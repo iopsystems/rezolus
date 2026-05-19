@@ -7,7 +7,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { applyResultToPlot, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, CAPTURE_EXPERIMENT } from './data.js';
+import { applyResultToPlot, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, CAPTURE_EXPERIMENT, fetchHeatmapsForGroups } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -418,15 +418,25 @@ const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     }
 };
 
-// Heatmap fetching previously round-tripped through a now-deleted
-// histogram_heatmap wrapper. Keep the API surface (toggleGlobalHeatmap
-// callers and reloadCurrentSection) but no longer populate
-// per-section heatmap data — the histograms the dashboard ships
-// render via their existing SQL heatmap projections.
-const fetchSectionHeatmapData = async (sectionRoute, _groups) => {
+// Populate `heatmapDataCache` for a section by batch-fetching the
+// histogram plots that carry a `metric` tag. The dedicated
+// `/api/v1/heatmap_range` endpoint returns one chart-ready envelope
+// per plot — keyed here by `plot.opts.id` so `viewer_core.js` can
+// look them up in `buildHistogramHeatmapSpec` when heatmap mode is
+// active.
+const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = true;
     m.redraw();
-    heatmapDataCache.set(sectionRoute, new Map());
+    try {
+        const data = await fetchHeatmapsForGroups(groups || [], {
+            captureId: 'baseline',
+            node: selectedNode || undefined,
+        });
+        heatmapDataCache.set(sectionRoute, data);
+    } catch (e) {
+        console.error('fetchSectionHeatmapData failed', e);
+        heatmapDataCache.set(sectionRoute, new Map());
+    }
     heatmapLoading = false;
     m.redraw();
 };

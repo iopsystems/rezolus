@@ -52,7 +52,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     for op in &["Read", "Write"] {
         let op_lower = op.to_lowercase();
         by_op.plot_sql(
-            PlotOpts::histogram_latency(*op, format!("latency-{op_lower}")),
+            PlotOpts::histogram_latency(*op, format!("latency-{op_lower}"))
+                .with_metric(format!("blockio_latency/{op_lower}")),
             sql::hist_percentile_series(&format!("blockio_latency/{op_lower}")),
         );
     }
@@ -67,6 +68,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         let op_lower = op.to_lowercase();
         by_op.plot_sql(
             PlotOpts::histogram(*op, format!("size-{op_lower}"), Unit::Bytes, "percentiles")
+                .with_metric(format!("blockio_size/{op_lower}"))
                 .with_log_scale(true),
             sql::hist_percentile_series(&format!("blockio_size/{op_lower}")),
         );

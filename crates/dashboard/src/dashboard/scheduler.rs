@@ -41,6 +41,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     queueing.describe("How long tasks waited on the runqueue before getting CPU time.");
     queueing.plot_sql_full(
         PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
+            .with_metric("scheduler_runqueue_latency")
             .with_axis_label("Latency")
             .with_unit_system("time"),
         hist_percentile_series_sql("scheduler_runqueue_latency"),
@@ -104,12 +105,14 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     timing.describe("Time tasks spent off-CPU (blocked, waiting) and on-CPU (running).");
     timing.plot_sql(
         PlotOpts::histogram_latency("Off CPU Time", "off-cpu-time")
+            .with_metric("scheduler_offcpu")
             .with_axis_label("Time")
             .with_unit_system("time"),
         hist_percentile_series_sql("scheduler_offcpu"),
     );
     timing.plot_sql(
         PlotOpts::histogram_latency("Running Time", "running-time")
+            .with_metric("scheduler_running")
             .with_axis_label("Time")
             .with_unit_system("time"),
         hist_percentile_series_sql("scheduler_running"),

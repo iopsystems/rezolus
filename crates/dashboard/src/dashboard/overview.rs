@@ -71,6 +71,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     tcp.describe("Time from packet received to being processed by the application.");
     tcp.plot_sql_full(
         PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            .with_metric("tcp_packet_latency")
             .with_axis_label("Latency")
             .with_unit_system("time"),
         sql::hist_percentile_series("tcp_packet_latency"),
@@ -84,6 +85,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     queueing.describe("How long tasks waited on the runqueue before getting CPU time.");
     queueing.plot_sql_full(
         PlotOpts::histogram_latency("Runqueue Latency", "scheduler-runqueue-latency")
+            .with_metric("scheduler_runqueue_latency")
             .with_axis_label("Latency")
             .with_unit_system("time"),
         sql::hist_percentile_series("scheduler_runqueue_latency"),

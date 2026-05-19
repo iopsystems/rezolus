@@ -345,6 +345,85 @@ const {
     buildEffectiveQuery,
 } = defaultDataApi;
 
+/**
+ * Fetch bucket-heatmap data for a single histogram plot. Returns
+ * `{time_data, bucket_bounds, data, min_value, max_value}` —
+ * exactly the shape `buildHistogramHeatmapSpec` consumes.
+ *
+ * Returns null for plots that don't carry a `metric` tag (e.g. the
+ * combined-histogram `Overall` plots that fan out across multiple
+ * `:buckets` columns and aren't single-metric addressable).
+ */
+const fetchHeatmapForPlot = async (plot, { captureId = 'baseline', node } = {}) => {
+    const metric = plot?.opts?.metric;
+    if (!metric) return null;
+    const resp = await ViewerApi.heatmapRange({
+        metric,
+        kind: 'buckets',
+        captureId,
+        node: node || getSelectedNode() || undefined,
+    });
+    return resp;
+};
+
+/**
+ * Batch fetch heatmaps for every histogram plot in `groups` that
+ * carries a `metric` tag. Returns a Map keyed by `plot.opts.id` so
+ * callers can populate `heatmapDataCache` directly.
+ *
+ * @param {Array} groups — section's `data.groups` array.
+ * @param {object} [options]
+ * @param {string} [options.captureId] — defaults to 'baseline'.
+ * @param {string} [options.node] — optional R4 node filter.
+ */
+const fetchHeatmapsForGroups = async (groups, { captureId = 'baseline', node } = {}) => {
+    const out = new Map();
+    const targets = [];
+    for (const g of groups || []) {
+        for (const plot of collectGroupPlots(g)) {
+            if (plot?.opts?.type !== 'histogram') continue;
+            if (!plot.opts.metric) continue;
+            targets.push(plot);
+        }
+    }
+    if (targets.length === 0) return out;
+    const settled = await Promise.allSettled(
+        targets.map((plot) => fetchHeatmapForPlot(plot, { captureId, node })),
+    );
+    for (let i = 0; i < targets.length; i++) {
+        const r = settled[i];
+        if (r.status === 'fulfilled' && r.value) {
+            out.set(targets[i].opts.id, r.value);
+        }
+    }
+    return out;
+};
+
+/**
+ * Fetch quantile-spectrum data for a single histogram plot's
+ * `quantile_heatmap` rendering mode. Returns the unwrapped envelope
+ * `{time_data, data, series_names, color_min_anchor}`.
+ */
+const fetchQuantileSpectrumForPlot = async (plot, { captureId = 'baseline', node, quantiles } = {}) => {
+    const metric = plot?.opts?.metric;
+    if (!metric) return null;
+    // 100-quantile spectrum by default: p0..p100 in 0.01 steps, with
+    // p0 peeled off server-side into `color_min_anchor`.
+    const qs = quantiles || (() => {
+        const out = [0.0];
+        for (let i = 1; i <= 100; i++) out.push(i / 100);
+        return out;
+    })();
+    const resp = await ViewerApi.heatmapRange({
+        metric,
+        kind: 'quantile_spectrum',
+        quantiles: qs,
+        captureId,
+        node: node || getSelectedNode() || undefined,
+    });
+    return resp;
+};
+
 export {
     applyResultToPlot,
     processDashboardData,
@@ -357,4 +436,7 @@ export {
     setSelectedInstance,
     getSelectedInstance,
     buildEffectiveQuery,
+    fetchHeatmapForPlot,
+    fetchHeatmapsForGroups,
+    fetchQuantileSpectrumForPlot,
 };

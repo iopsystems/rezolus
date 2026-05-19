@@ -49,7 +49,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::irate_total(&format!("^syscall/{op_lower}(/[0-9]+)?$")),
         );
         sg.plot_sql(
-            PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
+            PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency"))
+                .with_metric(format!("syscall_latency/{op_lower}")),
             sql::hist_percentile_series(&format!("syscall_latency/{op_lower}")),
         );
     }

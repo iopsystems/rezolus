@@ -63,6 +63,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
     latency.describe("Time from packet received to being processed by the application.");
     latency.plot_sql_full(
         PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
+            .with_metric("tcp_packet_latency")
             .with_axis_label("Latency")
             .with_unit_system("time"),
         sql::hist_percentile_series("tcp_packet_latency"),

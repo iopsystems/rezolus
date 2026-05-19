@@ -173,6 +173,39 @@ const ViewerApi = {
         });
     },
 
+    /**
+     * Fetch heatmap or quantile-spectrum data for a single metric.
+     *
+     * @param {object} args
+     * @param {string} args.metric — canonical metric name (no
+     *   `:buckets` suffix).
+     * @param {'buckets'|'quantile_spectrum'} args.kind
+     * @param {number[]} [args.quantiles] — required for spectrum.
+     * @param {string} [args.captureId] — 'baseline' (default) or
+     *   'experiment'.
+     * @param {string} [args.node] — optional node selector (R4).
+     */
+    async heatmapRange({ metric, kind, quantiles, captureId = 'baseline', node }) {
+        const params = new URLSearchParams({ metric, kind });
+        if (kind === 'quantile_spectrum') {
+            if (!Array.isArray(quantiles) || quantiles.length === 0) {
+                throw new Error('kind=quantile_spectrum requires a non-empty quantiles array');
+            }
+            params.set('quantiles', quantiles.join(','));
+        }
+        if (captureId && captureId !== 'baseline') {
+            params.set('capture', captureId);
+        }
+        if (node) {
+            params.set('node', node);
+        }
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/heatmap_range?${params.toString()}`,
+            background: true,
+        });
+    },
+
     async attachExperiment(file) {
         if (file.size > MAX_UPLOAD_BYTES) {
             throw new Error(

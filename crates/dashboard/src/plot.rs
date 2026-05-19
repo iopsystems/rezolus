@@ -342,6 +342,16 @@ pub struct PlotOpts {
     format: FormatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// Canonical metric name underlying this plot (no `:buckets`
+    /// suffix). Only set for histogram plots so the frontend can drive
+    /// the dedicated `/api/v1/heatmap_range` endpoint without
+    /// re-deriving the name from `sql_query`. Empty for non-histogram
+    /// plots; combined-histogram plots (which fan out over multiple
+    /// `<metric>/<op>:buckets` columns) intentionally leave this `None`
+    /// — `heatmap_range` is single-metric and the combined case
+    /// renders via the percentile scatter path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metric: Option<String>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -380,6 +390,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -394,6 +405,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -415,6 +427,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -458,6 +471,15 @@ impl PlotOpts {
 
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
         self.format.y_axis_label = Some(y_label.into());
+        self
+    }
+
+    /// Tag the plot with its underlying metric name (no `:buckets`
+    /// suffix). Used on histogram plots so the frontend can hit the
+    /// dedicated `/api/v1/heatmap_range` endpoint when the user
+    /// toggles into heatmap mode.
+    pub fn with_metric<T: Into<String>>(mut self, metric: T) -> Self {
+        self.metric = Some(metric.into());
         self
     }
 
