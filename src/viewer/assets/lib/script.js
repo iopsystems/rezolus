@@ -359,14 +359,20 @@ const bootstrap = async () => {
         bootstrapSharedSections([]);
     }
 
-    // Fetch per-section status server-side so the sidebar can gray
-    // out empty sections before the user has clicked any of them.
-    // Fire-and-forget — navigation is already rendering above; the
-    // status badges fill in async (~200ms on typical dashboards).
-    ViewerApi.getSectionStatus()
-        .then((resp) => bootstrapSectionStatus(resp?.data || {}))
-        .catch((e) => console.warn('section_status fetch failed:', e))
-        .finally(() => m.redraw());
+    // Fetch per-section status server-side so the sidebar's
+    // empty-section gray-out is correct on first paint. Done under
+    // the splash (next to the already-awaited sections call) rather
+    // than async-after-mount — the cost is ~200ms of additional
+    // splash time, but the sidebar then renders with the right
+    // state once, instead of flashing from "all bright" to
+    // "gray-out applied".
+    setSplashLabel('Loading section status');
+    try {
+        const statusResponse = await ViewerApi.getSectionStatus();
+        bootstrapSectionStatus(statusResponse?.data || {});
+    } catch (e) {
+        console.warn('section_status fetch failed:', e);
+    }
 
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
