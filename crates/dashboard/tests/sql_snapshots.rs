@@ -168,6 +168,39 @@ fn scale_v_wraps_inner_in_division() {
 }
 
 #[test]
+fn bucket_heatmap_sql_default_view() {
+    insta::assert_snapshot!(sql::bucket_heatmap_sql("syscall_latency", None));
+}
+
+#[test]
+fn bucket_heatmap_sql_per_source_view() {
+    insta::assert_snapshot!(sql::bucket_heatmap_sql(
+        "response_latency",
+        Some("cachecannon"),
+    ));
+}
+
+#[test]
+fn quantile_spectrum_sql_default_view() {
+    insta::assert_snapshot!(sql::quantile_spectrum_sql(
+        "syscall_latency",
+        &[0.0, 0.5, 0.9, 0.99, 0.999, 0.9999, 1.0],
+        7,
+        None,
+    ));
+}
+
+#[test]
+fn quantile_spectrum_sql_per_source_view() {
+    insta::assert_snapshot!(sql::quantile_spectrum_sql(
+        "response_latency",
+        &[0.0, 0.5, 0.9, 0.99],
+        3,
+        Some("cachecannon"),
+    ));
+}
+
+#[test]
 fn hist_percentile_series_combined_uses_h2_combine() {
     insta::assert_snapshot!(sql::hist_percentile_series_combined(
         "^syscall_latency/[a-z]+:buckets$",

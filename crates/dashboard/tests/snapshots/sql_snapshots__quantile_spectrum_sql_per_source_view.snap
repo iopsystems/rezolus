@@ -1,0 +1,16 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 195
+expression: "sql::quantile_spectrum_sql(\"response_latency\", &[0.0, 0.5, 0.9, 0.99], 3,\nSome(\"cachecannon\"),)"
+---
+WITH d AS (
+              SELECT timestamp,
+                     h2_delta("response_latency:buckets",
+                              LAG("response_latency:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM _src_cachecannon
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  h2_quantiles(d, [0, 0.5, 0.9, 0.99], 3) AS qs
+           FROM d
+           WHERE d IS NOT NULL
+           ORDER BY t

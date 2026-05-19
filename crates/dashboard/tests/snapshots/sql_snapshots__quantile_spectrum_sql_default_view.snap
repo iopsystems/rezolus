@@ -1,0 +1,16 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 185
+expression: "sql::quantile_spectrum_sql(\"syscall_latency\",\n&[0.0, 0.5, 0.9, 0.99, 0.999, 0.9999, 1.0], 7, None,)"
+---
+WITH d AS (
+              SELECT timestamp,
+                     h2_delta("syscall_latency:buckets",
+                              LAG("syscall_latency:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM _src
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  h2_quantiles(d, [0, 0.5, 0.9, 0.99, 0.999, 0.9999, 1], 7) AS qs
+           FROM d
+           WHERE d IS NOT NULL
+           ORDER BY t

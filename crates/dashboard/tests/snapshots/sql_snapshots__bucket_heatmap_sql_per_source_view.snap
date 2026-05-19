@@ -1,0 +1,10 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 177
+expression: "sql::bucket_heatmap_sql(\"response_latency\", Some(\"cachecannon\"),)"
+---
+SELECT timestamp,
+                  h2_delta("response_latency:buckets",
+                           LAG("response_latency:buckets") OVER (ORDER BY timestamp)) AS buckets
+           FROM _src_cachecannon
+           ORDER BY timestamp

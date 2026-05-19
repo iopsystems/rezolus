@@ -678,6 +678,65 @@ pub fn scale_v(inner: String, divisor: f64) -> String {
     format!("WITH _w AS ({inner}) SELECT _w.* REPLACE (_w.v / {divisor} AS v) FROM _w")
 }
 
+/// Bucket-heatmap source SQL: emits per-row histogram deltas as a
+/// `LIST<UBIGINT>` named `buckets`. The viewer route expands the LIST
+/// into sparse `(t_idx, b_idx, count)` triples server-side.
+///
+/// `source` is the data source key — `None` resolves to the default
+/// `_src` view; `Some("cachecannon")` resolves to `_src_cachecannon`.
+/// (`per_source` views are materialized by metriken-query-sql.)
+pub fn bucket_heatmap_sql(metric: &str, source: Option<&str>) -> String {
+    let view = match source {
+        Some(s) => format!("_src_{s}"),
+        None => "_src".to_string(),
+    };
+    format!(
+        r#"SELECT timestamp,
+                  h2_delta("{metric}:buckets",
+                           LAG("{metric}:buckets") OVER (ORDER BY timestamp)) AS buckets
+           FROM {view}
+           ORDER BY timestamp"#
+    )
+}
+
+/// Quantile-spectrum source SQL: emits, per-row, a `LIST<UBIGINT>` of
+/// computed quantile values (one entry per `q` in `quantiles`, in
+/// order). The viewer route unpacks the LIST into per-quantile parallel
+/// arrays for the frontend.
+///
+/// `p` is the histogram's `grouping_power` (lookup-based via
+/// `MetricCatalog::histogram_p_by_metric`). Without it `h2_quantiles`
+/// defaults to `p=3`, which under-resolves higher-`p` recorders.
+pub fn quantile_spectrum_sql(
+    metric: &str,
+    quantiles: &[f64],
+    p: u8,
+    source: Option<&str>,
+) -> String {
+    let view = match source {
+        Some(s) => format!("_src_{s}"),
+        None => "_src".to_string(),
+    };
+    let qs = quantiles
+        .iter()
+        .map(|q| format!("{q}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"WITH d AS (
+              SELECT timestamp,
+                     h2_delta("{metric}:buckets",
+                              LAG("{metric}:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM {view}
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  h2_quantiles(d, [{qs}], {p}) AS qs
+           FROM d
+           WHERE d IS NOT NULL
+           ORDER BY t"#
+    )
+}
+
 /// Like `hist_percentile_series` but for the "Overall" pattern: combine all
 /// `:buckets` columns matching a regex into a single histogram per row via
 /// `h2_combine`, then compute the per-quantile fan-out. PromQL's bare-metric
