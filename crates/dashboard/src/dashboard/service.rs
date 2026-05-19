@@ -27,6 +27,16 @@ pub fn substitute_view(sql: &str, source: &str) -> String {
     sql.replace("{{view}}", &view)
 }
 
+/// Substitute both `{{view}}` and `{{p}}`. Histogram KPI SQL templates
+/// reference `{{p}}` for the per-metric H2 grouping_power so the same
+/// `h2_quantile(..., {{p}})` call binds across captures whose recorder
+/// shipped different `p` values. Caller is responsible for looking up
+/// `p` via `MetricCatalog::histogram_p_by_metric` and falling back to
+/// the rezolus default (3) when the lookup misses.
+pub fn substitute_view_and_p(sql: &str, source: &str, p: u8) -> String {
+    substitute_view(sql, source).replace("{{p}}", &p.to_string())
+}
+
 pub fn generate(
     data: &dyn DashboardData,
     sections: Vec<Section>,
@@ -99,6 +109,12 @@ pub fn generate(
             Some(p) => opts.with_percentiles(p.clone()),
             None => opts,
         };
+        // Tag histogram KPIs with their underlying metric so the
+        // frontend can drive `/api/v1/heatmap_range` from the chart.
+        let opts = match (&kpi.metric_type[..], kpi.metric.as_deref()) {
+            ("histogram", Some(m)) => opts.with_metric(m),
+            _ => opts,
+        };
 
         // Resolve the destination subgroup. Named subgroup is opened on
         // first use; subsequent KPIs with the same name extend it.
@@ -117,9 +133,15 @@ pub fn generate(
             None => group.default_subgroup(),
         };
 
-        // Resolve `{{view}}` against the service name and emit the
-        // plot (full-width or half).
-        let sql = substitute_view(sql, &service_ext.service_name);
+        // Resolve `{{view}}` against the service name and `{{p}}`
+        // against the per-metric grouping_power (falling back to the
+        // rezolus default of 3 when unknown).
+        let p = kpi
+            .metric
+            .as_deref()
+            .and_then(|m| data.histogram_grouping_power(m))
+            .unwrap_or(3);
+        let sql = substitute_view_and_p(sql, &service_ext.service_name, p);
         if kpi.full_width {
             sg.plot_sql_full(opts, sql);
         } else {
@@ -154,6 +176,7 @@ mod tests {
             title: title.to_string(),
             description: None,
             sql: sql.map(str::to_string),
+            metric: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
             unit_system: Some("rate".to_string()),

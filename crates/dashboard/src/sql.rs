@@ -678,6 +678,85 @@ pub fn scale_v(inner: String, divisor: f64) -> String {
     format!("WITH _w AS ({inner}) SELECT _w.* REPLACE (_w.v / {divisor} AS v) FROM _w")
 }
 
+/// Single-quantile histogram KPI body. Emits a row per timestamp with
+/// `t` and `v` (the quantile value at this timestamp).
+///
+/// Returns a body containing `{{view}}` and `{{p}}` placeholders so
+/// `substitute_view_and_p` can fill them in at emit time.
+pub fn percentile_kpi_sql(metric: &str, q: f64) -> String {
+    format!(
+        r#"WITH d AS (
+              SELECT timestamp,
+                     h2_delta("{metric}:buckets",
+                              LAG("{metric}:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM {{{{view}}}}
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  h2_quantile(d, {q}, {{{{p}}}})::DOUBLE AS v
+           FROM d
+           WHERE d IS NOT NULL
+           ORDER BY t"#
+    )
+}
+
+/// Multi-quantile histogram KPI body. Emits one row per (timestamp,
+/// quantile) so the frontend renders a percentile scatter. Quantiles
+/// are inlined into a `VALUES` clause; the `h2_quantile` UDF handles
+/// the per-row lookup.
+///
+/// Returns a body containing `{{view}}` and `{{p}}` placeholders.
+pub fn multi_percentile_kpi_sql(metric: &str, qs: &[f64]) -> String {
+    let values = qs
+        .iter()
+        .map(|q| format!("({q})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"WITH d AS (
+              SELECT timestamp,
+                     h2_delta("{metric}:buckets",
+                              LAG("{metric}:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM {{{{view}}}}
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  q::VARCHAR AS quantile,
+                  h2_quantile(d, q, {{{{p}}}})::DOUBLE AS v
+           FROM d, (VALUES {values}) qs(q)
+           WHERE d IS NOT NULL"#
+    )
+}
+
+/// UNPIVOT-based regex multi-value KPI body. For vllm-style series
+/// like `vllm_request_success_total{finished_reason=~"stop|length"}`,
+/// where the parquet shape has one column per `finished_reason`
+/// suffix and the query needs `sum(rate(...))` across the matching
+/// suffixes.
+///
+/// `regex` is anchored against the column name (the helper does not
+/// add `^`/`$`); `label` is the OFD label name that becomes the
+/// per-series tag.
+pub fn unpivot_columns_sql(regex: &str, label: &str) -> String {
+    format!(
+        r#"WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('{regex}') FROM {{{{view}}}})
+                  ON COLUMNS('{regex}')
+                  INTO NAME {label} VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY {label} ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY {label} ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp"#
+    )
+}
+
 /// Bucket-heatmap source SQL: emits per-row histogram deltas as a
 /// `LIST<UBIGINT>` named `buckets`. The viewer route expands the LIST
 /// into sparse `(t_idx, b_idx, count)` triples server-side.

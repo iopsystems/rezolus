@@ -27,6 +27,13 @@ pub struct Kpi {
     /// placeholder cards via the silent-render path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    /// Canonical metric name (no `:buckets` suffix). Only meaningful
+    /// for histogram KPIs — used to look up the per-metric
+    /// `grouping_power` for `{{p}}` substitution and to thread the
+    /// metric tag onto the emitted plot's `PlotOpts` so the frontend
+    /// can drive the `/api/v1/heatmap_range` endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
     #[serde(rename = "type")]
     pub metric_type: String,
     #[serde(default)]

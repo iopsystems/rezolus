@@ -44,6 +44,14 @@ pub trait DashboardData {
     /// whether to render per-device variants of charts — when there's only
     /// one CPU/GPU, the per-device chart degenerates to the aggregate.
     fn unique_label_values(&self, metric: &str, key: &str) -> usize;
+
+    /// H2 `grouping_power` of `metric`, when known. Returns `None`
+    /// for non-histogram metrics or unknown ones. Used by the
+    /// service-KPI emitter to substitute `{{p}}` into histogram
+    /// SQL templates with the right per-metric value.
+    fn histogram_grouping_power(&self, _metric: &str) -> Option<u8> {
+        None
+    }
 }
 
 /// Empty `DashboardData` for the schema-dump binary and test fixtures.

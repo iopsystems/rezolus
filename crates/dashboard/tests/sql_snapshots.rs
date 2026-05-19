@@ -168,6 +168,27 @@ fn scale_v_wraps_inner_in_division() {
 }
 
 #[test]
+fn percentile_kpi_sql_single_quantile() {
+    insta::assert_snapshot!(sql::percentile_kpi_sql("response_latency", 0.99));
+}
+
+#[test]
+fn multi_percentile_kpi_sql_default_quantiles() {
+    insta::assert_snapshot!(sql::multi_percentile_kpi_sql(
+        "response_latency",
+        &[0.5, 0.9, 0.99, 0.999, 0.9999],
+    ));
+}
+
+#[test]
+fn unpivot_columns_sql_per_label_irate_total() {
+    insta::assert_snapshot!(sql::unpivot_columns_sql(
+        "^vllm_request_success_total/(stop|length)$",
+        "finished_reason",
+    ));
+}
+
+#[test]
 fn bucket_heatmap_sql_default_view() {
     insta::assert_snapshot!(sql::bucket_heatmap_sql("syscall_latency", None));
 }

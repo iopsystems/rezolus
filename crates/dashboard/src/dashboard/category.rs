@@ -175,6 +175,7 @@ mod tests {
             title: title.to_string(),
             description: None,
             sql: None,
+            metric: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
             unit_system: Some("rate".to_string()),

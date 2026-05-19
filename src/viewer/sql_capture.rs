@@ -166,6 +166,10 @@ impl DashboardData for SqlCapture {
         self.label_count_for(name, MetricKind::Histogram)
     }
 
+    fn histogram_grouping_power(&self, metric: &str) -> Option<u8> {
+        self.catalog.histogram_p_by_metric.get(metric).copied()
+    }
+
     fn unique_label_values(&self, metric: &str, key: &str) -> usize {
         let Some(series) = self.catalog.series_by_metric.get(metric) else {
             return 0;
