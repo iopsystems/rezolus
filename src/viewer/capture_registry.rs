@@ -229,25 +229,8 @@ impl CaptureRegistry {
         }
     }
 
-    #[cfg(feature = "live-mode")]
-    pub fn attach_experiment(
-        &self,
-        tsdb: Tsdb,
-        systeminfo: Option<String>,
-        file_metadata: Option<String>,
-        alias: Option<String>,
-    ) {
-        *self.experiment.write() = Some(CaptureSlot {
-            backend: CaptureBackend::Live(Arc::new(RwLock::new(tsdb))),
-            systeminfo: RwLock::new(systeminfo),
-            file_metadata: RwLock::new(file_metadata),
-            alias: RwLock::new(alias),
-        });
-    }
-
-    /// SQL-backed attach. Mirrors `attach_experiment` but stores an
-    /// `SqlCapture` instead of a `Tsdb`. Used by the file-mode HTTP
-    /// attach handler.
+    /// SQL-backed attach. Stores an `SqlCapture` in the experiment slot.
+    /// Used by the file-mode HTTP attach handler.
     pub fn attach_experiment_sql(
         &self,
         capture: SqlCapture,

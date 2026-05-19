@@ -818,20 +818,10 @@ fn save_single_dispatch(
     payload: &report_save::ReportPayload,
     selection_json: &str,
 ) -> Result<Vec<u8>, String> {
-    #[cfg(feature = "live-mode")]
-    if let Some(baseline_tsdb) = state.baseline_tsdb() {
-        return report_save::save_single_parquet(
-            path,
-            payload,
-            selection_json,
-            &baseline_tsdb,
-            payload.trim_columns,
-        )
-        .map_err(|e| e.to_string());
-    }
-    // SQL-backed baselines get column trim via the catalog-driven
-    // resolver. Drops the `trim_columns=false` override that was
-    // active pre-migration (review/review.md carve-out 4).
+    // File / upload / A-B baselines are all SqlCapture-backed; the trim
+    // path runs through the catalog-driven SQL resolver. Live mode
+    // never reaches this function — `save_with_selection` short-circuits
+    // to `snapshots_to_parquet` when `state.parquet_path` is None.
     if let Some(sql) = state.captures.get_sql(crate::viewer::capture_registry::CaptureId::Baseline) {
         let catalog = sql.read().catalog();
         return report_save::save_single_parquet_sql(
@@ -843,15 +833,12 @@ fn save_single_dispatch(
         )
         .map_err(|e| e.to_string());
     }
-    let _ = (state, payload);
     report_save::save_single_parquet_embed_only(path, selection_json).map_err(|e| e.to_string())
 }
 
-/// Combined-A/B (tarball) save-as-report dispatch. Trim requires
-/// BOTH sides to be Tsdb-backed. Combined-A/B is SQL-backed in
-/// practice today, so the trim path is largely unreachable — but the
-/// live-mode branch is kept so a future change can re-enable trim
-/// without re-introducing the cfg pair.
+/// Combined-A/B (tarball) save-as-report dispatch. Both sides are
+/// SqlCapture-backed (combined-A/B is always file-mode); trim runs
+/// through the SQL-aware resolver against each side's catalog.
 fn save_combined_ab_dispatch(
     state: &AppState,
     baseline_path: &std::path::Path,
@@ -860,25 +847,6 @@ fn save_combined_ab_dispatch(
     selection_json: &str,
     manifest: &crate::parquet_metadata::AbContainers,
 ) -> Result<Vec<u8>, String> {
-    #[cfg(feature = "live-mode")]
-    if let (Some(baseline_tsdb), Some(experiment_tsdb)) = (
-        state.baseline_tsdb(),
-        state.captures.get(CaptureId::Experiment),
-    ) {
-        return report_save::save_combined_ab_tarball(
-            baseline_path,
-            experiment_path,
-            payload,
-            selection_json,
-            &baseline_tsdb,
-            &experiment_tsdb,
-            manifest,
-            payload.trim_columns,
-        )
-        .map_err(|e| e.to_string());
-    }
-    // SQL-backed A/B: pull both per-side catalogs and trim via the
-    // SQL-aware resolver.
     if let (Some(baseline_sql), Some(experiment_sql)) = (
         state
             .captures
@@ -901,7 +869,6 @@ fn save_combined_ab_dispatch(
         )
         .map_err(|e| e.to_string());
     }
-    let _ = (state, payload);
     report_save::save_combined_ab_tarball_embed_only(
         baseline_path,
         experiment_path,

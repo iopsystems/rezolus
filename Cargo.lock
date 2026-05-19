@@ -3216,7 +3216,6 @@ dependencies = [
  "arrow",
  "bytes",
  "dashboard",
- "metriken-query",
  "metriken-query-sql",
  "parquet",
  "serde",

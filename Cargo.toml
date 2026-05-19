@@ -156,13 +156,13 @@ libbpf-cargo = { version = "0.26.2" }
 [features]
 default = ["live-mode"]
 developer-mode = []
-# Compile in the legacy live-agent ingest path: `rezolus view http://…`,
-# the `metriken-query` in-memory Tsdb + PromQL engine, and the MCP /
-# `parquet annotate` subcommands that still depend on it. Default-on
-# during the Tsdb→DuckDB migration; flip it off (e.g. `--no-default-features
-# --features sql-only`) to build a SQL-only viewer binary with zero
-# `metriken-query` linkage.
-live-mode = ["dashboard/live-mode", "report-save/live-mode", "dep:metriken-query"]
+# Compile in the live-agent ingest loop and the Tsdb side of its
+# dual-feed (which backs `validate_service_extensions` until C3
+# migrates it to SQL). Default-on during the Tsdb→DuckDB migration;
+# `--no-default-features --features sql-only` drops the live ingest
+# loop and removes `metriken-query` from the dep tree. Both feature
+# seams disappear in C4.
+live-mode = ["dashboard/live-mode", "dep:metriken-query"]
 # Marker feature for the SQL-only configuration. Exists so the command
 # `cargo build --no-default-features --features sql-only` reads as
 # "build the SQL-only viewer" rather than the slightly mysterious bare

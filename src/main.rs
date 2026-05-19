@@ -19,13 +19,11 @@ mod agent;
 mod exporter;
 mod hindsight;
 // MCP runs against parquet files via `metriken_query_sql::DuckDbBackend`
-// (post-May-2026 migration). It builds unconditionally and is
-// available in both default and `sql-only` builds. Legacy Tsdb/PromQL
-// entry points inside `src/mcp/` remain cfg-gated to `live-mode`
-// until a separate audit PR deletes them. `parquet_tools` itself
-// stays unconditional — the `combine` submodule is shared with
-// `recorder` and the viewer's A/B extraction; only `parquet annotate`
-// (Tsdb-flavoured KPI validation) is gated, inside the submodule.
+// (post-May-2026 migration). Builds unconditionally in default and
+// sql-only configurations. `parquet_tools` is also unconditional —
+// `annotate` runs KPI SQL through `DuckDbBackend`, `filter` reuses
+// `annotate::extract_metric_selectors` (a regex-only helper), and
+// neither path needs Tsdb.
 mod mcp;
 mod parquet_metadata;
 mod parquet_tools;

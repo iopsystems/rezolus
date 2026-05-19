@@ -1,15 +1,6 @@
-// `annotate` validates KPIs by running PromQL against a Tsdb, so it
-// stays behind the `live-mode` feature until its KPI validation is
-// rewired through `SqlCapture` + DuckDB. The other submodules are
-// pure Arrow/parquet I/O and compile unconditionally.
-#[cfg(feature = "live-mode")]
 mod annotate;
 pub(crate) mod combine;
 mod events;
-// `filter` reuses `annotate::extract_metric_selectors` for its column
-// projection logic. Gated alongside `annotate` until that helper is
-// either factored out or rewired through `SqlCapture`.
-#[cfg(feature = "live-mode")]
 mod filter;
 mod metadata;
 
@@ -23,12 +14,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub fn command() -> Command {
-    let cmd = Command::new("parquet")
+    Command::new("parquet")
         .about("Parquet file operations")
-        .subcommand_required(true);
-    #[cfg(feature = "live-mode")]
-    let cmd = cmd.subcommand(annotate_command()).subcommand(filter_command());
-    cmd
+        .subcommand_required(true)
+        .subcommand(annotate_command())
+        .subcommand(filter_command())
         .subcommand(
             Command::new("combine")
                 .about("Combine multiple parquet files (multi-node rezolus and/or multi-instance services)")
@@ -137,7 +127,6 @@ pub fn command() -> Command {
         )
 }
 
-#[cfg(feature = "live-mode")]
 fn filter_command() -> Command {
     Command::new("filter")
         .about("Filter parquet columns to only those needed by service extension KPIs")
@@ -175,7 +164,6 @@ fn filter_command() -> Command {
         )
 }
 
-#[cfg(feature = "live-mode")]
 fn annotate_command() -> Command {
     Command::new("annotate")
         .about("Add service extension metadata to a parquet file")
@@ -277,11 +265,9 @@ fn annotate_command() -> Command {
 }
 
 pub fn run(args: ArgMatches) {
-    #[cfg(feature = "live-mode")]
     use crate::viewer::load_template_registry;
 
     let result = match args.subcommand() {
-        #[cfg(feature = "live-mode")]
         Some(("annotate", sub_args)) => {
             let registry = load_template_registry(
                 sub_args
@@ -292,7 +278,6 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
-        #[cfg(feature = "live-mode")]
         Some(("filter", sub_args)) => {
             let registry = load_template_registry(
                 sub_args
