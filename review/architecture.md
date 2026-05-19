@@ -37,15 +37,16 @@ The shortest possible summary: **Rezolus is one binary with seven subcommands. T
   ┌──────────┐         ┌──────────┐    ┌──────────┐         ┌──────────┐
   │ EXPORTER │         │ RECORDER │    │HINDSIGHT │         │ VIEWER   │
   │          │         │          │    │          │         │ (live)   │
-  │ polls,   │         │ polls,   │    │ polls    │         │ polls    │
-  │ converts │         │ streams  │    │ into     │         │ into     │
-  │ to Prom  │         │ to       │    │ on-disk  │         │ in-mem   │
-  │ text on  │         │ parquet  │    │ ring     │         │ Tsdb     │
-  │ /metrics │         │ on disk  │    │ buffer;  │         │ (legacy, │
-  │          │         │ (also    │    │ SIGHUP   │         │ gated by │
-  │          │         │ accepts  │    │ or HTTP  │         │ live-    │
-  │          │         │ Prom     │    │ trigger  │         │  mode    │
-  │          │         │ scrape)  │    │ → parquet│         │ feature) │
+  │ polls,   │         │ polls,   │    │ polls    │         │ polls,   │
+  │ converts │         │ streams  │    │ into     │         │ ingests  │
+  │ to Prom  │         │ to       │    │ on-disk  │         │ into     │
+  │ text on  │         │ parquet  │    │ ring     │         │ DuckDB-  │
+  │ /metrics │         │ on disk  │    │ buffer;  │         │ backed   │
+  │          │         │ (also    │    │ SIGHUP   │         │ Live-    │
+  │          │         │ accepts  │    │ or HTTP  │         │ Source;  │
+  │          │         │ Prom     │    │ trigger  │         │ Tsdb     │
+  │          │         │ scrape)  │    │ → parquet│         │ dropping │
+  │          │         │          │    │          │         │ in C4    │
   └──────────┘         └────┬─────┘    └────┬─────┘         └──────────┘
                             │               │
                             ▼               ▼
@@ -110,13 +111,13 @@ The shortest possible summary: **Rezolus is one binary with seven subcommands. T
 
 **Three subcommands consume live msgpack, do different things with it.** The exporter is for people who already have Prometheus. The recorder is for "I want this on disk now." Hindsight is for "I want a rolling window so that when something explodes I can post-mortem the last N minutes." Those three look almost identical inside — a tokio interval, a `reqwest::Client`, a write target. Don't be fooled by directory boundaries.
 
-**The viewer has two front doors and an awkward seam.** File mode (and A-B compare, and the upload UI) goes through `metriken_query_sql::DuckDbBackend` — the new SQL world. Live-agent mode is still PromQL-against-an-in-memory `Tsdb` from the legacy `metriken-query` crate, and is gated behind the `live-mode` Cargo feature; building `--features sql-only` drops the whole thing. As of May 2026 the query path for live mode returns `capture_not_found`; only the load-time KPI availability check still uses PromQL. Treat the live path as a known carve-out, not a parallel system.
+**The viewer has one query engine, two ingest paths.** File mode (and A-B compare, and the upload UI) opens parquet through `SqlCapture` + `metriken_query_sql::DuckDbBackend`. Live mode polls msgpack from the agent and appends each snapshot to a `LiveSource` registered with the *same* backend under the key `live:baseline`. `/api/v1/query{,_range}` dispatches on a data-source string but the SQL code path is identical. The only remaining PromQL execution is `validate_service_extensions` (the load-time KPI availability check); it migrates to SQL in C3 of this branch, after which `metriken-query` is deleted from the dep tree entirely. While migration is in flight, `live-mode` (default-on) still gates the dual-ingest plumbing and `--features sql-only` drops `metriken-query`; both feature seams disappear in C4. Treat the SQL pipeline as the unified spine, not a parallel system.
 
 **The static site viewer is the same frontend wearing a different backend.** `site/viewer/lib/` is symlinks into `src/viewer/assets/lib/`, so any JS you change shows up in both. What differs is who runs the SQL: server viewer hands queries to native DuckDB via `duckdb-rs`; the static viewer hands them to `duckdb-wasm` running in the browser, with a thin Rust→WASM shim in `crates/viewer-sql` that mostly exists to project Arrow into the Prometheus-matrix JSON shape the frontend already understands. The `crates/prom-matrix` crate enforces that the JSON shape can't drift between native and WASM — there's one envelope formatter, two entry points.
 
 **The SQL macros — `rate_5m`, `hist_p99`, `cpu_busy_pct`, etc. — are the contract.** Source of truth is `shared_macros.sql` in the sibling `metriken` repo. The native backend registers them as DuckDB scalar UDFs; the WASM viewer can't run UDFs, so `crates/viewer-sql/src/macros.sql` ships pure-SQL substitutes for the H2-histogram primitives and `include_str!`'s the rest verbatim across the paired-repo layout. If queries behave differently in the two viewers, look here first.
 
-**MCP is parquet-only now.** The May-2026 migration moved every MCP analysis tool — anomaly detection, correlation, free-form SQL — onto `DuckDbBackend`. It opens a parquet, runs SQL, returns results. The cfg-gated leftovers in `src/mcp/` are pending an audit-and-delete pass; don't extend them.
+**MCP is parquet-only.** The May-2026 migration moved every MCP analysis tool — anomaly detection, correlation, free-form SQL — onto `DuckDbBackend`. It opens a parquet, runs SQL, returns results. The audit-and-delete pass already landed (`510b3c3` / `a06c6ab`); `grep "live-mode" src/mcp/` is empty. MCP builds unconditionally in both default and `--features sql-only` configurations.
 
 **Service extensions are the user-facing reason any of this composes.** A "service extension" is a JSON template under `config/templates/{vllm,sglang,valkey,…}.json` that names a service, lists per-source KPIs, and ships PromQL (legacy) plus optional SQL for each KPI. When a recording's parquet metadata names a matching `source`, the viewer activates that section; `parquet annotate` re-validates each KPI by running its SQL through DuckDB and stamps `available: true/false` into the footer. Templates ship `include_dir!`-baked into the release binary; `--templates` overrides for development.
 
@@ -144,6 +145,6 @@ The whole `metriken*` family lives in a sibling repo at `../metriken/`. Cross-re
 - **Recorder also speaks Prometheus.** Pointed at `http://host:9090/metrics`, it scrapes Prometheus text and writes the same parquet schema. That's how you combine a service's Prom metrics with Rezolus's BPF metrics — `parquet combine` merges the two files post-hoc.
 - **Hindsight has an HTTP control plane too.** Not just SIGHUP. The dump endpoint accepts a time-range filter so you can grab "the last 90 seconds" rather than the whole ring buffer.
 - **The dashboard crate is a code generator, not a service.** `crates/dashboard/src/dashboard/*.rs` builds plot definitions (with SQL) that get serialized to JSON and shipped to the frontend. The viewer's HTTP handlers don't *render* charts — they hand the JS the SQL to run.
-- **`live-mode` and `sql-only` are real feature seams.** `cargo build --no-default-features --features sql-only` produces a binary with no `metriken-query`, no PromQL, no Tsdb. Keep that in mind before adding new code that depends on either; cfg-gate it or pull it under DuckDB.
+- **`live-mode` and `sql-only` are real feature seams — for now.** `cargo build --no-default-features --features sql-only` produces a binary with no `metriken-query`, no PromQL, no Tsdb (and no live-agent ingest loop, since LiveSource's *bridge* lives in rezolus and is gated under `live-mode`). Both seams disappear in C4 of this branch once `validate_service_extensions` migrates and `metriken-query` leaves the dep tree. Until then: don't add new code that depends on PromQL or Tsdb; if you need historical context, look at the SQL pipeline.
 
 That's the whole forest. Once a specific tree calls — say, why a particular sampler is laid out the way it is, or how the `prom-matrix` projection handles labels — start at the relevant box and walk inward.

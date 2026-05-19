@@ -3,24 +3,40 @@
 For someone running the binary and the test suite. The code reviewer
 reads `review.md`; the newcomer reads `architecture.md`.
 
-- **What the branch does.** Migrates the file/upload/A-B viewer, MCP,
-  `parquet annotate`, and Save-as-Report column trim off in-memory
-  PromQL (`metriken_query::Tsdb`) and onto DuckDB-backed SQL through
-  a new `metriken_query_sql::DuckDbBackend`. The live-agent viewer
-  is unchanged: still PromQL, gated behind `live-mode` (default-on),
-  and `--features sql-only` drops the metriken-query dep entirely.
+- **What the branch does.** Migrates every viewer path (file / upload /
+  A-B / live-agent), MCP, `parquet annotate`, and Save-as-Report
+  column trim off in-memory PromQL (`metriken_query::Tsdb`) and onto
+  DuckDB-backed SQL through `metriken_query_sql::DuckDbBackend`. Live
+  mode now appends snapshots to a `LiveSource` registered with the
+  same backend (`live:baseline` key); `/api/v1/query{,_range}`
+  dispatches on a data-source string but the SQL code path is
+  identical for both ingest paths. The only remaining PromQL is
+  `validate_service_extensions` (a load-time KPI availability check);
+  the "Removing Tsdb entirely" plan in `review.md` is mid-execution
+  in this branch — C2-C5 migrate the validator to SQL and delete
+  `metriken-query` whole. While that work lands, `live-mode`
+  (default-on) still gates the dual-ingest plumbing and
+  `--features sql-only` drops `metriken-query`.
 
 - **Where the change lives** (concept order — engine first, callers after).
   - **The engine.** `/work/metriken/metriken-query-sql/` is a new
     crate. `backend.rs` owns the per-source connection pool with
-    panic-safe slot eviction; `udf.rs` the H2 histogram UDFs;
-    `shared_macros.sql` the 20-macro SQL layer (`cpu_busy_pct`,
-    `irate_1s`, `h2_combine_lol`, …); `views.rs` materialises
-    `_src_<source>` per-source views and the `_cgroup_index` JOIN
-    table. The same `shared_macros.sql` is `include_str!`d by both
-    the native engine and the WASM viewer so emitters can't drift.
+    panic-safe slot eviction and a `try_lock` scan that picks the
+    first idle slot before falling back to round-robin; `live.rs`
+    (~800 LOC) owns `LiveSource`, a single-`Connection` in-memory
+    DuckDB table that grows via `ALTER TABLE _src ADD COLUMN` +
+    `INSERT` as new metrics appear (the parquet pool model can't
+    apply — each slot is an independent in-memory DB, wrong for a
+    shared mutable table). `canonical_column_name` is a public free
+    fn that keeps live `_src` column names byte-identical to the
+    parquet path. `udf.rs` the H2 histogram UDFs; `shared_macros.sql`
+    the 20-macro SQL layer (`cpu_busy_pct`, `irate_1s`,
+    `h2_combine_lol`, …); `views.rs` materialises `_src_<source>`
+    per-source views and the `_cgroup_index` JOIN table. The same
+    `shared_macros.sql` is `include_str!`d by both the native engine
+    and the WASM viewer so emitters can't drift.
   - **The emitters.** `crates/dashboard/src/sql.rs` (715 LOC, 16
-    helpers) is what 130+ plot call sites in `dashboard/*.rs` call
+    helpers) is what 110 plot call sites in `dashboard/*.rs` call
     to produce each plot's `sql_query`. Every helper is
     snapshot-tested in `tests/sql_snapshots.rs`; the two newest
     (cgroup `irate_by_name`, `ratio_by_name`) also have a
@@ -30,10 +46,18 @@ reads `review.md`; the newcomer reads `architecture.md`.
   - **The viewer.** `Arc<DuckDbBackend>` lives on `AppState`
     (`src/viewer/state.rs`). Parquets are wrapped by `SqlCapture`
     (`sql_capture.rs`, 379 LOC) and held by `CaptureRegistry`
-    (`capture_registry.rs`, 305 LOC). `/api/v1/query{,_range}` in
-    `routes.rs` runs raw SQL through the backend, with a
-    binder-error → empty-matrix shim that preserves the
-    pre-migration "unknown metric → empty series" UX.
+    (`capture_registry.rs`, 305 LOC). Live captures attach via
+    `live_source: RwLock<Option<Arc<LiveSource>>>` on the same
+    `AppState`, registered under `LIVE_BASELINE_DATA_SOURCE =
+    "live:baseline"`. `data_source_for(state, capture)` in
+    `routes.rs:527` resolves the live key ahead of any parquet path,
+    so `/api/v1/query{,_range}` dispatch is uniform across modes.
+    `src/viewer/live_ingest.rs` (~343 LOC) is the
+    `metriken_exposition::Snapshot` → `LiveSource::append` bridge.
+    The SQL handler runs through `spawn_blocking` so 20+ parallel
+    chart fetches don't starve the tokio runtime. A binder-error →
+    empty-matrix shim in `run_sql` preserves the pre-migration
+    "unknown metric → empty series" UX.
   - **Parallel migrations.** MCP (`src/mcp/backend.rs` is the
     shared helper; ~2,100 LOC of legacy Tsdb/PromQL deleted),
     Save-as-Report (`crates/report-save/src/lib.rs`:
@@ -41,15 +65,22 @@ reads `review.md`; the newcomer reads `architecture.md`.
     main also threaded `events: Vec<Event>` → `KEY_EVENTS` through
     all four save entrypoints), `parquet annotate`
     (`src/parquet_tools/annotate.rs`: validates each KPI's SQL
-    binds against the parquet).
+    binds against the parquet), live-agent ingest
+    (`src/viewer/live_ingest.rs` + `metriken_query_sql::LiveSource`,
+    commits `17f1107` / `1d471cd` / `494b4fc` / `f5482ff` — `_src`
+    is byte-shape-identical to parquet so the same dashboard SQL
+    binds in both modes).
   - **The verification harness.**
     `/work/metriken/metriken-query/examples/sql_vs_promql.rs`
-    (~1,700 LOC) runs every dashboard plot through both PromQL
+    (~1,915 LOC) runs every dashboard plot through both PromQL
     (legacy evaluator) and SQL (wasm-style DuckDB connection
     mirroring the browser's setup), and diffs canonical JSON
     plot-by-plot. Substitutes `__SELECTED_CGROUPS__` per parquet
     from a fabricated `_cgroup_index` built from Arrow field
-    metadata.
+    metadata. **Deleted in C5 of this branch** along with the
+    PromQL evaluator it diffs against; correctness post-deletion
+    rests on dashboard snapshot tests + parquet ↔ live parity
+    tests in `metriken-query-sql/src/live.rs`.
 
 - **What's verified.** The harness against `demo.parquet`,
   `AB_level_pin.parquet`, `AB_base.parquet` reports **698 identical
@@ -81,15 +112,12 @@ reads `review.md`; the newcomer reads `architecture.md`.
     changed; M-in-MCP clients are LLMs and SQL-fluent.
   - **First query per parquet has a cold-start cost** while the
     `DuckDbBackend` warms a slot (~hundreds of ms for tens of MB).
-    Subsequent queries are warm-pool hits.
+    Subsequent queries are warm-pool hits. Live mode has no
+    cold-start — `_src` grows in place as snapshots arrive.
   - **Per-cgroup individual plots** show a ~5-min tail of
     carried-forward rate past an exited cgroup's last sample. This
     matches PromQL's `[5m]` lookback; the SQL pipeline was wrongly
     truncating before the cgroup-NULL-tail fix landed.
-  - **`rezolus view http://agent:4241`** returns `capture_not_found`
-    for `/api/v1/query{,_range}`. The live-agent query path is the
-    explicit `live-mode` carve-out — pending the live-ingest
-    storage decision in `review.md` "Removing Tsdb entirely" item D.
 
 - **How to test — automated** (from `/work/rezolus` unless noted):
 
@@ -101,7 +129,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
       | grep 'metriken-query v'                  # must be empty
 
   # Native + frontend + smoke
-  cargo test --bin rezolus                       # ~174
+  cargo test --bin rezolus                       # ~181
   cargo test -p dashboard -p prom-matrix -p viewer-sql -p report-save
   cargo test --test mcp_cli                      # ~8
   node --test tests/*.mjs                        # 116 pass / 6 fail (see below)
@@ -114,6 +142,10 @@ reads `review.md`; the newcomer reads `architecture.md`.
   # viewer_smoke.sh can't see (section returns 200 but body is blank).
   # Requires chromium, jq, python3, `pip install --user websockets`.
   bash scripts/viewer_chromium_smoke.sh site/viewer/data/cachecannon.parquet
+  # Live-mode variant (post-f5482ff): waits N seconds after viewer
+  # startup so _src has rows, then walks every section against a
+  # running agent.
+  bash scripts/viewer_chromium_smoke.sh --live http://localhost:4241 --ingest-wait 5
 
   # Engine side
   cd /work/metriken && cargo test --workspace --all-features --all-targets
@@ -154,18 +186,19 @@ reads `review.md`; the newcomer reads `architecture.md`.
   - A/B compare: load two parquets.
 
 - **Known not-regressions** — documented; don't report.
-  - 6 JS test failures (5 in `compare_node_filter.test.mjs`, 1 in
-    `wasm_viewer_histogram_kpis.test.mjs`). PromQL-side
-    `buildEffectiveQuery` paths skipped on `BACKEND='sql'` and a
-    retired in-process WASM viewer. To be retired in follow-up.
+  - 6 JS test failures: 5 in `compare_node_filter.test.mjs`
+    (PromQL-side `buildEffectiveQuery` paths skipped on
+    `BACKEND='sql'` — they target a code path that no longer fires)
+    and 1 in `wasm_viewer_histogram_kpis.test.mjs` (ENOENT on
+    `site/viewer/pkg/wasm_viewer.js`, the retired pre-2026 PromQL
+    WASM crate's output path). Both test files are slated for
+    deletion in C4.
   - `sql_vs_promql` `numa-local-rate` divergence on `AB_base`
     (`rel ≈ 2.7e-5`). Floating-point residual; sub-tolerance at
     `--rel-tol 1e-4`.
-  - Live-agent mode charts blank; query returns
-    `capture_not_found`. Explicit carve-out.
   - `--no-default-features --features sql-only` build emits ~24
-    dead-code warnings from PromQL helpers still in tree.
-    Self-clears with the legacy-deletion follow-up.
+    dead-code warnings from PromQL helpers still in tree. Clears
+    when `metriken-query` is deleted in C5.
 
 - **When something looks wrong** — quick triage.
   - **Wrong value vs. main.** Re-run `sql_vs_promql` against the

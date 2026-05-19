@@ -2,25 +2,30 @@
 
 Companion: `/work/metriken/review/review.md` (engine side).
 
-This branch finishes the migration of **`rezolus view <parquet>`**,
-**`rezolus mcp`**, and **Save-as-Report column trim** off the
-in-memory `metriken_query::Tsdb` + PromQL pipeline and onto
-DuckDB-driven SQL through `metriken_query_sql::DuckDbBackend`. The
-WASM static viewer was already on duckdb-wasm; this branch brings
-the server-backed viewer and MCP to parity. The live-agent ingest
-path and a few PromQL-only odds and ends remain as deliberate
-carve-outs; the _Removing Tsdb entirely_ section at the end is the
-roadmap for those.
+This branch unifies every viewer mode (file / upload / A-B / live
+agent), `rezolus mcp`, Save-as-Report column trim, and `parquet
+annotate` onto DuckDB-driven SQL through
+`metriken_query_sql::DuckDbBackend`. The WASM static viewer was
+already on duckdb-wasm; this branch closes the gap on the
+server-backed paths. The pivotal recent landing is `LiveSource`
+(`17f1107` + `1d471cd`): live captures now append to an in-memory
+DuckDB table registered with the same backend the parquet path
+uses, so `/api/v1/query{,_range}` dispatch is uniform across all
+modes. The only remaining PromQL execution is
+`validate_service_extensions` (a load-time KPI availability check);
+removing it is the unblocker for deleting `metriken-query` whole.
+The _Removing Tsdb entirely_ section at the end is the roadmap —
+**now mid-execution in this branch, C2-C5**.
 
 | Path                                                        | Engine                           | Status                                                                |
 | ----------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
 | `rezolus view <parquet>` — file / upload / A-B / experiment | `DuckDbBackend` via `SqlCapture` | **migrated**                                                          |
-| `rezolus view http://agent:4241` — live agent               | `Tsdb` (ingest only)             | **carve-out**; query handlers return `capture_not_found` in live mode |
+| `rezolus view http://agent:4241` — live agent               | `DuckDbBackend` via `LiveSource` (query) + Tsdb (`validate_service_extensions` only) | **migrated** for queries; PromQL holdout is the KPI availability check — drops in C3 of this branch |
 | WASM static viewer (`site/viewer/`)                         | duckdb-wasm                      | unchanged (already DuckDB)                                            |
 | MCP (`src/mcp/`)                                            | `DuckDbBackend` via `SqlCapture` | **migrated** — `src/mcp/backend.rs` is the shared loader/projector    |
 | `rezolus parquet annotate`                                  | `DuckDbBackend`                  | **migrated** — validates KPIs via SQL                                 |
-| Save-as-Report column trim                                  | `MetricCatalog` (via `SqlCapture`) | **migrated** for SQL-backed captures; live-mode keeps the PromQL trim path |
-| Save-as-Report query embed                                  | `Tsdb` + PromQL `QueryEngine`    | **carve-out** for live-mode embed-only; SQL-backed captures use catalog only |
+| Save-as-Report column trim                                  | `MetricCatalog` (via `SqlCapture` or `LiveSource::catalog()`) | **migrated** for SQL captures; live-mode PromQL path drops in C2 of this branch |
+| Save-as-Report query embed                                  | `Tsdb` + PromQL `QueryEngine`    | live-mode embed-only; drops in C4 alongside the rest of the Tsdb plumbing |
 
 ## Build matrix
 
@@ -44,30 +49,50 @@ Both build clean.
 ```
 src/viewer/
   state.rs            AppState
-                        sql_backend: Arc<DuckDbBackend>       (one per process)
-                        captures:    Arc<CaptureRegistry>
+                        sql_backend:  Arc<DuckDbBackend>      (one per process)
+                        captures:     Arc<CaptureRegistry>
+                        live_source:  RwLock<Option<Arc<LiveSource>>>   (live mode)
                         upload_mutex: Mutex<()>               (serializes uploads)
                         new_sql(capture, backend, templates)  (file mode)
-                        new(tsdb, templates)                  (live mode, cfg-gated)
+                        new(tsdb, templates)                  (live mode, cfg-gated; collapsed in C4)
                         new_empty(templates)                  (upload-only)
                         with_baseline_data(|&dyn DashboardData| ...)
+                      const LIVE_BASELINE_DATA_SOURCE = "live:baseline"
 
   sql_capture.rs      SqlCapture { parquet_path, catalog,
                                    kind_by_metric, interval_seconds,
                                    time_range, source, version, filename }
                       impl DashboardData for SqlCapture
 
+  live_ingest.rs      Snapshot → LiveSource bridge (~343 LOC).
+                      Walks metriken_exposition::Snapshot, strips shape
+                      metadata, calls canonical_column_name for shape-
+                      identical _src column naming, then LiveSource::append.
+
   capture_registry.rs CaptureRegistry { baseline, experiment: RwLock<Option<CaptureSlot>> }
                       enum CaptureBackend { Sql(Arc<RwLock<SqlCapture>>),
                                             #[cfg(live-mode)] Live(Arc<RwLock<Tsdb>>) }
+                      The Live variant is residue for non-query metadata
+                      reads; it collapses in C4 once a placeholder
+                      DashboardData replaces Tsdb in that role.
 
-  routes.rs           /api/v1/query{,_range} → state.sql_backend.run_sql + arrow_to_prom_matrix
-                      Binder errors ("No matching columns" / "not found in FROM clause")
-                      → EMPTY_PROM_MATRIX, restoring legacy "unknown metric → empty series" UX.
+  routes.rs           data_source_for(state, capture) resolves the live
+                      key ahead of any parquet path, so /api/v1/query{,_range}
+                      dispatch is uniform across modes.
+                      run_sql is async; the backend call + Arrow projection
+                      run under tokio::task::spawn_blocking so 20+ parallel
+                      chart fetches don't starve the runtime (7fc2f4d).
+                      /api/v1/section_status is a server-driven sidebar
+                      gating endpoint (d048379 + f47cbba + 69ff6b5 + 87a8aae).
+                      Binder errors ("No matching columns" / "not found in
+                      FROM clause") → EMPTY_PROM_MATRIX, restoring legacy
+                      "unknown metric → empty series" UX.
 
   actions.rs          ingest_baseline_from_path: SqlCapture::open + atomic swap
                       attach_experiment / detach_experiment: SqlCapture-backed
                       connect_agent / ingest_loop / reset_tsdb: cfg-gated live-mode
+                      ingest_loop currently dual-feeds Tsdb + LiveSource;
+                      Tsdb side drops in C4.
 
 crates/prom-matrix/   arrow_to_prom_matrix(&[RecordBatch]) -> String       (native)
                       js_arrow_to_prom_matrix(&JsValue)  -> JsValue        (wasm)
@@ -118,21 +143,25 @@ a warm slot.
 
 The remaining carve-outs sit behind the `live-mode` feature
 (default-on). `--no-default-features --features sql-only` drops
-them. MCP and Save-as-Report column-trim used to be here too and
-have since moved off Tsdb — they're called out in the _Recently
-landed_ section below and are unconditional in both build
-configurations.
+them. MCP, Save-as-Report column trim, and the live-agent query
+path used to be here too and have since moved off Tsdb — they're
+called out in the _Recently landed_ section below.
 
-### 1. Live-agent query path
+### 1. `validate_service_extensions` — the last PromQL call site
 
-`rezolus view http://agent:4241` ingests snapshots into a `Tsdb`
-(`actions.rs::ingest_loop`), but `/api/v1/query{,_range}` return
-`capture_not_found` for live mode by design — the SQL handlers
-need a parquet on disk and there isn't one. The only PromQL
-execution that still happens in live mode is
-`validate_service_extensions` (KPI availability check on load).
-Storage choice for live ingest is the architectural question;
-sketched in _Removing Tsdb entirely_.
+`src/viewer/metadata.rs:328` runs each service-extension KPI's
+PromQL through `QueryEngine::new(&tsdb)` at viewer load time to
+mark `available = false` for KPIs whose data is empty. This is the
+only reason `tsdb.ingest(snapshot)` still runs in
+`actions.rs::ingest_loop` alongside the LiveSource append, and the
+only reason `metriken-query` is still in the default-build
+dependency tree. Migrating to SQL is C3 of this branch:
+`validate_service_extensions_sql(&DuckDbBackend, data_source, exts)`
+runs each `kpi.sql` through the backend; KPIs without SQL are
+marked unavailable (graceful fallback — same UX as the current
+PromQL-empty case, since the silent-render fixes in `6054fe2`
+render them as `_unavailable` placeholder cards). After C3,
+`tsdb.ingest` and `metriken-query` go away in C4-C5.
 
 ### 2. Service-extension KPI templates: gauges/counters on SQL, histograms still PromQL
 
@@ -411,6 +440,129 @@ PromQL (CLI contract).
 Auto-skips when the demo fixture is missing or when the binary
 isn't built.
 
+### `7fc2f4d` — viewer: spawn_blocking the SQL handler
+
+`/api/v1/query{,_range}` used to run `state.sql_backend.run_sql`
+inline on the tokio worker thread. With 20+ parallel chart fetches
+on first page-load, the synchronous DuckDB call (warm-pool checkout
++ query execution + Arrow projection) starved the runtime, leaving
+unrelated handlers (`/api/v1/sections`, `/api/v1/metadata`) waiting
+behind the SQL queue.
+
+`run_sql` is now `async`. The backend call + `arrow_to_prom_matrix`
+projection both run under `tokio::task::spawn_blocking`. A
+`JoinError` (task panic) maps to the same `sql_error` shape the
+binder-error shim uses, so the frontend sees a uniform error
+envelope. The DuckDB pool's per-slot Mutex remains the residual
+serialization point — but it's now visible as queueing inside the
+backend, not as runtime starvation outside it.
+
+Measured: a 560-parallel-query smoke against `vllm.parquet` on a
+5-core box dropped from multi-second worst-case wall time to ~700 ms
+worst-case and ~360 ms mean.
+
+### Sidebar section gating — `d048379` + `f47cbba` + `69ff6b5` + `87a8aae`
+
+Pre-this-bundle, every section in the sidebar appeared live as soon
+as the dashboard JSON loaded — even sections whose plots had no
+matching metrics in the recording (which would render blank or as
+`_unavailable` cards). Users had to click through to discover empty
+sections.
+
+`d048379` adds `/api/v1/section_status`, a server-driven endpoint
+that ports `processDashboardData`'s plot-keep rules to the backend:
+for each section, the server enumerates plots and reports
+`withData` (a strict subset that returned non-empty rows) plus
+total plot counts. `f47cbba` consumes the response client-side in a
+`sectionStatus` map that persists past the 3-entry response-cache
+eviction, gating sidebar entries: sections with `withData == 0`
+render in gray. `69ff6b5` moves the `section_status` fetch under
+the splash screen so the first paint reflects the gating; the
+splash takes ~200 ms longer but there's no gray-flash. `87a8aae`
+adds a cgroup edge-case carve-out: cgroup plots are deferred (only
+materialised once a cgroup is selected), so they shouldn't count
+toward `withData` when the parquet has no cgroups at all — the
+status endpoint probes `_cgroup_index` row count up front.
+
+### `17f1107` + `1d471cd` + `494b4fc` + `f5482ff` — live mode migrates to DuckDB (LiveSource)
+
+The single largest landing on the branch post-doc-baseline. Closes
+the live-agent query carve-out (formerly carve-out 1, formerly item
+D of "Removing Tsdb entirely").
+
+**Engine side (metriken).** `metriken_query_sql::LiveSource`
+(`live.rs`, ~800 LOC) is an in-memory DuckDB table whose `_src`
+grows column-by-column as new metrics appear. Single shared
+`Mutex<Connection>` (DuckDB is `!Sync`); the parquet path's per-
+slot pool model doesn't apply because each pool slot is an
+independent in-memory DB — fine for the immutable parquet case,
+wrong for a shared mutable table. Schema growth (`ALTER TABLE
+_src ADD COLUMN`) plus single-row INSERT happens under one mutex
+acquisition. `_cgroup_index` rebuilds via the same
+`render_cgroup_index_sql` renderer the parquet path uses; `_src_<source>`
+is a pass-through `SELECT *` view that auto-picks up new columns.
+
+`DuckDbBackend` gains `create_live_source(data_source, source_name,
+sampling_interval_ms) -> Arc<LiveSource>` and a `live_sources` map
+parallel to the parquet `connections` map. `run_sql` /
+`describe_parquet` / `invalidate` all check live sources first
+before falling through to the parquet pool. Same API surface; the
+backend dispatches.
+
+`494b4fc` exposes `canonical_column_name` as a public free
+function — mirrors the parquet path's `canonical_alias` rule so
+external bridges (rezolus's `live_ingest.rs`) build `_src` column
+names byte-identical to what the parquet path would produce.
+Without this, rezolus agents emitting numeric label values (`"49"`,
+`"24x0"`) ended up with `_src` columns named `49, 50, 51, ...` and
+dashboard SQL targeting `^cpu_usage(/[^:]+)?$` matched nothing.
+
+`1e5a2a2` (slot-acquisition try_lock fast-path) landed alongside,
+unrelated to live but improves parquet-path concurrency. Slot
+checkout now scans all pool slots non-blockingly via `try_lock`
+starting at the round-robin pick; falls back to blocking only when
+every slot is busy. Eliminates the "12 peers queued behind a slow
+slot" pathology that was the residual after `spawn_blocking`.
+
+**Consumer side (rezolus).** `1d471cd` adds
+`live_source: RwLock<Option<Arc<LiveSource>>>` to `AppState` and
+the constant `LIVE_BASELINE_DATA_SOURCE = "live:baseline"` (picked
+to not collide with any parquet path). `init_live_mode` and
+`/api/v1/connect` register a fresh source on `state.sql_backend`
+and pass the `Arc<LiveSource>` to `ingest_loop` for dual-feed.
+`data_source_for(state, capture)` resolves baseline to the live key
+ahead of any parquet path, so `/api/v1/query{,_range}` dispatch is
+uniform.
+
+`src/viewer/live_ingest.rs` (~343 LOC) is the new bridge: walks
+`metriken_exposition::Snapshot` (Counter / Gauge / Histogram),
+strips shape-keys (`metric_type`, `unit`, `grouping_power`,
+`max_value_power`) from labels, builds `LiveColumn` descriptors
+canonicalised via `canonical_column_name`, and issues one
+`LiveSource::append` per snapshot. The Snapshot is cloned for the
+live path so the legacy `tsdb.ingest` continues to consume the
+original — Snapshot accessors take `&mut self` and `std::mem::take`
+the inner Vecs. Clone of ~tens of KB at 1 Hz is negligible; the
+clone drops alongside the Tsdb feed in C4 of this branch.
+
+`f5482ff` adds chromium smoke `--live <agent-url> [--ingest-wait N]`
+mode for end-to-end coverage.
+
+**Test coverage added.** L1: 10 tests in
+`metriken-query-sql/tests/live.rs` (round-trip, schema growth,
+NULL semantics, cgroup_index rebuild, timestamp snap, per-source
+view, concurrent read+write, bad-SQL surfacing). L2: 5 tests in
+`metriken-query-sql/src/live.rs::tests` (cross-engine parity —
+replay parquet rows into a LiveSource, assert byte-identical Arrow
+output for SELECT/COUNT/MIN/MAX/SUM/irate_1s/h2_*). L3: 5 tests in
+`src/viewer/routes.rs::live_route_tests` (data_source_for dispatch,
+metadata time-range advances as snapshots accumulate). L4: 2 tests
+in `src/viewer/live_ingest::tests` (snapshot round-trip, cgroup
+label propagation).
+
+What's NOT migrated: `validate_service_extensions`. That's C3 of
+this branch.
+
 ---
 
 ## Tests
@@ -421,54 +573,22 @@ isn't built.
 | `cargo test -p dashboard`          | DashboardData impls, plot emitters, sql_snapshots.                 |
 | `cargo test -p prom-matrix`        | Arrow → Prometheus matrix projection (incl. NaN/Inf row-dropping). |
 | `cargo test -p viewer-sql`         | WASM crate's SHARED_MACROS parity against the native engine.       |
-| `cargo test -p metriken-query-sql` | UDFs, backend pool, concurrent invalidate stress.                  |
-| `cargo test -p report-save`        | Column-trim resolvers (SQL via `MetricCatalog`; live-mode via `Tsdb`). |
+| `cargo test -p metriken-query-sql` | UDFs, backend pool, LiveSource parquet↔live parity. **Run from `/work/metriken/`** — the crate lives in the sibling repo, not in the rezolus workspace. |
+| `cargo test -p report-save`        | Column-trim resolvers (SQL via `MetricCatalog`; live-mode via `Tsdb` — live-mode path drops in C2). |
 | `cargo test --test mcp_cli`        | End-to-end MCP CLI smoke against `target/debug/rezolus` + `demo.parquet` (auto-skips when fixtures or binary are missing). |
 | `node --test tests/*.mjs`          | Frontend pure-JS tests.                                            |
 | `bash tests/viewer_smoke.sh`       | End-to-end (upload / file / A-B / proxy). Requires `jq`.           |
 | `bash scripts/viewer_chromium_smoke.sh <parquet>` | Headless-Chromium per-section smoke. Drives `rezolus view <parquet>` and navigates to every section in `/api/v1/sections`, then asserts each one either rendered a chart (`.chart-wrapper` with svg/canvas), reserved an `_unavailable` placeholder (`.chart-unavailable`), or displayed a "Charts with no data / Unavailable KPIs" notes section (`.section-notes`). Captures per-section screenshots, console errors, failed network requests, and HTTP 4xx/5xx responses. Surfaces the *silent* failure mode the API-only `viewer_smoke.sh` cannot — section returns 200 but renders nothing. Requires `chromium`, `jq`, `python3`, `python websockets` (`pip install --user websockets`). |
+| `bash scripts/viewer_chromium_smoke.sh --live <agent-url> [--ingest-wait N]` | Same per-section render check, against a running agent. Waits N seconds after viewer startup (default 5) so `_src` accumulates rows before sections are exercised. Post-LiveSource (`1d471cd` + `f5482ff`) live-mode renders the same dashboards as file mode. |
 
-Frontend JS has 6 pre-existing failures referencing the retired
-in-process WASM PromQL viewer (`crates/viewer/` deleted) and the
-PromQL-side `buildEffectiveQuery` injection path that goes
-unreached on `BACKEND='sql'`. Both are dead code on the
-server-backed viewer; the tests should be retired in a follow-up
-cleanup, not fixed.
-
-### Chromium smoke — two silent-rendering bugs fixed
-
-Adding `viewer_chromium_smoke.sh` surfaced two latent bugs that the
-API-only `viewer_smoke.sh` could not see because both produced 200
-OK responses with empty rendered output:
-
-1. **`data.js::processDashboardData` stripped `_unavailable` KPIs.**
-   The "no-data" filter loop (`src/viewer/assets/lib/data.js`
-   line ~489) checked `plotHasData(plot)` but not `plot._unavailable`.
-   KPIs whose `sql` field was null (i.e. PromQL-only templates from
-   pre-`91ea72e` parquets) got flagged `_unavailable` upstream, then
-   silently dropped here, so the chart-unavailable placeholder
-   defined in `charts/chart.js` never reached the renderer. The
-   data.js filter now mirrors `viewer_core.js::plotHasData`, keeping
-   `_unavailable` plots through to the placeholder render.
-
-2. **`loadSection` cached the section payload before `data.metadata`
-   was initialized.** `storeSectionResponse` makes a shallow copy
-   (`const { sections, ...stored } = data`). `processDashboardData`
-   then ran `data.metadata = data.metadata || {}` after caching, so
-   the reassignment hit the *live* object but never propagated to
-   the cached `stored.metadata` — staying `undefined`. The route
-   view reads `attrs.metadata.unavailable_charts` off the cached
-   entry, so the "Charts with no data" notes never rendered.
-   `loadSection` (`src/viewer/assets/lib/app.js` line ~288) now
-   ensures `data.metadata = {}` *before* caching so both objects
-   share the same `metadata` reference and subsequent
-   `data.metadata.X` writes are visible through the cache.
-
-Net effect on a pre-`91ea72e` parquet (PromQL-only KPI definitions
-embedded): every service section now renders KPI placeholder slots
-instead of a blank page, and every sampler section that has no
-matching metrics in the recording renders the "Charts with no data"
-explanatory list instead of "(0)" + a void.
+Frontend JS has 6 pre-existing failures: 5 in
+`compare_node_filter.test.mjs` (PromQL-side `buildEffectiveQuery`
+paths unreached on `BACKEND='sql'`) + 1 in
+`wasm_viewer_histogram_kpis.test.mjs` (ENOENT on the retired
+pre-2026 `site/viewer/pkg/wasm_viewer.js` artifact path). Both
+files target code paths that no longer exist on the server-backed
+viewer; they're slated for deletion in C4 of this branch alongside
+the rest of the Tsdb plumbing.
 
 ---
 
@@ -486,9 +606,12 @@ curl -s "http://127.0.0.1:9091/api/v1/query_range" \
   --data-urlencode 'start=0' --data-urlencode 'end=99999999999' --data-urlencode 'step=1' -G
 pkill rezolus
 
-# SQL-only build — only the live-agent ingest path is excluded.
-# MCP, file/upload/A-B viewer, parquet annotate, and report-save
-# column-trim all build and run in this configuration.
+# SQL-only build — drops the live-agent ingest plumbing. MCP, the
+# file/upload/A-B viewer, parquet annotate, and report-save
+# column-trim all build and run in this configuration. Live-mode
+# queries (now SQL via LiveSource) still require the live-mode
+# feature for the ingest loop itself. Both feature seams disappear
+# once C4 lands.
 cargo build --bin rezolus --no-default-features --features sql-only
 cargo tree -p rezolus --no-default-features --features sql-only | grep 'metriken-query v'   # (empty; only metriken-query-sql appears)
 ./target/debug/rezolus view site/viewer/data/demo.parquet --listen 127.0.0.1:9091 &
@@ -497,6 +620,16 @@ pkill rezolus
 
 # MCP smoke under sql-only
 ./target/debug/rezolus mcp query site/viewer/data/demo.parquet 'SELECT count(*) AS n FROM _src'
+
+# Live-mode smoke (post-LiveSource) — requires an agent on :4241
+sudo ./target/release/rezolus config/agent.toml &
+REZOLUS_NO_OPEN=1 ./target/debug/rezolus view http://localhost:4241 --listen 127.0.0.1:9091 &
+sleep 5   # let _src accumulate
+curl -s "http://127.0.0.1:9091/api/v1/query_range" \
+  --data-urlencode 'query=SELECT timestamp/1e9 AS t, "cpu_usage/user/0"::DOUBLE AS v FROM _src ORDER BY t LIMIT 3' \
+  --data-urlencode 'start=0' --data-urlencode 'end=99999999999' --data-urlencode 'step=1' -G
+# Should return matrix JSON (not capture_not_found).
+pkill rezolus
 ```
 
 Open <http://127.0.0.1:9091> for the full dashboard rendered via
@@ -506,50 +639,58 @@ SQL against DuckDB.
 
 ## Removing Tsdb entirely
 
+**Mid-execution in this branch (C2-C5).** The four-item plan below
+matched the pre-LiveSource picture; LiveSource (`1d471cd` + `17f1107`)
+closed item D as a fourth-option in-memory DuckDB table, and items
+A/B/C are now ordered as the C2-C5 commit sequence.
+
 Goal: drop `metriken-query` from the default build's dep tree, and
-delete `metriken-query::{promql, tsdb}` (~6,580 LOC) from the
-engine side. After this, `metriken-query` either disappears or
-becomes a thin re-export shell over `metriken-query-sql`; the
-harness's land-or-delete decision (see the metriken doc) is part
-of how this lands.
+delete `metriken-query::{promql, tsdb, harness}` (~10,914 LOC) from
+the engine side. After this, `metriken-query` is deleted as a crate
+(the harness's land-or-delete decision converged on **delete** once
+LiveSource landed — no remaining consumer wants the harness; see
+the metriken doc).
 
-The default build still pulls in `metriken-query` because **three**
-call-site classes still need it: the live-agent ingest path
-(item D below), `validate_service_extensions` on live mode
-(item B), and the dashboard crate's cfg-gated `Tsdb`
-re-export/`DashboardData` impl (item C). The plan defers all three
-behind a live-ingest storage decision; MCP, report-save column trim,
-the MCP audit-and-delete, and `parquet annotate` have all landed.
+The default build still pulls in `metriken-query` because **two**
+call-site classes still need it: `validate_service_extensions`
+on live mode (item B, migrates in C3), and the dashboard crate's
+cfg-gated `Tsdb` re-export/`DashboardData` impl (item C, dropped in
+C4). The `tsdb.ingest` in `ingest_loop` remains only to feed
+`validate_service_extensions`; it drops in C4 alongside the rest.
+MCP, report-save column trim, the MCP audit-and-delete,
+`parquet annotate`, and the live-agent query path have all landed.
 
-### A. report-save live-mode column trim (deferred — keeps Tsdb in
-live mode)
+### A. report-save live-mode column trim — drops in C2
 
 The HTML report renderer's live-mode `save_single_parquet` /
 `save_combined_ab_tarball` use a `Tsdb` only to drive the PromQL
 column-trim path (`resolve_kept_columns`). report-save **does not run
 queries** — it only embeds selection JSON into parquet footer
 metadata via `embed_selection_in_parquet`; query execution happens
-client-side at view time. Deleting the live-mode PromQL trim would
-make live-mode captures fall through to `embed_only` (full parquet
-bytes, no trim) — acceptable but a UX regression. Tied to the
-live-ingest decision (item D); once that lands and live captures are
-SQL-backed, the live-mode branch is dead and the trim path drops out
-naturally.
+client-side at view time. Now that LiveSource exposes a
+`MetricCatalog` (`LiveSource::catalog()` mirrors the parquet-path
+shape), live captures route through the existing `save_*_sql`
+paths via the same `resolve_kept_columns_sql` resolver SqlCaptures
+use. The legacy `resolve_kept_columns` deletes whole in C2 of this
+branch.
 
-### B. `validate_service_extensions` (`src/viewer/metadata.rs`)
+### B. `validate_service_extensions` (`src/viewer/metadata.rs`) — drops in C3
 
 Small. Runs each KPI's PromQL against the live-agent `Tsdb` to
-mark KPIs `available=false` when their data is empty. Two
-dependencies:
+mark KPIs `available=false` when their data is empty. Both
+preconditions are met now:
 
-- Carve-out 2 (service-extension SQL templates) must land first
-  so KPIs carry SQL strings.
-- A SQL backend for the live-agent capture must exist (see D).
+- Carve-out 2: 128/218 KPIs carry SQL (`91ea72e` auto-transcription).
+- A SQL backend for the live-agent capture: LiveSource (`1d471cd`).
 
-After both, this function is a half-page rewrite: run each
-`kpi.sql` through `DuckDbBackend`, check non-empty.
+C3 of this branch rewrites the function: run each `kpi.sql` through
+`DuckDbBackend` with the same `data_source_for(state, capture)` the
+query handlers use; KPIs without SQL are marked unavailable
+(graceful — same UX as PromQL-empty rendering, since `6054fe2`
+makes the frontend render unavailable plots as `_unavailable`
+placeholder cards).
 
-### C. Dashboard crate's `Tsdb` re-export + `DashboardData` impl
+### C. Dashboard crate's `Tsdb` re-export + `DashboardData` impl — drops in C4
 
 `crates/dashboard/src/lib.rs:11` re-exports `Tsdb`, and
 `data.rs:55` `impl DashboardData for Tsdb` (cfg-gated to
@@ -557,67 +698,67 @@ After both, this function is a half-page rewrite: run each
 uses `Tsdb::default()` to drive the dashboard generators for
 schema dumps.
 
-These exist solely because `Tsdb` is still a live `DashboardData`.
-Once items A and B above land and the live-agent path migrates
-(see D), the cfg-gated `impl` and the re-export delete with no
-remaining consumer. The dump binary needs a synthetic
-`DashboardData` (an empty `SqlCapture`-shaped placeholder is the
-obvious shape) so the static schema dump survives.
-
-The same applies to the scatter of `Tsdb::default()` in test
-fixtures across `dashboard/src/dashboard/{mod,category,service}.rs`
-and `viewer/{state,metadata,actions}.rs`. All replace with a
-synthetic `DashboardData` once the trait is the only contract.
+These exist solely because `Tsdb` is still a live `DashboardData`
+through the `CaptureBackend::Live` variant. After C3 lands, nothing
+runs queries against `Tsdb` anymore — but `Tsdb::default()` still
+back-stops scalar metadata reads (sections / metadata / systeminfo
+handlers) in live mode. C4 swaps `Tsdb::default()` for a synthetic
+empty `DashboardData` impl (a unit struct that reports zero metrics
+and an empty time range — sufficient because the live-source path
+serves all real data through SQL now). The cfg-gated `impl
+DashboardData for Tsdb`, the dashboard re-export, and the scatter
+of `Tsdb::default()` test fixtures across
+`dashboard/src/dashboard/{mod,category,service}.rs` and
+`viewer/{state,metadata,actions}.rs` all delete with it.
 (`report-save/src/lib.rs` uses `Tsdb::load_from_bytes` rather than
 `Tsdb::default()`; same shape, same disposition.)
 
-### D. The live-agent ingest path (storage choice)
+### D. The live-agent ingest path — landed (LiveSource)
 
-This is the architectural question. Today
-`src/viewer/actions.rs::ingest_loop` polls `/metrics/binary` from
-the agent and calls `tsdb.ingest(snapshot)`. To remove `Tsdb`,
-snapshots need to land in something DuckDB can query. Three
-sketches:
+**This item is closed.** Commit `17f1107` (metriken) + `1d471cd`
+(rezolus) landed `LiveSource`: an in-memory DuckDB table grown via
+`ALTER TABLE _src ADD COLUMN` + `INSERT` per snapshot, served by
+the same `DuckDbBackend` the parquet path uses. The three sketches
+originally considered (rolling on-disk parquet, in-memory DuckDB
+table, in-memory parquet bytes) all anticipated the "highest
+plumbing cost" of incremental schema growth — the actual cost
+turned out manageable because the per-source view layer (`views.rs`)
+and `render_cgroup_index_sql` from the parquet path reused
+cleanly. The follow-on architectural simplification (collapsing
+live mode and post-incident snapshot into one storage path with
+two viewers) remains an option for a future round; not a blocker
+for Tsdb deletion.
 
-- **Rolling on-disk parquet.** Hindsight already does this for
-  post-incident snapshots. Live mode becomes "rezolus view
-  <rolling-buffer-path>"; the viewer doesn't need to know it's
-  live. Cheap, reuses hindsight's rotation logic, deduplicates a
-  whole storage path. Query freshness = rotation period. Probably
-  the right move long-term: one ingest, one storage, two
-  consumers.
-- **In-memory DuckDB table.** `ingest_loop` builds an Arrow
-  `RecordBatch` from each snapshot (metriken-exposition's
-  `MsgpackToParquet` already has the shape) and `INSERT`s into a
-  named table. Lowest latency. Highest plumbing cost — the
-  schema needs to grow incrementally as new metrics appear,
-  which the current parquet flow handles implicitly.
-- **In-memory parquet bytes.** Buffer recent snapshots as parquet
-  bytes; query via `read_parquet('blob:...')`. Halfway between
-  the other two; loses the on-disk durability of option 1 and
-  the freshness of option 2.
-
-If hindsight's rotation logic is reusable (it is), option 1 is the
-shortest path. The follow-on simplification — collapsing live
-mode and post-incident snapshot into one storage path with two
-viewers — is the long-term architectural win.
+What `ingest_loop` still does after LiveSource: dual-feeds
+`tsdb.ingest(snapshot)` alongside the LiveSource append, purely to
+keep `validate_service_extensions` (item B) working until C3.
+After C3 the Tsdb feed is dead weight; C4 removes it.
 
 ### What deletes when A-D all land
 
-- `promql-parser` dep goes.
-- `metriken-query/src/promql/` (4,716 LOC) goes.
-- `metriken-query/src/tsdb/` (1,863 LOC) goes.
-- The `legacy` and `ingest` features go.
+- `promql-parser` dep goes (C5).
+- `metriken-query/src/promql/` (4,716 LOC) goes (C5).
+- `metriken-query/src/tsdb/` (1,863 LOC) goes (C5).
+- `metriken-query/src/harness/` (4,335 LOC) goes (C5).
+- `metriken-query/examples/{sql_vs_promql,wide_form_coverage,enumerate_rezolus_queries}.rs`
+  go (C5); `queries.toml` goes.
+- The `legacy`, `ingest`, and `harness` features go (C5).
 - `crates/dashboard/`: the `metriken-query` dep, the `Tsdb`
-  re-export, and the cfg-gated `DashboardData` impl all go.
-- The `#[cfg(feature = "live-mode")]` gates across `src/main.rs`,
-  `src/viewer/{state,actions,metadata}.rs`,
-  `src/viewer/capture_registry.rs::CaptureBackend::Live`, and
-  `src/parquet_tools/mod.rs` go — the carve-out marker
-  vanishes.
+  re-export, and the cfg-gated `DashboardData` impl all go (C4).
+- `crates/report-save/`: `metriken-query/legacy` feature dep + the
+  live-mode column-trim path go (C2).
+- All 83 `#[cfg(feature = "live-mode")]` gates across
+  `src/viewer/{state,actions,metadata,mod,capture_registry,routes,
+  live_ingest,sql_capture,tsdb}.rs` and `src/parquet_tools/mod.rs`
+  go (C4) — the carve-out marker vanishes.
+- The `live-mode` and `sql-only` features themselves go (C4) — single
+  build matrix.
+- `metriken-query` crate is deleted from the workspace (C5);
+  reduced to a thin re-export shell only if a downstream consumer
+  surfaces (none has).
 
-The harness's land-or-delete (metriken-side) collapses to **delete**
-once items A-D land: every previous candidate consumer (MCP,
+The harness's land-or-delete (metriken-side) collapsed to **delete**
+once LiveSource landed: every previous candidate consumer (MCP,
 report-save column trim, `validate_service_extensions`, report-save
-live-mode trim) is going the SQL-rewrite route, not the harness route.
-The build matrix simplifies to a single configuration.
+live-mode trim) went the SQL-rewrite route, not the harness route.
+The build matrix simplifies to a single configuration after C4.
