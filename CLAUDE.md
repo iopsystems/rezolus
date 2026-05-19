@@ -15,12 +15,6 @@ cargo build
 # Build (release)
 cargo build --release
 
-# Build SQL-only — drops live-agent mode. MCP is included (post-May-2026
-# migration onto DuckDbBackend). Legacy metriken-query (Tsdb + PromQL) is
-# not in the dep tree.
-# Verify with `cargo tree -p rezolus --no-default-features --features sql-only`.
-cargo build --bin rezolus --no-default-features --features sql-only
-
 # Run tests
 cargo test
 
@@ -81,13 +75,9 @@ target/release/rezolus record --metadata source=llm-perf http://host:9090/metric
 # Viewer - web dashboard for parquet files, live agents, or upload mode.
 # All paths (file / upload / A-B / live-agent) run SQL through
 # metriken-query-sql::DuckDbBackend. Live captures back the same backend
-# via a `LiveSource` registered under the key `live:baseline`. The
-# `live-mode` Cargo feature (default-on) currently gates the ingest loop
-# and the residual Tsdb-feed that backs `validate_service_extensions`;
-# --no-default-features --features sql-only drops both. Feature seams
-# disappear once validate_service_extensions migrates to SQL.
+# via a `LiveSource` registered under the key `live:baseline`.
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
-target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection (live-mode feature)
+target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
 
 # Hindsight - rolling ring buffer for incident analysis
@@ -102,8 +92,8 @@ target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
 
 # MCP - AI analysis server or CLI commands. Runs against parquet files via
-# metriken_query_sql::DuckDbBackend (post-May-2026 migration). Built in
-# both default and sql-only configurations. `query` takes DuckDB SQL;
+# metriken_query_sql::DuckDbBackend (post-May-2026 migration). `query`
+# takes DuckDB SQL;
 # `detect-anomalies` and `analyze-correlation` accept either a bare metric
 # name (auto-resolved to canonical rate/sum/quantile SQL) or full SQL.
 target/release/rezolus mcp                                                    # stdio server
@@ -134,17 +124,13 @@ The binary operates in seven modes via subcommands:
      so parallel chart fetches don't starve the runtime.
    - **Live agent** path appends each polled snapshot to a
      `metriken_query_sql::LiveSource` registered with the same backend
-     under the key `live:baseline`. `data_source_for(state, capture)`
-     in `routes.rs` resolves the live key ahead of any parquet path,
-     so `/api/v1/query{,_range}` dispatch is uniform across modes.
-     The `live-mode` Cargo feature (default-on) gates the ingest loop
-     and the `tsdb.ingest(snapshot)` dual-feed that backs
-     `validate_service_extensions` (load-time KPI availability check —
-     the last PromQL holdout). `--no-default-features --features sql-only`
-     drops the live ingest path and removes `metriken-query` from the
-     dep tree. Both feature seams disappear once
-     `validate_service_extensions` migrates to SQL and the Tsdb-side
-     of the dual-feed is removed.
+     under the key `live:baseline`, plus updates a `LiveCapture`
+     schema cache in lockstep so `DashboardData` queries see the
+     observed metrics. `data_source_for(state, capture)` in
+     `routes.rs` resolves the live key ahead of any parquet path so
+     `/api/v1/query{,_range}` dispatch is uniform across modes.
+     `validate_service_extensions` runs each KPI's SQL through the
+     same backend; no PromQL anywhere.
    - Service-extension KPI sections: 128/218 templates ship `sql`
      fields (`91ea72e`); the remaining 90 render as `_unavailable`
      placeholder cards via the silent-render path (`6054fe2`). SQL
@@ -155,17 +141,12 @@ The binary operates in seven modes via subcommands:
    helper module `src/mcp/backend.rs` owns parquet opening
    (`open_capture`), Arrow → series projection (`batches_to_series`), and
    SQL builders for the three metric kinds (`counter_sum_rate_sql`,
-   `gauge_sum_sql`, `histogram_quantile_sql`). The audit-and-delete pass
-   landed (`510b3c3` / `a06c6ab`); no `live-mode` cfg-gates remain in
-   `src/mcp/`, MCP builds unconditionally in both default and `sql-only`
-   configurations.
+   `gauge_sum_sql`, `histogram_quantile_sql`).
 7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata`
    (inspect), `annotate` (validates KPIs by running their SQL through
    `DuckDbBackend`; KPIs without `sql` are marked unavailable),
    `combine` (merge multi-source files), `events` (annotate one-off
-   events), `filter` (column-trim by selection). `combine` is the only
-   submodule unconditional; `annotate` and `filter` are gated to
-   `live-mode` because `filter` consumes `annotate::extract_metric_selectors`.
+   events), `filter` (column-trim by selection).
 
 ### Sampler Architecture
 
@@ -250,7 +231,6 @@ zero or more label columns.
 - `metriken` - Metric registration core (unconditional)
 - `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion (unconditional)
 - `metriken-query-sql` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`, `LiveSource`. The query engine for the server viewer (parquet + live), the MCP CLI/server, and the static WASM viewer.
-- `metriken-query` - Legacy in-memory `Tsdb` + PromQL engine. **Optional dep behind `live-mode` feature**, kept only to back `validate_service_extensions` until C3 of this branch migrates it to SQL. Crate is deleted in C5.
 - `libbpf-rs` / `libbpf-cargo` - eBPF program management (Linux)
 - `axum` - HTTP server
 - `tokio` - Async runtime

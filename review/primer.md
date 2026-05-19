@@ -4,19 +4,16 @@ For someone running the binary and the test suite. The code reviewer
 reads `review.md`; the newcomer reads `architecture.md`.
 
 - **What the branch does.** Migrates every viewer path (file / upload /
-  A-B / live-agent), MCP, `parquet annotate`, and Save-as-Report
-  column trim off in-memory PromQL (`metriken_query::Tsdb`) and onto
-  DuckDB-backed SQL through `metriken_query_sql::DuckDbBackend`. Live
-  mode now appends snapshots to a `LiveSource` registered with the
-  same backend (`live:baseline` key); `/api/v1/query{,_range}`
-  dispatches on a data-source string but the SQL code path is
-  identical for both ingest paths. The only remaining PromQL is
-  `validate_service_extensions` (a load-time KPI availability check);
-  the "Removing Tsdb entirely" plan in `review.md` is mid-execution
-  in this branch — C2-C5 migrate the validator to SQL and delete
-  `metriken-query` whole. While that work lands, `live-mode`
-  (default-on) still gates the dual-ingest plumbing and
-  `--features sql-only` drops `metriken-query`.
+  A-B / live-agent), MCP, `parquet annotate`, Save-as-Report column
+  trim, and `validate_service_extensions` off in-memory PromQL
+  (`metriken_query::Tsdb`) and onto DuckDB-backed SQL through
+  `metriken_query_sql::DuckDbBackend`. Live mode now appends
+  snapshots to a `LiveSource` registered with the same backend
+  (`live:baseline` key); `/api/v1/query{,_range}` dispatches on a
+  data-source string but the SQL code path is identical for both
+  ingest paths. The `metriken-query` crate is deleted from the
+  workspace; the `live-mode` / `sql-only` feature seam is gone;
+  single build: `cargo build --bin rezolus`.
 
 - **Where the change lives** (concept order — engine first, callers after).
   - **The engine.** `/work/metriken/metriken-query-sql/` is a new
@@ -70,25 +67,18 @@ reads `review.md`; the newcomer reads `architecture.md`.
     commits `17f1107` / `1d471cd` / `494b4fc` / `f5482ff` — `_src`
     is byte-shape-identical to parquet so the same dashboard SQL
     binds in both modes).
-  - **The verification harness.**
-    `/work/metriken/metriken-query/examples/sql_vs_promql.rs`
-    (~1,915 LOC) runs every dashboard plot through both PromQL
-    (legacy evaluator) and SQL (wasm-style DuckDB connection
-    mirroring the browser's setup), and diffs canonical JSON
-    plot-by-plot. Substitutes `__SELECTED_CGROUPS__` per parquet
-    from a fabricated `_cgroup_index` built from Arrow field
-    metadata. **Deleted in C5 of this branch** along with the
-    PromQL evaluator it diffs against; correctness post-deletion
-    rests on dashboard snapshot tests + parquet ↔ live parity
+  - **Verification (post-Tsdb-deletion).** No more PromQL evaluator
+    to diff against. Correctness rests on dashboard snapshot tests
+    (`crates/dashboard/tests/sql_snapshots.rs`), parquet ↔ live
     tests in `metriken-query-sql/src/live.rs`.
 
-- **What's verified.** The harness against `demo.parquet`,
-  `AB_level_pin.parquet`, `AB_base.parquet` reports **698 identical
-  / 1 divergent / 0 errors / 0 skipped**. The single divergence is
-  `numa-local-rate` on `AB_base.parquet`, `rel ≈ 2.7e-5` —
-  floating-point residual from the 5-min RANGE arithmetic;
-  sub-tolerance. Three behavioural fixes landed this session to
-  bring SQL into alignment with PromQL semantics:
+- **Historical verification (pre-deletion).** The `sql_vs_promql`
+  harness against `demo.parquet`, `AB_level_pin.parquet`,
+  `AB_base.parquet` reported **698 identical / 1 divergent / 0
+  errors / 0 skipped**. The single divergence was `numa-local-rate`
+  on `AB_base.parquet`, `rel ≈ 2.7e-5` — floating-point residual
+  from the 5-min RANGE arithmetic; sub-tolerance. Three behavioural
+  fixes landed in the SQL pipeline to align with PromQL semantics:
   - `rate_5m_total`: `RANGE 5m PRECEDING` → `5m − 1 ns` to exclude
     the boundary sample at `t − 5m` (PromQL's strict-greater
     semantics on parquets with sub-second start offsets).
@@ -122,17 +112,15 @@ reads `review.md`; the newcomer reads `architecture.md`.
 - **How to test — automated** (from `/work/rezolus` unless noted):
 
   ```bash
-  # Build matrix
+  # Build (single configuration; no feature flags)
   cargo build --bin rezolus
-  cargo build --bin rezolus --no-default-features --features sql-only
-  cargo tree -p rezolus --no-default-features --features sql-only \
-      | grep 'metriken-query v'                  # must be empty
+  cargo tree -p rezolus | grep 'metriken-query ' # empty (only metriken-query-sql appears)
 
   # Native + frontend + smoke
-  cargo test --bin rezolus                       # ~181
+  cargo test --bin rezolus                       # ~184
   cargo test -p dashboard -p prom-matrix -p viewer-sql -p report-save
-  cargo test --test mcp_cli                      # ~8
-  node --test tests/*.mjs                        # 116 pass / 6 fail (see below)
+  cargo test --test mcp_cli                      # 8
+  node --test tests/*.mjs                        # 116 pass / 0 fail
   bash tests/viewer_smoke.sh                     # requires jq
 
   # Headless-Chromium per-section render check. Drives `rezolus view
@@ -186,19 +174,16 @@ reads `review.md`; the newcomer reads `architecture.md`.
   - A/B compare: load two parquets.
 
 - **Known not-regressions** — documented; don't report.
-  - 6 JS test failures: 5 in `compare_node_filter.test.mjs`
-    (PromQL-side `buildEffectiveQuery` paths skipped on
-    `BACKEND='sql'` — they target a code path that no longer fires)
-    and 1 in `wasm_viewer_histogram_kpis.test.mjs` (ENOENT on
-    `site/viewer/pkg/wasm_viewer.js`, the retired pre-2026 PromQL
-    WASM crate's output path). Both test files are slated for
-    deletion in C4.
-  - `sql_vs_promql` `numa-local-rate` divergence on `AB_base`
-    (`rel ≈ 2.7e-5`). Floating-point residual; sub-tolerance at
-    `--rel-tol 1e-4`.
-  - `--no-default-features --features sql-only` build emits ~24
-    dead-code warnings from PromQL helpers still in tree. Clears
-    when `metriken-query` is deleted in C5.
+  - `sql_vs_promql` historical regression check (pre-deletion): the
+    only divergence was `numa-local-rate` on `AB_base` (`rel ≈
+    2.7e-5`), a floating-point residual sub-tolerance at `--rel-tol
+    1e-4`. The harness + PromQL evaluator are both gone post-C5;
+    correctness now rests on the L2 parquet ↔ live parity tests in
+    `metriken-query-sql/src/live.rs::tests` + dashboard snapshot
+    tests + chromium per-section smoke.
+  - The pre-deletion `~24 dead-code warnings from PromQL helpers
+    still in tree` warning that the SQL-only build used to emit is
+    gone with `metriken-query`.
 
 - **When something looks wrong** — quick triage.
   - **Wrong value vs. main.** Re-run `sql_vs_promql` against the
