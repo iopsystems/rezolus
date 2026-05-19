@@ -522,7 +522,7 @@ fn parquet_path_for(state: &AppState, capture: CaptureId) -> Option<PathBuf> {
 /// [`DuckDbBackend::create_live_source`]. Returns `None` for an
 /// unattached experiment slot or an upload-only viewer before its
 /// first upload.
-fn data_source_for(state: &AppState, capture: CaptureId) -> Option<String> {
+pub(super) fn data_source_for(state: &AppState, capture: CaptureId) -> Option<String> {
     // Live mode: only the baseline slot is ever live (live captures
     // are single-source by construction). When `live_source` is `Some`
     // for the baseline, route SQL queries there.

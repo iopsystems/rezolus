@@ -11,13 +11,11 @@ use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
-#[cfg(feature = "live-mode")]
+use metriken_query_sql::DuckDbBackend;
+
 use super::capture_registry::CaptureId;
-#[cfg(feature = "live-mode")]
-use super::promql::{self, QueryEngine};
+use super::routes::data_source_for;
 use super::state::{AppState, LazySectionStore};
-#[cfg(feature = "live-mode")]
-use super::tsdb::Tsdb;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 
 /// Read systeminfo, selection, and the full key-value map (with
@@ -322,24 +320,43 @@ pub fn extract_service_extension_metadata(
     results
 }
 
-/// Run each KPI's PromQL against the loaded TSDB so the dashboard can
-/// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
-#[cfg(feature = "live-mode")]
-pub fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtension)]) {
-    let engine = QueryEngine::new(tsdb);
-    let (start, end) = engine.get_time_range();
-
-    for (_source, ext) in exts.iter_mut() {
+/// Run each KPI's SQL against the resolved capture so the dashboard
+/// can hide KPIs whose queries return no data (e.g. zero-traffic
+/// histograms, or a metric this parquet doesn't carry).
+///
+/// KPIs without a `sql` field (templates pending SQL transcription)
+/// keep their default `available = true`: we have no way to validate
+/// them against the SQL backend, and the silent-render pipeline
+/// (`6054fe2`) renders empty matrices as `_unavailable` placeholders,
+/// so the KPI shows up but renders as a placeholder card. Marking
+/// them `false` would drop the KPI from the dashboard entirely.
+pub fn validate_service_extensions_sql(
+    backend: &DuckDbBackend,
+    data_source: &str,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    for (source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
-            let query = kpi.effective_query();
-            let has_data = match engine.query_range(&query, start, end, 1.0) {
-                Ok(result) => match &result {
-                    promql::QueryResult::Vector { result } => !result.is_empty(),
-                    promql::QueryResult::Matrix { result } => !result.is_empty(),
-                    promql::QueryResult::Scalar { .. } => true,
-                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
-                },
-                Err(_) => false,
+            let Some(sql) = kpi.sql.as_ref() else {
+                // PromQL-only KPI; can't validate via the SQL backend.
+                // Leave kpi.available at its default; the front-end
+                // renders it as an _unavailable placeholder when SQL
+                // is unset.
+                continue;
+            };
+            let resolved = dashboard::substitute_view(sql, source);
+            let has_data = match backend.run_sql(&resolved, data_source) {
+                Ok(batches) => batches.iter().any(|b| b.num_rows() > 0),
+                Err(e) => {
+                    warn!(
+                        target: "validate_service_extensions_sql",
+                        service = %source,
+                        kpi = %kpi.title,
+                        error = %e,
+                        "KPI SQL failed to bind/run; marking unavailable",
+                    );
+                    false
+                }
             };
             kpi.available = has_data;
         }
@@ -413,21 +430,17 @@ pub fn regenerate_dashboards(state: &AppState) {
         .map(|p| extract_service_extension_metadata(p, registry))
         .unwrap_or_default();
 
-    // Validate against the Tsdb when one is loaded (live mode). SQL-
-    // backed captures skip this — the SQL-aware validator lands once
-    // service-extension templates carry `sql` strings (plan stage 8).
-    // Until then SQL captures show every KPI as `available: true`.
-    #[cfg(feature = "live-mode")]
-    {
-        if let Some(baseline_handle) = state.baseline_tsdb() {
-            let baseline_data = baseline_handle.read();
-            validate_service_extensions(&baseline_data, &mut baseline_exts);
-        }
-        if !experiment_exts.is_empty() {
-            if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
-                let experiment_data = experiment_handle.read();
-                validate_service_extensions(&experiment_data, &mut experiment_exts);
-            }
+    // Validate each KPI's SQL through the same DuckDbBackend the query
+    // path uses. Live and file captures both resolve to a data_source
+    // string via `data_source_for`; KPIs without `sql` (PromQL-only
+    // templates) keep their default `available = true` and render as
+    // placeholders.
+    if let Some(data_source) = data_source_for(state, CaptureId::Baseline) {
+        validate_service_extensions_sql(&state.sql_backend, &data_source, &mut baseline_exts);
+    }
+    if !experiment_exts.is_empty() {
+        if let Some(data_source) = data_source_for(state, CaptureId::Experiment) {
+            validate_service_extensions_sql(&state.sql_backend, &data_source, &mut experiment_exts);
         }
     }
 
@@ -449,7 +462,7 @@ pub fn regenerate_dashboards(state: &AppState) {
 mod report_mode_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
+    use super::super::tsdb::Tsdb;
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
@@ -460,6 +473,116 @@ mod report_mode_tests {
         assert!(
             sections.is_empty(),
             "trimmed report should have no sections"
+        );
+    }
+}
+
+#[cfg(test)]
+mod validate_sql_tests {
+    //! Pin behaviour of `validate_service_extensions_sql`:
+    //!   • KPIs whose SQL binds and returns rows → `available = true`.
+    //!   • KPIs whose SQL binds but returns no rows → `available = false`.
+    //!   • KPIs whose SQL fails to bind → `available = false`.
+    //!   • KPIs without SQL (PromQL-only templates) → `available`
+    //!     unchanged (default `true`); they render as `_unavailable`
+    //!     placeholder cards rather than dropping from the dashboard.
+
+    use super::*;
+    use ::dashboard::{Kpi, ServiceExtension};
+    use metriken_query_sql::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
+    use std::collections::BTreeMap;
+
+    const DS: &str = "live:test";
+
+    fn make_backend_with_one_metric() -> DuckDbBackend {
+        let backend = DuckDbBackend::new();
+        let live = backend
+            .create_live_source(DS, "rezolus", 1000)
+            .expect("create_live_source");
+        let col = LiveColumn {
+            physical: "tokens".into(),
+            metric: "tokens".into(),
+            kind: LiveColumnKind::Counter,
+            labels: BTreeMap::new(),
+        };
+        live.append(
+            1_000_000_000,
+            Some(1_000_000_000),
+            &[(col, LiveValue::Counter(42))],
+        )
+        .expect("append");
+        backend
+    }
+
+    fn kpi(title: &str, sql: Option<&str>) -> Kpi {
+        Kpi {
+            role: "service".into(),
+            title: title.into(),
+            description: None,
+            query: String::new(),
+            sql: sql.map(|s| s.to_string()),
+            metric_type: "counter".into(),
+            subtype: None,
+            unit_system: None,
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        }
+    }
+
+    fn ext_with_kpis(kpis: Vec<Kpi>) -> Vec<(String, ServiceExtension)> {
+        vec![(
+            "rezolus".to_string(),
+            ServiceExtension {
+                service_name: "rezolus".into(),
+                aliases: vec![],
+                service_metadata: std::collections::HashMap::new(),
+                slo: None,
+                kpis,
+            },
+        )]
+    }
+
+    #[test]
+    fn kpi_with_binding_sql_returning_rows_is_available() {
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi(
+            "tokens-emitted",
+            Some("SELECT timestamp AS t, \"tokens\"::DOUBLE AS v FROM {{view}}"),
+        )]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(exts[0].1.kpis[0].available, "binding-and-rows ⇒ available");
+    }
+
+    #[test]
+    fn kpi_with_failing_sql_is_unavailable() {
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi(
+            "missing-metric",
+            Some("SELECT timestamp AS t, \"absent_metric\"::DOUBLE AS v FROM {{view}}"),
+        )]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            !exts[0].1.kpis[0].available,
+            "SQL referencing absent column ⇒ unavailable"
+        );
+    }
+
+    #[test]
+    fn kpi_without_sql_keeps_default_available() {
+        // PromQL-only templates pending SQL transcription must keep
+        // `available = true` so they don't drop from the dashboard.
+        // The renderer shows them as `_unavailable` placeholder cards
+        // via the silent-render path.
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi("promql-only", None)]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            exts[0].1.kpis[0].available,
+            "PromQL-only KPI must stay available"
         );
     }
 }
