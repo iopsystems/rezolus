@@ -36,14 +36,16 @@ pub fn collect() -> SystemSummary {
     }
 }
 
-fn collect_cpu_info() -> (
-    Option<String>,
-    Option<String>,
-    usize,
-    Option<usize>,
-    Option<usize>,
-    Option<bool>,
-) {
+type CpuInfo = (
+    Option<String>, // vendor
+    Option<String>, // model_name
+    usize,          // cpus
+    Option<usize>,  // cores_per_package
+    Option<usize>,  // packages
+    Option<bool>,   // hyperthreading
+);
+
+fn collect_cpu_info() -> CpuInfo {
     let cpu_ids = read_list("/sys/devices/system/cpu/online").unwrap_or_default();
     let cpus = cpu_ids.len();
 

@@ -946,8 +946,8 @@ mod live_to_sql_swap_tests {
         let s2 = StdArc::clone(&state);
         let p2 = path_b.clone();
         let t2 = std::thread::spawn(move || ingest_baseline_from_path(&s2, p2, "b.parquet".into()));
-        t1.join().unwrap();
-        t2.join().unwrap();
+        let _ = t1.join().unwrap();
+        let _ = t2.join().unwrap();
 
         // Whichever upload wrote second wins; the consistency invariant
         // is that the registry baseline's parquet_path and the
