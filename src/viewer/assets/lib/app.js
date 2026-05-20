@@ -661,11 +661,18 @@ const SectionContent = {
                 Chart,
                 CgroupSelector,
                 executeQuery: async (query) => {
-                    // Server backend resolves `__SELECTED_CGROUPS__`
-                    // server-side from the capture registry; the
-                    // wrapper here only needs to forward the SQL
-                    // verbatim alongside the auto-derived range/step
-                    // (matches the dashboard fetch path).
+                    // The server backend doesn't substitute
+                    // `__SELECTED_CGROUPS__` — that's resolved
+                    // client-side from `activeCgroupPattern` (the
+                    // cgroup_selector's last setActiveCgroupPattern
+                    // call). Empty selection falls back to `('')` so
+                    // `NOT IN (...)` includes everything and
+                    // `IN (...)` matches nothing — same semantics as
+                    // the WASM viewer's registry-side substitution.
+                    const pattern = activeCgroupPattern || "('')";
+                    const resolved = query?.includes('__SELECTED_CGROUPS__')
+                        ? query.split('__SELECTED_CGROUPS__').join(pattern)
+                        : query;
                     const meta = (await ViewerApi.getMetadata())?.data;
                     const minTime = meta?.minTime;
                     const maxTime = meta?.maxTime;
@@ -676,7 +683,7 @@ const SectionContent = {
                     const windowDuration = Math.min(3600, duration);
                     const start = Math.max(minTime, maxTime - windowDuration);
                     const step = getStepOverride() || Math.max(1, Math.floor(windowDuration / 500));
-                    return ViewerApi.queryRange(query, start, maxTime, step);
+                    return ViewerApi.queryRange(resolved, start, maxTime, step);
                 },
                 applyResultToPlot,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },

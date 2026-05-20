@@ -7,6 +7,19 @@ import { collectGroupPlots } from './features/group_utils.js';
 export const CAPTURE_BASELINE = 'baseline';
 export const CAPTURE_EXPERIMENT = 'experiment';
 
+/**
+ * Substitute the deferred-cgroup placeholder in a SQL plot query with
+ * the current selection's IN-list. Empty / unset selection becomes
+ * `('')` so the aggregate-side `NOT IN (...)` includes every cgroup
+ * and the individual-side `IN (...)` matches none — same semantics
+ * the WASM viewer applies inside duckdb-wasm.
+ */
+export const substituteCgroupPattern = (sql, pattern) => {
+    if (!sql || !sql.includes('__SELECTED_CGROUPS__')) return sql;
+    const replacement = pattern || "('')";
+    return sql.split('__SELECTED_CGROUPS__').join(replacement);
+};
+
 let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
@@ -233,17 +246,19 @@ const createDataApi = ({
         return metadataResponse.data;
     };
 
-    // The SQL backend resolves cgroup selection, histogram fan-out,
-    // counter rates, and topology filters server-side from the
-    // capture registry — the frontend just needs to hand it the
-    // pre-emitted `sql_query`. Plots without a `sql_query` are KPIs
-    // whose query lives in parquet metadata and hasn't been
-    // translated yet; returning null makes processDashboardData skip
-    // them and the section view paints a "query not yet available"
-    // placeholder.
-    const buildEffectiveQuery = (plot, _opts = {}) => plot.sql_query || null;
+    // The SQL backend resolves histogram fan-out, counter rates, and
+    // topology filters from the capture registry — the frontend hands
+    // it the pre-emitted `sql_query` after splicing in any cgroup
+    // selection. Plots without a `sql_query` are KPIs whose query
+    // lives in parquet metadata and hasn't been translated yet;
+    // returning null makes processDashboardData skip them and the
+    // section view paints a "query not yet available" placeholder.
+    const buildEffectiveQuery = (plot, { activeCgroupPattern } = {}) =>
+        plot.sql_query
+            ? substituteCgroupPattern(plot.sql_query, activeCgroupPattern)
+            : null;
 
-    const processDashboardData = async (data, _activeCgroupPattern, _sectionRoute) => {
+    const processDashboardData = async (data, activeCgroupPattern, _sectionRoute) => {
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
@@ -260,7 +275,7 @@ const createDataApi = ({
                         '(query not yet available — translation pending)';
                     continue;
                 }
-                const queryToRun = buildEffectiveQuery(plot);
+                const queryToRun = buildEffectiveQuery(plot, { activeCgroupPattern });
                 if (queryToRun == null) continue;
                 queryPlots.push({ plot, query: queryToRun });
             }
