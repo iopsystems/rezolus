@@ -138,7 +138,7 @@ The whole `metriken*` family lives in a sibling repo at `../metriken/`. Cross-re
 ## Things that surprise first-time readers
 
 - **`build.rs` is non-trivial.** It compiles every `mod.bpf.c` next to a sampler into a Rust skeleton via `libbpf-cargo`, parameterized by per-arch `vmlinux.h` in `src/agent/bpf/{x86_64,aarch64}/`. You need clang. Mac builds get a stub.
-- **Samplers self-register.** No central enable list — each module's `submit!` into the `SAMPLERS` distributed slice is what makes it appear in the agent. Greppable but not visible from `mod.rs`.
+- **Samplers self-register.** No central enable list — each module's `#[distributed_slice(SAMPLERS)]` attribute (via linkme) is what makes it appear in the agent. Greppable but not visible from `mod.rs`.
 - **Recorder also speaks Prometheus.** Pointed at `http://host:9090/metrics`, it scrapes Prometheus text and writes the same parquet schema. That's how you combine a service's Prom metrics with Rezolus's BPF metrics — `parquet combine` merges the two files post-hoc.
 - **Hindsight has an HTTP control plane too.** Not just SIGHUP. The dump endpoint accepts a time-range filter so you can grab "the last 90 seconds" rather than the whole ring buffer.
 - **The dashboard crate is a code generator, not a service.** `crates/dashboard/src/dashboard/*.rs` builds plot definitions (with SQL) that get serialized to JSON and shipped to the frontend. The viewer's HTTP handlers don't *render* charts — they hand the JS the SQL to run.

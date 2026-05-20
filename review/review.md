@@ -119,9 +119,10 @@ crates/dashboard/
                       in `tests/sql_snapshots.rs` (25 snapshots).
   service_extension.rs Kpi.sql: Option<String>  (the sole query body —
                                                   no `query` field exists).
-  service.rs          plot_sql{,_full} when kpi.sql is Some; KPIs without
-                      SQL render as `_unavailable` placeholder cards. Owns
-                      `{{p}}` substitution via `substitute_view_and_p`.
+  dashboard/service.rs  Calls plot_sql{,_full} (defined in plot.rs) when
+                        kpi.sql is Some; KPIs without SQL render as
+                        `_unavailable` placeholder cards. Owns `{{p}}`
+                        substitution via `substitute_view_and_p`.
 ```
 
 `Arc<DuckDbBackend>` lives once on `AppState`; handlers borrow it.
@@ -161,11 +162,22 @@ pre-branch.
 
 ### 1. Multi-node selection doesn't filter server-side
 
-The top-nav node picker injects `node="..."` only on the PromQL
-side; the SQL backend has no equivalent. WASM viewer has the
-same gap. On multi-node parquets the server returns aggregated
-data regardless of selection. Future work; not unique to this
-branch.
+**Single-node selection now filters server-side** (commits
+`490bba2` + `c92501a`): `/api/v1/query{,_range}` and
+`/api/v1/heatmap_range` accept a `node` query param;
+`routes.rs::run_sql` validates it against
+`MetricCatalog::nodes()` and rewrites bare `_src` references to
+`_src_node_<sanitized>` via `rewrite_src_to_node_view`
+(`routes.rs:657`). The frontend threads the selected node
+through `viewer_api.queryRange` / `heatmapRange` (`viewer_api.js:159-206`)
+and `data.js`'s fetch helpers.
+
+The residual gap is **multi-node set selection** — the picker is
+single-pick, and there is no `_src_node_combined` projection
+shape. WASM viewer has the same residual gap. On multi-node
+parquets, with no node selected the server returns aggregated
+data; selecting any single node scopes the query to that node's
+view. Multi-select is future work.
 
 ### 2. Multi-rezolus aggregation
 
@@ -359,8 +371,8 @@ After P6, the gates pass:
 | Gate                                      | Result                  |
 | ----------------------------------------- | ----------------------- |
 | `cargo build --bin rezolus`               | clean                   |
-| `cargo test --bin rezolus`                | 191 pass / 0 fail       |
-| `node --test tests/*.mjs`                 | 122 pass / 0 fail       |
+| `cargo test --bin rezolus`                | 192 pass / 0 fail       |
+| `node --test tests/*.mjs`                 | 137 pass / 0 fail       |
 | `grep -rn 'promql\|PromQL' src/ crates/`  | only comments / test guard assertions / `prom-matrix` crate name / `ReportEntry` serde aliases for old saves |
 | `cargo tree -p rezolus \| grep promql`    | empty                   |
 
@@ -495,7 +507,7 @@ alias.
 
 ### `6054fe2` — Chromium per-section smoke + two silent-render fixes
 
-`scripts/viewer_chromium_smoke.sh` (227 LOC bash + embedded Python
+`scripts/viewer_chromium_smoke.sh` (~530 LOC bash + embedded Python
 CDP driver) is a headless-Chromium harness that walks every section
 in `/api/v1/sections` against a running `rezolus view <parquet>`
 and asserts each section either rendered a real chart, reserved an

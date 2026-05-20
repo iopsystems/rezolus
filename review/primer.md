@@ -46,7 +46,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
     transition.
   - **The viewer.** `Arc<DuckDbBackend>` lives on `AppState`
     (`src/viewer/state.rs`). Parquets are wrapped by `SqlCapture`
-    (`sql_capture.rs`, 379 LOC) and held by `CaptureRegistry`
+    (`sql_capture.rs`, 384 LOC) and held by `CaptureRegistry`
     (`capture_registry.rs`, 265 LOC). Live captures wrap a
     `LiveSource` in a `LiveCapture` (`live_capture.rs`, 177 LOC; the
     `DashboardData` shim for the live slot); the shared
@@ -126,10 +126,10 @@ reads `review.md`; the newcomer reads `architecture.md`.
   cargo tree -p rezolus | grep 'metriken-query ' # empty (only metriken-query-sql appears)
 
   # Native + frontend + smoke
-  cargo test --bin rezolus                       # 191 tests
+  cargo test --bin rezolus                       # 192 tests
   cargo test -p dashboard -p prom-matrix -p viewer-sql -p report-save
   cargo test --test mcp_cli                      # 8
-  node --test tests/*.mjs                        # 122 pass / 0 fail
+  node --test tests/*.mjs                        # 137 pass / 0 fail
   bash tests/viewer_smoke.sh                     # requires jq
 
   # Headless-Chromium per-section render check. Drives `rezolus view
