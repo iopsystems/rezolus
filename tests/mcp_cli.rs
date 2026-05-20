@@ -36,9 +36,8 @@ fn demo_parquet() -> PathBuf {
 
 /// Run `rezolus mcp <args...>` and return (stdout, stderr, exit_code).
 fn run_mcp(args: &[&str]) -> (String, String, i32) {
-    let binary = find_binary().expect(
-        "rezolus binary not found — run `cargo build` before this test",
-    );
+    let binary =
+        find_binary().expect("rezolus binary not found — run `cargo build` before this test");
     let output = Command::new(&binary)
         .arg("mcp")
         .args(args)
@@ -100,11 +99,26 @@ fn cli_describe_metrics_against_demo_parquet() {
     }
     let (stdout, stderr, code) = run_mcp(&["describe-metrics", &demo_parquet_arg()]);
     assert_eq!(code, 0, "exit code: stderr={stderr}");
-    assert!(stdout.contains("COUNTERS"), "missing COUNTERS section: {stdout}");
-    assert!(stdout.contains("GAUGES"), "missing GAUGES section: {stdout}");
-    assert!(stdout.contains("HISTOGRAMS"), "missing HISTOGRAMS section: {stdout}");
-    assert!(stdout.contains("• cpu_cycles"), "missing cpu_cycles entry: {stdout}");
-    assert!(stdout.contains("Sampling interval: 1000ms"), "missing interval line");
+    assert!(
+        stdout.contains("COUNTERS"),
+        "missing COUNTERS section: {stdout}"
+    );
+    assert!(
+        stdout.contains("GAUGES"),
+        "missing GAUGES section: {stdout}"
+    );
+    assert!(
+        stdout.contains("HISTOGRAMS"),
+        "missing HISTOGRAMS section: {stdout}"
+    );
+    assert!(
+        stdout.contains("• cpu_cycles"),
+        "missing cpu_cycles entry: {stdout}"
+    );
+    assert!(
+        stdout.contains("Sampling interval: 1000ms"),
+        "missing interval line"
+    );
 }
 
 // ─── query (the headline DuckDB-via-MCP test) ────────────────────────
@@ -185,11 +199,7 @@ fn cli_detect_anomalies_bare_metric_name() {
     if skip_if_no_fixture().is_none() {
         return;
     }
-    let (stdout, stderr, code) = run_mcp(&[
-        "detect-anomalies",
-        &demo_parquet_arg(),
-        "cpu_cores",
-    ]);
+    let (stdout, stderr, code) = run_mcp(&["detect-anomalies", &demo_parquet_arg(), "cpu_cores"]);
     assert_eq!(code, 0, "exit code: stderr={stderr}");
     assert!(
         stdout.contains("Anomaly Detection Analysis"),
@@ -265,8 +275,14 @@ fn cli_query_help_mentions_sql_not_promql() {
         .output()
         .expect("spawn rezolus mcp query --help");
     let help = String::from_utf8_lossy(&output.stdout).to_string();
-    assert!(help.contains("DuckDB"), "help should mention DuckDB: {help}");
-    assert!(!help.contains("PromQL"), "help should not mention PromQL: {help}");
+    assert!(
+        help.contains("DuckDB"),
+        "help should mention DuckDB: {help}"
+    );
+    assert!(
+        !help.contains("PromQL"),
+        "help should not mention PromQL: {help}"
+    );
 }
 
 // Silence unused-import lints when the fixture is missing — `Path`

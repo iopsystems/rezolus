@@ -249,7 +249,7 @@ fn identify_anomalies(
     // Score CUSUM cliffs with highest weight (dramatic changes)
     for cliff in &cusum.cliffs {
         *anomaly_scores.entry(cliff.index).or_insert(0.0) += 3.0; // Highest weight for cliffs
-        // Mark surrounding points with lower weight
+                                                                  // Mark surrounding points with lower weight
         if cliff.index > 0 {
             *anomaly_scores.entry(cliff.index - 1).or_insert(0.0) += 0.8;
         }

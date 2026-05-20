@@ -71,7 +71,6 @@ fn default_available() -> bool {
     true
 }
 
-
 // ─────────────────────────────────────────────────────────────────────────
 // Category extension — declares that two ServiceExtensions belong to the
 // same kind of system, and exposes a unified set of KPIs for compare-mode

@@ -12,8 +12,8 @@
 //! undefined time range), which exercises every section's "no data"
 //! fallback while keeping the dump deterministic.
 
-use dashboard::dashboard::{build_dashboard_context, generate_section};
 use dashboard::EmptyDashboardData;
+use dashboard::dashboard::{build_dashboard_context, generate_section};
 use std::collections::HashMap;
 
 fn main() {

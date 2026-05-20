@@ -116,7 +116,10 @@ pub async fn handler(
     };
     let Some(&p) = catalog.histogram_p_by_metric.get(&params.metric) else {
         return ApiResponse::<serde_json::Value>::err(
-            format!("metric '{}' is not a histogram in this capture", params.metric),
+            format!(
+                "metric '{}' is not a histogram in this capture",
+                params.metric
+            ),
             "unknown_metric",
         )
         .into_response();
@@ -132,10 +135,7 @@ pub async fn handler(
                 return (
                     StatusCode::BAD_REQUEST,
                     ApiResponse::<serde_json::Value>::err(
-                        format!(
-                            "unknown node '{name}' — known nodes: {}",
-                            nodes.join(", "),
-                        ),
+                        format!("unknown node '{name}' — known nodes: {}", nodes.join(", "),),
                         "unknown_node",
                     ),
                 )
@@ -153,7 +153,9 @@ pub async fn handler(
         HeatmapKind::Buckets => Vec::new(),
         HeatmapKind::QuantileSpectrum => match parse_quantiles(params.quantiles.as_deref()) {
             Ok(qs) => qs,
-            Err(e) => return ApiResponse::<serde_json::Value>::err(e, "bad_request").into_response(),
+            Err(e) => {
+                return ApiResponse::<serde_json::Value>::err(e, "bad_request").into_response()
+            }
         },
     };
 
@@ -421,7 +423,10 @@ mod tests {
 
     #[test]
     fn parse_quantiles_validates_range_and_emptiness() {
-        assert_eq!(parse_quantiles(Some("0.5,0.9,0.99")).unwrap(), vec![0.5, 0.9, 0.99]);
+        assert_eq!(
+            parse_quantiles(Some("0.5,0.9,0.99")).unwrap(),
+            vec![0.5, 0.9, 0.99]
+        );
         assert!(parse_quantiles(None).is_err());
         assert!(parse_quantiles(Some("")).is_err());
         assert!(parse_quantiles(Some("1.5")).is_err());

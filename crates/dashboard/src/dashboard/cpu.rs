@@ -157,8 +157,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                 "ipns",
                 &[
                     ("instr", Arg::Sum("^cpu_instructions/[0-9]+$")),
-                    ("cyc",   Arg::Sum("^cpu_cycles/[0-9]+$")),
-                    ("tsc",   Arg::Sum("^cpu_tsc/[0-9]+$")),
+                    ("cyc", Arg::Sum("^cpu_cycles/[0-9]+$")),
+                    ("tsc", Arg::Sum("^cpu_tsc/[0-9]+$")),
                     ("aperf", Arg::Sum("^cpu_aperf/[0-9]+$")),
                     ("mperf", Arg::Sum("^cpu_mperf/[0-9]+$")),
                     ("cores", Arg::Col("cpu_cores")),
@@ -189,8 +189,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                 "ipns",
                 &[
                     ("instr", Arg::Sum("^cpu_instructions/[0-9]+$")),
-                    ("cyc",   Arg::Sum("^cpu_cycles/[0-9]+$")),
-                    ("tsc",   Arg::Sum("^cpu_tsc/[0-9]+$")),
+                    ("cyc", Arg::Sum("^cpu_cycles/[0-9]+$")),
+                    ("tsc", Arg::Sum("^cpu_tsc/[0-9]+$")),
                     ("aperf", Arg::Sum("^cpu_aperf/[0-9]+$")),
                     ("mperf", Arg::Sum("^cpu_mperf/[0-9]+$")),
                     ("cores", Arg::Col("cpu_cores")),
@@ -243,7 +243,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "frequency_hz",
                 &[
-                    ("tsc",   Arg::Sum("^cpu_tsc/[0-9]+$")),
+                    ("tsc", Arg::Sum("^cpu_tsc/[0-9]+$")),
                     ("aperf", Arg::Sum("^cpu_aperf/[0-9]+$")),
                     ("mperf", Arg::Sum("^cpu_mperf/[0-9]+$")),
                     ("cores", Arg::Col("cpu_cores")),
@@ -269,7 +269,7 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
             sql::concept_total(
                 "frequency_hz",
                 &[
-                    ("tsc",   Arg::Sum("^cpu_tsc/[0-9]+$")),
+                    ("tsc", Arg::Sum("^cpu_tsc/[0-9]+$")),
                     ("aperf", Arg::Sum("^cpu_aperf/[0-9]+$")),
                     ("mperf", Arg::Sum("^cpu_mperf/[0-9]+$")),
                     ("cores", Arg::Col("cpu_cores")),
@@ -360,7 +360,6 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
      *   - op="load" (Intel): cpu_dtlb_miss/load/<id>
      *   - op="store" (Intel): cpu_dtlb_miss/store/<id>
      */
-
 
     let mut dtlb = Group::new("DTLB", "dtlb");
 

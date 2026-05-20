@@ -1,5 +1,5 @@
-use crate::data::DashboardData;
 use crate::dashboard::service::substitute_view;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 

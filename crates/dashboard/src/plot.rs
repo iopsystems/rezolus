@@ -674,7 +674,6 @@ mod tests {
             "Shows total throughput and IOPS."
         );
     }
-
 }
 
 #[cfg(test)]

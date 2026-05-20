@@ -18,11 +18,11 @@ use reqwest::{Client, Url};
 use tracing::{debug, error, info, warn};
 
 use super::capture_registry::CaptureId;
+use super::live_capture::LiveCapture;
 use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
     extract_service_extension_metadata, regenerate_dashboards,
 };
-use super::live_capture::LiveCapture;
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
@@ -458,7 +458,9 @@ pub async fn connect_agent(
 
     // Tear down any pre-existing live source (we're swapping baseline)
     // and register a fresh one on the shared sql_backend.
-    state.sql_backend.invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    state
+        .sql_backend
+        .invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
     let live_source = match state.sql_backend.create_live_source(
         super::state::LIVE_BASELINE_DATA_SOURCE,
         &info.source,
@@ -542,7 +544,9 @@ pub async fn reset_baseline_live_source(
     };
 
     // Drop the old live source from the backend and create a fresh one.
-    state.sql_backend.invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    state
+        .sql_backend
+        .invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
     let fresh_source = match state.sql_backend.create_live_source(
         super::state::LIVE_BASELINE_DATA_SOURCE,
         &source,
@@ -806,7 +810,10 @@ fn save_single_dispatch(
     // path runs through the catalog-driven SQL resolver. Live mode
     // never reaches this function — `save_with_selection` short-circuits
     // to `snapshots_to_parquet` when `state.parquet_path` is None.
-    if let Some(sql) = state.captures.get_sql(crate::viewer::capture_registry::CaptureId::Baseline) {
+    if let Some(sql) = state
+        .captures
+        .get_sql(crate::viewer::capture_registry::CaptureId::Baseline)
+    {
         let catalog = sql.read().catalog();
         return report_save::save_single_parquet_sql(
             path,
@@ -871,8 +878,8 @@ mod live_to_sql_swap_tests {
     //! `ingest_baseline_from_path` clears `state.live` after the swap.
 
     use super::*;
-    use std::sync::atomic::Ordering;
     use ::dashboard::TemplateRegistry;
+    use std::sync::atomic::Ordering;
 
     /// Demo parquet bundled at site/viewer/data/demo.parquet — small
     /// (1.2 MB) and exercises the SqlCapture load path end-to-end.
@@ -880,8 +887,7 @@ mod live_to_sql_swap_tests {
     /// "delete on parquet-load failure" branch can't touch the
     /// source-of-truth.
     fn copy_demo_to_tempdir() -> PathBuf {
-        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("site/viewer/data/demo.parquet");
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("site/viewer/data/demo.parquet");
         let dst = baseline_temp_path();
         std::fs::copy(&src, &dst).expect("demo parquet copy");
         dst
@@ -891,15 +897,13 @@ mod live_to_sql_swap_tests {
     fn live_state() -> AppState {
         let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
         let live_source = backend
-            .create_live_source(super::super::state::LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
+            .create_live_source(
+                super::super::state::LIVE_BASELINE_DATA_SOURCE,
+                "rezolus",
+                1000,
+            )
             .expect("create_live_source");
-        let live = LiveCapture::new(
-            live_source.clone(),
-            1000,
-            "rezolus",
-            "test",
-            "http://test",
-        );
+        let live = LiveCapture::new(live_source.clone(), 1000, "rezolus", "test", "http://test");
         let mut state = AppState::new_live(live, backend, TemplateRegistry::empty());
         *state.live_source.write() = Some(live_source);
         state.live.store(true, Ordering::Relaxed);
@@ -938,14 +942,10 @@ mod live_to_sql_swap_tests {
 
         let s1 = StdArc::clone(&state);
         let p1 = path_a.clone();
-        let t1 = std::thread::spawn(move || {
-            ingest_baseline_from_path(&s1, p1, "a.parquet".into())
-        });
+        let t1 = std::thread::spawn(move || ingest_baseline_from_path(&s1, p1, "a.parquet".into()));
         let s2 = StdArc::clone(&state);
         let p2 = path_b.clone();
-        let t2 = std::thread::spawn(move || {
-            ingest_baseline_from_path(&s2, p2, "b.parquet".into())
-        });
+        let t2 = std::thread::spawn(move || ingest_baseline_from_path(&s2, p2, "b.parquet".into()));
         t1.join().unwrap();
         t2.join().unwrap();
 

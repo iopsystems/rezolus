@@ -325,10 +325,7 @@ fn gpu_mem_used_pct_uses_used_plus_free_in_denominator() {
     // alone. Distinguishes the correct formula from a plausible
     // wrong one — `used/free` would yield 0.4286 here, not 0.3.
     let conn = fresh();
-    let r = col_f64(
-        &conn,
-        "SELECT gpu_mem_used_pct(30::DOUBLE, 70::DOUBLE)",
-    );
+    let r = col_f64(&conn, "SELECT gpu_mem_used_pct(30::DOUBLE, 70::DOUBLE)");
     let v = r[0].expect("non-NULL");
     assert!(
         (v - 0.3).abs() < 1e-9,

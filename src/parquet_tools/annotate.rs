@@ -462,8 +462,8 @@ mod tests {
     use arrow::array::{Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
-    use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::ArrowWriter;
     use parquet::file::metadata::KeyValue;
     use parquet::file::properties::WriterProperties;
     use parquet::file::reader::FileReader;

@@ -39,7 +39,10 @@ pub const EMPTY_PROM_MATRIX: &str =
 /// One Prometheus matrix series: a label dictionary plus an ordered list of
 /// `(t_seconds, v_stringified)` samples. The label map is the `metric` JSON
 /// object; samples ship as strings to match Prometheus' wire shape.
-pub(crate) type SeriesGroup = (serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>);
+pub(crate) type SeriesGroup = (
+    serde_json::Map<String, serde_json::Value>,
+    Vec<(f64, String)>,
+);
 
 /// Emit the Prometheus matrix JSON envelope around a series-grouped
 /// projection. Shared by the native and WASM entry points so they cannot

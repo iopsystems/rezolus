@@ -38,10 +38,7 @@ fn irate_sum_by_id_groups_by_extracted_id() {
 
 #[test]
 fn irate_by_id_source_aware_variant() {
-    insta::assert_snapshot!(sql::irate_by_id(
-        "^cpu_usage/[a-z]+/[0-9]+$",
-        "/([0-9]+)$",
-    ));
+    insta::assert_snapshot!(sql::irate_by_id("^cpu_usage/[a-z]+/[0-9]+$", "/([0-9]+)$",));
 }
 
 #[test]

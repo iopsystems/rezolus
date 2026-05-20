@@ -377,7 +377,9 @@ impl ViewerSql {
         let view = dashboard::dashboard::generate_section(&self.metadata, &route, &self.context)?;
         let value = serde_json::to_value(&view).ok()?;
         let s = value.to_string();
-        self.cached_bodies.borrow_mut().insert(key.to_string(), value);
+        self.cached_bodies
+            .borrow_mut()
+            .insert(key.to_string(), value);
         Some(s)
     }
 

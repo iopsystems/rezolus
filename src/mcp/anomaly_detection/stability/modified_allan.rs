@@ -1,6 +1,6 @@
 use super::allan::NoiseTransition;
-use super::common::{CycleMinima, NoiseType};
 use super::common::{find_deviation_minima, identify_noise_type};
+use super::common::{CycleMinima, NoiseType};
 use allan::ModifiedAllan;
 use serde::{Deserialize, Serialize};
 

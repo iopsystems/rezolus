@@ -137,7 +137,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
                   t.sampler AS sampler,
                   (t.r / NULLIF(c.r, 0)) / 1e9 AS v
            FROM t_rates t JOIN c_rates c
-               ON t.timestamp = c.timestamp AND t.sampler = c.sampler"#.to_string(),
+               ON t.timestamp = c.timestamp AND t.sampler = c.sampler"#
+            .to_string(),
     );
 
     view.group(rezolus);

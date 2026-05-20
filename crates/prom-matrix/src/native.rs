@@ -100,27 +100,55 @@ fn cell_to_string_opt(arr: &dyn Array, row: usize) -> Option<String> {
     }
     Some(match arr.data_type() {
         DataType::Float64 => {
-            let v = arr.as_primitive::<arrow::datatypes::Float64Type>().value(row);
+            let v = arr
+                .as_primitive::<arrow::datatypes::Float64Type>()
+                .value(row);
             if !v.is_finite() {
                 return None;
             }
             v.to_string()
         }
         DataType::Float32 => {
-            let v = arr.as_primitive::<arrow::datatypes::Float32Type>().value(row);
+            let v = arr
+                .as_primitive::<arrow::datatypes::Float32Type>()
+                .value(row);
             if !v.is_finite() {
                 return None;
             }
             v.to_string()
         }
-        DataType::Int64 => arr.as_primitive::<arrow::datatypes::Int64Type>().value(row).to_string(),
-        DataType::Int32 => arr.as_primitive::<arrow::datatypes::Int32Type>().value(row).to_string(),
-        DataType::Int16 => arr.as_primitive::<arrow::datatypes::Int16Type>().value(row).to_string(),
-        DataType::Int8 => arr.as_primitive::<arrow::datatypes::Int8Type>().value(row).to_string(),
-        DataType::UInt64 => arr.as_primitive::<arrow::datatypes::UInt64Type>().value(row).to_string(),
-        DataType::UInt32 => arr.as_primitive::<arrow::datatypes::UInt32Type>().value(row).to_string(),
-        DataType::UInt16 => arr.as_primitive::<arrow::datatypes::UInt16Type>().value(row).to_string(),
-        DataType::UInt8 => arr.as_primitive::<arrow::datatypes::UInt8Type>().value(row).to_string(),
+        DataType::Int64 => arr
+            .as_primitive::<arrow::datatypes::Int64Type>()
+            .value(row)
+            .to_string(),
+        DataType::Int32 => arr
+            .as_primitive::<arrow::datatypes::Int32Type>()
+            .value(row)
+            .to_string(),
+        DataType::Int16 => arr
+            .as_primitive::<arrow::datatypes::Int16Type>()
+            .value(row)
+            .to_string(),
+        DataType::Int8 => arr
+            .as_primitive::<arrow::datatypes::Int8Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt64 => arr
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt32 => arr
+            .as_primitive::<arrow::datatypes::UInt32Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt16 => arr
+            .as_primitive::<arrow::datatypes::UInt16Type>()
+            .value(row)
+            .to_string(),
+        DataType::UInt8 => arr
+            .as_primitive::<arrow::datatypes::UInt8Type>()
+            .value(row)
+            .to_string(),
         DataType::Boolean => arr.as_boolean().value(row).to_string(),
         DataType::Utf8 => arr.as_string::<i32>().value(row).to_string(),
         DataType::LargeUtf8 => arr.as_string::<i64>().value(row).to_string(),
@@ -133,12 +161,20 @@ fn cell_to_f64(arr: &dyn Array, row: usize) -> Option<f64> {
         return None;
     }
     Some(match arr.data_type() {
-        DataType::Float64 => arr.as_primitive::<arrow::datatypes::Float64Type>().value(row),
-        DataType::Float32 => arr.as_primitive::<arrow::datatypes::Float32Type>().value(row) as f64,
+        DataType::Float64 => arr
+            .as_primitive::<arrow::datatypes::Float64Type>()
+            .value(row),
+        DataType::Float32 => arr
+            .as_primitive::<arrow::datatypes::Float32Type>()
+            .value(row) as f64,
         DataType::Int64 => arr.as_primitive::<arrow::datatypes::Int64Type>().value(row) as f64,
         DataType::Int32 => arr.as_primitive::<arrow::datatypes::Int32Type>().value(row) as f64,
-        DataType::UInt64 => arr.as_primitive::<arrow::datatypes::UInt64Type>().value(row) as f64,
-        DataType::UInt32 => arr.as_primitive::<arrow::datatypes::UInt32Type>().value(row) as f64,
+        DataType::UInt64 => arr
+            .as_primitive::<arrow::datatypes::UInt64Type>()
+            .value(row) as f64,
+        DataType::UInt32 => arr
+            .as_primitive::<arrow::datatypes::UInt32Type>()
+            .value(row) as f64,
         _ => return None,
     })
 }

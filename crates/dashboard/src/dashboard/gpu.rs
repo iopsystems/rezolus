@@ -209,7 +209,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
         gauge_sum("^gpu_memory/free/[0-9]+$"),
     );
     capacity.plot_sql_full(
-        PlotOpts::gauge("Memory Utilization %", "mem-util-pct", Unit::Percentage).percentage_range(),
+        PlotOpts::gauge("Memory Utilization %", "mem-util-pct", Unit::Percentage)
+            .percentage_range(),
         // Multiple STAR/COLUMNS in one expression are rejected — split
         // each list_sum into its own CTE projection (see duckdb.md).
         r#"WITH agg AS (
@@ -220,7 +221,8 @@ pub fn generate(data: &dyn DashboardData, sections: Vec<Section>) -> View {
            )
            SELECT timestamp::DOUBLE/1e9 AS t,
                   used / NULLIF(used + free, 0) AS v
-           FROM agg"#.to_string(),
+           FROM agg"#
+            .to_string(),
     );
 
     if multi_gpu {

@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -634,12 +634,10 @@ mod tests {
         let args = json!({"query": "cpu_cores"});
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Missing parquet_file")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing parquet_file"));
     }
 
     #[tokio::test]

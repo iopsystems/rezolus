@@ -238,7 +238,8 @@ pub fn save_combined_ab_tarball_sql(
     let events_json = events_payload_json(&payload.events);
     let (baseline_out, experiment_out) = if trim_columns {
         let baseline_kept = resolve_kept_columns_sql(payload, baseline_catalog, Side::Baseline);
-        let experiment_kept = resolve_kept_columns_sql(payload, experiment_catalog, Side::Experiment);
+        let experiment_kept =
+            resolve_kept_columns_sql(payload, experiment_catalog, Side::Experiment);
         (
             trim_parquet_to_columns(
                 baseline_bytes,
@@ -488,10 +489,15 @@ mod sql_resolve_tests {
     #[test]
     fn resolves_metric_name_to_all_physical_columns() {
         let cat = catalog_from(&[
-            ("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1", "cpu_cycles/2"]),
+            (
+                "cpu_cycles",
+                &["cpu_cycles/0", "cpu_cycles/1", "cpu_cycles/2"],
+            ),
             ("memory_used", &["memory_used"]),
         ]);
-        let payload = payload_with_queries(&["SELECT t, irate_1s(COLUMNS('^cpu_cycles(/[^:]+)?$'), timestamp) FROM _src"]);
+        let payload = payload_with_queries(&[
+            "SELECT t, irate_1s(COLUMNS('^cpu_cycles(/[^:]+)?$'), timestamp) FROM _src",
+        ]);
         let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
         assert!(kept.contains("timestamp"));
         assert!(kept.contains("duration"));
@@ -506,9 +512,7 @@ mod sql_resolve_tests {
     /// `"cpu_cycles/0"` in the SQL must keep just that column.
     #[test]
     fn resolves_direct_quoted_physical_in_sql() {
-        let cat = catalog_from(&[
-            ("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1"]),
-        ]);
+        let cat = catalog_from(&[("cpu_cycles", &["cpu_cycles/0", "cpu_cycles/1"])]);
         let sql = r#"SELECT timestamp/1e9 AS t, "cpu_cycles/0"::DOUBLE AS v FROM _src"#;
         let payload = payload_with_queries(&[sql]);
         let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
@@ -525,10 +529,7 @@ mod sql_resolve_tests {
     /// `cpu_cycles` is in the query, neither catalog metric is kept.
     #[test]
     fn word_boundary_prevents_partial_metric_match() {
-        let cat = catalog_from(&[
-            ("cpu", &["cpu"]),
-            ("cpu_cycles", &["cpu_cycles/0"]),
-        ]);
+        let cat = catalog_from(&[("cpu", &["cpu"]), ("cpu_cycles", &["cpu_cycles/0"])]);
         let payload = payload_with_queries(&["sum(cpu_cycles)"]);
         let kept = resolve_kept_columns_sql(&payload, &cat, Side::Baseline);
         assert!(kept.contains("cpu_cycles/0"));
@@ -573,7 +574,8 @@ mod sql_resolve_tests {
             "trim_columns": true,
             "events": []
         }"#;
-        let payload: ReportPayload = serde_json::from_str(json).expect("legacy payload deserializes");
+        let payload: ReportPayload =
+            serde_json::from_str(json).expect("legacy payload deserializes");
         assert_eq!(payload.entries.len(), 1);
         assert_eq!(
             payload.entries[0].sql_query,
@@ -784,4 +786,3 @@ mod sql_resolve_tests {
         }
     }
 }
-

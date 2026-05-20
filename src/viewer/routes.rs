@@ -76,7 +76,10 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
 
     // Live-mode-only routes.
     let api_routes = api_routes
-        .route("/reset", axum::routing::post(actions::reset_baseline_live_source))
+        .route(
+            "/reset",
+            axum::routing::post(actions::reset_baseline_live_source),
+        )
         .route("/connect", axum::routing::post(actions::connect_agent));
 
     let api_routes = api_routes.layer(axum::middleware::map_response(
@@ -208,11 +211,7 @@ async fn section_status(
         // Clone the section list so we don't hold the sections-read
         // lock across the per-section generation calls (each grabs
         // the write lock).
-        let sections: Vec<dashboard::Section> = state_clone
-            .sections
-            .read()
-            .sections()
-            .to_vec();
+        let sections: Vec<dashboard::Section> = state_clone.sections.read().sections().to_vec();
 
         let mut status = serde_json::Map::new();
         for section in &sections {
@@ -298,7 +297,10 @@ fn count_section_plots(
     let mut total = 0u32;
     let mut with_data = 0u32;
     let Some(groups) = body.get("groups").and_then(|v| v.as_array()) else {
-        return SectionCounts { total: 0, with_data: 0 };
+        return SectionCounts {
+            total: 0,
+            with_data: 0,
+        };
     };
 
     // One-time probe: does the source have any cgroups at all?
@@ -306,11 +308,16 @@ fn count_section_plots(
     // for them to defer to" rule. Failure → assume no cgroups
     // (safer to under-count than over-count for the gray-out).
     let has_cgroups = backend
-        .run_sql("SELECT 0::DOUBLE AS t, COUNT(*)::DOUBLE AS v FROM _cgroup_index", data_source)
+        .run_sql(
+            "SELECT 0::DOUBLE AS t, COUNT(*)::DOUBLE AS v FROM _cgroup_index",
+            data_source,
+        )
         .ok()
         .and_then(|batches| {
             batches.first().and_then(|b| {
-                if b.num_rows() == 0 { return None; }
+                if b.num_rows() == 0 {
+                    return None;
+                }
                 let col = b
                     .column(1)
                     .as_any()
@@ -331,10 +338,7 @@ fn count_section_plots(
             .chain(direct_plots)
             .flatten();
         for plot in plot_iter {
-            let sql = plot
-                .get("sql_query")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let sql = plot.get("sql_query").and_then(|v| v.as_str()).unwrap_or("");
 
             // Cgroup deferred plots: keep only if cgroups exist in
             // the source. The selector splices the picked cgroup
@@ -524,9 +528,7 @@ pub(super) fn data_source_for(state: &AppState, capture: CaptureId) -> Option<St
     // Live mode: only the baseline slot is ever live (live captures
     // are single-source by construction). When `live_source` is `Some`
     // for the baseline, route SQL queries there.
-    if matches!(capture, CaptureId::Baseline)
-        && state.live_source.read().is_some()
-    {
+    if matches!(capture, CaptureId::Baseline) && state.live_source.read().is_some() {
         return Some(super::state::LIVE_BASELINE_DATA_SOURCE.to_string());
     }
     parquet_path_for(state, capture).map(|p| p.to_string_lossy().into_owned())
@@ -630,8 +632,7 @@ async fn run_sql(
             // series" UX from the PromQL-era viewer. Query Explorer
             // (strict=true) bypasses this shim so users see raw errors.
             if !strict
-                && (msg.contains("No matching columns")
-                    || msg.contains("not found in FROM clause"))
+                && (msg.contains("No matching columns") || msg.contains("not found in FROM clause"))
             {
                 return (
                     StatusCode::OK,
@@ -665,8 +666,7 @@ pub(super) fn rewrite_src_to_node_view(sql: &str, node: &str) -> String {
         if bytes[i..].starts_with(needle.as_bytes()) {
             let after = i + needle.len();
             // Check the boundary character.
-            let boundary_ok = after == bytes.len()
-                || !is_sql_word_byte(bytes[after]);
+            let boundary_ok = after == bytes.len() || !is_sql_word_byte(bytes[after]);
             // Check the *preceding* character so `__src` or
             // `foo_src` (rare but possible) don't false-match.
             let prev_ok = i == 0 || !is_sql_word_byte(bytes[i - 1]);
@@ -775,10 +775,7 @@ async fn metadata(
 /// max_time_ns, filename) from a capture slot regardless of whether
 /// it's backed by `SqlCapture` (file/upload/A-B) or `LiveCapture`
 /// (live agent). Returns `None` for an unattached experiment slot.
-fn read_capture_scalar_meta(
-    state: &AppState,
-    capture: CaptureId,
-) -> Option<(u64, u64, String)> {
+fn read_capture_scalar_meta(state: &AppState, capture: CaptureId) -> Option<(u64, u64, String)> {
     use dashboard::DashboardData;
     let read = |data: &dyn DashboardData| -> (u64, u64, String) {
         let (lo, hi) = data.time_range().unwrap_or((0, 0));
@@ -923,18 +920,10 @@ mod live_route_tests {
         let live = backend
             .create_live_source(LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
             .expect("create_live_source");
-        let cap = LiveCapture::new(
-            live.clone(),
-            1000,
-            "rezolus",
-            "test",
-            "http://test",
-        );
+        let cap = LiveCapture::new(live.clone(), 1000, "rezolus", "test", "http://test");
         let mut state = AppState::new_live(cap, backend, TemplateRegistry::empty());
         *state.live_source.write() = Some(live.clone());
-        state
-            .live
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state.live.store(true, std::sync::atomic::Ordering::Relaxed);
         (Arc::new(state), live)
     }
 
@@ -950,8 +939,8 @@ mod live_route_tests {
     #[test]
     fn data_source_for_live_baseline_returns_live_key() {
         let (state, _live) = live_state();
-        let data_source = data_source_for(&state, CaptureId::Baseline)
-            .expect("baseline should resolve");
+        let data_source =
+            data_source_for(&state, CaptureId::Baseline).expect("baseline should resolve");
         assert_eq!(data_source, LIVE_BASELINE_DATA_SOURCE);
     }
 
@@ -971,8 +960,8 @@ mod live_route_tests {
         let state = AppState::new_empty(TemplateRegistry::empty());
         *state.parquet_path.write() = Some(std::path::PathBuf::from("/tmp/test.parquet"));
         let state = Arc::new(state);
-        let data_source = data_source_for(&state, CaptureId::Baseline)
-            .expect("file mode should resolve");
+        let data_source =
+            data_source_for(&state, CaptureId::Baseline).expect("file mode should resolve");
         assert_eq!(data_source, "/tmp/test.parquet");
     }
 
@@ -984,18 +973,10 @@ mod live_route_tests {
         let (state, live) = live_state();
 
         let c = col("requests", "requests", LiveColumnKind::Counter);
-        live.append(
-            1_000_000_000,
-            None,
-            &[(c.clone(), LiveValue::Counter(42))],
-        )
-        .expect("append");
-        live.append(
-            2_000_000_000,
-            None,
-            &[(c, LiveValue::Counter(100))],
-        )
-        .expect("append");
+        live.append(1_000_000_000, None, &[(c.clone(), LiveValue::Counter(42))])
+            .expect("append");
+        live.append(2_000_000_000, None, &[(c, LiveValue::Counter(100))])
+            .expect("append");
 
         let batches = state
             .sql_backend

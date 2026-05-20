@@ -47,9 +47,7 @@ fn build_src(conn: &Connection, t0: i64) {
     )
     .expect("create _src");
     let mut stmt = conn
-        .prepare(
-            "INSERT INTO _src VALUES (?, ?, ?)"
-        )
+        .prepare("INSERT INTO _src VALUES (?, ?, ?)")
         .expect("prepare insert");
     for tick in 0..600i64 {
         let ts = t0 + tick * TICK;
@@ -177,11 +175,7 @@ fn cgroup_ratio_by_name_emits_tail_after_column_null() {
     build_src(&conn, 0);
     build_cgroup_index(&conn);
 
-    let raw = sql::cgroup_ratio_by_name(
-        "cgroup_syscall",
-        "cgroup_syscall",
-        CgroupSide::Individual,
-    );
+    let raw = sql::cgroup_ratio_by_name("cgroup_syscall", "cgroup_syscall", CgroupSide::Individual);
     let sql = substitute_cgroups(&raw, &["/foo", "/bar"]);
     let counts = count_rows_by_name(&conn, &sql);
 

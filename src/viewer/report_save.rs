@@ -37,14 +37,8 @@ pub fn save_single_parquet_sql(
     trim_columns: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let bytes = read_path_to_bytes(source_path)?;
-    report_save::save_single_parquet_sql(
-        bytes,
-        payload,
-        selection_json,
-        catalog,
-        trim_columns,
-    )
-    .map_err(Into::into)
+    report_save::save_single_parquet_sql(bytes, payload, selection_json, catalog, trim_columns)
+        .map_err(Into::into)
 }
 
 /// Trim-free combined-A/B save. Both per-side parquets are embedded

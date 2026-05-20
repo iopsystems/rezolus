@@ -12,9 +12,7 @@
 use std::collections::BTreeMap;
 
 use metriken_exposition::Snapshot;
-use metriken_query_sql::{
-    LiveColumn, LiveColumnKind, LiveValue, SqlError, canonical_column_name,
-};
+use metriken_query_sql::{canonical_column_name, LiveColumn, LiveColumnKind, LiveValue, SqlError};
 
 use super::live_capture::LiveCapture;
 
@@ -25,12 +23,7 @@ use super::live_capture::LiveCapture;
 /// extract separately) so live `_cgroup_index` rows and parquet
 /// `_cgroup_index` rows carry the same label keys for the same
 /// underlying metric.
-const SHAPE_METADATA_KEYS: &[&str] = &[
-    "metric_type",
-    "unit",
-    "grouping_power",
-    "max_value_power",
-];
+const SHAPE_METADATA_KEYS: &[&str] = &["metric_type", "unit", "grouping_power", "max_value_power"];
 
 /// Apply a snapshot to the live capture: build column descriptors,
 /// run `LiveSource::append` to grow `_src`, and update the capture's
@@ -86,8 +79,7 @@ pub fn ingest_snapshot(live: &mut LiveCapture, snapshot: Snapshot) -> Result<(),
         columns.push((col, LiveValue::Histogram(&hist_buckets[i])));
     }
 
-    live.live()
-        .append(timestamp_ns, duration_ns, &columns)?;
+    live.live().append(timestamp_ns, duration_ns, &columns)?;
 
     // Update the schema cache so `DashboardData::*_names` and
     // `*_label_count` reflect the newly-observed columns. Borrows
@@ -228,8 +220,7 @@ mod tests {
     }
 
     fn fresh_capture() -> LiveCapture {
-        let live = metriken_query_sql::LiveSource::new("rezolus", 1000)
-            .expect("LiveSource::new");
+        let live = metriken_query_sql::LiveSource::new("rezolus", 1000).expect("LiveSource::new");
         LiveCapture::new(live, 1000, "rezolus", "test", "http://test")
     }
 
@@ -328,7 +319,8 @@ mod tests {
         ingest_snapshot(&mut cap, snap).expect("ingest");
 
         use arrow::array::StringArray;
-        let batches = cap.live()
+        let batches = cap
+            .live()
             .run_sql("SELECT metric, name, id FROM _cgroup_index")
             .expect("cgroup index");
         let b = &batches[0];

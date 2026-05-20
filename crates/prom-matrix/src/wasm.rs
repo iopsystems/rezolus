@@ -28,8 +28,10 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
             _ => label_indices.push((i, name)),
         }
     }
-    let t_idx = t_idx.ok_or_else(|| JsValue::from_str("query result missing required `t` column"))?;
-    let v_idx = v_idx.ok_or_else(|| JsValue::from_str("query result missing required `v` column"))?;
+    let t_idx =
+        t_idx.ok_or_else(|| JsValue::from_str("query result missing required `t` column"))?;
+    let v_idx =
+        v_idx.ok_or_else(|| JsValue::from_str("query result missing required `v` column"))?;
 
     // Pre-fetch the column vectors by index — avoids per-row Reflect on the table.
     let get_child_at: Function = Reflect::get(table, &"getChildAt".into())?.dyn_into()?;
@@ -48,8 +50,7 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
 
     let n_rows = Reflect::get(table, &"numRows".into())?
         .as_f64()
-        .ok_or_else(|| JsValue::from_str("table.numRows not a number"))?
-        as usize;
+        .ok_or_else(|| JsValue::from_str("table.numRows not a number"))? as usize;
 
     // Group rows by the tuple of label values. Build groups in insertion
     // order so output is deterministic.
@@ -103,9 +104,9 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
             None => continue, // NULL value → drop row (Prometheus gap)
         };
         let t_cell = get_cell(&t_col, row)?;
-        let t_secs = t_cell.as_f64().ok_or_else(|| {
-            JsValue::from_str(&format!("`t` column row {row} is not a number"))
-        })?;
+        let t_secs = t_cell
+            .as_f64()
+            .ok_or_else(|| JsValue::from_str(&format!("`t` column row {row} is not a number")))?;
 
         // Build label map for this row (deterministic field ordering).
         let mut metric = serde_json::Map::with_capacity(label_cols.len());

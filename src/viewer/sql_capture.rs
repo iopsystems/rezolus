@@ -25,8 +25,7 @@ use metriken_query_sql::{DuckDbBackend, MetricCatalog, SqlError};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::parquet_metadata::{
-    KEY_PER_SOURCE_METADATA, KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE, KEY_VERSION,
-    NESTED_VERSION,
+    KEY_PER_SOURCE_METADATA, KEY_SAMPLING_INTERVAL_MS, KEY_SOURCE, KEY_VERSION, NESTED_VERSION,
 };
 use dashboard::DashboardData;
 

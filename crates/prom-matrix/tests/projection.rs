@@ -9,7 +9,7 @@ use std::sync::Arc;
 use arrow::array::{Float64Array, RecordBatch, StringArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema};
 
-use prom_matrix::{arrow_to_prom_matrix, EMPTY_PROM_MATRIX};
+use prom_matrix::{EMPTY_PROM_MATRIX, arrow_to_prom_matrix};
 
 fn schema_t_v() -> Arc<Schema> {
     Arc::new(Schema::new(vec![

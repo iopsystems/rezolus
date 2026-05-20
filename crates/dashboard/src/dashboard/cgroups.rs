@@ -39,7 +39,11 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
 
     // CPU User Cores
     group.plot_sql(
-        PlotOpts::counter("User CPU Cores", format!("{prefix}-user-cores"), Unit::Count),
+        PlotOpts::counter(
+            "User CPU Cores",
+            format!("{prefix}-user-cores"),
+            Unit::Count,
+        ),
         sql::scale_v(sql_rate("cgroup_cpu_usage", Some(("state", "user"))), 1e9),
     );
 

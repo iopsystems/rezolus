@@ -429,8 +429,8 @@ fn init_file_mode_combined_ab(
             eprintln!("failed to load baseline parquet from tarball: {e}");
             std::process::exit(1);
         });
-    let mut experiment_capture = sql_capture::SqlCapture::open(&extracted.experiment_path, &backend)
-        .unwrap_or_else(|e| {
+    let mut experiment_capture =
+        sql_capture::SqlCapture::open(&extracted.experiment_path, &backend).unwrap_or_else(|e| {
             eprintln!("failed to load experiment parquet from tarball: {e}");
             std::process::exit(1);
         });
@@ -552,8 +552,7 @@ fn validate_category_at_startup(
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     });
-    let experiment_exts =
-        metadata::extract_service_extension_metadata(experiment_path, registry);
+    let experiment_exts = metadata::extract_service_extension_metadata(experiment_path, registry);
     // Category validation runs ahead of capture attach; KPI validation
     // happens later on the loaded SqlCapture (plan stage 8) — for now
     // we just match by source name.

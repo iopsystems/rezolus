@@ -357,11 +357,8 @@ pub fn validate_service_extensions_sql(
                 // is unset.
                 continue;
             };
-            let resolved = dashboard::substitute_view_and_p(
-                sql,
-                source,
-                p_for(kpi.metric.as_deref()),
-            );
+            let resolved =
+                dashboard::substitute_view_and_p(sql, source, p_for(kpi.metric.as_deref()));
             let has_data = match backend.run_sql(&resolved, data_source) {
                 Ok(batches) => batches.iter().any(|b| b.num_rows() > 0),
                 Err(e) => {

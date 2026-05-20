@@ -165,7 +165,9 @@ impl CaptureRegistry {
             CaptureId::Baseline => self.baseline.read(),
             CaptureId::Experiment => self.experiment.read(),
         };
-        guard.as_ref().and_then(|slot| slot.systeminfo.read().clone())
+        guard
+            .as_ref()
+            .and_then(|slot| slot.systeminfo.read().clone())
     }
 
     pub fn file_metadata(&self, id: CaptureId) -> Option<String> {
