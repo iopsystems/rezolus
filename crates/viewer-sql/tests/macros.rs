@@ -8,7 +8,7 @@
 //! These tests load the same SQL into a native DuckDB connection and
 //! assert the per-second rate and 5-minute rate primitives behave the
 //! same way as their counterparts in
-//! /work/metriken/metriken-query-sql/src/macros.rs (the source of truth
+//! /work/metriken/metriken-query/src/macros.rs (the source of truth
 //! for native dashboard SQL). Catches drift like the irate_1s reset case
 //! that was missing in this file pre-fix.
 
@@ -19,7 +19,7 @@ use duckdb::Connection;
 // Load the same SQL the wasm host registers: H2 replacement macros from
 // this crate's macros.sql, then the cross-crate shared macros via
 // viewer_sql::SHARED_MACROS (re-exported from
-// /work/metriken/metriken-query-sql/src/shared_macros.sql).
+// /work/metriken/metriken-query/src/shared_macros.sql).
 const H2_MACROS_SQL: &str = include_str!("../src/macros.sql");
 const SHARED_MACROS_SQL: &str = viewer_sql::SHARED_MACROS;
 
@@ -64,7 +64,7 @@ fn all_macros_register_without_error() {
 
 #[test]
 fn irate_1s_is_per_second_rate() {
-    // Mirrors metriken-query-sql/src/macros.rs::irate_1s_is_per_second_rate.
+    // Mirrors metriken-query/src/macros.rs::irate_1s_is_per_second_rate.
     let conn = fresh();
     let r = col_f64(
         &conn,
@@ -76,7 +76,7 @@ fn irate_1s_is_per_second_rate() {
 
 #[test]
 fn irate_1s_divides_by_actual_dt_when_samples_are_gappy() {
-    // Mirrors metriken-query-sql/src/macros.rs equivalent.
+    // Mirrors metriken-query/src/macros.rs equivalent.
     let conn = fresh();
     let r = col_f64(
         &conn,
@@ -102,7 +102,7 @@ fn irate_1s_handles_counter_resets_post_reset_value_as_increment() {
 
 #[test]
 fn rate_5m_lags_300_seconds_and_divides() {
-    // Mirrors metriken-query-sql/src/macros.rs::rate_5m_lags_300_seconds_and_divides.
+    // Mirrors metriken-query/src/macros.rs::rate_5m_lags_300_seconds_and_divides.
     // Range-based window: at ts=305s, lookback to ts=5s → delta=46350 over 300s = 154.5.
     let conn = fresh();
     let r = col_f64(
@@ -186,7 +186,7 @@ fn delta_1s_equals_per_second_increment() {
 #[test]
 fn h2_total_sums_bucket_list() {
     let conn = fresh();
-    // Mirrors metriken-query-sql/src/udf.rs::h2_total_is_sum.
+    // Mirrors metriken-query/src/udf.rs::h2_total_is_sum.
     assert_eq!(
         one_u64(&conn, "SELECT h2_total([10,20,30,40]::UBIGINT[])"),
         Some(100)

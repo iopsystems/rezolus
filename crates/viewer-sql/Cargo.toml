@@ -8,7 +8,7 @@ homepage.workspace = true
 publish = false
 
 # Browser-side viewer that drives duckdb-wasm via JS. Mirrors the
-# native server viewer (`metriken-query-sql` + `DuckDbBackend`) by
+# native server viewer (`metriken-query` + `DuckDbBackend`) by
 # registering the same `shared_macros.sql` plus pure-SQL substitutes
 # for the H2 histogram primitives, since WASM can't register
 # scalar UDFs.
@@ -30,6 +30,6 @@ console_error_panic_hook.workspace = true
 
 # Native-only test deps. The test scaffold runs the macros.sql script
 # against an in-memory DuckDB connection to catch drift between the WASM
-# macros and the native ones at metriken-query-sql/src/macros.rs.
+# macros and the native ones at metriken-query/src/macros.rs.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 duckdb = { version = "1.1.1", features = ["bundled"] }

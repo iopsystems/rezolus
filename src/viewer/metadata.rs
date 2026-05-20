@@ -11,7 +11,7 @@ use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
-use metriken_query_sql::DuckDbBackend;
+use metriken_query::DuckDbBackend;
 
 use super::capture_registry::CaptureId;
 use super::routes::data_source_for;
@@ -502,7 +502,7 @@ mod validate_sql_tests {
 
     use super::*;
     use ::dashboard::{Kpi, ServiceExtension};
-    use metriken_query_sql::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
+    use metriken_query::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
     use std::collections::BTreeMap;
 
     const DS: &str = "live:test";

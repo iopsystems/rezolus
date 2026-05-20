@@ -21,10 +21,10 @@ const TICK: i64 = 1_000_000_000;
 
 /// Build an in-memory DuckDB connection wired up the way the
 /// production native backend wires its slots: shared macros + UDFs
-/// registered via `metriken_query_sql::register_all`.
+/// registered via `metriken_query::register_all`.
 fn open_conn() -> Connection {
     let conn = Connection::open_in_memory().expect("open duckdb");
-    metriken_query_sql::register_all(&conn).expect("register_all");
+    metriken_query::register_all(&conn).expect("register_all");
     conn
 }
 

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use metriken_query_sql::DuckDbBackend;
+use metriken_query::DuckDbBackend;
 
 use crate::viewer::sql_capture::SqlCapture;
 

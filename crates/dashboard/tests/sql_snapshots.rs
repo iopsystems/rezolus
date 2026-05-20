@@ -6,7 +6,7 @@
 //! ~180 plot calls in `crates/dashboard/src/dashboard/*.rs`); without
 //! them the only feedback on emitter drift is end-to-end integration
 //! tests against real parquets (chromium per-section smoke + the L2
-//! parity tests in `metriken-query-sql/src/live.rs::tests`).
+//! parity tests in `metriken-query/src/live.rs::tests`).
 //!
 //! Running:
 //!   cargo test -p dashboard --test sql_snapshots

@@ -74,7 +74,7 @@ target/release/rezolus record --metadata source=llm-perf http://host:9090/metric
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode.
 # All paths (file / upload / A-B / live-agent) run SQL through
-# metriken-query-sql::DuckDbBackend. Live captures back the same backend
+# metriken-query::DuckDbBackend. Live captures back the same backend
 # via a `LiveSource` registered under the key `live:baseline`.
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
@@ -92,7 +92,7 @@ target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
 
 # MCP - AI analysis server or CLI commands. Runs against parquet files via
-# metriken_query_sql::DuckDbBackend (post-May-2026 migration). `query`
+# metriken_query::DuckDbBackend (post-May-2026 migration). `query`
 # takes DuckDB SQL;
 # `detect-anomalies` and `analyze-correlation` accept either a bare metric
 # name (auto-resolved to canonical rate/sum/quantile SQL) or full SQL.
@@ -116,14 +116,14 @@ The binary operates in seven modes via subcommands:
 3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw}`.
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
 5. **Viewer** (`src/viewer/`) - Web dashboard.
-   - **File / upload / A-B** paths run SQL through `metriken_query_sql::DuckDbBackend`
+   - **File / upload / A-B** paths run SQL through `metriken_query::DuckDbBackend`
      via `src/viewer/sql_capture.rs::SqlCapture` (parquet path + cached `MetricCatalog`).
      `Arc<DuckDbBackend>` lives on `AppState`. The `/api/v1/query{,_range}` handlers
      accept raw SQL and project Arrow → Prometheus matrix JSON via the
      `prom-matrix` crate; the handler runs under `tokio::task::spawn_blocking`
      so parallel chart fetches don't starve the runtime.
    - **Live agent** path appends each polled snapshot to a
-     `metriken_query_sql::LiveSource` registered with the same backend
+     `metriken_query::LiveSource` registered with the same backend
      under the key `live:baseline`, plus updates a `LiveCapture`
      schema cache in lockstep so `DashboardData` queries see the
      observed metrics. `data_source_for(state, capture)` in
@@ -138,7 +138,7 @@ The binary operates in seven modes via subcommands:
      path (`6054fe2`).
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
    SQL queries). Runs against parquet files via
-   `metriken_query_sql::DuckDbBackend` after the May-2026 migration. The
+   `metriken_query::DuckDbBackend` after the May-2026 migration. The
    helper module `src/mcp/backend.rs` owns parquet opening
    (`open_capture`), Arrow → series projection (`batches_to_series`), and
    SQL builders for the three metric kinds (`counter_sum_rate_sql`,
@@ -233,7 +233,7 @@ zero or more label columns.
 
 - `metriken` - Metric registration core (unconditional)
 - `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion (unconditional)
-- `metriken-query-sql` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`, `LiveSource`. The query engine for the server viewer (parquet + live), the MCP CLI/server, and the static WASM viewer.
+- `metriken-query` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`, `LiveSource`. The query engine for the server viewer (parquet + live), the MCP CLI/server, and the static WASM viewer.
 - `libbpf-rs` / `libbpf-cargo` - eBPF program management (Linux)
 - `axum` - HTTP server
 - `tokio` - Async runtime

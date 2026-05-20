@@ -351,7 +351,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     // subsequent handler calls hit the warmed per-source connection
     // pool. KPI validation runs each `kpi.sql` through the same backend
     // (`validate_service_extensions_sql`); no PromQL anywhere.
-    let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
     let capture = sql_capture::SqlCapture::open(path, &backend).unwrap_or_else(|e| {
         eprintln!("failed to load data from parquet: {e}");
         std::process::exit(1);
@@ -423,7 +423,7 @@ fn init_file_mode_combined_ab(
         metadata::extract_parquet_metadata(&extracted.experiment_path);
     let experiment_multinode = metadata::build_multinode_systeminfo(&extracted.experiment_path);
 
-    let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
     let mut baseline_capture = sql_capture::SqlCapture::open(&extracted.baseline_path, &backend)
         .unwrap_or_else(|e| {
             eprintln!("failed to load baseline parquet from tarball: {e}");
@@ -655,7 +655,7 @@ fn init_live_mode(
     // `sql_backend`. The same `Arc<LiveSource>` is parked on
     // `state.live_source` and inside the `LiveCapture` so query
     // handlers (via `data_source_for`) and the ingest loop both reach it.
-    let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
     let live_source = backend
         .create_live_source(state::LIVE_BASELINE_DATA_SOURCE, &info.source, 1000)
         .expect("create live source");

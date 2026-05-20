@@ -291,7 +291,7 @@ struct SectionCounts {
 /// the sidebar doesn't count).
 fn count_section_plots(
     body: &serde_json::Value,
-    backend: &metriken_query_sql::DuckDbBackend,
+    backend: &metriken_query::DuckDbBackend,
     data_source: &str,
 ) -> SectionCounts {
     let mut total = 0u32;
@@ -656,7 +656,7 @@ async fn run_sql(
 /// quotes `_src`), and Query Explorer users can always spell out
 /// `_src_node_<X>` themselves if they need the literal.
 pub(super) fn rewrite_src_to_node_view(sql: &str, node: &str) -> String {
-    use metriken_query_sql::view_name_for_node;
+    use metriken_query::view_name_for_node;
     let replacement = view_name_for_node(node);
     let needle = "_src";
     let bytes = sql.as_bytes();
@@ -910,12 +910,12 @@ mod live_route_tests {
     use super::super::state::{AppState, LIVE_BASELINE_DATA_SOURCE};
     use super::{data_source_for, CaptureId};
     use ::dashboard::TemplateRegistry;
-    use metriken_query_sql::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
+    use metriken_query::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
 
     /// Build an `AppState` in live mode with the sql_backend's
     /// live-source slot populated; returns the appender so the test
     /// can drive snapshots.
-    fn live_state() -> (Arc<AppState>, Arc<metriken_query_sql::LiveSource>) {
+    fn live_state() -> (Arc<AppState>, Arc<metriken_query::LiveSource>) {
         let backend = Arc::new(DuckDbBackend::new());
         let live = backend
             .create_live_source(LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)

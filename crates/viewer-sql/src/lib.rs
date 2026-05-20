@@ -31,7 +31,7 @@ pub fn init() {
 /// connection at boot. Concatenation of:
 ///   - SHARED_MACROS — the 19 macros shared with the native viewer
 ///     (irate_1s, rate_5m, hist_p*, cpu_busy_pct, …). Source of truth
-///     lives in `metriken-query-sql/src/shared_macros.sql`; we
+///     lives in `metriken-query/src/shared_macros.sql`; we
 ///     `include_str!` it via a relative path through the workspace
 ///     (paired-repo layout — see comment on `SHARED_MACROS` below).
 ///   - macros.sql — the wasm-only H2 replacement macros that stand in
@@ -57,18 +57,18 @@ pub fn pure_sql_macros() -> String {
 }
 
 /// Shared macros — one canonical copy across both viewers. We can't depend
-/// on `metriken-query-sql` directly because that crate pulls in `duckdb-rs`
+/// on `metriken-query` directly because that crate pulls in `duckdb-rs`
 /// (bundled C++), which doesn't build for `wasm32`. So we `include_str!`
 /// the SQL file through a relative path across the paired-repo layout.
 ///
 /// Path: `<rezolus>/crates/viewer-sql/src/lib.rs` →
-///       `<metriken>/metriken-query-sql/src/shared_macros.sql`
+///       `<metriken>/metriken-query/src/shared_macros.sql`
 ///
 /// Both repos live as siblings under the same parent dir (the developer
 /// laptop layout this project assumes). If you reorganize the repos, the
 /// `include_str!` below has to follow.
 pub const SHARED_MACROS: &str =
-    include_str!("../../../../metriken/metriken-query-sql/src/shared_macros.sql");
+    include_str!("../../../../metriken/metriken-query/src/shared_macros.sql");
 
 /// Read-only snapshot of the loaded parquet's metadata. JS computes this
 /// once at parquet-load time (running DESCRIBE + a couple of summary

@@ -33,7 +33,7 @@ pub fn save_single_parquet_sql(
     source_path: &Path,
     payload: &ReportPayload,
     selection_json: &str,
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     trim_columns: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let bytes = read_path_to_bytes(source_path)?;
@@ -69,8 +69,8 @@ pub fn save_combined_ab_tarball_sql(
     experiment_path: &Path,
     payload: &ReportPayload,
     selection_json: &str,
-    baseline_catalog: &metriken_query_sql::MetricCatalog,
-    experiment_catalog: &metriken_query_sql::MetricCatalog,
+    baseline_catalog: &metriken_query::MetricCatalog,
+    experiment_catalog: &metriken_query::MetricCatalog,
     manifest: &AbContainers,
     trim_columns: bool,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {

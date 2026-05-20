@@ -4,11 +4,11 @@
 -- ipc, frequency_hz, ipns, l3_hit_pct, branch_miss_pct, dtlb_mpki,
 -- gpu_mem_used_pct, bps_from_bytes, hist_irate_quantile,
 -- hist_rate5m_quantile, delta_1s, hist_p*) now live in
--- /work/metriken/metriken-query-sql/src/shared_macros.sql and are
+-- /work/metriken/metriken-query/src/shared_macros.sql and are
 -- prepended at runtime by `pure_sql_macros()` in lib.rs.
 --
 -- The macros below replace the Rust vscalar UDFs in
--- /work/metriken/metriken-query-sql/src/udf.rs (h2_lower, h2_upper,
+-- /work/metriken/metriken-query/src/udf.rs (h2_lower, h2_upper,
 -- h2_midpoint, h2_total, h2_delta, h2_quantile, h2_count_in_range,
 -- h2_quantiles, h2_combine, irate_lag). The native crate registers
 -- those as C++-backed vscalars; duckdb-wasm doesn't accept Rust
@@ -142,7 +142,7 @@ CREATE OR REPLACE MACRO h2_quantiles(b, qs, p := 3) AS
 -- direct-column callers stay native-only.
 
 -- ---- irate_lag: emulates the canonical Rust UDF on the wasm side ----
--- Native registers a vscalar UDF in /work/metriken/metriken-query-sql/src/udf.rs
+-- Native registers a vscalar UDF in /work/metriken/metriken-query/src/udf.rs
 -- which runs in C++ for perf (~8x faster than this macro form per the bench).
 -- Wasm has no UDF support, so we provide a same-name same-semantics macro:
 --   prev IS NULL                  → NULL (first sample)

@@ -1,6 +1,6 @@
 use arrow::record_batch::RecordBatch;
 use clap::ArgMatches;
-use metriken_query_sql::DuckDbBackend;
+use metriken_query::DuckDbBackend;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tracing::warn;

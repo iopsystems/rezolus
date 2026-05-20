@@ -763,7 +763,7 @@ pub fn unpivot_columns_sql(regex: &str, label: &str) -> String {
 ///
 /// `source` is the data source key — `None` resolves to the default
 /// `_src` view; `Some("cachecannon")` resolves to `_src_cachecannon`.
-/// (`per_source` views are materialized by metriken-query-sql.)
+/// (`per_source` views are materialized by metriken-query.)
 pub fn bucket_heatmap_sql(metric: &str, source: Option<&str>) -> String {
     let view = match source {
         Some(s) => format!("_src_{s}"),
@@ -823,7 +823,7 @@ pub fn quantile_spectrum_sql(
 /// emits `h2_combine` over the matching label-suffixed columns.
 pub fn hist_percentile_series_combined(buckets_re: &str) -> String {
     // Emits `h2_combine_lol(...)`, a shared pure-SQL macro
-    // (defined in `metriken-query-sql/src/shared_macros.sql`) that
+    // (defined in `metriken-query/src/shared_macros.sql`) that
     // accepts a single `LIST<LIST<UBIGINT>>` and folds it element-
     // wise. The macro is loaded on both the native and wasm DuckDB
     // builds via `SHARED_MACROS`, so the same dashboard SQL binds on

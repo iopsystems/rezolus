@@ -1055,7 +1055,7 @@ dependencies = [
  "duckdb",
  "include_dir",
  "insta",
- "metriken-query-sql",
+ "metriken-query",
  "serde",
  "serde_json",
  "tempfile",
@@ -2257,8 +2257,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "metriken-query-sql"
-version = "0.1.0"
+name = "metriken-query"
+version = "0.11.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -3074,7 +3074,7 @@ dependencies = [
  "arrow",
  "bytes",
  "dashboard",
- "metriken-query-sql",
+ "metriken-query",
  "parquet",
  "serde",
  "serde_json",
@@ -3190,7 +3190,7 @@ dependencies = [
  "memmap2",
  "metriken",
  "metriken-exposition",
- "metriken-query-sql",
+ "metriken-query",
  "nix",
  "notify",
  "nvml-wrapper",

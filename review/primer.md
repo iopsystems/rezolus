@@ -7,7 +7,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
   A-B / live-agent), MCP, `parquet annotate`, Save-as-Report column
   trim, and `validate_service_extensions` off in-memory PromQL
   (`metriken_query::Tsdb`) and onto DuckDB-backed SQL through
-  `metriken_query_sql::DuckDbBackend`. Live mode now appends
+  `metriken_query::DuckDbBackend`. Live mode now appends
   snapshots to a `LiveSource` registered with the same backend
   (`live:baseline` key); `/api/v1/query{,_range}` dispatches on a
   data-source string but the SQL code path is identical for both
@@ -16,7 +16,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
   single build: `cargo build --bin rezolus`.
 
 - **Where the change lives** (concept order — engine first, callers after).
-  - **The engine.** `/work/metriken/metriken-query-sql/` is a new
+  - **The engine.** `/work/metriken/metriken-query/` is a new
     crate. `backend.rs` owns the per-source connection pool with
     panic-safe slot eviction and a `try_lock` scan that picks the
     first idle slot before falling back to round-robin; `live.rs`
@@ -69,14 +69,14 @@ reads `review.md`; the newcomer reads `architecture.md`.
     all four save entrypoints), `parquet annotate`
     (`src/parquet_tools/annotate.rs`: validates each KPI's SQL
     binds against the parquet), live-agent ingest
-    (`src/viewer/live_ingest.rs` + `metriken_query_sql::LiveSource`,
+    (`src/viewer/live_ingest.rs` + `metriken_query::LiveSource`,
     commits `17f1107` / `1d471cd` / `494b4fc` / `f5482ff` — `_src`
     is byte-shape-identical to parquet so the same dashboard SQL
     binds in both modes).
   - **Verification (post-Tsdb-deletion).** No more PromQL evaluator
     to diff against. Correctness rests on dashboard snapshot tests
     (`crates/dashboard/tests/sql_snapshots.rs`), parquet ↔ live
-    tests in `metriken-query-sql/src/live.rs`.
+    tests in `metriken-query/src/live.rs`.
 
 - **Historical verification (pre-deletion).** The `sql_vs_promql`
   harness against `demo.parquet`, `AB_level_pin.parquet`,
@@ -85,7 +85,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
   on `AB_base.parquet`, `rel ≈ 2.7e-5` — floating-point residual
   from the 5-min RANGE arithmetic; sub-tolerance. The harness and
   PromQL evaluator are gone post-deletion; the L2 parquet↔live
-  parity tests in `metriken-query-sql/src/live.rs::tests` are the
+  parity tests in `metriken-query/src/live.rs::tests` are the
   current regression catch. Three behavioural fixes landed in the
   SQL pipeline to align with PromQL semantics:
   - `rate_5m_total`: `RANGE 5m PRECEDING` → `5m − 1 ns` to exclude
@@ -123,7 +123,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
   ```bash
   # Build (single configuration; no feature flags)
   cargo build --bin rezolus
-  cargo tree -p rezolus | grep 'metriken-query ' # empty (only metriken-query-sql appears)
+  cargo tree -p rezolus | grep 'metriken-query ' # the new DuckDB-backed 0.11.0 (not the deleted 0.10.x PromQL line)
 
   # Native + frontend + smoke
   cargo test --bin rezolus                       # 192 tests
@@ -188,7 +188,7 @@ reads `review.md`; the newcomer reads `architecture.md`.
     2.7e-5`), a floating-point residual sub-tolerance at `--rel-tol
     1e-4`. The harness + PromQL evaluator are both gone post-C5;
     correctness now rests on the L2 parquet ↔ live parity tests in
-    `metriken-query-sql/src/live.rs::tests` + dashboard snapshot
+    `metriken-query/src/live.rs::tests` + dashboard snapshot
     tests + chromium per-section smoke.
   - The pre-deletion `~24 dead-code warnings from PromQL helpers
     still in tree` warning that the SQL-only build used to emit is

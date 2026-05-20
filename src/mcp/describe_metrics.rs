@@ -2,7 +2,7 @@ use crate::viewer::sql_capture::SqlCapture;
 use dashboard::DashboardData;
 
 /// Format metrics description for display. Reads from the
-/// [`SqlCapture`]'s cached [`metriken_query_sql::MetricCatalog`].
+/// [`SqlCapture`]'s cached [`metriken_query::MetricCatalog`].
 pub fn format_metrics_description_sql(capture: &SqlCapture) -> String {
     let mut output = String::new();
     output.push_str("Available Metrics in Recording\n");
@@ -28,7 +28,7 @@ pub fn format_metrics_description_sql(capture: &SqlCapture) -> String {
                         // `MetricCatalog` already strips `metric`,
                         // `metric_type`, `unit`, `grouping_power`,
                         // `max_value_power` during classify (see
-                        // metriken-query-sql/src/views.rs:47-60), so no
+                        // metriken-query/src/views.rs:47-60), so no
                         // additional metadata filtering is needed here.
                         all_keys.insert(key.clone());
                     }

@@ -5,17 +5,19 @@ Companion: `/work/metriken/review/review.md` (engine side).
 This branch unifies every viewer mode (file / upload / A-B / live
 agent), `rezolus mcp`, Save-as-Report column trim, and `parquet
 annotate` onto DuckDB-driven SQL through
-`metriken_query_sql::DuckDbBackend`, and **deletes the legacy
-`metriken-query` crate** (Tsdb + PromQL evaluator + harness; ~13K
-LOC in `src/{promql,tsdb,harness}`, ~16.7K LOC counting everything
-that left with the crate) on the way out. The pivotal landings:
-`LiveSource` (`17f1107` + `1d471cd`) put live captures on the same
-DuckDB engine the parquet path uses; the C2-C5 commit sequence on
-this branch then migrated `validate_service_extensions` to SQL,
-collapsed the `CaptureBackend::Live(Tsdb)` variant into a
-`LiveCapture`-backed shim, removed the `live-mode` / `sql-only`
-feature seam, and deleted the `metriken-query` crate. **Single
-build matrix:** `cargo build --bin rezolus`.
+`metriken_query::DuckDbBackend`, and **deletes the pre-DuckDB
+`metriken-query` 0.10.x line** (Tsdb + PromQL evaluator + harness;
+~13K LOC in `src/{promql,tsdb,harness}`, ~16.7K LOC counting
+everything that left with the crate) on the way out. The name was
+then re-used for the new DuckDB-backed `metriken-query` 0.11.0 (see
+the companion metriken PR). The pivotal landings: `LiveSource`
+(`17f1107` + `1d471cd`) put live captures on the same DuckDB engine
+the parquet path uses; the C2-C5 commit sequence on this branch
+then migrated `validate_service_extensions` to SQL, collapsed the
+`CaptureBackend::Live(Tsdb)` variant into a `LiveCapture`-backed
+shim, removed the `live-mode` / `sql-only` feature seam, and deleted
+the pre-DuckDB crate. **Single build matrix:**
+`cargo build --bin rezolus`.
 
 | Path                                                        | Engine                           | Status                                                                |
 | ----------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
@@ -30,9 +32,10 @@ build matrix:** `cargo build --bin rezolus`.
 ## Build matrix
 
 `cargo build --bin rezolus` — the only build matrix. No `live-mode`
-or `sql-only` features; `metriken-query` is gone from the
-dependency tree (`cargo tree -p rezolus | grep 'metriken-query '`
-is empty — only `metriken-query-sql` appears).
+or `sql-only` features; the pre-DuckDB `metriken-query` 0.10.x line
+(PromQL evaluator + Tsdb + harness) is gone, replaced by the new
+DuckDB-backed `metriken-query` 0.11.0 (`cargo tree -p rezolus | grep
+'metriken-query '` shows the 0.11.0 git pin, never the old 0.10.x).
 
 ---
 
@@ -140,7 +143,7 @@ a warm slot.
 2. **`src/viewer/routes.rs::run_sql`** — the binder-error → empty-
    matrix shim restoring legacy "unknown metric → empty series"
    UX. Concentrated complexity is here.
-3. **`metriken-query-sql/src/backend.rs`** — the engine. See the
+3. **`metriken-query/src/backend.rs`** — the engine. See the
    companion metriken doc for the concurrency story.
 4. **`crates/prom-matrix/`** — the projection layer shared between
    server and WASM. Single envelope formatter blocks JSON drift.
@@ -423,7 +426,7 @@ narrative.
 `src/mcp/` no longer requires `Tsdb` + PromQL. The five subcommands
 (`describe-recording`, `describe-metrics`, `detect-anomalies`,
 `analyze-correlation`, `query`) and the stdio server run through
-`metriken_query_sql::DuckDbBackend` via `SqlCapture`. `mod mcp;` is
+`metriken_query::DuckDbBackend` via `SqlCapture`. `mod mcp;` is
 unconditional in `src/main.rs`; with the `sql-only` / `live-mode`
 feature seams gone (C4), MCP builds in the single default
 configuration.
@@ -489,7 +492,7 @@ mode bypasses these dispatchers entirely — `save_with_selection`
 (`actions.rs:662`) short-circuits to `snapshots_to_parquet` when no
 parquet path is attached. No Tsdb branch survives, and
 `report-save` has no feature flags (its `Cargo.toml` declares one
-runtime dep on `metriken-query-sql`, no optionals).
+runtime dep on `metriken-query`, no optionals).
 
 The four `report-save` entry points
 (`save_single_parquet_embed_only`, `save_single_parquet_sql`,
@@ -623,7 +626,7 @@ The single largest landing on the branch post-doc-baseline. Closes
 the live-agent query carve-out (formerly carve-out 1, formerly item
 D of "Removing Tsdb entirely").
 
-**Engine side (metriken).** `metriken_query_sql::LiveSource`
+**Engine side (metriken).** `metriken_query::LiveSource`
 (`live.rs`, ~800 LOC) is an in-memory DuckDB table whose `_src`
 grows column-by-column as new metrics appear. Single shared
 `Mutex<Connection>` (DuckDB is `!Sync`); the parquet path's per-
@@ -680,10 +683,10 @@ clone, no `std::mem::take` dance.
 mode for end-to-end coverage.
 
 **Test coverage added.** L1: 10 tests in
-`metriken-query-sql/tests/live.rs` (round-trip, time-range bounds,
+`metriken-query/tests/live.rs` (round-trip, time-range bounds,
 schema growth, NULL semantics, cgroup_index rebuild, timestamp snap,
 per-source view, concurrent read+write, bad-SQL surfacing). L2: 5 tests in
-`metriken-query-sql/src/live.rs::tests` (cross-engine parity —
+`metriken-query/src/live.rs::tests` (cross-engine parity —
 replay parquet rows into a LiveSource, assert byte-identical Arrow
 output for SELECT/COUNT/MIN/MAX/SUM/irate_1s/h2_*). L3: 5 tests in
 `src/viewer/routes.rs::live_route_tests` (data_source_for dispatch,
@@ -708,7 +711,7 @@ path (`6054fe2`).
 | `cargo test -p dashboard`          | DashboardData impls, plot emitters, sql_snapshots.                 |
 | `cargo test -p prom-matrix`        | Arrow → Prometheus matrix projection (incl. NaN/Inf row-dropping). |
 | `cargo test -p viewer-sql`         | WASM crate's SHARED_MACROS parity against the native engine.       |
-| `cargo test -p metriken-query-sql` | UDFs, backend pool, LiveSource parquet↔live parity. **Run from `/work/metriken/`** — the crate lives in the sibling repo, not in the rezolus workspace. |
+| `cargo test -p metriken-query` | UDFs, backend pool, LiveSource parquet↔live parity. **Run from `/work/metriken/`** — the crate lives in the sibling repo, not in the rezolus workspace. |
 | `cargo test -p report-save`        | Column-trim resolvers (SQL via `MetricCatalog`).                   |
 | `cargo test --test mcp_cli`        | End-to-end MCP CLI smoke against `target/debug/rezolus` + `demo.parquet` (auto-skips when fixtures or binary are missing). |
 | `node --test tests/*.mjs`          | Frontend pure-JS tests.                                            |
@@ -769,9 +772,13 @@ SQL against DuckDB.
 The C2-C5 deletion sequence as a reference for `git log` archaeology.
 
 End state:
-- `cargo tree -p rezolus | grep 'metriken-query '` → empty.
-- `metriken-query` crate deleted from `/work/metriken/`.
-- No `Tsdb`, no `QueryEngine`, no `metriken_query::*` import in
+- `cargo tree -p rezolus | grep 'metriken-query '` resolves to
+  the new DuckDB-backed `metriken-query` 0.11.0; the pre-DuckDB
+  0.10.x line (PromQL evaluator + Tsdb + harness) is gone.
+- The pre-DuckDB `metriken-query` directory is deleted from
+  `/work/metriken/`; the name now lives on the DuckDB-backed crate
+  (formerly `metriken-query`).
+- No `Tsdb`, no `QueryEngine`, no PromQL evaluator import in
   rezolus.
 - Single build: `cargo build --bin rezolus`. No `live-mode` /
   `sql-only` features.

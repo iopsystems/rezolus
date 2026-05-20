@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 mod agent;
 mod exporter;
 mod hindsight;
-// MCP runs against parquet files via `metriken_query_sql::DuckDbBackend`
+// MCP runs against parquet files via `metriken_query::DuckDbBackend`
 // (post-May-2026 migration). `parquet_tools::annotate` runs KPI SQL
 // through the same backend; `filter` reuses
 // `annotate::extract_metric_selectors` (a regex-only helper). Single

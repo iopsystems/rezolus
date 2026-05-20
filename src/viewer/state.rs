@@ -19,7 +19,7 @@ use super::live_capture::LiveCapture;
 use super::proxy_allow;
 use super::sql_capture::SqlCapture;
 use ::dashboard::{self, TemplateRegistry};
-use metriken_query_sql::{DuckDbBackend, LiveSource};
+use metriken_query::{DuckDbBackend, LiveSource};
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav

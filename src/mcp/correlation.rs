@@ -303,7 +303,7 @@ fn calculate_lag_correlations(
 /// project `t DOUBLE, v <numeric>, labels...`. Empty inputs or queries
 /// that produce no rows return a "no data" error.
 pub fn calculate_correlation_sql(
-    backend: &metriken_query_sql::DuckDbBackend,
+    backend: &metriken_query::DuckDbBackend,
     capture: &crate::viewer::sql_capture::SqlCapture,
     sql1: &str,
     sql2: &str,

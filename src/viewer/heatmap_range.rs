@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use super::capture_registry::CaptureId;
 use super::state::{ApiResponse, AppState};
 use ::dashboard::sql;
-use metriken_query_sql::udf::{bucket_count, h2_upper};
+use metriken_query::udf::{bucket_count, h2_upper};
 
 /// Allowed `kind` values on the `heatmap_range` request.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]

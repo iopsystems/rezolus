@@ -4,15 +4,15 @@
 //! column-name + label-metadata mapping that mirrors what the parquet
 //! writer does, so a live `_src` is shaped identically to a parquet
 //! `_src` for the same agent's data — that's what makes the cross-engine
-//! parity test in `metriken-query-sql` meaningful in production.
+//! parity test in `metriken-query` meaningful in production.
 //!
-//! The conversion lives here (not in `metriken-query-sql`) so the SQL
+//! The conversion lives here (not in `metriken-query`) so the SQL
 //! crate stays free of a `metriken-exposition` dep.
 
 use std::collections::BTreeMap;
 
 use metriken_exposition::Snapshot;
-use metriken_query_sql::{canonical_column_name, LiveColumn, LiveColumnKind, LiveValue, SqlError};
+use metriken_query::{canonical_column_name, LiveColumn, LiveColumnKind, LiveValue, SqlError};
 
 use super::live_capture::LiveCapture;
 
@@ -220,7 +220,7 @@ mod tests {
     }
 
     fn fresh_capture() -> LiveCapture {
-        let live = metriken_query_sql::LiveSource::new("rezolus", 1000).expect("LiveSource::new");
+        let live = metriken_query::LiveSource::new("rezolus", 1000).expect("LiveSource::new");
         LiveCapture::new(live, 1000, "rezolus", "test", "http://test")
     }
 

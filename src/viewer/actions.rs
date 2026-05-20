@@ -409,7 +409,7 @@ pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
         // this, a re-upload that lands at the same temp path (rare
         // but possible — same PID + same nanosecond suffix collision)
         // would serve queries against the stale schema. See
-        // metriken-query-sql/tests/pool_invalidate.rs.
+        // metriken-query/tests/pool_invalidate.rs.
         state.sql_backend.invalidate(&path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
     }
@@ -895,7 +895,7 @@ mod live_to_sql_swap_tests {
 
     /// Build a LiveCapture-backed AppState the way `init_live_mode` does.
     fn live_state() -> AppState {
-        let backend = Arc::new(metriken_query_sql::DuckDbBackend::new());
+        let backend = Arc::new(metriken_query::DuckDbBackend::new());
         let live_source = backend
             .create_live_source(
                 super::super::state::LIVE_BASELINE_DATA_SOURCE,

@@ -58,7 +58,7 @@ pub trait DashboardData {
 /// Reports zero metrics and an undefined time range — enough for
 /// section generators to emit dashboard JSON without binding to any
 /// concrete data source. Production code uses `SqlCapture` (via the
-/// `metriken-query-sql` engine).
+/// `metriken-query` engine).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EmptyDashboardData;
 

@@ -1,5 +1,5 @@
 //! `LiveCapture` — DashboardData-shaped wrapper around a
-//! `metriken_query_sql::LiveSource`. The baseline slot of a live-mode
+//! `metriken_query::LiveSource`. The baseline slot of a live-mode
 //! viewer carries one of these; the SQL query path goes through the
 //! backend's `live_sources` map under `LIVE_BASELINE_DATA_SOURCE`, but
 //! anything that needs *schema* metadata (interval, time range,
@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use metriken_query_sql::{LiveColumn, LiveColumnKind, LiveSource};
+use metriken_query::{LiveColumn, LiveColumnKind, LiveSource};
 
 use ::dashboard::DashboardData;
 

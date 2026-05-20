@@ -45,7 +45,7 @@ PNGs), so pixel-diff is a reliable signal of behavior change.
 
    ```bash
    git worktree add /tmp/preplan <baseline-commit>
-   # If metriken-query-sql is a sibling-path workspace dep, the
+   # If metriken-query is a sibling-path workspace dep, the
    # worktree's `../metriken/...` path resolves wrongly; symlink:
    ln -sfn /work/metriken /tmp/metriken
    ```
@@ -135,7 +135,7 @@ PNGs), so pixel-diff is a reliable signal of behavior change.
   `data.js`'s data-shape projections.
 - Edits to `crates/dashboard/src/sql.rs` or `crates/dashboard/src/dashboard/*.rs`
   that change emitted SQL.
-- Edits to `metriken-query-sql`'s view generation
+- Edits to `metriken-query`'s view generation
   (`render_src_sql`, `render_per_source_views_sql`,
   `render_per_node_views_sql`).
 - Before opening a PR that touches any of the above.

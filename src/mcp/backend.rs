@@ -25,7 +25,7 @@ use std::sync::Arc;
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::DataType;
 use arrow::record_batch::RecordBatch;
-use metriken_query_sql::DuckDbBackend;
+use metriken_query::DuckDbBackend;
 
 use crate::viewer::sql_capture::SqlCapture;
 
@@ -159,7 +159,7 @@ pub fn batches_to_series(batches: &[RecordBatch]) -> Vec<Series> {
 /// `sum_over_series(rate_per_series(M))` — taking the rate of the
 /// sum would mishandle per-series resets.
 pub fn counter_sum_rate_sql(
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     metric: &str,
 ) -> Option<String> {
     let series = catalog.series_by_metric.get(metric)?;
@@ -184,7 +184,7 @@ pub fn counter_sum_rate_sql(
 /// Build SQL for summing a gauge metric's series at each timestamp.
 /// Matches PromQL `sum(M)`. Returns `None` if the metric isn't in
 /// the catalog.
-pub fn gauge_sum_sql(catalog: &metriken_query_sql::MetricCatalog, metric: &str) -> Option<String> {
+pub fn gauge_sum_sql(catalog: &metriken_query::MetricCatalog, metric: &str) -> Option<String> {
     let series = catalog.series_by_metric.get(metric)?;
     if series.is_empty() {
         return None;
@@ -209,7 +209,7 @@ pub fn gauge_sum_sql(catalog: &metriken_query_sql::MetricCatalog, metric: &str) 
 /// 0.50 / 0.90 / 0.99. Returns `None` if the metric isn't in the
 /// catalog.
 pub fn histogram_quantile_sql(
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     metric: &str,
     q: f64,
 ) -> Option<String> {

@@ -205,7 +205,7 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
 /// Exhaustive anomaly detection: iterate the `SqlCapture` catalog and
 /// run each metric through the SQL builders in [`backend`].
 fn run_exhaustive_detection_sql(
-    backend: &metriken_query_sql::DuckDbBackend,
+    backend: &metriken_query::DuckDbBackend,
     capture: &crate::viewer::sql_capture::SqlCapture,
 ) {
     use dashboard::DashboardData;
@@ -388,7 +388,7 @@ fn run_exhaustive_detection_sql(
 /// Both metrics must have at least one physical column; returns `None`
 /// otherwise.
 fn counter_ratio_sql(
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     numerator: &str,
     denominator: &str,
 ) -> Option<String> {
@@ -477,7 +477,7 @@ fn run_query(file: PathBuf, query: String) {
 /// `process::exit` exit-handling around the CLI wrapper.
 ///
 /// The parquet is exposed as the `_src` view; SHARED_MACROS are
-/// pre-registered (see metriken-query-sql/src/shared_macros.sql).
+/// pre-registered (see metriken-query/src/shared_macros.sql).
 /// Any well-formed `RecordBatch` schema renders — the user owns the
 /// projection.
 pub(crate) fn execute_query(
@@ -539,7 +539,7 @@ pub(crate) fn resolve_query_to_sql(
 /// label to render alongside the result (the SQL we actually ran)
 /// plus the analysis.
 pub(crate) fn detect_anomalies_for_input(
-    backend: &metriken_query_sql::DuckDbBackend,
+    backend: &metriken_query::DuckDbBackend,
     capture: &crate::viewer::sql_capture::SqlCapture,
     input: &str,
 ) -> Result<anomaly_detection::AnomalyDetectionResult, Box<dyn std::error::Error>> {

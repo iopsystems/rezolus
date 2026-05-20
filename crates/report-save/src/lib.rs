@@ -105,7 +105,7 @@ pub fn save_single_parquet_sql(
     source_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
     let events_json = events_payload_json(&payload.events);
@@ -139,7 +139,7 @@ pub fn save_single_parquet_sql(
 /// would break the saved report.
 pub fn resolve_kept_columns_sql(
     payload: &ReportPayload,
-    catalog: &metriken_query_sql::MetricCatalog,
+    catalog: &metriken_query::MetricCatalog,
     side: Side,
 ) -> HashSet<String> {
     let mut out: HashSet<String> = ["timestamp", "duration"]
@@ -230,8 +230,8 @@ pub fn save_combined_ab_tarball_sql(
     experiment_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    baseline_catalog: &metriken_query_sql::MetricCatalog,
-    experiment_catalog: &metriken_query_sql::MetricCatalog,
+    baseline_catalog: &metriken_query::MetricCatalog,
+    experiment_catalog: &metriken_query::MetricCatalog,
     manifest_bytes: &[u8],
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
@@ -452,7 +452,7 @@ fn append_tar_entry<W: std::io::Write>(
 #[cfg(test)]
 mod sql_resolve_tests {
     use super::*;
-    use metriken_query_sql::{MetricCatalog, MetricSeries};
+    use metriken_query::{MetricCatalog, MetricSeries};
     use std::collections::BTreeMap;
 
     fn catalog_from(entries: &[(&str, &[&str])]) -> MetricCatalog {

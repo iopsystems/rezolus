@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
-use metriken_query_sql::{DuckDbBackend, MetricCatalog, SqlError};
+use metriken_query::{DuckDbBackend, MetricCatalog, SqlError};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 
 use crate::parquet_metadata::{
@@ -205,7 +205,7 @@ impl SqlCapture {
 
 /// Walk the parquet schema once and tag each metric as
 /// counter/gauge/histogram. Mirrors the classification rules in
-/// `metriken-query-sql::views::classify`, but we keep our own copy
+/// `metriken-query::views::classify`, but we keep our own copy
 /// because `MetricCatalog` deliberately drops the kind tag (the
 /// wide-form SQL generator doesn't need it) and we don't want to
 /// thread it through the upstream public API just for the dashboard.
@@ -233,7 +233,7 @@ fn classify_metrics(path: &Path) -> Option<HashMap<String, MetricKind>> {
         };
         let name = canonical_metric_name(field);
         // First column for a given canonical name wins, matching the
-        // dedupe rule in metriken-query-sql/src/views.rs:151.
+        // dedupe rule in metriken-query/src/views.rs:151.
         out.entry(name).or_insert(kind);
     }
     Some(out)
