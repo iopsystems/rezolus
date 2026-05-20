@@ -589,158 +589,6 @@ fn reduce_series_to_pair(series: &[backend::Series]) -> (Vec<f64>, Vec<f64>) {
     (timestamps, values)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn demo_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("site")
-            .join("viewer")
-            .join("data")
-            .join("demo.parquet")
-    }
-
-    /// End-to-end: `execute_query` runs a scalar SELECT and the
-    /// pretty-printed output contains the expected count cell.
-    /// `demo.parquet` is a 301-second recording at 1Hz, so `_src` has
-    /// 302 rows (302 timestamps including the trailing one).
-    #[test]
-    fn execute_query_scalar_count() {
-        let path = demo_path();
-        if !path.exists() {
-            eprintln!("skipping: fixture {} missing", path.display());
-            return;
-        }
-        let text =
-            execute_query(&path, "SELECT count(*) AS n FROM _src").expect("scalar SELECT runs");
-        // `arrow::util::pretty::pretty_format_batches` renders this as
-        // a 3-row text table with a single "n" column and a 302 value.
-        assert!(text.contains("| n"), "missing 'n' header: {text}");
-        assert!(text.contains("302"), "missing expected count: {text}");
-    }
-
-    /// `resolve_query_to_sql` auto-constructs SQL for bare metric
-    /// names by looking up their kind in the capture. Pinned: a
-    /// known counter resolves to a counter-rate SQL; a known gauge
-    /// resolves to a gauge-sum SQL; a known histogram resolves to
-    /// a p99 quantile SQL. Anything that already looks like SQL
-    /// passes through unchanged.
-    #[test]
-    fn resolve_query_to_sql_dispatches_by_metric_kind() {
-        let path = demo_path();
-        if !path.exists() {
-            eprintln!("skipping: fixture {} missing", path.display());
-            return;
-        }
-        let (_backend, capture) = backend::open_capture(&path).expect("open");
-
-        // Counter → contains irate_1s.
-        let counter_sql = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles counter");
-        assert!(
-            counter_sql.contains("irate_1s"),
-            "counter SQL: {counter_sql}"
-        );
-
-        // Gauge → no rate fn, just COALESCE(col, 0).
-        let gauge_sql = resolve_query_to_sql(&capture, "cpu_cores").expect("cpu_cores gauge");
-        assert!(gauge_sql.contains("COALESCE"), "gauge SQL: {gauge_sql}");
-        assert!(
-            !gauge_sql.contains("irate_1s"),
-            "gauge must not use rate: {gauge_sql}"
-        );
-
-        // Pass-through: a SQL string contains characters bare names can't.
-        let user_sql = "SELECT count(*) AS v FROM _src";
-        let pass = resolve_query_to_sql(&capture, user_sql).expect("pass-through");
-        assert_eq!(pass, user_sql);
-
-        // Unknown bare name → None.
-        assert!(resolve_query_to_sql(&capture, "definitely_not_a_metric").is_none());
-    }
-
-    /// End-to-end: `analyze-correlation` via the SQL pipeline returns
-    /// a non-empty result with finite correlation values. cpu_cycles
-    /// and cpu_instructions are tightly coupled on demo.parquet
-    /// (CPUs run instructions to generate cycles), so we expect a
-    /// strong positive correlation. The threshold (0.5) is loose to
-    /// survive small numerical drift between recordings.
-    #[test]
-    fn analyze_correlation_via_sql_pipeline() {
-        let path = demo_path();
-        if !path.exists() {
-            eprintln!("skipping: fixture {} missing", path.display());
-            return;
-        }
-        let (backend, capture) = backend::open_capture(&path).expect("open");
-        let sql1 = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles");
-        let sql2 = resolve_query_to_sql(&capture, "cpu_instructions").expect("cpu_instructions");
-        let result = correlation::calculate_correlation_sql(&backend, &capture, &sql1, &sql2)
-            .expect("correlation runs");
-        assert!(result.sample_count > 0, "have sample points");
-        assert!(
-            result.max_correlation.is_finite(),
-            "correlation is a finite number"
-        );
-        assert!(
-            result.max_correlation.abs() > 0.5,
-            "cpu_cycles ↔ cpu_instructions should be strongly correlated; got {}",
-            result.max_correlation
-        );
-    }
-
-    /// End-to-end: detect_anomalies_for_input on a real metric runs
-    /// the SQL builder + DuckDB + analysis pipeline and returns a
-    /// populated result. Pinned because this is the integration
-    /// path the `mcp detect-anomalies <file> <metric>` CLI exercises.
-    #[test]
-    fn detect_anomalies_for_input_runs_end_to_end() {
-        let path = demo_path();
-        if !path.exists() {
-            eprintln!("skipping: fixture {} missing", path.display());
-            return;
-        }
-        let (backend, capture) = backend::open_capture(&path).expect("open");
-        let result =
-            detect_anomalies_for_input(&backend, &capture, "cpu_cores").expect("analyse cpu_cores");
-        assert!(result.total_points > 0, "got data points");
-        assert_eq!(
-            result.total_points,
-            result.values.len(),
-            "total_points matches values len"
-        );
-        // The query field should record the executed SQL, not the bare
-        // metric name — that's the user-visible audit trail.
-        assert!(
-            result.query.contains("FROM _src"),
-            "query records executed SQL: {}",
-            result.query
-        );
-    }
-
-    /// `execute_query` surfaces DuckDB errors rather than panicking
-    /// on a malformed query. Pinned because the CLI's `run_query`
-    /// catches `Err` and exits with code 1, so a panic here would
-    /// regress the user-visible error UX.
-    #[test]
-    fn execute_query_propagates_sql_errors() {
-        let path = demo_path();
-        if !path.exists() {
-            eprintln!("skipping: fixture {} missing", path.display());
-            return;
-        }
-        let err = execute_query(&path, "SELECT bogus_column FROM _src").expect_err("must fail");
-        let msg = err.to_string();
-        // DuckDB's binder reports the missing column by name. We don't
-        // assert on the exact phrasing (it can shift across DuckDB
-        // versions), but the column name should land in the message.
-        assert!(
-            msg.to_lowercase().contains("bogus_column") || msg.to_lowercase().contains("binder"),
-            "expected binder error mentioning bogus_column or 'binder', got: {msg}",
-        );
-    }
-}
-
 /// MCP operation mode
 pub enum Mode {
     Server,
@@ -949,4 +797,156 @@ pub fn command() -> Command {
                         .index(2),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("site")
+            .join("viewer")
+            .join("data")
+            .join("demo.parquet")
+    }
+
+    /// End-to-end: `execute_query` runs a scalar SELECT and the
+    /// pretty-printed output contains the expected count cell.
+    /// `demo.parquet` is a 301-second recording at 1Hz, so `_src` has
+    /// 302 rows (302 timestamps including the trailing one).
+    #[test]
+    fn execute_query_scalar_count() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let text =
+            execute_query(&path, "SELECT count(*) AS n FROM _src").expect("scalar SELECT runs");
+        // `arrow::util::pretty::pretty_format_batches` renders this as
+        // a 3-row text table with a single "n" column and a 302 value.
+        assert!(text.contains("| n"), "missing 'n' header: {text}");
+        assert!(text.contains("302"), "missing expected count: {text}");
+    }
+
+    /// `resolve_query_to_sql` auto-constructs SQL for bare metric
+    /// names by looking up their kind in the capture. Pinned: a
+    /// known counter resolves to a counter-rate SQL; a known gauge
+    /// resolves to a gauge-sum SQL; a known histogram resolves to
+    /// a p99 quantile SQL. Anything that already looks like SQL
+    /// passes through unchanged.
+    #[test]
+    fn resolve_query_to_sql_dispatches_by_metric_kind() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let (_backend, capture) = backend::open_capture(&path).expect("open");
+
+        // Counter → contains irate_1s.
+        let counter_sql = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles counter");
+        assert!(
+            counter_sql.contains("irate_1s"),
+            "counter SQL: {counter_sql}"
+        );
+
+        // Gauge → no rate fn, just COALESCE(col, 0).
+        let gauge_sql = resolve_query_to_sql(&capture, "cpu_cores").expect("cpu_cores gauge");
+        assert!(gauge_sql.contains("COALESCE"), "gauge SQL: {gauge_sql}");
+        assert!(
+            !gauge_sql.contains("irate_1s"),
+            "gauge must not use rate: {gauge_sql}"
+        );
+
+        // Pass-through: a SQL string contains characters bare names can't.
+        let user_sql = "SELECT count(*) AS v FROM _src";
+        let pass = resolve_query_to_sql(&capture, user_sql).expect("pass-through");
+        assert_eq!(pass, user_sql);
+
+        // Unknown bare name → None.
+        assert!(resolve_query_to_sql(&capture, "definitely_not_a_metric").is_none());
+    }
+
+    /// End-to-end: `analyze-correlation` via the SQL pipeline returns
+    /// a non-empty result with finite correlation values. cpu_cycles
+    /// and cpu_instructions are tightly coupled on demo.parquet
+    /// (CPUs run instructions to generate cycles), so we expect a
+    /// strong positive correlation. The threshold (0.5) is loose to
+    /// survive small numerical drift between recordings.
+    #[test]
+    fn analyze_correlation_via_sql_pipeline() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let (backend, capture) = backend::open_capture(&path).expect("open");
+        let sql1 = resolve_query_to_sql(&capture, "cpu_cycles").expect("cpu_cycles");
+        let sql2 = resolve_query_to_sql(&capture, "cpu_instructions").expect("cpu_instructions");
+        let result = correlation::calculate_correlation_sql(&backend, &capture, &sql1, &sql2)
+            .expect("correlation runs");
+        assert!(result.sample_count > 0, "have sample points");
+        assert!(
+            result.max_correlation.is_finite(),
+            "correlation is a finite number"
+        );
+        assert!(
+            result.max_correlation.abs() > 0.5,
+            "cpu_cycles ↔ cpu_instructions should be strongly correlated; got {}",
+            result.max_correlation
+        );
+    }
+
+    /// End-to-end: detect_anomalies_for_input on a real metric runs
+    /// the SQL builder + DuckDB + analysis pipeline and returns a
+    /// populated result. Pinned because this is the integration
+    /// path the `mcp detect-anomalies <file> <metric>` CLI exercises.
+    #[test]
+    fn detect_anomalies_for_input_runs_end_to_end() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let (backend, capture) = backend::open_capture(&path).expect("open");
+        let result =
+            detect_anomalies_for_input(&backend, &capture, "cpu_cores").expect("analyse cpu_cores");
+        assert!(result.total_points > 0, "got data points");
+        assert_eq!(
+            result.total_points,
+            result.values.len(),
+            "total_points matches values len"
+        );
+        // The query field should record the executed SQL, not the bare
+        // metric name — that's the user-visible audit trail.
+        assert!(
+            result.query.contains("FROM _src"),
+            "query records executed SQL: {}",
+            result.query
+        );
+    }
+
+    /// `execute_query` surfaces DuckDB errors rather than panicking
+    /// on a malformed query. Pinned because the CLI's `run_query`
+    /// catches `Err` and exits with code 1, so a panic here would
+    /// regress the user-visible error UX.
+    #[test]
+    fn execute_query_propagates_sql_errors() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let err = execute_query(&path, "SELECT bogus_column FROM _src").expect_err("must fail");
+        let msg = err.to_string();
+        // DuckDB's binder reports the missing column by name. We don't
+        // assert on the exact phrasing (it can shift across DuckDB
+        // versions), but the column name should land in the message.
+        assert!(
+            msg.to_lowercase().contains("bogus_column") || msg.to_lowercase().contains("binder"),
+            "expected binder error mentioning bogus_column or 'binder', got: {msg}",
+        );
+    }
 }

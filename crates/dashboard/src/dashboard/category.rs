@@ -169,7 +169,7 @@ mod tests {
     use crate::service_extension::{CategoryKpi, Kpi};
     use std::collections::HashMap;
 
-    fn kpi(role: &str, title: &str, query: &str) -> Kpi {
+    fn kpi(role: &str, title: &str, _query: &str) -> Kpi {
         Kpi {
             role: role.to_string(),
             title: title.to_string(),

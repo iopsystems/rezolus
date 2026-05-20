@@ -921,7 +921,7 @@ mod live_route_tests {
             .create_live_source(LIVE_BASELINE_DATA_SOURCE, "rezolus", 1000)
             .expect("create_live_source");
         let cap = LiveCapture::new(live.clone(), 1000, "rezolus", "test", "http://test");
-        let mut state = AppState::new_live(cap, backend, TemplateRegistry::empty());
+        let state = AppState::new_live(cap, backend, TemplateRegistry::empty());
         *state.live_source.write() = Some(live.clone());
         state.live.store(true, std::sync::atomic::Ordering::Relaxed);
         (Arc::new(state), live)

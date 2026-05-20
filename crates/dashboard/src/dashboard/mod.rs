@@ -236,7 +236,7 @@ mod tests {
         use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
-        let kpi = |role: &str, title: &str, query: &str| Kpi {
+        let kpi = |role: &str, title: &str, _query: &str| Kpi {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
@@ -315,7 +315,7 @@ mod tests {
         use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
-        let kpi = |role: &str, title: &str, query: &str| Kpi {
+        let kpi = |role: &str, title: &str, _query: &str| Kpi {
             role: role.to_string(),
             title: title.to_string(),
             description: None,

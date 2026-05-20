@@ -85,7 +85,7 @@ impl CpuL3Inner {
             })
             .collect();
 
-        futures::future::join_all(perf_futures.into_iter()).await;
+        futures::future::join_all(perf_futures).await;
 
         Ok(())
     }
@@ -263,8 +263,7 @@ fn get_l3_caches() -> Result<Vec<L3Cache>, std::io::Error> {
 
     if l3_caches.is_empty() {
         debug!("failed to create perf counters for any L3 cache domain");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "failed to create L3 cache perf counters",
         ));
     }

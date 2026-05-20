@@ -142,6 +142,35 @@ pub fn format_metrics_description_sql(capture: &SqlCapture) -> String {
     output
 }
 
+/// Common query examples appended to the formatter output.
+const QUERY_EXAMPLES: &str = "\n\nCOMMON QUERY PATTERNS:\n\
+----------------------\n\
+Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\
+\n\
+Counter queries (use rate() for per-second rates):\n  \
+rate(cpu_cycles[1m])              - CPU cycles per second for each core\n  \
+sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n  \
+rate(cpu_instructions[1m])        - Instructions retired per second\n  \
+sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n  \
+rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n  \
+sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n\
+Gauge queries (instant values):\n  \
+cpu_usage                          - Current CPU usage per core\n  \
+sum(cpu_usage)                     - Total CPU usage across all cores\n  \
+memory_size                        - Memory size metrics\n\n\
+Histogram queries (use histogram_quantile for percentiles):\n  \
+histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n  \
+histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n\
+Aggregation and filtering:\n  \
+sum(gauge_metric)                  - Sum across all series\n  \
+avg(gauge_metric)                  - Average across all series\n  \
+max(gauge_metric)                  - Maximum value across all series\n  \
+metric{label=\"value\"}             - Filter by label value\n  \
+sum by (label) (metric)            - Aggregate by label\n\n\
+Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n      \
+Gauges can be queried directly as they represent point-in-time values.\n      \
+Histograms require histogram_quantile() to extract percentiles.\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,32 +225,3 @@ mod tests {
         );
     }
 }
-
-/// Common query examples appended to the formatter output.
-const QUERY_EXAMPLES: &str = "\n\nCOMMON QUERY PATTERNS:\n\
-----------------------\n\
-Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\
-\n\
-Counter queries (use rate() for per-second rates):\n  \
-rate(cpu_cycles[1m])              - CPU cycles per second for each core\n  \
-sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n  \
-rate(cpu_instructions[1m])        - Instructions retired per second\n  \
-sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n  \
-rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n  \
-sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n\
-Gauge queries (instant values):\n  \
-cpu_usage                          - Current CPU usage per core\n  \
-sum(cpu_usage)                     - Total CPU usage across all cores\n  \
-memory_size                        - Memory size metrics\n\n\
-Histogram queries (use histogram_quantile for percentiles):\n  \
-histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n  \
-histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n\
-Aggregation and filtering:\n  \
-sum(gauge_metric)                  - Sum across all series\n  \
-avg(gauge_metric)                  - Average across all series\n  \
-max(gauge_metric)                  - Maximum value across all series\n  \
-metric{label=\"value\"}             - Filter by label value\n  \
-sum by (label) (metric)            - Aggregate by label\n\n\
-Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n      \
-Gauges can be queried directly as they represent point-in-time values.\n      \
-Histograms require histogram_quantile() to extract percentiles.\n";

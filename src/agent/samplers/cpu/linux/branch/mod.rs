@@ -86,7 +86,7 @@ impl BranchInner {
             })
             .collect();
 
-        futures::future::join_all(perf_futures.into_iter()).await;
+        futures::future::join_all(perf_futures).await;
 
         Ok(())
     }
@@ -236,8 +236,7 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     }
 
     if cores.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "no cores available for branch sampling",
         ));
     }
@@ -297,8 +296,7 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
     }
 
     if perf_threads.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        return Err(std::io::Error::other(
             "no cores available for branch sampling",
         ));
     }

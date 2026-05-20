@@ -336,7 +336,7 @@ impl EthtoolInner {
         let total_size = header_size + data_size;
 
         let layout = std::alloc::Layout::from_size_align(total_size, 8)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // SAFETY: layout is valid and non-zero sized. We initialize the header
         // fields before use, and the trailing stat values are written by the

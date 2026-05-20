@@ -163,6 +163,27 @@ pub fn generate(
     view
 }
 
+/// Convert a title into a kebab-case slug for use as a DOM id.
+pub(crate) fn slug(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// Capitalize the first letter of a string (for group titles).
+pub(crate) fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,7 +191,7 @@ mod tests {
     use crate::service_extension::{Kpi, ServiceExtension};
     use std::collections::HashMap;
 
-    fn kpi(title: &str, query: &str, sql: Option<&str>) -> Kpi {
+    fn kpi(title: &str, _query: &str, sql: Option<&str>) -> Kpi {
         Kpi {
             role: "throughput".to_string(),
             title: title.to_string(),
@@ -289,26 +310,5 @@ mod tests {
         );
         // No placeholder → pass-through.
         assert_eq!(substitute_view("SELECT 1", "x"), "SELECT 1");
-    }
-}
-
-/// Convert a title into a kebab-case slug for use as a DOM id.
-pub(crate) fn slug(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-/// Capitalize the first letter of a string (for group titles).
-pub(crate) fn capitalize(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        None => String::new(),
-        Some(c) => c.to_uppercase().chain(chars).collect(),
     }
 }

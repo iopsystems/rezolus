@@ -904,7 +904,7 @@ mod live_to_sql_swap_tests {
             )
             .expect("create_live_source");
         let live = LiveCapture::new(live_source.clone(), 1000, "rezolus", "test", "http://test");
-        let mut state = AppState::new_live(live, backend, TemplateRegistry::empty());
+        let state = AppState::new_live(live, backend, TemplateRegistry::empty());
         *state.live_source.write() = Some(live_source);
         state.live.store(true, Ordering::Relaxed);
         state

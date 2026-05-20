@@ -98,15 +98,11 @@ fn read_cpuinfo() -> (Option<String>, Option<String>) {
             continue;
         }
         match parts[0] {
-            "model name" => {
-                if model.is_none() {
-                    model = Some(parts[1].to_string());
-                }
+            "model name" if model.is_none() => {
+                model = Some(parts[1].to_string());
             }
-            "vendor_id" => {
-                if vendor.is_none() {
-                    vendor = Some(parts[1].to_string());
-                }
+            "vendor_id" if vendor.is_none() => {
+                vendor = Some(parts[1].to_string());
             }
             _ => {}
         }
