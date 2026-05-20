@@ -5,7 +5,7 @@ mod plot;
 mod service_extension;
 pub mod sql;
 
-pub use dashboard::service::substitute_view;
+pub use dashboard::service::{substitute_view, substitute_view_and_p};
 pub use data::{DashboardData, EmptyDashboardData};
 pub use events::{Event, Events};
 pub use plot::*;

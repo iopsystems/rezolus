@@ -335,6 +335,19 @@ pub fn validate_service_extensions_sql(
     data_source: &str,
     exts: &mut [(String, ServiceExtension)],
 ) {
+    // Histogram KPIs reference `{{p}}` for the per-metric H2
+    // grouping_power; if we don't substitute it the validator's
+    // prepare-stage parser blows up on the literal `{{p}}`. The
+    // dashboard-generation path already does this via
+    // `substitute_view_and_p`; we mirror its catalog lookup +
+    // rezolus-default fallback.
+    let catalog = backend.describe_parquet(data_source).ok();
+    let p_for = |metric: Option<&str>| -> u8 {
+        catalog
+            .as_ref()
+            .and_then(|c| metric.and_then(|m| c.histogram_p_by_metric.get(m).copied()))
+            .unwrap_or(3)
+    };
     for (source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let Some(sql) = kpi.sql.as_ref() else {
@@ -344,7 +357,11 @@ pub fn validate_service_extensions_sql(
                 // is unset.
                 continue;
             };
-            let resolved = dashboard::substitute_view(sql, source);
+            let resolved = dashboard::substitute_view_and_p(
+                sql,
+                source,
+                p_for(kpi.metric.as_deref()),
+            );
             let has_data = match backend.run_sql(&resolved, data_source) {
                 Ok(batches) => batches.iter().any(|b| b.num_rows() > 0),
                 Err(e) => {
@@ -582,6 +599,61 @@ mod validate_sql_tests {
         assert!(
             exts[0].1.kpis[0].available,
             "PromQL-only KPI must stay available"
+        );
+    }
+
+    #[test]
+    fn histogram_kpi_with_pp_placeholder_substitutes_before_prepare() {
+        // Histogram KPI SQL templates carry the literal `{{p}}` until
+        // emit-time substitution. validate must do the same substitution
+        // before binding through DuckDB, or the parser blows up on the
+        // raw `{{`. Regression: pre-fix, KPIs like cachecannon "Response
+        // Latency" got marked unavailable because the validator only
+        // substituted `{{view}}`, leaving `{{p}}` as a parser-eater.
+        let backend = DuckDbBackend::new();
+        let live = backend
+            .create_live_source(DS, "rezolus", 1000)
+            .expect("create_live_source");
+        // Histogram column. The metric name + ":buckets" is the
+        // canonical naming the live source ingests under.
+        let mut buckets = vec![0u64; 256];
+        buckets[10] = 1;
+        let col = LiveColumn {
+            physical: "request_latency:buckets".into(),
+            metric: "request_latency".into(),
+            kind: LiveColumnKind::Histogram { grouping_power: 5 },
+            labels: BTreeMap::new(),
+        };
+        live.append(
+            1_000_000_000,
+            Some(1_000_000_000),
+            &[(col.clone(), LiveValue::Histogram(&buckets))],
+        )
+        .expect("append snapshot 1");
+        live.append(
+            2_000_000_000,
+            Some(1_000_000_000),
+            &[(col, LiveValue::Histogram(&buckets))],
+        )
+        .expect("append snapshot 2");
+
+        // KPI SQL that mirrors the percentile_kpi_sql emitter's shape:
+        // `h2_quantile(d, {p}, {{p}})` where `{p}` is already filled
+        // (the quantile) and `{{p}}` is the grouping_power placeholder
+        // resolved at validate / emit time.
+        let mut k = kpi(
+            "p99 latency",
+            Some(
+                "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"request_latency:buckets\",\n                  LAG(\"request_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       h2_quantile(d, 0.99, {{p}})::DOUBLE AS v\nFROM d WHERE d IS NOT NULL",
+            ),
+        );
+        k.metric = Some("request_latency".into());
+        k.metric_type = "histogram".into();
+        let mut exts = ext_with_kpis(vec![k]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            exts[0].1.kpis[0].available,
+            "histogram KPI with `{{{{p}}}}` placeholder must validate after substitution"
         );
     }
 }
