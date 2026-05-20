@@ -10,9 +10,43 @@ import { ViewerApi } from '../viewer_api.js';
 import { applyResultToPlot, fetchHeatmapForPlot } from '../data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { readHistory, pushHistory } from './sql_history.js';
+import {
+    UNIT_OPTIONS,
+    seedFieldsFromPlot,
+    applyFieldsToSpec,
+} from './single_chart_fields.js';
 
 // Re-export for tests + outside callers.
 export { trimAndDedupe } from './sql_history.js';
+
+/** Render a single labeled input + Apply button. Apply just nudges
+ *  mithril to redraw — every keystroke already drives a redraw via
+ *  `oninput`, so Apply is a UX affordance, not a state commit. */
+const fieldRow = (label, value, oninput) =>
+    m('div.single-chart-field', [
+        m('label', label),
+        m('div.field-input-row', [
+            m('input.field-input', {
+                type: 'text',
+                value,
+                oninput,
+            }),
+            m('button.field-apply-btn', { onclick: () => m.redraw() }, 'Apply'),
+        ]),
+    ]);
+
+/** Inline unit-system selector. */
+const unitSelector = (current, onchange) =>
+    m('label.unit-select-label', [
+        'Unit: ',
+        m('select.unit-select', {
+            value: current,
+            onchange: (e) => onchange(e.target.value),
+            title: 'Y-axis unit type',
+        }, UNIT_OPTIONS.map(o =>
+            m('option', { value: o.value }, o.label),
+        )),
+    ]);
 
 const EXAMPLES = [
     {
@@ -214,6 +248,13 @@ export const SingleChartView = {
         vnode.state.heatmapData = null;
         vnode.state.heatmapLoading = false;
         vnode.state.heatmapPrefetchKicked = false;
+        // Inline editor state. Seeded from the target plot's opts the
+        // first time `view()` resolves it (the section payload may
+        // still be loading at oninit time).
+        vnode.state.fieldsSeeded = false;
+        vnode.state.title = '';
+        vnode.state.description = '';
+        vnode.state.unitOverride = '';
     },
 
     view(vnode) {
@@ -249,9 +290,19 @@ export const SingleChartView = {
         if (!target) {
             return m('div.single-chart-main', m('p', `Chart "${chartId}" not found in section "${section}".`));
         }
+        if (!st.fieldsSeeded) {
+            const seed = seedFieldsFromPlot(target);
+            st.title = seed.title;
+            st.description = seed.description;
+            st.unitOverride = seed.unitOverride;
+            st.fieldsSeeded = true;
+        }
         const spec = {
-            ...target,
-            opts: { ...target.opts },
+            ...applyFieldsToSpec(target, {
+                title: st.title,
+                description: st.description,
+                unitOverride: st.unitOverride,
+            }),
             width: 'full',
         };
         const isHistogram = isHistogramPlot(target);
@@ -309,6 +360,14 @@ export const SingleChartView = {
                 ]),
                 spec.opts.description && m('p.chart-description', spec.opts.description),
                 m(Chart, { spec: chartSpec, chartsState, interval: cached.interval || 1 }),
+                m('div.single-chart-fields', [
+                    fieldRow('Title', st.title, (e) => { st.title = e.target.value; }),
+                    fieldRow('Description', st.description, (e) => { st.description = e.target.value; }),
+                    m('div.single-chart-field', [
+                        m('label', 'Unit override'),
+                        unitSelector(st.unitOverride, (v) => { st.unitOverride = v; }),
+                    ]),
+                ]),
             ]),
         );
     },
