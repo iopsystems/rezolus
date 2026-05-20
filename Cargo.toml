@@ -14,12 +14,15 @@ console_error_panic_hook = "0.1"
 histogram = "1.4.1"
 libc = "0.2.186"
 log = "0.4.29"
-metriken = "0.9.2"
-metriken-exposition = "0.16.0"
-# metriken-query-sql is unreleased; pin to the companion PR branch so CI
-# resolves it without a sibling-repo checkout. Local dev gets the sibling
-# path via the [patch] section below. Bump this back to a published
-# version once the metriken side lands.
+# metriken / metriken-exposition carry unreleased changes on the
+# companion PR branch (metriken-exposition 0.16.0 → 0.16.1, plus the
+# metriken-query-sql crate which isn't published at all). Pin all three
+# to the branch so CI resolves them without a sibling-repo checkout.
+# Local dev still gets the sibling path via the [patch] section below.
+# Bump back to published versions once the companion metriken PR lands
+# and a release is cut.
+metriken = { git = "https://github.com/iopsystems/metriken", branch = "yv/sql-testing" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "yv/sql-testing" }
 metriken-query-sql = { git = "https://github.com/iopsystems/metriken", branch = "yv/sql-testing" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -31,16 +34,16 @@ include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2.120"
 
-# Local override: use the in-tree metriken workspace instead of the
-# published 0.9.x crate. Drop this section to pin to released versions.
-[patch.crates-io]
+# Local override: when both repos are checked out side-by-side,
+# metriken / metriken-exposition / metriken-query-sql resolve through
+# the sibling path so local edits hot-reload here without a push/fetch
+# cycle. CI matches the layout by cloning the metriken repo into the
+# sibling location before invoking cargo — see .github/workflows/cargo.yml.
+# Drop this section once the companion metriken PR lands and a release
+# is cut.
+[patch."https://github.com/iopsystems/metriken"]
 metriken = { path = "../metriken/metriken" }
 metriken-exposition = { path = "../metriken/metriken-exposition" }
-
-# Local override for the git dep above. When both repos are checked
-# out side-by-side, metriken-query-sql resolves through the sibling
-# path; CI without that checkout falls back to the git source.
-[patch."https://github.com/iopsystems/metriken"]
 metriken-query-sql = { path = "../metriken/metriken-query-sql" }
 
 [package]
