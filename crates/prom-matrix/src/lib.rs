@@ -36,12 +36,15 @@ pub use wasm::js_arrow_to_prom_matrix;
 pub const EMPTY_PROM_MATRIX: &str =
     r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#;
 
+/// One Prometheus matrix series: a label dictionary plus an ordered list of
+/// `(t_seconds, v_stringified)` samples. The label map is the `metric` JSON
+/// object; samples ship as strings to match Prometheus' wire shape.
+pub(crate) type SeriesGroup = (serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>);
+
 /// Emit the Prometheus matrix JSON envelope around a series-grouped
 /// projection. Shared by the native and WASM entry points so they cannot
 /// drift on escaping or ordering.
-pub(crate) fn emit_prom_matrix_json(
-    groups: &[(serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>)],
-) -> String {
+pub(crate) fn emit_prom_matrix_json(groups: &[SeriesGroup]) -> String {
     let mut out = String::new();
     out.push_str("{\"status\":\"success\",\"data\":{\"resultType\":\"matrix\",\"result\":[");
     for (i, (metric, values)) in groups.iter().enumerate() {

@@ -53,7 +53,7 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
 
     // Group rows by the tuple of label values. Build groups in insertion
     // order so output is deterministic.
-    let mut groups: Vec<(serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>)> = Vec::new();
+    let mut groups: Vec<crate::SeriesGroup> = Vec::new();
     let mut group_index: HashMap<String, usize> = HashMap::new();
 
     let get_cell = |vector: &JsValue, row: usize| -> Result<JsValue, JsValue> {
@@ -90,10 +90,8 @@ pub fn js_arrow_to_prom_matrix(table: &JsValue) -> Result<String, JsValue> {
         if cell.is_null() || cell.is_undefined() {
             return Ok(None);
         }
-        if let Some(n) = cell.as_f64() {
-            if !n.is_finite() {
-                return Ok(None);
-            }
+        if matches!(cell.as_f64(), Some(n) if !n.is_finite()) {
+            return Ok(None);
         }
         Ok(Some(to_string_via_js(cell)?))
     };

@@ -134,7 +134,7 @@ fn make_column_with_physical(
     let labels: BTreeMap<String, String> = metadata
         .iter()
         .filter(|(k, _)| k.as_str() != "metric")
-        .filter(|(k, _)| !SHAPE_METADATA_KEYS.iter().any(|s| *s == k.as_str()))
+        .filter(|(k, _)| !SHAPE_METADATA_KEYS.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // Compute the canonical column name. For agents that already emit

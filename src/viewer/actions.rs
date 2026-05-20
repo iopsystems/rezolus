@@ -306,7 +306,7 @@ pub fn ingest_baseline_from_path(
     // from a user-supplied parquet that init_file_mode stamped into
     // state.parquet_path. The pool eviction is the safety-critical
     // part; eventual /tmp cleanup is the OS's job.
-    let prior_path = std::mem::replace(&mut *state.parquet_path.write(), Some(temp_path));
+    let prior_path = state.parquet_path.write().replace(temp_path);
     if let Some(prior) = prior_path {
         state.sql_backend.invalidate(&prior.to_string_lossy());
     }

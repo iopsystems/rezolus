@@ -36,8 +36,7 @@ pub fn arrow_to_prom_matrix(batches: &[RecordBatch]) -> String {
         return crate::EMPTY_PROM_MATRIX.to_string();
     };
 
-    let mut groups: Vec<(serde_json::Map<String, serde_json::Value>, Vec<(f64, String)>)> =
-        Vec::new();
+    let mut groups: Vec<crate::SeriesGroup> = Vec::new();
     let mut group_index: HashMap<String, usize> = HashMap::new();
 
     for batch in batches {

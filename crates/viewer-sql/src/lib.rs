@@ -286,28 +286,26 @@ impl ViewerSql {
     /// in `crates/viewer/src/lib.rs:172`. For multi-node combined files
     /// returns an object keyed by node name; otherwise the flat string.
     pub fn systeminfo(&self) -> Option<String> {
-        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata") {
-            if let Ok(psm) =
+        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata")
+            && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
-                    let mut nodes = serde_json::Map::new();
-                    for (sub_key, entry) in rez_group {
-                        let obj = match entry.as_object() {
-                            Some(o) => o,
-                            None => continue,
-                        };
-                        let sysinfo_val = match obj.get("systeminfo") {
-                            Some(v) => v,
-                            None => continue,
-                        };
-                        let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
-                        nodes.insert(node_name.to_string(), sysinfo_val.clone());
-                    }
-                    if nodes.len() > 1 {
-                        return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
-                    }
-                }
+            && let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object())
+        {
+            let mut nodes = serde_json::Map::new();
+            for (sub_key, entry) in rez_group {
+                let obj = match entry.as_object() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                let sysinfo_val = match obj.get("systeminfo") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
+                nodes.insert(node_name.to_string(), sysinfo_val.clone());
+            }
+            if nodes.len() > 1 {
+                return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
             }
         }
         self.metadata.file_metadata.get("systeminfo").cloned()
@@ -348,24 +346,23 @@ impl ViewerSql {
         registry: &dashboard::TemplateRegistry,
     ) -> Vec<(String, dashboard::ServiceExtension)> {
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
-        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata") {
-            if let Ok(psm) =
+        if let Some(psm_str) = self.metadata.file_metadata.get("per_source_metadata")
+            && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                for (source_type, _group) in &psm {
-                    if source_type == "rezolus" {
-                        continue;
-                    }
-                    if let Some(ext) = registry.get(source_type) {
-                        service_exts.push((source_type.clone(), ext.clone()));
-                    }
+        {
+            for (source_type, _group) in &psm {
+                if source_type == "rezolus" {
+                    continue;
+                }
+                if let Some(ext) = registry.get(source_type) {
+                    service_exts.push((source_type.clone(), ext.clone()));
                 }
             }
         }
-        if service_exts.is_empty() {
-            if let Some(ext) = registry.get(&self.metadata.source) {
-                service_exts.push((self.metadata.source.clone(), ext.clone()));
-            }
+        if service_exts.is_empty()
+            && let Some(ext) = registry.get(&self.metadata.source)
+        {
+            service_exts.push((self.metadata.source.clone(), ext.clone()));
         }
         service_exts
     }

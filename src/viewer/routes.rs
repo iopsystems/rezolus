@@ -328,7 +328,7 @@ fn count_section_plots(
             .into_iter()
             .flat_map(|sgs| sgs.iter())
             .filter_map(|sg| sg.get("plots").and_then(|v| v.as_array()))
-            .chain(direct_plots.into_iter())
+            .chain(direct_plots)
             .flatten();
         for plot in plot_iter {
             let sql = plot
@@ -580,7 +580,7 @@ async fn run_sql(
                 }
             };
             let nodes: Vec<&str> = catalog.nodes();
-            if !nodes.iter().any(|&n| n == node_name) {
+            if !nodes.contains(&node_name) {
                 return (
                     StatusCode::BAD_REQUEST,
                     ApiResponse::<serde_json::Value>::err(

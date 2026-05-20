@@ -188,7 +188,8 @@ impl SqlCapture {
     fn names_with_kind(&self, want: MetricKind) -> Vec<&str> {
         self.kind_by_metric
             .iter()
-            .filter_map(|(name, kind)| (*kind == want).then(|| name.as_str()))
+            .filter(|(_, kind)| **kind == want)
+            .map(|(name, _)| name.as_str())
             .collect()
     }
 

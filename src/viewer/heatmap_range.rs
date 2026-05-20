@@ -128,7 +128,7 @@ pub async fn handler(
     let node = match params.node.as_deref() {
         Some(name) => {
             let nodes: Vec<&str> = catalog.nodes();
-            if !nodes.iter().any(|&n| n == name) {
+            if !nodes.contains(&name) {
                 return (
                     StatusCode::BAD_REQUEST,
                     ApiResponse::<serde_json::Value>::err(

@@ -157,9 +157,9 @@ pub struct AppState {
     /// concurrent `/api/v1/upload` calls can interleave their
     /// post-swap metadata stamping — registry baseline ends up as
     /// upload B's capture while `state.parquet_path` points at A's
-    /// path. Held across the parquet load + replace_baseline_with_sql
-    /// + the cluster of `state.*.write()` updates so the world sees
-    /// a single coherent snapshot per upload.
+    /// path. Held across the parquet load, `replace_baseline_with_sql`,
+    /// and the cluster of `state.*.write()` updates so the world sees a
+    /// single coherent snapshot per upload.
     pub upload_mutex: Mutex<()>,
 }
 

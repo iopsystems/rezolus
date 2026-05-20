@@ -297,6 +297,7 @@ pub struct Plot {
     ///     `read_parquet('<registered>')` at submit time.
     ///   - Final SELECT projects `t` (DOUBLE seconds) and `v` (numeric);
     ///     per-id queries also project label columns (e.g. `id`).
+    ///
     /// See `crates/viewer-sql/duckdb.md` for the full SQL convention.
     #[serde(skip_serializing_if = "Option::is_none")]
     sql_query: Option<String>,
