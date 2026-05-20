@@ -178,6 +178,82 @@ end-to-end.
 
 ---
 
+## Regressions caught during wrap-up
+
+Pixel-diff vs `origin/main` on the same parquet
+(`scripts/viewer_chromium_smoke.sh` + Pillow ImageChops) surfaced
+three regressions during the final audit. All resolved on this branch
+before submitting.
+
+1. **`/cgroups` rendered zero charts.** Aggregate-side SQL templates
+   carry a `__SELECTED_CGROUPS__` placeholder that the legacy PromQL
+   path substituted client-side; the SQL port stopped substituting,
+   every aggregate / individual plot bind-errored and the section
+   silently rendered only the selector. Fix: re-introduce
+   `substituteCgroupPattern` in `data.js` (module-level pure helper,
+   exported), thread `activeCgroupPattern` through
+   `processDashboardData` / `buildEffectiveQuery`, and apply the same
+   substitution on the cgroup_selector's explicit-execute path
+   (`app.js::renderCgroupSection`). Empty selection becomes `('')`
+   so `NOT IN` includes everything and `IN` matches nothing — bit-
+   identical with the WASM viewer's registry-side substitution.
+   Regression covered by `tests/cgroup_pattern.test.mjs` (5 tests).
+2. **Cachecannon `Response / GET / SET Latency` marked unavailable.**
+   `validate_service_extensions_sql` only substituted `{{view}}` —
+   not `{{p}}` (per-metric H2 `grouping_power`). Histogram-percentile
+   KPIs failed prepare-stage parse on the literal `{{p}}` and were
+   marked unavailable, then dropped from the dashboard. Fix: look up
+   the catalog via `backend.describe_parquet(data_source)` and call
+   `substitute_view_and_p`, mirroring the dashboard-generation path.
+   Pinned by `histogram_kpi_with_pp_placeholder_substitutes_before_prepare`
+   in `validate_sql_tests`.
+3. **`SingleChartView` lost its inline editors.** Title / description /
+   unit-system editors dropped along with the PromQL query editor
+   they shared a row with. The display-format trio is query-language-
+   independent; collateral damage. Restored in `670de99` against
+   `single_chart_fields.js` pure helpers + 10 unit tests
+   (`tests/single_chart_editors.test.mjs`).
+
+---
+
+## Known pre-existing-on-main caveats
+
+Reproducible on `origin/main` against the same parquet, so not
+regressions — documenting so a reviewer doesn't suspect this branch.
+
+1. **`/cgroups` empty-state silent-render before selection.** Even
+   with the post-fix cgroup-pattern substitution, the cgroups
+   section's *initial* render (before the user picks any pairs)
+   produces an empty container without a `_unavailable` placeholder
+   or `.section-notes` callout. Right fix is an empty-state callout
+   in the cgroup_selector — small follow-up.
+2. **Live-mode Save-as-Report drops events.**
+   `snapshots_to_parquet` writes the selection blob but not the
+   top-level `KEY_EVENTS` footer entry that the parquet path
+   stamps via `events_payload_json`. Pre-existing on main.
+3. **WASM static-site Save-as-Report non-functional.**
+   `site/viewer/lib/viewer_api.js:144` calls
+   `registry.save_with_selection(...)` which the WASM crate doesn't
+   expose. Pre-existing on main.
+4. **`COLUMNS()` regex trim footgun.** Catalog-text-scan trim
+   (`resolve_kept_columns_sql`) can drop columns referenced by
+   regex-only queries that don't mention a metric name verbatim.
+   Documented limitation at `crates/report-save/src/lib.rs:136-139`.
+
+## Acknowledged scope-limit cut
+
+**Overview `Normalized by Throughput` group**. Main's overview emits
+three plots that divide a sampler metric by the service-extension's
+throughput KPI's PromQL (`CPU Time / Throughput`, `Network TX /
+Throughput`, `Network RX / Throughput`). The PromQL purge removed
+them; SQL transcription needs a new accessor on
+`ServiceExtension::throughput_query_sql()` plus an emitter in
+`overview.rs`. Filing as a follow-up rather than expanding scope here
+— on the demo cachecannon parquet these rendered as `_unavailable`
+notes on main anyway (PromQL ran but returned no data).
+
+---
+
 ## PromQL purge — completed (P1-P6)
 
 Sequenced after the C5 `metriken-query` crate deletion. Six commits
@@ -628,11 +704,18 @@ path (`6054fe2`).
 | `bash scripts/viewer_chromium_smoke.sh <parquet>` | Headless-Chromium per-section smoke. Drives `rezolus view <parquet>` and navigates to every section in `/api/v1/sections`, then asserts each one either rendered a chart (`.chart-wrapper` with svg/canvas), reserved an `_unavailable` placeholder (`.chart-unavailable`), or displayed a "Charts with no data / Unavailable KPIs" notes section (`.section-notes`). Captures per-section screenshots, console errors, failed network requests, and HTTP 4xx/5xx responses. Surfaces the *silent* failure mode the API-only `viewer_smoke.sh` cannot — section returns 200 but renders nothing. Requires `chromium`, `jq`, `python3`, `python websockets` (`pip install --user websockets`). |
 | `bash scripts/viewer_chromium_smoke.sh --live <agent-url> [--ingest-wait N]` | Same per-section render check, against a running agent. Waits N seconds after viewer startup (default 5) so `_src` accumulates rows before sections are exercised. Post-LiveSource (`1d471cd` + `f5482ff`) live-mode renders the same dashboards as file mode. |
 
-Frontend JS: `node --test tests/*.mjs` reports 122 pass / 0 fail.
-`cargo test --bin rezolus` reports 191 pass / 0 fail. The
-pre-existing failures from `compare_node_filter.test.mjs` (5) and
-`wasm_viewer_histogram_kpis.test.mjs` (1) were dropped in C4 along
-with the rest of the Tsdb plumbing.
+Frontend JS: `node --test tests/*.mjs` reports 137 pass / 0 fail
+(122 carried over + 10 new in `tests/single_chart_editors.test.mjs`
+for the restored SingleChartView inline editors + 5 new in
+`tests/cgroup_pattern.test.mjs` for the cgroup-pattern substitution
+regression fix). `cargo test --bin rezolus` reports 192 pass / 0 fail
+(191 carried over + 1 new in `validate_sql_tests` covering the
+`{{p}}` substitution regression fix). `cargo test -p report-save`
+reports 10 pass / 0 fail (5 SQL-resolver tests + 5 events round-trip
+tests restored from main `0ab61e0~1` against the SQL-backed shape).
+The pre-existing failures from `compare_node_filter.test.mjs` (5)
+and `wasm_viewer_histogram_kpis.test.mjs` (1) were dropped in C4
+along with the rest of the Tsdb plumbing.
 
 ---
 
