@@ -610,5 +610,178 @@ mod sql_resolve_tests {
         }
         Bytes::from(buf)
     }
+
+    // ── Events tests ─────────────────────────────────────────────────
+    //
+    // Restored from main (commit 0ab61e0~1) against the SQL-backed
+    // shape. The originals leaned on a now-gone `Tsdb::build_test`
+    // helper; here we drive `save_single_parquet_sql` /
+    // `save_combined_ab_tarball_sql` with a tiny inline parquet + a
+    // matching `MetricCatalog`.
+
+    /// Read the parquet footer's key-value metadata. Mirrors main's
+    /// `footer_kv` test helper.
+    fn footer_kv(bytes: &[u8]) -> Vec<KeyValue> {
+        let owned = Bytes::copy_from_slice(bytes);
+        let reader = SerializedFileReader::new(owned).expect("parquet reader");
+        reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Single-event fixture matching main's tests. Carries a `chart_id`
+    /// so the round-trip assertions can verify it survives.
+    fn sample_event() -> Event {
+        Event {
+            timestamp: 1_715_625_600_000_000_000,
+            description: "deploy".into(),
+            kind: Some("deploy".into()),
+            details: None,
+            source: Some("svc".into()),
+            node: None,
+            instance: None,
+            labels: Default::default(),
+            duration_ns: None,
+            id: None,
+            chart_id: Some("c1".into()),
+        }
+    }
+
+    #[test]
+    fn events_default_to_empty() {
+        // Wire shape: a payload without an `events` field still
+        // deserializes into a payload with an empty events vec.
+        let json = r#"{"entries":[]}"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.events.is_empty());
+    }
+
+    #[test]
+    fn events_round_trip_through_payload() {
+        // Wire shape: each event field deserializes onto the struct,
+        // including the optional `chart_id`.
+        let json = r#"{
+            "entries": [],
+            "events": [
+                {"timestamp": 1715625600000000000, "description": "deploy", "chart_id": "queue_depth"},
+                {"timestamp": 1715625900000000000, "description": "restart"}
+            ]
+        }"#;
+        let payload: ReportPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(payload.events.len(), 2);
+        assert_eq!(payload.events[0].description, "deploy");
+        assert_eq!(payload.events[0].chart_id.as_deref(), Some("queue_depth"));
+        assert_eq!(payload.events[1].chart_id, None);
+    }
+
+    #[test]
+    fn save_single_parquet_writes_key_events_when_payload_has_events() {
+        // SQL-backed single-parquet save with `events=[...]` must
+        // stamp the parquet footer with `KEY_EVENTS`. The events JSON
+        // wraps the array in `{"events": [...]}` for forward-compat.
+        let bytes = build_empty_parquet_bytes();
+        let cat = MetricCatalog::default();
+        let payload = ReportPayload {
+            entries: vec![],
+            trim_columns: true,
+            events: vec![sample_event()],
+        };
+        let out = save_single_parquet_sql(bytes, &payload, "{}", &cat, true)
+            .expect("save_single_parquet_sql with events");
+        let kv = footer_kv(&out);
+        let events_value = kv
+            .iter()
+            .find(|kv| kv.key == KEY_EVENTS)
+            .and_then(|kv| kv.value.as_deref())
+            .expect("KEY_EVENTS must be written when payload carries events");
+        let parsed: serde_json::Value = serde_json::from_str(events_value).unwrap();
+        let arr = parsed["events"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["description"], "deploy");
+        assert_eq!(arr[0]["chart_id"], "c1");
+    }
+
+    #[test]
+    fn save_single_parquet_skips_key_events_when_no_events() {
+        // Inverse of the above: empty events vec must NOT add a
+        // KEY_EVENTS footer entry. The save-output is byte-stable for
+        // selections that don't use events.
+        let bytes = build_empty_parquet_bytes();
+        let cat = MetricCatalog::default();
+        let payload = ReportPayload {
+            entries: vec![],
+            trim_columns: true,
+            events: vec![],
+        };
+        let out = save_single_parquet_sql(bytes, &payload, "{}", &cat, true)
+            .expect("save_single_parquet_sql without events");
+        let kv = footer_kv(&out);
+        assert!(
+            !kv.iter().any(|kv| kv.key == KEY_EVENTS),
+            "KEY_EVENTS must not be written when payload has no events"
+        );
+    }
+
+    #[test]
+    fn combined_ab_writes_events_to_both_sides() {
+        // Combined-A/B save: the same events list lands in both the
+        // baseline and experiment parquets that get packed into the
+        // tarball — clients view either side and see the same markers.
+        let bytes_a = build_empty_parquet_bytes();
+        let bytes_b = build_empty_parquet_bytes();
+        let baseline_cat = MetricCatalog::default();
+        let experiment_cat = MetricCatalog::default();
+        let payload = ReportPayload {
+            entries: vec![],
+            trim_columns: true,
+            events: vec![sample_event()],
+        };
+        let manifest_bytes = br#"{"version":1,"baseline":{"alias":"a","sources":["svc"]},"experiment":{"alias":"b","sources":["svc"]}}"#;
+        let out = save_combined_ab_tarball_sql(
+            bytes_a,
+            bytes_b,
+            &payload,
+            "{}",
+            &baseline_cat,
+            &experiment_cat,
+            manifest_bytes,
+            true,
+        )
+        .expect("save_combined_ab_tarball_sql with events");
+
+        let mut archive = tar::Archive::new(std::io::Cursor::new(&out));
+        let mut baseline_bytes: Vec<u8> = Vec::new();
+        let mut experiment_bytes: Vec<u8> = Vec::new();
+        for entry in archive.entries().unwrap() {
+            let mut entry = entry.unwrap();
+            let p = entry.path().unwrap().to_path_buf();
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            match name.as_str() {
+                "baseline.parquet" => {
+                    std::io::copy(&mut entry, &mut baseline_bytes).unwrap();
+                }
+                "experiment.parquet" => {
+                    std::io::copy(&mut entry, &mut experiment_bytes).unwrap();
+                }
+                _ => {}
+            }
+        }
+        for (label, bytes) in [
+            ("baseline", &baseline_bytes),
+            ("experiment", &experiment_bytes),
+        ] {
+            let kv = footer_kv(bytes);
+            let val = kv
+                .iter()
+                .find(|kv| kv.key == KEY_EVENTS)
+                .and_then(|kv| kv.value.as_deref())
+                .unwrap_or_else(|| panic!("{label} side missing KEY_EVENTS"));
+            let parsed: serde_json::Value = serde_json::from_str(val).unwrap();
+            assert_eq!(parsed["events"].as_array().unwrap().len(), 1);
+        }
+    }
 }
 
