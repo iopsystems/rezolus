@@ -946,6 +946,29 @@ main {
     font-weight: 600;
 }
 
+/* Sections whose post-processed payload has no surviving plots.
+   Common in live mode without sudo/eBPF — the section still clicks
+   through (the "Charts with no data" notes are informative) but
+   visually de-emphasised so the populated sections stand out. */
+#sidebar a.empty-section {
+    color: var(--fg-muted);
+    opacity: 0.4;
+    font-style: italic;
+}
+
+#sidebar a.empty-section:hover {
+    opacity: 0.8;
+    color: var(--fg);
+}
+
+/* Selected wins over empty — never let the gray-out steal the
+   accent highlight from a section the user has explicitly opened. */
+#sidebar a.empty-section.selected {
+    opacity: 1;
+    color: var(--accent);
+    font-style: normal;
+}
+
 #sidebar a.selected::after {
     content: '';
     position: absolute;
@@ -1064,6 +1087,347 @@ main {
 .section-action-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Chart Groups
+   ========================================================================== */
+
+#groups {
+    flex: 1;
+}
+
+#groups h2 {
+    font-family: var(--font-mono);
+    font-size: var(--font-size-base);
+    font-weight: 600;
+    color: var(--fg);
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#groups h2::before {
+    content: '';
+    width: 4px;
+    height: 16px;
+    background: linear-gradient(180deg, var(--accent) 0%, var(--chart-cyan) 100%);
+    border-radius: 2px;
+}
+
+.group {
+    margin-bottom: 2.5rem;
+}
+
+.group .charts {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2rem;
+}
+
+.group .subgroup {
+    margin-bottom: 1.5rem;
+}
+
+.group .subgroup:last-child {
+    margin-bottom: 0;
+}
+
+.group .subgroup-title {
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--fg-secondary);
+    margin: 0 0 0.25rem 0;
+}
+
+.group .subgroup-description {
+    font-size: 0.85rem;
+    color: var(--fg-secondary);
+    line-height: 1.4;
+    margin: 0 0 0.5rem 0;
+}
+
+.group .charts .chart-wrapper.full-width {
+    grid-column: 1 / -1;
+}
+
+/* ==========================================================================
+   Chart Cards
+   ========================================================================== */
+
+.chart {
+    height: 270px;
+    overflow: hidden;
+    position: relative;
+}
+
+.chart.chart-unavailable {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground, #888);
+    font-style: italic;
+    font-size: 0.85em;
+    background: var(--card, #11161e);
+    border: 1px dashed var(--border, #2a3242);
+    border-radius: 4px;
+}
+
+.chart.no-data {
+    height: 0;
+    border: none;
+    background: none;
+}
+
+.chart.no-data > div {
+    display: none !important;
+}
+
+.chart-wrapper:has(.no-data) {
+    display: none;
+}
+
+.chart-header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 16px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.chart-header > * {
+    pointer-events: auto;
+}
+
+.chart-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+}
+
+.chart-title {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--fg);
+    user-select: text;
+    width: fit-content;
+}
+
+.chart-subtitle {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--fg-muted);
+    user-select: text;
+    width: fit-content;
+}
+
+.chart-wrapper {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--bg-card-gradient);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    transition: all var(--transition-base);
+}
+
+.chart-wrapper::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 3%, transparent) 0%, transparent 30%);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--transition-base);
+}
+
+.chart-wrapper:hover {
+    border-color: var(--border-emphasis);
+    box-shadow:
+        var(--shadow-lg),
+        0 0 0 1px var(--accent-subtle),
+        inset 0 1px 0 color-mix(in srgb, var(--fg-on-accent) 2%, transparent);
+}
+
+.chart-wrapper:hover::before {
+    opacity: 1;
+}
+
+.chart-expand {
+    position: absolute;
+    bottom: 2px;
+    left: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    text-decoration: none;
+    opacity: 0;
+    transition: opacity var(--transition-base), color var(--transition-base);
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    z-index: 10;
+}
+
+.chart-wrapper:hover .chart-expand {
+    opacity: 0.6;
+}
+
+.chart-expand:hover {
+    opacity: 1 !important;
+    color: var(--fg);
+}
+
+.chart-select {
+    position: absolute;
+    bottom: 2px;
+    right: 16px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 2px 8px;
+    cursor: pointer;
+    opacity: 0;
+    transition: all var(--transition-base);
+    z-index: 10;
+}
+
+.chart-wrapper:hover .chart-select {
+    opacity: 0.6;
+}
+
+.chart-select:hover {
+    opacity: 1 !important;
+    color: var(--fg);
+    border-color: var(--accent-muted);
+    background: var(--accent-subtle);
+}
+
+.chart-selected {
+    opacity: 0.8 !important;
+    color: var(--accent);
+    border-color: var(--accent-muted);
+    background: var(--accent-subtle);
+}
+
+.chart-wrapper:hover .chart-selected {
+    opacity: 1;
+}
+
+/* ==========================================================================
+   Single Chart View
+   ========================================================================== */
+
+.single-chart-main {
+    flex: 1;
+    padding: var(--content-padding);
+}
+
+.single-chart-view {
+    width: 70%;
+    margin: 0 auto;
+}
+
+.single-chart-container .chart {
+    height: 500px;
+}
+
+.single-chart-fields {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 1rem;
+}
+
+.single-chart-field {
+    flex: 1;
+}
+
+.single-chart-field label,
+.single-chart-query label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    color: var(--fg-muted);
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+}
+
+.field-input,
+.query-input {
+    width: 100%;
+    padding: 1rem;
+    background: var(--bg-void);
+    color: var(--fg);
+    border: 1px solid var(--border-default);
+    border-radius: var(--card-radius);
+    font-family: var(--font-mono);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    transition: all var(--transition-base);
+}
+
+.field-input:focus,
+.query-input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow:
+        0 0 0 3px var(--accent-subtle),
+        var(--shadow-glow);
+}
+
+.field-input::placeholder,
+.query-input::placeholder {
+    color: var(--fg-muted);
+}
+
+.field-input-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.field-input-row .field-input {
+    flex: 1;
+}
+
+.field-apply-btn {
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-tertiary);
+    color: var(--fg-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all var(--transition-base);
+}
+
+.field-apply-btn:hover {
+    background: var(--bg-card);
+    color: var(--fg);
+    border-color: var(--border-emphasis);
+}
+
+.single-chart-query {
+    margin-top: 1rem;
 }
 
 /* ==========================================================================

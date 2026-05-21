@@ -6,74 +6,90 @@
     {
       "role": "load",
       "title": "Request Rate",
-      "query": "sum(irate(smg_http_requests_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_http_requests_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "load",
       "title": "Active Requests",
-      "query": "sum(smg_worker_requests_active{source=\"sglang-router\"})",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"smg_worker_requests_active\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Token Rate",
-      "query": "sum(irate(smg_router_tokens_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_router_tokens_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Upstream Response Rate",
-      "query": "sum(irate(smg_router_upstream_responses_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_router_upstream_responses_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Request Error Rate",
-      "query": "sum(irate(smg_router_request_errors_total{source=\"sglang-router\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"smg_router_request_errors_total\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "smg_router_ttft_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_ttft_seconds:buckets\",\n                  LAG(\"smg_router_ttft_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_ttft_seconds"
     },
     {
       "role": "latency",
       "title": "Time per Output Token (TPOT)",
-      "query": "smg_router_tpot_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_tpot_seconds:buckets\",\n                  LAG(\"smg_router_tpot_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_tpot_seconds"
     },
     {
       "role": "latency",
       "title": "Generation Duration",
-      "query": "smg_router_generation_duration_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_router_generation_duration_seconds:buckets\",\n                  LAG(\"smg_router_generation_duration_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_router_generation_duration_seconds"
     },
     {
       "role": "latency",
       "title": "HTTP Request Duration",
-      "query": "smg_http_request_duration_seconds{source=\"sglang-router\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"smg_http_request_duration_seconds:buckets\",\n                  LAG(\"smg_http_request_duration_seconds:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "smg_http_request_duration_seconds"
     }
   ]
 }

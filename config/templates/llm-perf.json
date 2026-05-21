@@ -1,110 +1,132 @@
 {
   "service_name": "llm-perf",
-  "aliases": ["llm-bench"],
+  "aliases": [
+    "llm-bench"
+  ],
   "service_metadata": {},
   "slo": null,
   "kpis": [
     {
       "role": "throughput",
       "title": "Output Token Rate",
-      "query": "sum(irate(tokens{direction=\"output\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"tokens/output\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "load",
       "title": "Input Token Rate",
-      "query": "sum(irate(tokens{direction=\"input\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"tokens/input\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "load",
       "title": "Requests In-Flight",
-      "query": "requests_inflight{source=\"llm-perf\"}",
       "type": "gauge",
-      "unit_system": "count"
+      "unit_system": "count",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"requests_inflight\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Request Rate",
-      "query": "sum(irate(requests{status=\"success\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/success\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Error Rate",
-      "query": "sum(irate(requests{status=\"error\",source=\"llm-perf\"}[5s])) / sum(irate(requests{status=\"sent\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "percentage"
+      "unit_system": "percentage",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t,\n       irate_1s(\"requests/error\", timestamp)\n         / NULLIF(irate_1s(\"requests/sent\", timestamp), 0) AS v\nFROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Error Request Rate",
-      "query": "sum(irate(requests{status=\"error\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/error\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Timeout Request Rate",
-      "query": "sum(irate(requests{status=\"timeout\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/timeout\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Canceled Request Rate",
-      "query": "sum(irate(requests{status=\"canceled\",source=\"llm-perf\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests/canceled\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "latency",
       "title": "Time to First Token (TTFT)",
-      "query": "ttft{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"ttft:buckets\",\n                  LAG(\"ttft:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "ttft"
     },
     {
       "role": "latency",
       "title": "Time per Output Token (TPOT)",
-      "query": "tpot{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"tpot:buckets\",\n                  LAG(\"tpot:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "tpot"
     },
     {
       "role": "latency",
       "title": "Inter-Token Latency (ITL)",
-      "query": "itl{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"itl:buckets\",\n                  LAG(\"itl:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "itl"
     },
     {
       "role": "latency",
       "title": "Request Latency",
-      "query": "request_latency{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"request_latency:buckets\",\n                  LAG(\"request_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "request_latency"
     },
     {
       "role": "latency",
       "title": "Think Duration",
-      "query": "think_duration{source=\"llm-perf\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "percentiles": [0.5, 0.95],
-      "unit_system": "time"
+      "percentiles": [
+        0.5,
+        0.95
+      ],
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"think_duration:buckets\",\n                  LAG(\"think_duration:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.95)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "think_duration"
     }
   ]
 }

@@ -1,0 +1,27 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 103
+expression: "sql::cgroup_irate_total(\"cgroup_cpu_usage\", CgroupSide::Aggregate, None,)"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') INTO NAME col VALUE v
+           ),
+           joined AS (
+              SELECT u.timestamp, u.col, u.v
+              FROM unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_usage'
+              WHERE COALESCE(idx.name, '') NOT IN __SELECTED_CGROUPS__
+           ),
+           rates AS (
+              SELECT timestamp,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM joined
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp

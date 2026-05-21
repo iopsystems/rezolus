@@ -1,0 +1,21 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::irate_total(\"^cpu_usage/[a-z]+$\")"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_usage/[a-z]+$') FROM _src)
+                  ON COLUMNS('^cpu_usage/[a-z]+$')
+                  INTO NAME col VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp

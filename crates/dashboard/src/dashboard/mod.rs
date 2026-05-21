@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
@@ -14,11 +14,11 @@ mod overview;
 mod query_explorer;
 mod rezolus;
 mod scheduler;
-mod service;
+pub mod service;
 mod softirq;
 mod syscall;
 
-type Generator = fn(&Tsdb, Vec<Section>) -> View;
+type Generator = fn(&dyn DashboardData, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
     // Exceptions sits after Overview — it's a cross-sampler triage view,
@@ -52,7 +52,6 @@ pub struct DashboardContext {
     /// difference is whether `category` below is set.
     pub service_exts: Vec<(String, ServiceExtension)>,
     pub category: Option<(String, CategoryExtension)>,
-    pub throughput_query: Option<String>,
 }
 
 /// Build the navigation list and other shared state needed to render
@@ -116,11 +115,6 @@ pub fn build_dashboard_context(
         }
     }
 
-    let throughput_query = unique_service_exts
-        .first()
-        .and_then(|(_, e)| e.throughput_query())
-        .map(str::to_string);
-
     let owned_service_exts: Vec<(String, ServiceExtension)> = unique_service_exts
         .iter()
         .map(|(name, ext)| ((*name).to_string(), (*ext).clone()))
@@ -137,7 +131,6 @@ pub fn build_dashboard_context(
         filesize,
         service_exts: owned_service_exts,
         category: owned_category,
-        throughput_query,
     }
 }
 
@@ -146,9 +139,13 @@ pub fn build_dashboard_context(
 ///
 /// Filesize is not applied — callers that want a filesize on the response
 /// should call `view.set_filesize(...)` themselves.
-pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Option<View> {
+pub fn generate_section(
+    data: &dyn DashboardData,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<View> {
     let view = if route == "/overview" {
-        overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
+        overview::generate(data, ctx.sections.clone())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
         generator(data, ctx.sections.clone())
     } else if let Some(name) = route.strip_prefix("/service/") {
@@ -184,6 +181,7 @@ pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::EmptyDashboardData;
 
     #[test]
     fn build_context_produces_full_navigation() {
@@ -205,13 +203,12 @@ mod tests {
         assert_eq!(actual, expected);
         assert!(ctx.service_exts.is_empty());
         assert!(ctx.category.is_none());
-        assert!(ctx.throughput_query.is_none());
         assert!(ctx.filesize.is_none());
     }
 
     #[test]
     fn generate_section_renders_known_routes_returns_none_for_unknown() {
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         let ctx = build_dashboard_context(None, &[], None);
 
         // Overview renders.
@@ -239,11 +236,12 @@ mod tests {
         use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
-        let kpi = |role: &str, title: &str, query: &str| Kpi {
+        let kpi = |role: &str, title: &str, _query: &str| Kpi {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
+            sql: None,
+            metric: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
             unit_system: Some("rate".to_string()),
@@ -269,7 +267,7 @@ mod tests {
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
         };
 
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
 
         // Per-service flow (no category).
         let ctx = build_dashboard_context(None, &[("vllm", &vllm)], None);
@@ -317,11 +315,12 @@ mod tests {
         use crate::service_extension::{CategoryExtension, CategoryKpi, Kpi, ServiceExtension};
         use std::collections::HashMap;
 
-        let kpi = |role: &str, title: &str, query: &str| Kpi {
+        let kpi = |role: &str, title: &str, _query: &str| Kpi {
             role: role.to_string(),
             title: title.to_string(),
             description: None,
-            query: query.to_string(),
+            sql: None,
+            metric: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
             unit_system: Some("rate".to_string()),
@@ -379,7 +378,7 @@ mod tests {
         assert!(!routes.contains(&"/service/sglang"));
 
         // generate_section honors the same: category route renders, members 404.
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         assert!(generate_section(&data, "/service/inference-library", &ctx).is_some());
         assert!(generate_section(&data, "/service/vllm", &ctx).is_none());
         assert!(generate_section(&data, "/service/sglang", &ctx).is_none());
@@ -394,7 +393,8 @@ mod tests {
             role: "throughput".to_string(),
             title: "Generation Token Rate".to_string(),
             description: None,
-            query: "vllm_q".to_string(),
+            sql: None,
+            metric: None,
             metric_type: "delta_counter".to_string(),
             subtype: None,
             unit_system: Some("rate".to_string()),
@@ -430,7 +430,7 @@ mod tests {
         // The deduped service ext list also collapses to one entry, so
         // generate_section can still render the route.
         assert_eq!(ctx.service_exts.len(), 1);
-        let data = Tsdb::default();
+        let data = EmptyDashboardData;
         assert!(generate_section(&data, "/service/vllm", &ctx).is_some());
     }
 }

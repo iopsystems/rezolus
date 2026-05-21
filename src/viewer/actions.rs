@@ -18,24 +18,28 @@ use reqwest::{Client, Url};
 use tracing::{debug, error, info, warn};
 
 use super::capture_registry::CaptureId;
+use super::live_capture::LiveCapture;
 use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
-    extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
+    extract_service_extension_metadata, regenerate_dashboards,
 };
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
-use super::tsdb::Tsdb;
 use ::dashboard;
 
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
-/// Background task that polls a live agent and ingests snapshots.
+/// Background task that polls a live agent and appends each snapshot
+/// to the shared `LiveCapture`. The capture's underlying `LiveSource`
+/// is what `/api/v1/query{,_range}` queries through the DuckDB
+/// backend; the capture also caches per-metric schema observations
+/// for the `DashboardData` impl.
 pub async fn ingest_loop(
     url: Url,
-    tsdb: Arc<RwLock<Tsdb>>,
+    live: Arc<RwLock<LiveCapture>>,
     snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
-    source: String,
-    version: String,
+    _source: String,
+    _version: String,
 ) {
     let client = match Client::builder().http1_only().build() {
         Ok(c) => c,
@@ -44,14 +48,6 @@ pub async fn ingest_loop(
             return;
         }
     };
-
-    {
-        let mut tsdb = tsdb.write();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(url.to_string());
-    }
 
     let interval_duration = Duration::from_secs(1);
     let mut interval = crate::common::aligned_interval(interval_duration);
@@ -86,19 +82,24 @@ pub async fn ingest_loop(
             }
         };
 
-        let mut tsdb = tsdb.write();
-        tsdb.ingest(snapshot);
+        {
+            let mut live = live.write();
+            if let Err(e) = super::live_ingest::ingest_snapshot(&mut live, snapshot) {
+                warn!("live source append failed: {e}");
+            }
+        }
         sample_count += 1;
 
         snapshots.lock().push_back(body.to_vec());
 
         if sample_count <= 5 || sample_count.is_multiple_of(60) {
+            let live = live.read();
             debug!(
                 "ingested {} samples, counters: {}, gauges: {}, histograms: {}",
                 sample_count,
-                tsdb.counter_names().len(),
-                tsdb.gauge_names().len(),
-                tsdb.histogram_names().len(),
+                <LiveCapture as ::dashboard::DashboardData>::counter_names(&live).len(),
+                <LiveCapture as ::dashboard::DashboardData>::gauge_names(&live).len(),
+                <LiveCapture as ::dashboard::DashboardData>::histogram_names(&live).len(),
             );
         }
     }
@@ -245,19 +246,28 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let mut data = match Tsdb::load(&temp_path) {
-        Ok(d) => d,
+    // Serialize concurrent uploads. Held across SqlCapture::open +
+    // replace_baseline_with_sql + every `state.*.write()` that
+    // follows so the post-swap snapshot is coherent (registry
+    // baseline, parquet_path, sections, selection, file_checksum,
+    // file_metadata, systeminfo all reference the same parquet by
+    // the time another handler can read them).
+    let _upload_lock = state.upload_mutex.lock();
+    let mut capture = match super::sql_capture::SqlCapture::open(&temp_path, &state.sql_backend) {
+        Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return ApiResponse::err(format!("failed to load parquet: {e}"), "invalid_parquet");
         }
     };
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
-    data.set_filename(filename.clone());
+    capture.set_filename(filename.clone());
 
     // Mirror the regenerate_dashboards short-circuit: a trimmed report
     // gets an empty section list so /api/v1/sections is consistent with
-    // CLI-mode loading of the same parquet.
+    // CLI-mode loading of the same parquet. KPI validation runs against
+    // the SqlCapture; templates without `sql` queries (everything pre
+    // commit 9) default to available.
     let report_marker = super::read_footer_kv(&temp_path, crate::parquet_metadata::KEY_REPORT);
     let context = if report_marker.is_some() {
         ::dashboard::dashboard::DashboardContext {
@@ -265,22 +275,41 @@ pub fn ingest_baseline_from_path(
             ..Default::default()
         }
     } else {
-        let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-        validate_service_extensions(&data, &mut service_exts);
+        let service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
+        // TODO(plan stage 8): once config/templates/*.json carry `sql`
+        // strings alongside `query`, validate each KPI by running its
+        // SQL through state.sql_backend. Until then every KPI lands as
+        // `available: true` and renders empty plots when its data is
+        // absent — degraded but not broken.
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
         ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = data;
-    }
+    // Swap the baseline backend from Live(LiveCapture) to Sql(capture).
+    // Clear `state.live` so live-only handlers (`/api/v1/reset`,
+    // `/api/v1/connect`) reject further requests with a clean
+    // `bad_request` instead of hitting the
+    // `expect("live mode baseline is LiveCapture-backed")` panic in
+    // `reset_baseline_live_source` (the baseline is now SQL-backed).
+    state.captures.replace_baseline_with_sql(capture);
+    state.live.store(false, Ordering::Relaxed);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
-    *state.parquet_path.write() = Some(temp_path);
+    // Replace parquet_path; if there was a prior baseline parquet
+    // (re-upload, or upload-after-file-mode-init), evict its
+    // DuckDbBackend pool entry so a future query that somehow holds
+    // a stale handle doesn't read against a closed file or — worse —
+    // a different file that recycled the same path. Do NOT delete
+    // the prior file: we can't distinguish viewer-owned temp paths
+    // from a user-supplied parquet that init_file_mode stamped into
+    // state.parquet_path. The pool eviction is the safety-critical
+    // part; eventual /tmp cleanup is the OS's job.
+    let prior_path = state.parquet_path.write().replace(temp_path);
+    if let Some(prior) = prior_path {
+        state.sql_backend.invalidate(&prior.to_string_lossy());
+    }
     *state.trimmed_report_marker.write() = report_marker;
     state
         .captures
@@ -338,8 +367,8 @@ pub async fn attach_experiment(
             .into_response();
     }
 
-    let mut tsdb = match Tsdb::load(&temp_path) {
-        Ok(t) => t,
+    let mut capture = match super::sql_capture::SqlCapture::open(&temp_path, &state.sql_backend) {
+        Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return (
@@ -349,7 +378,7 @@ pub async fn attach_experiment(
                 .into_response();
         }
     };
-    tsdb.set_filename(filename);
+    capture.set_filename(filename);
 
     let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
     // HTTP-attached experiments don't carry an alias today; the
@@ -357,7 +386,7 @@ pub async fn attach_experiment(
     // one through without further signature changes.
     state
         .captures
-        .attach_experiment(tsdb, sysinfo.clone(), file_meta, None);
+        .attach_experiment_sql(capture, sysinfo.clone(), file_meta, None);
     *state.experiment_parquet_path.write() = Some(temp_path);
 
     regenerate_dashboards(&state);
@@ -374,6 +403,14 @@ pub async fn attach_experiment(
 pub async fn detach_experiment(State(state): State<Arc<AppState>>) -> Response {
     state.captures.detach_experiment();
     if let Some(path) = state.experiment_parquet_path.write().take() {
+        // Evict the DuckDbBackend pool entry before removing the file:
+        // the pool's `_src` TEMP TABLE was loaded from this path at
+        // pool-init time and is stale once the file is gone. Without
+        // this, a re-upload that lands at the same temp path (rare
+        // but possible — same PID + same nanosecond suffix collision)
+        // would serve queries against the stale schema. See
+        // metriken-query/tests/pool_invalidate.rs.
+        state.sql_backend.invalidate(&path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
     }
     // Clear the CLI-supplied experiment path too so regen below doesn't
@@ -419,30 +456,51 @@ pub async fn connect_agent(
         Err(e) => return ApiResponse::err(e, "connection_error"),
     };
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
+    // Tear down any pre-existing live source (we're swapping baseline)
+    // and register a fresh one on the shared sql_backend.
+    state
+        .sql_backend
+        .invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    let live_source = match state.sql_backend.create_live_source(
+        super::state::LIVE_BASELINE_DATA_SOURCE,
+        &info.source,
+        1000,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return ApiResponse::err(
+                format!("failed to create live source: {e}"),
+                "internal_error",
+            );
+        }
+    };
+
+    let live_capture = LiveCapture::new(
+        live_source.clone(),
+        1000,
+        info.source.clone(),
+        info.version.clone(),
+        url.to_string(),
+    );
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut db = tsdb_handle.write();
-        *db = tsdb;
-    }
+    state.captures.reset_baseline_live(live_capture);
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(info.sysinfo);
     state.live.store(true, Ordering::Relaxed);
+    *state.live_source.write() = Some(live_source.clone());
 
-    let ingest_tsdb = state.baseline_tsdb();
+    let live_capture_handle = state
+        .captures
+        .get_live(crate::viewer::capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     tokio::spawn(ingest_loop(
         ingest_url,
-        ingest_tsdb,
+        live_capture_handle,
         ingest_snapshots,
         info.source.clone(),
         info.version.clone(),
@@ -461,33 +519,53 @@ pub async fn connect_agent(
     }))
 }
 
-/// Reset the TSDB — clears all data and buffered snapshots.
-pub async fn reset_tsdb(
+/// Reset the live capture — clears all in-memory data and buffered
+/// snapshots.
+pub async fn reset_baseline_live_source(
     State(state): State<Arc<AppState>>,
 ) -> Json<ApiResponse<serde_json::Value>> {
+    use ::dashboard::DashboardData;
+
     if !state.live.load(Ordering::Relaxed) {
         return ApiResponse::err("reset is only available in live mode", "bad_request");
     }
 
-    let tsdb_handle = state.baseline_tsdb();
+    let live_handle = state
+        .captures
+        .get_live(crate::viewer::capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let (source, version, filename) = {
-        let tsdb = tsdb_handle.read();
+        let live = live_handle.read();
         (
-            tsdb.source().to_string(),
-            tsdb.version().to_string(),
-            tsdb.filename().to_string(),
+            live.source().to_string(),
+            live.version().to_string(),
+            live.filename().to_string(),
         )
     };
-    {
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = Tsdb::default();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(filename);
-    }
+
+    // Drop the old live source from the backend and create a fresh one.
+    state
+        .sql_backend
+        .invalidate(super::state::LIVE_BASELINE_DATA_SOURCE);
+    let fresh_source = match state.sql_backend.create_live_source(
+        super::state::LIVE_BASELINE_DATA_SOURCE,
+        &source,
+        1000,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return ApiResponse::err(
+                format!("failed to create live source: {e}"),
+                "internal_error",
+            );
+        }
+    };
+    let fresh = LiveCapture::new(fresh_source.clone(), 1000, source, version, filename);
+
+    state.captures.reset_baseline_live(fresh);
+    *state.live_source.write() = Some(fresh_source);
     state.snapshots.lock().clear();
-    info!("TSDB reset by user");
+    info!("Live capture reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
 }
 
@@ -600,8 +678,6 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 .into_response();
             }
         };
-        let baseline_tsdb = state.baseline_tsdb();
-        let trim_columns = payload.trim_columns;
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
         let ab_manifest = state.combined_ab_marker.read().clone();
@@ -618,25 +694,18 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 )
                 .into_response();
             };
-            let experiment_tsdb = state
-                .captures
-                .get(CaptureId::Experiment)
-                .expect("experiment slot must be attached in combined-A/B mode");
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
                 move || {
-                    report_save::save_combined_ab_tarball(
+                    save_combined_ab_dispatch(
+                        &state,
                         &baseline_path,
                         &experiment_path,
                         &payload,
                         &body,
-                        &baseline_tsdb,
-                        &experiment_tsdb,
                         &manifest,
-                        trim_columns,
                     )
-                    .map_err(|e| e.to_string())
                 }
             })
             .await;
@@ -645,16 +714,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
 
         let result = tokio::task::spawn_blocking({
             let body = selection_json.clone();
-            move || {
-                report_save::save_single_parquet(
-                    &path,
-                    &payload,
-                    &body,
-                    &baseline_tsdb,
-                    trim_columns,
-                )
-                .map_err(|e| e.to_string())
-            }
+            move || save_single_dispatch(&state, &path, &payload, &body)
         })
         .await;
         return finalize_report_attachment(result);
@@ -733,4 +793,173 @@ fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
         )
         .body(Body::from(body))
         .unwrap()
+}
+
+/// Single-parquet save-as-report dispatch. File / upload / A-B
+/// baselines are `SqlCapture`-backed and run column trim through the
+/// SQL-aware resolver against the capture's `MetricCatalog`. The
+/// `embed_only` fallback (no trim) is for callers that don't have a
+/// SqlCapture attached.
+fn save_single_dispatch(
+    state: &AppState,
+    path: &std::path::Path,
+    payload: &report_save::ReportPayload,
+    selection_json: &str,
+) -> Result<Vec<u8>, String> {
+    // File / upload / A-B baselines are all SqlCapture-backed; the trim
+    // path runs through the catalog-driven SQL resolver. Live mode
+    // never reaches this function — `save_with_selection` short-circuits
+    // to `snapshots_to_parquet` when `state.parquet_path` is None.
+    if let Some(sql) = state
+        .captures
+        .get_sql(crate::viewer::capture_registry::CaptureId::Baseline)
+    {
+        let catalog = sql.read().catalog();
+        return report_save::save_single_parquet_sql(
+            path,
+            payload,
+            selection_json,
+            &catalog,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string());
+    }
+    report_save::save_single_parquet_embed_only(path, selection_json).map_err(|e| e.to_string())
+}
+
+/// Combined-A/B (tarball) save-as-report dispatch. Both sides are
+/// SqlCapture-backed (combined-A/B is always file-mode); trim runs
+/// through the SQL-aware resolver against each side's catalog.
+fn save_combined_ab_dispatch(
+    state: &AppState,
+    baseline_path: &std::path::Path,
+    experiment_path: &std::path::Path,
+    payload: &report_save::ReportPayload,
+    selection_json: &str,
+    manifest: &crate::parquet_metadata::AbContainers,
+) -> Result<Vec<u8>, String> {
+    if let (Some(baseline_sql), Some(experiment_sql)) = (
+        state
+            .captures
+            .get_sql(crate::viewer::capture_registry::CaptureId::Baseline),
+        state
+            .captures
+            .get_sql(crate::viewer::capture_registry::CaptureId::Experiment),
+    ) {
+        let baseline_catalog = baseline_sql.read().catalog();
+        let experiment_catalog = experiment_sql.read().catalog();
+        return report_save::save_combined_ab_tarball_sql(
+            baseline_path,
+            experiment_path,
+            payload,
+            selection_json,
+            &baseline_catalog,
+            &experiment_catalog,
+            manifest,
+            payload.trim_columns,
+        )
+        .map_err(|e| e.to_string());
+    }
+    report_save::save_combined_ab_tarball_embed_only(
+        baseline_path,
+        experiment_path,
+        selection_json,
+        manifest,
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod live_to_sql_swap_tests {
+    //! Regression: pre-fix, an upload during a live-mode session left
+    //! `state.live = true` but the baseline backend swapped from
+    //! LiveCapture to SqlCapture. Live-only handlers then panicked on
+    //! `expect("live mode baseline is LiveCapture-backed")`. Fix:
+    //! `ingest_baseline_from_path` clears `state.live` after the swap.
+
+    use super::*;
+    use ::dashboard::TemplateRegistry;
+    use std::sync::atomic::Ordering;
+
+    /// Demo parquet bundled at site/viewer/data/demo.parquet — small
+    /// (1.2 MB) and exercises the SqlCapture load path end-to-end.
+    /// Copied to a temp path so the production-code's
+    /// "delete on parquet-load failure" branch can't touch the
+    /// source-of-truth.
+    fn copy_demo_to_tempdir() -> PathBuf {
+        let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("site/viewer/data/demo.parquet");
+        let dst = baseline_temp_path();
+        std::fs::copy(&src, &dst).expect("demo parquet copy");
+        dst
+    }
+
+    /// Build a LiveCapture-backed AppState the way `init_live_mode` does.
+    fn live_state() -> AppState {
+        let backend = Arc::new(metriken_query::DuckDbBackend::new());
+        let live_source = backend
+            .create_live_source(
+                super::super::state::LIVE_BASELINE_DATA_SOURCE,
+                "rezolus",
+                1000,
+            )
+            .expect("create_live_source");
+        let live = LiveCapture::new(live_source.clone(), 1000, "rezolus", "test", "http://test");
+        let state = AppState::new_live(live, backend, TemplateRegistry::empty());
+        *state.live_source.write() = Some(live_source);
+        state.live.store(true, Ordering::Relaxed);
+        state
+    }
+
+    #[test]
+    fn upload_during_live_mode_clears_live_flag() {
+        let state = live_state();
+        assert!(state.live.load(Ordering::Relaxed));
+
+        let parquet = copy_demo_to_tempdir();
+        let _ = ingest_baseline_from_path(&state, parquet, "demo.parquet".into());
+
+        // After the swap the baseline is SqlCapture-backed. Live-only
+        // handlers must see `state.live = false` or they'll panic on
+        // their `expect("live mode baseline is LiveCapture-backed")`.
+        assert!(!state.live.load(Ordering::Relaxed));
+        assert!(state.captures.get_sql(CaptureId::Baseline).is_some());
+        assert!(state.captures.get_live(CaptureId::Baseline).is_none());
+    }
+
+    /// Two threads call `ingest_baseline_from_path` simultaneously.
+    /// Without `state.upload_mutex` the registry baseline and
+    /// `state.parquet_path` could land referencing different uploads —
+    /// inconsistent snapshot. With the mutex one upload completes
+    /// entirely before the other starts; the final state is whichever
+    /// upload wrote last, and `parquet_path` matches the registry's
+    /// baseline parquet_path.
+    #[test]
+    fn concurrent_uploads_leave_consistent_state() {
+        use std::sync::Arc as StdArc;
+        let state = StdArc::new(AppState::new_empty(TemplateRegistry::empty()));
+        let path_a = copy_demo_to_tempdir();
+        let path_b = copy_demo_to_tempdir();
+
+        let s1 = StdArc::clone(&state);
+        let p1 = path_a.clone();
+        let t1 = std::thread::spawn(move || ingest_baseline_from_path(&s1, p1, "a.parquet".into()));
+        let s2 = StdArc::clone(&state);
+        let p2 = path_b.clone();
+        let t2 = std::thread::spawn(move || ingest_baseline_from_path(&s2, p2, "b.parquet".into()));
+        let _ = t1.join().unwrap();
+        let _ = t2.join().unwrap();
+
+        // Whichever upload wrote second wins; the consistency invariant
+        // is that the registry baseline's parquet_path and the
+        // state.parquet_path agree.
+        let final_state_path = state.parquet_path.read().clone().expect("path set");
+        let baseline = state
+            .captures
+            .get_sql(CaptureId::Baseline)
+            .expect("baseline installed");
+        let baseline_path = baseline.read().parquet_path().to_path_buf();
+        assert_eq!(final_state_path, baseline_path);
+        // And it must be one of the two we uploaded — not some half-merged state.
+        assert!(final_state_path == path_a || final_state_path == path_b);
+    }
 }

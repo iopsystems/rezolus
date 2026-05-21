@@ -1,13 +1,13 @@
+use arrow::record_batch::RecordBatch;
 use clap::ArgMatches;
+use metriken_query::DuckDbBackend;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use tracing::warn;
 
 use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
 };
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
@@ -172,33 +172,49 @@ fn run_undo(path: &Path) {
     println!("Removed service extension annotation from {:?}", path);
 }
 
-/// Validate that each KPI query returns data from the parquet file.
-/// Sets `available` on each KPI based on whether its query returns data.
-/// Prints warnings for unavailable KPIs and exits if none match.
+/// Validate that each KPI's SQL returns data from the parquet file.
+/// Sets `available` on each KPI based on whether its SQL returns at
+/// least one row with a non-NULL `v` column.
+///
+/// KPIs that don't yet have a `sql` field (i.e. `kpi.sql == None`)
+/// default to `available = false`: without SQL we can't validate, and
+/// surfacing as unavailable beats rendering an empty plot. A `warn!`
+/// names each KPI missing SQL so authors know what to transcribe.
 fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
-    let tsdb = match Tsdb::load(path) {
-        Ok(tsdb) => Arc::new(tsdb),
-        Err(e) => {
-            eprintln!("warning: could not load parquet for validation: {e}");
+    let path_str = match path.to_str() {
+        Some(s) => s.to_string(),
+        None => {
+            eprintln!("warning: parquet path is not valid UTF-8; skipping KPI validation");
             return;
         }
     };
 
-    let engine = QueryEngine::new(tsdb);
-    let (start, end) = engine.get_time_range();
-    let step = 1.0;
+    let backend = DuckDbBackend::new();
 
     let mut matched = 0;
     let mut missing_metrics = BTreeSet::new();
 
     for kpi in &mut ext.kpis {
-        let query = kpi.effective_query();
-        let has_data = match engine.query_range(&query, start, end, step) {
-            Ok(result) => !query_result_is_empty(&result),
-            Err(_) => false,
+        let has_data = match &kpi.sql {
+            Some(sql) => {
+                let resolved = dashboard::substitute_view(sql, &ext.service_name);
+                match backend.run_sql(&resolved, &path_str) {
+                    Ok(batches) => kpi_has_data(&batches),
+                    Err(_) => false,
+                }
+            }
+            None => {
+                warn!(
+                    "KPI {:?} (role={}) has no SQL; marking unavailable",
+                    kpi.title, kpi.role,
+                );
+                false
+            }
         };
         if !has_data {
-            missing_metrics.extend(extract_metric_selectors(&kpi.query));
+            if let Some(sql) = kpi.sql.as_deref() {
+                missing_metrics.extend(extract_metric_selectors(sql));
+            }
         }
         kpi.available = has_data;
         if has_data {
@@ -224,6 +240,30 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
     );
 }
 
+/// Return true iff `batches` contains at least one row with a non-NULL
+/// `v` column. Dashboard SQL emitters project `(t, v, ...labels)`, so
+/// the presence of any non-null `v` cell is sufficient evidence that
+/// the KPI has data to plot. An empty result, or a column-set without
+/// `v`, both return false.
+fn kpi_has_data(batches: &[RecordBatch]) -> bool {
+    for batch in batches {
+        if batch.num_rows() == 0 {
+            continue;
+        }
+        let v_idx = match batch.schema().index_of("v") {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+        let col = batch.column(v_idx);
+        for row in 0..batch.num_rows() {
+            if !col.is_null(row) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Extract metric selectors (name + optional labels) from a PromQL query.
 ///
 /// Matches `metric_name` or `metric_name{labels...}`, skipping anything
@@ -246,16 +286,6 @@ pub(super) fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
         })
         .map(|m| m.as_str().to_string())
         .collect()
-}
-
-fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
-    use crate::viewer::promql::QueryResult;
-    match result {
-        QueryResult::Vector { result } => result.is_empty(),
-        QueryResult::Matrix { result } => result.is_empty(),
-        QueryResult::Scalar { .. } => false,
-        QueryResult::HistogramHeatmap { result } => result.data.is_empty(),
-    }
 }
 
 pub(super) fn read_source_metadata(path: &Path) -> Option<String> {

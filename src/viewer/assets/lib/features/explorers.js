@@ -1,21 +1,41 @@
-import { ChartsState, Chart } from '../charts/chart.js';
-import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from '../data.js';
+// SQL Query Explorer and SingleChartView.
+//
+// Pre-purge this module ran PromQL through the dead backend; this is
+// the SQL-native rebuild. The backend already accepts arbitrary
+// DuckDB SQL via `/api/v1/query_range?strict=true` — this module is
+// pure frontend.
+
+import { Chart } from '../charts/chart.js';
+import { ViewerApi } from '../viewer_api.js';
+import { applyResultToPlot, fetchHeatmapForPlot } from '../data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
-import { collectGroupPlots } from './group_utils.js';
+import { readHistory, pushHistory } from './sql_history.js';
+import {
+    UNIT_OPTIONS,
+    seedFieldsFromPlot,
+    applyFieldsToSpec,
+} from './single_chart_fields.js';
 
-const UNIT_OPTIONS = [
-    { value: '', label: 'Auto (none)' },
-    { value: 'count', label: 'Count' },
-    { value: 'rate', label: 'Rate (/s)' },
-    { value: 'time', label: 'Time (ns)' },
-    { value: 'bytes', label: 'Bytes' },
-    { value: 'datarate', label: 'Data Rate (B/s)' },
-    { value: 'bitrate', label: 'Bit Rate (bps)' },
-    { value: 'percentage', label: 'Percentage (0–1 → %)' },
-    { value: 'frequency', label: 'Frequency (Hz)' },
-];
+// Re-export for tests + outside callers.
+export { trimAndDedupe } from './sql_history.js';
 
-/** Render a unit-type selector dropdown with label (inline). */
+/** Render a single labeled input + Apply button. Apply just nudges
+ *  mithril to redraw — every keystroke already drives a redraw via
+ *  `oninput`, so Apply is a UX affordance, not a state commit. */
+const fieldRow = (label, value, oninput) =>
+    m('div.single-chart-field', [
+        m('label', label),
+        m('div.field-input-row', [
+            m('input.field-input', {
+                type: 'text',
+                value,
+                oninput,
+            }),
+            m('button.field-apply-btn', { onclick: () => m.redraw() }, 'Apply'),
+        ]),
+    ]);
+
+/** Inline unit-system selector. */
 const unitSelector = (current, onchange) =>
     m('label.unit-select-label', [
         'Unit: ',
@@ -28,436 +48,327 @@ const unitSelector = (current, onchange) =>
         )),
     ]);
 
-/** Build a format object for the given unit override (or null if empty). */
-const buildFormatOverride = (unit) => {
-    if (!unit) return undefined;
-    const fmt = { unit_system: unit, precision: 2 };
-    if (unit === 'percentage') fmt.range = { min: 0, max: 1 };
-    return fmt;
+const EXAMPLES = [
+    {
+        title: 'CPU usage rate per CPU',
+        sql: `SELECT timestamp::DOUBLE/1e9 AS t,
+       regexp_extract(col, '/([0-9]+)$', 1) AS id,
+       irate_1s(v, timestamp) AS v
+FROM (UNPIVOT (SELECT timestamp, COLUMNS('^cpu_usage/user/[0-9]+$') FROM _src)
+        ON COLUMNS('^cpu_usage/user/[0-9]+$') INTO NAME col VALUE v)
+ORDER BY t, id`,
+    },
+    {
+        title: 'TCP packet latency p99 (single quantile)',
+        sql: `WITH d AS (
+  SELECT timestamp,
+         h2_delta("tcp_packet_latency:buckets",
+                  LAG("tcp_packet_latency:buckets") OVER (ORDER BY timestamp)) AS d
+  FROM _src
+)
+SELECT timestamp::DOUBLE/1e9 AS t,
+       h2_quantile(d, 0.99)::DOUBLE AS v
+FROM d
+WHERE d IS NOT NULL`,
+    },
+    {
+        title: 'Multiple histogram percentiles in one query',
+        sql: `WITH d AS (
+  SELECT timestamp,
+         h2_delta("scheduler_runqueue_latency:buckets",
+                  LAG("scheduler_runqueue_latency:buckets") OVER (ORDER BY timestamp)) AS d
+  FROM _src
+)
+SELECT timestamp::DOUBLE/1e9 AS t,
+       q::VARCHAR AS quantile,
+       h2_quantile(d, q)::DOUBLE AS v
+FROM d, (VALUES (0.5), (0.9), (0.99)) qs(q)
+WHERE d IS NOT NULL`,
+    },
+    {
+        title: 'Counter delta between two CPUs',
+        sql: `SELECT timestamp::DOUBLE/1e9 AS t,
+       "cpu_usage/user/0"::DOUBLE - "cpu_usage/user/1"::DOUBLE AS v
+FROM _src`,
+    },
+    {
+        title: 'UNPIVOT regex spread to per-state series',
+        sql: `SELECT timestamp::DOUBLE/1e9 AS t, col AS state,
+       irate_1s(v, timestamp) AS v
+FROM (UNPIVOT (SELECT timestamp, COLUMNS('^cpu_usage/[a-z]+$') FROM _src)
+        ON COLUMNS('^cpu_usage/[a-z]+$') INTO NAME col VALUE v)`,
+    },
+];
+
+const buildPlotSpecFromResult = (result, title, unit) => {
+    const plot = {
+        opts: {
+            title,
+            id: `explorer-${Math.random().toString(36).slice(2, 10)}`,
+            type: 'gauge',
+            format: { unit_system: unit || null, precision: 2 },
+        },
+        data: [],
+    };
+    applyResultToPlot(plot, result);
+    return plot;
 };
 
-/** Build a human-readable series label from a PromQL metric map. */
-const buildSeriesLabel = (metric, fallbackIdx) => {
-    if (!metric) return 'Series ' + (fallbackIdx + 1);
-
-    const labels = [];
-    if (metric.id !== undefined) labels.push(`id=${metric.id}`);
-
-    const excluded = ['__name__', 'id', 'metric', 'metric_type', 'unit'];
-    const other = Object.entries(metric)
-        .filter(([k]) => !excluded.includes(k))
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([k, v]) => `${k}=${v}`);
-    labels.push(...other);
-
-    return labels.length > 0 ? labels.join(', ') : 'Series ' + (fallbackIdx + 1);
-};
-
-/** Transform multi-series PromQL result into { allData, seriesNames } or null. */
-const buildMultiSeriesData = (resultData) => {
-    const seriesNames = [];
-    const allData = [];
-    let timestamps = null;
-
-    for (let i = 0; i < resultData.length; i++) {
-        const item = resultData[i];
-        if (!item.values || !Array.isArray(item.values)) continue;
-
-        seriesNames.push(buildSeriesLabel(item.metric, i));
-
-        if (!timestamps) {
-            timestamps = item.values.map(([ts]) => ts);
-            allData.push(timestamps);
-        }
-        allData.push(item.values.map(([, val]) => parseFloat(val)));
-    }
-
-    return allData.length > 1 ? { allData, seriesNames } : null;
-};
-
-/** Transform single-series PromQL result into [timestamps, values] or null. */
-const buildSingleSeriesData = (resultData) => {
-    const timestamps = [];
-    const values = [];
-
-    for (const item of resultData) {
-        if (item.values && Array.isArray(item.values)) {
-            for (const [ts, val] of item.values) {
-                timestamps.push(ts);
-                values.push(parseFloat(val));
-            }
-        } else if (item.value && Array.isArray(item.value) && item.value.length === 2) {
-            timestamps.push(item.value[0]);
-            values.push(parseFloat(item.value[1]));
-        }
-    }
-
-    return timestamps.length > 0 ? [timestamps, values] : null;
-};
-
-/** Render a Chart component for a query result. */
-const renderQueryChart = (resultData, query, chartsState, format) => {
-    if (!resultData || resultData.length === 0) return m('p', 'No data returned');
-
-    const isMulti = resultData.length > 1;
-
-    if (isMulti) {
-        const multi = buildMultiSeriesData(resultData);
-        if (!multi) return null;
-
-        const key = `query-chart-multi-${query}`;
-        return m('div.query-chart', { key }, [
-            m(Chart, {
-                spec: {
-                    opts: { id: key, title: 'Query Result', style: 'multi', format },
-                    data: multi.allData,
-                    series_names: multi.seriesNames,
-                },
-                chartsState,
-            }),
-        ]);
-    }
-
-    const data = buildSingleSeriesData(resultData);
-    if (!data) return null;
-
-    const key = `query-chart-line-${query}`;
-    return m('div.query-chart', { key }, [
-        m(Chart, {
-            spec: {
-                opts: { id: key, title: 'Query Result', style: 'line', format },
-                data,
-            },
-            chartsState,
-        }),
-    ]);
-};
-
-/** Render a clickable example query item. */
-const exampleQuery = (state, query, description) =>
-    m('li', [
-        m('code', {
-            onclick: () => { state.query = query; state.executeQuery(); },
-        }, query),
-        description && (' - ' + description),
-    ]);
-
-/** Render a labeled input field with an Apply button. */
-const fieldRow = (label, value, oninput, onApply) =>
-    m('div.single-chart-field', [
-        m('label', label),
-        m('div.field-input-row', [
-            m('input.field-input', {
-                type: 'text',
-                value,
-                oninput,
-                onkeydown: (e) => { if (e.key === 'Enter') onApply(); },
-            }),
-            m('button.field-apply-btn', { onclick: onApply }, 'Apply'),
-        ]),
-    ]);
-
-// Attrs: { liveMode: boolean, isRecording: () => boolean }
+/**
+ * Mithril component: the SQL Query Explorer. Owns a textarea, an
+ * Execute button (Ctrl+Enter), a unit-system selector, a history
+ * dropdown, an error panel, and a result chart pane.
+ */
 export const QueryExplorer = {
     oninit(vnode) {
-        vnode.state.query = '';
-        vnode.state.result = null;
+        vnode.state.sql = '';
+        vnode.state.unit = '';
+        vnode.state.history = readHistory();
         vnode.state.error = null;
+        vnode.state.plot = null;
         vnode.state.loading = false;
-        vnode.state.unitOverride = '';
-        vnode.state.queryHistory = JSON.parse(
-            localStorage.getItem('promql_history') || '[]',
-        );
-        vnode.state.queryChartsState = new ChartsState();
-
-        vnode.state.executeQuery = async () => {
-            if (!vnode.state.query.trim()) return;
-
-            vnode.state.loading = true;
-            vnode.state.error = null;
-
-            try {
-                let q = vnode.state.query;
-                const node = getSelectedNode();
-                if (node) q = injectLabel(q, 'node', node);
-                vnode.state.result = await executePromQLRangeQuery(q);
-            } catch (error) {
-                vnode.state.error = error.message || 'Query failed';
-            }
-
-            vnode.state.loading = false;
-
-            if (
-                !vnode.state.error &&
-                vnode.state.result &&
-                !vnode.state.queryHistory.includes(vnode.state.query)
-            ) {
-                vnode.state.queryHistory.unshift(vnode.state.query);
-                vnode.state.queryHistory = vnode.state.queryHistory.slice(0, 20);
-                localStorage.setItem(
-                    'promql_history',
-                    JSON.stringify(vnode.state.queryHistory),
-                );
-            }
-
-            m.redraw();
-        };
+        vnode.state.chartsState = vnode.attrs.chartsState;
     },
-
-    oncreate(vnode) {
-        if (vnode.attrs.liveMode) {
-            vnode.state.liveInterval = setInterval(() => {
-                const isRecording = vnode.attrs.isRecording;
-                if (isRecording && isRecording() && vnode.state.query && vnode.state.result && !vnode.state.loading) {
-                    vnode.state.executeQuery();
-                }
-            }, 5000);
+    async submit(vnode) {
+        const sql = vnode.state.sql.trim();
+        if (!sql || vnode.state.loading) return;
+        vnode.state.loading = true;
+        vnode.state.error = null;
+        vnode.state.plot = null;
+        try {
+            // No meaningful start/end on the explorer side; the SQL
+            // body controls the time window via its own WHERE
+            // clause if the user wants one. Pass placeholder zeros
+            // (the backend ignores `start/end/step` on the SQL path).
+            const result = await ViewerApi.queryRange(sql, 0, 0, 1, 'baseline', { strict: true });
+            if (result && result.status === 'success') {
+                vnode.state.plot = buildPlotSpecFromResult(result, 'Result', vnode.state.unit);
+                vnode.state.history = pushHistory(sql);
+            } else {
+                vnode.state.error = result?.error || 'unknown query failure';
+            }
+        } catch (e) {
+            vnode.state.error = (e && e.message) || String(e);
+        } finally {
+            vnode.state.loading = false;
+            m.redraw();
         }
     },
-
-    onremove(vnode) {
-        if (vnode.state.liveInterval) clearInterval(vnode.state.liveInterval);
-        if (vnode.state.queryChartsState) vnode.state.queryChartsState.clear();
-    },
-
     view(vnode) {
-        const st = vnode.state;
-
+        const onKeyDown = (e) => {
+            // Ctrl/Cmd+Enter submits without losing focus.
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                this.submit(vnode);
+            }
+        };
+        const onHistoryPick = (e) => {
+            const idx = Number(e.target.value);
+            if (Number.isFinite(idx) && vnode.state.history[idx]) {
+                vnode.state.sql = vnode.state.history[idx].sql;
+                m.redraw();
+            }
+        };
         return m('div.query-explorer', [
-            m('div.query-input-section', [
-                m('h2', 'PromQL Query Explorer'),
-                m('div.query-input-wrapper', [
-                    m('textarea.query-input', {
-                        placeholder: 'Enter a PromQL query (e.g., sum(rate(syscall[5m])) or rate(network_bytes{direction="transmit"}[5m]))',
-                        value: st.query,
-                        oninput: (e) => { st.query = e.target.value; },
-                        onkeydown: (e) => {
-                            if (e.key === 'Enter' && e.ctrlKey) st.executeQuery();
-                        },
-                    }),
-                    m('div.query-controls', [
-                        m('button.execute-btn', {
-                            onclick: () => st.executeQuery(),
-                            disabled: st.loading,
-                        }, st.loading ? 'Running...' : 'Execute Query (Ctrl+Enter)'),
-                        unitSelector(st.unitOverride, (v) => {
-                            st.unitOverride = v;
-                            st.queryChartsState.clear();
-                        }),
-                    ]),
+            m('h2', 'Query Explorer'),
+            m('p.subtitle', 'Write DuckDB SQL against the loaded capture. ',
+                m('code', '_src'), ' is the parquet table; ',
+                m('code', 't'), ' (DOUBLE seconds) + ', m('code', 'v'),
+                ' is the schema the chart consumes.'),
+            m('div.explorer-toolbar', [
+                m('select.history-dropdown', {
+                    value: '',
+                    onchange: onHistoryPick,
+                    disabled: vnode.state.history.length === 0,
+                }, [
+                    m('option', { value: '' }, vnode.state.history.length === 0 ? 'No history yet' : 'History'),
+                    ...vnode.state.history.map((entry, i) =>
+                        m('option', { value: String(i) }, entry.sql.split('\n')[0].slice(0, 80)),
+                    ),
                 ]),
-
-                st.queryHistory.length > 0 && m('div.query-history', [
-                    m('h3', 'Recent Queries'),
-                    m('select.history-select', {
-                        onchange: (e) => { st.query = e.target.value; },
-                    }, [
-                        m('option', { value: '' }, '-- Select from history --'),
-                        st.queryHistory.map((q) =>
-                            m('option', { value: q }, q.length > 80 ? q.substring(0, 77) + '...' : q),
-                        ),
-                    ]),
+                m('select', {
+                    value: vnode.state.unit,
+                    onchange: (e) => { vnode.state.unit = e.target.value; },
+                }, [
+                    m('option', { value: '' }, 'Unit: default'),
+                    m('option', { value: 'time' }, 'time'),
+                    m('option', { value: 'rate' }, 'rate'),
+                    m('option', { value: 'bytes' }, 'bytes'),
+                    m('option', { value: 'percentage' }, 'percentage'),
                 ]),
+                m('button.execute', {
+                    onclick: () => this.submit(vnode),
+                    disabled: vnode.state.loading || !vnode.state.sql.trim(),
+                }, vnode.state.loading ? 'Running…' : 'Execute (Ctrl+Enter)'),
             ]),
-
-            st.error && m('div.error-message', [m('strong', 'Error: '), st.error]),
-
-            st.result && m('div.query-result', [
-                m('h3', 'Result'),
-                st.result.status === 'success'
-                    ? m('div.result-data', [
-                        renderQueryChart(
-                            st.result.data && st.result.data.result,
-                            st.query,
-                            st.queryChartsState,
-                            buildFormatOverride(st.unitOverride),
-                        ),
-                    ])
-                    : m('div.error-message', 'Query failed: ' + (st.result.error || 'Unknown error')),
+            m('textarea.explorer-sql', {
+                rows: 10,
+                spellcheck: false,
+                placeholder: 'SELECT timestamp::DOUBLE/1e9 AS t, "cpu_usage/user/0"::DOUBLE AS v FROM _src',
+                value: vnode.state.sql,
+                oninput: (e) => { vnode.state.sql = e.target.value; },
+                onkeydown: onKeyDown,
+            }),
+            vnode.state.error && m('div.explorer-error', [
+                m('strong', 'SQL error: '),
+                m('pre', vnode.state.error),
             ]),
-
-            m('div.example-queries', [
-                m('h3', 'Example Queries'),
-                m('ul', [
-                    exampleQuery(st, 'sum(irate(syscall[5m]))'),
-                    exampleQuery(st, 'sum(irate(cpu_usage[5m])) / 1e9 / cpu_cores', 'Average CPU utilization (0-1)'),
-                    exampleQuery(st, 'sum(irate(network_bytes{direction="transmit"}[5m])) * 8', 'Network transmit (bits/sec)'),
-                    exampleQuery(st, 'sum(irate(cpu_instructions[5m])) / sum(irate(cpu_cycles[5m]))', 'IPC (Instructions per Cycle)'),
-                    exampleQuery(st, 'sum by (id) (irate(cpu_usage[5m])) / 1e9', 'Per-CPU usage (cores)'),
-                    exampleQuery(st, 'sum by (state) (irate(cpu_usage[5m])) / 1e9', 'CPU by state (user/system)'),
-                    exampleQuery(st, 'sum by (direction) (irate(network_bytes[5m]))', 'Network by direction'),
-                    exampleQuery(st, 'histogram_quantile(0.95, scheduler_runqueue_latency)', 'P95 scheduler latency'),
-                    exampleQuery(st, 'sum by (op) (irate(syscall[5m]))', 'Syscalls by operation'),
-                ]),
+            vnode.state.plot && m('div.explorer-result', [
+                m(Chart, {
+                    spec: vnode.state.plot,
+                    chartsState: vnode.state.chartsState,
+                    interval: 1,
+                }),
+            ]),
+            m('details.explorer-examples', [
+                m('summary', 'Example queries'),
+                m('ul', EXAMPLES.map((ex) => m('li', [
+                    m('button.example-link', {
+                        onclick: () => { vnode.state.sql = ex.sql; m.redraw(); },
+                    }, ex.title),
+                ]))),
             ]),
         ]);
     },
 };
 
-// Expanded view for a single chart — opened in a new tab from the "Expand" link.
-// Shows one chart at full width with an editable PromQL query input below it.
-// Attrs: { data, chartId, applyResultToPlot: (plot, result) => void }
+/**
+ * Mithril component: pinned single-chart view. Reads section data
+ * from the supplied cache and locates a plot by `opts.id`. Caller
+ * routes here via `/chart/:section/:chartId`, where `section` is the
+ * URL-encoded section path (single-segment or multi-segment).
+ *
+ * For histogram plots, mirrors the dashboard's "Show Heatmaps"
+ * affordance with a per-view toggle: percentile-line view by default,
+ * heatmap view when the user clicks the toggle.
+ */
 export const SingleChartView = {
     oninit(vnode) {
-        vnode.state.singleChartsState = new ChartsState();
-        vnode.state.query = '';
-        vnode.state.title = '';
-        vnode.state.description = '';
-        vnode.state.plot = null;
-        vnode.state.loading = false;
-        vnode.state.error = null;
-        vnode.state.unitOverride = '';
         vnode.state.heatmapMode = false;
         vnode.state.heatmapData = null;
         vnode.state.heatmapLoading = false;
-    },
-
-    onremove(vnode) {
-        vnode.state.singleChartsState.clear();
+        vnode.state.heatmapPrefetchKicked = false;
+        // Inline editor state. Seeded from the target plot's opts the
+        // first time `view()` resolves it (the section payload may
+        // still be loading at oninit time).
+        vnode.state.fieldsSeeded = false;
+        vnode.state.title = '';
+        vnode.state.description = '';
+        vnode.state.unitOverride = '';
     },
 
     view(vnode) {
-        const data = vnode.attrs.data;
-        const chartId = vnode.attrs.chartId;
-        const applyResultToPlot = vnode.attrs.applyResultToPlot;
-        if (!data) return m('div', 'Loading...');
-
-        if (!vnode.state.plot) {
-            for (const group of data.groups || []) {
-                for (const plot of collectGroupPlots(group)) {
-                    if (plot.opts.id === chartId) {
-                        vnode.state.plot = plot;
-                        vnode.state.query = plot.promql_query || '';
-                        vnode.state.title = plot.opts.title || '';
-                        vnode.state.description = plot.opts.description || '';
-                        vnode.state.unitOverride = (plot.opts.format && plot.opts.format.unit_system) || '';
-                        break;
+        const { section, chartId, sectionResponseCache, chartsState, initialHeatmap } = vnode.attrs;
+        const st = vnode.state;
+        const cached = sectionResponseCache[section];
+        if (!cached) {
+            return m('div.single-chart-main', m('p', 'Section data not loaded.'));
+        }
+        // Prefer the unfiltered plot index that `processDashboardData`
+        // stashes on the section payload — that way a deep link
+        // resolves even when the parquet has no data for the chart.
+        // Fall back to walking the visible group tree for sections
+        // whose payload predates the `_allPlots` field.
+        let target = (cached._allPlots || []).find((p) => p?.opts?.id === chartId) || null;
+        if (!target) {
+            for (const g of cached.groups || []) {
+                const subgroups = Array.isArray(g.subgroups)
+                    ? g.subgroups
+                    : [{ plots: g.plots || [] }];
+                for (const sg of subgroups) {
+                    for (const plot of (sg.plots || [])) {
+                        if (plot?.opts?.id === chartId) {
+                            target = plot;
+                            break;
+                        }
                     }
+                    if (target) break;
                 }
-                if (vnode.state.plot) break;
+                if (target) break;
             }
         }
-
-        const plot = vnode.state.plot;
-        if (!plot) return m('div.single-chart-view', m('p', `Chart "${chartId}" not found`));
-
-        const st = vnode.state;
-
-        const formatOverride = buildFormatOverride(st.unitOverride);
+        if (!target) {
+            return m('div.single-chart-main', m('p', `Chart "${chartId}" not found in section "${section}".`));
+        }
+        if (!st.fieldsSeeded) {
+            const seed = seedFieldsFromPlot(target);
+            st.title = seed.title;
+            st.description = seed.description;
+            st.unitOverride = seed.unitOverride;
+            st.fieldsSeeded = true;
+        }
         const spec = {
-            ...plot,
-            opts: { ...plot.opts, title: st.title, description: st.description, format: formatOverride || plot.opts.format },
+            ...applyFieldsToSpec(target, {
+                title: st.title,
+                description: st.description,
+                unitOverride: st.unitOverride,
+            }),
+            width: 'full',
         };
+        const isHistogram = isHistogramPlot(target);
 
-        const executeQuery = async () => {
-            if (!st.query.trim()) return;
-            st.loading = true;
-            st.error = null;
-
-            try {
-                let q = st.query;
-                const node = getSelectedNode();
-                if (node) q = injectLabel(q, 'node', node);
-                const response = await executePromQLRangeQuery(q);
-
-                if (response.status === 'success' && response.data && response.data.result) {
-                    applyResultToPlot(plot, response);
-                    st.singleChartsState.clear();
-                } else {
-                    st.error = response.error || 'Query returned no data';
+        // Honor `?heatmap=1` from the URL once per mount, after the
+        // target plot is resolved. We can't fetch in oninit because
+        // the section's data may still be loading at that point.
+        if (initialHeatmap && isHistogram && !st.heatmapPrefetchKicked) {
+            st.heatmapPrefetchKicked = true;
+            st.heatmapLoading = true;
+            (async () => {
+                try {
+                    st.heatmapData = await fetchHeatmapForPlot(target);
+                    if (st.heatmapData) st.heatmapMode = true;
+                } finally {
+                    st.heatmapLoading = false;
+                    m.redraw();
                 }
-            } catch (e) {
-                st.error = e.message || 'Query failed';
-            }
+            })();
+        }
 
-            st.loading = false;
-            m.redraw();
-        };
-
-        const applyFields = () => {
-            st.singleChartsState.charts.forEach(chart => {
-                chart.spec = spec;
-                chart.configureChartByType();
-            });
-        };
-
-        const isHistogram = isHistogramPlot(plot);
+        const chartSpec = (st.heatmapMode && st.heatmapData)
+            ? buildHistogramHeatmapSpec(spec, st.heatmapData)
+            : spec;
 
         const toggleHeatmap = async () => {
             if (st.heatmapMode) {
                 st.heatmapMode = false;
-                st.singleChartsState.resetAll();
-                st.singleChartsState.clear();
                 m.redraw();
                 return;
             }
             if (!st.heatmapData) {
                 st.heatmapLoading = true;
                 m.redraw();
-                st.heatmapData = await fetchHeatmapForPlot(plot);
-                st.heatmapLoading = false;
+                try {
+                    st.heatmapData = await fetchHeatmapForPlot(target);
+                } finally {
+                    st.heatmapLoading = false;
+                }
             }
-            if (st.heatmapData) {
-                st.heatmapMode = true;
-                st.singleChartsState.resetAll();
-                st.singleChartsState.clear();
-            }
+            if (st.heatmapData) st.heatmapMode = true;
             m.redraw();
         };
 
-        const hasSelection = st.singleChartsState.hasActiveSelection();
-
-        let chartSpec = spec;
-        if (st.heatmapMode && st.heatmapData) {
-            chartSpec = buildHistogramHeatmapSpec(spec, st.heatmapData);
-        }
-
-        return m('div.single-chart-view', [
-            m('div.section-header-row', [
-                m('h1.section-title', 'Single Chart View'),
-                m('div.section-actions', [
-                    hasSelection && m('button.section-action-btn', {
-                        onclick: () => { st.singleChartsState.resetAll(); m.redraw(); },
-                    }, 'RESET SELECTION'),
+        return m('div.single-chart-main',
+            m('div.single-chart-view.single-chart-container', [
+                m('div.single-chart-header', [
+                    m('h2', spec.opts.title),
                     isHistogram && m('button.section-action-btn', {
                         onclick: toggleHeatmap,
                         disabled: st.heatmapLoading,
-                    }, st.heatmapLoading ? 'LOADING...' : (st.heatmapMode ? 'SHOW PERCENTILES' : 'SHOW HEATMAP')),
+                    }, st.heatmapLoading
+                        ? 'LOADING...'
+                        : (st.heatmapMode ? 'SHOW PERCENTILES' : 'SHOW HEATMAP')),
                 ]),
-            ]),
-            m('div.single-chart-container', [
-                m('div.chart-wrapper', [
-                    m(Chart, { spec: chartSpec, chartsState: st.singleChartsState, interval: data.interval }),
-                ]),
-            ]),
-            m('div.single-chart-fields', [
-                fieldRow('Title', st.title, (e) => { st.title = e.target.value; }, applyFields),
-                fieldRow('Description', st.description, (e) => { st.description = e.target.value; }, applyFields),
-            ]),
-            m('div.single-chart-query', [
-                m('label', 'PromQL Query'),
-                m('div.query-input-wrapper', [
-                    m('textarea.query-input', {
-                        value: st.query,
-                        oninput: (e) => { st.query = e.target.value; },
-                        onkeydown: (e) => {
-                            if (e.key === 'Enter' && e.ctrlKey) executeQuery();
-                        },
-                        rows: 2,
-                    }),
-                    m('div.query-controls', [
-                        m('button.execute-btn', {
-                            onclick: executeQuery,
-                            disabled: st.loading,
-                        }, st.loading ? 'Running...' : 'Execute (Ctrl+Enter)'),
-                        unitSelector(st.unitOverride, (v) => {
-                            st.unitOverride = v;
-                            st.singleChartsState.clear();
-                        }),
+                spec.opts.description && m('p.chart-description', spec.opts.description),
+                m(Chart, { spec: chartSpec, chartsState, interval: cached.interval || 1 }),
+                m('div.single-chart-fields', [
+                    fieldRow('Title', st.title, (e) => { st.title = e.target.value; }),
+                    fieldRow('Description', st.description, (e) => { st.description = e.target.value; }),
+                    m('div.single-chart-field', [
+                        m('label', 'Unit override'),
+                        unitSelector(st.unitOverride, (v) => { st.unitOverride = v; }),
                     ]),
                 ]),
-                st.error && m('div.error-message', st.error),
             ]),
-        ]);
+        );
     },
 };

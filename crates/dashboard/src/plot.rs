@@ -1,37 +1,6 @@
-use metriken_query::Tsdb;
-use metriken_query::tsdb::Labels;
+use crate::data::DashboardData;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
-
-/// Count distinct values of `key` across `labels`. Series missing the
-/// key are skipped. Used by section generators to decide whether
-/// per-device charts are worth showing (a single GPU/CPU makes the
-/// per-device variant identical to the aggregate).
-pub fn unique_label_count(labels: &[Labels], key: &str) -> usize {
-    let mut seen: HashSet<&str> = HashSet::new();
-    for l in labels {
-        if let Some(v) = l.inner.get(key) {
-            seen.insert(v.as_str());
-        }
-    }
-    seen.len()
-}
-
-/// Convenience: how many distinct values of `key` exist for `metric`
-/// in `data`, looking across counter/gauge/histogram collections.
-/// Returns 0 if the metric is unknown.
-pub fn metric_unique_label_count(data: &Tsdb, metric: &str, key: &str) -> usize {
-    if let Some(l) = data.gauge_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    if let Some(l) = data.counter_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    if let Some(l) = data.histogram_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    0
-}
+use std::collections::HashMap;
 
 #[derive(Default, Serialize)]
 pub struct View {
@@ -56,7 +25,7 @@ pub struct View {
 }
 
 impl View {
-    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
+    pub fn new(data: &dyn DashboardData, sections: Vec<Section>) -> Self {
         let interval = data.interval();
         let source = data.source().to_string();
         let version = data.version().to_string();
@@ -72,13 +41,13 @@ impl View {
         let num_series = {
             let mut count = 0usize;
             for name in data.counter_names() {
-                count += data.counter_labels(name).map_or(0, |l| l.len());
+                count += data.counter_label_count(name);
             }
             for name in data.gauge_names() {
-                count += data.gauge_labels(name).map_or(0, |l| l.len());
+                count += data.gauge_label_count(name);
             }
             for name in data.histogram_names() {
-                count += data.histogram_labels(name).map_or(0, |l| l.len());
+                count += data.histogram_label_count(name);
             }
             Some(count)
         };
@@ -144,16 +113,16 @@ impl Group {
     }
 
     /// Ensures a trailing subgroup exists to append plots to. Used by the
-    /// legacy `Group::plot_promql*` call sites so they keep working
-    /// without conversion — the first legacy call opens a default
-    /// unnamed subgroup, subsequent legacy calls append to the most
+    /// flat `Group::plot_sql*` call sites so they keep working without
+    /// constructing an explicit subgroup — the first flat call opens a
+    /// default unnamed subgroup, subsequent flat calls append to the most
     /// recently opened subgroup.
     ///
     /// NOTE: if the caller has already opened a subgroup via `subgroup()`
-    /// or `subgroup_unnamed()`, a subsequent legacy `plot_promql*` call
+    /// or `subgroup_unnamed()`, a subsequent flat `plot_sql*` call
     /// appends to THAT subgroup — even if it is named. Do not mix the
-    /// legacy flat-plot API with the subgroup API on the same `Group`
-    /// unless you intend that behavior.
+    /// flat-plot API with the subgroup API on the same `Group` unless
+    /// you intend that behavior.
     fn tail_subgroup_mut(&mut self) -> &mut SubGroup {
         if self.subgroups.is_empty() {
             self.subgroups.push(SubGroup::default());
@@ -178,20 +147,34 @@ impl Group {
         self.subgroups.last_mut().unwrap()
     }
 
-    /// Legacy: append a plot to the current (or default) subgroup.
-    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
-        self.tail_subgroup_mut().plot_promql(opts, promql_query);
+    /// Flat: append a SQL-bodied plot to the current (or default) subgroup.
+    pub fn plot_sql(&mut self, opts: PlotOpts, sql_query: String) {
+        self.tail_subgroup_mut().plot_sql(opts, sql_query);
     }
 
-    /// Legacy: append a plot with description-autofill support.
-    pub fn plot_promql_with_descriptions(
+    pub fn plot_sql_with_descriptions(
         &mut self,
         opts: PlotOpts,
-        promql_query: String,
+        sql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
         self.tail_subgroup_mut()
-            .plot_promql_with_descriptions(opts, promql_query, descriptions);
+            .plot_sql_with_descriptions(opts, sql_query, descriptions);
+    }
+
+    /// Flat full-width SQL-bodied plot.
+    pub fn plot_sql_full(&mut self, opts: PlotOpts, sql_query: String) {
+        self.tail_subgroup_mut().plot_sql_full(opts, sql_query);
+    }
+
+    pub fn plot_sql_full_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.tail_subgroup_mut()
+            .plot_sql_full_with_descriptions(opts, sql_query, descriptions);
     }
 
     /// Find an existing named subgroup by exact name match.
@@ -203,36 +186,42 @@ impl Group {
 
     /// Lazily return the trailing or default unnamed subgroup. Use for
     /// callers that want the "land in an unnamed catch-all bucket"
-    /// semantics without going through `plot_promql*` on `Group`.
+    /// semantics without going through `plot_sql*` on `Group`.
     pub fn default_subgroup(&mut self) -> &mut SubGroup {
         self.tail_subgroup_mut()
     }
 }
 
 impl SubGroup {
-    pub fn plot_promql(&mut self, opts: PlotOpts, promql_query: String) {
-        self.plot_promql_with_descriptions(opts, promql_query, None);
-    }
-
     /// Mutable access to the most recently pushed plot. Used by callers
-    /// that mutate per-plot fields (e.g. `promql_query_experiment` on the
-    /// category generator) right after `plot_promql*`.
+    /// that mutate per-plot fields (e.g. `sql_query_experiment` on the
+    /// category generator) right after `plot_sql*`.
     pub fn plots_mut_last(&mut self) -> Option<&mut Plot> {
         self.plots.last_mut()
     }
 
-    pub fn plot_promql_with_descriptions(
+    /// Append a SQL-bodied plot.
+    pub fn plot_sql(&mut self, opts: PlotOpts, sql_query: String) {
+        self.plot_sql_with_descriptions(opts, sql_query, None);
+    }
+
+    pub fn plot_sql_with_descriptions(
         &mut self,
         mut opts: PlotOpts,
-        promql_query: String,
+        sql_query: String,
         descriptions: Option<&HashMap<String, String>>,
     ) {
+        // Description-autofill matches metric names that appear in the
+        // SQL body — e.g. `_src."cpu_cycles/0"` will match the description
+        // for `cpu_cycles`. Longest-name-wins, ties broken by later
+        // position then lexicographic name (stable across HashMap
+        // iteration order).
         if opts.description.is_none()
             && let Some(descriptions) = descriptions
         {
             let mut best_match: Option<(usize, &str, &str)> = None;
             for (name, desc) in descriptions {
-                if let Some(pos) = promql_query.find(name.as_str()) {
+                if let Some(pos) = sql_query.find(name.as_str()) {
                     let dominated = best_match.is_some_and(|(best_pos, best_name, _)| {
                         name.len() < best_name.len()
                             || (name.len() == best_name.len()
@@ -257,34 +246,33 @@ impl SubGroup {
             time_data: None,
             formatted_time_data: None,
             series_names: None,
-            promql_query: Some(promql_query),
-            promql_query_experiment: None,
+            sql_query: Some(sql_query),
+            sql_query_experiment: None,
             width: PlotWidth::default(),
         });
+    }
+
+    /// Full-width SQL-bodied plot.
+    pub fn plot_sql_full(&mut self, opts: PlotOpts, sql_query: String) {
+        self.plot_sql_full_with_descriptions(opts, sql_query, None);
+    }
+
+    pub fn plot_sql_full_with_descriptions(
+        &mut self,
+        opts: PlotOpts,
+        sql_query: String,
+        descriptions: Option<&HashMap<String, String>>,
+    ) {
+        self.plot_sql_with_descriptions(opts, sql_query, descriptions);
+        if let Some(plot) = self.plots.last_mut() {
+            plot.width = PlotWidth::Full;
+        }
     }
 
     /// Set the optional description text rendered below the subgroup header.
     pub fn describe<T: Into<String>>(&mut self, text: T) -> &mut Self {
         self.description = Some(text.into());
         self
-    }
-
-    /// Append a plot that spans the full width of the group's grid.
-    pub fn plot_promql_full(&mut self, opts: PlotOpts, promql_query: String) {
-        self.plot_promql_full_with_descriptions(opts, promql_query, None);
-    }
-
-    /// Full-width variant with description autofill.
-    pub fn plot_promql_full_with_descriptions(
-        &mut self,
-        opts: PlotOpts,
-        promql_query: String,
-        descriptions: Option<&HashMap<String, String>>,
-    ) {
-        self.plot_promql_with_descriptions(opts, promql_query, descriptions);
-        if let Some(plot) = self.plots.last_mut() {
-            plot.width = PlotWidth::Full;
-        }
     }
 }
 
@@ -302,10 +290,20 @@ pub struct Plot {
     formatted_time_data: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     series_names: Option<Vec<String>>,
+    /// SQL query body emitted by dashboard generators. Body conventions:
+    ///   - References parquet columns directly via `[*COLUMNS('regex')]`
+    ///     and/or by literal name (e.g. `"cpu_cycles/0"`).
+    ///   - Uses `_src` as the parquet alias — viewer-sql binds it to
+    ///     `read_parquet('<registered>')` at submit time.
+    ///   - Final SELECT projects `t` (DOUBLE seconds) and `v` (numeric);
+    ///     per-id queries also project label columns (e.g. `id`).
+    ///
+    /// See `crates/viewer-sql/duckdb.md` for the full SQL convention.
     #[serde(skip_serializing_if = "Option::is_none")]
-    promql_query: Option<String>,
+    sql_query: Option<String>,
+    /// Compare-mode experiment-side variant of `sql_query`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub promql_query_experiment: Option<String>,
+    pub sql_query_experiment: Option<String>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
@@ -345,6 +343,16 @@ pub struct PlotOpts {
     format: FormatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// Canonical metric name underlying this plot (no `:buckets`
+    /// suffix). Only set for histogram plots so the frontend can drive
+    /// the dedicated `/api/v1/heatmap_range` endpoint without
+    /// re-deriving the name from `sql_query`. Empty for non-histogram
+    /// plots; combined-histogram plots (which fan out over multiple
+    /// `<metric>/<op>:buckets` columns) intentionally leave this `None`
+    /// — `heatmap_range` is single-metric and the combined case
+    /// renders via the percentile scatter path only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metric: Option<String>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -383,6 +391,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -397,6 +406,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -418,6 +428,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            metric: None,
         }
     }
 
@@ -461,6 +472,15 @@ impl PlotOpts {
 
     pub fn with_axis_label<T: Into<String>>(mut self, y_label: T) -> Self {
         self.format.y_axis_label = Some(y_label.into());
+        self
+    }
+
+    /// Tag the plot with its underlying metric name (no `:buckets`
+    /// suffix). Used on histogram plots so the frontend can hit the
+    /// dedicated `/api/v1/heatmap_range` endpoint when the user
+    /// toggles into heatmap mode.
+    pub fn with_metric<T: Into<String>>(mut self, metric: T) -> Self {
+        self.metric = Some(metric.into());
         self
     }
 
@@ -533,8 +553,8 @@ mod tests {
             time_data: None,
             formatted_time_data: None,
             series_names: None,
-            promql_query: Some("up".into()),
-            promql_query_experiment: None,
+            sql_query: Some("SELECT 1 AS t, 1 AS v".into()),
+            sql_query_experiment: None,
             width,
         }
     }
@@ -582,18 +602,24 @@ mod tests {
     }
 
     #[test]
-    fn legacy_plot_promql_creates_single_unnamed_subgroup() {
+    fn flat_plot_sql_creates_single_unnamed_subgroup() {
         let mut g = Group::new("G", "g");
-        g.plot_promql(PlotOpts::counter("t1", "id1", Unit::Count), "up".into());
-        g.plot_promql(PlotOpts::counter("t2", "id2", Unit::Count), "up".into());
+        g.plot_sql(
+            PlotOpts::counter("t1", "id1", Unit::Count),
+            "SELECT 1 AS t, 1 AS v".into(),
+        );
+        g.plot_sql(
+            PlotOpts::counter("t2", "id2", Unit::Count),
+            "SELECT 1 AS t, 1 AS v".into(),
+        );
         let json = serde_json::to_value(&g).unwrap();
         let subs = json["subgroups"].as_array().expect("subgroups present");
-        assert_eq!(subs.len(), 1, "legacy calls collapse to one subgroup");
+        assert_eq!(subs.len(), 1, "flat calls collapse to one subgroup");
         assert!(subs[0].get("name").is_none(), "default subgroup is unnamed");
         assert_eq!(
             subs[0]["plots"].as_array().unwrap().len(),
             2,
-            "both legacy plots land in the default subgroup"
+            "both flat plots land in the default subgroup"
         );
     }
 
@@ -608,12 +634,27 @@ mod tests {
     }
 
     #[test]
-    fn plot_promql_full_marks_plot_as_full_width() {
+    fn plot_sql_serializes_with_sql_query_field() {
         let mut g = Group::new("G", "g");
-        let sg = g.subgroup("Ops");
-        sg.plot_promql_full(
-            PlotOpts::counter("Summary", "sum", Unit::Count),
-            "up".into(),
+        g.subgroup("Ops").plot_sql(
+            PlotOpts::counter("Total", "total", Unit::Rate),
+            "SELECT timestamp::DOUBLE/1e9 AS t, irate_1s(\"cpu_cycles/0\", timestamp) AS v FROM _src".into(),
+        );
+        let json = serde_json::to_value(&g).unwrap();
+        let plot = &json["subgroups"][0]["plots"][0];
+        assert!(plot["sql_query"].as_str().unwrap().contains("irate_1s"));
+        assert!(
+            plot.get("promql_query").is_none(),
+            "plot JSON no longer carries promql_query"
+        );
+    }
+
+    #[test]
+    fn plot_sql_full_marks_plot_as_full_width() {
+        let mut g = Group::new("G", "g");
+        g.subgroup("Ops").plot_sql_full(
+            PlotOpts::counter("Wide", "wide", Unit::Rate),
+            "SELECT 1 AS t, 1 AS v".into(),
         );
         let json = serde_json::to_value(&g).unwrap();
         assert_eq!(
@@ -633,34 +674,6 @@ mod tests {
             "Shows total throughput and IOPS."
         );
     }
-
-    #[test]
-    fn unique_label_count_returns_zero_for_empty_input() {
-        let labels: Vec<metriken_query::tsdb::Labels> = vec![];
-        assert_eq!(unique_label_count(&labels, "id"), 0);
-    }
-
-    #[test]
-    fn unique_label_count_counts_distinct_values() {
-        use metriken_query::tsdb::Labels;
-        let labels: Vec<Labels> = vec![
-            Labels::from([("id", "0"), ("state", "user")].as_slice()),
-            Labels::from([("id", "0"), ("state", "system")].as_slice()),
-            Labels::from([("id", "1"), ("state", "user")].as_slice()),
-            Labels::from([("id", "1"), ("state", "system")].as_slice()),
-        ];
-        assert_eq!(unique_label_count(&labels, "id"), 2);
-    }
-
-    #[test]
-    fn unique_label_count_ignores_series_missing_the_key() {
-        use metriken_query::tsdb::Labels;
-        let labels: Vec<Labels> = vec![
-            Labels::from([("id", "0")].as_slice()),
-            Labels::from([("other", "x")].as_slice()),
-        ];
-        assert_eq!(unique_label_count(&labels, "id"), 1);
-    }
 }
 
 #[cfg(test)]
@@ -668,22 +681,22 @@ mod plot_serialize_tests {
     use super::*;
 
     #[test]
-    fn plot_promql_query_experiment_round_trips() {
+    fn plot_sql_query_experiment_round_trips() {
         let mut sg = SubGroup::default();
-        sg.plot_promql(
+        sg.plot_sql(
             PlotOpts::counter("X", "kpi-x", Unit::Count),
-            "metric_a".to_string(),
+            "SELECT 1 AS t, 1 AS v".to_string(),
         );
-        // Mutate the just-pushed plot to set the experiment query, then
+        // Mutate the just-pushed plot to set the experiment SQL, then
         // serialize and confirm it appears in the JSON.
         let plot = sg.plots.last_mut().unwrap();
-        plot.promql_query_experiment = Some("metric_b".to_string());
+        plot.sql_query_experiment = Some("SELECT 2 AS t, 2 AS v".to_string());
         let json = serde_json::to_string(plot).unwrap();
-        assert!(json.contains("\"promql_query_experiment\":\"metric_b\""));
+        assert!(json.contains("\"sql_query_experiment\":\"SELECT 2 AS t, 2 AS v\""));
 
         // Default (None) is omitted from the JSON.
-        plot.promql_query_experiment = None;
+        plot.sql_query_experiment = None;
         let json = serde_json::to_string(plot).unwrap();
-        assert!(!json.contains("promql_query_experiment"), "got {json}");
+        assert!(!json.contains("sql_query_experiment"), "got {json}");
     }
 }

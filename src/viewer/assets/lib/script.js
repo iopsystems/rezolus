@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, bootstrapSectionStatus, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -119,6 +119,15 @@ const uploadParquet = async (file) => {
 
         const sectionsResponse = await ViewerApi.getSections();
         bootstrapSharedSections(sectionsResponse?.data?.sections || []);
+
+        // Fetch per-section status server-side so the sidebar can
+        // gray out empty sections before the user clicks any of
+        // them. Don't block on it — the navigation list above is
+        // what gets the page rendering; status badges fill in async.
+        ViewerApi.getSectionStatus()
+            .then((resp) => bootstrapSectionStatus(resp?.data || {}))
+            .catch((e) => console.warn('section_status fetch failed:', e))
+            .finally(() => m.redraw());
 
         // A trimmed Save-as-Report parquet has no section data (most
         // columns are projected away) and the backend stamps its
@@ -349,6 +358,22 @@ const bootstrap = async () => {
     } catch (_) {
         bootstrapSharedSections([]);
     }
+
+    // Fetch per-section status server-side so the sidebar's
+    // empty-section gray-out is correct on first paint. Done under
+    // the splash (next to the already-awaited sections call) rather
+    // than async-after-mount — the cost is ~200ms of additional
+    // splash time, but the sidebar then renders with the right
+    // state once, instead of flashing from "all bright" to
+    // "gray-out applied".
+    setSplashLabel('Loading section status');
+    try {
+        const statusResponse = await ViewerApi.getSectionStatus();
+        bootstrapSectionStatus(statusResponse?.data || {});
+    } catch (e) {
+        console.warn('section_status fetch failed:', e);
+    }
+
     if (fileChecksum) {
         setStorageScope({ filename: fileChecksum });
     }

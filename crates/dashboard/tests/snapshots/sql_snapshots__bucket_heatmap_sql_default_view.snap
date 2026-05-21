@@ -1,0 +1,10 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 172
+expression: "sql::bucket_heatmap_sql(\"syscall_latency\", None)"
+---
+SELECT timestamp,
+                  h2_delta("syscall_latency:buckets",
+                           LAG("syscall_latency:buckets") OVER (ORDER BY timestamp)) AS buckets
+           FROM _src
+           ORDER BY timestamp

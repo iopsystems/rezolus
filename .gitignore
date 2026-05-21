@@ -10,3 +10,4 @@ site/viewer/templates/manifest.json
 **/*.rs.bk
 .worktrees/
 results/
+node_modules

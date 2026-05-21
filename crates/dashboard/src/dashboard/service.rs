@@ -1,8 +1,47 @@
-use crate::Tsdb;
+use crate::data::DashboardData;
 use crate::plot::*;
 use crate::service_extension::ServiceExtension;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtension) -> View {
+/// Substitute `{{view}}` in a KPI SQL string with the source-specific
+/// view name (`_src_<sanitized-source>`). Mirrors the wasm viewer's
+/// `viewNameForSource` rule: non-`[a-zA-Z0-9_]` chars in the source
+/// name become `_`, so `vllm-prefill` resolves to `_src_vllm_prefill`
+/// on both backends. Authors write `{{view}}` once and the same KPI
+/// template renders correctly across every parquet that ships a
+/// matching source.
+///
+/// Shared between the dashboard emitter (here) and `parquet annotate`'s
+/// KPI validator (`src/parquet_tools/annotate.rs`), which both need to
+/// resolve the placeholder to a runnable SQL string against the same
+/// engine-side per-source view.
+pub fn substitute_view(sql: &str, source: &str) -> String {
+    let mut view = String::with_capacity(source.len() + 5);
+    view.push_str("_src_");
+    for ch in source.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            view.push(ch);
+        } else {
+            view.push('_');
+        }
+    }
+    sql.replace("{{view}}", &view)
+}
+
+/// Substitute both `{{view}}` and `{{p}}`. Histogram KPI SQL templates
+/// reference `{{p}}` for the per-metric H2 grouping_power so the same
+/// `h2_quantile(..., {{p}})` call binds across captures whose recorder
+/// shipped different `p` values. Caller is responsible for looking up
+/// `p` via `MetricCatalog::histogram_p_by_metric` and falling back to
+/// the rezolus default (3) when the lookup misses.
+pub fn substitute_view_and_p(sql: &str, source: &str, p: u8) -> String {
+    substitute_view(sql, source).replace("{{p}}", &p.to_string())
+}
+
+pub fn generate(
+    data: &dyn DashboardData,
+    sections: Vec<Section>,
+    service_ext: &ServiceExtension,
+) -> View {
     let mut view = View::new(data, sections);
 
     // Embed service metadata in the view so the frontend can display it
@@ -21,7 +60,7 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
     // Group KPIs by role. Within each role group, KPIs with the same
     // `subgroup` value land in a named subgroup; KPIs without a subgroup
     // land in the role's default unnamed subgroup (lazily created on
-    // first use by `Group::plot_promql*`).
+    // first use by `Group::plot_sql*`).
     let mut groups: Vec<(String, Group)> = Vec::new();
     let mut unavailable: Vec<serde_json::Value> = Vec::new();
 
@@ -30,10 +69,17 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
             unavailable.push(serde_json::json!({
                 "title": kpi.title,
                 "role": kpi.role,
-                "query": kpi.query,
             }));
             continue;
         }
+
+        // KPIs without `sql` are skipped entirely — the frontend
+        // renders them as `_unavailable` placeholder cards via the
+        // silent-render path. Transcribe SQL in the template to make
+        // a KPI plot render.
+        let Some(sql) = kpi.sql.as_deref() else {
+            continue;
+        };
 
         let plot_id = format!("kpi-{}-{}", kpi.role, slug(&kpi.title));
 
@@ -63,6 +109,12 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
             Some(p) => opts.with_percentiles(p.clone()),
             None => opts,
         };
+        // Tag histogram KPIs with their underlying metric so the
+        // frontend can drive `/api/v1/heatmap_range` from the chart.
+        let opts = match (&kpi.metric_type[..], kpi.metric.as_deref()) {
+            ("histogram", Some(m)) => opts.with_metric(m),
+            _ => opts,
+        };
 
         // Resolve the destination subgroup. Named subgroup is opened on
         // first use; subsequent KPIs with the same name extend it.
@@ -81,10 +133,19 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>, service_ext: &ServiceExtens
             None => group.default_subgroup(),
         };
 
+        // Resolve `{{view}}` against the service name and `{{p}}`
+        // against the per-metric grouping_power (falling back to the
+        // rezolus default of 3 when unknown).
+        let p = kpi
+            .metric
+            .as_deref()
+            .and_then(|m| data.histogram_grouping_power(m))
+            .unwrap_or(3);
+        let sql = substitute_view_and_p(sql, &service_ext.service_name, p);
         if kpi.full_width {
-            sg.plot_promql_full(opts, kpi.query.clone());
+            sg.plot_sql_full(opts, sql);
         } else {
-            sg.plot_promql(opts, kpi.query.clone());
+            sg.plot_sql(opts, sql);
         }
     }
 
@@ -120,5 +181,134 @@ pub(crate) fn capitalize(s: &str) -> String {
     match chars.next() {
         None => String::new(),
         Some(c) => c.to_uppercase().chain(chars).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::EmptyDashboardData;
+    use crate::service_extension::{Kpi, ServiceExtension};
+    use std::collections::HashMap;
+
+    fn kpi(title: &str, _query: &str, sql: Option<&str>) -> Kpi {
+        Kpi {
+            role: "throughput".to_string(),
+            title: title.to_string(),
+            description: None,
+            sql: sql.map(str::to_string),
+            metric: None,
+            metric_type: "delta_counter".to_string(),
+            subtype: None,
+            unit_system: Some("rate".to_string()),
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        }
+    }
+
+    /// `sql: None` KPIs are skipped entirely after the P3 PromQL-emitter
+    /// purge — the frontend no longer renders PromQL, so a plot that
+    /// only carries `promql_query` produces nothing useful. KPIs pending
+    /// SQL transcription will reappear once their template gains a `sql`
+    /// field. SQL-bearing KPIs emit `sql_query` and never `promql_query`
+    /// (the field is reserved for a P4 struct deletion).
+    #[test]
+    fn kpi_sql_none_is_skipped() {
+        let ext = ServiceExtension {
+            service_name: "vllm".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![
+                kpi("Rate (SQL)", "rate_promql", Some("SELECT 1")),
+                kpi("Rate (legacy)", "legacy_promql", None),
+            ],
+        };
+
+        let view = generate(&EmptyDashboardData, vec![], &ext);
+        let json = serde_json::to_string(&view).unwrap();
+
+        // The SQL kpi's body is serialized; the legacy kpi is absent
+        // from the JSON entirely (no plot, no promql_query reference).
+        assert!(
+            json.contains("\"sql_query\":\"SELECT 1\""),
+            "SQL kpi's sql_query body missing: {json}"
+        );
+        assert_eq!(
+            json.matches("\"sql_query\"").count(),
+            1,
+            "expected exactly one sql_query field (the SQL kpi); got: {json}"
+        );
+        // The PromQL-only KPI is gone; neither its title nor its query
+        // string should appear anywhere in the output.
+        assert!(
+            !json.contains("legacy_promql"),
+            "PromQL-only KPI leaked into emitted plot: {json}"
+        );
+        assert!(
+            !json.contains("Rate (legacy)"),
+            "PromQL-only KPI title leaked into emitted plot: {json}"
+        );
+        // The SQL KPI carries no promql_query — the field is `None` and
+        // therefore elided by `skip_serializing_if`.
+        assert!(
+            !json.contains("\"promql_query\""),
+            "no plot should serialize a promql_query field: {json}"
+        );
+    }
+
+    /// End-to-end: a KPI whose `sql` carries `{{view}}` lands in the
+    /// generated plot with the placeholder resolved to
+    /// `_src_<service_name>`. Pins the substitution wiring through the
+    /// service emitter.
+    #[test]
+    fn kpi_sql_view_placeholder_is_resolved() {
+        let ext = ServiceExtension {
+            service_name: "vllm-prefill".to_string(),
+            aliases: vec![],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: vec![kpi(
+                "Rate",
+                "metric{source=\"vllm-prefill\"}",
+                Some("SELECT t FROM {{view}}"),
+            )],
+        };
+        let view = generate(&EmptyDashboardData, vec![], &ext);
+        let json = serde_json::to_string(&view).unwrap();
+        // Placeholder resolved (non-alphanumeric `-` → `_`).
+        assert!(
+            json.contains("FROM _src_vllm_prefill"),
+            "expected resolved view: {json}",
+        );
+        // Placeholder doesn't leak through.
+        assert!(!json.contains("{{view}}"), "placeholder leaked: {json}");
+    }
+
+    /// `{{view}}` is substituted to `_src_<source>` (wasm-compatible
+    /// sanitisation: non-`[a-zA-Z0-9_]` chars become `_`). Pinned so a
+    /// future change can't accidentally diverge the server's view-name
+    /// rule from `viewNameForSource` in `duckdb-registry.js`.
+    #[test]
+    fn substitute_view_mirrors_wasm_sanitisation() {
+        assert_eq!(
+            substitute_view("SELECT * FROM {{view}}", "cachecannon"),
+            "SELECT * FROM _src_cachecannon"
+        );
+        assert_eq!(
+            substitute_view("SELECT * FROM {{view}}", "vllm-prefill"),
+            "SELECT * FROM _src_vllm_prefill"
+        );
+        // Multiple occurrences all substitute.
+        assert_eq!(
+            substitute_view("a {{view}} b {{view}} c", "x"),
+            "a _src_x b _src_x c"
+        );
+        // No placeholder → pass-through.
+        assert_eq!(substitute_view("SELECT 1", "x"), "SELECT 1");
     }
 }

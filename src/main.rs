@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 mod agent;
 mod exporter;
 mod hindsight;
+// MCP runs against parquet files via `metriken_query::DuckDbBackend`
+// (post-May-2026 migration). `parquet_tools::annotate` runs KPI SQL
+// through the same backend; `filter` reuses
+// `annotate::extract_metric_selectors` (a regex-only helper). Single
+// build configuration — no feature gates.
 mod mcp;
 mod parquet_metadata;
 mod parquet_tools;
@@ -76,11 +81,12 @@ fn main() {
         )
         .subcommand(exporter::command())
         .subcommand(hindsight::command())
-        .subcommand(mcp::command())
         .subcommand(parquet_tools::command())
         .subcommand(recorder::command())
         .subcommand(viewer::command())
-        .get_matches();
+        .subcommand(mcp::command());
+
+    let cli = cli.get_matches();
 
     match cli.subcommand() {
         None => {

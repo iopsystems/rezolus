@@ -2,13 +2,12 @@
 // Exports initDashboard(config) which sets up state and mounts the Mithril router.
 
 import { ChartsState, Chart } from './charts/chart.js';
-import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { CgroupSelector } from './features/cgroup_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { applyResultToPlot, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, CAPTURE_EXPERIMENT, fetchHeatmapsForGroups } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -17,6 +16,7 @@ import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
+import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import {
@@ -30,6 +30,7 @@ import {
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
+    recordSectionStatus,
 } from './sections/section_cache.js';
 
 let activeSectionRoute = null;
@@ -58,6 +59,16 @@ const cacheSectionResponse = (section, data) =>
     storeSectionResponse(sectionCacheState, section, data);
 const bootstrapSharedSections = (sections) =>
     storeSharedSections(sectionCacheState, sections);
+/// Pre-populate the persistent per-section status map from a
+/// `{[sectionKey]: {total, withData}}` payload (typically
+/// `ViewerApi.getSectionStatus()` at viewer init). Lets the sidebar
+/// gray out empty sections before the user has visited any of them.
+const bootstrapSectionStatus = (statusMap) => {
+    if (!statusMap || typeof statusMap !== 'object') return;
+    for (const [key, status] of Object.entries(statusMap)) {
+        recordSectionStatus(sectionCacheState, key, status);
+    }
+};
 const withCachedSections = (data) => withSharedSections(sectionCacheState, data);
 const getCachedSections = () => getSections(sectionCacheState);
 
@@ -68,9 +79,9 @@ let experimentAttached = false;
 let experimentSystemInfo = null;
 let experimentDurationMs = null;
 let experimentFilename = null;
-// {start, end, step} in PromQL-native seconds, cached at compare-mode
-// entry so every CompareChartWrapper skips its per-chart
-// ViewerApi.getMetadata round-trip. Cleared on detach.
+// {start, end, step} in seconds (matches plot.data[0] timestamps),
+// cached at compare-mode entry so every CompareChartWrapper skips its
+// per-chart ViewerApi.getMetadata round-trip. Cleared on detach.
 let experimentQueryRange = null;
 export const getExperimentQueryRange = () => experimentQueryRange;
 
@@ -135,9 +146,9 @@ const durationFromFileMetadata = (fileMeta) => {
     return null;
 };
 
-// /api/v1/metadata returns minTime/maxTime in PromQL-native seconds
-// (same scale as plot.data[0] timestamps). Returns null when the
-// response shape doesn't include a recognisable time range.
+// /api/v1/metadata returns minTime/maxTime in seconds (same scale as
+// plot.data[0] timestamps). Returns null when the response shape
+// doesn't include a recognisable time range.
 const queryRangeFromMeta = (meta) => {
     const data = meta?.data ?? meta;
     const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
@@ -279,8 +290,34 @@ const loadSection = async (section) => {
     const data = await ViewerApi.getSection(section);
     if (!data) return null;
 
-    const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
-    return cacheSectionResponse(section, processedData);
+    // Initialize `metadata` before caching so the cache's shallow copy
+    // shares the same `metadata` object reference as the live `data`.
+    // `processDashboardData` later mutates `data.metadata.unavailable_charts`
+    // to surface no-data notes; if it had to create `data.metadata`
+    // first, the cached entry's `metadata` would stay undefined and
+    // the section view would never see the notes.
+    if (!data.metadata) data.metadata = {};
+    // Pre-allocate the unfiltered plot index for the same reason. The
+    // pinned single-chart view (`/chart/:section/:chartId`) consumes
+    // `_allPlots` to resolve deep links even when a chart has no data
+    // in this parquet; the shallow copy that `storeSectionResponse`
+    // takes only sees keys present before caching.
+    if (!data._allPlots) data._allPlots = [];
+
+    // Cache the bare section structure immediately so the route
+    // resolves without the "Loading…" splash. Plot data fills in
+    // progressively as `processDashboardData` mutates plots in place
+    // and triggers a redraw — same data flow as before, but the user
+    // sees the section frame appear right away instead of staring at
+    // a splash for the duration of N async query round-trips.
+    cacheSectionResponse(section, data);
+    await processDashboardData(data, activeCgroupPattern, `/${section}`);
+    // Record persistent section status (survives response-cache
+    // eviction). Drives the sidebar's "gray out empty sections"
+    // affordance: once a section has been visited, its renderable
+    // plot count sticks even if the body is evicted later.
+    recordSectionStatus(sectionCacheState, section, countCharts(data.groups));
+    return data;
 };
 
 const preloadSections = (allSections) => {
@@ -344,7 +381,6 @@ const CLIENT_ONLY_SECTIONS = new Set([
     'report',
     'systeminfo',
     'metadata',
-    'query_explorer',
 ]);
 
 const changeGranularity = async (step) => {
@@ -367,9 +403,9 @@ const changeGranularity = async (step) => {
     chartsState.globalZoom = null;
 
     // Data sections refetch themselves; client-only sections (Selection,
-    // Report, System Info, Metadata, Query Explorer) need overview
-    // primed so the sidebar + topnav meta stays populated after the
-    // cache wipe — otherwise the whole nav collapses.
+    // Report, System Info, Metadata) need overview primed so the
+    // sidebar + topnav meta stays populated after the cache wipe —
+    // otherwise the whole nav collapses.
     const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
 
     try {
@@ -389,13 +425,38 @@ const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     }
 };
 
+// Populate `heatmapDataCache` for a section by batch-fetching the
+// histogram plots that carry a `metric` tag. The dedicated
+// `/api/v1/heatmap_range` endpoint returns one chart-ready envelope
+// per plot — keyed here by `plot.opts.id` so `viewer_core.js` can
+// look them up in `buildHistogramHeatmapSpec` when heatmap mode is
+// active.
 const fetchSectionHeatmapData = async (sectionRoute, groups) => {
     heatmapLoading = true;
     m.redraw();
-    const heatmapData = await fetchHeatmapsForGroups(groups);
-    heatmapDataCache.set(sectionRoute, heatmapData);
+    try {
+        const data = await fetchHeatmapsForGroups(groups || [], {
+            captureId: 'baseline',
+            node: selectedNode || undefined,
+        });
+        heatmapDataCache.set(sectionRoute, data);
+    } catch (e) {
+        console.error('fetchSectionHeatmapData failed', e);
+        heatmapDataCache.set(sectionRoute, new Map());
+    }
     heatmapLoading = false;
     m.redraw();
+};
+
+const changeSource = async (sourceName) => {
+    if (!ViewerApi.registry()?.has?.('baseline')) return;
+    await ViewerApi.registry().setSource('baseline', sourceName);
+    // Source switch invalidates section caches keyed by previous
+    // source's data — drop them so the next render re-fetches.
+    for (const k of Object.keys(sectionResponseCache)) delete sectionResponseCache[k];
+    chartsState.clear();
+    m.redraw();
+    await reloadCurrentSection();
 };
 
 const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
@@ -415,6 +476,22 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedNode,
     nodeVersions,
     onNodeChange: changeNode,
+    sourceList: (() => {
+        const reg = ViewerApi.registry();
+        if (!reg?.has?.('baseline')) return [];
+        const sources = reg.sources('baseline') || [];
+        // Prepend the synthetic combined-rezolus entry when present so
+        // users can choose between cross-source aggregation (default)
+        // and any individual source for drill-down.
+        const combined = reg.combinedView?.('baseline');
+        return combined ? [combined, ...sources] : sources;
+    })(),
+    selectedSource: (() => {
+        const reg = ViewerApi.registry();
+        if (!reg?.has?.('baseline')) return null;
+        return reg.pickedSource('baseline') || null;
+    })(),
+    onSourceChange: changeSource,
     extra: {
         // Default compare state so TopNav renders the badge in every
         // code path (Main.view, single-chart route, service route).
@@ -464,12 +541,6 @@ const SectionContent = {
             requestAnimationFrame(() => {
                 requestAnimationFrame(() => chartsState.replayZoom());
             });
-        }
-
-        if (sectionName === 'Query Explorer') {
-            return m('div#section-content', [
-                m(QueryExplorer, { liveMode, isRecording: () => recording }),
-            ]);
         }
 
         if (sectionName === 'System Info') {
@@ -523,6 +594,23 @@ const SectionContent = {
             });
         }
 
+        if (sectionName === 'Query Explorer') {
+            // Pinned single-chart variant: `metadata.singleChart` is
+            // populated by the `/:section/chart/:chartId` resolver.
+            if (attrs.metadata?.singleChart) {
+                return m(SingleChartView, {
+                    section: attrs.metadata.singleChart.section,
+                    chartId: attrs.metadata.singleChart.chartId,
+                    initialHeatmap: attrs.metadata.singleChart.initialHeatmap,
+                    sectionResponseCache,
+                    chartsState,
+                });
+            }
+            return m('div#section-content', [
+                m(QueryExplorer, { chartsState }),
+            ]);
+        }
+
         if (sectionName === 'Report') {
             const sectionMeta = getCachedSectionMeta(sectionResponseCache, interval);
             return m(ReportView, {
@@ -550,8 +638,19 @@ const SectionContent = {
             });
         }
 
-        const { withData } = countCharts(attrs.groups);
-        const titleText = `${sectionName} (${withData})`;
+        // Section title shows the total plot count once the section
+        // structure has loaded. `total` is stable from the moment
+        // the section JSON arrives (it's the number of plots emitted
+        // by the dashboard generator), so the title doesn't flicker
+        // between `(0)` and `(N)` as per-plot data arrives. Before
+        // the section JSON itself lands, show `(…)`.
+        const groupsLoaded = Array.isArray(attrs.groups);
+        const { total } = groupsLoaded
+            ? countCharts(attrs.groups)
+            : { total: 0 };
+        const titleText = groupsLoaded
+            ? `${sectionName} (${total})`
+            : `${sectionName} (…)`;
 
         if (attrs.section.route === '/cgroups') {
             return renderCgroupSection({
@@ -561,13 +660,32 @@ const SectionContent = {
                 chartsState,
                 Chart,
                 CgroupSelector,
-                executePromQLRangeQuery: (query, ...args) => {
-                    const node = getSelectedNode();
-                    if (node) query = injectLabel(query, 'node', node);
-                    return executePromQLRangeQuery(query, ...args);
+                executeQuery: async (query) => {
+                    // The server backend doesn't substitute
+                    // `__SELECTED_CGROUPS__` — that's resolved
+                    // client-side from `activeCgroupPattern` (the
+                    // cgroup_selector's last setActiveCgroupPattern
+                    // call). Empty selection falls back to `('')` so
+                    // `NOT IN (...)` includes everything and
+                    // `IN (...)` matches nothing — same semantics as
+                    // the WASM viewer's registry-side substitution.
+                    const pattern = activeCgroupPattern || "('')";
+                    const resolved = query?.includes('__SELECTED_CGROUPS__')
+                        ? query.split('__SELECTED_CGROUPS__').join(pattern)
+                        : query;
+                    const meta = (await ViewerApi.getMetadata())?.data;
+                    const minTime = meta?.minTime;
+                    const maxTime = meta?.maxTime;
+                    if (minTime == null || maxTime == null) {
+                        return { status: 'error', error: 'missing metadata' };
+                    }
+                    const duration = maxTime - minTime;
+                    const windowDuration = Math.min(3600, duration);
+                    const start = Math.max(minTime, maxTime - windowDuration);
+                    const step = getStepOverride() || Math.max(1, Math.floor(windowDuration / 500));
+                    return ViewerApi.queryRange(resolved, start, maxTime, step);
                 },
                 applyResultToPlot,
-                substituteCgroupPattern,
                 setActiveCgroupPattern: (p) => { activeCgroupPattern = p; },
                 globalColorMapper,
             });
@@ -594,10 +712,9 @@ const SectionContent = {
                     // Hide the percentile↔heatmap toggle in compare
                     // mode — the compare adapter's histogram-heatmap
                     // side-by-side path doesn't yet populate experiment
-                    // bucket data through fetchHeatmapsForGroups, so
-                    // toggling renders the baseline heatmap next to an
-                    // empty experiment pane. Re-enable when that gap
-                    // is closed.
+                    // bucket data, so toggling renders the baseline
+                    // heatmap next to an empty experiment pane.
+                    // Re-enable when that gap is closed.
                     !compareMode && m('button.section-action-btn', {
                         onclick: () => toggleGlobalHeatmap(sectionRoute, attrs.groups),
                         disabled: heatmapLoading || !hasHistogramCharts,
@@ -626,6 +743,7 @@ const metadataSection = { name: 'Metadata', route: '/metadata' };
 const notebookSection = { name: 'Notebook', route: '/notebook' };
 const selectionSection = { name: 'Selection', route: '/selection' };
 const reportSection = { name: 'Report', route: '/report' };
+const querySection = { name: 'Query Explorer', route: '/query' };
 
 const bootstrapCacheIfNeeded = () => {
     if (Object.keys(sectionResponseCache).length > 0) return;
@@ -691,6 +809,10 @@ const initDashboard = (config = {}) => {
         SaveModal,
         SectionContent,
         sectionResponseCache,
+        // Persistent per-section status map (survives response-cache
+        // eviction). Sidebar reads from this for the "gray out empty
+        // sections" affordance.
+        getSectionStatusMap: () => sectionCacheState.sectionStatus || {},
         getHasSystemInfo: () => systemInfoData,
         getHasFileMetadata: () => fileMetadata && Object.keys(fileMetadata).length > 0,
         getCompareBadgeAttrs: () => ({
@@ -759,46 +881,6 @@ const initDashboard = (config = {}) => {
 
     m.route.prefix = '#';
     m.route(document.body, defaultRoute, {
-        '/:section/chart/:chartId': {
-            onmatch(params) {
-                const sectionKey = params.section;
-                const makeSingleChartView = () => ({
-                    view() {
-                        const data = sectionResponseCache[sectionKey];
-                        const activeSection = getCachedSections()
-                            .find(s => s.route === `/${sectionKey}`);
-                        if (!data) {
-                            return m('div#splash', m('div.card', [
-                                m('h1', activeSection?.name || 'Loading'),
-                                m('p.subtitle', 'Loading…'),
-                                m('div.progress-bar',
-                                    m('div.progress-fill.indeterminate'),
-                                ),
-                            ]));
-                        }
-                        return m('div', [
-                            m(TopNav, topNavAttrs(data, activeSection?.route)),
-                            m('main.single-chart-main', [
-                                m(SingleChartView, {
-                                    data,
-                                    chartId: decodeURIComponent(params.chartId),
-                                    applyResultToPlot,
-                                }),
-                            ]),
-                        ]);
-                    },
-                });
-
-                // Resolve synchronously regardless of cache state — see
-                // the matching comment in '/:section' below for rationale.
-                if (!sectionResponseCache[sectionKey]) {
-                    loadSection(sectionKey)
-                        .then(() => m.redraw())
-                        .catch(() => {});
-                }
-                return makeSingleChartView();
-            },
-        },
         ...createServiceRoutes({
             sectionResponseCache,
             loadSection,
@@ -807,13 +889,45 @@ const initDashboard = (config = {}) => {
             Main,
             TopNav,
             topNavAttrs,
-            SingleChartView,
             applyResultToPlot,
             getCompareMode: () => compareMode,
             getSections: getCachedSections,
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
+        '/chart/:section/:chartId': {
+            // Pinned single-chart route. Section may be multi-segment
+            // (`service/vllm`); the link generator URL-encodes it so
+            // mithril's per-segment matcher receives a single param.
+            // Resolves the chart from the section response cache; if
+            // the section isn't cached yet (direct nav into a new tab),
+            // kick off a load and let m.redraw refresh once data arrives.
+            // `?heatmap=1` carries the dashboard's heatmap-toggle state
+            // so histogram charts open in the right mode.
+            onmatch(params) {
+                bootstrapCacheIfNeeded();
+                if (!sectionResponseCache[params.section]) {
+                    loadSection(params.section).then(() => m.redraw()).catch(() => {});
+                }
+                const initialHeatmap = params.heatmap === '1' || params.heatmap === 'true';
+                return {
+                    view() {
+                        const anyCached = Object.values(sectionResponseCache)[0];
+                        return m(Main, {
+                            activeSection: querySection,
+                            groups: [],
+                            sections: getCachedSections(),
+                            compareMode,
+                            source: anyCached?.source,
+                            version: anyCached?.version,
+                            filename: anyCached?.filename,
+                            interval: anyCached?.interval,
+                            metadata: { singleChart: { section: params.section, chartId: params.chartId, initialHeatmap } },
+                        });
+                    },
+                };
+            },
+        },
         '/about': {
             render() {
                 return m('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem' },
@@ -895,6 +1009,17 @@ const initDashboard = (config = {}) => {
                         sectionResponseCache,
                         getCachedSections,
                         reportSection,
+                        () => compareMode,
+                    );
+                }
+
+                if (params.section === 'query') {
+                    bootstrapCacheIfNeeded();
+                    return buildClientOnlySectionView(
+                        Main,
+                        sectionResponseCache,
+                        getCachedSections,
+                        querySection,
                         () => compareMode,
                     );
                 }
@@ -981,4 +1106,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, bootstrapSectionStatus, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

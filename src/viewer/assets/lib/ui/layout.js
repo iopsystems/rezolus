@@ -109,6 +109,32 @@ const TopNav = {
                 }
                 return null;
             })(),
+            // Source picker (multi-source combined parquets only).
+            // viewer-sql exposes per-source aliasing views; the user
+            // picks which source's metrics drive the dashboard. The
+            // legacy PromQL backend never had this — files produced by
+            // `parquet combine` weren't introspectable per-source.
+            (() => {
+                const sources = attrs.sourceList || [];
+                if (sources.length < 2) return null;
+                // The combined-rezolus view is a synthetic value
+                // (`_src_rezolus_combined`) — the real source labels
+                // are short slugs like `decode`, `prefill`, `router`.
+                // Render the combined entry with a friendlier label
+                // while keeping the synthetic value as the option's
+                // value (the source-change handler already routes
+                // synthetic names correctly).
+                const labelFor = (s) => s === '_src_rezolus_combined'
+                    ? 'All rezolus sources (combined)'
+                    : s;
+                return m('div.topnav-source.topnav-multi-source', [
+                    m('label.topnav-source-label', { for: 'topnav-source-select' }, 'Source:'),
+                    m('select.topnav-node-select#topnav-source-select', {
+                        value: attrs.selectedSource || sources[0],
+                        onchange: (e) => attrs.onSourceChange?.(e.target.value),
+                    }, sources.map((s) => m('option', { value: s }, labelFor(s)))),
+                ]);
+            })(),
             // Three sibling buttons sit next to REZOLUS in single-capture
             // mode: file metadata (filename text + dropdown), Load Parquet,
             // Load Selection. Compare mode puts filename + per-side Load
@@ -210,6 +236,11 @@ const countCharts = (groups) => {
 const Sidebar = {
     view({ attrs }) {
         const sectionResponseCache = attrs.sectionResponseCache;
+        // Persistent per-section status map (`{total, withData}` per
+        // visited section). Survives response-cache eviction so the
+        // sidebar's "gray out empty" + label-suffix affordance sticks
+        // for the life of the viewer, not just the last 3 visits.
+        const sectionStatus = attrs.sectionStatus || {};
 
         // In compare mode, cgroup section is hidden from navigation (v1 scope).
         const visibleSections = attrs.compareMode
@@ -287,13 +318,30 @@ const Sidebar = {
 
             serviceSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
-                const cached = sectionResponseCache[sectionKey];
-                const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                // Persistent status is set after `processDashboardData`
+                // finishes — survives response-cache eviction. Until
+                // a section is first visited, no suffix and no gray
+                // (we don't yet know whether it has data).
+                const count = sectionStatus[sectionKey] || null;
+                const label = count
+                    ? `${section.name} (${count.total})`
+                    : section.name;
+                // Gray out sections whose post-processed payload has no
+                // surviving plots (`data.js::processDashboardData` strips
+                // unavailable plots and empties parent groups). Common
+                // in live mode without sudo/eBPF where most samplers
+                // can't run — the section JSON loads but every plot
+                // ends up in `metadata.unavailable_charts`. We keep
+                // the section clickable (the "Charts with no data"
+                // notes are still informative) but visually mark it
+                // as content-empty.
+                const classes = [];
+                if (attrs.activeSection?.route === section.route) classes.push('selected');
+                if (count && count.total === 0) classes.push('empty-section');
                 return m(
                     m.route.Link,
                     {
-                        class: attrs.activeSection?.route === section.route ? 'selected' : '',
+                        class: classes.join(' '),
                         href: section.route,
                     },
                     label,
@@ -316,14 +364,20 @@ const Sidebar = {
 
             samplerSections.map((section) => {
                 const sectionKey = section.route.replace(/^\//, '');
-                const cached = sectionResponseCache[sectionKey];
-                const count = cached ? countCharts(cached.groups) : null;
-                const label = count ? `${section.name} (${count.withData})` : section.name;
+                // See service-section block above for the rationale —
+                // persistent status drives both the `(N)` suffix and
+                // the empty-section gray-out.
+                const count = sectionStatus[sectionKey] || null;
+                const label = count
+                    ? `${section.name} (${count.total})`
+                    : section.name;
+                const classes = [];
+                if (attrs.activeSection === section) classes.push('selected');
+                if (count && count.total === 0) classes.push('empty-section');
                 return m(
                     m.route.Link,
                     {
-                        class:
-                            attrs.activeSection === section ? 'selected' : '',
+                        class: classes.join(' '),
                         href: section.route,
                     },
                     label,

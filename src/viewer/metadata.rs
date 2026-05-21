@@ -11,10 +11,11 @@ use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
+use metriken_query::DuckDbBackend;
+
 use super::capture_registry::CaptureId;
-use super::promql::{self, QueryEngine};
+use super::routes::data_source_for;
 use super::state::{AppState, LazySectionStore};
-use super::tsdb::Tsdb;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 
 /// Read systeminfo, selection, and the full key-value map (with
@@ -319,23 +320,57 @@ pub fn extract_service_extension_metadata(
     results
 }
 
-/// Run each KPI's PromQL against the loaded TSDB so the dashboard can
-/// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
-pub fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtension)]) {
-    let engine = QueryEngine::new(tsdb);
-    let (start, end) = engine.get_time_range();
-
-    for (_source, ext) in exts.iter_mut() {
+/// Run each KPI's SQL against the resolved capture so the dashboard
+/// can hide KPIs whose queries return no data (e.g. zero-traffic
+/// histograms, or a metric this parquet doesn't carry).
+///
+/// KPIs without a `sql` field (templates pending SQL transcription)
+/// keep their default `available = true`: we have no way to validate
+/// them against the SQL backend, and the silent-render pipeline
+/// (`6054fe2`) renders empty matrices as `_unavailable` placeholders,
+/// so the KPI shows up but renders as a placeholder card. Marking
+/// them `false` would drop the KPI from the dashboard entirely.
+pub fn validate_service_extensions_sql(
+    backend: &DuckDbBackend,
+    data_source: &str,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    // Histogram KPIs reference `{{p}}` for the per-metric H2
+    // grouping_power; if we don't substitute it the validator's
+    // prepare-stage parser blows up on the literal `{{p}}`. The
+    // dashboard-generation path already does this via
+    // `substitute_view_and_p`; we mirror its catalog lookup +
+    // rezolus-default fallback.
+    let catalog = backend.describe_parquet(data_source).ok();
+    let p_for = |metric: Option<&str>| -> u8 {
+        catalog
+            .as_ref()
+            .and_then(|c| metric.and_then(|m| c.histogram_p_by_metric.get(m).copied()))
+            .unwrap_or(3)
+    };
+    for (source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
-            let query = kpi.effective_query();
-            let has_data = match engine.query_range(&query, start, end, 1.0) {
-                Ok(result) => match &result {
-                    promql::QueryResult::Vector { result } => !result.is_empty(),
-                    promql::QueryResult::Matrix { result } => !result.is_empty(),
-                    promql::QueryResult::Scalar { .. } => true,
-                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
-                },
-                Err(_) => false,
+            let Some(sql) = kpi.sql.as_ref() else {
+                // PromQL-only KPI; can't validate via the SQL backend.
+                // Leave kpi.available at its default; the front-end
+                // renders it as an _unavailable placeholder when SQL
+                // is unset.
+                continue;
+            };
+            let resolved =
+                dashboard::substitute_view_and_p(sql, source, p_for(kpi.metric.as_deref()));
+            let has_data = match backend.run_sql(&resolved, data_source) {
+                Ok(batches) => batches.iter().any(|b| b.num_rows() > 0),
+                Err(e) => {
+                    warn!(
+                        target: "validate_service_extensions_sql",
+                        service = %source,
+                        kpi = %kpi.title,
+                        error = %e,
+                        "KPI SQL failed to bind/run; marking unavailable",
+                    );
+                    false
+                }
             };
             kpi.available = has_data;
         }
@@ -397,9 +432,9 @@ pub fn regenerate_dashboards(state: &AppState) {
         .clone()
         .or_else(|| state.cli_experiment_path.read().clone());
 
-    // Validate baseline exts against the baseline tsdb and experiment
-    // exts against the experiment tsdb so a KPI present only in one
-    // recording isn't wrongly marked unavailable.
+    // Validate baseline exts against the baseline capture and
+    // experiment exts against the experiment capture so a KPI present
+    // only in one recording isn't wrongly marked unavailable.
     let mut baseline_exts: Vec<(String, ServiceExtension)> = baseline_path
         .as_ref()
         .map(|p| extract_service_extension_metadata(p, registry))
@@ -409,15 +444,17 @@ pub fn regenerate_dashboards(state: &AppState) {
         .map(|p| extract_service_extension_metadata(p, registry))
         .unwrap_or_default();
 
-    {
-        let baseline_handle = state.baseline_tsdb();
-        let baseline_data = baseline_handle.read();
-        validate_service_extensions(&baseline_data, &mut baseline_exts);
+    // Validate each KPI's SQL through the same DuckDbBackend the query
+    // path uses. Live and file captures both resolve to a data_source
+    // string via `data_source_for`; KPIs without `sql` (PromQL-only
+    // templates) keep their default `available = true` and render as
+    // placeholders.
+    if let Some(data_source) = data_source_for(state, CaptureId::Baseline) {
+        validate_service_extensions_sql(&state.sql_backend, &data_source, &mut baseline_exts);
     }
     if !experiment_exts.is_empty() {
-        if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
-            let experiment_data = experiment_handle.read();
-            validate_service_extensions(&experiment_data, &mut experiment_exts);
+        if let Some(data_source) = data_source_for(state, CaptureId::Experiment) {
+            validate_service_extensions_sql(&state.sql_backend, &data_source, &mut experiment_exts);
         }
     }
 
@@ -439,17 +476,181 @@ pub fn regenerate_dashboards(state: &AppState) {
 mod report_mode_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let state = AppState::new_empty(TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);
         let sections = state.sections.read();
         assert!(
             sections.is_empty(),
             "trimmed report should have no sections"
+        );
+    }
+}
+
+#[cfg(test)]
+mod validate_sql_tests {
+    //! Pin behaviour of `validate_service_extensions_sql`:
+    //!   • KPIs whose SQL binds and returns rows → `available = true`.
+    //!   • KPIs whose SQL binds but returns no rows → `available = false`.
+    //!   • KPIs whose SQL fails to bind → `available = false`.
+    //!   • KPIs without SQL (PromQL-only templates) → `available`
+    //!     unchanged (default `true`); they render as `_unavailable`
+    //!     placeholder cards rather than dropping from the dashboard.
+
+    use super::*;
+    use ::dashboard::{Kpi, ServiceExtension};
+    use metriken_query::{DuckDbBackend, LiveColumn, LiveColumnKind, LiveValue};
+    use std::collections::BTreeMap;
+
+    const DS: &str = "live:test";
+
+    fn make_backend_with_one_metric() -> DuckDbBackend {
+        let backend = DuckDbBackend::new();
+        let live = backend
+            .create_live_source(DS, "rezolus", 1000)
+            .expect("create_live_source");
+        let col = LiveColumn {
+            physical: "tokens".into(),
+            metric: "tokens".into(),
+            kind: LiveColumnKind::Counter,
+            labels: BTreeMap::new(),
+        };
+        live.append(
+            1_000_000_000,
+            Some(1_000_000_000),
+            &[(col, LiveValue::Counter(42))],
+        )
+        .expect("append");
+        backend
+    }
+
+    fn kpi(title: &str, sql: Option<&str>) -> Kpi {
+        Kpi {
+            role: "service".into(),
+            title: title.into(),
+            description: None,
+            sql: sql.map(|s| s.to_string()),
+            metric: None,
+            metric_type: "counter".into(),
+            subtype: None,
+            unit_system: None,
+            percentiles: None,
+            available: true,
+            denominator: false,
+            subgroup: None,
+            subgroup_description: None,
+            full_width: false,
+        }
+    }
+
+    fn ext_with_kpis(kpis: Vec<Kpi>) -> Vec<(String, ServiceExtension)> {
+        vec![(
+            "rezolus".to_string(),
+            ServiceExtension {
+                service_name: "rezolus".into(),
+                aliases: vec![],
+                service_metadata: std::collections::HashMap::new(),
+                slo: None,
+                kpis,
+            },
+        )]
+    }
+
+    #[test]
+    fn kpi_with_binding_sql_returning_rows_is_available() {
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi(
+            "tokens-emitted",
+            Some("SELECT timestamp AS t, \"tokens\"::DOUBLE AS v FROM {{view}}"),
+        )]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(exts[0].1.kpis[0].available, "binding-and-rows ⇒ available");
+    }
+
+    #[test]
+    fn kpi_with_failing_sql_is_unavailable() {
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi(
+            "missing-metric",
+            Some("SELECT timestamp AS t, \"absent_metric\"::DOUBLE AS v FROM {{view}}"),
+        )]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            !exts[0].1.kpis[0].available,
+            "SQL referencing absent column ⇒ unavailable"
+        );
+    }
+
+    #[test]
+    fn kpi_without_sql_keeps_default_available() {
+        // PromQL-only templates pending SQL transcription must keep
+        // `available = true` so they don't drop from the dashboard.
+        // The renderer shows them as `_unavailable` placeholder cards
+        // via the silent-render path.
+        let backend = make_backend_with_one_metric();
+        let mut exts = ext_with_kpis(vec![kpi("promql-only", None)]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            exts[0].1.kpis[0].available,
+            "PromQL-only KPI must stay available"
+        );
+    }
+
+    #[test]
+    fn histogram_kpi_with_pp_placeholder_substitutes_before_prepare() {
+        // Histogram KPI SQL templates carry the literal `{{p}}` until
+        // emit-time substitution. validate must do the same substitution
+        // before binding through DuckDB, or the parser blows up on the
+        // raw `{{`. Regression: pre-fix, KPIs like cachecannon "Response
+        // Latency" got marked unavailable because the validator only
+        // substituted `{{view}}`, leaving `{{p}}` as a parser-eater.
+        let backend = DuckDbBackend::new();
+        let live = backend
+            .create_live_source(DS, "rezolus", 1000)
+            .expect("create_live_source");
+        // Histogram column. The metric name + ":buckets" is the
+        // canonical naming the live source ingests under.
+        let mut buckets = vec![0u64; 256];
+        buckets[10] = 1;
+        let col = LiveColumn {
+            physical: "request_latency:buckets".into(),
+            metric: "request_latency".into(),
+            kind: LiveColumnKind::Histogram { grouping_power: 5 },
+            labels: BTreeMap::new(),
+        };
+        live.append(
+            1_000_000_000,
+            Some(1_000_000_000),
+            &[(col.clone(), LiveValue::Histogram(&buckets))],
+        )
+        .expect("append snapshot 1");
+        live.append(
+            2_000_000_000,
+            Some(1_000_000_000),
+            &[(col, LiveValue::Histogram(&buckets))],
+        )
+        .expect("append snapshot 2");
+
+        // KPI SQL that mirrors the percentile_kpi_sql emitter's shape:
+        // `h2_quantile(d, {p}, {{p}})` where `{p}` is already filled
+        // (the quantile) and `{{p}}` is the grouping_power placeholder
+        // resolved at validate / emit time.
+        let mut k = kpi(
+            "p99 latency",
+            Some(
+                "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"request_latency:buckets\",\n                  LAG(\"request_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       h2_quantile(d, 0.99, {{p}})::DOUBLE AS v\nFROM d WHERE d IS NOT NULL",
+            ),
+        );
+        k.metric = Some("request_latency".into());
+        k.metric_type = "histogram".into();
+        let mut exts = ext_with_kpis(vec![k]);
+        validate_service_extensions_sql(&backend, DS, &mut exts);
+        assert!(
+            exts[0].1.kpis[0].available,
+            "histogram KPI with `{{{{p}}}}` placeholder must validate after substitution"
         );
     }
 }

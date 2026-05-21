@@ -1,0 +1,27 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::nway_ratio_by_id(&[(\"i\", \"^cpu_instructions/[0-9]+$\"),\n(\"c\", \"^cpu_cycles/[0-9]+$\"), (\"t\", \"^cpu_tsc/[0-9]+$\"),], \"/([0-9]+)$\",\n\"(i_rate / NULLIF(c_rate, 0)) * (t_rate)\",)"
+---
+WITH i_unp AS (
+        UNPIVOT (SELECT timestamp, COLUMNS('^cpu_instructions/[0-9]+$') FROM _src) ON COLUMNS('^cpu_instructions/[0-9]+$') INTO NAME col VALUE v
+     ),
+     c_unp AS (
+        UNPIVOT (SELECT timestamp, COLUMNS('^cpu_cycles/[0-9]+$') FROM _src) ON COLUMNS('^cpu_cycles/[0-9]+$') INTO NAME col VALUE v
+     ),
+     t_unp AS (
+        UNPIVOT (SELECT timestamp, COLUMNS('^cpu_tsc/[0-9]+$') FROM _src) ON COLUMNS('^cpu_tsc/[0-9]+$') INTO NAME col VALUE v
+     ),
+     joined AS (
+        SELECT i_unp.timestamp, regexp_extract(i_unp.col, '/([0-9]+)$', 1) AS id, i_unp.v AS i_v, c_unp.v AS c_v, t_unp.v AS t_v
+        FROM i_unp
+            JOIN c_unp ON i_unp.timestamp = c_unp.timestamp AND regexp_extract(i_unp.col, '/([0-9]+)$', 1) = regexp_extract(c_unp.col, '/([0-9]+)$', 1)
+            JOIN t_unp ON i_unp.timestamp = t_unp.timestamp AND regexp_extract(i_unp.col, '/([0-9]+)$', 1) = regexp_extract(t_unp.col, '/([0-9]+)$', 1)
+     ),
+     rates AS (
+        SELECT timestamp, id,
+               irate_lag(i_v, LAG(i_v) OVER (PARTITION BY id ORDER BY timestamp), timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS i_rate,
+               irate_lag(c_v, LAG(c_v) OVER (PARTITION BY id ORDER BY timestamp), timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS c_rate,
+               irate_lag(t_v, LAG(t_v) OVER (PARTITION BY id ORDER BY timestamp), timestamp - LAG(timestamp) OVER (PARTITION BY id ORDER BY timestamp)) AS t_rate
+        FROM joined
+     )
+     SELECT timestamp::DOUBLE/1e9 AS t, id, ((i_rate / NULLIF(c_rate, 0)) * (t_rate)) AS v FROM rates

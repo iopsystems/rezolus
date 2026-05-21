@@ -1,0 +1,49 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 23
+expression: "sql::rate_5m_total(\"^cpu_usage$\")"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_usage$') FROM _src)
+                  ON COLUMNS('^cpu_usage$')
+                  INTO NAME col VALUE v
+           ),
+           per_pair AS (
+              SELECT timestamp, col,
+                     CASE
+                         WHEN LAG(v) OVER w IS NULL THEN 0::DOUBLE
+                         WHEN v >= LAG(v) OVER w THEN (v - LAG(v) OVER w)::DOUBLE
+                         ELSE v::DOUBLE
+                     END AS inc
+              FROM unp
+              WINDOW w AS (PARTITION BY col ORDER BY timestamp)
+           ),
+           row_sum AS (
+              SELECT timestamp, SUM(inc) AS s_inc
+              FROM per_pair
+              GROUP BY timestamp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  -- PromQL `rate(c[5m])` walks pairs in samples[lo..hi]
+                  -- and sums `windows(2)` increments — that's hi-lo-1
+                  -- pairs. The boundary-crossing increment (between the
+                  -- sample just before `lo` and `lo` itself) is NOT
+                  -- counted. SUM(s_inc) OVER wr includes that crossing
+                  -- increment via LAG over the full partition; subtract
+                  -- FIRST_VALUE(s_inc) to drop it.
+                  --
+                  -- The RANGE lower bound is `5m - 1ns` (not exactly
+                  -- 5m) so the row at `current - 5m` is *excluded* —
+                  -- matching PromQL, whose eval point carries a tiny
+                  -- sub-second offset (the parquet's start_ns mod
+                  -- sampling-interval) and so its `[t - 5m, t]` window
+                  -- starts strictly greater than the snapped sample at
+                  -- `t - 5m`. Without the 1-ns shift, SQL's inclusive
+                  -- lower bound picks up that boundary sample on every
+                  -- real parquet (start_ns is wall-clock-aligned, never
+                  -- a clean integer second) and the trailing-edge
+                  -- points diverge by ~one boundary increment / 300s.
+                  (SUM(s_inc) OVER wr - COALESCE(FIRST_VALUE(s_inc) OVER wr, 0))
+                    / NULLIF((timestamp - MIN(timestamp) OVER wr)::DOUBLE/1e9, 0) AS v
+           FROM row_sum
+           WINDOW wr AS (ORDER BY timestamp RANGE BETWEEN 299999999999 PRECEDING AND CURRENT ROW)

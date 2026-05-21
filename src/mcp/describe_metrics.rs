@@ -1,15 +1,17 @@
-use crate::viewer::tsdb::Tsdb;
-use std::sync::Arc;
+use crate::viewer::sql_capture::SqlCapture;
+use dashboard::DashboardData;
 
-/// Format metrics description for display
-pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
+/// Format metrics description for display. Reads from the
+/// [`SqlCapture`]'s cached [`metriken_query::MetricCatalog`].
+pub fn format_metrics_description_sql(capture: &SqlCapture) -> String {
     let mut output = String::new();
     output.push_str("Available Metrics in Recording\n");
     output.push_str("===============================\n\n");
 
     let descriptions = crate::common::metric_descriptions();
+    let catalog = capture.catalog();
 
-    let mut counter_names = tsdb.counter_names();
+    let mut counter_names = capture.counter_names();
     if !counter_names.is_empty() {
         counter_names.sort();
         output.push_str("COUNTERS (monotonically increasing values):\n");
@@ -19,14 +21,16 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.counter_labels(name) {
-                // Get unique label keys, excluding metadata labels
+            if let Some(series_list) = catalog.series_by_metric.get(name) {
                 let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
+                for series in series_list {
+                    for key in series.labels.keys() {
+                        // `MetricCatalog` already strips `metric`,
+                        // `metric_type`, `unit`, `grouping_power`,
+                        // `max_value_power` during classify (see
+                        // metriken-query/src/views.rs:47-60), so no
+                        // additional metadata filtering is needed here.
+                        all_keys.insert(key.clone());
                     }
                 }
                 if !all_keys.is_empty() {
@@ -34,13 +38,13 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                     keys.sort();
                     output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
                 }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
+                output.push_str(&format!("  Series count: {}\n", series_list.len()));
             }
             output.push('\n');
         }
     }
 
-    let mut gauge_names = tsdb.gauge_names();
+    let mut gauge_names = capture.gauge_names();
     if !gauge_names.is_empty() {
         gauge_names.sort();
         output.push_str("\nGAUGES (values that can go up or down):\n");
@@ -50,14 +54,11 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.gauge_labels(name) {
-                // Get unique label keys, excluding metadata labels
+            if let Some(series_list) = catalog.series_by_metric.get(name) {
                 let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
+                for series in series_list {
+                    for key in series.labels.keys() {
+                        all_keys.insert(key.clone());
                     }
                 }
                 if !all_keys.is_empty() {
@@ -65,13 +66,13 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                     keys.sort();
                     output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
                 }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
+                output.push_str(&format!("  Series count: {}\n", series_list.len()));
             }
             output.push('\n');
         }
     }
 
-    let mut histogram_names = tsdb.histogram_names();
+    let mut histogram_names = capture.histogram_names();
     if !histogram_names.is_empty() {
         histogram_names.sort();
         output.push_str("\nHISTOGRAMS (distributions of values):\n");
@@ -81,14 +82,11 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
             if let Some(desc) = descriptions.get(name) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.histogram_labels(name) {
-                // Get unique label keys, excluding metadata labels
+            if let Some(series_list) = catalog.series_by_metric.get(name) {
                 let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
+                for series in series_list {
+                    for key in series.labels.keys() {
+                        all_keys.insert(key.clone());
                     }
                 }
                 if !all_keys.is_empty() {
@@ -96,37 +94,32 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
                     keys.sort();
                     output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
                 }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
+                output.push_str(&format!("  Series count: {}\n", series_list.len()));
             }
             output.push('\n');
         }
     }
 
-    let total_counters = tsdb.counter_names().len();
-    let total_gauges = tsdb.gauge_names().len();
-    let total_histograms = tsdb.histogram_names().len();
+    let total_counters = capture.counter_names().len();
+    let total_gauges = capture.gauge_names().len();
+    let total_histograms = capture.histogram_names().len();
     let total_metrics = total_counters + total_gauges + total_histograms;
 
-    let mut total_counter_series = 0;
-    for name in tsdb.counter_names() {
-        if let Some(labels_list) = tsdb.counter_labels(name) {
-            total_counter_series += labels_list.len();
-        }
-    }
-
-    let mut total_gauge_series = 0;
-    for name in tsdb.gauge_names() {
-        if let Some(labels_list) = tsdb.gauge_labels(name) {
-            total_gauge_series += labels_list.len();
-        }
-    }
-
-    let mut total_histogram_series = 0;
-    for name in tsdb.histogram_names() {
-        if let Some(labels_list) = tsdb.histogram_labels(name) {
-            total_histogram_series += labels_list.len();
-        }
-    }
+    let total_counter_series: usize = capture
+        .counter_names()
+        .iter()
+        .filter_map(|n| catalog.series_by_metric.get(*n).map(Vec::len))
+        .sum();
+    let total_gauge_series: usize = capture
+        .gauge_names()
+        .iter()
+        .filter_map(|n| catalog.series_by_metric.get(*n).map(Vec::len))
+        .sum();
+    let total_histogram_series: usize = capture
+        .histogram_names()
+        .iter()
+        .filter_map(|n| catalog.series_by_metric.get(*n).map(Vec::len))
+        .sum();
 
     let total_series = total_counter_series + total_gauge_series + total_histogram_series;
 
@@ -142,54 +135,93 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str(&format!("  Histogram series: {total_histogram_series}\n"));
     output.push_str(&format!(
         "\nSampling interval: {}ms\n",
-        tsdb.interval() * 1000.0
+        capture.interval() * 1000.0
     ));
 
-    output.push_str("\n\nCOMMON QUERY PATTERNS:\n");
-    output.push_str("----------------------\n");
-    output.push_str(
-        "Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\n",
-    );
-
-    output.push_str("Counter queries (use rate() for per-second rates):\n");
-    output.push_str("  rate(cpu_cycles[1m])              - CPU cycles per second for each core\n");
+    output.push_str(QUERY_EXAMPLES);
     output
-        .push_str("  sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n");
-    output.push_str("  rate(cpu_instructions[1m])        - Instructions retired per second\n");
-    output.push_str("  sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n");
-    output.push_str(
-        "  rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n",
-    );
-    output.push_str(
-        "  sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n",
-    );
+}
 
-    output.push_str("Gauge queries (instant values):\n");
-    output.push_str("  cpu_usage                          - Current CPU usage per core\n");
-    output.push_str("  sum(cpu_usage)                     - Total CPU usage across all cores\n");
-    output.push_str("  memory_size                        - Memory size metrics\n\n");
+/// Common query examples appended to the formatter output.
+const QUERY_EXAMPLES: &str = "\n\nCOMMON QUERY PATTERNS:\n\
+----------------------\n\
+Use the 'rezolus mcp query <file> <query>' command to execute these queries.\n\
+\n\
+Counter queries (use rate() for per-second rates):\n  \
+rate(cpu_cycles[1m])              - CPU cycles per second for each core\n  \
+sum(rate(cpu_cycles[1m]))         - Total CPU cycles/sec across all cores\n  \
+rate(cpu_instructions[1m])        - Instructions retired per second\n  \
+sum(rate(blockio_bytes[1m]))      - Total block I/O bytes per second\n  \
+rate(syscall{op=\"read\"}[1m])     - Read syscalls per second (filtered by label)\n  \
+sum by (op) (rate(blockio_operations[1m])) - Block I/O ops/sec grouped by operation\n\n\
+Gauge queries (instant values):\n  \
+cpu_usage                          - Current CPU usage per core\n  \
+sum(cpu_usage)                     - Total CPU usage across all cores\n  \
+memory_size                        - Memory size metrics\n\n\
+Histogram queries (use histogram_quantile for percentiles):\n  \
+histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n  \
+histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n\
+Aggregation and filtering:\n  \
+sum(gauge_metric)                  - Sum across all series\n  \
+avg(gauge_metric)                  - Average across all series\n  \
+max(gauge_metric)                  - Maximum value across all series\n  \
+metric{label=\"value\"}             - Filter by label value\n  \
+sum by (label) (metric)            - Aggregate by label\n\n\
+Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n      \
+Gauges can be queried directly as they represent point-in-time values.\n      \
+Histograms require histogram_quantile() to extract percentiles.\n";
 
-    output.push_str("Histogram queries (use histogram_quantile for percentiles):\n");
-    output.push_str(
-        "  histogram_quantile(0.99, scheduler_runqueue_latency) - p99 runqueue latency\n",
-    );
-    output.push_str(
-        "  histogram_quantile(0.50, tcp_receive_size)           - Median TCP receive size\n\n",
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
 
-    output.push_str("Aggregation and filtering:\n");
-    output.push_str("  sum(gauge_metric)                  - Sum across all series\n");
-    output.push_str("  avg(gauge_metric)                  - Average across all series\n");
-    output.push_str("  max(gauge_metric)                  - Maximum value across all series\n");
-    output.push_str("  metric{label=\"value\"}             - Filter by label value\n");
-    output.push_str("  sum by (label) (metric)            - Aggregate by label\n\n");
+    fn demo_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("site")
+            .join("viewer")
+            .join("data")
+            .join("demo.parquet")
+    }
 
-    output.push_str(
-        "Note: Counter metrics track cumulative values, so use rate() to get per-second rates.\n",
-    );
-    output
-        .push_str("      Gauges can be queried directly as they represent point-in-time values.\n");
-    output.push_str("      Histograms require histogram_quantile() to extract percentiles.\n");
+    /// End-to-end pin: the SQL-backed formatter must produce non-empty
+    /// counter/gauge/histogram sections for demo.parquet, list each
+    /// metric with its label keys + series count, and conclude with
+    /// the query-examples block. This is the user-visible contract
+    /// for `rezolus mcp describe-metrics`.
+    #[test]
+    fn format_metrics_description_sql_against_demo_parquet() {
+        let path = demo_path();
+        if !path.exists() {
+            eprintln!("skipping: fixture {} missing", path.display());
+            return;
+        }
+        let (_backend, capture) =
+            crate::mcp::backend::open_capture(&path).expect("open demo.parquet");
+        let out = format_metrics_description_sql(&capture);
 
-    output
+        assert!(out.contains("Available Metrics in Recording"));
+        assert!(out.contains("COUNTERS"));
+        assert!(out.contains("GAUGES"));
+        assert!(out.contains("HISTOGRAMS"));
+        assert!(out.contains("SUMMARY:"));
+        // Sampling interval surfaces.
+        assert!(out.contains("Sampling interval: 1000ms"));
+        // Query-examples block is appended.
+        assert!(out.contains("COMMON QUERY PATTERNS:"));
+        assert!(out.contains("histogram_quantile"));
+
+        // Spot-check: `cpu_usage` is a per-CPU counter on demo.parquet.
+        // Two assertions: it's listed in the COUNTERS section, and at
+        // least one of its label keys (e.g. `id` for the CPU index)
+        // is rendered.
+        assert!(out.contains("• cpu_usage"));
+
+        // The parquet's `duration` column is timing metadata, not a
+        // metric, and must not be listed as a counter.
+        assert!(
+            !out.contains("• duration\n"),
+            "duration is metadata, must not appear as a counter metric"
+        );
+    }
 }

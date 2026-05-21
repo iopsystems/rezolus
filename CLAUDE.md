@@ -9,7 +9,7 @@ Rezolus is a high-resolution systems performance telemetry agent written in Rust
 ## Build Commands
 
 ```bash
-# Build (debug)
+# Build (debug, default features = live-agent mode + MCP compiled in)
 cargo build
 
 # Build (release)
@@ -28,6 +28,17 @@ cargo test -p package_name
 # bundler, no jsdom, just node's built-in test runner
 node --test tests/*.mjs
 
+# End-to-end viewer smoke (upload / file / A-B / proxy modes). Requires `jq`.
+bash tests/viewer_smoke.sh
+
+# Headless-Chromium per-section render check. Walks every section in
+# /api/v1/sections, asserts each renders a chart, an `_unavailable`
+# placeholder, or a `.section-notes` no-data callout. Catches the
+# silent-render regression the API-only smoke can't see.
+# Requires chromium, jq, python3, `pip install --user websockets`.
+bash scripts/viewer_chromium_smoke.sh <parquet>
+bash scripts/viewer_chromium_smoke.sh site/viewer/data/cachecannon.parquet
+
 # Format code (runs rustfmt and clang-format on .c/.h files)
 cargo xtask fmt
 
@@ -41,8 +52,9 @@ cargo run -p dashboard -- output_dir/   # write files to directory
 # Developer mode build (serves viewer assets from disk for hot reload)
 cargo build --features developer-mode
 
-# Build the WASM viewer for the static site (outputs to site/viewer/pkg/)
-./crates/viewer/build.sh
+# Build the WASM viewer for the static site (outputs to site/viewer-sql/pkg/).
+# The static viewer at site/viewer/ imports it via a relative path.
+./crates/viewer-sql/build.sh
 ```
 
 ## Running Modes
@@ -60,7 +72,10 @@ target/release/rezolus record --metadata source=llm-perf http://host:9090/metric
 # Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw},
 # --metadata key=value (repeatable), --interval, --duration.
 
-# Viewer - web dashboard for parquet files, live agents, or upload mode
+# Viewer - web dashboard for parquet files, live agents, or upload mode.
+# All paths (file / upload / A-B / live-agent) run SQL through
+# metriken-query::DuckDbBackend. Live captures back the same backend
+# via a `LiveSource` registered under the key `live:baseline`.
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
@@ -76,14 +91,18 @@ target/release/rezolus parquet annotate file.parquet                # add servic
 target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
 
-# MCP - AI analysis server or CLI commands
+# MCP - AI analysis server or CLI commands. Runs against parquet files via
+# metriken_query::DuckDbBackend (post-May-2026 migration). `query`
+# takes DuckDB SQL;
+# `detect-anomalies` and `analyze-correlation` accept either a bare metric
+# name (auto-resolved to canonical rate/sum/quantile SQL) or full SQL.
 target/release/rezolus mcp                                                    # stdio server
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
 target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
-target/release/rezolus mcp detect-anomalies file.parquet "cpu_usage"          # targeted anomaly detection
-target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # PromQL query
-target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
+target/release/rezolus mcp detect-anomalies file.parquet cpu_usage            # targeted anomaly detection (bare metric name)
+target/release/rezolus mcp query file.parquet "SELECT count(*) FROM _src"     # DuckDB SQL
+target/release/rezolus mcp analyze-correlation file.parquet cpu_cycles cpu_instructions
 ```
 
 ## Architecture
@@ -96,9 +115,39 @@ The binary operates in seven modes via subcommands:
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
 3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw}`.
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
-5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
-6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect), `annotate` (add service extension KPIs), `combine` (merge multi-source files).
+5. **Viewer** (`src/viewer/`) - Web dashboard.
+   - **File / upload / A-B** paths run SQL through `metriken_query::DuckDbBackend`
+     via `src/viewer/sql_capture.rs::SqlCapture` (parquet path + cached `MetricCatalog`).
+     `Arc<DuckDbBackend>` lives on `AppState`. The `/api/v1/query{,_range}` handlers
+     accept raw SQL and project Arrow → Prometheus matrix JSON via the
+     `prom-matrix` crate; the handler runs under `tokio::task::spawn_blocking`
+     so parallel chart fetches don't starve the runtime.
+   - **Live agent** path appends each polled snapshot to a
+     `metriken_query::LiveSource` registered with the same backend
+     under the key `live:baseline`, plus updates a `LiveCapture`
+     schema cache in lockstep so `DashboardData` queries see the
+     observed metrics. `data_source_for(state, capture)` in
+     `routes.rs` resolves the live key ahead of any parquet path so
+     `/api/v1/query{,_range}` dispatch is uniform across modes.
+     `validate_service_extensions` runs each KPI's SQL through the
+     same backend; no PromQL anywhere.
+   - Service-extension KPI sections: 209/218 templates ship `sql`
+     fields (`91ea72e` + `9b9165f` + `9daefc6` + `cd92f18`); the
+     remaining 9 (all in `inference-library.json`, a placeholder
+     template) render as `_unavailable` cards via the silent-render
+     path (`6054fe2`).
+6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation,
+   SQL queries). Runs against parquet files via
+   `metriken_query::DuckDbBackend` after the May-2026 migration. The
+   helper module `src/mcp/backend.rs` owns parquet opening
+   (`open_capture`), Arrow → series projection (`batches_to_series`), and
+   SQL builders for the three metric kinds (`counter_sum_rate_sql`,
+   `gauge_sum_sql`, `histogram_quantile_sql`).
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata`
+   (inspect), `annotate` (validates KPIs by running their SQL through
+   `DuckDbBackend`; KPIs without `sql` are marked unavailable),
+   `combine` (merge multi-source files), `events` (annotate one-off
+   events), `filter` (column-trim by selection).
 
 ### Sampler Architecture
 
@@ -135,19 +184,56 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 
 ### Service Extensions
 
-Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
+Service-level KPI dashboards are defined in
+`crates/dashboard/src/service_extension.rs` (`ServiceExtension`/`Kpi`
+structs). Each `Kpi` carries a single `sql: Option<String>` query
+body — DuckDB SQL with `{{view}}` substituted to `_src_<source>` at
+emit time. Templates live in
+`config/templates/{cachecannon,vllm,vllm-prefill,vllm-decode,sglang,sglang-decode,sglang-prefill,sglang-router,llm-perf,valkey,inference-library}.json`.
+KPIs without a transcribed `sql` field render as `_unavailable`
+placeholder cards via the silent-render path; custom templates
+must ship SQL, not PromQL (the PromQL surface was purged on this
+branch — see `review/review.md`'s _PromQL purge — completed_
+section). `parquet annotate` validates each KPI by running its SQL
+through `DuckDbBackend`; KPIs without SQL are marked
+`available: false` with a warn-level log.
 
 ### Static Site Viewer (WASM)
 
-The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads parquet files directly in the browser through a WASM module.
+The `site/` directory hosts a browser-only viewer deployed to GitHub
+Pages. It shares the `src/viewer/assets/` frontend (via symlinks)
+with the server-backed viewer, but loads parquet files directly in
+the browser through a WASM module.
 
-The WASM crate lives at `crates/viewer/`. It is its own Cargo workspace — it targets `wasm32-unknown-unknown` and has profile settings that differ from the main rezolus binary. Build with `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`.
+The WASM crate lives at `crates/viewer-sql/`. It targets
+`wasm32-unknown-unknown` and runs queries through duckdb-wasm against
+the loaded parquet (no in-process PromQL engine). Build with
+`./crates/viewer-sql/build.sh`; output goes to `site/viewer-sql/pkg/`
+where the frontend imports it as
+`../viewer-sql/pkg/wasm_viewer_sql.js`. The static viewer at
+`site/viewer/` boots a `CaptureRegistry` from
+`site/viewer-sql/lib/duckdb-registry.js` (a JS-side multi-worker pool
+that mirrors the legacy `WasmCaptureRegistry` surface). The pre-2026
+PromQL/metriken-query WASM crate at `crates/viewer/` was retired once
+every dashboard plot emitted SQL — see
+`git log --oneline -- crates/viewer` for migration history.
+
+### Arrow → Prometheus matrix projection
+
+`crates/prom-matrix/` owns the projection from Arrow `RecordBatch`es
+(server-side, native) or a JS Arrow `Table` (WASM) to the Prometheus
+matrix JSON shape the frontend renders. The two entry points
+(`arrow_to_prom_matrix` and `js_arrow_to_prom_matrix`) share a
+`pub(crate) emit_prom_matrix_json` envelope formatter so the JSON
+shape can't drift between server and browser. Both consumers expect
+SQL emitters to project `t` (DOUBLE seconds), `v` (numeric), and
+zero or more label columns.
 
 ### Key Dependencies
 
-- `metriken` - Metrics registration and exposition
-- `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion
-- `metriken-query` - TSDB, PromQL query engine (re-exported in `src/viewer/mod.rs`)
+- `metriken` - Metric registration core (unconditional)
+- `metriken-exposition` - Snapshot serialization and msgpack-to-parquet conversion (unconditional)
+- `metriken-query` - DuckDB-backed SQL engine: `DuckDbBackend::run_sql`, `describe_parquet`, `MetricCatalog`, `LiveSource`. The query engine for the server viewer (parquet + live), the MCP CLI/server, and the static WASM viewer.
 - `libbpf-rs` / `libbpf-cargo` - eBPF program management (Linux)
 - `axum` - HTTP server
 - `tokio` - Async runtime

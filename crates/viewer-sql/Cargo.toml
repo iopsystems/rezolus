@@ -1,0 +1,35 @@
+[package]
+name = "viewer-sql"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+# Browser-side viewer that drives duckdb-wasm via JS. Mirrors the
+# native server viewer (`metriken-query` + `DuckDbBackend`) by
+# registering the same `shared_macros.sql` plus pure-SQL substitutes
+# for the H2 histogram primitives, since WASM can't register
+# scalar UDFs.
+[lib]
+# rlib so integration tests in tests/ can link against the crate on the host
+# target. Build script (build.sh) still produces the cdylib for wasm32.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dashboard.workspace = true
+prom-matrix.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+serde-wasm-bindgen = "0.6"
+console_error_panic_hook.workspace = true
+
+# Native-only test deps. The test scaffold runs the macros.sql script
+# against an in-memory DuckDB connection to catch drift between the WASM
+# macros and the native ones at metriken-query/src/macros.rs.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+duckdb = { version = "1.1.1", features = ["bundled"] }

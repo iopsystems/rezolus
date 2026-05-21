@@ -1,0 +1,19 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::hist_percentile_series_combined(\"^syscall_latency/[a-z]+:buckets$\",)"
+---
+WITH combined AS (
+              SELECT timestamp,
+                     h2_combine_lol([*COLUMNS('^syscall_latency/[a-z]+:buckets$')]) AS b
+              FROM _src
+           ),
+           d AS (
+              SELECT timestamp,
+                     h2_delta(b, LAG(b) OVER (ORDER BY timestamp)) AS d
+              FROM combined
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  q::VARCHAR AS quantile,
+                  h2_quantile(d, q)::DOUBLE AS v
+           FROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)
+           WHERE d IS NOT NULL

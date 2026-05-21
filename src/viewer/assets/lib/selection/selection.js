@@ -5,7 +5,7 @@
 import { ChartsState, Chart } from '../charts/chart.js';
 import { CompareChartWrapper } from '../viewer_core.js';
 import { compareToggle } from '../ui/chart_controls.js';
-import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { applyResultToPlot, queryRangeForCapture, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
@@ -138,9 +138,9 @@ const entriesFromPayload = (entries) => (entries || []).map(e => ({
     section: e.section,
     sectionName: e.sectionName,
     groupName: e.groupName || '',
-    promql_query: e.promql_query,
+    sql_query: e.sql_query,
     // Optional on pre-fix payloads; null degrades to single-query compare.
-    promql_query_experiment: e.promql_query_experiment || null,
+    sql_query_experiment: e.sql_query_experiment || null,
     category_members: e.category_members || null,
     note: e.note || '',
     // Optional inline-Markdown title override; '' = use derived title.
@@ -266,8 +266,8 @@ const persistStore = (key, store) => {
                 section: e.section,
                 sectionName: e.sectionName,
                 groupName: e.groupName || '',
-                promql_query: e.promql_query,
-                promql_query_experiment: e.promql_query_experiment || undefined,
+                sql_query: e.sql_query,
+                sql_query_experiment: e.sql_query_experiment || undefined,
                 category_members: e.category_members || undefined,
                 note: e.note,
                 titleOverride: e.titleOverride || undefined,
@@ -441,11 +441,11 @@ const toggleSelection = (spec, sectionKey, sectionName, groupName, compareMeta =
         section: sectionKey,
         sectionName,
         groupName: groupName || '',
-        promql_query: spec.promql_query,
+        sql_query: spec.sql_query,
         // Bridge fields for category KPIs: without these, Notebook
         // re-renders only the baseline arm (experiment runs the
         // wrong query and returns no data).
-        promql_query_experiment: spec.promql_query_experiment || null,
+        sql_query_experiment: spec.sql_query_experiment || null,
         category_members: compareMeta?.categoryMembers || null,
         note: '',
         chartOpts: JSON.parse(JSON.stringify(spec.opts)),
@@ -606,8 +606,8 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
         section: e.section,
         sectionName: e.sectionName,
         groupName: e.groupName || '',
-        promql_query: e.promql_query,
-        promql_query_experiment: e.promql_query_experiment || undefined,
+        sql_query: e.sql_query,
+        sql_query_experiment: e.sql_query_experiment || undefined,
         category_members: e.category_members || undefined,
         note: includeNotes ? e.note : '',
         titleOverride: e.titleOverride || undefined,
@@ -789,23 +789,37 @@ const chartLoaderMixin = (store, component) => ({
             // count and visible cards diverged with no explanation).
             const spec = {
                 opts: { ...entry.chartOpts },
-                promql_query: entry.promql_query,
+                sql_query: entry.sql_query,
                 // Bridge: per-side experiment query for category KPIs.
-                promql_query_experiment: entry.promql_query_experiment || undefined,
+                sql_query_experiment: entry.sql_query_experiment || undefined,
                 data: [],
             };
-            if (!entry.promql_query) {
+            if (!entry.sql_query) {
                 spec.unavailable = true;
                 this.specs.set(entry.chartId, spec);
                 return;
             }
             try {
-                // Histogram metrics need histogram_quantiles / heatmap
-                // wrapping; the dashboard pipeline does this via
-                // buildEffectiveQuery, but the stored entry only has
-                // the raw metric name.
-                const effective = buildEffectiveQuery(spec) || entry.promql_query;
-                const result = await executePromQLRangeQuery(effective);
+                // Direct SQL fetch against the baseline capture, with
+                // a range/step derived from the capture's metadata
+                // (mirrors the dashboard fetch path).
+                const metaResp = await ViewerApi.getMetadata(CAPTURE_BASELINE);
+                const md = metaResp?.data;
+                if (!md || md.minTime == null || md.maxTime == null) {
+                    spec.unavailable = true;
+                    spec.unavailableReason = 'missing capture metadata';
+                    this.specs.set(entry.chartId, spec);
+                    return;
+                }
+                const minTime = md.minTime;
+                const maxTime = md.maxTime;
+                const duration = maxTime - minTime;
+                const windowDuration = Math.min(3600, duration);
+                const start = Math.max(minTime, maxTime - windowDuration);
+                const step = Math.max(1, Math.floor(windowDuration / 500));
+                const result = await queryRangeForCapture(
+                    CAPTURE_BASELINE, entry.sql_query, start, maxTime, step,
+                );
                 if (result) {
                     applyResultToPlot(spec, result);
                 }
@@ -1017,7 +1031,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 // In compare mode, render through CompareChartWrapper so
                 // pinned charts mirror the live A/B view (side-by-side,
                 // diff, etc.). Service-template charts that lack a
-                // promql_query fall through to the single-capture path.
+                // sql_query fall through to the single-capture path.
                 const captureLabels = {
                     baseline: attrs.baselineAlias || 'baseline',
                     experiment: attrs.experimentAlias || 'experiment',
@@ -1027,7 +1041,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
                 // — otherwise the baseline's hostname gets injected
                 // into bridge queries and returns zero matches.
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/notebook';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = (attrs.compareMode && spec.sql_query)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,
@@ -1170,7 +1184,7 @@ Object.assign(ReportView, chartLoaderMixin(reportStore, ReportView), {
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/report';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = (attrs.compareMode && spec.sql_query)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,
@@ -1253,7 +1267,7 @@ Object.assign(LoadedSelectionView, chartLoaderMixin(loadedSelectionStore, Loaded
                     experiment: attrs.experimentAlias || 'experiment',
                 };
                 const originalSectionRoute = entry.section ? `/${entry.section}` : '/selection';
-                const chartBody = (attrs.compareMode && spec.promql_query)
+                const chartBody = (attrs.compareMode && spec.sql_query)
                     ? m(CompareChartWrapper, {
                         spec,
                         chartsState: attrs.chartsState,

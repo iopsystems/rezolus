@@ -7,3 +7,18 @@ runs:
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
+    # rezolus's workspace pins `metriken`, `metriken-exposition`, and the
+    # (unpublished) `metriken-query` 0.11.0 crate to a sibling-path patch in
+    # Cargo.toml; cargo --locked then expects to find the sibling repo
+    # at ../metriken. Locally that repo is already checked out; in CI
+    # we clone it here. Drop this step (and the corresponding [patch]
+    # block in Cargo.toml) once the companion metriken PR lands and a
+    # release is cut.
+    - name: Clone metriken sibling
+      shell: bash
+      run: |
+        if [ ! -d "$GITHUB_WORKSPACE/../metriken" ]; then
+          git clone --depth 1 --branch yv/sql-testing \
+            https://github.com/iopsystems/metriken.git \
+            "$GITHUB_WORKSPACE/../metriken"
+        fi

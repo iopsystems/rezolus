@@ -51,9 +51,6 @@
     <rezolus-chart id="chart"></rezolus-chart>
 
     <script type="module">
-        // Viewer's exact node-scoping label injection.
-        import { injectLabel } from '../data.js';
-
         const chartEl = document.getElementById('chart');
         const statusEl = document.getElementById('status');
 
@@ -69,7 +66,7 @@
                     range: { min: 0, max: 100 },
                 },
             },
-            promql_query: 'sum(irate(rezolus_cpu_usage[5m])) / 1000000000',
+            sql_query: 'SELECT timestamp::DOUBLE/1e9 AS t, cpu_busy_pct() AS v FROM _src ORDER BY t',
         };
 
         function syntheticData(descriptor) {
@@ -87,18 +84,9 @@
             return subgroup?.plots?.find(p => p.opts?.id === 'cpu') ?? null;
         }
 
-        // Section JSON is descriptor-only (no inline series), so mirror
-        // data.js: pick the viewer's node, injectLabel, run query_range.
-        async function selectedNode() {
-            const res = await fetch('/api/v1/file_metadata', { cache: 'no-store' });
-            if (!res.ok) return null;
-            const fm = await res.json();
-            const nodes = Array.isArray(fm.nodes) ? fm.nodes : [];
-            if (nodes.length === 0) return null;
-            const pinned = fm.pinned_node;
-            return (pinned && nodes.includes(pinned)) ? pinned : nodes[0];
-        }
-
+        // Section JSON is descriptor-only (no inline series); fetch the
+        // recording's time range and run the plot's SQL through
+        // /api/v1/query_range.
         async function runPlotQuery(plot) {
             const metaRes = await fetch('/api/v1/metadata', { cache: 'no-store' });
             if (!metaRes.ok) throw new Error(`metadata HTTP ${metaRes.status}`);
@@ -112,13 +100,8 @@
             const start = Math.max(minTime, maxTime - windowDuration);
             const step = Math.max(1, Math.floor(windowDuration / 500));
 
-            const node = await selectedNode();
-            const query = node
-                ? injectLabel(plot.promql_query, 'node', node)
-                : plot.promql_query;
-
             const qs = new URLSearchParams({
-                query,
+                query: plot.sql_query,
                 start: String(start),
                 end: String(maxTime),
                 step: String(step),
@@ -130,8 +113,7 @@
             if (!Array.isArray(series) || series.length === 0) return null;
 
             return {
-                node,
-                query,
+                query: plot.sql_query,
                 plot: {
                     ...plot,
                     data: [
@@ -149,17 +131,14 @@
                 const view = await res.json();
                 const plot = findCpuPlot(view);
                 if (!plot) throw new Error('CPU % plot not found in rezolus section');
-                if (!plot.promql_query) throw new Error('CPU plot descriptor has no promql_query');
+                if (!plot.sql_query) throw new Error('CPU plot descriptor has no sql_query');
 
                 const result = await runPlotQuery(plot);
                 if (result) {
                     chartEl.plot = result.plot;
                     statusEl.className = 'status ok';
-                    const scope = result.node
-                        ? ` scoped to <code>node="${result.node}"</code>`
-                        : '';
-                    statusEl.innerHTML = `Executed <code>${result.query}</code> via
-                        <code>/api/v1/query_range</code>${scope} —
+                    statusEl.innerHTML = `Executed plot SQL via
+                        <code>/api/v1/query_range</code> —
                         ${result.plot.data[0].length} data points.`;
                     return;
                 }

@@ -1,5 +1,6 @@
 import { expandLink, selectButton } from '../ui/chart_controls.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { ViewerApi } from '../viewer_api.js';
 
 const createSystemInfoView = ({ CpuTopology, formatBytes }) => ({
     view({ attrs }) {
@@ -237,12 +238,12 @@ const createMetadataView = () => {
                     ...serviceQueries.map(sq => [
                         m('h3', sq.source),
                         sq.queries.kpis && m('table.sysinfo-table', [
-                            m('thead', m('tr', [m('th', 'Title'), m('th', 'Type'), m('th', 'Query')])),
+                            m('thead', m('tr', [m('th', 'Title'), m('th', 'Type'), m('th', 'SQL')])),
                             m('tbody', sq.queries.kpis.map(kpi =>
                                 m('tr', [
                                     m('td', kpi.title || ''),
                                     m('td', kpi.metric_type || kpi.type || ''),
-                                    m('td', m('code', kpi.query || '')),
+                                    m('td', m('code', kpi.sql || '')),
                                 ])
                             )),
                         ]),
@@ -268,9 +269,8 @@ const renderCgroupSection = ({
     chartsState,
     Chart,
     CgroupSelector,
-    executePromQLRangeQuery,
+    executeQuery,
     applyResultToPlot,
-    substituteCgroupPattern,
     setActiveCgroupPattern,
     globalColorMapper,
 }) => {
@@ -315,10 +315,36 @@ const renderCgroupSection = ({
         m('h1.section-title', titleText),
         m(CgroupSelector, {
             groups: attrs.groups,
-            executeQuery: executePromQLRangeQuery,
+            executeQuery,
             applyResultToPlot: applyResultToPlot,
-            substitutePattern: substituteCgroupPattern,
-            setActiveCgroupPattern: (p) => { setActiveCgroupPattern(p); },
+            // The cgroup_selector emits the picked names as a string[].
+            // Two consumers need that:
+            //   1. The wasm-viewer registry (substitutes inside
+            //      duckdb-wasm). On the server build this is a no-op
+            //      stub but we still call it for cross-build symmetry.
+            //   2. The server build's `__SELECTED_CGROUPS__` literal
+            //      substitution path — `activeCgroupPattern` carries
+            //      the SQL IN-list and the registry / server runs the
+            //      substitution before query execution. We convert
+            //      names → SQL IN-list literal here and push it
+            //      through `setActiveCgroupPattern`.
+            setSelectedCgroups: (names) => {
+                ViewerApi.setSelectedCgroups(names);
+                if (setActiveCgroupPattern) {
+                    if (names && names.length > 0) {
+                        const escaped = names
+                            .map((n) => "'" + String(n).replace(/'/g, "''") + "'")
+                            .join(',');
+                        setActiveCgroupPattern(`(${escaped})`);
+                    } else {
+                        // No selection — pattern that filters out
+                        // empty-name rows. `('')` so the individual
+                        // side matches nothing and the aggregate side
+                        // (which uses `NOT IN`) includes everything.
+                        setActiveCgroupPattern("('')");
+                    }
+                }
+            },
         }),
         m('div.cgroup-pairs',
             pairs.map((pair) => {

@@ -17,105 +17,8 @@ pub fn command() -> Command {
     Command::new("parquet")
         .about("Parquet file operations")
         .subcommand_required(true)
-        .subcommand(
-            Command::new("annotate")
-                .about("Add service extension metadata to a parquet file")
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("Parquet file to annotate")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("queries")
-                        .long("queries")
-                        .value_name("PATH")
-                        .help("Custom service extension JSON file (overrides built-in template)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("undo")
-                        .long("undo")
-                        .help("Remove service extension annotation from the parquet file")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("queries"),
-                )
-                .arg(
-                    clap::Arg::new("filter")
-                        .long("filter")
-                        .help("Also filter columns to only those needed by the service extension KPIs")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("templates")
-                        .long("templates")
-                        .value_name("DIR")
-                        .help("Directory containing service extension template JSON files")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("node")
-                        .long("node")
-                        .value_name("NAME")
-                        .help("Set the node attribute on this parquet file")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("source")
-                        .long("source")
-                        .value_name("NAME")
-                        .help("Set the source attribute (use with --overwrite to replace an existing one)")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Set)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("overwrite")
-                        .long("overwrite")
-                        .help("Allow --source to replace an existing source value")
-                        .action(clap::ArgAction::SetTrue)
-                        .requires("source"),
-                )
-                .arg(
-                    clap::Arg::new("systeminfo")
-                        .long("systeminfo")
-                        .value_name("PATH")
-                        .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("add-events")
-                        .long("add-events")
-                        .value_name("PATH")
-                        .help("Add one-off events from a JSON/JSONL file (or '-' for stdin). Repeatable.")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Append)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("event")
-                        .long("event")
-                        .value_name("KV")
-                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. Repeatable.")
-                        .value_parser(value_parser!(String))
-                        .action(clap::ArgAction::Append)
-                        .conflicts_with("undo"),
-                )
-                .arg(
-                    clap::Arg::new("clear-events")
-                        .long("clear-events")
-                        .help("Remove existing events before applying --add-events / --event")
-                        .action(clap::ArgAction::SetTrue)
-                        .conflicts_with("undo"),
-                ),
-        )
+        .subcommand(annotate_command())
+        .subcommand(filter_command())
         .subcommand(
             Command::new("combine")
                 .about("Combine multiple parquet files (multi-node rezolus and/or multi-instance services)")
@@ -222,41 +125,142 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::SetTrue),
                 ),
         )
-        .subcommand(
-            Command::new("filter")
-                .about("Filter parquet columns to only those needed by service extension KPIs")
-                .arg(
-                    clap::Arg::new("FILE")
-                        .help("Parquet file to filter")
-                        .value_parser(value_parser!(PathBuf))
-                        .required(true)
-                        .index(1),
-                )
-                .arg(
-                    clap::Arg::new("queries")
-                        .long("queries")
-                        .value_name("PATH")
-                        .help("Custom service extension JSON file (overrides metadata/template)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("output")
-                        .short('o')
-                        .long("output")
-                        .value_name("PATH")
-                        .help("Output file path (default: overwrite input file in-place)")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                )
-                .arg(
-                    clap::Arg::new("templates")
-                        .long("templates")
-                        .value_name("DIR")
-                        .help("Directory containing service extension template JSON files")
-                        .value_parser(value_parser!(PathBuf))
-                        .action(clap::ArgAction::Set),
-                ),
+}
+
+fn filter_command() -> Command {
+    Command::new("filter")
+        .about("Filter parquet columns to only those needed by service extension KPIs")
+        .arg(
+            clap::Arg::new("FILE")
+                .help("Parquet file to filter")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .index(1),
+        )
+        .arg(
+            clap::Arg::new("queries")
+                .long("queries")
+                .value_name("PATH")
+                .help("Custom service extension JSON file (overrides metadata/template)")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("output")
+                .short('o')
+                .long("output")
+                .value_name("PATH")
+                .help("Output file path (default: overwrite input file in-place)")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("templates")
+                .long("templates")
+                .value_name("DIR")
+                .help("Directory containing service extension template JSON files")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set),
+        )
+}
+
+fn annotate_command() -> Command {
+    Command::new("annotate")
+        .about("Add service extension metadata to a parquet file")
+        .arg(
+            clap::Arg::new("FILE")
+                .help("Parquet file to annotate")
+                .value_parser(value_parser!(PathBuf))
+                .required(true)
+                .index(1),
+        )
+        .arg(
+            clap::Arg::new("queries")
+                .long("queries")
+                .value_name("PATH")
+                .help("Custom service extension JSON file (overrides built-in template)")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("undo")
+                .long("undo")
+                .help("Remove service extension annotation from the parquet file")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("queries"),
+        )
+        .arg(
+            clap::Arg::new("filter")
+                .long("filter")
+                .help("Also filter columns to only those needed by the service extension KPIs")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("undo"),
+        )
+        .arg(
+            clap::Arg::new("templates")
+                .long("templates")
+                .value_name("DIR")
+                .help("Directory containing service extension template JSON files")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("node")
+                .long("node")
+                .value_name("NAME")
+                .help("Set the node attribute on this parquet file")
+                .value_parser(value_parser!(String))
+                .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("source")
+                .long("source")
+                .value_name("NAME")
+                .help("Set the source attribute (use with --overwrite to replace an existing one)")
+                .value_parser(value_parser!(String))
+                .action(clap::ArgAction::Set)
+                .conflicts_with("undo"),
+        )
+        .arg(
+            clap::Arg::new("overwrite")
+                .long("overwrite")
+                .help("Allow --source to replace an existing source value")
+                .action(clap::ArgAction::SetTrue)
+                .requires("source"),
+        )
+        .arg(
+            clap::Arg::new("systeminfo")
+                .long("systeminfo")
+                .value_name("PATH")
+                .help("Embed systeminfo JSON from PATH (or '-' for stdin) into the parquet footer")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Set)
+                .conflicts_with("undo"),
+        )
+        .arg(
+            clap::Arg::new("add-events")
+                .long("add-events")
+                .value_name("PATH")
+                .help("Add one-off events from a JSON/JSONL file (or '-' for stdin). Repeatable.")
+                .value_parser(value_parser!(PathBuf))
+                .action(clap::ArgAction::Append)
+                .conflicts_with("undo"),
+        )
+        .arg(
+            clap::Arg::new("event")
+                .long("event")
+                .value_name("KV")
+                .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. Repeatable.")
+                .value_parser(value_parser!(String))
+                .action(clap::ArgAction::Append)
+                .conflicts_with("undo"),
+        )
+        .arg(
+            clap::Arg::new("clear-events")
+                .long("clear-events")
+                .help("Remove existing events before applying --add-events / --event")
+                .action(clap::ArgAction::SetTrue)
+                .conflicts_with("undo"),
         )
 }
 

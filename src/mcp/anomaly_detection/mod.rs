@@ -1,9 +1,6 @@
-use crate::viewer::promql::{QueryEngine, QueryResult};
-use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 mod cusum;
 mod mad;
@@ -58,447 +55,29 @@ pub enum AnomalySeverity {
     Critical,
 }
 
-/// Validate and fix common query issues
-fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let range_vector_functions = [
-        "rate(",
-        "irate(",
-        "increase(",
-        "delta(",
-        "deriv(",
-        "rate_over_time(",
-        "avg_over_time(",
-        "min_over_time(",
-        "max_over_time(",
-        "sum_over_time(",
-        "count_over_time(",
-        "stddev_over_time(",
-        "stdvar_over_time(",
-        "changes(",
-        "resets(",
-        "holt_winters(",
-        "predict_linear(",
-    ];
-
-    for func in &range_vector_functions {
-        if query.contains(func) {
-            // Substring check, not a real parser: good enough for the common cases
-            if let Some(start_pos) = query.find(func) {
-                let after_func = &query[start_pos + func.len()..];
-                let mut paren_depth = 1;
-                let mut has_range_vector = false;
-                let mut last_close_paren = 0;
-
-                for (i, ch) in after_func.chars().enumerate() {
-                    match ch {
-                        '(' => paren_depth += 1,
-                        ')' => {
-                            paren_depth -= 1;
-                            if paren_depth == 0 {
-                                last_close_paren = i;
-                                break;
-                            }
-                        }
-                        '[' if paren_depth > 0 => {
-                            has_range_vector = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if !has_range_vector && paren_depth == 0 {
-                    let default_range = "[1m]";
-
-                    let before_close = start_pos + func.len() + last_close_paren;
-                    let mut fixed_query = String::new();
-                    fixed_query.push_str(&query[..before_close]);
-                    fixed_query.push_str(default_range);
-                    fixed_query.push_str(&query[before_close..]);
-
-                    eprintln!(
-                        "WARNING: Query '{}' was missing range vector for {}. Auto-fixed to: {}",
-                        query,
-                        func.trim_end_matches('('),
-                        fixed_query
-                    );
-
-                    return Ok(fixed_query);
-                }
-            }
-        }
-    }
-
-    // A bare range vector (e.g. "metric[5m]" with no enclosing function) is invalid
-    if query.contains('[') && query.contains(']') {
-        let has_function = range_vector_functions.iter().any(|f| query.contains(f));
-        if !has_function && !query.contains("(") {
-            return Err(format!(
-                "Query '{}' appears to be a bare range vector selector.\n\
-                \n\
-                Range vectors must be used with a function.\n\
-                For counters, use: rate({})\n\
-                For gauges, use: avg_over_time({})\n\
-                \n\
-                Range vectors alone cannot be graphed or analyzed.",
-                query, query, query
-            )
-            .into());
-        }
-    }
-
-    Ok(query.to_string())
-}
-
-/// Extract metric name from a query string
-fn extract_metric_name(query: &str) -> Option<&str> {
-    if let Some(start) = query.rfind("rate(") {
-        let after_rate = &query[start + 5..];
-        if let Some(end) = after_rate.find(['[', '{', ')']) {
-            return Some(after_rate[..end].trim());
-        }
-    }
-
-    for func in &["sum(", "avg(", "min(", "max(", "count("] {
-        if let Some(start) = query.find(func) {
-            let after_func = &query[start + func.len()..];
-            if let Some(end) = after_func.find(['{', ')', '[']) {
-                let metric = after_func[..end].trim();
-                if !metric.is_empty() && !metric.contains('(') {
-                    return Some(metric);
-                }
-            }
-        }
-    }
-
-    if let Some(end) = query.find(['{', '[', '(', ' ']) {
-        return Some(query[..end].trim());
-    }
-
-    Some(query.trim())
-}
-
-/// Show available labels for a metric
-fn show_available_labels(
-    output: &mut String,
-    metric_name: &str,
-    labels_list: &[crate::viewer::tsdb::Labels],
-) {
-    use std::collections::HashMap;
-
-    let mut label_values: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
-
-    for labels in labels_list {
-        for (key, value) in labels.inner.iter() {
-            if key != "metric" && key != "unit" && key != "metric_type" {
-                label_values
-                    .entry(key.clone())
-                    .or_default()
-                    .insert(value.clone());
-            }
-        }
-    }
-
-    if label_values.is_empty() {
-        output.push_str(&format!(
-            "  No labels available (use just '{}')\n",
-            metric_name
-        ));
-        return;
-    }
-
-    output.push_str("\nAvailable labels and values:\n");
-    let mut sorted_keys: Vec<_> = label_values.keys().collect();
-    sorted_keys.sort();
-
-    for key in sorted_keys {
-        let values = &label_values[key];
-        let mut sorted_values: Vec<_> = values.iter().collect();
-        sorted_values.sort();
-
-        output.push_str(&format!("  {}: ", key));
-
-        if sorted_values.len() <= 10 {
-            output.push_str(
-                &sorted_values
-                    .iter()
-                    .map(|v| format!("\"{}\"", v))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-        } else {
-            output.push_str(
-                &sorted_values
-                    .iter()
-                    .take(10)
-                    .map(|v| format!("\"{}\"", v))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            output.push_str(&format!(" ... ({} more)", sorted_values.len() - 10));
-        }
-        output.push('\n');
-    }
-
-    output.push_str("\nExample queries:\n");
-    output.push_str(&format!("  {}  (all series)\n", metric_name));
-
-    if let Some((first_key, first_values)) = label_values.iter().next() {
-        if let Some(first_value) = first_values.iter().next() {
-            output.push_str(&format!(
-                "  {}{{{}=\"{}\"}}  (filtered by label)\n",
-                metric_name, first_key, first_value
-            ));
-        }
-    }
-}
-
-/// Automatically construct appropriate query based on metric type
-/// If query is just a metric name, construct the right query for its type
-fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std::error::Error>> {
-    let query = query.trim();
-
-    // A bare metric name has no functions, brackets, or operators
-    let is_bare_metric = !query.contains('(')
-        && !query.contains('[')
-        && !query.contains('+')
-        && !query.contains('-')
-        && !query.contains('*')
-        && !query.contains('/');
-
-    if !is_bare_metric {
-        return Ok(query.to_string());
-    }
-
-    // Strip any label selector to get the bare metric name
-    let metric_name = if let Some(pos) = query.find('{') {
-        &query[..pos]
-    } else {
-        query
-    };
-
-    if tsdb.counter_names().contains(&metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
-            metric_name, query
-        );
-        Ok(format!("sum(rate({}[1m]))", query))
-    } else if tsdb.gauge_names().contains(&metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as GAUGE, using: sum({})",
-            metric_name, query
-        );
-        Ok(format!("sum({})", query))
-    } else if tsdb.histogram_names().contains(&metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
-            metric_name, query
-        );
-        Ok(format!("histogram_quantile(0.99, {})", query))
-    } else {
-        // Unknown metric: return as-is and let normal error handling report it
-        Ok(query.to_string())
-    }
-}
-
-/// Perform anomaly detection on a time series
-pub fn detect_anomalies(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
-    query: &str,
+/// Run the statistical analyses (Allan/Hadamard/MAD/CUSUM) on
+/// `(timestamps, values)` and assemble the [`AnomalyDetectionResult`].
+/// `query_label` is recorded on the result for user-facing display;
+/// `step` is the sampling interval in seconds.
+pub fn analyze_time_series(
+    query_label: String,
+    timestamps: Vec<f64>,
+    values: Vec<f64>,
+    step: f64,
 ) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
-    // Undo JSON escaping of quotes
-    let query = query.replace("\\\"", "\"");
-
-    let query = auto_construct_query(&query, tsdb)?;
-
-    let query = validate_and_fix_query(&query)?;
-
-    let (start_time, end_time) = engine.get_time_range();
-
-    if start_time >= end_time {
-        return Err(format!(
-            "Invalid time range for anomaly detection: start ({}) >= end ({}). \
-            The parquet file may not contain enough data.",
-            start_time, end_time
-        )
-        .into());
-    }
-
-    let step = 1.0; // seconds
-
-    let duration = end_time - start_time;
-    if duration < 10.0 {
-        return Err(format!(
-            "Time range too short for anomaly detection: {:.1} seconds. \
-            Need at least 10 seconds of data for meaningful analysis.",
-            duration
-        )
-        .into());
-    }
-
-    let query_result = match engine.query_range(&query, start_time, end_time, step) {
-        Ok(result) => result,
-        Err(e) => {
-            let error_msg = e.to_string();
-
-            if error_msg.contains("Metric not found") || error_msg.contains("not found") {
-                let metric_hint = extract_metric_name(&query);
-
-                let mut all_metrics = Vec::new();
-                all_metrics.extend(tsdb.counter_names());
-                all_metrics.extend(tsdb.gauge_names());
-                all_metrics.extend(tsdb.histogram_names());
-
-                let mut suggestions = Vec::new();
-                if let Some(hint) = metric_hint {
-                    let hint_normalized = hint.replace(['/', '-'], "_");
-
-                    for metric in &all_metrics {
-                        // Exact matches go to the front so they rank above partial matches
-                        if *metric == hint || *metric == hint_normalized {
-                            suggestions.insert(0, *metric);
-                        } else if metric.contains(&hint_normalized)
-                            || metric.starts_with(&format!("{}_", hint_normalized))
-                            || metric.ends_with(&format!("_{}", hint_normalized))
-                        {
-                            suggestions.push(*metric);
-                        }
-                    }
-                }
-
-                let mut error_with_help = format!("Query failed: {}", error_msg);
-
-                // A label selector on an existing metric likely filtered out all series
-                if query.contains('{') {
-                    if let Some(metric_name) = metric_hint {
-                        // Exact match at front of suggestions means the metric exists
-                        if !suggestions.is_empty() && suggestions[0] == metric_name {
-                            error_with_help.push_str("\n\nThe metric exists but your label selector might be filtering out all series.");
-
-                            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (COUNTER) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (GAUGE) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                                error_with_help.push_str(&format!(
-                                    "\n\nMetric '{}' (HISTOGRAM) has {} series.",
-                                    metric_name,
-                                    labels_list.len()
-                                ));
-                                show_available_labels(
-                                    &mut error_with_help,
-                                    metric_name,
-                                    &labels_list,
-                                );
-                            }
-
-                            return Err(error_with_help.into());
-                        }
-                    }
-                }
-
-                if !suggestions.is_empty() {
-                    error_with_help.push_str("\n\nDid you mean one of these metrics?");
-                    for suggestion in suggestions.iter().take(5) {
-                        error_with_help.push_str(&format!("\n  - {}", suggestion));
-                    }
-                } else if !all_metrics.is_empty() {
-                    error_with_help.push_str("\n\nAvailable metrics include:");
-                    for metric in all_metrics.iter().take(10) {
-                        error_with_help.push_str(&format!("\n  - {}", metric));
-                    }
-                    if all_metrics.len() > 10 {
-                        error_with_help
-                            .push_str(&format!("\n  ... and {} more", all_metrics.len() - 10));
-                    }
-                }
-
-                return Err(error_with_help.into());
-            }
-
-            return Err(Box::new(e));
-        }
-    };
-
-    let (timestamps, values) = extract_time_series(&query_result, &query)?;
-
     if values.is_empty() {
-        // No data: surface valid labels to help diagnose an over-restrictive selector
-        let metric_hint = extract_metric_name(&query);
-
-        if let Some(metric_name) = metric_hint {
-            let mut error_msg = format!(
-                "Query returned no data points: {}\n\nThis usually means:\n\
-                1. The metric doesn't exist in this recording\n\
-                2. The label selector filters out all series\n\
-                3. The time range is too short for rate calculations\n",
-                query
-            );
-
-            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (COUNTER) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (GAUGE) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' (HISTOGRAM) exists with {} series.\n",
-                    metric_name,
-                    labels_list.len()
-                ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else {
-                error_msg.push_str(&format!(
-                    "\nMetric '{}' not found in this recording.\n",
-                    metric_name
-                ));
-            }
-
-            return Err(error_msg.into());
-        }
-
-        return Err("Query returned no data points. The metric might not exist or label selectors filtered out all series.".into());
+        return Err("No data points to analyze. The query returned an empty time series.".into());
     }
 
-    // Allan deviation also determines the optimal smoothing window used below
+    // Allan/Hadamard/Modified Allan determine the noise type + optimal
+    // smoothing window.
     let allan_analysis = stability::perform_allan_analysis(&values, step)?;
-
     let hadamard_analysis = stability::perform_hadamard_analysis(&values, step)?;
-
     let modified_allan_analysis = stability::perform_modified_allan_analysis(&values, step)?;
 
-    // Extract Allan-determined window for both smoothing and change-point detection
     let allan_window = if !allan_analysis.minima.is_empty() {
         allan_analysis.minima[0].tau_seconds
     } else {
-        // Fallback based on noise type
         match allan_analysis.noise_type {
             NoiseType::WhitePhase | NoiseType::FlickerPhase => 15.0 * step,
             NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 30.0 * step,
@@ -507,39 +86,24 @@ pub fn detect_anomalies(
         }
     };
 
-    // Apply Allan-based smoothing to reduce spike noise and detect regime shifts
     let (smoothed_values, smoothing_window) = apply_allan_smoothing(&values, &allan_analysis, step);
-
-    // Determine if smoothing was applied (window > 0 means it was)
     let use_smoothed = smoothing_window > 0.0;
-
-    // Run anomaly detection on smoothed data to detect regime shifts
-    // Use smoothed values for MAD and CUSUM to focus on level shifts not spikes
     let analysis_values = if use_smoothed {
         &smoothed_values
     } else {
         &values
     };
 
-    // Perform MAD analysis with Allan-based adaptive threshold
-    // Different noise types require different sensitivity:
-    // - White/Flicker Phase: Low noise → stricter threshold (more sensitive)
-    // - Frequency noise: Medium → moderate threshold
-    // - Random Walk/drift: Expected to wander → looser threshold (less sensitive)
     let mad_threshold = match allan_analysis.noise_type {
-        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0, // Stricter for low-noise systems
-        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0, // Standard threshold
-        NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,  // Looser for drifting systems
-        NoiseType::Unknown => 5.0,                              // Default conservative threshold
+        NoiseType::WhitePhase | NoiseType::FlickerPhase => 4.0,
+        NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 5.0,
+        NoiseType::RandomWalk | NoiseType::FlickerWalk => 6.5,
+        NoiseType::Unknown => 5.0,
     };
     let mad_analysis = mad::perform_mad_analysis(analysis_values, mad_threshold)?;
-
-    // Perform CUSUM analysis - run on RAW values with Allan window for change-point detection
-    // Window-based change-point detection uses Allan-determined optimal window and significance
     let cusum_analysis =
         cusum::perform_cusum_analysis_with_allan(&values, step, allan_window, &allan_analysis)?;
 
-    // Combine analyses to identify high-confidence anomalies
     let anomalies = identify_anomalies(
         &timestamps,
         analysis_values,
@@ -549,12 +113,12 @@ pub fn detect_anomalies(
         &hadamard_analysis,
         &modified_allan_analysis,
     );
-
     let confidence_score = calculate_confidence_score(&anomalies, values.len());
+    let total_points = values.len();
 
     Ok(AnomalyDetectionResult {
-        query: query.to_string(),
-        total_points: values.len(),
+        query: query_label,
+        total_points,
         timestamps,
         values,
         smoothed_values: if use_smoothed {
@@ -577,113 +141,6 @@ pub fn detect_anomalies(
     })
 }
 
-/// Extract time series data from query result
-fn extract_time_series(
-    result: &QueryResult,
-    query: &str,
-) -> Result<(Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
-    match result {
-        QueryResult::Vector { result } => {
-            // Vector results from query_range indicate something is wrong:
-            // shouldn't happen with properly formed rate() queries
-            let has_range_vector = query.contains("[") && query.contains("]");
-            let is_rate_query =
-                query.contains("rate(") || query.contains("irate(") || query.contains("increase(");
-
-            if is_rate_query && has_range_vector {
-                // This should have returned a Matrix, not a Vector!
-                return Err(format!(
-                    "Unexpected result type for query '{}'. \
-                    The query appears correct but returned instant values instead of a time series. \
-                    This might indicate:\n\
-                    1. The time range in the parquet file is too short\n\
-                    2. There's insufficient data for the rate calculation\n\
-                    3. The query engine encountered an issue\n\
-                    \nDebug info: Result contains {} series",
-                    query,
-                    result.len()
-                ).into());
-            }
-
-            let example_query = if query.contains("rate(") || query.contains("irate(") {
-                // Has rate() but missing the range vector
-                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
-                format!(
-                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
-                    fixed
-                )
-            } else if query.contains("increase(") {
-                let fixed = query.replace("))", "[1m]))").replace("})", "}[1m]))");
-                format!(
-                    "\n\nYour query appears to be missing a range vector selector.\nTry: {}",
-                    fixed
-                )
-            } else {
-                "\n\nFor counter metrics, use: rate(metric_name[1m]) or irate(metric_name[1m])\nFor gauge metrics that need smoothing, use: avg_over_time(metric_name[1m])".to_string()
-            };
-
-            if result.is_empty() {
-                return Err(format!(
-                    "Query returned no time series data. The query executed as an instant vector, \
-                    which returns only current values, not a time series.{}",
-                    example_query
-                )
-                .into());
-            }
-
-            Err(format!(
-                "Query returned instant values instead of time series data. \
-                Anomaly detection requires metrics with range vectors to analyze patterns over time.{}",
-                example_query
-            ).into())
-        }
-        QueryResult::Matrix { result } => {
-            if result.is_empty() {
-                return Ok((vec![], vec![]));
-            }
-
-            if result.len() > 1 {
-                // Aggregate multiple series by summing values at each timestamp
-                let mut timestamp_values: std::collections::BTreeMap<i64, f64> =
-                    std::collections::BTreeMap::new();
-
-                for series in result {
-                    for (ts, val) in &series.values {
-                        let ts_key = ts.round() as i64;
-                        *timestamp_values.entry(ts_key).or_insert(0.0) += val;
-                    }
-                }
-
-                let timestamps: Vec<f64> = timestamp_values.keys().map(|&ts| ts as f64).collect();
-                let values: Vec<f64> = timestamp_values.values().copied().collect();
-                Ok((timestamps, values))
-            } else {
-                let series = &result[0];
-                let timestamps: Vec<f64> = series.values.iter().map(|(ts, _)| *ts).collect();
-                let values: Vec<f64> = series.values.iter().map(|(_, val)| *val).collect();
-                Ok((timestamps, values))
-            }
-        }
-        QueryResult::Scalar { result } => {
-            // Single scalar value - not enough for anomaly detection
-            Err(format!(
-                "Scalar query returned a single value ({:.4}). \
-                Anomaly detection requires time series data with multiple points.",
-                result.1
-            )
-            .into())
-        }
-        QueryResult::HistogramHeatmap { .. } => {
-            // Histogram heatmap data - not suitable for standard time series analysis
-            Err(
-                "Histogram heatmap data is not suitable for anomaly detection. \
-                Use histogram_quantiles() instead for time series analysis."
-                    .into(),
-            )
-        }
-    }
-}
-
 /// Apply moving average smoothing using Allan-determined window
 /// Returns (smoothed_values, window_seconds)
 fn apply_allan_smoothing(
@@ -694,7 +151,7 @@ fn apply_allan_smoothing(
     // Determine optimal averaging window from Allan deviation
     // Use the first minimum (optimal tau) if available, otherwise use noise characteristics
     let window_seconds = if !allan_analysis.minima.is_empty() {
-        // Primary minimum is the optimal averaging time
+        // Use the primary minimum as the optimal averaging time
         allan_analysis.minima[0].tau_seconds
     } else {
         // Fallback: use heuristic based on noise type
@@ -933,6 +390,7 @@ fn identify_anomalies(
     // 4. Detect fundamental changes in system dynamics (noise transitions from all three methods)
 
     for (idx, score) in anomaly_scores {
+        // Calculate deviation factor for confidence scoring
         let deviation_factor = if mad.mad > 0.0 {
             (values[idx] - mad.median).abs() / mad.mad
         } else {
@@ -978,6 +436,7 @@ fn identify_anomalies(
 
             let value = values[idx];
 
+            // Determine anomaly type
             let anomaly_type = if mad.outliers.contains(&idx) && cusum.change_points.contains(&idx)
             {
                 AnomalyType::Combined
@@ -1131,6 +590,7 @@ pub fn format_anomaly_detection_result(result: &AnomalyDetectionResult) -> Strin
         ));
     }
 
+    // Show window-based regime shifts (most important for detecting experiments)
     if !result.cusum_analysis.window_change_points.is_empty() && !result.timestamps.is_empty() {
         output.push_str("\n  SUSTAINED REGIME SHIFTS (experimental changes):\n");
         for (i, wcp) in result

@@ -21,6 +21,7 @@ use tower_livereload::LiveReloadLayer;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
@@ -29,22 +30,20 @@ use notify::Watcher;
 pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
-pub use metriken_query::promql;
-pub use metriken_query::tsdb;
-
-use tsdb::*;
-
 pub mod capture_registry;
 mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+mod heatmap_range;
+pub mod live_capture;
+mod live_ingest;
 mod metadata;
 mod report_save;
 mod routes;
+pub mod sql_capture;
 mod state;
 
-use capture_registry::CaptureId;
 use state::AppState;
 
 /// Shared entry point for loading the template registry. Both the
@@ -277,7 +276,7 @@ pub fn run(config: Config) {
         Source::Live(url) => init_live_mode(&rt, url, &registry),
         Source::Empty => {
             info!("No input file — starting in upload-only mode");
-            AppState::new(Tsdb::default(), registry.clone())
+            AppState::new_empty(registry.clone())
         }
     };
 
@@ -347,13 +346,18 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
     let multinode_sysinfo = metadata::build_multinode_systeminfo(path);
 
-    let data = Tsdb::load(path).unwrap_or_else(|e| {
+    // File mode goes DuckDB-only. Build the SqlCapture through a fresh
+    // backend, then thread that backend onto AppState via new_sql so
+    // subsequent handler calls hit the warmed per-source connection
+    // pool. KPI validation runs each `kpi.sql` through the same backend
+    // (`validate_service_extensions_sql`); no PromQL anywhere.
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
+    let capture = sql_capture::SqlCapture::open(path, &backend).unwrap_or_else(|e| {
         eprintln!("failed to load data from parquet: {e}");
         std::process::exit(1);
     });
 
-    let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
-    metadata::validate_service_extensions(&data, &mut service_exts);
+    let service_exts = metadata::extract_service_extension_metadata(path, registry);
 
     info!("Computing file checksum...");
     let file_checksum = metadata::compute_file_checksum(path);
@@ -363,7 +367,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     }
     log_service_exts(&service_exts, "baseline");
 
-    let state = AppState::new(data, registry.clone());
+    let state = AppState::new_sql(capture, backend, registry.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -391,10 +395,10 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
 }
 
 /// Combined-A/B file mode: extract the tar, load each per-side parquet
-/// as its own Tsdb, and wire them into the baseline/experiment slots.
-/// CLI baseline alias still wins over the manifest-supplied alias.
-/// The CLI experiment-path flag is ignored — combined-A/B carries both
-/// sides in a single artifact.
+/// as its own `SqlCapture`, and wire them into the baseline/experiment
+/// slots. CLI baseline alias still wins over the manifest-supplied
+/// alias. The CLI experiment-path flag is ignored — combined-A/B
+/// carries both sides in a single artifact.
 fn init_file_mode_combined_ab(
     config: &Config,
     path: &Path,
@@ -419,16 +423,19 @@ fn init_file_mode_combined_ab(
         metadata::extract_parquet_metadata(&extracted.experiment_path);
     let experiment_multinode = metadata::build_multinode_systeminfo(&extracted.experiment_path);
 
-    let mut baseline_tsdb = Tsdb::load(&extracted.baseline_path).unwrap_or_else(|e| {
-        eprintln!("failed to load baseline parquet from tarball: {e}");
-        std::process::exit(1);
-    });
-    let mut experiment_tsdb = Tsdb::load(&extracted.experiment_path).unwrap_or_else(|e| {
-        eprintln!("failed to load experiment parquet from tarball: {e}");
-        std::process::exit(1);
-    });
-    // Tsdb's filename defaults to the on-disk path of the extracted parquet
-    // (a tempdir path that disappears on shutdown). Replace it with the
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
+    let mut baseline_capture = sql_capture::SqlCapture::open(&extracted.baseline_path, &backend)
+        .unwrap_or_else(|e| {
+            eprintln!("failed to load baseline parquet from tarball: {e}");
+            std::process::exit(1);
+        });
+    let mut experiment_capture =
+        sql_capture::SqlCapture::open(&extracted.experiment_path, &backend).unwrap_or_else(|e| {
+            eprintln!("failed to load experiment parquet from tarball: {e}");
+            std::process::exit(1);
+        });
+    // SqlCapture defaults filename to the extracted parquet's basename
+    // (a tempdir path that disappears on shutdown). Replace with the
     // tarball's filename so user-facing displays show the artifact the
     // user actually pointed at.
     let display_filename = path
@@ -436,17 +443,17 @@ fn init_file_mode_combined_ab(
         .and_then(|s| s.to_str())
         .unwrap_or("combined-ab.parquet.ab.tar")
         .to_string();
-    baseline_tsdb.set_filename(display_filename.clone());
-    experiment_tsdb.set_filename(display_filename);
+    baseline_capture.set_filename(display_filename.clone());
+    experiment_capture.set_filename(display_filename);
 
-    let mut baseline_service_exts =
+    let baseline_service_exts =
         metadata::extract_service_extension_metadata(&extracted.baseline_path, registry);
-    metadata::validate_service_extensions(&baseline_tsdb, &mut baseline_service_exts);
     log_service_exts(&baseline_service_exts, "baseline");
-    let mut experiment_service_exts =
+    let experiment_service_exts =
         metadata::extract_service_extension_metadata(&extracted.experiment_path, registry);
-    metadata::validate_service_extensions(&experiment_tsdb, &mut experiment_service_exts);
     log_service_exts(&experiment_service_exts, "experiment");
+    // KPI validation is deferred to plan stage 8 (when templates carry
+    // SQL); SQL-backed captures default every KPI to `available: true`.
 
     info!("Computing file checksum...");
     let file_checksum = metadata::compute_file_checksum(path);
@@ -457,7 +464,7 @@ fn init_file_mode_combined_ab(
         .unwrap_or_else(|| ab.baseline.alias.clone());
     let experiment_alias = ab.experiment.alias.clone();
 
-    let state = AppState::new(baseline_tsdb, registry.clone());
+    let state = AppState::new_sql(baseline_capture, backend, registry.clone());
     // Point parquet_path at the *extracted* baseline parquet (not the
     // tar itself) so `regenerate_dashboards` and other parquet-aware
     // consumers can read its metadata. Same for the experiment side via
@@ -480,8 +487,8 @@ fn init_file_mode_combined_ab(
     );
     state.captures.set_baseline_alias(Some(baseline_alias));
 
-    state.captures.attach_experiment(
-        experiment_tsdb,
+    state.captures.attach_experiment_sql(
+        experiment_capture,
         experiment_multinode.or(experiment_systeminfo),
         experiment_file_meta,
         Some(experiment_alias),
@@ -545,11 +552,10 @@ fn validate_category_at_startup(
         eprintln!("--category {cat_name:?} requires both a baseline and an experiment capture");
         std::process::exit(1);
     });
-    let mut experiment_exts =
-        metadata::extract_service_extension_metadata(experiment_path, registry);
-    if let Ok(exp_data) = Tsdb::load(experiment_path) {
-        metadata::validate_service_extensions(&exp_data, &mut experiment_exts);
-    }
+    let experiment_exts = metadata::extract_service_extension_metadata(experiment_path, registry);
+    // Category validation runs ahead of capture attach; KPI validation
+    // happens later on the loaded SqlCapture (plan stage 8) — for now
+    // we just match by source name.
     let experiment_sources: Vec<String> = experiment_exts.iter().map(|(s, _)| s.clone()).collect();
     for source in baseline_sources.iter().chain(experiment_sources.iter()) {
         if !category.members.iter().any(|m| m == source) {
@@ -578,8 +584,8 @@ fn attach_cli_experiment(
 ) {
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
-    let mut exp_tsdb = match Tsdb::load(exp_path) {
-        Ok(t) => t,
+    let mut exp_capture = match sql_capture::SqlCapture::open(exp_path, &state.sql_backend) {
+        Ok(c) => c,
         Err(e) => {
             warn!(
                 "failed to load experiment '{}': {e}. Starting in single-capture mode.",
@@ -593,18 +599,14 @@ fn attach_cli_experiment(
         .and_then(|s| s.to_str())
         .unwrap_or("experiment.parquet")
         .to_string();
-    exp_tsdb.set_filename(base);
+    exp_capture.set_filename(base);
     state
         .captures
-        .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta, alias);
+        .attach_experiment_sql(exp_capture, exp_sysinfo, exp_file_meta, alias);
     *state.cli_experiment_path.write() = Some(exp_path.to_path_buf());
     info!("Attached experiment capture: {}", exp_path.display());
 
-    let mut exp_exts = metadata::extract_service_extension_metadata(exp_path, registry);
-    if let Some(handle) = state.captures.get(CaptureId::Experiment) {
-        let exp_data = handle.read();
-        metadata::validate_service_extensions(&exp_data, &mut exp_exts);
-    }
+    let exp_exts = metadata::extract_service_extension_metadata(exp_path, registry);
     if exp_exts.is_empty() {
         warn!("no service extension matched the experiment parquet's source metadata");
     }
@@ -649,25 +651,40 @@ fn init_live_mode(
         version = info.version
     );
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
-    let state = AppState::new(tsdb, registry.clone());
+    // Create the live DuckDB data source registered on the shared
+    // `sql_backend`. The same `Arc<LiveSource>` is parked on
+    // `state.live_source` and inside the `LiveCapture` so query
+    // handlers (via `data_source_for`) and the ingest loop both reach it.
+    let backend = Arc::new(metriken_query::DuckDbBackend::new());
+    let live_source = backend
+        .create_live_source(state::LIVE_BASELINE_DATA_SOURCE, &info.source, 1000)
+        .expect("create live source");
+    let live_capture = live_capture::LiveCapture::new(
+        live_source.clone(),
+        1000,
+        info.source.clone(),
+        info.version.clone(),
+        url.to_string(),
+    );
+
+    let state = AppState::new_live(live_capture, backend, registry.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
+    *state.live_source.write() = Some(live_source.clone());
 
-    let ingest_tsdb = state.baseline_tsdb();
+    let live_capture_handle = state
+        .captures
+        .get_live(capture_registry::CaptureId::Baseline)
+        .expect("live mode baseline is LiveCapture-backed");
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     rt.spawn(actions::ingest_loop(
         ingest_url,
-        ingest_tsdb,
+        live_capture_handle,
         ingest_snapshots,
         info.source,
         info.version,

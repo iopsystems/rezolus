@@ -90,7 +90,7 @@ test('buildPayload-shaped v3 payload round-trips through migrateSelection with c
         compare: { baseline_alias: 'vllm', experiment_alias: 'sglang' },
         tagline: 'compare run #42',
         entries: [
-            { chartId: 'cpu/usage', section: 'cpu', sectionName: 'CPU', groupName: 'usage', promql_query: 'rate(...)', note: '', chartOpts: { id: 'cpu/usage', title: 'CPU' } },
+            { chartId: 'cpu/usage', section: 'cpu', sectionName: 'CPU', groupName: 'usage', sql_query: 'SELECT * FROM cpu_usage', note: '', chartOpts: { id: 'cpu/usage', title: 'CPU' } },
         ],
     };
     const s = migrateSelection(v3);

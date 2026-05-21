@@ -29,8 +29,6 @@ const baseDeps = (sectionResponseCache) => ({
     Main: 'Main',
     TopNav: 'TopNav',
     topNavAttrs: (data, route, extra) => ({ data, route, extra }),
-    SingleChartView: 'SingleChartView',
-    applyResultToPlot: () => {},
     getCompareMode: () => false,
 });
 

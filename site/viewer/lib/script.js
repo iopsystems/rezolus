@@ -72,10 +72,11 @@ const loadTemplates = async () => {
 };
 
 const initWasmViewer = async (data, filename) => {
-    const wasmModule = await import('../pkg/wasm_viewer.js');
-    await wasmModule.default();
+    // Boot the duckdb-wasm-backed registry. Mirrors the legacy
+    // `WasmCaptureRegistry` surface; data layer is unchanged elsewhere.
     if (!ViewerApi.registry()) {
-        ViewerApi.setRegistry(new wasmModule.WasmCaptureRegistry());
+        const { CaptureRegistry } = await import('../../viewer-sql/lib/duckdb-registry.js');
+        ViewerApi.setRegistry(new CaptureRegistry({ workersPerCapture: 4 }));
     }
     await ViewerApi.attachBaseline(data, filename);
     await loadTemplates();

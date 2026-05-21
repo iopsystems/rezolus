@@ -1,9 +1,17 @@
 // Attrs:
 //   groups: array of group objects with plots
-//   executeQuery: (query) => Promise<result> — runs a PromQL range query
-//   applyResultToPlot: (plot, result) => void — applies PromQL result to a plot
-//   substitutePattern: (query, pattern) => string — substitutes cgroup placeholder
-//   setActiveCgroupPattern: (pattern) => void — sets the global active cgroup pattern
+//   executeQuery: (sql) => Promise<result> — runs a SQL range query
+//                 against the active capture (returns Prometheus
+//                 matrix-shape JSON). Used for cgroup name discovery
+//                 and per-plot refresh on selection change.
+//   applyResultToPlot: (plot, result) => void — paints a query result
+//                      onto a plot's data structure.
+//   setSelectedCgroups: (names: string[]) => void — informs the
+//                       capture registry that the user's cgroup
+//                       selection changed. viewer-sql substitutes
+//                       `__SELECTED_CGROUPS__` server-side from this
+//                       state, so plots only need to re-fetch — no
+//                       client-side query rewriting.
 
 import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
@@ -74,7 +82,6 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
 
 // Persisted state — survives component remount across navigations.
 let persistedSelectedCgroups = new Set();
-let persistedOriginalQueries = null; // Map<string, string>
 
 export const CgroupSelector = {
     oninit(vnode) {
@@ -86,7 +93,6 @@ export const CgroupSelector = {
         vnode.state.rightSelected = new Set();
         vnode.state.lastClickedLeft = null;
         vnode.state.lastClickedRight = null;
-        vnode.state.originalQueries = persistedOriginalQueries;
 
         // Force multi-series style on right-side (individual) cgroup plots so that
         // color assignment is always by cgroup name (hash-based) — even when only
@@ -104,125 +110,109 @@ export const CgroupSelector = {
         this.fetchAvailableCgroups(vnode);
 
         // When re-initialized with persisted selections (e.g. after granularity
-        // or node change unmounts/remounts the component tree), re-run queries
-        // so the individual cgroup charts get populated.
-        if (persistedSelectedCgroups.size > 0 && persistedOriginalQueries) {
+        // or node change unmounts/remounts the component tree), re-fetch the
+        // individual-side plots so they reflect the current selection.
+        if (persistedSelectedCgroups.size > 0) {
+            // Push the selection back into the registry — the component's
+            // state survives remount, but registry state may have been
+            // rebuilt (e.g. on parquet reload).
+            vnode.attrs.setSelectedCgroups?.(Array.from(persistedSelectedCgroups));
             this.debouncedUpdateQueries(vnode);
         }
     },
 
     async fetchAvailableCgroups(vnode) {
         const { executeQuery } = vnode.attrs;
-        const queries = [
-            'sum by (name) (cgroup_cpu_usage)',
-            'group by (name) (cgroup_cpu_usage)',
-            'cgroup_cpu_usage',
-            'sum by (name) (rate(cgroup_cpu_usage[1m]))',
-        ];
-
+        // The registry pre-populates a `_cgroup_index` table at parquet
+        // load time keyed on (metric, column_name, name, id, labels).
+        // One SQL query against it gives us every distinct cgroup name
+        // — replaces the legacy four PromQL probes.
+        //
+        // The `t` projection is constant; query_range's outer wrap
+        // requires a `t` column for the Prom-matrix shaper, but the
+        // value doesn't matter for name discovery.
+        const sql = `SELECT 0::DOUBLE AS t, name AS name, COUNT(*)::DOUBLE AS v
+                     FROM _cgroup_index WHERE name IS NOT NULL
+                     GROUP BY name`;
         try {
-            let cgroups = new Set();
-
-            for (const query of queries) {
-                try {
-                    const result = await executeQuery(query);
-                    cgroups = extractCgroupNames(result);
-                    if (cgroups.size > 0) break;
-                } catch (e) {
-                    console.warn(`Query failed: ${query}`, e);
-                }
-            }
-
-            if (cgroups.size === 0) {
-                vnode.state.error = 'No cgroup data found';
-            }
-
+            const result = await executeQuery(sql);
+            const cgroups = extractCgroupNames(result);
+            if (cgroups.size === 0) vnode.state.error = 'No cgroup data found';
             vnode.state.availableCgroups = cgroups;
         } catch (error) {
             console.error('Failed to fetch available cgroups:', error);
             vnode.state.error = 'Failed to load cgroups: ' + error.message;
             vnode.state.availableCgroups = new Set();
         }
-
         vnode.state.loading = false;
         m.redraw();
     },
 
     async updateQueries(vnode) {
-        const { executeQuery, substitutePattern, setActiveCgroupPattern, applyResultToPlot } = vnode.attrs;
+        const { executeQuery, applyResultToPlot, setSelectedCgroups } = vnode.attrs;
 
         if (vnode.state.updateInProgress) {
             vnode.state.cancelUpdate = true;
             return;
         }
-
         vnode.state.updateInProgress = true;
         vnode.state.cancelUpdate = false;
 
+        // Inform the capture registry of the new selection. viewer-sql
+        // substitutes `__SELECTED_CGROUPS__` server-side from this
+        // state on every subsequent query; the registry's result cache
+        // key includes the selection vector, so re-fetched plots will
+        // miss the cache and pick up fresh data.
         const selected = Array.from(vnode.state.selectedCgroups);
-        const selectedPattern = selected.length > 1
-            ? '(' + selected.join('|') + ')'
-            : selected[0] || '';
-
-        setActiveCgroupPattern(selectedPattern || null);
-
-        // Snapshot original queries on first update
-        if (!vnode.state.originalQueries) {
-            vnode.state.originalQueries = new Map();
-            for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
-                for (const [pi, plot] of collectGroupPlots(group).entries()) {
-                    if (plot.promql_query) {
-                        vnode.state.originalQueries.set(`${gi}-${pi}`, plot.promql_query);
-                    }
-                }
-            }
-            persistedOriginalQueries = vnode.state.originalQueries;
-        }
+        setSelectedCgroups?.(selected);
 
         const generation = ++vnode.state.updateGeneration || 1;
         vnode.state.updateGeneration = generation;
 
-        // Collect plots whose original query contains the cgroup placeholder
+        // Collect plots whose SQL contains the cgroup placeholder.
+        // Plots without it are unaffected by selection and don't need
+        // refetching. (Same membership check as the legacy PromQL
+        // path, just over `sql_query` instead of the snapshotted
+        // PromQL originals — no per-plot string rewriting needed.)
         const plotsToUpdate = [];
-        for (const [gi, group] of (vnode.attrs.groups || []).entries()) {
-            for (const [pi, plot] of collectGroupPlots(group).entries()) {
-                const orig = vnode.state.originalQueries.get(`${gi}-${pi}`);
-                if (orig && orig.includes('__SELECTED_CGROUPS__')) {
-                    plotsToUpdate.push({
-                        plot,
-                        query: substitutePattern(orig, selectedPattern || null),
-                    });
+        for (const group of (vnode.attrs.groups || [])) {
+            for (const plot of collectGroupPlots(group)) {
+                if (plot.sql_query?.includes('__SELECTED_CGROUPS__')) {
+                    plotsToUpdate.push(plot);
                 }
             }
         }
 
-        // Execute in batches to avoid overwhelming the server
+        // Same batched, generation-tokened orchestration as the legacy
+        // path. The query string is unchanged across selections (the
+        // registry handles substitution); only the cache miss + fetch
+        // is what's new.
+        //
+        // Redraw after EACH plot's data lands rather than after the
+        // entire batch — cgroup queries can be ~100–300 ms each, so
+        // the user sees per-cgroup charts appear one-by-one instead
+        // of all-at-once after the slowest finishes.
         const BATCH_SIZE = 5;
         for (let i = 0; i < plotsToUpdate.length; i += BATCH_SIZE) {
             if (vnode.state.cancelUpdate || vnode.state.updateGeneration !== generation) {
                 vnode.state.updateInProgress = false;
                 return;
             }
-
             const batch = plotsToUpdate.slice(i, i + BATCH_SIZE);
-            await Promise.all(batch.map(async ({ plot, query }) => {
-                plot.promql_query = query;
+            await Promise.all(batch.map(async (plot) => {
                 try {
-                    const result = await executeQuery(query);
+                    const result = await executeQuery(plot.sql_query);
                     if (vnode.state.updateGeneration !== generation) return;
                     applyResultToPlot(plot, result);
+                    m.redraw();
                 } catch (error) {
                     console.error(`Failed query for ${plot.opts.title}:`, error);
                     plot.data = [];
                     plot.series_names = [];
+                    m.redraw();
                 }
             }));
         }
-
-        if (vnode.state.updateGeneration === generation) {
-            m.redraw();
-        }
-
         vnode.state.updateInProgress = false;
     },
 

@@ -6,7 +6,8 @@ on:
     paths:
       - 'site/**'
       - 'src/viewer/assets/lib/**'
-      - 'crates/viewer/**'
+      - 'crates/viewer-sql/**'
+      - 'crates/prom-matrix/**'
       - 'crates/dashboard/**'
       - 'config/templates/**'
       - 'Cargo.toml'
@@ -38,7 +39,7 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --version ^0.14 --locked
       - name: Build WASM viewer
-        run: ./crates/viewer/build.sh
+        run: ./crates/viewer-sql/build.sh
       - name: Resolve symlinks
         run: cp -rL site site-resolved
       - uses: actions/configure-pages@v5

@@ -19,6 +19,34 @@ const captureQS = (captureId) =>
     (captureId && captureId !== 'baseline') ? `?capture=${captureId}` : '';
 
 const ViewerApi = {
+    // Server-backed viewer has no JS-side source registry — captures
+    // live in `AppState.captures` on the Rust side and the source-picker
+    // UI is a no-op here. Returning null lets `app.js`'s
+    // `ViewerApi.registry()?.has?.('baseline')` patterns short-circuit
+    // cleanly. The static-viewer adapter (site/viewer/lib/viewer_api.js)
+    // overrides this to return the duckdb-wasm CaptureRegistry.
+    registry() {
+        return null;
+    },
+
+    // Server-backed viewer: cgroup selection is resolved server-side
+    // — SQL queries carry an `__SELECTED_CGROUPS__` placeholder the
+    // server / registry substitutes per request from its own selection
+    // state. The static-viewer adapter overrides this to push the
+    // selection into the duckdb-wasm CaptureRegistry so each fresh
+    // capture-load also re-applies it. Server-side captures live in
+    // `AppState.captures` and don't need a client-side push, so this
+    // is a no-op stub.
+    setSelectedCgroups(_names, _captureId = 'baseline') {},
+
+    // Mirror the static-viewer surface so any caller using
+    // `getSelectedCgroups` on the server build gets a sensible
+    // empty-set default rather than a TypeError. Real state lives
+    // in the cgroup_selector component on this build.
+    getSelectedCgroups(_captureId = 'baseline') {
+        return [];
+    },
+
     async getMode() {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
     },
@@ -108,6 +136,18 @@ const ViewerApi = {
         });
     },
 
+    /// Server-side per-section status (`{[key]: {total, withData}}`).
+    /// Fetched once at viewer init so the sidebar can gray out empty
+    /// sections from the start. Heavier than `getSections` (the
+    /// server runs each section's plot queries to compute `total`),
+    /// but bounded at ~200ms even on realistic dashboards.
+    async getSectionStatus(captureId = 'baseline') {
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/section_status${captureQS(captureId)}`,
+        });
+    },
+
     async getSection(section, background = false) {
         return backendRequest({
             method: 'GET',
@@ -116,7 +156,7 @@ const ViewerApi = {
         });
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline') {
+    async queryRange(query, start, end, step, captureId = 'baseline', { node, strict } = {}) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -126,9 +166,48 @@ const ViewerApi = {
         if (captureId && captureId !== 'baseline') {
             params.set('capture', captureId);
         }
+        if (node) {
+            params.set('node', node);
+        }
+        if (strict) {
+            params.set('strict', 'true');
+        }
         return backendRequest({
             method: 'GET',
             url: `/api/v1/query_range?${params.toString()}`,
+            background: true,
+        });
+    },
+
+    /**
+     * Fetch heatmap or quantile-spectrum data for a single metric.
+     *
+     * @param {object} args
+     * @param {string} args.metric — canonical metric name (no
+     *   `:buckets` suffix).
+     * @param {'buckets'|'quantile_spectrum'} args.kind
+     * @param {number[]} [args.quantiles] — required for spectrum.
+     * @param {string} [args.captureId] — 'baseline' (default) or
+     *   'experiment'.
+     * @param {string} [args.node] — optional node selector (R4).
+     */
+    async heatmapRange({ metric, kind, quantiles, captureId = 'baseline', node }) {
+        const params = new URLSearchParams({ metric, kind });
+        if (kind === 'quantile_spectrum') {
+            if (!Array.isArray(quantiles) || quantiles.length === 0) {
+                throw new Error('kind=quantile_spectrum requires a non-empty quantiles array');
+            }
+            params.set('quantiles', quantiles.join(','));
+        }
+        if (captureId && captureId !== 'baseline') {
+            params.set('capture', captureId);
+        }
+        if (node) {
+            params.set('node', node);
+        }
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/heatmap_range?${params.toString()}`,
             background: true,
         });
     },
@@ -186,7 +265,6 @@ const ViewerApi = {
         const bytes = new Uint8Array(await resp.arrayBuffer());
         return { bytes, mime, extension };
     },
-
 };
 
 export { ViewerApi };

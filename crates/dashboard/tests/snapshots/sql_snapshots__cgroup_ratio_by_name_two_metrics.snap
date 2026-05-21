@@ -1,0 +1,72 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 139
+expression: "sql::cgroup_ratio_by_name(\"cgroup_cpu_instructions\", \"cgroup_cpu_cycles\",\nCgroupSide::Individual,)"
+---
+WITH n_unp AS (
+              -- SQL-standard UNPIVOT for INCLUDE NULLS — see comment
+              -- on `cgroup_irate_by_name` for the grammar wart.
+              SELECT * FROM (SELECT timestamp, COLUMNS('^cgroup_cpu_instructions(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^cgroup_cpu_instructions(/[^:]+)?$')))
+           ),
+           d_unp AS (
+              SELECT * FROM (SELECT timestamp, COLUMNS('^cgroup_cpu_cycles(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^cgroup_cpu_cycles(/[^:]+)?$')))
+           ),
+           n_join AS (
+              SELECT u.timestamp, idx.name, u.v
+              FROM n_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_instructions'
+              WHERE idx.name IN __SELECTED_CGROUPS__
+           ),
+           d_join AS (
+              SELECT u.timestamp, idx.name, u.v
+              FROM d_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_cycles'
+              WHERE idx.name IN __SELECTED_CGROUPS__
+           ),
+           -- SUM(UBIGINT) promotes to HUGEINT in DuckDB; cast back so
+           -- `irate_lag` (which is UBIGINT-typed) binds. See
+           -- `cgroup_irate_by_name` for the rationale and overflow note.
+           n_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM n_join GROUP BY timestamp, name),
+           d_by AS (SELECT timestamp, name, CAST(SUM(v) AS UBIGINT) AS s
+                    FROM d_join GROUP BY timestamp, name),
+           n_rate_raw AS (
+              SELECT timestamp, name,
+                     irate_lag(s,
+                         LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
+                     ) AS r
+              FROM n_by
+           ),
+           d_rate_raw AS (
+              SELECT timestamp, name,
+                     irate_lag(s,
+                         LAG(s) OVER (PARTITION BY name ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY name ORDER BY timestamp)
+                     ) AS r
+              FROM d_by
+           ),
+           n_rate AS (
+              SELECT timestamp, name,
+                     COALESCE(r, LAST_VALUE(r IGNORE NULLS) OVER (
+                         PARTITION BY name ORDER BY timestamp
+                         RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                     )) AS r
+              FROM n_rate_raw
+           ),
+           d_rate AS (
+              SELECT timestamp, name,
+                     COALESCE(r, LAST_VALUE(r IGNORE NULLS) OVER (
+                         PARTITION BY name ORDER BY timestamp
+                         RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                     )) AS r
+              FROM d_rate_raw
+           )
+           SELECT n.timestamp::DOUBLE/1e9 AS t, n.name,
+                  n.r / NULLIF(d.r, 0) AS v
+           FROM n_rate n JOIN d_rate d USING(timestamp, name)
+           WHERE n.r IS NOT NULL OR d.r IS NOT NULL

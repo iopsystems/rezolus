@@ -23,7 +23,17 @@ pub struct Kpi {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
-    pub query: String,
+    /// SQL body for the KPI. KPIs without SQL render as `_unavailable`
+    /// placeholder cards via the silent-render path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sql: Option<String>,
+    /// Canonical metric name (no `:buckets` suffix). Only meaningful
+    /// for histogram KPIs — used to look up the per-metric
+    /// `grouping_power` for `{{p}}` substitution and to thread the
+    /// metric tag onto the emitted plot's `PlotOpts` so the frontend
+    /// can drive the `/api/v1/heatmap_range` endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metric: Option<String>,
     #[serde(rename = "type")]
     pub metric_type: String,
     #[serde(default)]
@@ -59,49 +69,6 @@ pub struct Kpi {
 
 fn default_available() -> bool {
     true
-}
-
-impl Kpi {
-    /// Build the effective PromQL query for this KPI, wrapping histogram
-    /// metrics in the appropriate histogram function.
-    pub fn effective_query(&self) -> String {
-        if self.metric_type == "histogram" {
-            let subtype = self.subtype.as_deref().unwrap_or("percentiles");
-            if subtype == "buckets" {
-                format!("histogram_heatmap({})", self.query)
-            } else {
-                let quantiles = match &self.percentiles {
-                    Some(p) => format!(
-                        "[{}]",
-                        p.iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    None => format!(
-                        "[{}]",
-                        crate::DEFAULT_PERCENTILES
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                };
-                format!("histogram_quantiles({}, {})", quantiles, self.query)
-            }
-        } else {
-            self.query.clone()
-        }
-    }
-}
-
-impl ServiceExtension {
-    pub fn throughput_query(&self) -> Option<&str> {
-        self.kpis
-            .iter()
-            .find(|k| k.denominator)
-            .map(|k| k.query.as_str())
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -162,40 +129,6 @@ impl CategoryKpi {
             .get(member)
             .map(String::as_str)
             .unwrap_or(self.title.as_str())
-    }
-
-    /// Build the same effective query string that a regular `Kpi` would
-    /// produce given the supplied raw query. Mirrors `Kpi::effective_query`
-    /// — histogram_quantiles wrapping, histogram_heatmap for buckets,
-    /// passthrough for everything else.
-    pub fn effective_query(&self, raw_query: &str) -> String {
-        if self.metric_type == "histogram" {
-            let subtype = self.subtype.as_deref().unwrap_or("percentiles");
-            if subtype == "buckets" {
-                format!("histogram_heatmap({})", raw_query)
-            } else {
-                let quantiles = match &self.percentiles {
-                    Some(p) => format!(
-                        "[{}]",
-                        p.iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    None => format!(
-                        "[{}]",
-                        crate::DEFAULT_PERCENTILES
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                };
-                format!("histogram_quantiles({}, {})", quantiles, raw_query)
-            }
-        } else {
-            raw_query.to_string()
-        }
     }
 }
 

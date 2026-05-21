@@ -9,10 +9,8 @@ import {
     queryRangeForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
-    fetchQuantileSpectrumForPlot,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
-import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
 
@@ -82,13 +80,13 @@ const extractBaselineCapture = (spec, options = {}) => {
     return cap;
 };
 
-// Convert an experiment PromQL range result (same JSON shape as the
+// Convert an experiment SQL range result (same JSON shape as the
 // baseline got through applyResultToPlot) into the same capture shape
 // produced by extractBaselineCapture.
-const extractExperimentCapture = (spec, promqlResult, options = {}) => {
+const extractExperimentCapture = (spec, queryResult, options = {}) => {
     const style = resolvedStyle(spec);
     const cap = { id: CAPTURE_EXPERIMENT };
-    const results = promqlResult?.data?.result;
+    const results = queryResult?.data?.result;
     if (!Array.isArray(results) || results.length === 0) {
         if (style === 'multi' || style === 'scatter') cap.seriesMap = new Map();
         else if (style === 'heatmap' || style === 'histogram_heatmap') {
@@ -142,7 +140,7 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
     }
 
     // histogram_heatmap — handled via a separate endpoint in the real
-    // app; for compare mode we best-effort pass the raw PromQL result,
+    // app; for compare mode we best-effort pass the raw SQL result,
     // understanding the side-by-side strategy may degrade to no-data if
     // the shape doesn't match. Full support is follow-up work.
     cap.timeData = [];
@@ -167,32 +165,26 @@ const effectiveExperimentStep = (attrs, range) => {
     return range.step;
 };
 
-// Fetch the experiment-side PromQL result and stash it on vnode.state.
+// Fetch the experiment-side SQL result and stash it on vnode.state.
 // Records `_lastFetchedStep` so the component's view can detect when
 // the granularity selector has moved and trigger another fetch.
 const fetchExperimentResult = (vnode) => {
     const { spec, sectionRoute } = vnode.attrs;
-    if (!spec.promql_query) {
-        vnode.state.error = 'no PromQL query';
+    // Category templates supply a per-side experiment query via
+    // spec.sql_query_experiment. When present, prefer it over
+    // spec.sql_query so the baseline and experiment arms can pull
+    // from different source projections.
+    const baseQuery = spec.sql_query_experiment || spec.sql_query;
+    if (!baseQuery) {
+        vnode.state.error = 'no SQL query';
         return;
     }
-    // Apply the same transforms the baseline path applies (histogram
-    // wrap, counter rewrite, cgroup substitution), but deliberately
-    // SKIP node/instance label injection: those labels are tied to the
-    // baseline's topology and would return zero matches on the
-    // experiment in the common case where the two recordings have
-    // different hostnames or instance IDs.
-    // Category templates supply a per-side experiment query via
-    // spec.promql_query_experiment. When present, route it through
-    // buildEffectiveQuery instead of spec.promql_query so the same
-    // histogram/counter rewrites and step substitutions apply.
-    const baseQuery = spec.promql_query_experiment || spec.promql_query;
     const query = buildEffectiveQuery(
-        { ...spec, promql_query: baseQuery },
+        { ...spec, sql_query: baseQuery },
         { sectionRoute, crossCapture: true },
     );
     if (query == null) {
-        vnode.state.error = 'compare: query skipped (unresolved cgroup pattern)';
+        vnode.state.error = 'compare: query skipped';
         return;
     }
     vnode.state._fetchInFlight = true;
@@ -247,78 +239,11 @@ const fetchExperimentResult = (vnode) => {
     })();
 };
 
-// Returns null on metadata failure; callers then fall back to data.js's
-// 3600 s-capped baseline range — fine outside the diff path.
-const fetchBaselineRange = async () => {
-    try {
-        const meta = await ViewerApi.getMetadata(CAPTURE_BASELINE);
-        const data = meta?.data ?? meta;
-        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
-        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
-        if (minT == null || maxT == null) return null;
-        const start = Number(minT);
-        const end = Number(maxT);
-        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-            return null;
-        }
-        return { start, end };
-    } catch (_) {
-        return null;
-    }
-};
-
-// Both captures fetch with a SHARED step so buildDeltaSpectrum can pair
-// samples by index. Without it, baseline (3600 s cap) and experiment
-// (full duration) land on incompatible grids whenever durations differ
-// and the diff path silently falls back to the baseline scatter.
-const kickOffSpectrumFetch = (vnode, spec, kind) => {
-    const expRange = vnode.attrs.experimentQueryRange;
-    const quantiles = quantilesForKind(kind);
-    const plotForFetch = { promql_query: spec.promql_query, opts: spec.opts };
-    // Snapshot _lastFetchedStep: if granularity changes mid-fetch we
-    // discard this result to avoid writing stale data into the cache.
-    const stepAtLaunch = vnode.state._lastFetchedStep;
-
-    (async () => {
-        try {
-            const baseRangeBare = await fetchBaselineRange();
-            let baseRange = null;
-            let expRangeOut = expRange || null;
-            if (baseRangeBare && expRange?.step) {
-                // Coarsest step avoids oversampling either capture.
-                const baseStep = Math.max(1, Math.floor((baseRangeBare.end - baseRangeBare.start) / 500));
-                const sharedStep = Math.max(baseStep, expRange.step);
-                baseRange = { ...baseRangeBare, step: sharedStep };
-                expRangeOut = { ...expRange, step: sharedStep };
-            }
-
-            const [base, exp] = await Promise.all([
-                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_BASELINE, baseRange),
-                fetchQuantileSpectrumForPlot(plotForFetch, quantiles, CAPTURE_EXPERIMENT, expRangeOut),
-            ]);
-
-            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
-            if (vnode.state._spectrumPending === kind) {
-                vnode.state._spectrumPending = null;
-            }
-            if (!base || !exp) {
-                m.redraw();
-                return;
-            }
-            vnode.state._spectrumByKind = vnode.state._spectrumByKind || {};
-            vnode.state._spectrumByKind[kind] = { baseline: base, experiment: exp };
-            m.redraw();
-        } catch (err) {
-            if (vnode.state._spectrumCachedStep !== stepAtLaunch) return;
-            console.error('[compare] spectrum fetch failed', err);
-            if (vnode.state._spectrumPending === kind) {
-                vnode.state._spectrumPending = null;
-            }
-            vnode.state.error = err?.message || 'spectrum fetch failed';
-            m.redraw();
-        }
-    })();
-};
+// Compare-mode quantile-spectrum fetching (Full / Tail toggles) was
+// driven by a now-deleted histogram_quantiles wrapper. The SQL
+// backend has no replacement yet — the toggle is rendered but the
+// per-cell spectrum view degrades to side-by-side until a SQL-native
+// spectrum fetch is wired up.
 
 export const CompareChartWrapper = {
     oninit(vnode) {
@@ -395,38 +320,18 @@ export const CompareChartWrapper = {
             vnode.state._spectrumCachedStep = vnode.state._lastFetchedStep;
         }
 
-        if (spectrumKind && resolvedStyle(spec) === 'scatter') {
-            const cached = vnode.state._spectrumByKind?.[spectrumKind];
-            if (!cached && vnode.state._spectrumPending !== spectrumKind) {
-                vnode.state._spectrumPending = spectrumKind;
-                kickOffSpectrumFetch(vnode, spec, spectrumKind);
-                return m('div.chart-loading', 'Loading spectrum\u2026');
-            }
-            if (!cached) {
-                return m('div.chart-loading', 'Loading spectrum\u2026');
-            }
-            // Augment captures with spectrum fields for the strategies.
-            baselineCap.spectrumTimeData = cached.baseline.time_data;
-            baselineCap.spectrumData = cached.baseline.data;
-            baselineCap.spectrumSeriesNames = cached.baseline.series_names;
-            baselineCap.spectrumColorMinAnchor = cached.baseline.color_min_anchor;
-            experimentCap.spectrumTimeData = cached.experiment.time_data;
-            experimentCap.spectrumData = cached.experiment.data;
-            experimentCap.spectrumSeriesNames = cached.experiment.series_names;
-            experimentCap.spectrumColorMinAnchor = cached.experiment.color_min_anchor;
-        } else {
-            // Toggle off (or chart is non-scatter): scrub any spectrum
-            // fields left on the memoized capture objects from a prior
-            // toggled-on render. Otherwise downstream consumers would
-            // see stale truthy fields after the user disables the
-            // spectrum view.
-            for (const cap of [baselineCap, experimentCap]) {
-                if (!cap) continue;
-                cap.spectrumTimeData = undefined;
-                cap.spectrumData = undefined;
-                cap.spectrumSeriesNames = undefined;
-                cap.spectrumColorMinAnchor = undefined;
-            }
+        // Spectrum mode (Full / Tail compare-mode toggles) is currently
+        // disabled \u2014 the legacy histogram_quantiles fetch is gone and
+        // the SQL backend has no replacement yet. Scrub any stale
+        // spectrum fields so downstream consumers don't see leftover
+        // truthy values from a previous render.
+        void spectrumKind;
+        for (const cap of [baselineCap, experimentCap]) {
+            if (!cap) continue;
+            cap.spectrumTimeData = undefined;
+            cap.spectrumData = undefined;
+            cap.spectrumSeriesNames = undefined;
+            cap.spectrumColorMinAnchor = undefined;
         }
 
         const result = renderCompareChart({
@@ -527,10 +432,17 @@ export function createGroupComponent(getState) {
             // the group title + subgroup headers when the whole cluster is
             // empty (e.g. a section querying metrics that don't exist on
             // the host, like GPU on a CPU-only box).
+            //
+            // Plots flagged `_unavailable` by data.js (KPI plots whose
+            // query lives in parquet metadata and hasn't been translated
+            // to SQL yet) count as "has data" so the placeholder still
+            // renders — otherwise the user can't tell there's a plot
+            // there at all.
             const plotHasData = (plot) =>
-                Array.isArray(plot.data) && plot.data.some((series) =>
+                plot._unavailable
+                || (Array.isArray(plot.data) && plot.data.some((series) =>
                     Array.isArray(series) && series.length > 0
-                );
+                ));
             const subgroupHasData = (sg) => (sg.plots || []).some(plotHasData);
             const groupHasData = subgroups.some(subgroupHasData);
 
@@ -538,9 +450,9 @@ export function createGroupComponent(getState) {
 
             // Build the chart-body vnode for a given (maybe-prefixed) spec.
             // Picks the compare wrapper when in compare mode AND the spec has
-            // a promql_query (service-template charts without one fall through
+            // a sql_query (service-template charts without one fall through
             // to the single-capture path even in compare mode).
-            const chartBody = (renderSpec, sourceSpec) => (compareMode && sourceSpec.promql_query)
+            const chartBody = (renderSpec, sourceSpec) => (compareMode && sourceSpec.sql_query)
                 ? m(CompareChartWrapper, {
                     spec: renderSpec,
                     chartsState,
@@ -585,7 +497,7 @@ export function createGroupComponent(getState) {
                     m('div.chart-wrapper', [
                         chartHeader(renderSpec.opts, renderSpec),
                         chartBody(renderSpec, spec),
-                        expandLink(spec, sectionRoute),
+                        expandLink(spec, sectionRoute, { heatmapMode: isHeatmapMode }),
                         selectButton(spec, sectionRoute, sectionName, attrs.name, compareMode ? {
                             baselineAlias: captureLabels.baseline,
                             experimentAlias: captureLabels.experiment,

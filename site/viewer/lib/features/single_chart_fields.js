@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/features/single_chart_fields.js

@@ -1,8 +1,6 @@
-use crate::viewer::promql::{MatrixSample, QueryEngine, QueryResult};
-use crate::viewer::tsdb::Tsdb;
+use crate::mcp::backend::Series;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 // Fixed time intervals optimized for system performance analysis
 // Balances coverage with computational efficiency
@@ -42,120 +40,10 @@ pub struct SeriesCorrelation {
     pub sample_count: usize,
 }
 
-/// Calculate cross-correlation between two PromQL expressions
-///
-/// IMPORTANT: Counter metrics must be wrapped in rate() or irate() functions
-/// for meaningful correlation analysis. Raw counter values are monotonically
-/// increasing and will show spurious correlations.
-///
-/// This handles various cases:
-/// - Simple metrics: `cpu_usage` vs `memory_used` (for gauges)
-/// - Rate queries: `irate(cpu_cycles[5m])` vs `irate(instructions[5m])` (for counters)
-/// - Aggregations: `sum by (name) (irate(cgroup_cpu_usage[5m]))` vs `sum by (id) (irate(cpu_usage[5m]))`
-/// - Complex expressions: `cpu_usage / cpu_total` vs `memory_used / memory_total`
-///
-/// It also detects lag relationships - for example, if memory pressure leads to
-/// increased CPU usage due to garbage collection after a delay.
-///
-/// The time range and step are determined automatically from the underlying TSDB.
-///
-/// Note: Use describe_metrics tool to identify counter vs gauge metrics.
-pub fn calculate_correlation(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
-    expr1: &str,
-    expr2: &str,
-) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    let (start, end) = engine.get_time_range();
-    let step = tsdb.interval();
-
-    let result1 = engine.query_range(expr1, start, end, step)?;
-    let result2 = engine.query_range(expr2, start, end, step)?;
-
-    let samples1 = extract_matrix_samples(&result1)?;
-    let samples2 = extract_matrix_samples(&result2)?;
-
-    if samples1.is_empty() || samples2.is_empty() {
-        return Err("No data returned from queries".into());
-    }
-
-    let series_results: Vec<_> = samples1
-        .par_iter()
-        .flat_map(|s1| {
-            samples2.par_iter().filter_map(move |s2| {
-                calculate_series_cross_correlation(s1, s2, step).map(|corr| {
-                    (
-                        SeriesCorrelation {
-                            labels1: s1.metric.clone(),
-                            labels2: s2.metric.clone(),
-                            max_correlation: corr.max_correlation,
-                            optimal_lag: corr.optimal_lag,
-                            sample_count: corr.sample_count,
-                        },
-                        (corr.max_correlation, corr.optimal_lag, corr.sample_count),
-                    )
-                })
-            })
-        })
-        .collect();
-
-    let mut series_pairs: Vec<SeriesCorrelation> = Vec::new();
-    let mut all_correlations: Vec<(f64, i64, usize)> = Vec::new();
-
-    for (series_corr, corr_tuple) in series_results {
-        series_pairs.push(series_corr);
-        all_correlations.push(corr_tuple);
-    }
-
-    if all_correlations.is_empty() {
-        return Err("No valid correlations found (insufficient overlapping data)".into());
-    }
-
-    // Best overall correlation = highest absolute value
-    let (max_correlation, optimal_lag, total_samples) = if all_correlations.len() == 1 {
-        all_correlations[0]
-    } else {
-        all_correlations
-            .iter()
-            .max_by(|a, b| {
-                a.0.abs()
-                    .partial_cmp(&b.0.abs())
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .cloned()
-            .unwrap_or((0.0, 0, 0))
-    };
-
-    let correlations_at_lag = if samples1.len() == 1 && samples2.len() == 1 {
-        calculate_lag_correlations(&samples1[0], &samples2[0], step)
-    } else {
-        vec![]
-    };
-
-    series_pairs.sort_by(|a, b| {
-        b.max_correlation
-            .abs()
-            .partial_cmp(&a.max_correlation.abs())
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    Ok(CorrelationResult {
-        metric1: expr1.to_string(),
-        metric2: expr2.to_string(),
-        metric1_name: Some(expr1.to_string()),
-        metric2_name: Some(expr2.to_string()),
-        max_correlation,
-        optimal_lag,
-        sample_count: total_samples,
-        correlations_at_lag,
-        series_pairs,
-    })
-}
-
 /// Calculate cross-correlation between two specific time series
 fn calculate_series_cross_correlation(
-    series1: &MatrixSample,
-    series2: &MatrixSample,
+    series1: &Series,
+    series2: &Series,
     step: f64,
 ) -> Option<CrossCorrelationResult> {
     let data1 = prepare_series_data(series1);
@@ -241,7 +129,7 @@ struct CrossCorrelationResult {
 }
 
 /// Prepare time series data by normalizing and detrending
-fn prepare_series_data(series: &MatrixSample) -> Vec<f64> {
+fn prepare_series_data(series: &Series) -> Vec<f64> {
     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
 
     if values.is_empty() {
@@ -262,7 +150,7 @@ fn detrend(data: &[f64]) -> Vec<f64> {
         return data.to_vec();
     }
 
-    // Linear regression coefficients
+    // Calculate linear regression coefficients
     let mut sum_x = 0.0;
     let mut sum_y = 0.0;
     let mut sum_xx = 0.0;
@@ -279,6 +167,7 @@ fn detrend(data: &[f64]) -> Vec<f64> {
     let slope = (n * sum_xy - sum_x * sum_y) / (n * sum_xx - sum_x * sum_x);
     let intercept = (sum_y - slope * sum_x) / n;
 
+    // Remove the trend
     data.iter()
         .enumerate()
         .map(|(i, &y)| y - (slope * i as f64 + intercept))
@@ -365,8 +254,8 @@ fn calculate_correlation_at_lag(data1: &[f64], data2: &[f64], lag: i64) -> Optio
 
 /// Calculate correlations at multiple lags for display
 fn calculate_lag_correlations(
-    series1: &MatrixSample,
-    series2: &MatrixSample,
+    series1: &Series,
+    series2: &Series,
     step: f64,
 ) -> Vec<LagCorrelation> {
     let data1 = prepare_series_data(series1);
@@ -410,38 +299,109 @@ fn calculate_lag_correlations(
         .collect()
 }
 
-/// Extract matrix samples from a query result
-fn extract_matrix_samples(
-    result: &QueryResult,
-) -> Result<Vec<MatrixSample>, Box<dyn std::error::Error>> {
-    match result {
-        QueryResult::Matrix { result } => Ok(result.clone()),
-        QueryResult::Vector { result } => {
-            // Convert vector to single-sample matrix
-            Ok(result
-                .iter()
-                .map(|s| MatrixSample {
-                    metric: s.metric.clone(),
-                    values: vec![s.value],
-                })
-                .collect())
-        }
-        QueryResult::Scalar { result } => {
-            // Convert scalar to single-sample matrix
-            Ok(vec![MatrixSample {
-                metric: HashMap::new(),
-                values: vec![*result],
-            }])
-        }
-        QueryResult::HistogramHeatmap { .. } => {
-            // Histogram heatmap data cannot be converted to matrix samples
-            Err(
-                "Histogram heatmap data is not suitable for correlation analysis. \
-                Use histogram_quantiles() instead."
-                    .into(),
-            )
-        }
+/// Calculate cross-correlation between two SQL queries. Each must
+/// project `t DOUBLE, v <numeric>, labels...`. Empty inputs or queries
+/// that produce no rows return a "no data" error.
+pub fn calculate_correlation_sql(
+    backend: &metriken_query::DuckDbBackend,
+    capture: &crate::viewer::sql_capture::SqlCapture,
+    sql1: &str,
+    sql2: &str,
+) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
+    use dashboard::DashboardData;
+
+    let path_str = capture.parquet_path().to_string_lossy().to_string();
+    let step = capture.interval();
+
+    let batches1 = backend.run_sql(sql1, &path_str)?;
+    let batches2 = backend.run_sql(sql2, &path_str)?;
+
+    let samples1 = crate::mcp::backend::batches_to_series(&batches1);
+    let samples2 = crate::mcp::backend::batches_to_series(&batches2);
+
+    if samples1.is_empty() || samples2.is_empty() {
+        return Err("No data returned from queries".into());
     }
+
+    correlate_samples(samples1, samples2, sql1, sql2, step)
+}
+
+/// Cross-correlate two sets of `Series` (one per SQL input) across
+/// the fixed `TIME_LAGS` grid and return the best lag/correlation.
+fn correlate_samples(
+    samples1: Vec<Series>,
+    samples2: Vec<Series>,
+    expr1: &str,
+    expr2: &str,
+    step: f64,
+) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
+    let series_results: Vec<_> = samples1
+        .par_iter()
+        .flat_map(|s1| {
+            samples2.par_iter().filter_map(move |s2| {
+                calculate_series_cross_correlation(s1, s2, step).map(|corr| {
+                    (
+                        SeriesCorrelation {
+                            labels1: s1.labels.clone(),
+                            labels2: s2.labels.clone(),
+                            max_correlation: corr.max_correlation,
+                            optimal_lag: corr.optimal_lag,
+                            sample_count: corr.sample_count,
+                        },
+                        (corr.max_correlation, corr.optimal_lag, corr.sample_count),
+                    )
+                })
+            })
+        })
+        .collect();
+
+    let mut series_pairs: Vec<SeriesCorrelation> = Vec::new();
+    let mut all_correlations: Vec<(f64, i64, usize)> = Vec::new();
+    for (series_corr, corr_tuple) in series_results {
+        series_pairs.push(series_corr);
+        all_correlations.push(corr_tuple);
+    }
+    if all_correlations.is_empty() {
+        return Err("No valid correlations found (insufficient overlapping data)".into());
+    }
+    let (max_correlation, optimal_lag, total_samples) = if all_correlations.len() == 1 {
+        all_correlations[0]
+    } else {
+        all_correlations
+            .iter()
+            .max_by(|a, b| {
+                a.0.abs()
+                    .partial_cmp(&b.0.abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .cloned()
+            .unwrap_or((0.0, 0, 0))
+    };
+
+    let correlations_at_lag = if samples1.len() == 1 && samples2.len() == 1 {
+        calculate_lag_correlations(&samples1[0], &samples2[0], step)
+    } else {
+        vec![]
+    };
+
+    series_pairs.sort_by(|a, b| {
+        b.max_correlation
+            .abs()
+            .partial_cmp(&a.max_correlation.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    Ok(CorrelationResult {
+        metric1: expr1.to_string(),
+        metric2: expr2.to_string(),
+        metric1_name: Some(expr1.to_string()),
+        metric2_name: Some(expr2.to_string()),
+        max_correlation,
+        optimal_lag,
+        sample_count: total_samples,
+        correlations_at_lag,
+        series_pairs,
+    })
 }
 
 /// Format correlation result for display
@@ -500,6 +460,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         interpret_correlation(result.max_correlation)
     ));
 
+    // Show correlation at different lags if available
     if !result.correlations_at_lag.is_empty() {
         output.push_str("\nCorrelation at different lags:\n");
         for lag_corr in &result.correlations_at_lag {
@@ -556,6 +517,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
             // Format labels compactly with deterministic ordering
             let format_labels = |labels: &HashMap<String, String>| -> String {
+                // Get the metric name first
                 let metric_name = labels
                     .get("metric")
                     .or_else(|| labels.get("__name__"))
@@ -566,11 +528,12 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
                 let mut label_parts = Vec::new();
 
-                // 'id' goes first if present
+                // First add 'id' if present
                 if let Some(id_value) = labels.get("id") {
                     label_parts.push(format!("id=\"{id_value}\""));
                 }
 
+                // Collect and sort remaining labels alphabetically
                 let mut remaining_labels: Vec<(String, String)> = labels
                     .iter()
                     .filter(|(k, _)| k.as_str() != "id" && !omit_labels.contains(&k.as_str()))
@@ -578,6 +541,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
                     .collect();
                 remaining_labels.sort_by(|a, b| a.0.cmp(&b.0));
 
+                // Add sorted labels with proper quoting for PromQL
                 for (k, v) in remaining_labels {
                     label_parts.push(format!("{k}=\"{v}\""));
                 }
@@ -622,6 +586,7 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
         }
     }
 
+    // Add interpretation note about the methodology
     output.push_str(
         "\nNote: Data has been detrended and normalized to detect non-linear relationships.\n",
     );

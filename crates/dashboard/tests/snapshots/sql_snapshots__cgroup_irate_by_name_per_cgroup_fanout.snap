@@ -1,0 +1,45 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 121
+expression: "sql::cgroup_irate_by_name(\"cgroup_cpu_usage\", CgroupSide::Individual, None,)"
+---
+WITH unp AS (
+              -- The SQL-standard `UNPIVOT … (v FOR col IN …)` form is
+              -- the one that accepts the `INCLUDE NULLS` modifier in
+              -- DuckDB's grammar; the friendlier `UNPIVOT t ON … INTO
+              -- NAME col VALUE v` form does not, as of duckdb 1.5.
+              SELECT * FROM (SELECT timestamp, COLUMNS('^cgroup_cpu_usage(/[^:]+)?$') FROM _src)
+                  UNPIVOT INCLUDE NULLS
+                  (v FOR col IN (COLUMNS('^cgroup_cpu_usage(/[^:]+)?$')))
+           ),
+           joined AS (
+              SELECT u.timestamp, idx.name, u.col, u.v
+              FROM unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_usage'
+              WHERE idx.name IN __SELECTED_CGROUPS__
+           ),
+           rates AS (
+              SELECT timestamp, name, col,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate
+              FROM joined
+           ),
+           carried AS (
+              SELECT timestamp, name,
+                     COALESCE(
+                         rate,
+                         LAST_VALUE(rate IGNORE NULLS) OVER (
+                             PARTITION BY col
+                             ORDER BY timestamp
+                             RANGE BETWEEN 300000000000 PRECEDING AND CURRENT ROW
+                         )
+                     ) AS rate
+              FROM rates
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, name, SUM(rate) AS v
+           FROM carried
+           WHERE rate IS NOT NULL
+           GROUP BY timestamp, name

@@ -1,6 +1,10 @@
 // WASM API adapter for site/viewer frontend.
 // Mirrors the server viewer's transport layer; queries run via WASM.
 
+// Tells data.js which of plot.{sql_query, promql_query} to prefer when
+// both are present. Static viewer drives duckdb-wasm — pure SQL.
+const BACKEND = 'sql';
+
 let registry = null;
 
 const ensureRegistry = () => {
@@ -25,26 +29,26 @@ const ViewerApi = {
 
     async attachBaseline(data, filename) {
         ensureRegistry();
-        registry.attach('baseline', data, filename);
+        await registry.attach('baseline', data, filename);
     },
 
     async attachExperiment(file) {
         ensureRegistry();
         const data = new Uint8Array(await file.arrayBuffer());
-        registry.attach('experiment', data, file.name || 'experiment.parquet');
+        await registry.attach('experiment', data, file.name || 'experiment.parquet');
     },
 
     // Attach an experiment capture from raw bytes (no File wrapper). Used
     // by the demo URL flow to feed pre-fetched parquet buffers into the
-    // WASM registry.
+    // duckdb registry.
     async attachExperimentBytes(bytes, filename) {
         ensureRegistry();
-        registry.attach('experiment', bytes, filename || 'experiment.parquet');
+        await registry.attach('experiment', bytes, filename || 'experiment.parquet');
     },
 
     async detachExperiment() {
         ensureRegistry();
-        registry.detach('experiment');
+        await registry.detach('experiment');
     },
 
     async getMetadata(captureId = 'baseline') {
@@ -89,7 +93,10 @@ const ViewerApi = {
 
     async queryRange(query, start, end, step, captureId = 'baseline') {
         ensureAttached(captureId);
-        return JSON.parse(registry.query_range(captureId, query, start, end, step));
+        // CaptureRegistry.query_range is async (Worker round-trip); the
+        // legacy synchronous WasmCaptureRegistry returned a JSON string
+        // directly. Await the Promise before parsing.
+        return JSON.parse(await registry.query_range(captureId, query, start, end, step));
     },
 
     async getInfo(captureId = 'baseline') {
@@ -102,6 +109,21 @@ const ViewerApi = {
         registry.init_templates(captureId, templatesJson);
     },
 
+    // Update the selected-cgroup names for a capture. viewer-sql
+    // substitutes `__SELECTED_CGROUPS__` server-side from this state;
+    // SQL plots that reference the placeholder pick up the new
+    // selection on their next fetch (cache key includes selection).
+    setSelectedCgroups(names, captureId = 'baseline') {
+        ensureAttached(captureId);
+        registry.setSelectedCgroups(captureId, names);
+    },
+
+    // Currently-selected cgroups for a capture. Returns a defensive copy.
+    getSelectedCgroups(captureId = 'baseline') {
+        if (!registry?.has(captureId)) return [];
+        return registry.selectedCgroups(captureId);
+    },
+
     regenerateCombined(templatesJson, categoryName) {
         ensureRegistry();
         registry.regenerate_combined(
@@ -109,6 +131,8 @@ const ViewerApi = {
             categoryName ?? undefined,
         );
     },
+
+    backend() { return BACKEND; },
 
     // Mirror of the server's POST /api/v1/save_with_selection. The
     // WASM registry projects the source bytes locally and returns

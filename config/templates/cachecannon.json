@@ -6,108 +6,111 @@
     {
       "role": "load",
       "title": "Target Rate",
-      "query": "target_rate{source=\"cachecannon\"}",
       "type": "gauge",
       "unit_system": "count",
       "subgroup": "Target Rate",
-      "full_width": true
+      "full_width": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, CAST(\"target_rate\" AS DOUBLE) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Request Rate",
-      "query": "sum(irate(requests_sent{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"requests_sent\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Response Rate",
-      "query": "sum(irate(responses_received{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
       "unit_system": "rate",
-      "denominator": true
+      "denominator": true,
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"responses_received\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Bytes Received Rate",
-      "query": "sum(irate(bytes_rx{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"bytes_rx\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "throughput",
       "title": "Bytes Sent Rate",
-      "query": "sum(irate(bytes_tx{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "datarate"
+      "unit_system": "datarate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"bytes_tx\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "latency",
       "title": "Response Latency",
-      "query": "response_latency{source=\"cachecannon\"}",
       "type": "histogram",
       "subtype": "percentiles",
       "unit_system": "time",
       "subgroup": "Response Latency",
-      "full_width": true
+      "full_width": true,
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"response_latency:buckets\",\n                  LAG(\"response_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "response_latency"
     },
     {
       "role": "latency",
       "title": "GET Latency",
-      "query": "get_latency{source=\"cachecannon\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"get_latency:buckets\",\n                  LAG(\"get_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "get_latency"
     },
     {
       "role": "latency",
       "title": "SET Latency",
-      "query": "set_latency{source=\"cachecannon\"}",
       "type": "histogram",
       "subtype": "percentiles",
-      "unit_system": "time"
+      "unit_system": "time",
+      "sql": "WITH d AS (\n  SELECT timestamp,\n         h2_delta(\"set_latency:buckets\",\n                  LAG(\"set_latency:buckets\") OVER (ORDER BY timestamp)) AS d\n  FROM {{view}}\n)\nSELECT timestamp::DOUBLE/1e9 AS t,\n       q::VARCHAR AS quantile,\n       h2_quantile(d, q, {{p}})::DOUBLE AS v\nFROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)\nWHERE d IS NOT NULL",
+      "metric": "set_latency"
     },
     {
       "role": "error",
       "title": "Request Error Rate",
-      "query": "sum(irate(request_errors{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"request_errors\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "error",
       "title": "Connection Failure Rate",
-      "query": "sum(irate(connections_failed{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"connections_failed\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "custom",
       "title": "Cache Hit Rate",
-      "query": "sum(irate(cache_hits{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"cache_hits\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "custom",
       "title": "Cache Miss Rate",
-      "query": "sum(irate(cache_misses{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"cache_misses\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "custom",
       "title": "GET Rate",
-      "query": "sum(irate(get_count{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"get_count\", timestamp) AS v FROM {{view}} ORDER BY t"
     },
     {
       "role": "custom",
       "title": "SET Rate",
-      "query": "sum(irate(set_count{source=\"cachecannon\"}[5s]))",
       "type": "delta_counter",
-      "unit_system": "rate"
+      "unit_system": "rate",
+      "sql": "SELECT CAST(timestamp / 1e9 AS DOUBLE) AS t, irate_1s(\"set_count\", timestamp) AS v FROM {{view}} ORDER BY t"
     }
   ]
 }

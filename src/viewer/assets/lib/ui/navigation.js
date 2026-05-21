@@ -15,6 +15,9 @@ const buildTopNavAttrs = ({
     selectedNode = null,
     nodeVersions = {},
     onNodeChange,
+    sourceList = [],
+    selectedSource = null,
+    onSourceChange,
     extra = {},
 }) => ({
     sectionRoute,
@@ -39,6 +42,9 @@ const buildTopNavAttrs = ({
     selectedNode,
     nodeVersions,
     onNodeChange,
+    sourceList,
+    selectedSource,
+    onSourceChange,
     ...extra,
 });
 
@@ -48,6 +54,7 @@ const createMainComponent = ({
     SaveModal,
     SectionContent,
     sectionResponseCache,
+    getSectionStatusMap,
     getHasSystemInfo,
     getHasFileMetadata,
     getCompareBadgeAttrs,
@@ -80,6 +87,9 @@ const createMainComponent = ({
                     activeSection,
                     sections,
                     sectionResponseCache,
+                    sectionStatus: typeof getSectionStatusMap === 'function'
+                        ? getSectionStatusMap()
+                        : {},
                     compareMode,
                     hasSystemInfo: !!getHasSystemInfo(),
                     hasFileMetadata: !!(getHasFileMetadata && getHasFileMetadata()),

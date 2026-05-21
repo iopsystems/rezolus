@@ -115,8 +115,8 @@ Open a Parquet artifact in a web-based dashboard:
 
 The same dashboard is also available as a browser-only static site under
 [`site/viewer/`](site/viewer/), powered by the
-[`crates/viewer`](crates/viewer) WASM module. It runs the PromQL query engine
-client-side, so parquet files never leave the browser.
+[`crates/viewer-sql`](crates/viewer-sql) WASM module. It runs DuckDB
+client-side via `duckdb-wasm`, so parquet files never leave the browser.
 
 ### Parquet Tools
 
@@ -359,16 +359,16 @@ target/release/rezolus parquet metadata -i rezolus.parquet
 target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
 ```
 
-To rebuild the browser-only static viewer (`site/viewer/`) that ships the
-PromQL engine as WebAssembly, install
-[wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) (0.13+) and run:
+To rebuild the browser-only static viewer (`site/viewer/`) that ships
+`duckdb-wasm` as the in-browser query engine, install
+[wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) (0.14+) and run:
 
 ```bash
-./crates/viewer/build.sh
+./crates/viewer-sql/build.sh
 ```
 
-The artifacts land in `site/viewer/pkg/`. See
-[`crates/viewer/README.md`](crates/viewer/README.md) for details.
+The artifacts land in `site/viewer-sql/pkg/` and are imported by the
+frontend as `../viewer-sql/pkg/wasm_viewer_sql.js`.
 
 ## Contributing
 

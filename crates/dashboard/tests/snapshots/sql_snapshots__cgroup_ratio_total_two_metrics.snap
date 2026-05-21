@@ -1,0 +1,29 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::cgroup_ratio_total(\"cgroup_cpu_instructions\", \"cgroup_cpu_cycles\",\nCgroupSide::Aggregate,)"
+---
+WITH n_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cgroup_cpu_instructions(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cgroup_cpu_instructions(/[^:]+)?$') INTO NAME col VALUE v
+           ),
+           d_unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cgroup_cpu_cycles(/[^:]+)?$') FROM _src)
+                  ON COLUMNS('^cgroup_cpu_cycles(/[^:]+)?$') INTO NAME col VALUE v
+           ),
+           n_join AS (
+              SELECT u.timestamp, u.v FROM n_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_instructions'
+              WHERE COALESCE(idx.name, '') NOT IN __SELECTED_CGROUPS__
+           ),
+           d_join AS (
+              SELECT u.timestamp, u.v FROM d_unp u JOIN _cgroup_index idx
+                  ON idx.column_name = u.col AND idx.metric = 'cgroup_cpu_cycles'
+              WHERE COALESCE(idx.name, '') NOT IN __SELECTED_CGROUPS__
+           ),
+           n_agg AS (SELECT timestamp, SUM(v) AS s FROM n_join GROUP BY timestamp),
+           d_agg AS (SELECT timestamp, SUM(v) AS s FROM d_join GROUP BY timestamp),
+           n_rate AS (SELECT timestamp, irate_1s(s, timestamp) AS r FROM n_agg),
+           d_rate AS (SELECT timestamp, irate_1s(s, timestamp) AS r FROM d_agg)
+           SELECT n.timestamp::DOUBLE/1e9 AS t,
+                  n.r / NULLIF(d.r, 0) AS v
+           FROM n_rate n JOIN d_rate d USING(timestamp)

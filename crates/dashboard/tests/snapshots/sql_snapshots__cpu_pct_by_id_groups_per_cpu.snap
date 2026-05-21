@@ -1,0 +1,24 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+expression: "sql::cpu_pct_by_id(\"^cpu_usage/[a-z]+/[0-9]+$\", \"/([0-9]+)$\",)"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^cpu_usage/[a-z]+/[0-9]+$') FROM _src)
+                  ON COLUMNS('^cpu_usage/[a-z]+/[0-9]+$')
+                  INTO NAME col VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     regexp_extract(col, '/([0-9]+)$', 1) AS id,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY col ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY col ORDER BY timestamp)
+                     ) AS rate_ns
+              FROM unp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  id,
+                  SUM(rate_ns) / 1e9 AS v
+           FROM rates
+           GROUP BY timestamp, id

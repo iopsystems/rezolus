@@ -1,0 +1,22 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 185
+expression: "sql::unpivot_columns_sql(\"^vllm_request_success_total/(stop|length)$\",\n\"finished_reason\",)"
+---
+WITH unp AS (
+              UNPIVOT (SELECT timestamp, COLUMNS('^vllm_request_success_total/(stop|length)$') FROM {{view}})
+                  ON COLUMNS('^vllm_request_success_total/(stop|length)$')
+                  INTO NAME finished_reason VALUE v
+           ),
+           rates AS (
+              SELECT timestamp,
+                     irate_lag(
+                         v,
+                         LAG(v) OVER (PARTITION BY finished_reason ORDER BY timestamp),
+                         timestamp - LAG(timestamp) OVER (PARTITION BY finished_reason ORDER BY timestamp)
+                     ) AS rate
+              FROM unp
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t, SUM(rate) AS v
+           FROM rates
+           GROUP BY timestamp

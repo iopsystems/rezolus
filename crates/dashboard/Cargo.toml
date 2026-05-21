@@ -8,7 +8,6 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
-metriken-query.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
@@ -17,3 +16,11 @@ include_dir.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+insta = "1"
+# In-memory DuckDB for behavioural tests that run the emitted SQL
+# against a fabricated `_src` + `_cgroup_index`. Match the version
+# `metriken-query` already builds with so the bundled native lib
+# is shared, and pull metriken-query in so `register_all` wires
+# up the same `irate_lag` UDF the production backend uses.
+duckdb = { version = "1.1.1", features = ["bundled"] }
+metriken-query.workspace = true

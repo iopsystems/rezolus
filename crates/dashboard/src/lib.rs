@@ -1,10 +1,13 @@
 pub mod dashboard;
+mod data;
 pub mod events;
 mod plot;
 mod service_extension;
+pub mod sql;
 
+pub use dashboard::service::{substitute_view, substitute_view_and_p};
+pub use data::{DashboardData, EmptyDashboardData};
 pub use events::{Event, Events};
-pub use metriken_query::Tsdb;
 pub use plot::*;
 pub use service_extension::{CategoryExtension, Kpi, ServiceExtension, TemplateRegistry};
 

@@ -5,17 +5,21 @@
 //!
 //! Without arguments, prints all section JSON to stdout.
 //! With a directory argument, writes each section as a pretty-printed JSON file.
+//!
+//! The generators only consume the `DashboardData` trait — they don't
+//! need real data, just metadata about source / interval / metric names.
+//! `EmptyDashboardData` reports the empty-recording case (zero metrics,
+//! undefined time range), which exercises every section's "no data"
+//! fallback while keeping the dump deterministic.
 
-use dashboard::Tsdb;
+use dashboard::EmptyDashboardData;
 use dashboard::dashboard::{build_dashboard_context, generate_section};
 use std::collections::HashMap;
 
 fn main() {
     let output_dir = std::env::args().nth(1);
 
-    // Render every section in the navigation list. The lazy API replaces
-    // the old eager `generate` shim — same coverage, just hand-walked.
-    let data = Tsdb::default();
+    let data = EmptyDashboardData;
     let ctx = build_dashboard_context(None, &[], None);
     let mut rendered: HashMap<String, String> = HashMap::new();
     for section in &ctx.sections {

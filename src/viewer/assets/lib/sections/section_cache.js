@@ -1,6 +1,13 @@
 const createSectionCacheState = () => ({
     responses: {},
     sections: [],
+    // Per-section summary `{ total, withData }` kept alive across
+    // response-cache evictions. The response cache itself is capped
+    // (defaults to 3 entries) so a long session evicts older section
+    // bodies; this map only stores two integers per section, so it
+    // can persist for the life of the viewer and feed the sidebar's
+    // "gray out empty sections" affordance.
+    sectionStatus: {},
 });
 
 const getSections = (state) => state.sections || [];
@@ -57,6 +64,21 @@ const withSharedSections = (state, data) => {
     };
 };
 
+/// Update the persistent per-section status entry. Call this from
+/// `processDashboardData` after plot stripping so `total` reflects
+/// the *renderable* plot count — same number the sidebar shows in
+/// `(N)` and what `total === 0` means for "gray me out". `withData`
+/// is the count of plots with non-empty time-series data; kept for
+/// possible future affordances (e.g. distinguishing "no data yet,
+/// poll again" from "no plots at all").
+const recordSectionStatus = (state, key, status) => {
+    if (!state.sectionStatus) state.sectionStatus = {};
+    state.sectionStatus[key] = status;
+};
+
+const getSectionStatus = (state, key) =>
+    (state.sectionStatus || {})[key] || null;
+
 const clearSectionResponses = (state) => {
     Object.keys(state.responses).forEach((key) => delete state.responses[key]);
 };
@@ -85,4 +107,6 @@ export {
     resetSectionCacheState,
     setSectionCacheLimit,
     pinSectionKey,
+    recordSectionStatus,
+    getSectionStatus,
 };

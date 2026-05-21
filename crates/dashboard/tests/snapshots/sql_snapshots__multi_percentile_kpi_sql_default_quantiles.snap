@@ -1,0 +1,16 @@
+---
+source: crates/dashboard/tests/sql_snapshots.rs
+assertion_line: 177
+expression: "sql::multi_percentile_kpi_sql(\"response_latency\",\n&[0.5, 0.9, 0.99, 0.999, 0.9999],)"
+---
+WITH d AS (
+              SELECT timestamp,
+                     h2_delta("response_latency:buckets",
+                              LAG("response_latency:buckets") OVER (ORDER BY timestamp)) AS d
+              FROM {{view}}
+           )
+           SELECT timestamp::DOUBLE/1e9 AS t,
+                  q::VARCHAR AS quantile,
+                  h2_quantile(d, q, {{p}})::DOUBLE AS v
+           FROM d, (VALUES (0.5), (0.9), (0.99), (0.999), (0.9999)) qs(q)
+           WHERE d IS NOT NULL
