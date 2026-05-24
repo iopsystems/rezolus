@@ -183,7 +183,7 @@ for path in / /about /lib/style.css; do
 done
 
 echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
-selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection.js")
+selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection/selection.js")
 echo "$selection_js" | grep -q "notebookStore" \
     || fail "selection.js missing notebookStore identifier" "" "notebookStore present" "$LOGDIR/file.log"
 echo "$selection_js" | grep -q "loadedSelectionStore" \
