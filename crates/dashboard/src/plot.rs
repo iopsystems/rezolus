@@ -316,7 +316,7 @@ impl SubGroup {
         let rate_query = match rate {
             RateSource::Counter(q) => q,
             RateSource::FromHistogram => {
-                format!("sum(irate(histogram_count({selector})[5m]))")
+                format!("sum(histogram_irate({selector}))")
             }
         };
         self.plot_promql(
@@ -784,7 +784,7 @@ mod tests {
         assert_eq!(plots.len(), 2);
         assert_eq!(
             plots[0]["promql_query"],
-            "sum(irate(histogram_count(scheduler_runqueue_latency)[5m]))"
+            "sum(histogram_irate(scheduler_runqueue_latency))"
         );
         assert_eq!(
             plots[1]["promql_query"],

@@ -81,7 +81,7 @@ mod tests {
     fn tcp_packet_latency_gets_from_histogram_rate_mean() {
         let view = generate(&Tsdb::default(), vec![]);
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
-        assert!(json.contains("sum(irate(histogram_count(tcp_packet_latency)[5m]))"));
+        assert!(json.contains("sum(histogram_irate(tcp_packet_latency))"));
         assert!(json.contains("histogram_mean(tcp_packet_latency)\""));
         // percentile plot still present
         assert!(json.contains("\"tcp_packet_latency\""));

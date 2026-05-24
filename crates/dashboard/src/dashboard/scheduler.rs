@@ -121,14 +121,14 @@ mod tests {
     fn scheduler_histograms_get_from_histogram_rate_mean() {
         let view = generate(&Tsdb::default(), vec![]);
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
-        assert!(json.contains("sum(irate(histogram_count(scheduler_runqueue_latency)[5m]))"));
+        assert!(json.contains("sum(histogram_irate(scheduler_runqueue_latency))"));
         assert!(json.contains("histogram_mean(scheduler_runqueue_latency)\""));
-        assert!(json.contains("sum(irate(histogram_count(scheduler_offcpu)[5m]))"));
+        assert!(json.contains("sum(histogram_irate(scheduler_offcpu))"));
         assert!(json.contains("histogram_mean(scheduler_offcpu)\""));
-        assert!(json.contains("sum(irate(histogram_count(scheduler_running)[5m]))"));
+        assert!(json.contains("sum(histogram_irate(scheduler_running))"));
         assert!(json.contains("histogram_mean(scheduler_running)\""));
         // runqueue_wait must NOT become a rate source.
-        assert!(!json.contains("histogram_count(scheduler_runqueue_wait"));
+        assert!(!json.contains("histogram_irate(scheduler_runqueue_wait"));
         // percentile histograms still present
         assert!(json.contains("scheduler_runqueue_latency"));
         assert!(json.contains("scheduler_offcpu"));
