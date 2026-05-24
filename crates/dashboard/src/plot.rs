@@ -309,9 +309,9 @@ impl SubGroup {
             Unit::Bytes => "bytes",
             // This helper is only used for latency/size means; guard
             // anything else loudly rather than mis-format silently.
-            other => panic!(
-                "histogram_rate_mean: unsupported mean unit {other:?}; only Time/Bytes"
-            ),
+            other => {
+                panic!("histogram_rate_mean: unsupported mean unit {other:?}; only Time/Bytes")
+            }
         };
         let rate_query = match rate {
             RateSource::Counter(q) => q,
