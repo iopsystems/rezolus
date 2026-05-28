@@ -20,19 +20,7 @@ pub fn unique_label_count(labels: &[BTreeMap<String, String>], key: &str) -> usi
 /// in `data`, looking across counter/gauge/histogram collections.
 /// Returns 0 if the metric is unknown.
 pub fn metric_unique_label_count(data: &dyn MetricsSource, metric: &str, key: &str) -> usize {
-    let gauge = data.gauge_labels(metric);
-    if !gauge.is_empty() {
-        return unique_label_count(&gauge, key);
-    }
-    let counter = data.counter_labels(metric);
-    if !counter.is_empty() {
-        return unique_label_count(&counter, key);
-    }
-    let histogram = data.histogram_labels(metric);
-    if !histogram.is_empty() {
-        return unique_label_count(&histogram, key);
-    }
-    0
+    data.label_values(metric, key).len()
 }
 
 #[derive(Default, Serialize)]

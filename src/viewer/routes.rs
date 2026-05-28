@@ -154,9 +154,8 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
 
     let value = {
         let data = state.baseline_data();
-        let filename = state.captures.filename(CaptureId::Baseline);
         let mut store = state.sections.write();
-        store.get_or_generate(&route, data.as_ref(), filename).cloned()
+        store.get_or_generate(&route, data.as_ref()).cloned()
     };
 
     let Some(mut value) = value else {

@@ -57,13 +57,12 @@ impl LazySectionStore {
         &mut self,
         route: &str,
         data: &dyn MetricsSource,
-        filename: String,
     ) -> Option<&serde_json::Value> {
         let key = format!("{}.json", &route[1..]);
         if !self.cached_bodies.contains_key(&key) {
             let mut view =
                 dashboard::dashboard::generate_section(data, route, &self.context)?;
-            view.set_filename(filename);
+            view.set_filename(data.filename().unwrap_or_default());
             if let Some(size) = self.context.filesize {
                 view.set_filesize(size);
             }
@@ -123,13 +122,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(
-        data: Arc<dyn MetricsSource + Send + Sync>,
-        filename: String,
+        data: Arc<dyn MetricsSource>,
         templates: TemplateRegistry,
     ) -> Self {
         Self {
             sections: Default::default(),
-            captures: Arc::new(CaptureRegistry::new(data, filename, None, None, None)),
+            captures: Arc::new(CaptureRegistry::new(data, None, None, None)),
             templates,
             snapshots: Arc::new(Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
@@ -162,19 +160,16 @@ impl AppState {
     }
 
     /// Shorthand for the baseline data store (clones the Arc).
-    pub fn baseline_data(&self) -> Arc<dyn MetricsSource + Send + Sync> {
+    pub fn baseline_data(&self) -> Arc<dyn MetricsSource> {
         self.captures
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
     }
 
     /// Replace the baseline data store (used by upload/connect handlers).
-    pub fn replace_baseline(
-        &self,
-        data: Arc<dyn MetricsSource + Send + Sync>,
-        filename: String,
-    ) {
-        self.captures.set_baseline_data(data, filename);
+    /// The display filename is carried on the data source itself.
+    pub fn replace_baseline(&self, data: Arc<dyn MetricsSource>) {
+        self.captures.set_baseline_data(data);
     }
 
     pub fn combined_ab(&self) -> bool {
@@ -200,7 +195,7 @@ impl AppState {
         let interval = data.interval();
         let source = data.source();
         let version = data.version();
-        let filename = self.captures.filename(CaptureId::Baseline);
+        let filename = data.filename().unwrap_or_default();
         // time_range is now in seconds; convert to milliseconds for the UI.
         let (start_time, end_time) = data
             .time_range()
@@ -339,15 +334,15 @@ mod report_marker_tests {
 
     #[test]
     fn default_is_not_a_trimmed_report() {
-        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource + Send + Sync>;
-        let state = AppState::new(store, String::new(), TemplateRegistry::empty());
+        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource>;
+        let state = AppState::new(store, TemplateRegistry::empty());
         assert!(!state.is_trimmed_report());
     }
 
     #[test]
     fn setting_marker_flips_predicate() {
-        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource + Send + Sync>;
-        let state = AppState::new(store, String::new(), TemplateRegistry::empty());
+        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource>;
+        let state = AppState::new(store, TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         assert!(state.is_trimmed_report());
     }

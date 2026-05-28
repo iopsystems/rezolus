@@ -441,8 +441,8 @@ mod report_mode_tests {
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
-        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource + Send + Sync>;
-        let state = AppState::new(store, String::new(), TemplateRegistry::empty());
+        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource>;
+        let state = AppState::new(store, TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);
         let sections = state.sections.read();

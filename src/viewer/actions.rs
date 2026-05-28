@@ -77,7 +77,7 @@ pub async fn ingest_loop(
 
         debug!("sampling latency: {} us", start.elapsed().as_micros());
 
-        let mut snapshot: metriken_exposition::Snapshot = match rmp_serde::from_slice(&body) {
+        let snapshot: metriken_exposition::Snapshot = match rmp_serde::from_slice(&body) {
             Ok(s) => s,
             Err(e) => {
                 warn!("failed to deserialize snapshot: {e}");
@@ -85,7 +85,7 @@ pub async fn ingest_loop(
             }
         };
 
-        store.ingest_snapshot(&mut snapshot);
+        store.ingest_snapshot(snapshot);
         sample_count += 1;
 
         snapshots.lock().push_back(body.to_vec());
@@ -244,14 +244,14 @@ pub fn ingest_baseline_from_path(
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let reader = match ParquetReader::open(&temp_path) {
-        Ok(r) => r,
+        Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return ApiResponse::err(format!("failed to load parquet: {e}"), "invalid_parquet");
         }
     };
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
-    let reader_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(reader);
+    let reader_arc: Arc<dyn MetricsSource> = Arc::new(reader);
 
     // Mirror the regenerate_dashboards short-circuit: a trimmed report
     // gets an empty section list so /api/v1/sections is consistent with
@@ -271,7 +271,8 @@ pub fn ingest_baseline_from_path(
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    state.replace_baseline(reader_arc, filename.clone());
+    let display_filename = reader_arc.filename().unwrap_or_default();
+    state.replace_baseline(reader_arc);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
@@ -283,7 +284,7 @@ pub fn ingest_baseline_from_path(
     *state.file_checksum.write() = file_checksum;
     state.captures.set_baseline_file_metadata(file_meta);
 
-    ApiResponse::ok(serde_json::json!({ "filename": filename }))
+    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
 }
 
 pub fn baseline_temp_path() -> PathBuf {
@@ -333,7 +334,7 @@ pub async fn attach_experiment(
     }
 
     let exp_reader = match ParquetReader::open(&temp_path) {
-        Ok(r) => r,
+        Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return (
@@ -349,8 +350,7 @@ pub async fn attach_experiment(
     // parameter is here so a future `x-rezolus-alias` header can thread
     // one through without further signature changes.
     state.captures.attach_experiment(
-        Arc::new(exp_reader) as Arc<dyn MetricsSource + Send + Sync>,
-        filename,
+        Arc::new(exp_reader) as Arc<dyn MetricsSource>,
         sysinfo.clone(),
         file_meta,
         None,
@@ -420,11 +420,12 @@ pub async fn connect_agent(
         .source(info.source.clone())
         .version(info.version.clone())
         .sampling_interval_ms(1000)
+        .filename(url.to_string())
         .build();
-    let new_store_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(new_store.clone());
+    let new_store_arc: Arc<dyn MetricsSource> = Arc::new(new_store.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
-    state.replace_baseline(new_store_arc, url.to_string());
+    state.replace_baseline(new_store_arc);
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(info.sysinfo);
     state.live.store(true, Ordering::Relaxed);
@@ -465,15 +466,16 @@ pub async fn reset_tsdb(
     let data = state.baseline_data();
     let source = data.source();
     let version = data.version();
-    let filename = state.captures.filename(CaptureId::Baseline);
+    let filename = data.filename().unwrap_or_default();
 
     let new_store = MemoryStore::builder()
         .source(source)
         .version(version)
         .sampling_interval_ms(1000)
+        .filename(filename)
         .build();
-    let new_store_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(new_store);
-    state.replace_baseline(new_store_arc, filename);
+    let new_store_arc: Arc<dyn MetricsSource> = Arc::new(new_store);
+    state.replace_baseline(new_store_arc);
 
     state.snapshots.lock().clear();
     info!("TSDB reset by user");

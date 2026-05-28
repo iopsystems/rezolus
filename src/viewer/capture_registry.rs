@@ -33,9 +33,9 @@ impl CaptureId {
 
 pub struct CaptureSlot {
     /// The data source behind a RwLock so it can be replaced on upload.
-    pub data: RwLock<Arc<dyn MetricsSource + Send + Sync>>,
-    /// Filename is tracked separately since it's no longer on the reader.
-    pub filename: RwLock<String>,
+    /// The display filename is stored on the data source itself via
+    /// `MetricsSource::filename()` — no separate field needed.
+    pub data: RwLock<Arc<dyn MetricsSource>>,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
     /// Optional display alias for this capture (e.g. "redis", "valkey").
@@ -50,8 +50,7 @@ pub struct CaptureRegistry {
 
 impl CaptureRegistry {
     pub fn new(
-        baseline_data: Arc<dyn MetricsSource + Send + Sync>,
-        baseline_filename: String,
+        baseline_data: Arc<dyn MetricsSource>,
         baseline_systeminfo: Option<String>,
         baseline_file_metadata: Option<String>,
         baseline_alias: Option<String>,
@@ -59,7 +58,6 @@ impl CaptureRegistry {
         Self {
             baseline: CaptureSlot {
                 data: RwLock::new(baseline_data),
-                filename: RwLock::new(baseline_filename),
                 systeminfo: RwLock::new(baseline_systeminfo),
                 file_metadata: RwLock::new(baseline_file_metadata),
                 alias: RwLock::new(baseline_alias),
@@ -68,7 +66,7 @@ impl CaptureRegistry {
         }
     }
 
-    pub fn get(&self, id: CaptureId) -> Option<Arc<dyn MetricsSource + Send + Sync>> {
+    pub fn get(&self, id: CaptureId) -> Option<Arc<dyn MetricsSource>> {
         match id {
             CaptureId::Baseline => Some(self.baseline.data.read().clone()),
             CaptureId::Experiment => self
@@ -79,20 +77,24 @@ impl CaptureRegistry {
         }
     }
 
+    /// Returns the display filename for the given capture.
+    /// Reads it from the data source's `filename()` method — no separate
+    /// storage needed since the reader/store carries the name.
     pub fn filename(&self, id: CaptureId) -> String {
         match id {
-            CaptureId::Baseline => self.baseline.filename.read().clone(),
+            CaptureId::Baseline => self
+                .baseline
+                .data
+                .read()
+                .filename()
+                .unwrap_or_default(),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .map(|slot| slot.filename.read().clone())
+                .and_then(|slot| slot.data.read().filename())
                 .unwrap_or_default(),
         }
-    }
-
-    pub fn set_baseline_filename(&self, filename: String) {
-        *self.baseline.filename.write() = filename;
     }
 
     pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
@@ -146,27 +148,21 @@ impl CaptureRegistry {
         *self.baseline.file_metadata.write() = file_metadata;
     }
 
-    /// Replace the baseline data store and filename.
-    pub fn set_baseline_data(
-        &self,
-        data: Arc<dyn MetricsSource + Send + Sync>,
-        filename: String,
-    ) {
+    /// Replace the baseline data store. The display filename is carried on
+    /// the data source itself via `MetricsSource::filename()`.
+    pub fn set_baseline_data(&self, data: Arc<dyn MetricsSource>) {
         *self.baseline.data.write() = data;
-        *self.baseline.filename.write() = filename;
     }
 
     pub fn attach_experiment(
         &self,
-        data: Arc<dyn MetricsSource + Send + Sync>,
-        filename: String,
+        data: Arc<dyn MetricsSource>,
         systeminfo: Option<String>,
         file_metadata: Option<String>,
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
             data: RwLock::new(data),
-            filename: RwLock::new(filename),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),

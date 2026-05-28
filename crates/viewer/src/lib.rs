@@ -78,8 +78,6 @@ fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::A
 #[wasm_bindgen]
 pub struct Viewer {
     reader: Arc<ParquetReader>,
-    /// Filename stored separately since it's no longer on the reader.
-    filename: String,
     file_metadata: std::collections::HashMap<String, String>,
     /// Lazy section context. Populated by `init_templates` (single
     /// capture) or `WasmCaptureRegistry::regenerate_combined` (compare
@@ -144,6 +142,7 @@ impl Viewer {
         let reader = Arc::new(
             ParquetReader::open_bytes(bytes)
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
+                .with_filename(filename.to_string())
         );
 
         let file_metadata = reader.file_metadata();
@@ -155,7 +154,6 @@ impl Viewer {
 
         Ok(Viewer {
             reader,
-            filename: filename.to_string(),
             file_metadata,
             context,
             cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -195,7 +193,7 @@ impl Viewer {
             interval: self.reader.interval(),
             source: self.reader.source(),
             version: self.reader.version(),
-            filename: self.filename.clone(),
+            filename: self.reader.filename().unwrap_or_default().to_string(),
             min_time,
             max_time,
             counter_names: self.reader.counter_names(),
@@ -401,7 +399,7 @@ impl Viewer {
         // Render on demand.
         let mut view =
             dashboard::dashboard::generate_section(self.reader.as_ref(), &route, &self.context)?;
-        view.set_filename(self.filename.clone());
+        view.set_filename(self.reader.filename().unwrap_or_default().to_string());
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);
         }

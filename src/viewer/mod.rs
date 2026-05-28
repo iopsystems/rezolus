@@ -280,9 +280,9 @@ pub fn run(config: Config) {
         Source::Live(url) => init_live_mode(&rt, url, &registry),
         Source::Empty => {
             info!("No input file — starting in upload-only mode");
-            let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync> =
+            let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
                 std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
-            AppState::new(empty_store, String::new(), registry.clone())
+            AppState::new(empty_store, registry.clone())
         }
     };
 
@@ -352,17 +352,13 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
     let multinode_sysinfo = metadata::build_multinode_systeminfo(path);
 
+    // ParquetReader::open defaults filename() to the path's basename.
     let reader = std::sync::Arc::new(
         metriken_query::ParquetReader::open(path).unwrap_or_else(|e| {
             eprintln!("failed to load data from parquet: {e}");
             std::process::exit(1);
         })
     );
-    let filename = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("capture.parquet")
-        .to_string();
 
     let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
     metadata::validate_service_extensions(reader.as_ref(), &mut service_exts);
@@ -375,7 +371,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     }
     log_service_exts(&service_exts, "baseline");
 
-    let state = AppState::new(reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>, filename, registry.clone());
+    let state = AppState::new(reader as std::sync::Arc<dyn metriken_query::MetricsSource>, registry.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -431,6 +427,8 @@ fn init_file_mode_combined_ab(
         metadata::extract_parquet_metadata(&extracted.experiment_path);
     let experiment_multinode = metadata::build_multinode_systeminfo(&extracted.experiment_path);
 
+    // Both readers use the tar's display name so the frontend shows the
+    // original combined-A/B filename rather than the extracted temp paths.
     let display_filename = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -438,16 +436,20 @@ fn init_file_mode_combined_ab(
         .to_string();
 
     let baseline_reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open(&extracted.baseline_path).unwrap_or_else(|e| {
-            eprintln!("failed to load baseline parquet from tarball: {e}");
-            std::process::exit(1);
-        })
+        metriken_query::ParquetReader::open(&extracted.baseline_path)
+            .unwrap_or_else(|e| {
+                eprintln!("failed to load baseline parquet from tarball: {e}");
+                std::process::exit(1);
+            })
+            .with_filename(display_filename.clone())
     );
     let experiment_reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open(&extracted.experiment_path).unwrap_or_else(|e| {
-            eprintln!("failed to load experiment parquet from tarball: {e}");
-            std::process::exit(1);
-        })
+        metriken_query::ParquetReader::open(&extracted.experiment_path)
+            .unwrap_or_else(|e| {
+                eprintln!("failed to load experiment parquet from tarball: {e}");
+                std::process::exit(1);
+            })
+            .with_filename(display_filename.clone())
     );
 
     let mut baseline_service_exts =
@@ -469,8 +471,7 @@ fn init_file_mode_combined_ab(
     let experiment_alias = ab.experiment.alias.clone();
 
     let state = AppState::new(
-        baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
-        display_filename.clone(),
+        baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
     );
     // Point parquet_path at the *extracted* baseline parquet (not the
@@ -496,8 +497,7 @@ fn init_file_mode_combined_ab(
     state.captures.set_baseline_alias(Some(baseline_alias));
 
     state.captures.attach_experiment(
-        experiment_reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
-        display_filename,
+        experiment_reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         experiment_multinode.or(experiment_systeminfo),
         experiment_file_meta,
         Some(experiment_alias),
@@ -594,6 +594,7 @@ fn attach_cli_experiment(
 ) {
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
+    // ParquetReader::open defaults filename() to the path's basename.
     let exp_reader = match metriken_query::ParquetReader::open(exp_path) {
         Ok(r) => std::sync::Arc::new(r),
         Err(e) => {
@@ -604,14 +605,8 @@ fn attach_cli_experiment(
             return;
         }
     };
-    let exp_filename = exp_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("experiment.parquet")
-        .to_string();
     state.captures.attach_experiment(
-        exp_reader.clone() as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
-        exp_filename,
+        exp_reader.clone() as std::sync::Arc<dyn metriken_query::MetricsSource>,
         exp_sysinfo,
         exp_file_meta,
         alias,
@@ -671,10 +666,11 @@ fn init_live_mode(
         .source(info.source.clone())
         .version(info.version.clone())
         .sampling_interval_ms(1000)
+        .filename(url.to_string())
         .build();
-    let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync> =
+    let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource> =
         std::sync::Arc::new(store.clone());
-    let state = AppState::new(store_arc, url.to_string(), registry.clone());
+    let state = AppState::new(store_arc, registry.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
