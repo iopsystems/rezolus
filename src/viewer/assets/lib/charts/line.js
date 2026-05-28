@@ -18,6 +18,8 @@ import {
     CHART_GRID_TOP_WITH_LEGEND,
     COLORS,
 } from './base.js';
+import { FONTS } from './util/fonts.js';
+import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -32,6 +34,11 @@ export function configureLineChart(chart) {
         opts
     } = chart.spec;
 
+    // Tooltip series row reflects current toggle state; card header keeps the full suffix.
+    const seriesTitle = chart.spec.promql_query_total
+        ? opts.title.replace(/Mean\/Total\b/, chart._showTotal ? 'Total' : 'Mean')
+        : opts.title;
+
     // Normalize to a list of {name, color, timeData, valueData, fill}.
     // Single-series callers pass `data: [timeData, valueData]` (unchanged).
     // Compare-mode callers pass `multiSeries: [{name,color,timeData,valueData}, ...]`.
@@ -39,7 +46,7 @@ export function configureLineChart(chart) {
         ? multiSeries
         : (data && data.length >= 2 && data[0] && data[1] && data[0].length > 0
             ? [{
-                name: opts.title,
+                name: seriesTitle,
                 color: COLORS.accent,
                 timeData: data[0],
                 valueData: data[1],
@@ -186,4 +193,101 @@ export function configureLineChart(chart) {
         };
         chart.echart.on('legendselectchanged', chart._legendSelectHandler);
     }
+
+    ensureTotalToggle(chart);
+}
+
+// Mean/Total toggle. State on the chart instance (no persistence);
+// pattern mirrors scatter.js's spectrum-controls.
+
+const TOTAL_TOGGLE_CLASS = 'total-toggle';
+
+function renderTotalCheckbox(el, on, pending) {
+    const glyph = on ? '☑' : '☐';
+    const label = pending ? 'Total…' : 'Total';
+    el.innerHTML =
+        `<span style="font-size: 16px; line-height: 1; transform: translateY(-2px);">${glyph}</span>`
+        + `<span>${label}</span>`;
+    el.style.color = on ? COLORS.fg : COLORS.fgSecondary;
+}
+
+function refreshTotalCheckbox(chart) {
+    const el = chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS);
+    if (el) renderTotalCheckbox(el, !!chart._showTotal, !!chart._totalPending);
+}
+
+async function toggleTotal(chart) {
+    if (chart._totalPending) return;
+    const totalQuery = chart.spec.promql_query_total;
+    if (!totalQuery) return;
+
+    if (chart._showTotal) {
+        if (chart._meanDataCache) chart.spec.data = chart._meanDataCache;
+        chart._showTotal = false;
+        refreshTotalCheckbox(chart);
+        chart.configureChartByType();
+        return;
+    }
+
+    chart._meanDataCache = chart.spec.data;
+    if (chart._totalDataCache) {
+        chart.spec.data = chart._totalDataCache;
+        chart._showTotal = true;
+        refreshTotalCheckbox(chart);
+        chart.configureChartByType();
+        return;
+    }
+
+    chart._totalPending = true;
+    refreshTotalCheckbox(chart);
+    try {
+        const result = await executePromQLRangeQuery(totalQuery);
+        chart._totalPending = false;
+        const ok = result?.status === 'success'
+            && (result.data?.result?.length ?? 0) > 0;
+        if (!ok) {
+            chart._meanDataCache = null;
+            refreshTotalCheckbox(chart);
+            return;
+        }
+        applyResultToPlot(chart.spec, result);
+        chart._totalDataCache = chart.spec.data;
+        chart._showTotal = true;
+    } catch (e) {
+        console.warn('[total-toggle] fetch failed:', e);
+        chart._totalPending = false;
+        chart.spec.data = chart._meanDataCache;
+        chart._meanDataCache = null;
+    }
+    refreshTotalCheckbox(chart);
+    chart.configureChartByType();
+}
+
+function ensureTotalToggle(chart) {
+    if (!chart.spec.promql_query_total) {
+        chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS)?.remove();
+        return;
+    }
+    if (!chart.domNode) return;
+    let el = chart.domNode.querySelector('.' + TOTAL_TOGGLE_CLASS);
+    if (!el) {
+        el = document.createElement('span');
+        el.className = TOTAL_TOGGLE_CLASS;
+        // right:60 clears the expand (right:8) + select-pin (right:32) icons.
+        el.style.cssText = `
+            position: absolute;
+            top: 8px;
+            right: 60px;
+            z-index: 10;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+            ${FONTS.cssControl}
+            user-select: none;
+        `;
+        chart.domNode.appendChild(el);
+    }
+    el.onclick = () => toggleTotal(chart);
+    renderTotalCheckbox(el, !!chart._showTotal, !!chart._totalPending);
 }

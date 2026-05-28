@@ -1106,6 +1106,9 @@ export class Chart {
         if (style !== 'histogram_heatmap') {
             this.domNode?.querySelector('.histogram-toggle')?.remove();
         }
+        if (style !== 'line') {
+            this.domNode?.querySelector('.total-toggle')?.remove();
+        }
 
         // Handle different chart types by delegating to specialized modules
         if (style === 'line') {

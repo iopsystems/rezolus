@@ -259,6 +259,7 @@ impl SubGroup {
             series_names: None,
             promql_query: Some(promql_query),
             promql_query_experiment: None,
+            promql_query_total: None,
             width: PlotWidth::default(),
         });
     }
@@ -329,7 +330,7 @@ impl SubGroup {
         );
         self.plot_promql(
             PlotOpts::gauge(
-                format!("{title_stem} Mean"),
+                format!("{title_stem} Mean/Total"),
                 format!("{id_stem}-mean"),
                 mean_unit,
             )
@@ -337,6 +338,9 @@ impl SubGroup {
             .with_axis_label("Mean"),
             format!("histogram_mean({selector})"),
         );
+        if let Some(mean_plot) = self.plots.last_mut() {
+            mean_plot.promql_query_total = Some(format!("histogram_sum({selector})"));
+        }
     }
 }
 
@@ -358,6 +362,9 @@ pub struct Plot {
     promql_query: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub promql_query_experiment: Option<String>,
+    /// Alt query the viewer's Mean/Total toggle swaps to (= `histogram_sum`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub promql_query_total: Option<String>,
     #[serde(skip_serializing_if = "plot_width_is_half", default)]
     pub width: PlotWidth,
 }
@@ -604,6 +611,7 @@ mod tests {
             series_names: None,
             promql_query: Some("up".into()),
             promql_query_experiment: None,
+            promql_query_total: None,
             width,
         }
     }
@@ -758,13 +766,17 @@ mod tests {
             "sum(irate(blockio_operations{op=\"read\"}[5m]))"
         );
 
-        assert_eq!(plots[1]["opts"]["title"], "Read Mean");
+        assert_eq!(plots[1]["opts"]["title"], "Read Mean/Total");
         assert_eq!(plots[1]["opts"]["id"], "latency-read-mean");
         assert_eq!(plots[1]["opts"]["type"], "gauge");
         assert_eq!(plots[1]["opts"]["format"]["unit_system"], "time");
         assert_eq!(
             plots[1]["promql_query"],
             "histogram_mean(blockio_latency{op=\"read\"})"
+        );
+        assert_eq!(
+            plots[1]["promql_query_total"],
+            "histogram_sum(blockio_latency{op=\"read\"})"
         );
     }
 
@@ -786,9 +798,14 @@ mod tests {
             plots[0]["promql_query"],
             "sum(histogram_irate(scheduler_runqueue_latency))"
         );
+        assert_eq!(plots[1]["opts"]["title"], "Runqueue Mean/Total");
         assert_eq!(
             plots[1]["promql_query"],
             "histogram_mean(scheduler_runqueue_latency)"
+        );
+        assert_eq!(
+            plots[1]["promql_query_total"],
+            "histogram_sum(scheduler_runqueue_latency)"
         );
     }
 }
