@@ -5,8 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
+use metriken_query::{MetricsSource, ParquetReader};
 
 /// MCP protocol methods
 #[derive(Debug)]
@@ -62,15 +61,13 @@ impl From<&str> for McpTool {
 
 /// MCP server state
 pub struct Server {
-    tsdb_cache: Arc<RwLock<HashMap<String, Arc<Tsdb>>>>,
-    query_engine_cache: Arc<RwLock<HashMap<String, Arc<QueryEngine>>>>,
+    reader_cache: Arc<RwLock<HashMap<String, Arc<ParquetReader>>>>,
 }
 
 impl Server {
     pub fn new() -> Self {
         Self {
-            tsdb_cache: Arc::new(RwLock::new(HashMap::new())),
-            query_engine_cache: Arc::new(RwLock::new(HashMap::new())),
+            reader_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -482,21 +479,17 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let tsdb = Arc::new(Tsdb::load(path)?);
-
-        use crate::viewer::promql::QueryEngine;
-        let engine = QueryEngine::new(Arc::clone(&tsdb));
-
-        let output = super::format_recording_info(parquet_file, &tsdb, &engine);
+        let reader = Arc::new(ParquetReader::open(path)?);
+        let output = super::format_recording_info(parquet_file, reader.as_ref());
         Ok(output)
     }
 
-    /// Load or get cached TSDB
-    async fn get_tsdb(&self, parquet_file: &str) -> Result<Arc<Tsdb>, Box<dyn std::error::Error>> {
+    /// Load or get cached ParquetReader
+    async fn get_reader(&self, parquet_file: &str) -> Result<Arc<ParquetReader>, Box<dyn std::error::Error>> {
         {
-            let cache = self.tsdb_cache.read().unwrap();
-            if let Some(tsdb) = cache.get(parquet_file) {
-                return Ok(Arc::clone(tsdb));
+            let cache = self.reader_cache.read().unwrap();
+            if let Some(reader) = cache.get(parquet_file) {
+                return Ok(Arc::clone(reader));
             }
         }
 
@@ -505,37 +498,14 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let tsdb = Arc::new(Tsdb::load(path)?);
+        let reader = Arc::new(ParquetReader::open(path)?);
 
         {
-            let mut cache = self.tsdb_cache.write().unwrap();
-            cache.insert(parquet_file.to_string(), Arc::clone(&tsdb));
+            let mut cache = self.reader_cache.write().unwrap();
+            cache.insert(parquet_file.to_string(), Arc::clone(&reader));
         }
 
-        Ok(tsdb)
-    }
-
-    /// Load or get cached QueryEngine
-    async fn get_query_engine(
-        &self,
-        parquet_file: &str,
-    ) -> Result<Arc<QueryEngine>, Box<dyn std::error::Error>> {
-        {
-            let cache = self.query_engine_cache.read().unwrap();
-            if let Some(engine) = cache.get(parquet_file) {
-                return Ok(Arc::clone(engine));
-            }
-        }
-
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = Arc::new(QueryEngine::new(tsdb));
-
-        {
-            let mut cache = self.query_engine_cache.write().unwrap();
-            cache.insert(parquet_file.to_string(), Arc::clone(&engine));
-        }
-
-        Ok(engine)
+        Ok(reader)
     }
 
     /// Analyze correlation between two metrics
@@ -558,12 +528,11 @@ impl Server {
             .and_then(|m| m.as_str())
             .ok_or("Missing metric2")?;
 
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = self.get_query_engine(parquet_file).await?;
+        let reader = self.get_reader(parquet_file).await?;
 
         use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
 
-        let result = calculate_correlation(&engine, &tsdb, metric1, metric2)?;
+        let result = calculate_correlation(reader.as_ref(), metric1, metric2)?;
         Ok(format_correlation_result(&result))
     }
 
@@ -577,10 +546,10 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
 
-        let tsdb = self.get_tsdb(parquet_file).await?;
+        let reader = self.get_reader(parquet_file).await?;
 
         use crate::mcp::describe_metrics::format_metrics_description;
-        Ok(format_metrics_description(&tsdb))
+        Ok(format_metrics_description(reader.as_ref()))
     }
 
     /// Detect anomalies in time series data
@@ -598,12 +567,11 @@ impl Server {
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let tsdb = self.get_tsdb(parquet_file).await?;
-        let engine = self.get_query_engine(parquet_file).await?;
+        let reader = self.get_reader(parquet_file).await?;
 
         use crate::mcp::anomaly_detection::{detect_anomalies, format_anomaly_detection_result};
 
-        let result = detect_anomalies(&engine, &tsdb, query)?;
+        let result = detect_anomalies(reader.as_ref(), query)?;
         Ok(format_anomaly_detection_result(&result))
     }
 
@@ -619,12 +587,12 @@ impl Server {
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let engine = self.get_query_engine(parquet_file).await?;
+        let reader = self.get_reader(parquet_file).await?;
 
-        let (start_time, end_time) = engine.get_time_range();
+        let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
         let step = 1.0;
 
-        let result = engine.query_range(query, start_time, end_time, step)?;
+        let result = reader.query_range(query, start_time, end_time, step)?;
 
         Ok(serde_json::to_string_pretty(&result)?)
     }

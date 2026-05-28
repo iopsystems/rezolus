@@ -1,15 +1,15 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
 /// True iff the recording has more than one CPU. Per-core charts are
 /// suppressed when this is false because they degenerate to the aggregate.
-fn has_multiple_cpus(data: &Tsdb) -> bool {
+fn has_multiple_cpus(data: &dyn MetricsSource) -> bool {
     ["scheduler_runqueue_wait", "scheduler_context_switch"]
         .iter()
         .any(|m| metric_unique_label_count(data, m, "id") > 1)
 }
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_cpu = has_multiple_cpus(data);
 

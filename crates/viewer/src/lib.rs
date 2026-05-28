@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use metriken_query::{Bytes, QueryEngine, Tsdb};
+use bytes::Bytes;
+use metriken_query::{MetricsSource, ParquetReader};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -61,14 +62,14 @@ fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::A
                 .alias
                 .clone()
                 .unwrap_or_else(|| "baseline".to_string()),
-            sources: to_sources(baseline.engine.tsdb().source()),
+            sources: to_sources(&baseline.reader.source()),
         },
         experiment: report_save::AbSide {
             alias: experiment
                 .alias
                 .clone()
                 .unwrap_or_else(|| "experiment".to_string()),
-            sources: to_sources(experiment.engine.tsdb().source()),
+            sources: to_sources(&experiment.reader.source()),
         },
         category: None,
     }
@@ -76,7 +77,9 @@ fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::A
 
 #[wasm_bindgen]
 pub struct Viewer {
-    engine: QueryEngine<Arc<Tsdb>>,
+    reader: Arc<ParquetReader>,
+    /// Filename stored separately since it's no longer on the reader.
+    filename: String,
     file_metadata: std::collections::HashMap<String, String>,
     /// Lazy section context. Populated by `init_templates` (single
     /// capture) or `WasmCaptureRegistry::regenerate_combined` (compare
@@ -92,8 +95,8 @@ pub struct Viewer {
     /// one (e.g. via an `alias=path` static-site URL param). None
     /// means the UI falls back to the capture id.
     alias: Option<String>,
-    /// Original parquet bytes kept alongside the Tsdb. Save as Report
-    /// re-encodes a projection from this source, not from the Tsdb
+    /// Original parquet bytes kept alongside the reader. Save as Report
+    /// re-encodes a projection from this source, not from the reader
     /// (which has lost internal Arrow field metadata like the
     /// `metric` key used by `parquet filter`'s keep-field predicate).
     source_bytes: Bytes,
@@ -138,20 +141,21 @@ impl Viewer {
     pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
         let bytes = Bytes::from(data.to_vec());
         let source_bytes = bytes.clone();
-        let mut tsdb = Tsdb::load_from_bytes(bytes)
-            .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?;
-        tsdb.set_filename(filename.to_string());
+        let reader = Arc::new(
+            ParquetReader::open_bytes(bytes)
+                .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
+        );
 
-        let file_metadata = tsdb.file_metadata().clone();
+        let file_metadata = reader.file_metadata();
         let context = if is_trimmed_report(&file_metadata) {
             empty_dashboard_context()
         } else {
             dashboard::dashboard::build_dashboard_context(None, &[], None)
         };
-        let engine = QueryEngine::new(Arc::new(tsdb));
 
         Ok(Viewer {
-            engine,
+            reader,
+            filename: filename.to_string(),
             file_metadata,
             context,
             cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),
@@ -169,11 +173,7 @@ impl Viewer {
 
     /// Returns JSON metadata compatible with /api/v1/metadata
     pub fn metadata(&self) -> String {
-        let tsdb = self.engine.tsdb();
-        let (min_time, max_time) = tsdb
-            .time_range()
-            .map(|(min, max)| (min as f64 / 1e9, max as f64 / 1e9))
-            .unwrap_or((0.0, 0.0));
+        let (min_time, max_time) = self.reader.time_range().unwrap_or((0.0, 0.0));
 
         serde_json::to_string(&MetadataResponse {
             status: "success".to_string(),
@@ -189,34 +189,18 @@ impl Viewer {
 
     /// Returns JSON with viewer info (interval, source, version, metric names)
     pub fn info(&self) -> String {
-        let tsdb = self.engine.tsdb();
-        let (min_time, max_time) = tsdb
-            .time_range()
-            .map(|(min, max)| (min as f64 / 1e9, max as f64 / 1e9))
-            .unwrap_or((0.0, 0.0));
+        let (min_time, max_time) = self.reader.time_range().unwrap_or((0.0, 0.0));
 
         serde_json::to_string(&ViewerInfo {
-            interval: tsdb.interval(),
-            source: tsdb.source().to_string(),
-            version: tsdb.version().to_string(),
-            filename: tsdb.filename().to_string(),
+            interval: self.reader.interval(),
+            source: self.reader.source(),
+            version: self.reader.version(),
+            filename: self.filename.clone(),
             min_time,
             max_time,
-            counter_names: tsdb
-                .counter_names()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            gauge_names: tsdb
-                .gauge_names()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
-            histogram_names: tsdb
-                .histogram_names()
-                .into_iter()
-                .map(|s| s.to_string())
-                .collect(),
+            counter_names: self.reader.counter_names(),
+            gauge_names: self.reader.gauge_names(),
+            histogram_names: self.reader.histogram_names(),
         })
         .unwrap()
     }
@@ -282,7 +266,7 @@ impl Viewer {
     /// Execute a PromQL range query. Returns JSON compatible with
     /// /api/v1/query_range response format.
     pub fn query_range(&self, query: &str, start: f64, end: f64, step: f64) -> String {
-        match self.engine.query_range(query, start, end, step) {
+        match self.reader.query_range(query, start, end, step) {
             Ok(result) => {
                 let json = serde_json::to_string(&result).unwrap_or_else(|e| {
                     format!(
@@ -301,7 +285,7 @@ impl Viewer {
 
     /// Execute a PromQL instant query.
     pub fn query(&self, query: &str, time: f64) -> String {
-        match self.engine.query(query, Some(time)) {
+        match self.reader.query(query, Some(time)) {
             Ok(result) => {
                 let json = serde_json::to_string(&result).unwrap_or_else(|e| {
                     format!(
@@ -383,16 +367,15 @@ impl Viewer {
             }
         }
         if service_exts.is_empty() {
-            let tsdb = self.engine.tsdb();
-            let source = tsdb.source().to_string();
+            let source = self.reader.source();
             if let Some(ext) = registry.get(&source) {
                 service_exts.push((source, ext.clone()));
             }
         }
 
-        // Validate against this capture's own tsdb so per-capture
+        // Validate against this capture's own reader so per-capture
         // unavailability is correctly reported.
-        validate_service_extensions_inline(&self.engine, &mut service_exts);
+        validate_service_extensions_inline(self.reader.as_ref(), &mut service_exts);
         service_exts
     }
 
@@ -415,10 +398,10 @@ impl Viewer {
             return serialize_lean_section(value);
         }
 
-        // Render on demand. The engine owns the Arc<Tsdb> so we can pass
-        // `self.engine.tsdb()` as `&Tsdb`.
+        // Render on demand.
         let mut view =
-            dashboard::dashboard::generate_section(self.engine.tsdb(), &route, &self.context)?;
+            dashboard::dashboard::generate_section(self.reader.as_ref(), &route, &self.context)?;
+        view.set_filename(self.filename.clone());
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);
         }
@@ -680,8 +663,8 @@ impl WasmCaptureRegistry {
                     experiment.source_bytes.clone(),
                     &payload,
                     payload_json,
-                    baseline.engine.tsdb(),
-                    experiment.engine.tsdb(),
+                    baseline.reader.as_ref(),
+                    experiment.reader.as_ref(),
                     &manifest,
                     payload.trim_columns,
                 )
@@ -691,7 +674,7 @@ impl WasmCaptureRegistry {
                 baseline.source_bytes.clone(),
                 &payload,
                 payload_json,
-                baseline.engine.tsdb(),
+                baseline.reader.as_ref(),
                 payload.trim_columns,
             )
             .map_err(|e| JsValue::from_str(&e)),
@@ -782,25 +765,22 @@ fn parse_template_registry(
 }
 
 /// Validate KPI availability for service extensions by running each KPI's
-/// PromQL query against the Viewer's existing query engine. Re-creating a
-/// fresh engine over `&Tsdb` has diverged for histogram queries in the WASM
-/// parquet-bytes path, which produced false "Unavailable KPIs" notes even
-/// though the same queries succeeded through the attached Viewer engine.
-fn validate_service_extensions_inline<T: std::ops::Deref<Target = Tsdb>>(
-    engine: &QueryEngine<T>,
+/// PromQL query against the data source.
+fn validate_service_extensions_inline(
+    data: &dyn MetricsSource,
     exts: &mut [(String, dashboard::ServiceExtension)],
 ) {
-    use metriken_query::promql;
-    let (start, end) = engine.get_time_range();
+    use metriken_query::QueryResult;
+    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
-            let has_data = match engine.query_range(&query, start, end, 1.0) {
+            let has_data = match data.query_range(&query, start, end, 1.0) {
                 Ok(result) => match &result {
-                    promql::QueryResult::Vector { result } => !result.is_empty(),
-                    promql::QueryResult::Matrix { result } => !result.is_empty(),
-                    promql::QueryResult::Scalar { .. } => true,
-                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                    QueryResult::Vector { result } => !result.is_empty(),
+                    QueryResult::Matrix { result } => !result.is_empty(),
+                    QueryResult::Scalar { .. } => true,
+                    QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
                 },
                 Err(_) => false,
             };

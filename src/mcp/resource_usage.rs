@@ -1,7 +1,5 @@
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
+use metriken_query::MetricsSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Result of resource usage analysis
 #[derive(Debug)]
@@ -26,18 +24,17 @@ pub struct ResourceConsumer {
 
 /// Analyze top resource consumers for a given query
 pub fn analyze_resource_usage(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
+    data: &dyn MetricsSource,
     query: &str,
     description: &str,
     top_n: usize,
 ) -> Result<ResourceUsageResult, Box<dyn std::error::Error>> {
-    let (start, end) = engine.get_time_range();
-    let step = tsdb.interval();
+    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    let step = data.interval();
 
-    let result = engine.query_range(query, start, end, step)?;
+    let result = data.query_range(query, start, end, step)?;
 
-    use crate::viewer::promql::{QueryResult, Sample};
+    use metriken_query::{QueryResult, Sample};
 
     let mut consumers = Vec::new();
     let mut total_sum = 0.0;
@@ -225,8 +222,7 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 
 /// Analyze multiple resource metrics
 pub fn analyze_multiple_resources(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
+    data: &dyn MetricsSource,
 ) -> Result<Vec<ResourceUsageResult>, Box<dyn std::error::Error>> {
     let queries = vec![
         ("sum by(name) (irate(cgroup_cpu_usage[1m])) / 1e9", "Container CPU Usage"),
@@ -234,15 +230,15 @@ pub fn analyze_multiple_resources(
         ("sum by(id) (irate(cpu_usage[1m]))", "Per-Core CPU Usage"),
         ("sum by(op) (irate(syscall[1m]))", "System Call Types"),
     ];
-    
+
     let mut results = Vec::new();
-    
+
     for (query, description) in queries {
-        match analyze_resource_usage(engine, tsdb, query, description, 10) {
+        match analyze_resource_usage(data, query, description, 10) {
             Ok(result) => results.push(result),
             Err(e) => eprintln!("Failed to analyze {}: {}", description, e),
         }
     }
-    
+
     Ok(results)
 }

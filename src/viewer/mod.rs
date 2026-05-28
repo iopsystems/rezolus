@@ -29,10 +29,13 @@ use notify::Watcher;
 pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
-pub use metriken_query::promql;
-pub use metriken_query::tsdb;
-
-use tsdb::*;
+/// Re-export PromQL types so other modules can use `crate::viewer::promql::*`.
+pub mod promql {
+    pub use metriken_query::{HistogramHeatmapResult, MatrixSample, QueryError, QueryResult, Sample};
+    /// Adapter: callers that previously constructed `QueryEngine::new(data).query_range(...)`
+    /// can now call these functions directly on any `MetricsSource`.
+    pub use metriken_query::MetricsSource as QueryEngine;
+}
 
 pub mod capture_registry;
 mod proxy_allow;
@@ -277,7 +280,9 @@ pub fn run(config: Config) {
         Source::Live(url) => init_live_mode(&rt, url, &registry),
         Source::Empty => {
             info!("No input file — starting in upload-only mode");
-            AppState::new(Tsdb::default(), registry.clone())
+            let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync> =
+                std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
+            AppState::new(empty_store, String::new(), registry.clone())
         }
     };
 
@@ -347,13 +352,20 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
     let multinode_sysinfo = metadata::build_multinode_systeminfo(path);
 
-    let data = Tsdb::load(path).unwrap_or_else(|e| {
-        eprintln!("failed to load data from parquet: {e}");
-        std::process::exit(1);
-    });
+    let reader = std::sync::Arc::new(
+        metriken_query::ParquetReader::open(path).unwrap_or_else(|e| {
+            eprintln!("failed to load data from parquet: {e}");
+            std::process::exit(1);
+        })
+    );
+    let filename = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("capture.parquet")
+        .to_string();
 
     let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
-    metadata::validate_service_extensions(&data, &mut service_exts);
+    metadata::validate_service_extensions(reader.as_ref(), &mut service_exts);
 
     info!("Computing file checksum...");
     let file_checksum = metadata::compute_file_checksum(path);
@@ -363,7 +375,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     }
     log_service_exts(&service_exts, "baseline");
 
-    let state = AppState::new(data, registry.clone());
+    let state = AppState::new(reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>, filename, registry.clone());
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -419,33 +431,32 @@ fn init_file_mode_combined_ab(
         metadata::extract_parquet_metadata(&extracted.experiment_path);
     let experiment_multinode = metadata::build_multinode_systeminfo(&extracted.experiment_path);
 
-    let mut baseline_tsdb = Tsdb::load(&extracted.baseline_path).unwrap_or_else(|e| {
-        eprintln!("failed to load baseline parquet from tarball: {e}");
-        std::process::exit(1);
-    });
-    let mut experiment_tsdb = Tsdb::load(&extracted.experiment_path).unwrap_or_else(|e| {
-        eprintln!("failed to load experiment parquet from tarball: {e}");
-        std::process::exit(1);
-    });
-    // Tsdb's filename defaults to the on-disk path of the extracted parquet
-    // (a tempdir path that disappears on shutdown). Replace it with the
-    // tarball's filename so user-facing displays show the artifact the
-    // user actually pointed at.
     let display_filename = path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("combined-ab.parquet.ab.tar")
         .to_string();
-    baseline_tsdb.set_filename(display_filename.clone());
-    experiment_tsdb.set_filename(display_filename);
+
+    let baseline_reader = std::sync::Arc::new(
+        metriken_query::ParquetReader::open(&extracted.baseline_path).unwrap_or_else(|e| {
+            eprintln!("failed to load baseline parquet from tarball: {e}");
+            std::process::exit(1);
+        })
+    );
+    let experiment_reader = std::sync::Arc::new(
+        metriken_query::ParquetReader::open(&extracted.experiment_path).unwrap_or_else(|e| {
+            eprintln!("failed to load experiment parquet from tarball: {e}");
+            std::process::exit(1);
+        })
+    );
 
     let mut baseline_service_exts =
         metadata::extract_service_extension_metadata(&extracted.baseline_path, registry);
-    metadata::validate_service_extensions(&baseline_tsdb, &mut baseline_service_exts);
+    metadata::validate_service_extensions(baseline_reader.as_ref(), &mut baseline_service_exts);
     log_service_exts(&baseline_service_exts, "baseline");
     let mut experiment_service_exts =
         metadata::extract_service_extension_metadata(&extracted.experiment_path, registry);
-    metadata::validate_service_extensions(&experiment_tsdb, &mut experiment_service_exts);
+    metadata::validate_service_extensions(experiment_reader.as_ref(), &mut experiment_service_exts);
     log_service_exts(&experiment_service_exts, "experiment");
 
     info!("Computing file checksum...");
@@ -457,7 +468,11 @@ fn init_file_mode_combined_ab(
         .unwrap_or_else(|| ab.baseline.alias.clone());
     let experiment_alias = ab.experiment.alias.clone();
 
-    let state = AppState::new(baseline_tsdb, registry.clone());
+    let state = AppState::new(
+        baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
+        display_filename.clone(),
+        registry.clone(),
+    );
     // Point parquet_path at the *extracted* baseline parquet (not the
     // tar itself) so `regenerate_dashboards` and other parquet-aware
     // consumers can read its metadata. Same for the experiment side via
@@ -481,7 +496,8 @@ fn init_file_mode_combined_ab(
     state.captures.set_baseline_alias(Some(baseline_alias));
 
     state.captures.attach_experiment(
-        experiment_tsdb,
+        experiment_reader as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
+        display_filename,
         experiment_multinode.or(experiment_systeminfo),
         experiment_file_meta,
         Some(experiment_alias),
@@ -547,8 +563,8 @@ fn validate_category_at_startup(
     });
     let mut experiment_exts =
         metadata::extract_service_extension_metadata(experiment_path, registry);
-    if let Ok(exp_data) = Tsdb::load(experiment_path) {
-        metadata::validate_service_extensions(&exp_data, &mut experiment_exts);
+    if let Ok(exp_reader) = metriken_query::ParquetReader::open(experiment_path) {
+        metadata::validate_service_extensions(&exp_reader, &mut experiment_exts);
     }
     let experiment_sources: Vec<String> = experiment_exts.iter().map(|(s, _)| s.clone()).collect();
     for source in baseline_sources.iter().chain(experiment_sources.iter()) {
@@ -578,8 +594,8 @@ fn attach_cli_experiment(
 ) {
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
-    let mut exp_tsdb = match Tsdb::load(exp_path) {
-        Ok(t) => t,
+    let exp_reader = match metriken_query::ParquetReader::open(exp_path) {
+        Ok(r) => std::sync::Arc::new(r),
         Err(e) => {
             warn!(
                 "failed to load experiment '{}': {e}. Starting in single-capture mode.",
@@ -588,22 +604,24 @@ fn attach_cli_experiment(
             return;
         }
     };
-    let base = exp_path
+    let exp_filename = exp_path
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("experiment.parquet")
         .to_string();
-    exp_tsdb.set_filename(base);
-    state
-        .captures
-        .attach_experiment(exp_tsdb, exp_sysinfo, exp_file_meta, alias);
+    state.captures.attach_experiment(
+        exp_reader.clone() as std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync>,
+        exp_filename,
+        exp_sysinfo,
+        exp_file_meta,
+        alias,
+    );
     *state.cli_experiment_path.write() = Some(exp_path.to_path_buf());
     info!("Attached experiment capture: {}", exp_path.display());
 
     let mut exp_exts = metadata::extract_service_extension_metadata(exp_path, registry);
-    if let Some(handle) = state.captures.get(CaptureId::Experiment) {
-        let exp_data = handle.read();
-        metadata::validate_service_extensions(&exp_data, &mut exp_exts);
+    if let Some(exp_data) = state.captures.get(CaptureId::Experiment) {
+        metadata::validate_service_extensions(exp_data.as_ref(), &mut exp_exts);
     }
     if exp_exts.is_empty() {
         warn!("no service extension matched the experiment parquet's source metadata");
@@ -649,25 +667,26 @@ fn init_live_mode(
         version = info.version
     );
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
-    let state = AppState::new(tsdb, registry.clone());
+    let store = metriken_query::MemoryStore::builder()
+        .source(info.source.clone())
+        .version(info.version.clone())
+        .sampling_interval_ms(1000)
+        .build();
+    let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource + Send + Sync> =
+        std::sync::Arc::new(store.clone());
+    let state = AppState::new(store_arc, url.to_string(), registry.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);
 
-    let ingest_tsdb = state.baseline_tsdb();
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     rt.spawn(actions::ingest_loop(
         ingest_url,
-        ingest_tsdb,
+        store,
         ingest_snapshots,
         info.source,
         info.version,

@@ -17,6 +17,8 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::{Client, Url};
 use tracing::{debug, error, info, warn};
 
+use metriken_query::{MemoryStore, MetricsSource, ParquetReader};
+
 use super::capture_registry::CaptureId;
 use super::metadata::{
     build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
@@ -24,7 +26,6 @@ use super::metadata::{
 };
 use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
-use super::tsdb::Tsdb;
 use ::dashboard;
 
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
@@ -32,7 +33,7 @@ use ::dashboard;
 /// Background task that polls a live agent and ingests snapshots.
 pub async fn ingest_loop(
     url: Url,
-    tsdb: Arc<RwLock<Tsdb>>,
+    store: MemoryStore,
     snapshots: Arc<Mutex<VecDeque<Vec<u8>>>>,
     source: String,
     version: String,
@@ -45,13 +46,11 @@ pub async fn ingest_loop(
         }
     };
 
-    {
-        let mut tsdb = tsdb.write();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(url.to_string());
-    }
+    // source/version/interval already set during construction; update in case
+    // they changed (connect_agent path).
+    store.set_source(&source);
+    store.set_version(&version);
+    store.set_sampling_interval_ms(1000);
 
     let interval_duration = Duration::from_secs(1);
     let mut interval = crate::common::aligned_interval(interval_duration);
@@ -78,7 +77,7 @@ pub async fn ingest_loop(
 
         debug!("sampling latency: {} us", start.elapsed().as_micros());
 
-        let snapshot: metriken_exposition::Snapshot = match rmp_serde::from_slice(&body) {
+        let mut snapshot: metriken_exposition::Snapshot = match rmp_serde::from_slice(&body) {
             Ok(s) => s,
             Err(e) => {
                 warn!("failed to deserialize snapshot: {e}");
@@ -86,8 +85,7 @@ pub async fn ingest_loop(
             }
         };
 
-        let mut tsdb = tsdb.write();
-        tsdb.ingest(snapshot);
+        store.ingest_snapshot(&mut snapshot);
         sample_count += 1;
 
         snapshots.lock().push_back(body.to_vec());
@@ -96,9 +94,9 @@ pub async fn ingest_loop(
             debug!(
                 "ingested {} samples, counters: {}, gauges: {}, histograms: {}",
                 sample_count,
-                tsdb.counter_names().len(),
-                tsdb.gauge_names().len(),
-                tsdb.histogram_names().len(),
+                store.counter_names().len(),
+                store.gauge_names().len(),
+                store.histogram_names().len(),
             );
         }
     }
@@ -245,15 +243,15 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let mut data = match Tsdb::load(&temp_path) {
-        Ok(d) => d,
+    let reader = match ParquetReader::open(&temp_path) {
+        Ok(r) => r,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return ApiResponse::err(format!("failed to load parquet: {e}"), "invalid_parquet");
         }
     };
     let filesize = std::fs::metadata(&temp_path).map(|m| m.len()).ok();
-    data.set_filename(filename.clone());
+    let reader_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(reader);
 
     // Mirror the regenerate_dashboards short-circuit: a trimmed report
     // gets an empty section list so /api/v1/sections is consistent with
@@ -266,18 +264,14 @@ pub fn ingest_baseline_from_path(
         }
     } else {
         let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
-        validate_service_extensions(&data, &mut service_exts);
+        validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
         ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = data;
-    }
+    state.replace_baseline(reader_arc, filename.clone());
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
     *state.parquet_path.write() = Some(temp_path);
@@ -338,8 +332,8 @@ pub async fn attach_experiment(
             .into_response();
     }
 
-    let mut tsdb = match Tsdb::load(&temp_path) {
-        Ok(t) => t,
+    let exp_reader = match ParquetReader::open(&temp_path) {
+        Ok(r) => r,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
             return (
@@ -349,15 +343,18 @@ pub async fn attach_experiment(
                 .into_response();
         }
     };
-    tsdb.set_filename(filename);
 
     let (sysinfo, _selection, file_meta) = extract_parquet_metadata(&temp_path);
     // HTTP-attached experiments don't carry an alias today; the
     // parameter is here so a future `x-rezolus-alias` header can thread
     // one through without further signature changes.
-    state
-        .captures
-        .attach_experiment(tsdb, sysinfo.clone(), file_meta, None);
+    state.captures.attach_experiment(
+        Arc::new(exp_reader) as Arc<dyn MetricsSource + Send + Sync>,
+        filename,
+        sysinfo.clone(),
+        file_meta,
+        None,
+    );
     *state.experiment_parquet_path.write() = Some(temp_path);
 
     regenerate_dashboards(&state);
@@ -419,30 +416,26 @@ pub async fn connect_agent(
         Err(e) => return ApiResponse::err(e, "connection_error"),
     };
 
-    let mut tsdb = Tsdb::default();
-    tsdb.set_sampling_interval_ms(1000);
-    tsdb.set_source(info.source.clone());
-    tsdb.set_version(info.version.clone());
-    tsdb.set_filename(url.to_string());
+    let new_store = MemoryStore::builder()
+        .source(info.source.clone())
+        .version(info.version.clone())
+        .sampling_interval_ms(1000)
+        .build();
+    let new_store_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(new_store.clone());
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
 
-    {
-        let tsdb_handle = state.baseline_tsdb();
-        let mut db = tsdb_handle.write();
-        *db = tsdb;
-    }
+    state.replace_baseline(new_store_arc, url.to_string());
     *state.sections.write() = LazySectionStore::new(context);
     state.captures.set_baseline_systeminfo(info.sysinfo);
     state.live.store(true, Ordering::Relaxed);
 
-    let ingest_tsdb = state.baseline_tsdb();
     let ingest_snapshots = state.snapshots.clone();
     let mut ingest_url = url.clone();
     ingest_url.set_path("/metrics/binary");
 
     tokio::spawn(ingest_loop(
         ingest_url,
-        ingest_tsdb,
+        new_store,
         ingest_snapshots,
         info.source.clone(),
         info.version.clone(),
@@ -469,23 +462,19 @@ pub async fn reset_tsdb(
         return ApiResponse::err("reset is only available in live mode", "bad_request");
     }
 
-    let tsdb_handle = state.baseline_tsdb();
-    let (source, version, filename) = {
-        let tsdb = tsdb_handle.read();
-        (
-            tsdb.source().to_string(),
-            tsdb.version().to_string(),
-            tsdb.filename().to_string(),
-        )
-    };
-    {
-        let mut tsdb = tsdb_handle.write();
-        *tsdb = Tsdb::default();
-        tsdb.set_sampling_interval_ms(1000);
-        tsdb.set_source(source);
-        tsdb.set_version(version);
-        tsdb.set_filename(filename);
-    }
+    let data = state.baseline_data();
+    let source = data.source();
+    let version = data.version();
+    let filename = state.captures.filename(CaptureId::Baseline);
+
+    let new_store = MemoryStore::builder()
+        .source(source)
+        .version(version)
+        .sampling_interval_ms(1000)
+        .build();
+    let new_store_arc: Arc<dyn MetricsSource + Send + Sync> = Arc::new(new_store);
+    state.replace_baseline(new_store_arc, filename);
+
     state.snapshots.lock().clear();
     info!("TSDB reset by user");
     ApiResponse::ok(serde_json::json!({ "ok": true }))
@@ -600,7 +589,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 .into_response();
             }
         };
-        let baseline_tsdb = state.baseline_tsdb();
+        let baseline_data = state.baseline_data();
         let trim_columns = payload.trim_columns;
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
@@ -618,7 +607,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                 )
                 .into_response();
             };
-            let experiment_tsdb = state
+            let experiment_data = state
                 .captures
                 .get(CaptureId::Experiment)
                 .expect("experiment slot must be attached in combined-A/B mode");
@@ -631,10 +620,10 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                         &experiment_path,
                         &payload,
                         &body,
-                        &baseline_tsdb,
-                        &experiment_tsdb,
                         &manifest,
                         trim_columns,
+                        baseline_data.as_ref(),
+                        experiment_data.as_ref(),
                     )
                     .map_err(|e| e.to_string())
                 }
@@ -650,7 +639,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
                     &path,
                     &payload,
                     &body,
-                    &baseline_tsdb,
+                    baseline_data.as_ref(),
                     trim_columns,
                 )
                 .map_err(|e| e.to_string())

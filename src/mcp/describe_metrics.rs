@@ -1,133 +1,87 @@
-use crate::viewer::tsdb::Tsdb;
-use std::sync::Arc;
+use metriken_query::MetricsSource;
 
 /// Format metrics description for display
-pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
+pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
     let mut output = String::new();
     output.push_str("Available Metrics in Recording\n");
     output.push_str("===============================\n\n");
 
     let descriptions = crate::common::metric_descriptions();
 
-    let mut counter_names = tsdb.counter_names();
+    let helper = |output: &mut String, name: &str, labels_list: &[std::collections::BTreeMap<String, String>]| {
+        let mut all_keys = std::collections::HashSet::new();
+        for labels in labels_list {
+            for (key, _) in labels.iter() {
+                if key != "metric" && key != "unit" && key != "metric_type" {
+                    all_keys.insert(key.clone());
+                }
+            }
+        }
+        if !all_keys.is_empty() {
+            let mut keys: Vec<_> = all_keys.into_iter().collect();
+            keys.sort();
+            output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
+        }
+        output.push_str(&format!("  Series count: {}\n", labels_list.len()));
+        let _ = name;
+    };
+
+    let mut counter_names = data.counter_names();
     if !counter_names.is_empty() {
         counter_names.sort();
         output.push_str("COUNTERS (monotonically increasing values):\n");
         output.push_str("-------------------------------------------\n");
-        for name in counter_names {
+        for name in &counter_names {
             output.push_str(&format!("• {name}\n"));
-            if let Some(desc) = descriptions.get(name) {
+            if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.counter_labels(name) {
-                // Get unique label keys, excluding metadata labels
-                let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
-                    }
-                }
-                if !all_keys.is_empty() {
-                    let mut keys: Vec<_> = all_keys.into_iter().collect();
-                    keys.sort();
-                    output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
-                }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
-            }
+            let labels_list = data.counter_labels(name);
+            helper(&mut output, name, &labels_list);
             output.push('\n');
         }
     }
 
-    let mut gauge_names = tsdb.gauge_names();
+    let mut gauge_names = data.gauge_names();
     if !gauge_names.is_empty() {
         gauge_names.sort();
         output.push_str("\nGAUGES (values that can go up or down):\n");
         output.push_str("----------------------------------------\n");
-        for name in gauge_names {
+        for name in &gauge_names {
             output.push_str(&format!("• {name}\n"));
-            if let Some(desc) = descriptions.get(name) {
+            if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.gauge_labels(name) {
-                // Get unique label keys, excluding metadata labels
-                let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
-                    }
-                }
-                if !all_keys.is_empty() {
-                    let mut keys: Vec<_> = all_keys.into_iter().collect();
-                    keys.sort();
-                    output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
-                }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
-            }
+            let labels_list = data.gauge_labels(name);
+            helper(&mut output, name, &labels_list);
             output.push('\n');
         }
     }
 
-    let mut histogram_names = tsdb.histogram_names();
+    let mut histogram_names = data.histogram_names();
     if !histogram_names.is_empty() {
         histogram_names.sort();
         output.push_str("\nHISTOGRAMS (distributions of values):\n");
         output.push_str("--------------------------------------\n");
-        for name in histogram_names {
+        for name in &histogram_names {
             output.push_str(&format!("• {name}\n"));
-            if let Some(desc) = descriptions.get(name) {
+            if let Some(desc) = descriptions.get(name.as_str()) {
                 output.push_str(&format!("  Description: {desc}\n"));
             }
-            if let Some(labels_list) = tsdb.histogram_labels(name) {
-                // Get unique label keys, excluding metadata labels
-                let mut all_keys = std::collections::HashSet::new();
-                for labels in &labels_list {
-                    for (key, _) in labels.inner.iter() {
-                        if key != "metric" && key != "unit" && key != "metric_type" {
-                            all_keys.insert(key.clone());
-                        }
-                    }
-                }
-                if !all_keys.is_empty() {
-                    let mut keys: Vec<_> = all_keys.into_iter().collect();
-                    keys.sort();
-                    output.push_str(&format!("  Labels: {}\n", keys.join(", ")));
-                }
-                output.push_str(&format!("  Series count: {}\n", labels_list.len()));
-            }
+            let labels_list = data.histogram_labels(name);
+            helper(&mut output, name, &labels_list);
             output.push('\n');
         }
     }
 
-    let total_counters = tsdb.counter_names().len();
-    let total_gauges = tsdb.gauge_names().len();
-    let total_histograms = tsdb.histogram_names().len();
+    let total_counters = counter_names.len();
+    let total_gauges = gauge_names.len();
+    let total_histograms = histogram_names.len();
     let total_metrics = total_counters + total_gauges + total_histograms;
 
-    let mut total_counter_series = 0;
-    for name in tsdb.counter_names() {
-        if let Some(labels_list) = tsdb.counter_labels(name) {
-            total_counter_series += labels_list.len();
-        }
-    }
-
-    let mut total_gauge_series = 0;
-    for name in tsdb.gauge_names() {
-        if let Some(labels_list) = tsdb.gauge_labels(name) {
-            total_gauge_series += labels_list.len();
-        }
-    }
-
-    let mut total_histogram_series = 0;
-    for name in tsdb.histogram_names() {
-        if let Some(labels_list) = tsdb.histogram_labels(name) {
-            total_histogram_series += labels_list.len();
-        }
-    }
-
+    let total_counter_series: usize = counter_names.iter().map(|n| data.counter_labels(n).len()).sum();
+    let total_gauge_series: usize = gauge_names.iter().map(|n| data.gauge_labels(n).len()).sum();
+    let total_histogram_series: usize = histogram_names.iter().map(|n| data.histogram_labels(n).len()).sum();
     let total_series = total_counter_series + total_gauge_series + total_histogram_series;
 
     output.push_str("\nSUMMARY:\n");
@@ -142,7 +96,7 @@ pub fn format_metrics_description(tsdb: &Arc<Tsdb>) -> String {
     output.push_str(&format!("  Histogram series: {total_histogram_series}\n"));
     output.push_str(&format!(
         "\nSampling interval: {}ms\n",
-        tsdb.interval() * 1000.0
+        data.interval() * 1000.0
     ));
 
     output.push_str("\n\nCOMMON QUERY PATTERNS:\n");

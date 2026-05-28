@@ -1,10 +1,10 @@
-//! Holds the two TSDB stores (baseline + optional experiment) plus their
+//! Holds the two capture stores (baseline + optional experiment) plus their
 //! per-capture metadata. All cross-capture composition lives outside this
 //! module; the registry is intentionally dumb about comparison.
 
 use std::sync::Arc;
 
-use metriken_query::Tsdb;
+use metriken_query::MetricsSource;
 use parking_lot::RwLock;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash, serde::Deserialize)]
@@ -32,7 +32,10 @@ impl CaptureId {
 }
 
 pub struct CaptureSlot {
-    pub tsdb: Arc<RwLock<Tsdb>>,
+    /// The data source behind a RwLock so it can be replaced on upload.
+    pub data: RwLock<Arc<dyn MetricsSource + Send + Sync>>,
+    /// Filename is tracked separately since it's no longer on the reader.
+    pub filename: RwLock<String>,
     pub systeminfo: RwLock<Option<String>>,
     pub file_metadata: RwLock<Option<String>>,
     /// Optional display alias for this capture (e.g. "redis", "valkey").
@@ -47,14 +50,16 @@ pub struct CaptureRegistry {
 
 impl CaptureRegistry {
     pub fn new(
-        baseline_tsdb: Tsdb,
+        baseline_data: Arc<dyn MetricsSource + Send + Sync>,
+        baseline_filename: String,
         baseline_systeminfo: Option<String>,
         baseline_file_metadata: Option<String>,
         baseline_alias: Option<String>,
     ) -> Self {
         Self {
             baseline: CaptureSlot {
-                tsdb: Arc::new(RwLock::new(baseline_tsdb)),
+                data: RwLock::new(baseline_data),
+                filename: RwLock::new(baseline_filename),
                 systeminfo: RwLock::new(baseline_systeminfo),
                 file_metadata: RwLock::new(baseline_file_metadata),
                 alias: RwLock::new(baseline_alias),
@@ -63,15 +68,31 @@ impl CaptureRegistry {
         }
     }
 
-    pub fn get(&self, id: CaptureId) -> Option<Arc<RwLock<Tsdb>>> {
+    pub fn get(&self, id: CaptureId) -> Option<Arc<dyn MetricsSource + Send + Sync>> {
         match id {
-            CaptureId::Baseline => Some(self.baseline.tsdb.clone()),
+            CaptureId::Baseline => Some(self.baseline.data.read().clone()),
             CaptureId::Experiment => self
                 .experiment
                 .read()
                 .as_ref()
-                .map(|slot| slot.tsdb.clone()),
+                .map(|slot| slot.data.read().clone()),
         }
+    }
+
+    pub fn filename(&self, id: CaptureId) -> String {
+        match id {
+            CaptureId::Baseline => self.baseline.filename.read().clone(),
+            CaptureId::Experiment => self
+                .experiment
+                .read()
+                .as_ref()
+                .map(|slot| slot.filename.read().clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn set_baseline_filename(&self, filename: String) {
+        *self.baseline.filename.write() = filename;
     }
 
     pub fn systeminfo(&self, id: CaptureId) -> Option<String> {
@@ -110,15 +131,12 @@ impl CaptureRegistry {
         }
     }
 
-    /// Overwrite the baseline slot's alias. Useful when the agent mode
-    /// swaps in a newly-recorded baseline without tearing the registry
-    /// down.
+    /// Overwrite the baseline slot's alias.
     pub fn set_baseline_alias(&self, alias: Option<String>) {
         *self.baseline.alias.write() = alias;
     }
 
-    /// Overwrite the baseline slot's systeminfo. The baseline TSDB Arc is
-    /// unaffected so callers holding it keep working across updates.
+    /// Overwrite the baseline slot's systeminfo.
     pub fn set_baseline_systeminfo(&self, systeminfo: Option<String>) {
         *self.baseline.systeminfo.write() = systeminfo;
     }
@@ -128,15 +146,27 @@ impl CaptureRegistry {
         *self.baseline.file_metadata.write() = file_metadata;
     }
 
+    /// Replace the baseline data store and filename.
+    pub fn set_baseline_data(
+        &self,
+        data: Arc<dyn MetricsSource + Send + Sync>,
+        filename: String,
+    ) {
+        *self.baseline.data.write() = data;
+        *self.baseline.filename.write() = filename;
+    }
+
     pub fn attach_experiment(
         &self,
-        tsdb: Tsdb,
+        data: Arc<dyn MetricsSource + Send + Sync>,
+        filename: String,
         systeminfo: Option<String>,
         file_metadata: Option<String>,
         alias: Option<String>,
     ) {
         *self.experiment.write() = Some(CaptureSlot {
-            tsdb: Arc::new(RwLock::new(tsdb)),
+            data: RwLock::new(data),
+            filename: RwLock::new(filename),
             systeminfo: RwLock::new(systeminfo),
             file_metadata: RwLock::new(file_metadata),
             alias: RwLock::new(alias),
@@ -170,13 +200,7 @@ mod tests {
 
     #[test]
     fn registry_experiment_attached_toggles() {
-        // Building a real Tsdb requires a parquet on disk (Tsdb::load(path)).
-        // Exercise only the boolean state transitions that do not need a
-        // backing store. Full attach/get is covered by manual verification
-        // in Task 29.
-        //
-        // Compile-only smoke: the types exist and the method signatures
-        // are reachable.
+        // Compile-only smoke: the types exist and the method signatures are reachable.
         #[allow(dead_code)]
         fn _compile_only(reg: &CaptureRegistry) -> bool {
             reg.experiment_attached()

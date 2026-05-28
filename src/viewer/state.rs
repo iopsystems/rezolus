@@ -14,9 +14,10 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
 use tracing::error;
 
+use metriken_query::MetricsSource;
+
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
-use super::tsdb::Tsdb;
 use ::dashboard::{self, TemplateRegistry};
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
@@ -52,10 +53,17 @@ impl LazySectionStore {
     /// Generate (or return the cached body for) `route` (`/cpu`,
     /// `/service/vllm`, …). Returns `None` when the route is unknown or
     /// the section has no data. Applies `context.filesize` uniformly.
-    pub fn get_or_generate(&mut self, route: &str, data: &Tsdb) -> Option<&serde_json::Value> {
+    pub fn get_or_generate(
+        &mut self,
+        route: &str,
+        data: &dyn MetricsSource,
+        filename: String,
+    ) -> Option<&serde_json::Value> {
         let key = format!("{}.json", &route[1..]);
         if !self.cached_bodies.contains_key(&key) {
-            let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
+            let mut view =
+                dashboard::dashboard::generate_section(data, route, &self.context)?;
+            view.set_filename(filename);
             if let Some(size) = self.context.filesize {
                 view.set_filesize(size);
             }
@@ -88,7 +96,7 @@ impl ProxyState {
 
 pub struct AppState {
     pub sections: RwLock<LazySectionStore>,
-    /// Per-capture TSDB + metadata. Single-capture callers always target
+    /// Per-capture data store + metadata. Single-capture callers always target
     /// `CaptureId::Baseline`; the experiment slot is empty unless a
     /// compare-mode hand-off has attached one.
     pub captures: Arc<CaptureRegistry>,
@@ -99,14 +107,8 @@ pub struct AppState {
     /// Original parquet file path (file mode only).
     pub parquet_path: RwLock<Option<PathBuf>>,
     /// Temp parquet path for the HTTP-attached experiment capture.
-    /// Owned by the attach handler — deleted on detach. The CLI startup
-    /// path uses `cli_experiment_path` instead so detach never touches
-    /// the user's own file.
     pub experiment_parquet_path: RwLock<Option<PathBuf>>,
-    /// User-supplied experiment parquet path from the CLI. Read-only —
-    /// never deleted on detach. Kept separate from
-    /// `experiment_parquet_path` so `regenerate_dashboards` can find
-    /// the experiment metadata without risking the user's file.
+    /// User-supplied experiment parquet path from the CLI.
     pub cli_experiment_path: RwLock<Option<PathBuf>>,
     /// Active category template name (when `--category` was supplied).
     pub category_name: RwLock<Option<String>>,
@@ -115,23 +117,19 @@ pub struct AppState {
     /// SHA-256 hex digest of the source parquet file (file mode only).
     pub file_checksum: RwLock<Option<String>>,
     pub proxy: ProxyState,
-    /// Set during init_file_mode when the input was a `*.parquet.ab.tar`
-    /// archive. Carries the manifest extracted from the tarball; the
-    /// presence of `Some` is what `/api/v1/mode` exposes as
-    /// `combined_ab: true` so the frontend can pick UX appropriate for
-    /// a single-artifact compare.
     pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
-    /// Footer `KEY_REPORT` value cached at init. `Some("trimmed")`
-    /// flips the viewer into report mode (empty section list, frontend
-    /// defaults to `/report`).
     pub trimmed_report_marker: RwLock<Option<String>>,
 }
 
 impl AppState {
-    pub fn new(tsdb: Tsdb, templates: TemplateRegistry) -> Self {
+    pub fn new(
+        data: Arc<dyn MetricsSource + Send + Sync>,
+        filename: String,
+        templates: TemplateRegistry,
+    ) -> Self {
         Self {
             sections: Default::default(),
-            captures: Arc::new(CaptureRegistry::new(tsdb, None, None, None)),
+            captures: Arc::new(CaptureRegistry::new(data, filename, None, None, None)),
             templates,
             snapshots: Arc::new(Mutex::new(VecDeque::new())),
             live: AtomicBool::new(false),
@@ -147,9 +145,7 @@ impl AppState {
         }
     }
 
-    /// Enable the URL proxy with the given hostname allowlist. Builds a
-    /// dedicated reqwest client so proxy traffic is isolated from the
-    /// live-mode scrape client. No-op when the allowlist is empty.
+    /// Enable the URL proxy with the given hostname allowlist.
     pub fn set_proxy(&mut self, allow: proxy_allow::Allowlist) {
         if allow.is_empty() {
             return;
@@ -165,33 +161,31 @@ impl AppState {
         }
     }
 
-    /// Shorthand for the baseline TSDB handle. The registry guarantees
-    /// the baseline slot is always present.
-    pub fn baseline_tsdb(&self) -> Arc<RwLock<Tsdb>> {
+    /// Shorthand for the baseline data store (clones the Arc).
+    pub fn baseline_data(&self) -> Arc<dyn MetricsSource + Send + Sync> {
         self.captures
             .get(CaptureId::Baseline)
             .expect("baseline capture is always present")
     }
 
-    /// True when the input artifact was a combined-A/B tarball
-    /// (extracted at startup into two per-side TSDBs). The frontend uses
-    /// this to distinguish a single-file compare from a two-file compare
-    /// in download / save flows.
+    /// Replace the baseline data store (used by upload/connect handlers).
+    pub fn replace_baseline(
+        &self,
+        data: Arc<dyn MetricsSource + Send + Sync>,
+        filename: String,
+    ) {
+        self.captures.set_baseline_data(data, filename);
+    }
+
     pub fn combined_ab(&self) -> bool {
         self.combined_ab_marker.read().is_some()
     }
 
-    /// True when the loaded parquet carries `KEY_REPORT` — see
-    /// [`AppState::trimmed_report_marker`] for what that flips.
     pub fn is_trimmed_report(&self) -> bool {
         self.trimmed_report_marker.read().is_some()
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.
-    /// When no context has been loaded yet (live mode pre-refresh,
-    /// upload-only mode pre-upload) returns a minimal payload with empty
-    /// sections and zeroed numerics. The `_capture` argument is advisory:
-    /// the same nav list applies to both baseline and experiment.
     pub fn sections_metadata(&self, _capture: CaptureId) -> serde_json::Value {
         let store = self.sections.read();
         let sections_array: Vec<serde_json::Value> = store
@@ -202,28 +196,29 @@ impl AppState {
         let filesize = store.context().filesize.unwrap_or(0);
         drop(store);
 
-        let tsdb_handle = self.baseline_tsdb();
-        let data = tsdb_handle.read();
+        let data = self.baseline_data();
         let interval = data.interval();
-        let source = data.source().to_string();
-        let version = data.version().to_string();
-        let filename = data.filename().to_string();
-        // Tsdb time_range is in nanoseconds; convert to milliseconds to
-        // match the View's convention.
+        let source = data.source();
+        let version = data.version();
+        let filename = self.captures.filename(CaptureId::Baseline);
+        // time_range is now in seconds; convert to milliseconds for the UI.
         let (start_time, end_time) = data
             .time_range()
-            .map(|(min, max)| (min / 1_000_000, max / 1_000_000))
+            .map(|(min, max)| (
+                (min * 1000.0) as u64,
+                (max * 1000.0) as u64,
+            ))
             .unwrap_or((0, 0));
         let num_series = {
             let mut count = 0usize;
             for name in data.counter_names() {
-                count += data.counter_labels(name).map_or(0, |l| l.len());
+                count += data.counter_labels(&name).len();
             }
             for name in data.gauge_names() {
-                count += data.gauge_labels(name).map_or(0, |l| l.len());
+                count += data.gauge_labels(&name).len();
             }
             for name in data.histogram_names() {
-                count += data.histogram_labels(name).map_or(0, |l| l.len());
+                count += data.histogram_labels(&name).len();
             }
             count
         };
@@ -282,8 +277,7 @@ impl CaptureParam {
     }
 }
 
-/// Standard JSON envelope for API endpoints. Matches Prometheus's
-/// `{ status, data?, error?, errorType? }` shape.
+/// Standard JSON envelope for API endpoints.
 #[derive(serde::Serialize)]
 pub struct ApiResponse<T: serde::Serialize> {
     status: String,
@@ -315,7 +309,6 @@ impl<T: serde::Serialize> ApiResponse<T> {
         }
     }
 
-    /// Convenience: build an error response already wrapped in `Json`.
     pub fn err(
         error: impl Into<String>,
         error_type: impl Into<String>,
@@ -328,8 +321,8 @@ impl<T: serde::Serialize> ApiResponse<T> {
     }
 }
 
-pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
-    use super::promql::QueryError::*;
+pub fn promql_error_type(e: &metriken_query::QueryError) -> &'static str {
+    use metriken_query::QueryError::*;
     match e {
         ParseError(_) => "bad_data",
         EvaluationError(_) => "execution",
@@ -342,17 +335,19 @@ pub fn promql_error_type(e: &super::promql::QueryError) -> &'static str {
 mod report_marker_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
+    use metriken_query::MemoryStore;
 
     #[test]
     fn default_is_not_a_trimmed_report() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource + Send + Sync>;
+        let state = AppState::new(store, String::new(), TemplateRegistry::empty());
         assert!(!state.is_trimmed_report());
     }
 
     #[test]
     fn setting_marker_flips_predicate() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn MetricsSource + Send + Sync>;
+        let state = AppState::new(store, String::new(), TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         assert!(state.is_trimmed_report());
     }

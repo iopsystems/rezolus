@@ -6,7 +6,6 @@
 //! Without arguments, prints all section JSON to stdout.
 //! With a directory argument, writes each section as a pretty-printed JSON file.
 
-use dashboard::Tsdb;
 use dashboard::dashboard::{build_dashboard_context, generate_section};
 use std::collections::HashMap;
 
@@ -15,7 +14,7 @@ fn main() {
 
     // Render every section in the navigation list. The lazy API replaces
     // the old eager `generate` shim — same coverage, just hand-walked.
-    let data = Tsdb::default();
+    let data = metriken_query::MemoryStore::builder().build();
     let ctx = build_dashboard_context(None, &[], None);
     let mut rendered: HashMap<String, String> = HashMap::new();
     for section in &ctx.sections {
