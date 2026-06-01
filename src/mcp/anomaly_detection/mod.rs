@@ -272,19 +272,19 @@ fn auto_construct_query(query: &str, data: &dyn MetricsSource) -> Result<String,
         query
     };
 
-    if data.counter_names().iter().any(|n| n == metric_name) {
+    if data.has_counter(metric_name) {
         eprintln!(
             "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
             metric_name, query
         );
         Ok(format!("sum(rate({}[1m]))", query))
-    } else if data.gauge_names().iter().any(|n| n == metric_name) {
+    } else if data.has_gauge(metric_name) {
         eprintln!(
             "Auto-detected '{}' as GAUGE, using: sum({})",
             metric_name, query
         );
         Ok(format!("sum({})", query))
-    } else if data.histogram_names().iter().any(|n| n == metric_name) {
+    } else if data.has_histogram(metric_name) {
         eprintln!(
             "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
             metric_name, query
@@ -339,10 +339,7 @@ pub fn detect_anomalies(
             if error_msg.contains("Metric not found") || error_msg.contains("not found") {
                 let metric_hint = extract_metric_name(&query);
 
-                let mut all_metrics = Vec::new();
-                all_metrics.extend(data.counter_names());
-                all_metrics.extend(data.gauge_names());
-                all_metrics.extend(data.histogram_names());
+                let all_metrics = data.all_names();
 
                 let mut suggestions: Vec<&str> = Vec::new();
                 if let Some(hint) = metric_hint {

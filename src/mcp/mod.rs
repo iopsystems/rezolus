@@ -214,7 +214,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
     let mut derived_metrics = Vec::new();
 
     // CPU Frequency = (aperf / mperf) - shows actual vs max performance
-    if reader.counter_names().iter().any(|n| n == "cpu_aperf") && reader.counter_names().iter().any(|n| n == "cpu_mperf") {
+    if reader.has_counter("cpu_aperf") && reader.has_counter("cpu_mperf") {
         derived_metrics.push((
             "cpu_frequency_ratio".to_string(),
             "derived",
@@ -223,9 +223,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
     }
 
     // CPU Instructions Per Cycle (IPC) - efficiency metric
-    if reader.counter_names().iter().any(|n| n == "cpu_instructions")
-        && reader.counter_names().iter().any(|n| n == "cpu_cycles")
-    {
+    if reader.has_counter("cpu_instructions") && reader.has_counter("cpu_cycles") {
         derived_metrics.push((
             "cpu_instructions_per_cycle".to_string(),
             "derived",
@@ -234,9 +232,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
     }
 
     // Cgroup versions of the same
-    if reader.counter_names().iter().any(|n| n == "cgroup_cpu_aperf")
-        && reader.counter_names().iter().any(|n| n == "cgroup_cpu_mperf")
-    {
+    if reader.has_counter("cgroup_cpu_aperf") && reader.has_counter("cgroup_cpu_mperf") {
         derived_metrics.push((
             "cgroup_cpu_frequency_ratio".to_string(),
             "derived",
@@ -244,9 +240,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
         ));
     }
 
-    if reader.counter_names().iter().any(|n| n == "cgroup_cpu_instructions")
-        && reader.counter_names().iter().any(|n| n == "cgroup_cpu_cycles")
-    {
+    if reader.has_counter("cgroup_cpu_instructions") && reader.has_counter("cgroup_cpu_cycles") {
         derived_metrics.push((
             "cgroup_cpu_instructions_per_cycle".to_string(),
             "derived",

@@ -62,7 +62,7 @@ impl LazySectionStore {
         if !self.cached_bodies.contains_key(&key) {
             let mut view =
                 dashboard::dashboard::generate_section(data, route, &self.context)?;
-            view.set_filename(data.filename().unwrap_or_default());
+            view.set_filename(data.filename_or_default());
             if let Some(size) = self.context.filesize {
                 view.set_filesize(size);
             }
@@ -195,7 +195,7 @@ impl AppState {
         let interval = data.interval();
         let source = data.source();
         let version = data.version();
-        let filename = data.filename().unwrap_or_default();
+        let filename = data.filename_or_default();
         // time_range is now in seconds; convert to milliseconds for the UI.
         let (start_time, end_time) = data
             .time_range()
@@ -204,19 +204,7 @@ impl AppState {
                 (max * 1000.0) as u64,
             ))
             .unwrap_or((0, 0));
-        let num_series = {
-            let mut count = 0usize;
-            for name in data.counter_names() {
-                count += data.counter_labels(&name).len();
-            }
-            for name in data.gauge_names() {
-                count += data.gauge_labels(&name).len();
-            }
-            for name in data.histogram_names() {
-                count += data.histogram_labels(&name).len();
-            }
-            count
-        };
+        let num_series = data.total_series_count();
 
         build_sections_metadata_payload(
             sections_array,

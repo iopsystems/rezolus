@@ -193,7 +193,7 @@ impl Viewer {
             interval: self.reader.interval(),
             source: self.reader.source(),
             version: self.reader.version(),
-            filename: self.reader.filename().unwrap_or_default().to_string(),
+            filename: self.reader.filename_or_default(),
             min_time,
             max_time,
             counter_names: self.reader.counter_names(),
@@ -399,7 +399,7 @@ impl Viewer {
         // Render on demand.
         let mut view =
             dashboard::dashboard::generate_section(self.reader.as_ref(), &route, &self.context)?;
-        view.set_filename(self.reader.filename().unwrap_or_default().to_string());
+        view.set_filename(self.reader.filename_or_default());
         if let Some(size) = self.context.filesize {
             view.set_filesize(size);
         }

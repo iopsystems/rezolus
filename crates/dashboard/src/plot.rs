@@ -58,19 +58,7 @@ impl View {
         };
 
         // Count total time series (each metric x label combination)
-        let num_series = {
-            let mut count = 0usize;
-            for name in data.counter_names() {
-                count += data.counter_labels(&name).len();
-            }
-            for name in data.gauge_names() {
-                count += data.gauge_labels(&name).len();
-            }
-            for name in data.histogram_names() {
-                count += data.histogram_labels(&name).len();
-            }
-            Some(count)
-        };
+        let num_series = Some(data.total_series_count());
 
         Self {
             interval,

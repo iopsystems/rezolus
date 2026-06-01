@@ -271,7 +271,7 @@ pub fn ingest_baseline_from_path(
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
 
-    let display_filename = reader_arc.filename().unwrap_or_default();
+    let display_filename = reader_arc.filename_or_default();
     state.replace_baseline(reader_arc);
     *state.sections.write() = LazySectionStore::new(context);
     let multinode_sysinfo = build_multinode_systeminfo(&temp_path);
@@ -466,7 +466,7 @@ pub async fn reset_tsdb(
     let data = state.baseline_data();
     let source = data.source();
     let version = data.version();
-    let filename = data.filename().unwrap_or_default();
+    let filename = data.filename_or_default();
 
     let new_store = MemoryStore::builder()
         .source(source)
