@@ -263,6 +263,21 @@ async function toggleTotal(chart) {
     chart.configureChartByType();
 }
 
+// Sit below the title, left edge aligned with the echarts plot grid
+// (i.e. just past the y-axis gutter).
+function positionTotalToggle(chart, container) {
+    if (!chart.echart) return;
+    try {
+        const rect = chart.echart.getModel()
+            .getComponent('grid')?.coordinateSystem?.getRect();
+        if (rect && Number.isFinite(rect.x)) {
+            container.style.left = Math.round(rect.x) + 'px';
+        }
+    } catch (_e) {
+        // echarts grid not ready yet; next 'finished' event will retry.
+    }
+}
+
 function ensureTotalToggle(chart) {
     if (!chart.spec.promql_query_total) {
         chart.domNode?.querySelector('.' + TOTAL_TOGGLE_CLASS)?.remove();
@@ -273,11 +288,10 @@ function ensureTotalToggle(chart) {
     if (!el) {
         el = document.createElement('span');
         el.className = TOTAL_TOGGLE_CLASS;
-        // right:60 clears the expand (right:8) + select-pin (right:32) icons.
         el.style.cssText = `
             position: absolute;
-            top: 8px;
-            right: 60px;
+            top: 42px;
+            left: 0px;
             z-index: 10;
             display: inline-flex;
             align-items: center;
@@ -290,4 +304,16 @@ function ensureTotalToggle(chart) {
     }
     el.onclick = () => toggleTotal(chart);
     renderTotalCheckbox(el, !!chart._showTotal, !!chart._totalPending);
+
+    // Reposition on each echarts layout (initial, theme swap, resize,
+    // zoom). Replace any previously bound listener so we don't stack
+    // handlers across reconfigures.
+    if (chart.echart) {
+        if (chart._totalToggleFinishedFn) {
+            chart.echart.off('finished', chart._totalToggleFinishedFn);
+        }
+        chart._totalToggleFinishedFn = () => positionTotalToggle(chart, el);
+        chart.echart.on('finished', chart._totalToggleFinishedFn);
+        positionTotalToggle(chart, el);
+    }
 }
