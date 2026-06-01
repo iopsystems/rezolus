@@ -53,6 +53,13 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 
     let latency = tcp.subgroup("Packet Latency");
     latency.describe("Time from packet received to being processed by the application.");
+    latency.histogram_rate_mean(
+        "TCP Packet",
+        "tcp-packet-latency",
+        "tcp_packet_latency",
+        RateSource::FromHistogram,
+        Unit::Time,
+    );
     latency.plot_promql_full(
         PlotOpts::histogram_latency("TCP Packet Latency", "tcp-packet-latency")
             .with_axis_label("Latency")
@@ -63,4 +70,20 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
     view.group(tcp);
 
     view
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Tsdb;
+
+    #[test]
+    fn tcp_packet_latency_gets_from_histogram_rate_mean() {
+        let view = generate(&Tsdb::default(), vec![]);
+        let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
+        assert!(json.contains("sum(histogram_irate(tcp_packet_latency))"));
+        assert!(json.contains("histogram_mean(tcp_packet_latency)\""));
+        // percentile plot still present
+        assert!(json.contains("\"tcp_packet_latency\""));
+    }
 }

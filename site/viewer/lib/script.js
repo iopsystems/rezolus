@@ -5,7 +5,8 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload, splitAlias } from './ui/landing.js';
 import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
-import { initDashboard, bootstrapSharedSections } from './app.js';
+import { initDashboard, bootstrapSharedSections, sectionResponseCache, loadSection } from './app.js';
+import { clearMetadataCache } from './data.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -108,6 +109,9 @@ const fetchInitialState = async () => {
 
 async function loadParquet(data, filename) {
     await initWasmViewer(data, filename);
+    // Stale {minTime, maxTime} would point fresh queries at a window
+    // outside the new file.
+    clearMetadataCache();
     const state = await fetchInitialState();
     // initWasmViewer already called setStorageScope, so a persisted
     // working set (if any) has been restored; this only seeds the
@@ -134,6 +138,16 @@ async function loadParquet(data, filename) {
         // loadParquet directly.
         onUploadParquet: loadFile,
     });
+    // Evict + refetch the visible section: same route → onmatch
+    // doesn't re-fire, so without an explicit kick the cachedView
+    // spins on a placeholder. Topnav time range rides along.
+    const currentSection = (m.route.get() || '').replace(/^\//, '').split('/')[0];
+    if (currentSection) {
+        delete sectionResponseCache[currentSection];
+        loadSection(currentSection).then(() => m.redraw()).catch(() => m.redraw());
+    } else {
+        m.redraw();
+    }
 }
 
 // Shared file-upload entry point: reads the File's bytes and runs the
@@ -513,5 +527,13 @@ if (_captureRaw.length >= 2) {
     m.mount(document.body, Root);
     loadDemo(_demoParam || 'demo.parquet');
 } else {
+    // No capture in URL — drop a stale section hash (e.g. #/overview
+    // left over from a previous session) so the landing-page URL bar
+    // matches what's actually rendered.
+    if (window.location.hash) {
+        const url = new URL(window.location);
+        url.hash = '';
+        window.history.replaceState(null, '', url);
+    }
     m.mount(document.body, Root);
 }
