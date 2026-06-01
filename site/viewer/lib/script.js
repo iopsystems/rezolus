@@ -5,8 +5,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { FileUpload, splitAlias } from './ui/landing.js';
 import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
-import { initDashboard, bootstrapSharedSections, clearViewerCaches } from './app.js';
-import { clearMetadataCache } from './data.js';
+import { initDashboard, bootstrapSharedSections } from './app.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -108,11 +107,6 @@ const fetchInitialState = async () => {
 // ── Common loader ───────────────────────────────────────────────────
 
 async function loadParquet(data, filename) {
-    // Reloading replaces the WASM TSDB; stale section/chart/metadata
-    // caches keyed by the old file would otherwise short-circuit query
-    // resolution and the new file would render empty.
-    clearViewerCaches();
-    clearMetadataCache();
     await initWasmViewer(data, filename);
     const state = await fetchInitialState();
     // initWasmViewer already called setStorageScope, so a persisted
