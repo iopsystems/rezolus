@@ -513,5 +513,13 @@ if (_captureRaw.length >= 2) {
     m.mount(document.body, Root);
     loadDemo(_demoParam || 'demo.parquet');
 } else {
+    // No capture in URL — drop a stale section hash (e.g. #/overview
+    // left over from a previous session) so the landing-page URL bar
+    // matches what's actually rendered.
+    if (window.location.hash) {
+        const url = new URL(window.location);
+        url.hash = '';
+        window.history.replaceState(null, '', url);
+    }
     m.mount(document.body, Root);
 }
