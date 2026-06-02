@@ -243,7 +243,7 @@ pub fn ingest_baseline_from_path(
     temp_path: PathBuf,
     filename: String,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let reader = match ParquetReader::open(&temp_path) {
+    let reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -333,7 +333,7 @@ pub async fn attach_experiment(
             .into_response();
     }
 
-    let exp_reader = match ParquetReader::open(&temp_path) {
+    let exp_reader = match ParquetReader::open_with_pool(&temp_path, Arc::clone(&state.pool)) {
         Ok(r) => r.with_filename(filename),
         Err(e) => {
             let _ = std::fs::remove_file(&temp_path);

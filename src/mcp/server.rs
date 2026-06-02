@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use metriken_query::{MetricsSource, ParquetReader};
+use metriken_query::{BufferPool, MetricsSource, ParquetReader};
 
 /// MCP protocol methods
 #[derive(Debug)]
@@ -59,15 +59,25 @@ impl From<&str> for McpTool {
     }
 }
 
+/// Default buffer pool budget for the MCP server: 500 MB.
+///
+/// Multiple parquet files may be queried in a single MCP session; the
+/// shared pool means row groups decoded for one file stay warm for the
+/// next tool call against the same file.
+const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
+
 /// MCP server state
 pub struct Server {
     reader_cache: Arc<RwLock<HashMap<String, Arc<ParquetReader>>>>,
+    /// Shared LRU row-group cache for all readers opened by this server.
+    pool: Arc<BufferPool>,
 }
 
 impl Server {
     pub fn new() -> Self {
         Self {
             reader_cache: Arc::new(RwLock::new(HashMap::new())),
+            pool: BufferPool::new(MCP_CACHE_SIZE_BYTES),
         }
     }
 
@@ -479,7 +489,7 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let reader = Arc::new(ParquetReader::open(path)?);
+        let reader = Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?);
         let output = super::format_recording_info(parquet_file, reader.as_ref());
         Ok(output)
     }
@@ -498,7 +508,7 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let reader = Arc::new(ParquetReader::open(path)?);
+        let reader = Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?);
 
         {
             let mut cache = self.reader_cache.write().unwrap();

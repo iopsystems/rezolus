@@ -1,7 +1,15 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use metriken_query::{MetricsSource, ParquetReader};
+use metriken_query::{BufferPool, MetricsSource, ParquetReader};
+
+/// Buffer pool budget for the WASM viewer: 64 MB.
+///
+/// Browsers impose tighter heap limits than servers; the source bytes
+/// are already in memory, so the effective warm-cache speedup is bounded
+/// by how many row groups fit alongside them. 64 MB is a conservative
+/// default — enough for a moderate recording without crowding the JS heap.
+const WASM_CACHE_SIZE_BYTES: usize = 64 * 1024 * 1024;
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -78,6 +86,9 @@ fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::A
 #[wasm_bindgen]
 pub struct Viewer {
     reader: Arc<ParquetReader>,
+    /// Per-Viewer buffer pool. WASM is single-upload-per-Viewer; each
+    /// Viewer gets its own pool sized at `WASM_CACHE_SIZE_BYTES`.
+    _pool: Arc<BufferPool>,
     file_metadata: std::collections::HashMap<String, String>,
     /// Lazy section context. Populated by `init_templates` (single
     /// capture) or `WasmCaptureRegistry::regenerate_combined` (compare
@@ -139,8 +150,9 @@ impl Viewer {
     pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
         let bytes = Bytes::from(data.to_vec());
         let source_bytes = bytes.clone();
+        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
         let reader = Arc::new(
-            ParquetReader::open_bytes(bytes)
+            ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
                 .with_filename(filename.to_string())
         );
@@ -154,6 +166,7 @@ impl Viewer {
 
         Ok(Viewer {
             reader,
+            _pool: pool,
             file_metadata,
             context,
             cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),

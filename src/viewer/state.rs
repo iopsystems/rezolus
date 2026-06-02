@@ -14,11 +14,21 @@ use parking_lot::{Mutex, RwLock};
 use reqwest::Client;
 use tracing::error;
 
-use metriken_query::MetricsSource;
+use metriken_query::{BufferPool, MetricsSource};
 
 use super::capture_registry::{CaptureId, CaptureRegistry};
 use super::proxy_allow;
 use ::dashboard::{self, TemplateRegistry};
+
+/// Default buffer pool budget for the server-side viewer: 500 MB.
+///
+/// All `ParquetReader`s share this budget via an LRU-evicted row-group
+/// cache. First-query latency is unchanged; subsequent queries against
+/// the same row groups (the common dashboard workload) are served from
+/// the in-memory cache.
+///
+/// Tune with `REZOLUS_CACHE_MB` (env) or the `--cache-size-mb` flag.
+pub const DEFAULT_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
 /// Caches the navigation list (via the owned `DashboardContext`) and
 /// memoizes per-section JSON bodies. `/api/v1/sections` reads the nav
@@ -118,12 +128,26 @@ pub struct AppState {
     pub proxy: ProxyState,
     pub combined_ab_marker: RwLock<Option<crate::parquet_metadata::AbContainers>>,
     pub trimmed_report_marker: RwLock<Option<String>>,
+    /// Shared LRU row-group cache for all `ParquetReader`s in this process.
+    ///
+    /// Readers opened with `Arc::clone(&state.pool)` share the same budget.
+    /// The default is `DEFAULT_CACHE_SIZE_BYTES`; set `REZOLUS_CACHE_MB` or
+    /// pass `--cache-size-mb` to override.
+    pub pool: Arc<BufferPool>,
 }
 
 impl AppState {
     pub fn new(
         data: Arc<dyn MetricsSource>,
         templates: TemplateRegistry,
+    ) -> Self {
+        Self::with_pool(data, templates, BufferPool::new(DEFAULT_CACHE_SIZE_BYTES))
+    }
+
+    pub fn with_pool(
+        data: Arc<dyn MetricsSource>,
+        templates: TemplateRegistry,
+        pool: Arc<BufferPool>,
     ) -> Self {
         Self {
             sections: Default::default(),
@@ -140,6 +164,7 @@ impl AppState {
             proxy: ProxyState::default(),
             combined_ab_marker: RwLock::new(None),
             trimmed_report_marker: RwLock::new(None),
+            pool,
         }
     }
 

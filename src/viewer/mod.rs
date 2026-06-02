@@ -21,6 +21,7 @@ use tower_livereload::LiveReloadLayer;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 #[cfg(feature = "developer-mode")]
 use notify::Watcher;
@@ -168,6 +169,19 @@ pub fn command() -> Command {
                 )
                 .action(clap::ArgAction::SetTrue),
         )
+        .arg(
+            clap::Arg::new("CACHE_SIZE_MB")
+                .long("cache-size-mb")
+                .value_name("MB")
+                .help(
+                    "Row-group buffer cache size in megabytes. Larger values \
+                     speed up repeated queries against the same data (typical \
+                     dashboard workload); smaller values reduce peak RSS. \
+                     Overrides REZOLUS_CACHE_MB. Default: 500.",
+                )
+                .value_parser(value_parser!(usize))
+                .action(clap::ArgAction::Set),
+        )
 }
 
 pub struct Config {
@@ -180,6 +194,8 @@ pub struct Config {
     listen: SocketAddr,
     templates_dir: Option<PathBuf>,
     proxy_allow: proxy_allow::Allowlist,
+    /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
+    cache_size_bytes: usize,
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -244,6 +260,18 @@ impl TryFrom<ArgMatches> for Config {
             )
         };
 
+        // Resolve cache size: CLI flag > env var > compile-time default.
+        let cache_size_bytes = args
+            .get_one::<usize>("CACHE_SIZE_MB")
+            .copied()
+            .or_else(|| {
+                std::env::var("REZOLUS_CACHE_MB")
+                    .ok()
+                    .and_then(|s| s.parse::<usize>().ok())
+            })
+            .map(|mb| mb * 1024 * 1024)
+            .unwrap_or(state::DEFAULT_CACHE_SIZE_BYTES);
+
         Ok(Config {
             source,
             experiment_path,
@@ -256,6 +284,7 @@ impl TryFrom<ArgMatches> for Config {
                 .unwrap_or(&"127.0.0.1:0".to_socket_addrs().unwrap().next().unwrap()),
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
             proxy_allow,
+            cache_size_bytes,
         })
     }
 }
@@ -275,14 +304,21 @@ pub fn run(config: Config) {
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
+    // One shared pool for all ParquetReaders in this process.
+    let pool = metriken_query::BufferPool::new(config.cache_size_bytes);
+    info!(
+        "Buffer pool: {} MB",
+        config.cache_size_bytes / (1024 * 1024)
+    );
+
     let mut state = match &config.source {
-        Source::File(path) => init_file_mode(&config, path, &registry),
-        Source::Live(url) => init_live_mode(&rt, url, &registry),
+        Source::File(path) => init_file_mode(&config, path, &registry, Arc::clone(&pool)),
+        Source::Live(url) => init_live_mode(&rt, url, &registry, Arc::clone(&pool)),
         Source::Empty => {
             info!("No input file — starting in upload-only mode");
             let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
                 std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
-            AppState::new(empty_store, registry.clone())
+            AppState::with_pool(empty_store, registry.clone(), Arc::clone(&pool))
         }
     };
 
@@ -340,13 +376,13 @@ pub(super) fn read_footer_kv(path: &Path, key: &str) -> Option<String> {
 
 /// Build initial AppState for a parquet file source, including the
 /// optional experiment attach and category validation.
-fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> AppState {
+fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry, pool: Arc<metriken_query::BufferPool>) -> AppState {
     info!("Loading data from parquet file...");
 
     // Combined-A/B tarball detection runs first — bare parquets fall
     // through to the normal load path below.
     if ab_extract::looks_like_ab_tarball(path) {
-        return init_file_mode_combined_ab(config, path, registry);
+        return init_file_mode_combined_ab(config, path, registry, pool);
     }
 
     let (systeminfo, selection, file_meta) = metadata::extract_parquet_metadata(path);
@@ -354,7 +390,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
 
     // ParquetReader::open defaults filename() to the path's basename.
     let reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open(path).unwrap_or_else(|e| {
+        metriken_query::ParquetReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(|e| {
             eprintln!("failed to load data from parquet: {e}");
             std::process::exit(1);
         })
@@ -371,7 +407,7 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
     }
     log_service_exts(&service_exts, "baseline");
 
-    let state = AppState::new(reader as std::sync::Arc<dyn metriken_query::MetricsSource>, registry.clone());
+    let state = AppState::with_pool(reader as std::sync::Arc<dyn metriken_query::MetricsSource>, registry.clone(), Arc::clone(&pool));
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -386,11 +422,11 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry) -> 
         .set_baseline_alias(config.baseline_alias.clone());
 
     if let Some(ref cat_name) = config.category_name {
-        validate_category_at_startup(&state, registry, cat_name, &service_exts, config);
+        validate_category_at_startup(&state, registry, cat_name, &service_exts, config, Arc::clone(&pool));
     }
 
     if let Some(exp_path) = &config.experiment_path {
-        attach_cli_experiment(&state, exp_path, registry, config.experiment_alias.clone());
+        attach_cli_experiment(&state, exp_path, registry, config.experiment_alias.clone(), Arc::clone(&pool));
     }
 
     info!("Generating dashboards...");
@@ -407,6 +443,7 @@ fn init_file_mode_combined_ab(
     config: &Config,
     path: &Path,
     registry: &TemplateRegistry,
+    pool: Arc<metriken_query::BufferPool>,
 ) -> AppState {
     info!("Combined-A/B tarball detected — extracting per-side parquets");
 
@@ -436,7 +473,7 @@ fn init_file_mode_combined_ab(
         .to_string();
 
     let baseline_reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open(&extracted.baseline_path)
+        metriken_query::ParquetReader::open_with_pool(&extracted.baseline_path, Arc::clone(&pool))
             .unwrap_or_else(|e| {
                 eprintln!("failed to load baseline parquet from tarball: {e}");
                 std::process::exit(1);
@@ -444,7 +481,7 @@ fn init_file_mode_combined_ab(
             .with_filename(display_filename.clone())
     );
     let experiment_reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open(&extracted.experiment_path)
+        metriken_query::ParquetReader::open_with_pool(&extracted.experiment_path, Arc::clone(&pool))
             .unwrap_or_else(|e| {
                 eprintln!("failed to load experiment parquet from tarball: {e}");
                 std::process::exit(1);
@@ -470,9 +507,10 @@ fn init_file_mode_combined_ab(
         .unwrap_or_else(|| ab.baseline.alias.clone());
     let experiment_alias = ab.experiment.alias.clone();
 
-    let state = AppState::new(
+    let state = AppState::with_pool(
         baseline_reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
+        Arc::clone(&pool),
     );
     // Point parquet_path at the *extracted* baseline parquet (not the
     // tar itself) so `regenerate_dashboards` and other parquet-aware
@@ -526,7 +564,7 @@ fn init_file_mode_combined_ab(
         if config.category_name.is_none() {
             info!("Applying category {cat_name:?} from combined-A/B manifest");
         }
-        validate_category_at_startup(&state, registry, cat_name, &baseline_service_exts, config);
+        validate_category_at_startup(&state, registry, cat_name, &baseline_service_exts, config, Arc::clone(&pool));
     }
 
     info!("Generating dashboards...");
@@ -543,6 +581,7 @@ fn validate_category_at_startup(
     cat_name: &str,
     baseline_exts: &[(String, ServiceExtension)],
     config: &Config,
+    pool: Arc<metriken_query::BufferPool>,
 ) {
     let category = registry.get_category(cat_name).unwrap_or_else(|| {
         eprintln!("no category template named {cat_name:?} found in the registry");
@@ -563,7 +602,7 @@ fn validate_category_at_startup(
     });
     let mut experiment_exts =
         metadata::extract_service_extension_metadata(experiment_path, registry);
-    if let Ok(exp_reader) = metriken_query::ParquetReader::open(experiment_path) {
+    if let Ok(exp_reader) = metriken_query::ParquetReader::open_with_pool(experiment_path, Arc::clone(&pool)) {
         metadata::validate_service_extensions(&exp_reader, &mut experiment_exts);
     }
     let experiment_sources: Vec<String> = experiment_exts.iter().map(|(s, _)| s.clone()).collect();
@@ -591,11 +630,12 @@ fn attach_cli_experiment(
     exp_path: &Path,
     registry: &TemplateRegistry,
     alias: Option<String>,
+    pool: Arc<metriken_query::BufferPool>,
 ) {
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
-    // ParquetReader::open defaults filename() to the path's basename.
-    let exp_reader = match metriken_query::ParquetReader::open(exp_path) {
+    // ParquetReader::open_with_pool defaults filename() to the path's basename.
+    let exp_reader = match metriken_query::ParquetReader::open_with_pool(exp_path, Arc::clone(&pool)) {
         Ok(r) => std::sync::Arc::new(r),
         Err(e) => {
             warn!(
@@ -641,6 +681,7 @@ fn init_live_mode(
     rt: &tokio::runtime::Runtime,
     url: &Url,
     registry: &TemplateRegistry,
+    pool: Arc<metriken_query::BufferPool>,
 ) -> AppState {
     info!("Connecting to live agent at {url}...");
     let info = rt.block_on(async {
@@ -670,7 +711,7 @@ fn init_live_mode(
         .build();
     let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource> =
         std::sync::Arc::new(store.clone());
-    let state = AppState::new(store_arc, registry.clone());
+    let state = AppState::with_pool(store_arc, registry.clone(), pool);
     let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
