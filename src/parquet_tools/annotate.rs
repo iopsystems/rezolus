@@ -1,7 +1,6 @@
 use clap::ArgMatches;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,

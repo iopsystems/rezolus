@@ -32,10 +32,8 @@ pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
 /// Re-export PromQL types so other modules can use `crate::viewer::promql::*`.
 pub mod promql {
-    pub use metriken_query::{HistogramHeatmapResult, MatrixSample, QueryError, QueryResult, Sample};
-    /// Adapter: callers that previously constructed `QueryEngine::new(data).query_range(...)`
-    /// can now call these functions directly on any `MetricsSource`.
-    pub use metriken_query::MetricsSource as QueryEngine;
+    
+    
 }
 
 pub mod capture_registry;

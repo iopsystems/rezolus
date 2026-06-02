@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Json, Response};
 use http::{header, StatusCode};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use reqwest::{Client, Url};
 use tracing::{debug, error, info, warn};
 
