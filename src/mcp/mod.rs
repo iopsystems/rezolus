@@ -193,13 +193,13 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
     let mut metrics_to_analyze = Vec::new();
 
     for name in reader.counter_names() {
-        if !skip_metrics.iter().any(|n| *n == name.as_str()) {
+        if !skip_metrics.contains(&name.as_str()) {
             metrics_to_analyze.push((name.to_string(), "counter", None));
         }
     }
 
     for name in reader.gauge_names() {
-        if !skip_metrics.iter().any(|n| *n == name.as_str()) {
+        if !skip_metrics.contains(&name.as_str()) {
             metrics_to_analyze.push((name.to_string(), "gauge", None));
         }
     }

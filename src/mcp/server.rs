@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use metriken_query::{BufferPool, MetricsSource, ParquetReader};
+use metriken_query::{BufferPool, ParquetReader};
 
 /// MCP protocol methods
 #[derive(Debug)]
