@@ -1,0 +1,293 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Downsampled time-series plots</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font: 15px/1.55 system-ui, sans-serif;
+    margin: 0;
+    background: #0e0e11;
+    color: #e8e8ea;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 3rem 1.5rem 4rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .6rem; letter-spacing: -0.01em; }
+  .lede { color: #b6b6bd; max-width: 64ch; margin: 0 0 .75rem; }
+  .controls { color: #8f8f97; font-size: .85rem; margin: 0; }
+  .controls kbd {
+    font: inherit; background: #26262c; border: 1px solid #3a3a42;
+    border-radius: 4px; padding: 0 .35em;
+  }
+  section.chart { margin: 2.75rem 0 0; }
+  section.chart:first-of-type { margin-top: 3rem; }
+  section.chart h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 .9rem; }
+  .caption { color: #9a9aa2; font-size: .85rem; max-width: 64ch; margin: 1rem 0 0; }
+  .caption b { color: #d2d2d8; font-weight: 600; }
+  hr.sep { border: 0; border-top: 1px solid #222228; margin: 2.75rem 0 0; }
+</style>
+<main>
+  <h1>Downsampled time-series plots</h1>
+  <p class="lede">
+    Two server-rendered views of large time series. Each plot is a
+    <b>downsampled render of the visible window</b> &mdash; pan and zoom freely,
+    and when you settle, the server recomputes the view at full resolution for
+    exactly the range on screen.
+  </p>
+  <p class="controls">
+    <b>Drag</b> to pan &middot; <b>Scroll</b> to zoom (up to 64&times;) &middot;
+    <kbd>Shift</kbd>+drag to select a range
+  </p>
+
+  <section class="chart">
+    <h2>Line &mdash; M4 downsampling</h2>
+    <div id="line"></div>
+    <p class="caption" id="line-caption"></p>
+  </section>
+
+  <hr class="sep">
+
+  <section class="chart">
+    <h2>Raster &mdash; summed-area-table tiles</h2>
+    <div id="raster"></div>
+    <p class="caption" id="raster-caption"></p>
+  </section>
+</main>
+<script type="module">
+  import { LinePlot   } from "./components/line-plot.js";
+  import { RasterPlot } from "./components/raster-plot.js";
+  import { PlotAxis   } from "./components/plot-axis.js";
+  import { ZoomInteraction } from "./components/zoom-interaction.js";
+
+  const PLOT_W = 720, PLOT_H = 180;
+  const margin = { top: 10, right: 10, bottom: 24, left: 56 };
+  const worldExtent = { x0: 0, x1: PLOT_W / PLOT_H, y0: 0, y1: 1 };
+  const scaleExtent = [1, 64];
+
+  function toUnitView(view) {
+    const w = worldExtent.x1 - worldExtent.x0;
+    const h = worldExtent.y1 - worldExtent.y0;
+    return {
+      extent: {
+        x0: (view.extent.x0 - worldExtent.x0) / w,
+        x1: (view.extent.x1 - worldExtent.x0) / w,
+        y0: (view.extent.y0 - worldExtent.y0) / h,
+        y1: (view.extent.y1 - worldExtent.y0) / h,
+      },
+      size: view.size,
+    };
+  }
+
+  const THROTTLE_MS = 50;
+  const REFETCH_MAX_MS = 200;
+  const PREFETCH_SCALE = 1.2;
+
+  // Trailing debounce with a hard ceiling. It still fires THROTTLE_MS after the
+  // last view change (snappy once you settle), but never defers longer than
+  // maxWait from the first pending change — so a continuous stream of events
+  // (e.g. a trackpad zoom-out keeps emitting inertial wheel events for a while)
+  // can't keep resetting the timer and delaying the request indefinitely.
+  function makeRefetchScheduler(fn, wait, maxWait) {
+    let timer = null, firstPending = 0, lastArgs = null;
+    return (...args) => {
+      lastArgs = args;
+      const now = performance.now();
+      if (timer === null) firstPending = now;
+      else clearTimeout(timer);
+      const run = () => { timer = null; fn(...lastArgs); };
+      const waited = now - firstPending;
+      if (waited >= maxWait) { run(); return; }
+      timer = setTimeout(run, Math.min(wait, maxWait - waited));
+    };
+  }
+
+  function padExtent(ext, scale) {
+    const cx = (ext.x0 + ext.x1) / 2;
+    const half = ((ext.x1 - ext.x0) / 2) * scale;
+    const cy = (ext.y0 + ext.y1) / 2;
+    const halfY = ((ext.y1 - ext.y0) / 2) * scale;
+    return { x0: cx - half, x1: cx + half, y0: cy - halfY, y1: cy + halfY };
+  }
+
+  // Map a world-space extent to data-domain coordinates for the given plot.
+  function worldExtentToDomain(ext, domain) {
+    const wx = worldExtent.x1 - worldExtent.x0;
+    const wy = worldExtent.y1 - worldExtent.y0;
+    const dx = domain.x1 - domain.x0;
+    const dy = domain.y1 - domain.y0;
+    return {
+      x0: domain.x0 + ((ext.x0 - worldExtent.x0) / wx) * dx,
+      x1: domain.x0 + ((ext.x1 - worldExtent.x0) / wx) * dx,
+      y0: domain.y0 + ((ext.y0 - worldExtent.y0) / wy) * dy,
+      y1: domain.y0 + ((ext.y1 - worldExtent.y0) / wy) * dy,
+    };
+  }
+
+  // Choose SI tick precision from the visible x span, so labels stay compact when
+  // zoomed out (20k, 140k) yet distinct when zoomed deep in (148.2k). A fixed
+  // precision can't do both: too few significant figures collide once the tick
+  // step drops below what they can resolve, too many clutter the overview.
+  function xTickFormat(span) {
+    if (span >= 50000) return ".2~s";
+    if (span >= 5000)  return ".3~s";
+    return ".4~s";
+  }
+
+  // Every mounted plot shares the same world frame, so one view change drives all
+  // of them: the line and the raster zoom and pan together as a single linked view.
+  const linkedPlots = [];
+  function broadcastView(view, liveSource) {
+    for (const applyView of linkedPlots) {
+      // `liveSource` is the plot currently driving a gesture (or null for a brush,
+      // which has already ended); it keeps its own d3 transform, the rest sync.
+      applyView(view, applyView === liveSource);
+    }
+  }
+
+  function mountPlot(hostEl, data, makePlot, endpoint) {
+    const axisDomain = data.domain;
+    const axis = new PlotAxis(hostEl, {
+      width: PLOT_W, height: PLOT_H, margin,
+      axes: {
+        x: {
+          domain: [axisDomain.x0, axisDomain.x1],
+          tickFormat: xTickFormat(axisDomain.x1 - axisDomain.x0),
+        },
+        y: { domain: [axisDomain.y0, axisDomain.y1], tickFormat: ".2~s" },
+      },
+    });
+
+    const plotEl = document.createElement("div");
+    const zoomEl = document.createElement("div");
+    for (const el of [plotEl, zoomEl]) {
+      el.style.position = "absolute";
+      el.style.inset = "0";
+    }
+    axis.plotFrame.append(plotEl, zoomEl);
+
+    const plot = makePlot(plotEl, data);
+
+    const initialZoomView = {
+      extent: { ...worldExtent },
+      size: { width: PLOT_W, height: PLOT_H },
+    };
+
+    // Size the renderer to the full plot viewport up front. The constructor sized
+    // it to whatever resolution the server returned (its default), so without this
+    // the data would render small in the corner until the first interaction.
+    plot.setView(toUnitView(initialZoomView));
+
+    const zoom = new ZoomInteraction(zoomEl, {
+      view: initialZoomView, worldExtent, scaleExtent, zoomAxis: "x", mode: "zoom",
+    });
+
+    // Tracks the request in flight so a newer view can cancel it. Aborting also
+    // closes the out-of-order race: a slow earlier request can't land after a
+    // newer one and overwrite the plot with a stale view.
+    let inflight = null;
+    async function refetch(viewExtent) {
+      inflight?.abort();
+      inflight = new AbortController();
+      const { signal } = inflight;
+
+      const padded = padExtent(viewExtent, PREFETCH_SCALE);
+      const dom = worldExtentToDomain(padded, axisDomain);
+      const params = new URLSearchParams({
+        x0: dom.x0, x1: dom.x1,
+        y0: dom.y0, y1: dom.y1,
+        width: PLOT_W, height: PLOT_H,
+      });
+      let fresh;
+      try {
+        fresh = await fetch(`${endpoint}?${params}`, { signal }).then(r => r.json());
+      } catch (err) {
+        if (err.name === "AbortError") return; // superseded by a newer view
+        throw err;
+      }
+      if (fresh.paths)  plot.setPaths(fresh.paths);
+      if (fresh.raster) plot.setRaster(fresh.raster);
+    }
+    const scheduleRefetch = makeRefetchScheduler(refetch, THROTTLE_MS, REFETCH_MAX_MS);
+
+    // Re-range the axis ticks to the visible window. This is cheap (a handful of
+    // ticks) and runs live with the view transform, so labels track the zoom/pan
+    // immediately rather than waiting on the debounced data refetch.
+    function updateAxis(view) {
+      const dom = worldExtentToDomain(view.extent, axisDomain);
+      axis.setAxes({
+        x: { domain: [dom.x0, dom.x1], tickFormat: xTickFormat(dom.x1 - dom.x0) },
+        y: { domain: [dom.y0, dom.y1], tickFormat: ".2~s" },
+      });
+    }
+
+    // Apply a view that originated on this plot or a linked one. `live` is true
+    // only for the plot driving an in-progress gesture: its d3 transform is already
+    // correct, so we leave it alone rather than overwrite it mid-drag.
+    function applyView(view, live) {
+      if (!live) zoom.setView(view);
+      plot.setView(toUnitView(view));
+      updateAxis(view);
+      scheduleRefetch(view.extent);
+    }
+    linkedPlots.push(applyView);
+
+    zoomEl.addEventListener("viewchange", ({ detail }) => {
+      broadcastView(detail.view, applyView);
+    });
+
+    zoomEl.addEventListener("brushselect", ({ detail }) => {
+      broadcastView(detail.view, null);
+    });
+
+    const onKeyDown = (e) => { if (e.key === "Shift") zoom.setMode("brush"); };
+    const onKeyUp   = (e) => { if (e.key === "Shift") zoom.setMode("zoom"); };
+    // If the window loses focus while Shift is held (alt-tab, devtools), the keyup
+    // never arrives — reset to zoom mode so brush mode can't get stuck on.
+    const onBlur    = () => zoom.setMode("zoom");
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup",   onKeyUp);
+    window.addEventListener("blur",     onBlur);
+  }
+
+  // Request the initial render at the actual plot resolution, not the server's
+  // default, so the first paint is as sharp as the post-interaction refetch.
+  const initialParams = new URLSearchParams({ width: PLOT_W, height: PLOT_H });
+  const line   = await fetch(`/api/line?${initialParams}`).then(r => r.json());
+  const raster = await fetch(`/api/raster?${initialParams}`).then(r => r.json());
+
+  // Contextualize each chart with stats derived from the live data domain, so
+  // the copy stays accurate if the backend's series sizes ever change.
+  const fmt = (n) => n.toLocaleString("en-US");
+
+  const lineSamples = Math.round(line.domain.x1 - line.domain.x0);
+  const perColumn   = Math.round(lineSamples / PLOT_W);
+  const maxVertices = PLOT_W * 4; // M4 keeps first, last, min, max per pixel column
+  document.getElementById("line-caption").innerHTML =
+    `A <b>${fmt(lineSamples)}-sample</b> series. At this width each pixel column ` +
+    `spans ~<b>${perColumn} samples</b>, and M4 keeps only the first, last, min, ` +
+    `and max of each &mdash; so a fully zoomed-out view draws at most ` +
+    `<b>${fmt(maxVertices)}</b> points instead of ${fmt(lineSamples)}, ` +
+    `while every visible peak and trough survives. Zoom in and the server resamples ` +
+    `the narrower window at full resolution.`;
+
+  const rasterRows  = Math.round(raster.domain.x1 - raster.domain.x0);
+  const rasterCols  = Math.round(raster.domain.y1 - raster.domain.y0);
+  const rasterCells = rasterRows * rasterCols;
+  document.getElementById("raster-caption").innerHTML =
+    `A <b>${fmt(rasterRows)} &times; ${rasterCols}</b> density field &mdash; ` +
+    `${fmt(rasterRows)} time steps, each a ${rasterCols}-bin value histogram ` +
+    `(<b>${fmt(rasterCells)} cells</b>). A summed-area table, built once, answers ` +
+    `each visible tile in constant time, so every zoom and pan level renders from ` +
+    `the same prepared table.`;
+
+  mountPlot(
+    document.getElementById("line"),
+    line,
+    (el, d) => new LinePlot(el, d),
+    "/api/line",
+  );
+  mountPlot(
+    document.getElementById("raster"),
+    raster,
+    (el, d) => new RasterPlot(el, d),
+    "/api/raster",
+  );
+</script>
