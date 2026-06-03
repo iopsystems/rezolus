@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
 /// Centralized view of true error / fault metrics across subsystems:
@@ -6,7 +6,7 @@ use crate::plot::*;
 /// hits, and quota-driven throttling. Excludes ordinary performance
 /// counters like cache misses or page faults — those belong in their
 /// own subsystem sections.
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     let mut network = Group::new("Network", "network");

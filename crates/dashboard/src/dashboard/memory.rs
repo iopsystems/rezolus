@@ -1,7 +1,7 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     let mut usage = Group::new("Usage", "usage");

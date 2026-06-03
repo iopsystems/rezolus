@@ -12,6 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 arrow = "58.2.0"
+bytes = "1"
 parquet = { version = "58.2.0", default-features = false, features = ["arrow", "simdutf8", "zstd"] }
 tar = { version = "0.4.45", default-features = false }
 serde.workspace = true

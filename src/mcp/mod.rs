@@ -8,13 +8,12 @@ pub mod correlation;
 mod describe_metrics;
 mod server;
 
-use crate::viewer::promql::{QueryEngine, QueryResult};
-use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
+use metriken_query::{MetricsSource, ParquetReader, QueryResult};
 
 /// Format recording information for display
-pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEngine) -> String {
-    let (start_time, end_time) = engine.get_time_range();
+pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> String {
+    let (start_time, end_time) = data.time_range().unwrap_or((0.0, 0.0));
     let duration_seconds = end_time - start_time;
 
     let hours = (duration_seconds / 3600.0) as u64;
@@ -47,8 +46,8 @@ pub fn format_recording_info(file_path: &str, tsdb: &Arc<Tsdb>, engine: &QueryEn
          Start Time: {} (epoch: {:.0})\n\
          End Time: {} (epoch: {:.0})",
         file_path,
-        tsdb.version(),
-        tsdb.source(),
+        data.version(),
+        data.source(),
         duration_str,
         duration_seconds,
         start_datetime,
@@ -98,20 +97,15 @@ fn run_server(config: Config) {
 }
 
 fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
-    use crate::viewer::promql::QueryEngine;
-    use crate::viewer::tsdb::Tsdb;
-
-    let tsdb = match Tsdb::load(&file) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
 
-    let engine = Arc::new(QueryEngine::new(tsdb.clone()));
-
-    match correlation::calculate_correlation(&engine, &tsdb, &query1, &query2) {
+    match correlation::calculate_correlation(&reader, &query1, &query2) {
         Ok(result) => {
             println!("{}", correlation::format_correlation_result(&result));
         }
@@ -123,46 +117,42 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
 }
 
 fn run_describe_recording(file: PathBuf) {
-    let tsdb = match Tsdb::load(&file) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
 
-    let engine = QueryEngine::new(tsdb.clone());
-
-    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &tsdb, &engine);
+    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &reader);
     println!("{output}");
 }
 
 fn run_describe_metrics(file: PathBuf) {
-    let tsdb = match Tsdb::load(&file) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
 
-    let output = describe_metrics::format_metrics_description(&tsdb);
+    let output = describe_metrics::format_metrics_description(&reader);
     println!("{output}");
 }
 
 fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
-    let tsdb = match Tsdb::load(&file) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(&file) {
+        Ok(r) => Arc::new(r),
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
 
-    let engine = Arc::new(QueryEngine::new(tsdb.clone()));
-
     if let Some(query) = query {
-        match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
+        match anomaly_detection::detect_anomalies(reader.as_ref(), &query) {
             Ok(result) => {
                 println!(
                     "{}",
@@ -177,10 +167,10 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
         return;
     }
 
-    run_exhaustive_detection(engine, tsdb);
+    run_exhaustive_detection(reader);
 }
 
-fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
+fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
     // Metrics to skip - these are raw building blocks or redundant metrics
     let skip_metrics = [
         // CPU building blocks - only meaningful when combined
@@ -202,19 +192,19 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
 
     let mut metrics_to_analyze = Vec::new();
 
-    for name in tsdb.counter_names() {
-        if !skip_metrics.contains(&name) {
+    for name in reader.counter_names() {
+        if !skip_metrics.iter().any(|n| *n == name.as_str()) {
             metrics_to_analyze.push((name.to_string(), "counter", None));
         }
     }
 
-    for name in tsdb.gauge_names() {
-        if !skip_metrics.contains(&name) {
+    for name in reader.gauge_names() {
+        if !skip_metrics.iter().any(|n| *n == name.as_str()) {
             metrics_to_analyze.push((name.to_string(), "gauge", None));
         }
     }
 
-    for name in tsdb.histogram_names() {
+    for name in reader.histogram_names() {
         metrics_to_analyze.push((name.to_string(), "histogram_p50", None));
         metrics_to_analyze.push((name.to_string(), "histogram_p90", None));
         metrics_to_analyze.push((name.to_string(), "histogram_p99", None));
@@ -224,7 +214,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     let mut derived_metrics = Vec::new();
 
     // CPU Frequency = (aperf / mperf) - shows actual vs max performance
-    if tsdb.counter_names().contains(&"cpu_aperf") && tsdb.counter_names().contains(&"cpu_mperf") {
+    if reader.has_counter("cpu_aperf") && reader.has_counter("cpu_mperf") {
         derived_metrics.push((
             "cpu_frequency_ratio".to_string(),
             "derived",
@@ -233,9 +223,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     }
 
     // CPU Instructions Per Cycle (IPC) - efficiency metric
-    if tsdb.counter_names().contains(&"cpu_instructions")
-        && tsdb.counter_names().contains(&"cpu_cycles")
-    {
+    if reader.has_counter("cpu_instructions") && reader.has_counter("cpu_cycles") {
         derived_metrics.push((
             "cpu_instructions_per_cycle".to_string(),
             "derived",
@@ -244,9 +232,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
     }
 
     // Cgroup versions of the same
-    if tsdb.counter_names().contains(&"cgroup_cpu_aperf")
-        && tsdb.counter_names().contains(&"cgroup_cpu_mperf")
-    {
+    if reader.has_counter("cgroup_cpu_aperf") && reader.has_counter("cgroup_cpu_mperf") {
         derived_metrics.push((
             "cgroup_cpu_frequency_ratio".to_string(),
             "derived",
@@ -254,9 +240,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
         ));
     }
 
-    if tsdb.counter_names().contains(&"cgroup_cpu_instructions")
-        && tsdb.counter_names().contains(&"cgroup_cpu_cycles")
-    {
+    if reader.has_counter("cgroup_cpu_instructions") && reader.has_counter("cgroup_cpu_cycles") {
         derived_metrics.push((
             "cgroup_cpu_instructions_per_cycle".to_string(),
             "derived",
@@ -293,7 +277,7 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
             }
         };
 
-        match anomaly_detection::detect_anomalies(&engine, &tsdb, &query) {
+        match anomaly_detection::detect_anomalies(reader.as_ref(), &query) {
             Ok(result) => {
                 if !result.anomalies.is_empty() {
                     let high_severity = result
@@ -377,20 +361,18 @@ fn run_exhaustive_detection(engine: Arc<QueryEngine>, tsdb: Arc<Tsdb>) {
 }
 
 fn run_query(file: PathBuf, query: String) {
-    let tsdb = match Tsdb::load(&file) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
         }
     };
 
-    let engine = Arc::new(QueryEngine::new(tsdb.clone()));
-
-    let (start_time, end_time) = engine.get_time_range();
+    let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
     let step = 1.0;
 
-    match engine.query_range(&query, start_time, end_time, step) {
+    match reader.query_range(&query, start_time, end_time, step) {
         Ok(result) => {
             println!("{}", format_query_result(&result));
         }

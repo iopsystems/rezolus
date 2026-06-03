@@ -1,4 +1,4 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 use crate::service_extension::{CategoryExtension, ServiceExtension};
 
@@ -18,7 +18,7 @@ mod service;
 mod softirq;
 mod syscall;
 
-type Generator = fn(&Tsdb, Vec<Section>) -> View;
+type Generator = fn(&dyn MetricsSource, Vec<Section>) -> View;
 
 static SECTION_META: &[(&str, &str, Generator)] = &[
     // Exceptions sits after Overview — it's a cross-sampler triage view,
@@ -146,7 +146,11 @@ pub fn build_dashboard_context(
 ///
 /// Filesize is not applied — callers that want a filesize on the response
 /// should call `view.set_filesize(...)` themselves.
-pub fn generate_section(data: &Tsdb, route: &str, ctx: &DashboardContext) -> Option<View> {
+pub fn generate_section(
+    data: &dyn MetricsSource,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<View> {
     let view = if route == "/overview" {
         overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
@@ -211,7 +215,7 @@ mod tests {
 
     #[test]
     fn generate_section_renders_known_routes_returns_none_for_unknown() {
-        let data = Tsdb::default();
+        let data = metriken_query::MemoryStore::builder().build();
         let ctx = build_dashboard_context(None, &[], None);
 
         // Overview renders.
@@ -269,7 +273,7 @@ mod tests {
             kpis: vec![kpi("throughput", "Generation Token Rate", "sglang_q")],
         };
 
-        let data = Tsdb::default();
+        let data = metriken_query::MemoryStore::builder().build();
 
         // Per-service flow (no category).
         let ctx = build_dashboard_context(None, &[("vllm", &vllm)], None);
@@ -379,7 +383,7 @@ mod tests {
         assert!(!routes.contains(&"/service/sglang"));
 
         // generate_section honors the same: category route renders, members 404.
-        let data = Tsdb::default();
+        let data = metriken_query::MemoryStore::builder().build();
         assert!(generate_section(&data, "/service/inference-library", &ctx).is_some());
         assert!(generate_section(&data, "/service/vllm", &ctx).is_none());
         assert!(generate_section(&data, "/service/sglang", &ctx).is_none());
@@ -430,7 +434,7 @@ mod tests {
         // The deduped service ext list also collapses to one entry, so
         // generate_section can still render the route.
         assert_eq!(ctx.service_exts.len(), 1);
-        let data = Tsdb::default();
+        let data = metriken_query::MemoryStore::builder().build();
         assert!(generate_section(&data, "/service/vllm", &ctx).is_some());
     }
 }

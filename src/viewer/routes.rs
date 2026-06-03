@@ -28,11 +28,11 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use std::sync::atomic::Ordering;
 
+use metriken_query::{QueryError, QueryResult};
+
 use super::actions;
 use super::capture_registry::{self, CaptureId};
-use super::promql::{self, QueryEngine};
 use super::state::{self, ApiResponse, AppState, CaptureParam};
-use super::tsdb::Tsdb;
 
 #[cfg(not(feature = "developer-mode"))]
 static ASSETS: Dir<'_> = include_dir!("src/viewer/assets");
@@ -153,10 +153,9 @@ async fn data(State(state): State<Arc<AppState>>, AxumPath(path): AxumPath<Strin
     let route = format!("/{stem}");
 
     let value = {
-        let tsdb_handle = state.baseline_tsdb();
-        let tsdb = tsdb_handle.read();
+        let data = state.baseline_data();
         let mut store = state.sections.write();
-        store.get_or_generate(&route, &tsdb).cloned()
+        store.get_or_generate(&route, data.as_ref()).cloned()
     };
 
     let Some(mut value) = value else {
@@ -285,26 +284,20 @@ struct RangeQueryParams {
     capture: Option<String>,
 }
 
-/// Run `f` against the resolved capture's `QueryEngine`; on a missing
+/// Run `f` against the resolved capture's data source; on a missing
 /// capture, return a `capture_not_found` ApiResponse.
-fn run_query<F>(
-    state: &AppState,
-    capture: Option<&str>,
-    f: F,
-) -> Json<ApiResponse<promql::QueryResult>>
+fn run_query<F>(state: &AppState, capture: Option<&str>, f: F) -> Json<ApiResponse<QueryResult>>
 where
-    F: FnOnce(&QueryEngine<&Tsdb>) -> Result<promql::QueryResult, promql::QueryError>,
+    F: FnOnce(&dyn metriken_query::MetricsSource) -> Result<QueryResult, QueryError>,
 {
     let capture = CaptureId::parse_opt(capture);
-    let Some(tsdb_handle) = state.captures.get(capture) else {
+    let Some(data) = state.captures.get(capture) else {
         return ApiResponse::err(
             format!("capture '{capture:?}' not attached"),
             "capture_not_found",
         );
     };
-    let tsdb = tsdb_handle.read();
-    let engine = QueryEngine::new(&*tsdb);
-    match f(&engine) {
+    match f(data.as_ref()) {
         Ok(result) => ApiResponse::ok(result),
         Err(e) => ApiResponse::err(e.to_string(), state::promql_error_type(&e)),
     }
@@ -313,18 +306,18 @@ where
 async fn instant_query(
     Query(params): Query<QueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<promql::QueryResult>> {
-    run_query(&state, params.capture.as_deref(), |engine| {
-        engine.query(&params.query, params.time)
+) -> Json<ApiResponse<QueryResult>> {
+    run_query(&state, params.capture.as_deref(), |data| {
+        data.query(&params.query, params.time)
     })
 }
 
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<promql::QueryResult>> {
-    run_query(&state, params.capture.as_deref(), |engine| {
-        engine.query_range(&params.query, params.start, params.end, params.step)
+) -> Json<ApiResponse<QueryResult>> {
+    run_query(&state, params.capture.as_deref(), |data| {
+        data.query_range(&params.query, params.start, params.end, params.step)
     })
 }
 
@@ -366,19 +359,19 @@ async fn metadata(
     Query(p): Query<CaptureParam>,
 ) -> Json<ApiResponse<serde_json::Value>> {
     let capture = p.capture_id();
-    let Some(tsdb_handle) = state.captures.get(capture) else {
+    let Some(data) = state.captures.get(capture) else {
         return ApiResponse::err(
             format!("capture {capture:?} not attached"),
             "capture_not_found",
         );
     };
-    let tsdb = tsdb_handle.read();
-    let engine = QueryEngine::new(&*tsdb);
-    let (min_time, max_time) = engine.get_time_range();
+    // time_range is in seconds; metadata endpoint returns seconds too.
+    let (min_time, max_time) = data.time_range().unwrap_or((0.0, 0.0));
+    let filename = state.captures.filename(capture);
     let mut meta = serde_json::json!({
         "minTime": min_time,
         "maxTime": max_time,
-        "filename": tsdb.filename(),
+        "filename": filename,
     });
     if let Some(alias) = state.captures.alias(capture) {
         meta["alias"] = serde_json::json!(alias);

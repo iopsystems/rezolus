@@ -1,7 +1,7 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     let mut operations = Group::new("Operations", "operations");
@@ -97,11 +97,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use metriken_query::MemoryStore;
 
     #[test]
     fn blockio_latency_and_size_get_rate_mean_pairs() {
-        let view = generate(&Tsdb::default(), vec![]);
+        let view = generate(&MemoryStore::builder().build(), vec![]);
         // serde escapes the inner `"` of PromQL label selectors; unescape
         // so the substring checks read like the queries we actually emit.
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");

@@ -1,7 +1,11 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>, throughput_query: Option<&str>) -> View {
+pub fn generate(
+    data: &dyn MetricsSource,
+    sections: Vec<Section>,
+    throughput_query: Option<&str>,
+) -> View {
     let mut view = View::new(data, sections);
 
     let mut cpu = Group::new("CPU", "cpu");

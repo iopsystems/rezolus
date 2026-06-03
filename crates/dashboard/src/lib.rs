@@ -4,7 +4,8 @@ mod plot;
 mod service_extension;
 
 pub use events::{Event, Events};
-pub use metriken_query::Tsdb;
+// Re-export for callers that use &dyn MetricsSource through the dashboard crate.
+pub use metriken_query::MetricsSource;
 pub use plot::*;
 pub use service_extension::{CategoryExtension, Kpi, ServiceExtension, TemplateRegistry};
 

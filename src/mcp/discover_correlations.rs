@@ -1,7 +1,5 @@
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
+use metriken_query::MetricsSource;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use super::correlation::{calculate_correlation, CorrelationResult, SeriesCorrelation};
 
@@ -58,8 +56,7 @@ pub struct CorrelationDiscoveryResult {
 
 /// Discover significant correlations automatically
 pub fn discover_correlations(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
+    data: &dyn MetricsSource,
     params: Option<DiscoveryParams>,
 ) -> Result<CorrelationDiscoveryResult, Box<dyn std::error::Error>> {
     let start_time = std::time::Instant::now();
@@ -86,7 +83,7 @@ pub fn discover_correlations(
             println!("Processed {}/{} pairs...", processed, total_pairs);
         }
         
-        match calculate_correlation(engine, tsdb, &query1.query, &query2.query) {
+        match calculate_correlation(data, &query1.query, &query2.query) {
             Ok(result) => {
                 if result.max_correlation.abs() >= params.min_correlation {
                     let relationship_type = if cat1 == cat2 {

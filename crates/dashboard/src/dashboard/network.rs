@@ -1,7 +1,7 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     let mut traffic = Group::new("Traffic", "traffic");
@@ -75,11 +75,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use metriken_query::MemoryStore;
 
     #[test]
     fn tcp_packet_latency_gets_from_histogram_rate_mean() {
-        let view = generate(&Tsdb::default(), vec![]);
+        let view = generate(&MemoryStore::builder().build(), vec![]);
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
         assert!(json.contains("sum(histogram_irate(tcp_packet_latency))"));
         assert!(json.contains("histogram_mean(tcp_packet_latency)\""));

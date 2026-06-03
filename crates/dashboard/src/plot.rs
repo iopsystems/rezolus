@@ -1,16 +1,15 @@
-use metriken_query::Tsdb;
-use metriken_query::tsdb::Labels;
+use metriken_query::MetricsSource;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Count distinct values of `key` across `labels`. Series missing the
 /// key are skipped. Used by section generators to decide whether
 /// per-device charts are worth showing (a single GPU/CPU makes the
 /// per-device variant identical to the aggregate).
-pub fn unique_label_count(labels: &[Labels], key: &str) -> usize {
+pub fn unique_label_count(labels: &[BTreeMap<String, String>], key: &str) -> usize {
     let mut seen: HashSet<&str> = HashSet::new();
     for l in labels {
-        if let Some(v) = l.inner.get(key) {
+        if let Some(v) = l.get(key) {
             seen.insert(v.as_str());
         }
     }
@@ -20,17 +19,8 @@ pub fn unique_label_count(labels: &[Labels], key: &str) -> usize {
 /// Convenience: how many distinct values of `key` exist for `metric`
 /// in `data`, looking across counter/gauge/histogram collections.
 /// Returns 0 if the metric is unknown.
-pub fn metric_unique_label_count(data: &Tsdb, metric: &str, key: &str) -> usize {
-    if let Some(l) = data.gauge_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    if let Some(l) = data.counter_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    if let Some(l) = data.histogram_labels(metric) {
-        return unique_label_count(&l, key);
-    }
-    0
+pub fn metric_unique_label_count(data: &dyn MetricsSource, metric: &str, key: &str) -> usize {
+    data.label_values(metric, key).len()
 }
 
 #[derive(Default, Serialize)]
@@ -56,38 +46,25 @@ pub struct View {
 }
 
 impl View {
-    pub fn new(data: &Tsdb, sections: Vec<Section>) -> Self {
+    pub fn new(data: &dyn MetricsSource, sections: Vec<Section>) -> Self {
         let interval = data.interval();
-        let source = data.source().to_string();
-        let version = data.version().to_string();
-        let filename = data.filename().to_string();
+        let source = data.source();
+        let version = data.version();
 
-        // Epoch milliseconds (source is nanoseconds).
+        // Epoch milliseconds (source is seconds).
         let (start_time, end_time) = match data.time_range() {
-            Some((min, max)) => (Some(min as f64 / 1e6), Some(max as f64 / 1e6)),
+            Some((min, max)) => (Some(min * 1000.0), Some(max * 1000.0)),
             None => (None, None),
         };
 
         // Count total time series (each metric x label combination)
-        let num_series = {
-            let mut count = 0usize;
-            for name in data.counter_names() {
-                count += data.counter_labels(name).map_or(0, |l| l.len());
-            }
-            for name in data.gauge_names() {
-                count += data.gauge_labels(name).map_or(0, |l| l.len());
-            }
-            for name in data.histogram_names() {
-                count += data.histogram_labels(name).map_or(0, |l| l.len());
-            }
-            Some(count)
-        };
+        let num_series = Some(data.total_series_count());
 
         Self {
             interval,
             source,
             version,
-            filename,
+            filename: String::new(),
             filesize: None,
             start_time,
             end_time,
@@ -96,6 +73,10 @@ impl View {
             sections,
             metadata: HashMap::new(),
         }
+    }
+
+    pub fn set_filename(&mut self, filename: String) {
+        self.filename = filename;
     }
 
     pub fn set_filesize(&mut self, size: u64) {
@@ -713,29 +694,32 @@ mod tests {
 
     #[test]
     fn unique_label_count_returns_zero_for_empty_input() {
-        let labels: Vec<metriken_query::tsdb::Labels> = vec![];
+        let labels: Vec<BTreeMap<String, String>> = vec![];
         assert_eq!(unique_label_count(&labels, "id"), 0);
+    }
+
+    fn make_labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
     fn unique_label_count_counts_distinct_values() {
-        use metriken_query::tsdb::Labels;
-        let labels: Vec<Labels> = vec![
-            Labels::from([("id", "0"), ("state", "user")].as_slice()),
-            Labels::from([("id", "0"), ("state", "system")].as_slice()),
-            Labels::from([("id", "1"), ("state", "user")].as_slice()),
-            Labels::from([("id", "1"), ("state", "system")].as_slice()),
+        let labels: Vec<BTreeMap<String, String>> = vec![
+            make_labels(&[("id", "0"), ("state", "user")]),
+            make_labels(&[("id", "0"), ("state", "system")]),
+            make_labels(&[("id", "1"), ("state", "user")]),
+            make_labels(&[("id", "1"), ("state", "system")]),
         ];
         assert_eq!(unique_label_count(&labels, "id"), 2);
     }
 
     #[test]
     fn unique_label_count_ignores_series_missing_the_key() {
-        use metriken_query::tsdb::Labels;
-        let labels: Vec<Labels> = vec![
-            Labels::from([("id", "0")].as_slice()),
-            Labels::from([("other", "x")].as_slice()),
-        ];
+        let labels: Vec<BTreeMap<String, String>> =
+            vec![make_labels(&[("id", "0")]), make_labels(&[("other", "x")])];
         assert_eq!(unique_label_count(&labels, "id"), 1);
     }
 

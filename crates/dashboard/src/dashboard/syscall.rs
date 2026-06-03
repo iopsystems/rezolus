@@ -1,7 +1,7 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
     let mut syscall = Group::new("Syscall", "syscall");
@@ -64,11 +64,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use metriken_query::MemoryStore;
 
     #[test]
     fn syscall_overall_and_per_op_get_rate_mean_pairs() {
-        let view = generate(&Tsdb::default(), vec![]);
+        let view = generate(&MemoryStore::builder().build(), vec![]);
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
         // Overall: rate query preserved verbatim, plus mean.
         assert!(json.contains("sum(irate(syscall[5m]))"));

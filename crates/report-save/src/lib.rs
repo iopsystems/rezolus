@@ -11,11 +11,11 @@
 //! through, and the WASM viewer reuses the bytes it already holds.
 
 use std::collections::{BTreeSet, HashSet};
-use std::ops::Deref;
 
 use arrow::datatypes::Field;
+use bytes::Bytes;
 use dashboard::Event;
-use metriken_query::{Bytes, QueryEngine, Tsdb};
+use metriken_query::MetricsSource;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::KeyValue;
@@ -89,16 +89,15 @@ fn events_payload_json(events: &[Event]) -> Option<String> {
 
 // ── Column resolution ────────────────────────────────────────────────
 
-/// Resolve every entry's query against `engine`, union the returned
-/// columns, and always keep `timestamp` + `duration` (which
-/// `engine.columns` never returns but `Tsdb::load` requires).
+/// Resolve every entry's query against `source`, union the returned
+/// columns, and always keep `timestamp` + `duration`.
 ///
 /// Queries that fail to PARSE are logged and skipped — one malformed
 /// chart shouldn't abort the whole save. Queries that parse but match
 /// no series contribute nothing.
-pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
+pub fn resolve_kept_columns(
     payload: &ReportPayload,
-    engine: &QueryEngine<T>,
+    source: &dyn MetricsSource,
     side: Side,
 ) -> HashSet<String> {
     let mut out: HashSet<String> = ["timestamp", "duration"]
@@ -113,7 +112,7 @@ pub fn resolve_kept_columns<T: Deref<Target = Tsdb>>(
                 .as_deref()
                 .unwrap_or(entry.promql_query.as_str()),
         };
-        match engine.columns(query) {
+        match source.columns(query) {
             Ok(cols) => out.extend(cols),
             Err(e) => warn!("report-save: skipped malformed query {query:?}: {e}"),
         }
@@ -131,13 +130,12 @@ pub fn save_single_parquet(
     source_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    tsdb: &Tsdb,
+    source: &dyn MetricsSource,
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
     let events_json = events_payload_json(&payload.events);
     if trim_columns {
-        let engine = QueryEngine::new(tsdb);
-        let kept = resolve_kept_columns(payload, &engine, Side::Baseline);
+        let kept = resolve_kept_columns(payload, source, Side::Baseline);
         trim_parquet_to_columns(source_bytes, &kept, selection_json, events_json.as_deref())
     } else {
         embed_selection_in_parquet(source_bytes, selection_json, events_json.as_deref())
@@ -155,21 +153,15 @@ pub fn save_combined_ab_tarball(
     experiment_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    baseline_tsdb: &Tsdb,
-    experiment_tsdb: &Tsdb,
+    baseline_source: &dyn MetricsSource,
+    experiment_source: &dyn MetricsSource,
     manifest_bytes: &[u8],
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
     let events_json = events_payload_json(&payload.events);
     let (baseline_out, experiment_out) = if trim_columns {
-        let baseline_kept = {
-            let engine = QueryEngine::new(baseline_tsdb);
-            resolve_kept_columns(payload, &engine, Side::Baseline)
-        };
-        let experiment_kept = {
-            let engine = QueryEngine::new(experiment_tsdb);
-            resolve_kept_columns(payload, &engine, Side::Experiment)
-        };
+        let baseline_kept = resolve_kept_columns(payload, baseline_source, Side::Baseline);
+        let experiment_kept = resolve_kept_columns(payload, experiment_source, Side::Experiment);
         (
             trim_parquet_to_columns(
                 baseline_bytes,
@@ -375,13 +367,13 @@ mod tests {
     use arrow::array::{Int64Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use metriken_query::ParquetReader;
     use std::sync::Arc;
 
     /// Build a tiny single-source parquet (timestamp, duration, m_a,
     /// m_b) entirely in memory and return both its bytes and the loaded
-    /// Tsdb. The Tsdb keeps an Arc on the bytes internally; we hand
-    /// back the bytes too so callers can pass them to save_*.
-    fn build_test(parquet: bool) -> (Bytes, Tsdb) {
+    /// ParquetReader.
+    fn build_test(_parquet: bool) -> (Bytes, ParquetReader) {
         let sec = 1_000_000_000u64;
         let mut meta = std::collections::HashMap::new();
         meta.insert("metric_type".to_string(), "gauge".to_string());
@@ -423,9 +415,8 @@ mod tests {
             writer.close().unwrap();
         }
         let bytes = Bytes::from(buf);
-        let tsdb = Tsdb::load_from_bytes(bytes.clone()).expect("tsdb loads");
-        let _ = parquet;
-        (bytes, tsdb)
+        let reader = ParquetReader::open_bytes(bytes.clone()).expect("reader loads");
+        (bytes, reader)
     }
 
     fn schema_names(bytes: &[u8]) -> Vec<String> {
@@ -449,8 +440,8 @@ mod tests {
 
     #[test]
     fn baseline_side_kept_set_includes_timestamp_and_duration() {
-        let (_bytes, tsdb) = build_test(true);
-        let engine = QueryEngine::new(&tsdb);
+        let (_bytes, reader) = build_test(true);
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -459,7 +450,7 @@ mod tests {
             trim_columns: true,
             events: vec![],
         };
-        let kept = resolve_kept_columns(&payload, &engine, Side::Baseline);
+        let kept = resolve_kept_columns(&payload, &reader, Side::Baseline);
         assert!(kept.contains("timestamp"));
         assert!(kept.contains("duration"));
         assert!(kept.contains("m_a"));
@@ -468,8 +459,8 @@ mod tests {
 
     #[test]
     fn experiment_side_falls_back_to_promql_query_when_experiment_unset() {
-        let (_bytes, tsdb) = build_test(true);
-        let engine = QueryEngine::new(&tsdb);
+        let (_bytes, reader) = build_test(true);
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -478,15 +469,15 @@ mod tests {
             trim_columns: true,
             events: vec![],
         };
-        let kept = resolve_kept_columns(&payload, &engine, Side::Experiment);
+        let kept = resolve_kept_columns(&payload, &reader, Side::Experiment);
         assert!(kept.contains("m_a"));
         assert!(!kept.contains("m_b"));
     }
 
     #[test]
     fn experiment_side_uses_promql_query_experiment_when_set() {
-        let (_bytes, tsdb) = build_test(true);
-        let engine = QueryEngine::new(&tsdb);
+        let (_bytes, reader) = build_test(true);
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -495,8 +486,8 @@ mod tests {
             trim_columns: true,
             events: vec![],
         };
-        let kept_b = resolve_kept_columns(&payload, &engine, Side::Baseline);
-        let kept_e = resolve_kept_columns(&payload, &engine, Side::Experiment);
+        let kept_b = resolve_kept_columns(&payload, &reader, Side::Baseline);
+        let kept_e = resolve_kept_columns(&payload, &reader, Side::Experiment);
         assert!(kept_b.contains("m_a") && !kept_b.contains("m_b"));
         assert!(kept_e.contains("m_b") && !kept_e.contains("m_a"));
     }
@@ -543,7 +534,7 @@ mod tests {
 
     #[test]
     fn single_parquet_round_trip_trims_to_one_column() {
-        let (bytes, tsdb) = build_test(true);
+        let (bytes, reader) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -553,7 +544,7 @@ mod tests {
             events: vec![],
         };
         let body = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
+        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
         assert_eq!(schema_names(&out), vec!["timestamp", "duration", "m_a"]);
         let kv = footer_kv(&out);
         assert_eq!(
@@ -572,7 +563,7 @@ mod tests {
 
     #[test]
     fn save_with_trim_columns_false_preserves_all_columns_and_skips_marker() {
-        let (bytes, tsdb) = build_test(true);
+        let (bytes, reader) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -582,7 +573,7 @@ mod tests {
             events: vec![],
         };
         let selection = r#"{"version":1,"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, selection, &tsdb, false).unwrap();
+        let out = save_single_parquet(bytes, &payload, selection, &reader, false).unwrap();
         assert_eq!(
             schema_names(&out),
             vec!["timestamp", "duration", "m_a", "m_b"]
@@ -625,8 +616,8 @@ mod tests {
 
     #[test]
     fn combined_ab_round_trip_trims_each_side_and_repacks() {
-        let (bytes_a, tsdb_a) = build_test(true);
-        let (bytes_b, tsdb_b) = build_test(true);
+        let (bytes_a, reader_a) = build_test(true);
+        let (bytes_b, reader_b) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -645,8 +636,8 @@ mod tests {
             bytes_b,
             &payload,
             body,
-            &tsdb_a,
-            &tsdb_b,
+            &reader_a,
+            &reader_b,
             manifest_bytes,
             true,
         )
@@ -689,7 +680,7 @@ mod tests {
 
     #[test]
     fn save_single_parquet_writes_key_events_when_payload_has_events() {
-        let (bytes, tsdb) = build_test(true);
+        let (bytes, reader) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -711,7 +702,7 @@ mod tests {
             }],
         };
         let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
+        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
         let kv = footer_kv(&out);
         let events_value = kv
             .iter()
@@ -727,7 +718,7 @@ mod tests {
 
     #[test]
     fn save_single_parquet_skips_key_events_when_no_events() {
-        let (bytes, tsdb) = build_test(true);
+        let (bytes, reader) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -737,7 +728,7 @@ mod tests {
             events: vec![],
         };
         let body = r#"{"entries":[{"chartId":"c","promql_query":"m_a"}]}"#;
-        let out = save_single_parquet(bytes, &payload, body, &tsdb, true).unwrap();
+        let out = save_single_parquet(bytes, &payload, body, &reader, true).unwrap();
         let kv = footer_kv(&out);
         assert!(
             !kv.iter().any(|kv| kv.key == "events"),
@@ -747,8 +738,8 @@ mod tests {
 
     #[test]
     fn combined_ab_writes_events_to_both_sides() {
-        let (bytes_a, tsdb_a) = build_test(true);
-        let (bytes_b, tsdb_b) = build_test(true);
+        let (bytes_a, reader_a) = build_test(true);
+        let (bytes_b, reader_b) = build_test(true);
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -776,8 +767,8 @@ mod tests {
             bytes_b,
             &payload,
             body,
-            &tsdb_a,
-            &tsdb_b,
+            &reader_a,
+            &reader_b,
             manifest_bytes,
             true,
         )

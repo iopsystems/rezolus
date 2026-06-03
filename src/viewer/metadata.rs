@@ -12,9 +12,9 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use tracing::warn;
 
 use super::capture_registry::CaptureId;
-use super::promql::{self, QueryEngine};
+use metriken_query::{MetricsSource, QueryResult};
+
 use super::state::{AppState, LazySectionStore};
-use super::tsdb::Tsdb;
 use ::dashboard::{self, CategoryExtension, ServiceExtension, TemplateRegistry};
 
 /// Read systeminfo, selection, and the full key-value map (with
@@ -321,19 +321,21 @@ pub fn extract_service_extension_metadata(
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
 /// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
-pub fn validate_service_extensions(tsdb: &Tsdb, exts: &mut [(String, ServiceExtension)]) {
-    let engine = QueryEngine::new(tsdb);
-    let (start, end) = engine.get_time_range();
+pub fn validate_service_extensions(
+    data: &dyn MetricsSource,
+    exts: &mut [(String, ServiceExtension)],
+) {
+    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
 
     for (_source, ext) in exts.iter_mut() {
         for kpi in &mut ext.kpis {
             let query = kpi.effective_query();
-            let has_data = match engine.query_range(&query, start, end, 1.0) {
+            let has_data = match data.query_range(&query, start, end, 1.0) {
                 Ok(result) => match &result {
-                    promql::QueryResult::Vector { result } => !result.is_empty(),
-                    promql::QueryResult::Matrix { result } => !result.is_empty(),
-                    promql::QueryResult::Scalar { .. } => true,
-                    promql::QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
+                    QueryResult::Vector { result } => !result.is_empty(),
+                    QueryResult::Matrix { result } => !result.is_empty(),
+                    QueryResult::Scalar { .. } => true,
+                    QueryResult::HistogramHeatmap { result } => !result.data.is_empty(),
                 },
                 Err(_) => false,
             };
@@ -410,14 +412,12 @@ pub fn regenerate_dashboards(state: &AppState) {
         .unwrap_or_default();
 
     {
-        let baseline_handle = state.baseline_tsdb();
-        let baseline_data = baseline_handle.read();
-        validate_service_extensions(&baseline_data, &mut baseline_exts);
+        let baseline_data = state.baseline_data();
+        validate_service_extensions(baseline_data.as_ref(), &mut baseline_exts);
     }
     if !experiment_exts.is_empty() {
-        if let Some(experiment_handle) = state.captures.get(CaptureId::Experiment) {
-            let experiment_data = experiment_handle.read();
-            validate_service_extensions(&experiment_data, &mut experiment_exts);
+        if let Some(experiment_data) = state.captures.get(CaptureId::Experiment) {
+            validate_service_extensions(experiment_data.as_ref(), &mut experiment_exts);
         }
     }
 
@@ -439,11 +439,14 @@ pub fn regenerate_dashboards(state: &AppState) {
 mod report_mode_tests {
     use super::*;
     use ::dashboard::TemplateRegistry;
-    use metriken_query::Tsdb;
+    use metriken_query::MemoryStore;
+    use std::sync::Arc;
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
-        let state = AppState::new(Tsdb::default(), TemplateRegistry::empty());
+        let store =
+            Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource>;
+        let state = AppState::new(store, TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);
         let sections = state.sections.read();

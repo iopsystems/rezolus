@@ -11,6 +11,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+bytes = "1"
 # Workspace declares metriken-query with default-features = false. The browser
 # doesn't need the server-side http or ingest features, so we inherit as-is.
 metriken-query.workspace = true

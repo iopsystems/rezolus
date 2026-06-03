@@ -1,9 +1,7 @@
-use crate::viewer::promql::{QueryEngine, QueryResult};
-use crate::viewer::tsdb::Tsdb;
 use chrono::{DateTime, Utc};
+use metriken_query::{MetricsSource, QueryResult};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap};
 
 mod cusum;
 mod mad;
@@ -181,14 +179,12 @@ fn extract_metric_name(query: &str) -> Option<&str> {
 fn show_available_labels(
     output: &mut String,
     metric_name: &str,
-    labels_list: &[crate::viewer::tsdb::Labels],
+    labels_list: &[BTreeMap<String, String>],
 ) {
-    use std::collections::HashMap;
-
     let mut label_values: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
 
     for labels in labels_list {
-        for (key, value) in labels.inner.iter() {
+        for (key, value) in labels.iter() {
             if key != "metric" && key != "unit" && key != "metric_type" {
                 label_values
                     .entry(key.clone())
@@ -254,7 +250,10 @@ fn show_available_labels(
 
 /// Automatically construct appropriate query based on metric type
 /// If query is just a metric name, construct the right query for its type
-fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std::error::Error>> {
+fn auto_construct_query(
+    query: &str,
+    data: &dyn MetricsSource,
+) -> Result<String, Box<dyn std::error::Error>> {
     let query = query.trim();
 
     // A bare metric name has no functions, brackets, or operators
@@ -276,19 +275,19 @@ fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std:
         query
     };
 
-    if tsdb.counter_names().contains(&metric_name) {
+    if data.has_counter(metric_name) {
         eprintln!(
             "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
             metric_name, query
         );
         Ok(format!("sum(rate({}[1m]))", query))
-    } else if tsdb.gauge_names().contains(&metric_name) {
+    } else if data.has_gauge(metric_name) {
         eprintln!(
             "Auto-detected '{}' as GAUGE, using: sum({})",
             metric_name, query
         );
         Ok(format!("sum({})", query))
-    } else if tsdb.histogram_names().contains(&metric_name) {
+    } else if data.has_histogram(metric_name) {
         eprintln!(
             "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
             metric_name, query
@@ -302,18 +301,17 @@ fn auto_construct_query(query: &str, tsdb: &Tsdb) -> Result<String, Box<dyn std:
 
 /// Perform anomaly detection on a time series
 pub fn detect_anomalies(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
+    data: &dyn MetricsSource,
     query: &str,
 ) -> Result<AnomalyDetectionResult, Box<dyn std::error::Error>> {
     // Undo JSON escaping of quotes
     let query = query.replace("\\\"", "\"");
 
-    let query = auto_construct_query(&query, tsdb)?;
+    let query = auto_construct_query(&query, data)?;
 
     let query = validate_and_fix_query(&query)?;
 
-    let (start_time, end_time) = engine.get_time_range();
+    let (start_time, end_time) = data.time_range().unwrap_or((0.0, 0.0));
 
     if start_time >= end_time {
         return Err(format!(
@@ -336,7 +334,7 @@ pub fn detect_anomalies(
         .into());
     }
 
-    let query_result = match engine.query_range(&query, start_time, end_time, step) {
+    let query_result = match data.query_range(&query, start_time, end_time, step) {
         Ok(result) => result,
         Err(e) => {
             let error_msg = e.to_string();
@@ -344,24 +342,21 @@ pub fn detect_anomalies(
             if error_msg.contains("Metric not found") || error_msg.contains("not found") {
                 let metric_hint = extract_metric_name(&query);
 
-                let mut all_metrics = Vec::new();
-                all_metrics.extend(tsdb.counter_names());
-                all_metrics.extend(tsdb.gauge_names());
-                all_metrics.extend(tsdb.histogram_names());
+                let all_metrics = data.all_names();
 
-                let mut suggestions = Vec::new();
+                let mut suggestions: Vec<&str> = Vec::new();
                 if let Some(hint) = metric_hint {
                     let hint_normalized = hint.replace(['/', '-'], "_");
 
                     for metric in &all_metrics {
                         // Exact matches go to the front so they rank above partial matches
-                        if *metric == hint || *metric == hint_normalized {
-                            suggestions.insert(0, *metric);
+                        if metric.as_str() == hint || metric.as_str() == hint_normalized {
+                            suggestions.insert(0, metric.as_str());
                         } else if metric.contains(&hint_normalized)
                             || metric.starts_with(&format!("{}_", hint_normalized))
                             || metric.ends_with(&format!("_{}", hint_normalized))
                         {
-                            suggestions.push(*metric);
+                            suggestions.push(metric.as_str());
                         }
                     }
                 }
@@ -375,38 +370,41 @@ pub fn detect_anomalies(
                         if !suggestions.is_empty() && suggestions[0] == metric_name {
                             error_with_help.push_str("\n\nThe metric exists but your label selector might be filtering out all series.");
 
-                            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
+                            let counter_labels = data.counter_labels(metric_name);
+                            let gauge_labels = data.gauge_labels(metric_name);
+                            let histogram_labels = data.histogram_labels(metric_name);
+                            if !counter_labels.is_empty() {
                                 error_with_help.push_str(&format!(
                                     "\n\nMetric '{}' (COUNTER) has {} series.",
                                     metric_name,
-                                    labels_list.len()
+                                    counter_labels.len()
                                 ));
                                 show_available_labels(
                                     &mut error_with_help,
                                     metric_name,
-                                    &labels_list,
+                                    &counter_labels,
                                 );
-                            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
+                            } else if !gauge_labels.is_empty() {
                                 error_with_help.push_str(&format!(
                                     "\n\nMetric '{}' (GAUGE) has {} series.",
                                     metric_name,
-                                    labels_list.len()
+                                    gauge_labels.len()
                                 ));
                                 show_available_labels(
                                     &mut error_with_help,
                                     metric_name,
-                                    &labels_list,
+                                    &gauge_labels,
                                 );
-                            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
+                            } else if !histogram_labels.is_empty() {
                                 error_with_help.push_str(&format!(
                                     "\n\nMetric '{}' (HISTOGRAM) has {} series.",
                                     metric_name,
-                                    labels_list.len()
+                                    histogram_labels.len()
                                 ));
                                 show_available_labels(
                                     &mut error_with_help,
                                     metric_name,
-                                    &labels_list,
+                                    &histogram_labels,
                                 );
                             }
 
@@ -453,27 +451,30 @@ pub fn detect_anomalies(
                 query
             );
 
-            if let Some(labels_list) = tsdb.counter_labels(metric_name) {
+            let counter_labels = data.counter_labels(metric_name);
+            let gauge_labels = data.gauge_labels(metric_name);
+            let histogram_labels = data.histogram_labels(metric_name);
+            if !counter_labels.is_empty() {
                 error_msg.push_str(&format!(
                     "\nMetric '{}' (COUNTER) exists with {} series.\n",
                     metric_name,
-                    labels_list.len()
+                    counter_labels.len()
                 ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.gauge_labels(metric_name) {
+                show_available_labels(&mut error_msg, metric_name, &counter_labels);
+            } else if !gauge_labels.is_empty() {
                 error_msg.push_str(&format!(
                     "\nMetric '{}' (GAUGE) exists with {} series.\n",
                     metric_name,
-                    labels_list.len()
+                    gauge_labels.len()
                 ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
-            } else if let Some(labels_list) = tsdb.histogram_labels(metric_name) {
+                show_available_labels(&mut error_msg, metric_name, &gauge_labels);
+            } else if !histogram_labels.is_empty() {
                 error_msg.push_str(&format!(
                     "\nMetric '{}' (HISTOGRAM) exists with {} series.\n",
                     metric_name,
-                    labels_list.len()
+                    histogram_labels.len()
                 ));
-                show_available_labels(&mut error_msg, metric_name, &labels_list);
+                show_available_labels(&mut error_msg, metric_name, &histogram_labels);
             } else {
                 error_msg.push_str(&format!(
                     "\nMetric '{}' not found in this recording.\n",

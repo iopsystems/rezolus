@@ -1,14 +1,12 @@
 use clap::ArgMatches;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
 };
-use crate::viewer::promql::QueryEngine;
-use crate::viewer::tsdb::Tsdb;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
+use metriken_query::ParquetReader;
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
@@ -176,16 +174,15 @@ fn run_undo(path: &Path) {
 /// Sets `available` on each KPI based on whether its query returns data.
 /// Prints warnings for unavailable KPIs and exits if none match.
 fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
-    let tsdb = match Tsdb::load(path) {
-        Ok(tsdb) => Arc::new(tsdb),
+    let reader = match ParquetReader::open(path) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("warning: could not load parquet for validation: {e}");
             return;
         }
     };
 
-    let engine = QueryEngine::new(tsdb);
-    let (start, end) = engine.get_time_range();
+    let (start, end) = reader.time_range().unwrap_or((0.0, 0.0));
     let step = 1.0;
 
     let mut matched = 0;
@@ -193,7 +190,7 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 
     for kpi in &mut ext.kpis {
         let query = kpi.effective_query();
-        let has_data = match engine.query_range(&query, start, end, step) {
+        let has_data = match reader.query_range(&query, start, end, step) {
             Ok(result) => !query_result_is_empty(&result),
             Err(_) => false,
         };
@@ -248,8 +245,8 @@ pub(super) fn extract_metric_selectors(query: &str) -> BTreeSet<String> {
         .collect()
 }
 
-fn query_result_is_empty(result: &crate::viewer::promql::QueryResult) -> bool {
-    use crate::viewer::promql::QueryResult;
+fn query_result_is_empty(result: &metriken_query::QueryResult) -> bool {
+    use metriken_query::QueryResult;
     match result {
         QueryResult::Vector { result } => result.is_empty(),
         QueryResult::Matrix { result } => result.is_empty(),

@@ -4,7 +4,8 @@
 //! attached viewers (compare mode loads two separate parquets, never
 //! a real tar manifest) and serializes it for the shared crate.
 
-use metriken_query::{Bytes, Tsdb};
+use bytes::Bytes;
+use metriken_query::MetricsSource;
 use serde::Serialize;
 
 pub use report_save::ReportPayload;
@@ -33,29 +34,26 @@ impl AbContainers {
     pub const SCHEMA_VERSION: u32 = 1;
 }
 
-/// Trim or embed-only single-parquet save. Thin pass-through to the
-/// shared crate; takes `Bytes` (which the WASM `Viewer` already holds).
+/// Trim or embed-only single-parquet save.
 pub fn save_single_parquet(
     source_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    tsdb: &Tsdb,
+    source: &dyn MetricsSource,
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
-    report_save::save_single_parquet(source_bytes, payload, selection_json, tsdb, trim_columns)
+    report_save::save_single_parquet(source_bytes, payload, selection_json, source, trim_columns)
 }
 
-/// Trim or embed-only combined-A/B repack. Serializes the manifest
-/// here and hands the bytes to the shared crate, which writes them as
-/// `ab.json` inside the tar.
+/// Trim or embed-only combined-A/B repack.
 #[allow(clippy::too_many_arguments)]
 pub fn save_combined_ab_tarball(
     baseline_bytes: Bytes,
     experiment_bytes: Bytes,
     payload: &ReportPayload,
     selection_json: &str,
-    baseline_tsdb: &Tsdb,
-    experiment_tsdb: &Tsdb,
+    baseline_source: &dyn MetricsSource,
+    experiment_source: &dyn MetricsSource,
     manifest: &AbContainers,
     trim_columns: bool,
 ) -> Result<Vec<u8>, String> {
@@ -65,8 +63,8 @@ pub fn save_combined_ab_tarball(
         experiment_bytes,
         payload,
         selection_json,
-        baseline_tsdb,
-        experiment_tsdb,
+        baseline_source,
+        experiment_source,
         &manifest_bytes,
         trim_columns,
     )

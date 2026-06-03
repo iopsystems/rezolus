@@ -1,8 +1,6 @@
-use crate::viewer::promql::{MatrixSample, QueryEngine, QueryResult};
-use crate::viewer::tsdb::Tsdb;
+use metriken_query::{MatrixSample, MetricsSource, QueryResult};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 // Fixed time intervals optimized for system performance analysis
 // Balances coverage with computational efficiency
@@ -61,16 +59,15 @@ pub struct SeriesCorrelation {
 ///
 /// Note: Use describe_metrics tool to identify counter vs gauge metrics.
 pub fn calculate_correlation(
-    engine: &Arc<QueryEngine>,
-    tsdb: &Arc<Tsdb>,
+    data: &dyn MetricsSource,
     expr1: &str,
     expr2: &str,
 ) -> Result<CorrelationResult, Box<dyn std::error::Error>> {
-    let (start, end) = engine.get_time_range();
-    let step = tsdb.interval();
+    let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
+    let step = data.interval();
 
-    let result1 = engine.query_range(expr1, start, end, step)?;
-    let result2 = engine.query_range(expr2, start, end, step)?;
+    let result1 = data.query_range(expr1, start, end, step)?;
+    let result2 = data.query_range(expr2, start, end, step)?;
 
     let samples1 = extract_matrix_samples(&result1)?;
     let samples2 = extract_matrix_samples(&result2)?;

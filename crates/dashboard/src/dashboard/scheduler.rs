@@ -1,15 +1,15 @@
-use crate::Tsdb;
+use crate::MetricsSource;
 use crate::plot::*;
 
 /// True iff the recording has more than one CPU. Per-core charts are
 /// suppressed when this is false because they degenerate to the aggregate.
-fn has_multiple_cpus(data: &Tsdb) -> bool {
+fn has_multiple_cpus(data: &dyn MetricsSource) -> bool {
     ["scheduler_runqueue_wait", "scheduler_context_switch"]
         .iter()
         .any(|m| metric_unique_label_count(data, m, "id") > 1)
 }
 
-pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
+pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_cpu = has_multiple_cpus(data);
 
@@ -115,11 +115,11 @@ pub fn generate(data: &Tsdb, sections: Vec<Section>) -> View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Tsdb;
+    use metriken_query::MemoryStore;
 
     #[test]
     fn scheduler_histograms_get_from_histogram_rate_mean() {
-        let view = generate(&Tsdb::default(), vec![]);
+        let view = generate(&MemoryStore::builder().build(), vec![]);
         let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
         assert!(json.contains("sum(histogram_irate(scheduler_runqueue_latency))"));
         assert!(json.contains("histogram_mean(scheduler_runqueue_latency)\""));
