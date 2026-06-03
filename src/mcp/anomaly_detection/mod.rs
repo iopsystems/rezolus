@@ -1,5 +1,5 @@
-use metriken_query::{MetricsSource, QueryResult};
 use chrono::{DateTime, Utc};
+use metriken_query::{MetricsSource, QueryResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -250,7 +250,10 @@ fn show_available_labels(
 
 /// Automatically construct appropriate query based on metric type
 /// If query is just a metric name, construct the right query for its type
-fn auto_construct_query(query: &str, data: &dyn MetricsSource) -> Result<String, Box<dyn std::error::Error>> {
+fn auto_construct_query(
+    query: &str,
+    data: &dyn MetricsSource,
+) -> Result<String, Box<dyn std::error::Error>> {
     let query = query.trim();
 
     // A bare metric name has no functions, brackets, or operators

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
 };
-use metriken_query::ParquetReader;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
+use metriken_query::ParquetReader;
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();

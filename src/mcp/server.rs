@@ -495,7 +495,10 @@ impl Server {
     }
 
     /// Load or get cached ParquetReader
-    async fn get_reader(&self, parquet_file: &str) -> Result<Arc<ParquetReader>, Box<dyn std::error::Error>> {
+    async fn get_reader(
+        &self,
+        parquet_file: &str,
+    ) -> Result<Arc<ParquetReader>, Box<dyn std::error::Error>> {
         {
             let cache = self.reader_cache.read().unwrap();
             if let Some(reader) = cache.get(parquet_file) {

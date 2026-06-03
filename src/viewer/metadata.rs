@@ -321,7 +321,10 @@ pub fn extract_service_extension_metadata(
 
 /// Run each KPI's PromQL against the loaded TSDB so the dashboard can
 /// hide KPIs whose queries return no data (e.g. zero-traffic histograms).
-pub fn validate_service_extensions(data: &dyn MetricsSource, exts: &mut [(String, ServiceExtension)]) {
+pub fn validate_service_extensions(
+    data: &dyn MetricsSource,
+    exts: &mut [(String, ServiceExtension)],
+) {
     let (start, end) = data.time_range().unwrap_or((0.0, 0.0));
 
     for (_source, ext) in exts.iter_mut() {
@@ -441,7 +444,8 @@ mod report_mode_tests {
 
     #[test]
     fn regenerate_returns_empty_sections_for_trimmed_report() {
-        let store = Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource>;
+        let store =
+            Arc::new(MemoryStore::builder().build()) as Arc<dyn metriken_query::MetricsSource>;
         let state = AppState::new(store, TemplateRegistry::empty());
         *state.trimmed_report_marker.write() = Some("trimmed".to_string());
         regenerate_dashboards(&state);

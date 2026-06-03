@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn baseline_side_kept_set_includes_timestamp_and_duration() {
         let (_bytes, reader) = build_test(true);
-        
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -460,7 +460,7 @@ mod tests {
     #[test]
     fn experiment_side_falls_back_to_promql_query_when_experiment_unset() {
         let (_bytes, reader) = build_test(true);
-        
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn experiment_side_uses_promql_query_experiment_when_set() {
         let (_bytes, reader) = build_test(true);
-        
+
         let payload = ReportPayload {
             entries: vec![ReportEntry {
                 promql_query: "m_a".into(),

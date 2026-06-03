@@ -146,7 +146,11 @@ pub fn build_dashboard_context(
 ///
 /// Filesize is not applied — callers that want a filesize on the response
 /// should call `view.set_filesize(...)` themselves.
-pub fn generate_section(data: &dyn MetricsSource, route: &str, ctx: &DashboardContext) -> Option<View> {
+pub fn generate_section(
+    data: &dyn MetricsSource,
+    route: &str,
+    ctx: &DashboardContext,
+) -> Option<View> {
     let view = if route == "/overview" {
         overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {

@@ -273,7 +273,15 @@ mod tests {
         let a = ext("a", vec![kpi("throughput", "Token Rate", "a_q")]);
         let b = ext("b", vec![]); // missing the categorized title
 
-        let view = generate(&metriken_query::MemoryStore::builder().build(), vec![], &category, "a", &a, "b", &b);
+        let view = generate(
+            &metriken_query::MemoryStore::builder().build(),
+            vec![],
+            &category,
+            "a",
+            &a,
+            "b",
+            &b,
+        );
         let json = serde_json::to_value(&view).unwrap();
 
         let unavailable = json
@@ -315,7 +323,15 @@ mod tests {
         b_kpi.available = false;
         let b = ext("b", vec![b_kpi]);
 
-        let view = generate(&metriken_query::MemoryStore::builder().build(), vec![], &category, "a", &a, "b", &b);
+        let view = generate(
+            &metriken_query::MemoryStore::builder().build(),
+            vec![],
+            &category,
+            "a",
+            &a,
+            "b",
+            &b,
+        );
         let json = serde_json::to_value(&view).unwrap();
 
         let unavailable = json

@@ -8,7 +8,9 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
 
     let descriptions = crate::common::metric_descriptions();
 
-    let helper = |output: &mut String, name: &str, labels_list: &[std::collections::BTreeMap<String, String>]| {
+    let helper = |output: &mut String,
+                  name: &str,
+                  labels_list: &[std::collections::BTreeMap<String, String>]| {
         let mut all_keys = std::collections::HashSet::new();
         for labels in labels_list {
             for (key, _) in labels.iter() {
@@ -79,9 +81,15 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
     let total_histograms = histogram_names.len();
     let total_metrics = total_counters + total_gauges + total_histograms;
 
-    let total_counter_series: usize = counter_names.iter().map(|n| data.counter_labels(n).len()).sum();
+    let total_counter_series: usize = counter_names
+        .iter()
+        .map(|n| data.counter_labels(n).len())
+        .sum();
     let total_gauge_series: usize = gauge_names.iter().map(|n| data.gauge_labels(n).len()).sum();
-    let total_histogram_series: usize = histogram_names.iter().map(|n| data.histogram_labels(n).len()).sum();
+    let total_histogram_series: usize = histogram_names
+        .iter()
+        .map(|n| data.histogram_labels(n).len())
+        .sum();
     let total_series = total_counter_series + total_gauge_series + total_histogram_series;
 
     output.push_str("\nSUMMARY:\n");

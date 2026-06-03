@@ -286,11 +286,7 @@ struct RangeQueryParams {
 
 /// Run `f` against the resolved capture's data source; on a missing
 /// capture, return a `capture_not_found` ApiResponse.
-fn run_query<F>(
-    state: &AppState,
-    capture: Option<&str>,
-    f: F,
-) -> Json<ApiResponse<QueryResult>>
+fn run_query<F>(state: &AppState, capture: Option<&str>, f: F) -> Json<ApiResponse<QueryResult>>
 where
     F: FnOnce(&dyn metriken_query::MetricsSource) -> Result<QueryResult, QueryError>,
 {
@@ -370,9 +366,7 @@ async fn metadata(
         );
     };
     // time_range is in seconds; metadata endpoint returns seconds too.
-    let (min_time, max_time) = data
-        .time_range()
-        .unwrap_or((0.0, 0.0));
+    let (min_time, max_time) = data.time_range().unwrap_or((0.0, 0.0));
     let filename = state.captures.filename(capture);
     let mut meta = serde_json::json!({
         "minTime": min_time,

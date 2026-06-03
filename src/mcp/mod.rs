@@ -8,8 +8,8 @@ pub mod correlation;
 mod describe_metrics;
 mod server;
 
-use metriken_query::{MetricsSource, ParquetReader, QueryResult};
 use chrono::{DateTime, Utc};
+use metriken_query::{MetricsSource, ParquetReader, QueryResult};
 
 /// Format recording information for display
 pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> String {

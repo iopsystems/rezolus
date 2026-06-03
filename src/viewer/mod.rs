@@ -31,10 +31,7 @@ pub use dashboard::Kpi;
 pub use dashboard::{Event, Events, ServiceExtension, TemplateRegistry};
 
 /// Re-export PromQL types so other modules can use `crate::viewer::promql::*`.
-pub mod promql {
-    
-    
-}
+pub mod promql {}
 
 pub mod capture_registry;
 mod proxy_allow;
@@ -374,7 +371,12 @@ pub(super) fn read_footer_kv(path: &Path, key: &str) -> Option<String> {
 
 /// Build initial AppState for a parquet file source, including the
 /// optional experiment attach and category validation.
-fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry, pool: Arc<metriken_query::BufferPool>) -> AppState {
+fn init_file_mode(
+    config: &Config,
+    path: &Path,
+    registry: &TemplateRegistry,
+    pool: Arc<metriken_query::BufferPool>,
+) -> AppState {
     info!("Loading data from parquet file...");
 
     // Combined-A/B tarball detection runs first — bare parquets fall
@@ -388,10 +390,12 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry, poo
 
     // ParquetReader::open defaults filename() to the path's basename.
     let reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(|e| {
-            eprintln!("failed to load data from parquet: {e}");
-            std::process::exit(1);
-        })
+        metriken_query::ParquetReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(
+            |e| {
+                eprintln!("failed to load data from parquet: {e}");
+                std::process::exit(1);
+            },
+        ),
     );
 
     let mut service_exts = metadata::extract_service_extension_metadata(path, registry);
@@ -405,7 +409,11 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry, poo
     }
     log_service_exts(&service_exts, "baseline");
 
-    let state = AppState::with_pool(reader as std::sync::Arc<dyn metriken_query::MetricsSource>, registry.clone(), Arc::clone(&pool));
+    let state = AppState::with_pool(
+        reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
+        registry.clone(),
+        Arc::clone(&pool),
+    );
     *state.parquet_path.write() = Some(path.to_path_buf());
     state
         .captures
@@ -420,11 +428,24 @@ fn init_file_mode(config: &Config, path: &Path, registry: &TemplateRegistry, poo
         .set_baseline_alias(config.baseline_alias.clone());
 
     if let Some(ref cat_name) = config.category_name {
-        validate_category_at_startup(&state, registry, cat_name, &service_exts, config, Arc::clone(&pool));
+        validate_category_at_startup(
+            &state,
+            registry,
+            cat_name,
+            &service_exts,
+            config,
+            Arc::clone(&pool),
+        );
     }
 
     if let Some(exp_path) = &config.experiment_path {
-        attach_cli_experiment(&state, exp_path, registry, config.experiment_alias.clone(), Arc::clone(&pool));
+        attach_cli_experiment(
+            &state,
+            exp_path,
+            registry,
+            config.experiment_alias.clone(),
+            Arc::clone(&pool),
+        );
     }
 
     info!("Generating dashboards...");
@@ -476,15 +497,18 @@ fn init_file_mode_combined_ab(
                 eprintln!("failed to load baseline parquet from tarball: {e}");
                 std::process::exit(1);
             })
-            .with_filename(display_filename.clone())
+            .with_filename(display_filename.clone()),
     );
     let experiment_reader = std::sync::Arc::new(
-        metriken_query::ParquetReader::open_with_pool(&extracted.experiment_path, Arc::clone(&pool))
-            .unwrap_or_else(|e| {
-                eprintln!("failed to load experiment parquet from tarball: {e}");
-                std::process::exit(1);
-            })
-            .with_filename(display_filename.clone())
+        metriken_query::ParquetReader::open_with_pool(
+            &extracted.experiment_path,
+            Arc::clone(&pool),
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("failed to load experiment parquet from tarball: {e}");
+            std::process::exit(1);
+        })
+        .with_filename(display_filename.clone()),
     );
 
     let mut baseline_service_exts =
@@ -562,7 +586,14 @@ fn init_file_mode_combined_ab(
         if config.category_name.is_none() {
             info!("Applying category {cat_name:?} from combined-A/B manifest");
         }
-        validate_category_at_startup(&state, registry, cat_name, &baseline_service_exts, config, Arc::clone(&pool));
+        validate_category_at_startup(
+            &state,
+            registry,
+            cat_name,
+            &baseline_service_exts,
+            config,
+            Arc::clone(&pool),
+        );
     }
 
     info!("Generating dashboards...");
@@ -600,7 +631,9 @@ fn validate_category_at_startup(
     });
     let mut experiment_exts =
         metadata::extract_service_extension_metadata(experiment_path, registry);
-    if let Ok(exp_reader) = metriken_query::ParquetReader::open_with_pool(experiment_path, Arc::clone(&pool)) {
+    if let Ok(exp_reader) =
+        metriken_query::ParquetReader::open_with_pool(experiment_path, Arc::clone(&pool))
+    {
         metadata::validate_service_extensions(&exp_reader, &mut experiment_exts);
     }
     let experiment_sources: Vec<String> = experiment_exts.iter().map(|(s, _)| s.clone()).collect();
@@ -633,16 +666,17 @@ fn attach_cli_experiment(
     info!("Loading experiment from parquet file...");
     let (exp_sysinfo, _exp_selection, exp_file_meta) = metadata::extract_parquet_metadata(exp_path);
     // ParquetReader::open_with_pool defaults filename() to the path's basename.
-    let exp_reader = match metriken_query::ParquetReader::open_with_pool(exp_path, Arc::clone(&pool)) {
-        Ok(r) => std::sync::Arc::new(r),
-        Err(e) => {
-            warn!(
-                "failed to load experiment '{}': {e}. Starting in single-capture mode.",
-                exp_path.display(),
-            );
-            return;
-        }
-    };
+    let exp_reader =
+        match metriken_query::ParquetReader::open_with_pool(exp_path, Arc::clone(&pool)) {
+            Ok(r) => std::sync::Arc::new(r),
+            Err(e) => {
+                warn!(
+                    "failed to load experiment '{}': {e}. Starting in single-capture mode.",
+                    exp_path.display(),
+                );
+                return;
+            }
+        };
     state.captures.attach_experiment(
         exp_reader.clone() as std::sync::Arc<dyn metriken_query::MetricsSource>,
         exp_sysinfo,

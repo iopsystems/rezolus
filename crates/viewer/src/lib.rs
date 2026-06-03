@@ -154,7 +154,7 @@ impl Viewer {
         let reader = Arc::new(
             ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
-                .with_filename(filename.to_string())
+                .with_filename(filename.to_string()),
         );
 
         let file_metadata = reader.file_metadata();

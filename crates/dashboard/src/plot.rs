@@ -699,7 +699,10 @@ mod tests {
     }
 
     fn make_labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -715,10 +718,8 @@ mod tests {
 
     #[test]
     fn unique_label_count_ignores_series_missing_the_key() {
-        let labels: Vec<BTreeMap<String, String>> = vec![
-            make_labels(&[("id", "0")]),
-            make_labels(&[("other", "x")]),
-        ];
+        let labels: Vec<BTreeMap<String, String>> =
+            vec![make_labels(&[("id", "0")]), make_labels(&[("other", "x")])];
         assert_eq!(unique_label_count(&labels, "id"), 1);
     }
 

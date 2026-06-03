@@ -82,12 +82,7 @@ impl CaptureRegistry {
     /// storage needed since the reader/store carries the name.
     pub fn filename(&self, id: CaptureId) -> String {
         match id {
-            CaptureId::Baseline => self
-                .baseline
-                .data
-                .read()
-                .filename()
-                .unwrap_or_default(),
+            CaptureId::Baseline => self.baseline.data.read().filename().unwrap_or_default(),
             CaptureId::Experiment => self
                 .experiment
                 .read()

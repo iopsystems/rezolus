@@ -70,8 +70,7 @@ impl LazySectionStore {
     ) -> Option<&serde_json::Value> {
         let key = format!("{}.json", &route[1..]);
         if !self.cached_bodies.contains_key(&key) {
-            let mut view =
-                dashboard::dashboard::generate_section(data, route, &self.context)?;
+            let mut view = dashboard::dashboard::generate_section(data, route, &self.context)?;
             view.set_filename(data.filename_or_default());
             if let Some(size) = self.context.filesize {
                 view.set_filesize(size);
@@ -137,10 +136,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(
-        data: Arc<dyn MetricsSource>,
-        templates: TemplateRegistry,
-    ) -> Self {
+    pub fn new(data: Arc<dyn MetricsSource>, templates: TemplateRegistry) -> Self {
         Self::with_pool(data, templates, BufferPool::new(DEFAULT_CACHE_SIZE_BYTES))
     }
 
@@ -224,10 +220,7 @@ impl AppState {
         // time_range is now in seconds; convert to milliseconds for the UI.
         let (start_time, end_time) = data
             .time_range()
-            .map(|(min, max)| (
-                (min * 1000.0) as u64,
-                (max * 1000.0) as u64,
-            ))
+            .map(|(min, max)| ((min * 1000.0) as u64, (max * 1000.0) as u64))
             .unwrap_or((0, 0));
         let num_series = data.total_series_count();
 
