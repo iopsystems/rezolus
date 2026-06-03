@@ -1,5 +1,43 @@
 ## [Unreleased]
 
+## [5.14.0] - 2026-06-03
+
+### Added
+
+- Viewer: Notebook / Selection / Report rework — Markdown notes,
+  preamble, and editable titles; report-mode load with column-trim;
+  SelectionView mirrors live compare mode. (#908 #909 #919 #931)
+- Viewer: event annotations — add from chart tooltips, plus one-off
+  event annotations baked into recordings. (#914 #929)
+- Viewer: `<rezolus-chart>` embed component for charts with exact
+  viewer parity. (#915)
+- Dashboard: histogram rate|mean card pair and additional vLLM
+  metrics. (#918 #938)
+- WASM viewer: Save as Report works offline; restored Load Parquet
+  upload affordance. (#923 #924)
+- Parquet: combined A/B tarball artifact. (#912)
+
+### Changed
+
+- Adopt `metriken-query` 0.11 streaming `ParquetReader`. (#943)
+- Refresh cargo dependencies. (#930)
+- Viewer: refactor JS into domain subdirectories, trim redundant
+  JS/Rust comments, and a Lit chart spike with CSS tokens /
+  `charts.css` extraction. (#913 #932 #933)
+- Trim parquet codecs to zstd-only and drop brotli. (#907)
+- CI: drop release-profile builds from PR CI; generate A/B smoke
+  fixtures on demand instead of checking them in. (#916 #917)
+
+### Fixed
+
+- Viewer: compare-mode bridge KPIs render both arms in section +
+  Notebook. (#910)
+- Viewer: narrow-screen fixes — topnav cleanup, and chart title-row +
+  spectrum controls. (#925 #926)
+- Viewer: add missing vllm-prefill / vllm-decode template symlinks.
+  (#928)
+- CI: locate the viewer tarball regardless of download nesting. (#905)
+
 ## [5.13.0] - 2026-05-10
 
 ### Added
@@ -794,7 +832,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.13.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.14.0...HEAD
+[5.14.0]: https://github.com/iopsystems/rezolus/compare/v5.13.0...v5.14.0
 [5.13.0]: https://github.com/iopsystems/rezolus/compare/v5.12.1...v5.13.0
 [5.12.1]: https://github.com/iopsystems/rezolus/compare/v5.12.0...v5.12.1
 [5.12.0]: https://github.com/iopsystems/rezolus/compare/v5.11.0...v5.12.0

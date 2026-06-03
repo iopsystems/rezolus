@@ -136,6 +136,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
     pub fn new(data: Arc<dyn MetricsSource>, templates: TemplateRegistry) -> Self {
         Self::with_pool(data, templates, BufferPool::new(DEFAULT_CACHE_SIZE_BYTES))
     }
