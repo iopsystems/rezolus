@@ -611,7 +611,7 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::viewer::promql::QueryResult;
+    use metriken_query::QueryResult;
 
     #[test]
     fn test_mcp_tool_from_str_query() {
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn test_query_result_vector_json_format() {
-        use crate::viewer::promql::Sample;
+        use metriken_query::Sample;
         use std::collections::HashMap;
 
         let mut metric = HashMap::new();
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_query_result_matrix_json_format() {
-        use crate::viewer::promql::MatrixSample;
+        use metriken_query::MatrixSample;
         use std::collections::HashMap;
 
         let mut metric = HashMap::new();

@@ -11,9 +11,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let overall = syscall.subgroup("Overall");
     overall.describe("Aggregate syscall rate and latency across all operation categories.");
-    overall.plot_promql(
-        PlotOpts::counter("Overall Rate", "syscall-total", Unit::Rate),
-        "sum(irate(syscall[5m]))".to_string(),
+    overall.histogram_rate_mean(
+        "Overall",
+        "syscall-total",
+        "syscall_latency",
+        RateSource::Counter("sum(irate(syscall[5m]))".to_string()),
+        Unit::Time,
     );
     overall.plot_promql(
         PlotOpts::histogram_latency("Overall Latency", "syscall-total-latency"),
@@ -40,9 +43,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     ] {
         let op_lower = op.to_lowercase();
         let sg = syscall.subgroup(*op);
-        sg.plot_promql(
-            PlotOpts::counter(format!("{op} Rate"), format!("syscall-{op}"), Unit::Rate),
-            format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))"),
+        sg.histogram_rate_mean(
+            op,
+            &format!("syscall-{op_lower}"),
+            &format!("syscall_latency{{op=\"{op_lower}\"}}"),
+            RateSource::Counter(format!("sum(irate(syscall{{op=\"{op_lower}\"}}[5m]))")),
+            Unit::Time,
         );
         sg.plot_promql(
             PlotOpts::histogram_latency(format!("{op} Latency"), format!("syscall-{op}-latency")),
@@ -53,4 +59,27 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     view.group(syscall);
 
     view
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metriken_query::MemoryStore;
+
+    #[test]
+    fn syscall_overall_and_per_op_get_rate_mean_pairs() {
+        let view = generate(&MemoryStore::builder().build(), vec![]);
+        let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
+        // Overall: rate query preserved verbatim, plus mean.
+        assert!(json.contains("sum(irate(syscall[5m]))"));
+        assert!(json.contains("histogram_mean(syscall_latency)\""));
+        // Per-op (read): rate preserved, mean added.
+        assert!(json.contains("sum(irate(syscall{op=\"read\"}[5m]))"));
+        assert!(json.contains("histogram_mean(syscall_latency{op=\"read\"})"));
+        // Percentile histogram still present.
+        assert!(json.contains("syscall_latency{op=\"write\"}"));
+        // No duplicate standalone overall rate: the overall rate query
+        // string appears exactly once.
+        assert_eq!(json.matches("sum(irate(syscall[5m]))").count(), 1);
+    }
 }

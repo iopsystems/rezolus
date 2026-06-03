@@ -15,3 +15,14 @@ this file is for everything else (dashboard, viewer, tooling).
   histogram/percentile query paths should derive count, mean, and the
   percentile distribution from that one column + one call instead of
   parallel metrics. Reduces parquet columns and query fan-out.
+
+## Viewer
+
+- **Customizable report title + browser tab title.** Let the user set
+  a report title (likely alongside the existing Notebook/Report
+  preamble/notes machinery in `selection.js`, persisted in the
+  selection payload like `tagline`/`note`). When viewing the Report or
+  Notebook routes, overwrite `document.title` with
+  `Report` / `Notebook` plus `: <optional title>` when one is set
+  (e.g. `Report: vLLM prefill regression`); restore the default title
+  on other routes.
