@@ -2,11 +2,12 @@
 
 ### Added
 
-- GPU (NVIDIA): `gpu_tensor_utilization` now breaks out tensor-pipe
-  activity by data type via a `precision` label — `fp16` (HMMA),
-  `int8` (IMMA), and `fp64` (DFMA) — alongside the existing aggregate
-  (`precision=any`). Collected from NVML GPM, so it requires Hopper+
-  and is reported only where the corresponding pipe is supported.
+- GPU (NVIDIA): `gpu_tensor_utilization` now breaks out per-tensor-pipe
+  activity via a `pipe` label — `hmma` (FP16/BF16, and FP32 matmul that
+  runs as TF32), `imma` (integer), and `dfma` (FP64) — alongside the
+  existing aggregate (`pipe=any`). Collected from NVML GPM, so it
+  requires Hopper+ and is reported only where the corresponding pipe is
+  supported.
 
 ## [5.14.0] - 2026-06-03
 

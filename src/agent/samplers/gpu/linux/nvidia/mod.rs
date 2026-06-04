@@ -237,15 +237,15 @@ impl NvidiaInner {
                                                 GPU_TENSOR_UTILIZATION.set(id, result.value as i64);
                                         }
                                         GpmMetricId::HmmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_FP16
+                                            let _ = GPU_TENSOR_UTILIZATION_HMMA
                                                 .set(id, result.value as i64);
                                         }
                                         GpmMetricId::ImmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_INT8
+                                            let _ = GPU_TENSOR_UTILIZATION_IMMA
                                                 .set(id, result.value as i64);
                                         }
                                         GpmMetricId::DfmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_FP64
+                                            let _ = GPU_TENSOR_UTILIZATION_DFMA
                                                 .set(id, result.value as i64);
                                         }
                                         _ => {}
