@@ -83,12 +83,21 @@ Example: `/release minor`
    ```
 
 8. **Push and create PR**:
+
+   IMPORTANT: The PR title must start with `release: prepare v` so the
+   `tag-release.yml` workflow fires after merge. When the PR is
+   squash-merged (the repo default), the squash commit takes the PR
+   title as its message, and the workflow guard checks
+   `startsWith(head_commit.message, 'release: prepare v')`. A title like
+   `release: v${NEW_VERSION}` would NOT match and the tag/release would
+   be silently skipped.
+
    ```bash
    git push -u origin release/v${NEW_VERSION}
 
    gh pr create \
      --repo iopsystems/rezolus \
-     --title "release: v${NEW_VERSION}" \
+     --title "release: prepare v${NEW_VERSION}" \
      --body "$(cat <<'EOF'
    ## Release v${NEW_VERSION}
 
