@@ -138,6 +138,27 @@ pub static GPU_DRAM_BW_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 #[metric(
     name = "gpu_tensor_utilization",
     description = "The percentage of time the GPU's SMs were doing any tensor operations. (0-100). Requires Hopper+ GPU.",
-    metadata = { unit = "percentage" }
+    metadata = { pipe = "any", unit = "percentage" }
 )]
 pub static GPU_TENSOR_UTILIZATION: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_tensor_utilization",
+    description = "The percentage of time the GPU's SMs were doing HMMA tensor operations (FP16/BF16, and FP32 matmul which runs as TF32). (0-100). Requires Hopper+ GPU.",
+    metadata = { pipe = "hmma", unit = "percentage" }
+)]
+pub static GPU_TENSOR_UTILIZATION_HMMA: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_tensor_utilization",
+    description = "The percentage of time the GPU's SMs were doing IMMA tensor operations (integer, e.g. INT8). (0-100). Requires Hopper+ GPU.",
+    metadata = { pipe = "imma", unit = "percentage" }
+)]
+pub static GPU_TENSOR_UTILIZATION_IMMA: GaugeGroup = GaugeGroup::new(MAX_GPUS);
+
+#[metric(
+    name = "gpu_tensor_utilization",
+    description = "The percentage of time the GPU's SMs were doing DFMA tensor operations (FP64). (0-100). Requires Hopper+ GPU.",
+    metadata = { pipe = "dfma", unit = "percentage" }
+)]
+pub static GPU_TENSOR_UTILIZATION_DFMA: GaugeGroup = GaugeGroup::new(MAX_GPUS);

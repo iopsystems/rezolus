@@ -215,6 +215,9 @@ impl NvidiaInner {
                                     GpmMetricId::SmOccupancy,
                                     GpmMetricId::DramBwUtil,
                                     GpmMetricId::AnyTensorUtil,
+                                    GpmMetricId::HmmaTensorUtil,
+                                    GpmMetricId::ImmaTensorUtil,
+                                    GpmMetricId::DfmaTensorUtil,
                                 ],
                             ) {
                                 for result in results.into_iter().flatten() {
@@ -232,6 +235,18 @@ impl NvidiaInner {
                                         GpmMetricId::AnyTensorUtil => {
                                             let _ =
                                                 GPU_TENSOR_UTILIZATION.set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::HmmaTensorUtil => {
+                                            let _ = GPU_TENSOR_UTILIZATION_HMMA
+                                                .set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::ImmaTensorUtil => {
+                                            let _ = GPU_TENSOR_UTILIZATION_IMMA
+                                                .set(id, result.value as i64);
+                                        }
+                                        GpmMetricId::DfmaTensorUtil => {
+                                            let _ = GPU_TENSOR_UTILIZATION_DFMA
+                                                .set(id, result.value as i64);
                                         }
                                         _ => {}
                                     }
