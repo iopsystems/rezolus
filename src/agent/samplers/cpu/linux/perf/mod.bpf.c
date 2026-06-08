@@ -92,8 +92,7 @@ struct {
 
 // attach a tracepoint on sched_switch for per-cgroup accounting
 
-SEC("tp_btf/sched_switch")
-int handle__sched_switch(u64* ctx) {
+static __always_inline int account__sched_switch(u64* ctx) {
     /* TP_PROTO(bool preempt, struct task_struct *prev,
      *      struct task_struct *next)
      */
@@ -107,7 +106,7 @@ int handle__sched_switch(u64* ctx) {
     u64 i = bpf_perf_event_read(&instructions, BPF_F_CURRENT_CPU);
 
     if (bpf_core_field_exists(prev->sched_task_group)) {
-        int cgroup_id = prev->sched_task_group->css.id;
+        int cgroup_id = BPF_CORE_READ(prev, sched_task_group, css.id);
 
         if (cgroup_id < MAX_CGROUPS) {
 
@@ -148,6 +147,16 @@ int handle__sched_switch(u64* ctx) {
     bpf_map_update_elem(&instructions_prev, &processor_id, &i, BPF_ANY);
 
     return 0;
+}
+
+SEC("tp_btf/sched_switch")
+int handle__sched_switch_btf(u64* ctx) {
+    return account__sched_switch(ctx);
+}
+
+SEC("raw_tp/sched_switch")
+int handle__sched_switch_raw(u64* ctx) {
+    return account__sched_switch(ctx);
 }
 
 char LICENSE[] SEC("license") = "GPL";
