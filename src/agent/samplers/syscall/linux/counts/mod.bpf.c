@@ -221,10 +221,10 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
     idx = offset + group;
     array_incr(&counters, idx);
 
-    struct task_struct* current = bpf_get_current_task_btf();
+    struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
     if (bpf_core_field_exists(current->sched_task_group)) {
-        int cgroup_id = current->sched_task_group->css.id;
+        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
 
         if (cgroup_id < MAX_CGROUPS) {
 

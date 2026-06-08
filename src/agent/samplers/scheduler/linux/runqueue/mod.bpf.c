@@ -154,24 +154,21 @@ static __always_inline int trace_enqueue(u32 tgid, u32 pid) {
     return 0;
 }
 
-SEC("tp_btf/sched_wakeup")
-int handle__sched_wakeup(u64* ctx) {
+static __always_inline int account__sched_wakeup(u64* ctx) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(p->tgid, p->pid);
+    return trace_enqueue(BPF_CORE_READ(p, tgid), BPF_CORE_READ(p, pid));
 }
 
-SEC("tp_btf/sched_wakeup_new")
-int handle__sched_wakeup_new(u64* ctx) {
+static __always_inline int account__sched_wakeup_new(u64* ctx) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* p = (void*)ctx[0];
 
-    return trace_enqueue(p->tgid, p->pid);
+    return trace_enqueue(BPF_CORE_READ(p, tgid), BPF_CORE_READ(p, pid));
 }
 
-SEC("tp_btf/sched_switch")
-int handle__sched_switch(u64* ctx) {
+static __always_inline int account__sched_switch(u64* ctx) {
     /* TP_PROTO(bool preempt, struct task_struct *prev,
      *      struct task_struct *next)
      */
@@ -250,7 +247,7 @@ int handle__sched_switch(u64* ctx) {
             array_incr(&cgroup_ivcsw, cgroup_id);
         }
 
-        pid = prev->pid;
+        pid = BPF_CORE_READ(prev, pid);
 
         bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
 
@@ -265,14 +262,14 @@ int handle__sched_switch(u64* ctx) {
     }
 
     // for all tasks: track when it went off-cpu
-    pid = prev->pid;
+    pid = BPF_CORE_READ(prev, pid);
 
     bpf_map_update_elem(&offcpu_at, &pid, &ts, 0);
 
     // next task has moved into running
     // - update next->pid running_at with now
     // - calculate how long next task was enqueued, update hist
-    pid = next->pid;
+    pid = BPF_CORE_READ(next, pid);
 
     // read the next task cgroup details and push to ringbuf if new cgroup
     void* next_task_group = BPF_CORE_READ(next, sched_task_group);
@@ -331,6 +328,36 @@ int handle__sched_switch(u64* ctx) {
     }
 
     return 0;
+}
+
+SEC("tp_btf/sched_wakeup")
+int handle__sched_wakeup_btf(u64* ctx) {
+    return account__sched_wakeup(ctx);
+}
+
+SEC("raw_tp/sched_wakeup")
+int handle__sched_wakeup_raw(u64* ctx) {
+    return account__sched_wakeup(ctx);
+}
+
+SEC("tp_btf/sched_wakeup_new")
+int handle__sched_wakeup_new_btf(u64* ctx) {
+    return account__sched_wakeup_new(ctx);
+}
+
+SEC("raw_tp/sched_wakeup_new")
+int handle__sched_wakeup_new_raw(u64* ctx) {
+    return account__sched_wakeup_new(ctx);
+}
+
+SEC("tp_btf/sched_switch")
+int handle__sched_switch_btf(u64* ctx) {
+    return account__sched_switch(ctx);
+}
+
+SEC("raw_tp/sched_switch")
+int handle__sched_switch_raw(u64* ctx) {
+    return account__sched_switch(ctx);
 }
 
 char LICENSE[] SEC("license") = "GPL";

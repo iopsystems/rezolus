@@ -63,8 +63,7 @@ struct {
     __type(value, u32); // cpu
 } last_cpu SEC(".maps");
 
-SEC("tp_btf/sched_switch")
-int handle__sched_switch(u64* ctx) {
+static __always_inline int account__sched_switch(u64* ctx) {
     /* TP_PROTO(bool preempt, struct task_struct *prev, struct task_struct *next) */
     struct task_struct* next = (struct task_struct*)ctx[2];
 
@@ -117,6 +116,16 @@ int handle__sched_switch(u64* ctx) {
     bpf_map_update_elem(&last_cpu, &next_pid, &cpu, BPF_ANY);
 
     return 0;
+}
+
+SEC("tp_btf/sched_switch")
+int handle__sched_switch_btf(u64* ctx) {
+    return account__sched_switch(ctx);
+}
+
+SEC("raw_tp/sched_switch")
+int handle__sched_switch_raw(u64* ctx) {
+    return account__sched_switch(ctx);
 }
 
 char LICENSE[] SEC("license") = "GPL";

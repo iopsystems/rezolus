@@ -6,9 +6,21 @@ mod sync_primitive;
 pub use builder::Builder as BpfBuilder;
 pub use builder::{BpfProgStats, PerfEvent};
 
+use std::path::Path;
+use std::sync::OnceLock;
+
 use crate::agent::samplers::Sampler;
 use crate::agent::GroupMetadata;
 use crate::*;
+
+/// Returns true if the running kernel exposes its own BTF
+/// (`/sys/kernel/btf/vmlinux`). Programs that need in-kernel BTF — `tp_btf`,
+/// `fentry`/`fexit`, and the `bpf_get_current_task_btf` helper — can only be
+/// attached when this is true. Checked once and cached.
+pub fn kernel_has_btf() -> bool {
+    static HAS_BTF: OnceLock<bool> = OnceLock::new();
+    *HAS_BTF.get_or_init(|| Path::new("/sys/kernel/btf/vmlinux").exists())
+}
 
 pub trait OpenSkelExt {
     /// When called, the SkelBuilder should log instruction counts for each of

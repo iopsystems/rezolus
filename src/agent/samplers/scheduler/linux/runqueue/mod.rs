@@ -62,6 +62,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .packed_counters("cgroup_offcpu", &CGROUP_SCHEDULER_OFFCPU)
     .packed_counters("cgroup_ivcsw", &CGROUP_SCHEDULER_IVCSW)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
+    .disabled_programs(if kernel_has_btf() {
+        &[
+            "handle__sched_wakeup_raw",
+            "handle__sched_wakeup_new_raw",
+            "handle__sched_switch_raw",
+        ]
+    } else {
+        &[
+            "handle__sched_wakeup_btf",
+            "handle__sched_wakeup_new_btf",
+            "handle__sched_switch_btf",
+        ]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -86,16 +99,28 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} handle__sched_switch() BPF instruction count: {}",
-            self.progs.handle__sched_switch.insn_cnt()
+            "{NAME} handle__sched_switch_btf() BPF instruction count: {}",
+            self.progs.handle__sched_switch_btf.insn_cnt()
         );
         debug!(
-            "{NAME} handle__sched_wakeup() BPF instruction count: {}",
-            self.progs.handle__sched_wakeup.insn_cnt()
+            "{NAME} handle__sched_switch_raw() BPF instruction count: {}",
+            self.progs.handle__sched_switch_raw.insn_cnt()
         );
         debug!(
-            "{NAME} handle__sched_wakeup_new() BPF instruction count: {}",
-            self.progs.handle__sched_wakeup_new.insn_cnt()
+            "{NAME} handle__sched_wakeup_btf() BPF instruction count: {}",
+            self.progs.handle__sched_wakeup_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_wakeup_raw() BPF instruction count: {}",
+            self.progs.handle__sched_wakeup_raw.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_wakeup_new_btf() BPF instruction count: {}",
+            self.progs.handle__sched_wakeup_new_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_wakeup_new_raw() BPF instruction count: {}",
+            self.progs.handle__sched_wakeup_new_raw.insn_cnt()
         );
     }
 }

@@ -57,6 +57,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
     .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
     .ringbuf_handler("cgroup_info", handle_event)
+    .disabled_programs(if kernel_has_btf() {
+        &["handle__sched_switch_raw"]
+    } else {
+        &["handle__sched_switch_btf"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -78,8 +83,12 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} handle__sched_switch() BPF instruction count: {}",
-            self.progs.handle__sched_switch.insn_cnt()
+            "{NAME} handle__sched_switch_btf() BPF instruction count: {}",
+            self.progs.handle__sched_switch_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_switch_raw() BPF instruction count: {}",
+            self.progs.handle__sched_switch_raw.insn_cnt()
         );
     }
 }
