@@ -66,6 +66,15 @@ paying — we would build the agent differently. Architecture-specific
 builds are reproducible against a known-good kernel ABI snapshot rather than
 depending on the build host's headers.
 
+**Two distinct BTF requirements.** CO-RE relocations need BTF, but it may be
+kernel-provided *or* supplied as an external file via the `btf_path` config —
+the kernel need not expose its own. In contrast, BTF-typed program/helper
+attach (`tp_btf`, `fentry`/`fexit`, `bpf_get_current_task_btf`) needs the
+*kernel's own* BTF (`/sys/kernel/btf/vmlinux`) and cannot be satisfied by a
+file. On kernels that lack in-kernel BTF (e.g. NVIDIA Tegra/L4T), Rezolus
+detects this at startup (`kernel_has_btf`) and loads `raw_tp` variants of the
+affected hooks instead, keeping CO-RE via the external BTF.
+
 **How to apply.**
 - New BPF code must use CO-RE (`BPF_CORE_READ`, `bpf_core_read`) for kernel
   field access.
@@ -111,6 +120,13 @@ requires BTF, principle 2), substantially lower per-call overhead, and
 `fexit` exposes entry args + return value in one program — often eliminating
 the side-maps that `kprobe`+`kretprobe` or `kprobe`+exit-tracepoint pairs
 need today.
+
+*BTF caveat.* The ordering above assumes in-kernel BTF. On a CO-RE-only kernel
+(external BTF file, no `/sys/kernel/btf/vmlinux`) it collapses to `raw_tp` >
+`tracepoint` > `kprobe`; `tp_btf` and `fentry`/`fexit` are unavailable. Hooks
+that prefer `tp_btf` should ship a `raw_tp` twin sharing one `__always_inline`
+body, selected at runtime via `kernel_has_btf` and
+`BpfBuilder::disabled_programs` (see `cpu/migrations`, `scheduler/runqueue`).
 
 **How to apply.**
 - New samplers default to the highest-preference attach the target supports.
