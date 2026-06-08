@@ -1037,7 +1037,7 @@
     justify-content: center;
     min-height: 160px;
     padding: 1rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     color: var(--fg-muted);
 }
