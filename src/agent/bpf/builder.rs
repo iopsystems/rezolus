@@ -234,6 +234,11 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     /// enabled (default behavior). If Some, only the listed programs will have
     /// autoload enabled; all others will be disabled before loading.
     enabled_programs: Option<HashSet<&'static str>>,
+    /// Optional list of program names to disable. Any program named here has
+    /// autoload disabled before load, regardless of `enabled_programs`. Used to
+    /// drop the unused variant when a sampler ships both a `tp_btf` and a
+    /// `raw_tp` version of a hook.
+    disabled_programs: Option<HashSet<&'static str>>,
 }
 
 impl<T: 'static> Builder<T>
@@ -261,6 +266,7 @@ where
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
+            disabled_programs: None,
         }
     }
 
@@ -331,6 +337,22 @@ where
                         prog.set_autoload(false);
                     } else {
                         debug!("{} enabling program: {}", self.name, prog_name);
+                    }
+                }
+            }
+
+            // If disabled_programs is set, disable autoload for those programs
+            // (leaving all others at their default). Used to drop the unused
+            // tp_btf/raw_tp variant based on in-kernel BTF availability.
+            if let Some(ref disabled) = self.disabled_programs {
+                for mut prog in open_skel.open_object_mut().progs_mut() {
+                    let prog_name = prog.name().to_string_lossy();
+                    if disabled.contains(prog_name.as_ref()) {
+                        debug!(
+                            "{} disabling autoload for program: {}",
+                            self.name, prog_name
+                        );
+                        prog.set_autoload(false);
                     }
                 }
             }
@@ -643,6 +665,30 @@ where
     /// ```
     pub fn enabled_programs(mut self, names: &[&'static str]) -> Self {
         self.enabled_programs = Some(names.iter().copied().collect());
+        self
+    }
+
+    /// Specify BPF programs to disable (autoload off). Unlike
+    /// [`Self::enabled_programs`], which is an allowlist, this is a denylist:
+    /// only the named programs are disabled; everything else loads as usual.
+    ///
+    /// Use this to drop the unused variant when a sampler defines both a
+    /// `tp_btf` and a `raw_tp` version of a hook, selecting at runtime on
+    /// [`crate::agent::bpf::kernel_has_btf`].
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// BpfBuilder::new(...)
+    ///     .disabled_programs(if kernel_has_btf() {
+    ///         &["handle__sched_switch_raw"]
+    ///     } else {
+    ///         &["handle__sched_switch_btf"]
+    ///     })
+    ///     .build()?;
+    /// ```
+    pub fn disabled_programs(mut self, names: &[&'static str]) -> Self {
+        self.disabled_programs = Some(names.iter().copied().collect());
         self
     }
 }
