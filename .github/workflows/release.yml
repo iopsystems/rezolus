@@ -349,15 +349,18 @@ jobs:
           path: target/viewer-static/
           pattern: viewer-static
 
-      # Upload debs to systemslab registry
+      # Upload debs to systemslab registry (stable releases only)
       - uses: google-github-actions/auth@v2
+        if: steps.check-release.outputs.is_stable == 'true'
         id: auth-systemslab
         with:
           credentials_json: "${{ secrets.GCP_CREDENTIALS }}"
 
       - uses: google-github-actions/setup-gcloud@v2
+        if: steps.check-release.outputs.is_stable == 'true'
 
-      - name: upload debs to systemslab registry (all releases)
+      - name: upload debs to systemslab registry (stable releases only)
+        if: steps.check-release.outputs.is_stable == 'true'
         run: |
           gcloud config set artifacts/repository systemslab
           gcloud config set artifacts/location us
@@ -516,7 +519,14 @@ jobs:
 
       - name: create GitHub release
         run: |
+          # Mark non-stable tags (anything with '-' or '+', e.g. -alpha.N) as
+          # GitHub pre-releases so they don't become the "Latest" release.
+          PRERELEASE=""
+          if [ "${{ steps.check-release.outputs.is_stable }}" != "true" ]; then
+            PRERELEASE="--prerelease"
+          fi
           gh release create "${{ github.ref_name }}" \
+            $PRERELEASE \
             --title "${{ github.ref_name }}" \
             --notes-file /tmp/release-notes.md \
             target/release-artifacts/*

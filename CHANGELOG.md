@@ -9,6 +9,16 @@
   requires Hopper+ and is reported only where the corresponding pipe is
   supported.
 
+### Fixed
+
+- BPF samplers that rely on in-kernel BTF (`cpu_usage`, `cpu_migrations`,
+  `cpu_perf`, `scheduler_runqueue`, `syscall_counts`) now work on kernels
+  built without `/sys/kernel/btf/vmlinux` (e.g. NVIDIA Tegra/L4T). Each
+  `tp_btf` hook gains a `raw_tp` twin selected at runtime via
+  `kernel_has_btf()`, and `syscall_counts` uses `bpf_get_current_task()`
+  instead of `bpf_get_current_task_btf()`. CO-RE still uses the external
+  BTF file (`btf_path`). Stock BTF kernels are unaffected. (#948)
+
 ## [5.14.0] - 2026-06-03
 
 ### Added

@@ -23,7 +23,7 @@ env:
 
 jobs:
   build-and-push:
-    if: github.repository == 'iopsystems/rezolus'
+    if: ${{ github.repository == 'iopsystems/rezolus' && (github.event_name == 'workflow_dispatch' || (!contains(github.ref_name, '-') && !contains(github.ref_name, '+'))) }}
     name: "Build and push Docker image (${{ matrix.arch }})"
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     strategy:
@@ -85,7 +85,7 @@ jobs:
           retention-days: 1
 
   merge:
-    if: github.repository == 'iopsystems/rezolus'
+    if: ${{ github.repository == 'iopsystems/rezolus' && (github.event_name == 'workflow_dispatch' || (!contains(github.ref_name, '-') && !contains(github.ref_name, '+'))) }}
     name: Create multi-arch manifest
     runs-on: ubuntu-latest
     needs: build-and-push
