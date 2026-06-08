@@ -20,7 +20,7 @@ mod bpf;
 use bpf::*;
 
 #[cfg(target_os = "linux")]
-pub use bpf::{process_cgroup_info, CgroupInfo};
+pub use bpf::{kernel_has_btf, process_cgroup_info, CgroupInfo};
 
 // This is the maximum number of CPUs we track with BPF counters.
 pub const MAX_CPUS: usize = 1024;
