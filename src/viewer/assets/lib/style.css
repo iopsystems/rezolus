@@ -102,7 +102,7 @@
     --card-radius-lg: 12px;
 
     /* Typography scale */
-    --font-mono: "Berkeley Mono", "JetBrains Mono", "Fira Code", "SF Mono", monospace;
+    --font-mono: "JetBrains Mono", "SF Mono", monospace;
     --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --font-size-xs: 0.75rem;
     --font-size-sm: 0.8125rem;
@@ -2765,7 +2765,7 @@ main {
     border: 1px solid var(--border-default);
     border-radius: 6px;
     font-size: 0.9rem;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     outline: none;
     transition: border-color 0.15s;
     text-align: center;
