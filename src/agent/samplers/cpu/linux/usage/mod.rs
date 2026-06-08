@@ -165,6 +165,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("task_info", handle_task_info)
     .ringbuf_handler("task_exit", handle_task_exit)
+    .disabled_programs(if kernel_has_btf() {
+        &["handle__sched_process_exit_raw"]
+    } else {
+        &["handle__sched_process_exit_btf"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -194,8 +199,12 @@ impl OpenSkelExt for ModSkel<'_> {
             self.progs.cpuacct_account_field_kprobe.insn_cnt()
         );
         debug!(
-            "{NAME} handle__sched_process_exit() BPF instruction count: {}",
-            self.progs.handle__sched_process_exit.insn_cnt()
+            "{NAME} handle__sched_process_exit_btf() BPF instruction count: {}",
+            self.progs.handle__sched_process_exit_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} handle__sched_process_exit_raw() BPF instruction count: {}",
+            self.progs.handle__sched_process_exit_raw.insn_cnt()
         );
     }
 }

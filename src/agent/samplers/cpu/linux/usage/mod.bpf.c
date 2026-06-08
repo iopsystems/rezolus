@@ -331,8 +331,7 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     return 0;
 }
 
-SEC("tp_btf/sched_process_exit")
-int handle__sched_process_exit(u64* ctx) {
+static __always_inline int account__sched_process_exit(u64* ctx) {
     /* TP_PROTO(struct task_struct *p) */
     struct task_struct* task = (struct task_struct*)ctx[0];
 
@@ -400,6 +399,16 @@ int softirq_exit(struct trace_event_raw_softirq* args) {
     *start_ts = 0;
 
     return 0;
+}
+
+SEC("tp_btf/sched_process_exit")
+int handle__sched_process_exit_btf(u64* ctx) {
+    return account__sched_process_exit(ctx);
+}
+
+SEC("raw_tp/sched_process_exit")
+int handle__sched_process_exit_raw(u64* ctx) {
+    return account__sched_process_exit(ctx);
 }
 
 char LICENSE[] SEC("license") = "GPL";
