@@ -161,8 +161,11 @@ async fn probe_endpoint(
     None
 }
 
-/// Fetch systeminfo and descriptions from a Rezolus agent endpoint.
-async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> (Option<String>, Option<String>) {
+/// Fetch systeminfo, descriptions, and sampler status from a Rezolus agent.
+async fn fetch_agent_metadata(
+    client: &Client,
+    base_url: &Url,
+) -> (Option<String>, Option<String>, Option<String>) {
     let mut info_url = base_url.clone();
     info_url.set_path("/systeminfo");
     let systeminfo = match client.get(info_url).send().await {
@@ -177,7 +180,14 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> (Option<String
         _ => None,
     };
 
-    (systeminfo, descriptions)
+    let mut samplers_url = base_url.clone();
+    samplers_url.set_path("/samplers");
+    let sampler_status = match client.get(samplers_url).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok(),
+        _ => None,
+    };
+
+    (systeminfo, descriptions, sampler_status)
 }
 
 async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
@@ -321,6 +331,7 @@ fn build_parquet_converter(
         ep.first_success_ns,
         ep.last_success_ns,
         ep.config.role.as_deref(),
+        ep.sampler_status.as_deref(),
     ) {
         converter = converter.metadata("per_source_metadata".to_string(), json);
     }
@@ -341,6 +352,7 @@ fn build_per_source_metadata(
     first_sample_ns: Option<u64>,
     last_sample_ns: Option<u64>,
     role: Option<&str>,
+    sampler_status: Option<&str>,
 ) -> Option<String> {
     let mut source_meta = serde_json::Map::new();
     if let Some(ns) = first_sample_ns {
@@ -360,6 +372,11 @@ fn build_per_source_metadata(
             parquet_metadata::NESTED_ROLE.to_string(),
             serde_json::json!(role),
         );
+    }
+    if let Some(ss) = sampler_status {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(ss) {
+            source_meta.insert(parquet_metadata::NESTED_SAMPLER_STATUS.to_string(), value);
+        }
     }
 
     if source_meta.is_empty() {
@@ -448,9 +465,10 @@ pub fn run(config: RecordingConfig) {
                         protocol
                     );
                     if protocol == Protocol::Msgpack {
-                        let (si, desc) = fetch_agent_metadata(&client, &ep.config.url).await;
+                        let (si, desc, ss) = fetch_agent_metadata(&client, &ep.config.url).await;
                         ep.systeminfo = si;
                         ep.descriptions = desc;
+                        ep.sampler_status = ss;
                     }
                     ep.scrape_url = Some(url);
                     ep.detected_protocol = Some(protocol);
@@ -640,10 +658,11 @@ pub fn run(config: RecordingConfig) {
                         endpoints[idx].config.url
                     );
                     if protocol == Protocol::Msgpack {
-                        let (si, desc) =
+                        let (si, desc, ss) =
                             fetch_agent_metadata(&client, &endpoints[idx].config.url).await;
                         endpoints[idx].systeminfo = si;
                         endpoints[idx].descriptions = desc;
+                        endpoints[idx].sampler_status = ss;
                     }
                     endpoints[idx].scrape_url = Some(url);
                     endpoints[idx].detected_protocol = Some(protocol.clone());
@@ -886,7 +905,8 @@ mod tests {
     #[test]
     fn test_build_per_source_metadata_single_source() {
         let json =
-            build_per_source_metadata("rezolus", Some(100), Some(200), Some("service")).unwrap();
+            build_per_source_metadata("rezolus", Some(100), Some(200), Some("service"), None)
+                .unwrap();
         let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(
             psm["rezolus"]["first_sample_ns"].as_u64(),
@@ -908,6 +928,7 @@ mod tests {
             Some(100),
             Some(200),
             Some("service"),
+            None,
         )
         .unwrap();
         let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -926,18 +947,30 @@ mod tests {
     #[test]
     fn test_build_per_source_metadata_returns_none_when_empty() {
         // No per-source fields at all → no per_source_metadata.
-        assert!(build_per_source_metadata("rezolus", None, None, None).is_none());
+        assert!(build_per_source_metadata("rezolus", None, None, None, None).is_none());
     }
 
     #[test]
     fn test_build_per_source_metadata_array_with_partial_fields() {
         // Array source with only a subset of per-source fields populated.
-        let json = build_per_source_metadata("[\"a\",\"b\",\"c\"]", Some(50), None, None).unwrap();
+        let json =
+            build_per_source_metadata("[\"a\",\"b\",\"c\"]", Some(50), None, None, None).unwrap();
         let psm: serde_json::Value = serde_json::from_str(&json).unwrap();
         for name in ["a", "b", "c"] {
             assert_eq!(psm[name]["first_sample_ns"].as_u64(), Some(50));
             assert!(psm[name].get("last_sample_ns").is_none());
             assert!(psm[name].get("role").is_none());
         }
+    }
+
+    #[test]
+    fn test_build_per_source_metadata_includes_sampler_status() {
+        let ss = r#"[{"name":"cpu_usage","state":"active"}]"#;
+        let json = build_per_source_metadata("rezolus", None, None, None, Some(ss)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let arr = &v["rezolus"]["sampler_status"];
+        assert!(arr.is_array());
+        assert_eq!(arr[0]["name"], "cpu_usage");
+        assert_eq!(arr[0]["state"], "active");
     }
 }

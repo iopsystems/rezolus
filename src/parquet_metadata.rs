@@ -90,6 +90,10 @@ pub const NESTED_NODE: &str = "node";
 /// Per-source instance identifier (nested key).
 pub const NESTED_INSTANCE: &str = "instance";
 
+/// Per-source nested key: JSON array of sampler status (from the agent's
+/// `/samplers` endpoint). Present only for Rezolus-agent sources.
+pub const NESTED_SAMPLER_STATUS: &str = "sampler_status";
+
 // ── Viewer hints ─────────────────────────────────────────────────────
 
 /// The default rezolus node to display when the viewer opens a combined

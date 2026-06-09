@@ -51,6 +51,7 @@ pub struct EndpointState {
     pub scrape_url: Option<Url>,
     pub systeminfo: Option<String>,
     pub descriptions: Option<String>,
+    pub sampler_status: Option<String>,
     pub first_success_ns: Option<u64>,
     pub last_success_ns: Option<u64>,
 }
@@ -65,6 +66,7 @@ impl EndpointState {
             scrape_url: None,
             systeminfo: None,
             descriptions: None,
+            sampler_status: None,
             first_success_ns: None,
             last_success_ns: None,
         }
