@@ -113,6 +113,11 @@ async function loadParquet(data, filename) {
     // outside the new file.
     clearMetadataCache();
     const state = await fetchInitialState();
+    // WASM's file_metadata_json only emits the parquet's embedded
+    // metadata; filename is a runtime TSDB field. Inject it so the
+    // tab title and other UI hooks see it the same way the server
+    // viewer does.
+    state.fileMetadata = { ...(state.fileMetadata || {}), filename };
     // initWasmViewer already called setStorageScope, so a persisted
     // working set (if any) has been restored; this only seeds the
     // footer events when nothing was persisted.
