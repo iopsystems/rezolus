@@ -35,7 +35,7 @@
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.8.3</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.14.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
@@ -98,10 +98,16 @@
 </div>
 </div>
 <div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;  <span class="text-slate-600">Collection interval [default: 1s]</span></div>
-<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;  <span class="text-slate-600">Collection duration</span></div>
-<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;      <span class="text-slate-600">parquet|raw [default: parquet]</span></div>
-<div><span class="text-slate-400">-v, --verbose</span>              <span class="text-slate-600">Increase verbosity (stackable)</span></div>
+<div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">Collection interval [default: 1s]</span></div>
+<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Collection duration</span></div>
+<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">parquet|raw [default: parquet]</span></div>
+<div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">TOML config for multi-endpoint recording</span></div>
+<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Additional endpoint (repeatable)</span></div>
+<div><span class="text-slate-400">    --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">Custom metadata (repeatable)</span></div>
+<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;             <span class="text-slate-600">Node name attached to rezolus data</span></div>
+<div><span class="text-slate-400">    --instance</span> &lt;NAME&gt;         <span class="text-slate-600">Instance name attached to service data</span></div>
+<div><span class="text-slate-400">    --separate</span>                <span class="text-slate-600">Write per-endpoint files instead of one combined</span></div>
+<div><span class="text-slate-400">-v, --verbose</span>                 <span class="text-slate-600">Increase verbosity (stackable)</span></div>
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-sm">
@@ -127,11 +133,19 @@
 <h3 class="text-base font-bold mb-3">Viewer</h3>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-sm">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view [OPTIONS] &lt;INPUT&gt; [LISTEN]</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view [OPTIONS] [INPUT] [EXPERIMENT]</code></div>
 </div>
 </div>
 <div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">-v, --verbose</span>  <span class="text-slate-600">Increase verbosity</span></div>
+<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture (parquet path, agent URL, or alias=parquet)</span></div>
+<div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">Optional second capture for A/B comparison</span></div>
+<div><span class="text-slate-400">-l, --listen</span> &lt;ADDR&gt;           <span class="text-slate-600">Viewer listen address (e.g. 127.0.0.1:8080)</span></div>
+<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;         <span class="text-slate-600">Directory of service-extension template JSON</span></div>
+<div><span class="text-slate-400">    --category</span> &lt;NAME&gt;         <span class="text-slate-600">Activate category mode (e.g. inference-library)</span></div>
+<div><span class="text-slate-400">    --proxy-allow</span> &lt;PATTERN&gt;  <span class="text-slate-600">Whitelist a host pattern for URL proxy (repeatable)</span></div>
+<div><span class="text-slate-400">    --proxy-allow-any</span>         <span class="text-slate-600">Disable proxy allowlist entirely (trust-everyone mode)</span></div>
+<div><span class="text-slate-400">    --cache-size-mb</span> &lt;MB&gt;     <span class="text-slate-600">Row-group buffer cache size [default: 500]</span></div>
+<div><span class="text-slate-400">-v, --verbose</span>                  <span class="text-slate-600">Increase verbosity</span></div>
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-sm">
