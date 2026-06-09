@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Usage - Rezolus Docs</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.14.0</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="usage.html">Usage</a>
+<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#long-running">Long-running</a>
+<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#one-off">One-off</a>
+<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#offline">Offline analysis</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
+<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-12">Usage</h1>
+
+<!-- Long-running -->
+<section class="mb-16" id="long-running">
+<h2 class="text-xl font-bold mb-2">Long-running</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-8">Continuous deployments that observe a system over its lifetime.</p>
+
+<div class="space-y-10">
+
+<!-- Agent + Prometheus -->
+<div>
+<h3 class="text-base font-bold mb-3">Run the agent and scrape with Prometheus</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Standard always-on monitoring. The agent collects via eBPF and exposes its data to the exporter, which serves Prometheus on <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">:4242</code>.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># systemd-installed: both services are already enabled</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl start rezolus rezolus-exporter</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Point Prometheus at :4242 and wire Grafana to that source</div>
+</div>
+</div>
+</div>
+
+<!-- Hindsight -->
+<div>
+<h3 class="text-base font-bold mb-3">Keep a rolling buffer with Hindsight</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">For systems where you can't predict when something will go wrong. Hindsight maintains a rolling on-disk ring buffer of high-resolution snapshots; when an incident hits, trigger a snapshot and load the surrounding time window in the viewer.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl start rezolus-hindsight</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Trigger a snapshot on demand (signal or HTTP)</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo pkill -HUP -f rezolus-hindsight</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Or via the HTTP API for scripted triggers</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -X POST http://localhost:4243/snapshot</code></div>
+</div>
+</div>
+</div>
+
+<!-- OTel ingest -->
+<div>
+<h3 class="text-base font-bold mb-3">Combine your own metrics</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Pull metrics from your application's OpenTelemetry/Prometheus endpoint into the same recording as the rezolus system metrics. Useful for correlating service-level KPIs (request rate, p99 latency) with kernel-level events.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-[10px] font-mono opacity-50 uppercase tracking-widest">rezolus-record.toml</span>
+</div>
+<div class="p-5 font-mono text-sm leading-8">
+<div><span class="text-purple-400">[recording]</span></div>
+<div><span class="text-blue-400">interval</span> = <span class="text-green-400">"1s"</span></div>
+<div><span class="text-blue-400">output</span> = <span class="text-green-400">"combined.parquet"</span></div>
+<div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># rezolus agent</span></div>
+<div><span class="text-blue-400">url</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"rezolus"</span></div>
+<div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># your service's /metrics</span></div>
+<div><span class="text-blue-400">url</span> = <span class="text-green-400">"http://127.0.0.1:9090/metrics"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"my-service"</span></div>
+<div><span class="text-blue-400">role</span> = <span class="text-green-400">"service"</span></div>
+<div><span class="text-blue-400">protocol</span> = <span class="text-green-400">"prometheus"</span></div>
+</div>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-3">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --config rezolus-record.toml</code></div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<!-- One-off -->
+<section class="mb-16" id="one-off">
+<h2 class="text-xl font-bold mb-2">One-off</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-8">Ad-hoc captures and live connections for a specific investigation.</p>
+
+<div class="space-y-10">
+
+<!-- Single recording -->
+<div>
+<h3 class="text-base font-bold mb-3">Capture a recording for performance analysis</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Run a workload while recording at a high enough resolution to catch what you're looking for. The output parquet is self-contained &mdash; open it later, share it, archive it.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># Record 60s at 100ms intervals against a running agent</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 60s http://localhost:4241 run-1.parquet</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Open it in the viewer</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view run-1.parquet</code></div>
+</div>
+</div>
+</div>
+
+<!-- A/B compare -->
+<div>
+<h3 class="text-base font-bold mb-3">A/B comparison</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Compare two recordings side-by-side &mdash; before/after a change, baseline vs. experiment, or two different machines. The viewer renders each chart twice and surfaces deltas.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view baseline.parquet experiment.parquet</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Aliases for clearer labels in the UI</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view before=run-a.parquet after=run-b.parquet</code></div>
+</div>
+</div>
+</div>
+
+<!-- Live tail -->
+<div>
+<h3 class="text-base font-bold mb-3">Live-tail a remote agent</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Skip the recording step and stream straight from an agent into a browser dashboard. Best for quick checks against a remote host where you don't want to save anything to disk.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://agent-host:4241</code></div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<!-- Offline / read-time -->
+<section class="mb-16" id="offline">
+<h2 class="text-xl font-bold mb-2">Offline analysis</h2>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-8">Things you do after the data is already captured &mdash; in the viewer or via the MCP server.</p>
+
+<div class="space-y-10">
+
+<!-- A/B compare (again) -->
+<div>
+<h3 class="text-base font-bold mb-3">A/B comparison</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Same workflow as in the one-off case: any two recordings can be compared, regardless of when or how they were captured. Useful when you already have an archive of runs and want to spot regressions between specific pairs.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view 2025-12-01.parquet 2026-01-15.parquet</code></div>
+</div>
+</div>
+</div>
+
+<!-- Per-cgroup -->
+<div>
+<h3 class="text-base font-bold mb-3">Per-cgroup / container drill-down</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">CPU, Scheduler, and Syscall samplers emit per-cgroup metrics. In the viewer, switch the cgroup selector to a specific container to see only its CPU usage, runqueue latency, syscall mix &mdash; isolating one tenant on a noisy host.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view recording.parquet</code></div>
+<div class="mt-3 text-slate-500 text-xs"># In the viewer: Cgroups section → pick a container → all charts re-scope</div>
+</div>
+</div>
+</div>
+
+<!-- MCP -->
+<div>
+<h3 class="text-base font-bold mb-3">AI-assisted analysis with MCP</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">Point the MCP server at a recording and ask an LLM-driven client to investigate. Built-in tools cover anomaly detection (MAD / CUSUM / FFT), metric correlation, and arbitrary PromQL queries against the recording.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># One-shot CLI mode</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies recording.parquet</code></div>
+<div class="mt-3 text-slate-500 text-xs"># Or run as a stdio server for Claude Desktop / Cursor</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp</code></div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Installation</a>
+<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Architecture &rarr;</a>
+</div>
+
+</main>
+</div>
+</body></html>
