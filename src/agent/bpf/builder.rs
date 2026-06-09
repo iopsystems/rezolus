@@ -381,7 +381,7 @@ where
             // failures are tolerated here.
             let mut links: Vec<libbpf_rs::Link> = Vec::new();
             let mut prog_status: Vec<crate::agent::sampler_status::ProgramStatus> = Vec::new();
-            for prog in skel.object().progs() {
+            for prog in skel.object().progs_mut() {
                 if !prog.autoload() {
                     continue; // intentionally-disabled tp_btf/raw_tp twin
                 }
