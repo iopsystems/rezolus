@@ -393,6 +393,7 @@ body::after {
     font-size: var(--font-size-lg);
     font-weight: 700;
     letter-spacing: 0.15em;
+    margin-right: 1rem;
     color: var(--fg);
     display: flex;
     align-items: center;

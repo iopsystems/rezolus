@@ -33,6 +33,29 @@ import {
 } from './sections/section_cache.js';
 
 let activeSectionRoute = null;
+
+// Captured at mount-time from the HTML <title> so we can fall back to
+// it when neither section nor filename is known yet (e.g. initial load).
+const DEFAULT_DOCUMENT_TITLE = (typeof document !== 'undefined' && document.title) || 'Rezolus';
+
+// Update browser tab title to reflect the active section + loaded file
+// so pasted URLs (e.g. .../viewer/?demo=vllm.parquet#/gpu) preview
+// usefully in link-unfurling and tab strips.
+const updateDocumentTitle = (sectionKey) => {
+    if (typeof document === 'undefined') return;
+    const section = getCachedSections().find(s => s.route === `/${sectionKey}`);
+    const sectionName = section?.name;
+    const filename = fileMetadata?.filename;
+    if (sectionName && filename) {
+        document.title = `${sectionName} (${filename}) — Rezolus`;
+    } else if (sectionName) {
+        document.title = `${sectionName} — Rezolus`;
+    } else if (filename) {
+        document.title = `${filename} — Rezolus`;
+    } else {
+        document.title = DEFAULT_DOCUMENT_TITLE;
+    }
+};
 let systemInfoData = null;
 let fileChecksum = null;
 let fileMetadata = null;
@@ -844,6 +867,8 @@ const initDashboard = (config = {}) => {
                     window.scrollTo(0, 0);
                 }
 
+                updateDocumentTitle(params.section);
+
                 if (params.section === 'systeminfo') {
                     bootstrapCacheIfNeeded();
                     return buildClientOnlySectionView(
@@ -966,6 +991,13 @@ const initDashboard = (config = {}) => {
             },
         },
     });
+
+    // Initial title refresh — m.route's onmatch may resolve before
+    // fileMetadata is set on first load, and same-path reload (Load
+    // Parquet) suppresses onmatch entirely. Force-refresh once
+    // fileMetadata is in hand.
+    const currentRoute = (m.route.get() || '').split('/')[1] || '';
+    updateDocumentTitle(currentRoute);
 };
 
 // Double-click anywhere resets zoom and clears all pin selections
