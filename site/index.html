@@ -9,7 +9,7 @@
         content="Rezolus is a high-resolution systems &amp; performance telemetry agent using eBPF for low-overhead instrumentation on Linux." />
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Jost:wght@100..900&amp;display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Jost:wght@100..900&amp;family=JetBrains+Mono:wght@700&amp;display=swap"
         rel="stylesheet" />
     <link
         href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
@@ -49,10 +49,33 @@
         }
 
         .hero-title,
-        .brand,
         h2 {
             font-family: 'Jost', sans-serif;
             font-weight: 650;
+        }
+    
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
         }
     </style>
 </head>
@@ -63,7 +86,7 @@
     <nav
         class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
         <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
-            <a href="/" class="brand text-2xl tracking-tighter text-slate-800 dark:text-white no-underline">Rezolus</a>
+            <a href="/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
             <div class="hidden md:flex items-center gap-8 text-sm font-medium">
                 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#features">Features</a>
@@ -358,9 +381,9 @@
                 <a href="docs/telemetry.html#cpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="memory">memory</span></span></div>
+                                data-icon="memory">memory</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">CPU</h3>
                     </div>
                     <p class="text-base text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
@@ -368,9 +391,9 @@
                 <a href="docs/telemetry.html#gpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="developer_board">developer_board</span></span></div>
+                                data-icon="developer_board">developer_board</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">GPU</h3>
                     </div>
                     <p class="text-base text-slate-400">NVIDIA and Apple Silicon metrics</p>
@@ -378,9 +401,9 @@
                 <a href="docs/telemetry.html#memory"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="dynamic_form">dynamic_form</span></span></div>
+                                data-icon="dynamic_form">dynamic_form</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Memory</h3>
                     </div>
                     <p class="text-base text-slate-400">Usage, vmstat, NUMA allocations</p>
@@ -388,9 +411,9 @@
                 <a href="docs/telemetry.html#network"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="lan">lan</span></span></div>
+                                data-icon="lan">lan</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Network</h3>
                     </div>
                     <p class="text-base text-slate-400">Traffic, errors, ethtool counters</p>
@@ -398,9 +421,9 @@
                 <a href="docs/telemetry.html#tcp"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="cable">cable</span></span></div>
+                                data-icon="cable">cable</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">TCP</h3>
                     </div>
                     <p class="text-base text-slate-400">Connect latency, jitter, retransmits</p>
@@ -408,9 +431,9 @@
                 <a href="docs/telemetry.html#blockio"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="storage">storage</span></span></div>
+                                data-icon="storage">storage</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Block I/O</h3>
                     </div>
                     <p class="text-base text-slate-400">Latency distributions, request counts</p>
@@ -418,9 +441,9 @@
                 <a href="docs/telemetry.html#scheduler"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="schedule">schedule</span></span></div>
+                                data-icon="schedule">schedule</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Scheduler</h3>
                     </div>
                     <p class="text-base text-slate-400">Runqueue latency, context switches</p>
@@ -428,9 +451,9 @@
                 <a href="docs/telemetry.html#syscall"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="terminal">terminal</span></span></div>
+                                data-icon="terminal">terminal</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Syscall</h3>
                     </div>
                     <p class="text-base text-slate-400">Counts and latency by type</p>
@@ -438,9 +461,9 @@
                 <a href="docs/telemetry.html#rezolus"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
-                        <div class="text-2xl"><span
+                        <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
-                                data-icon="speed">speed</span></span></div>
+                                data-icon="speed">speed</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Rezolus</h3>
                     </div>
                     <p class="text-base text-slate-400">Self-monitoring: CPU, memory, I/O</p>
@@ -471,8 +494,8 @@
                         class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                         data-icon="download">download</span>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">Installation</h3>
-                        <p class="text-sm text-slate-400">Packages, source builds, platform support</p>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Installation</h3>
+                        <p class="text-base text-slate-400">Packages, source builds, platform support</p>
                     </div>
                 </a>
                 <a href="docs/architecture.html"
@@ -481,8 +504,8 @@
                         class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                         data-icon="account_tree">account_tree</span>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">Architecture</h3>
-                        <p class="text-sm text-slate-400">Modes, samplers, eBPF integration</p>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Architecture</h3>
+                        <p class="text-base text-slate-400">Modes, samplers, eBPF integration</p>
                     </div>
                 </a>
                 <a href="docs/cli.html"
@@ -491,8 +514,8 @@
                         class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                         data-icon="terminal">terminal</span>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
-                        <p class="text-sm text-slate-400">Commands, flags, TOML config reference</p>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
+                        <p class="text-base text-slate-400">Commands, flags, TOML config reference</p>
                     </div>
                 </a>
                 <a href="docs/api.html"
@@ -501,8 +524,8 @@
                         class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                         data-icon="api">api</span>
                     <div>
-                        <h3 class="text-sm font-bold text-slate-900 dark:text-white">API Reference</h3>
-                        <p class="text-sm text-slate-400">HTTP endpoints for every mode</p>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">API Reference</h3>
+                        <p class="text-base text-slate-400">HTTP endpoints for every mode</p>
                     </div>
                 </a>
             </div>
