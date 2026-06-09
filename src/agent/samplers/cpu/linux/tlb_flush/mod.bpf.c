@@ -111,6 +111,12 @@ SEC("raw_tp/tlb_flush")
 int BPF_PROG(tlb_flush, int reason, u64 pages) {
     u32 offset, idx;
 
+    // defensive bounds check: a future kernel could add reason codes beyond
+    // the slots in this CPU's counter bank
+    if (reason < 0 || reason >= COUNTER_GROUP_WIDTH) {
+        return 0;
+    }
+
     offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
     idx = reason + offset;

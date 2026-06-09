@@ -176,8 +176,12 @@ static __always_inline int account__sched_switch(u64* ctx) {
     struct task_struct* next = (struct task_struct*)ctx[2];
 
     u32 pid, idx;
-    u32 cgroup_id = 0;
-    u64 *tsp, delta_ns, offcpu_ns, *elem;
+    // prev and next can belong to different cgroups; track each separately so
+    // runqueue wait and off-cpu time are never charged to prev's cgroup.
+    // MAX_CGROUPS is the "no attribution" sentinel.
+    u32 prev_cgroup_id = MAX_CGROUPS;
+    u32 next_cgroup_id = MAX_CGROUPS;
+    u64 *tsp, delta_ns, offcpu_ns;
 
     u32 processor_id = bpf_get_smp_processor_id();
     u64 ts = bpf_ktime_get_ns();
@@ -185,49 +189,19 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // read the prev task cgroup details and push to ringbuf if new cgroup
     void* prev_task_group = BPF_CORE_READ(prev, sched_task_group);
     if (prev_task_group) {
-        cgroup_id = BPF_CORE_READ(prev, sched_task_group, css.id);
-        u64 serial_nr = BPF_CORE_READ(prev, sched_task_group, css.serial_nr);
+        u32 id = BPF_CORE_READ(prev, sched_task_group, css.id);
 
-        if (cgroup_id < MAX_CGROUPS) {
+        if (id < MAX_CGROUPS) {
+            prev_cgroup_id = id;
 
-            // we check to see if this is a new cgroup by checking the serial number
+            int ret = handle_new_cgroup(prev, &cgroup_serial_numbers, &cgroup_info);
 
-            elem = bpf_map_lookup_elem(&cgroup_serial_numbers, &cgroup_id);
-
-            if (elem && *elem != serial_nr) {
-                // zero the counters, they will not be exported until they are non-zero
+            if (ret == 0) {
+                // New cgroup detected, zero the counters
                 u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &cgroup_id, &zero, BPF_ANY);
-
-                // reserve ringbuf space to avoid stack allocation of cgroup_info
-                struct cgroup_info* cginfo =
-                    bpf_ringbuf_reserve(&cgroup_info, sizeof(struct cgroup_info), 0);
-                if (!cginfo) {
-                    bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-                } else {
-                    __builtin_memset(cginfo, 0, sizeof(struct cgroup_info));
-                    cginfo->id = cgroup_id;
-                    cginfo->level = BPF_CORE_READ(prev, sched_task_group, css.cgroup, level);
-
-                    bpf_probe_read_kernel_str(
-                        &cginfo->name, CGROUP_NAME_LEN,
-                        BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn, name));
-
-                    struct kernfs_node* kn = BPF_CORE_READ(prev, sched_task_group, css.cgroup, kn);
-                    struct kernfs_node* parent = get_kernfs_node_parent(kn);
-                    bpf_probe_read_kernel_str(&cginfo->pname, CGROUP_NAME_LEN,
-                                              BPF_CORE_READ(parent, name));
-
-                    struct kernfs_node* grandparent = get_kernfs_node_parent(parent);
-                    bpf_probe_read_kernel_str(&cginfo->gpname, CGROUP_NAME_LEN,
-                                              BPF_CORE_READ(grandparent, name));
-
-                    bpf_ringbuf_submit(cginfo, 0);
-
-                    bpf_map_update_elem(&cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-                }
+                bpf_map_update_elem(&cgroup_ivcsw, &prev_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_runq_wait, &prev_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_offcpu, &prev_cgroup_id, &zero, BPF_ANY);
             }
         }
     }
@@ -243,8 +217,8 @@ static __always_inline int account__sched_switch(u64* ctx) {
         idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
         array_incr(&counters, idx);
 
-        if (cgroup_id < MAX_CGROUPS) {
-            array_incr(&cgroup_ivcsw, cgroup_id);
+        if (prev_cgroup_id < MAX_CGROUPS) {
+            array_incr(&cgroup_ivcsw, prev_cgroup_id);
         }
 
         pid = BPF_CORE_READ(prev, pid);
@@ -274,18 +248,19 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // read the next task cgroup details and push to ringbuf if new cgroup
     void* next_task_group = BPF_CORE_READ(next, sched_task_group);
     if (next_task_group) {
-        cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
+        u32 id = BPF_CORE_READ(next, sched_task_group, css.id);
 
-        if (cgroup_id < MAX_CGROUPS) {
+        if (id < MAX_CGROUPS) {
+            next_cgroup_id = id;
 
             int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);
 
             if (ret == 0) {
                 // New cgroup detected, zero the counters
                 u64 zero = 0;
-                bpf_map_update_elem(&cgroup_ivcsw, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_runq_wait, &cgroup_id, &zero, BPF_ANY);
-                bpf_map_update_elem(&cgroup_offcpu, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_ivcsw, &next_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_runq_wait, &next_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_offcpu, &next_cgroup_id, &zero, BPF_ANY);
             }
         }
     }
@@ -301,8 +276,8 @@ static __always_inline int account__sched_switch(u64* ctx) {
         idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
         array_add(&counters, idx, delta_ns);
 
-        if (cgroup_id < MAX_CGROUPS) {
-            array_add(&cgroup_runq_wait, cgroup_id, delta_ns);
+        if (next_cgroup_id < MAX_CGROUPS) {
+            array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
         }
 
         *tsp = 0;
@@ -318,8 +293,8 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
                 histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
 
-                if (cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_offcpu, cgroup_id, offcpu_ns);
+                if (next_cgroup_id < MAX_CGROUPS) {
+                    array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
                 }
             }
 

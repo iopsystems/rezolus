@@ -102,6 +102,10 @@ struct {
  */
 
 // track the start time of softirq
+//
+// one slot per CPU (softirqs do not nest on a CPU), padded out to a whole
+// cacheline (* 8) to avoid false sharing between cores; the index is always
+// cpu * 8
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, MAX_CPUS * 8);
@@ -265,7 +269,11 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     u64 delta_utime = 0;
     u64 delta_stime = 0;
 
-    // Only calculate delta if we have valid previous values
+    // Only calculate delta if we have valid previous values. A zero previous
+    // value means this is the first observation of the task: skipping the
+    // delta intentionally drops CPU time accrued before we started watching,
+    // otherwise an agent restart would dump every task's accumulated time
+    // into one tick and spike any rate() over these counters.
     if (*last_utime != 0 && curr_utime >= *last_utime) {
         delta_utime = curr_utime - *last_utime;
     }

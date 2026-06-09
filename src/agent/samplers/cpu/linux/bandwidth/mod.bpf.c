@@ -219,6 +219,10 @@ int unthrottle_cfs_rq(struct pt_regs* ctx) {
     int nr_periods = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_periods);
     int nr_throttled = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.nr_throttled);
     u64 cgroup_throttled_time = BPF_CORE_READ(cfs_rq, tg, cfs_bandwidth.throttled_time);
+
+    // benign race: these kernel counters are monotone, so the non-atomic
+    // load+compare+store in array_set_if_larger can lose an occasional
+    // concurrent update and the next observation self-heals
     array_set_if_larger(&bandwidth_periods, (u32)cgroup_id, (u64)nr_periods);
     array_set_if_larger(&bandwidth_throttled_periods, (u32)cgroup_id, (u64)nr_throttled);
     array_set_if_larger(&bandwidth_throttled_time, (u32)cgroup_id, cgroup_throttled_time);

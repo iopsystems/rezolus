@@ -57,10 +57,10 @@ struct {
 } cgroup_instructions SEC(".maps");
 
 // previous readings for various events
+// (BPF-internal state, not read by userspace, so not mmapable)
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, MAX_CGROUPS);
@@ -68,7 +68,6 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, MAX_CGROUPS);

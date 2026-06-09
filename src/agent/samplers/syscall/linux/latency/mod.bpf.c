@@ -186,8 +186,6 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
     u64 *start_ts, lat = 0;
     u32 tid = id, group = 0;
 
-    u32 idx;
-
     if (args->id < 0) {
         return 0;
     }
@@ -205,8 +203,6 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
 
     *start_ts = 0;
 
-    idx = value_to_index(lat, HISTOGRAM_POWER);
-
     // increment latency histogram for the syscall family
     if (syscall_id < MAX_SYSCALL_ID) {
         u32* counter_offset = bpf_map_lookup_elem(&syscall_lut, &syscall_id);
@@ -218,52 +214,52 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
 
     switch (group) {
     case 1:
-        array_incr(&read_latency, idx);
+        histogram_incr(&read_latency, HISTOGRAM_POWER, lat);
         break;
     case 2:
-        array_incr(&write_latency, idx);
+        histogram_incr(&write_latency, HISTOGRAM_POWER, lat);
         break;
     case 3:
-        array_incr(&poll_latency, idx);
+        histogram_incr(&poll_latency, HISTOGRAM_POWER, lat);
         break;
     case 4:
-        array_incr(&lock_latency, idx);
+        histogram_incr(&lock_latency, HISTOGRAM_POWER, lat);
         break;
     case 5:
-        array_incr(&time_latency, idx);
+        histogram_incr(&time_latency, HISTOGRAM_POWER, lat);
         break;
     case 6:
-        array_incr(&sleep_latency, idx);
+        histogram_incr(&sleep_latency, HISTOGRAM_POWER, lat);
         break;
     case 7:
-        array_incr(&socket_latency, idx);
+        histogram_incr(&socket_latency, HISTOGRAM_POWER, lat);
         break;
     case 8:
-        array_incr(&yield_latency, idx);
+        histogram_incr(&yield_latency, HISTOGRAM_POWER, lat);
         break;
     case 9:
-        array_incr(&filesystem_latency, idx);
+        histogram_incr(&filesystem_latency, HISTOGRAM_POWER, lat);
         break;
     case 10:
-        array_incr(&memory_latency, idx);
+        histogram_incr(&memory_latency, HISTOGRAM_POWER, lat);
         break;
     case 11:
-        array_incr(&process_latency, idx);
+        histogram_incr(&process_latency, HISTOGRAM_POWER, lat);
         break;
     case 12:
-        array_incr(&query_latency, idx);
+        histogram_incr(&query_latency, HISTOGRAM_POWER, lat);
         break;
     case 13:
-        array_incr(&ipc_latency, idx);
+        histogram_incr(&ipc_latency, HISTOGRAM_POWER, lat);
         break;
     case 14:
-        array_incr(&timer_latency, idx);
+        histogram_incr(&timer_latency, HISTOGRAM_POWER, lat);
         break;
     case 15:
-        array_incr(&event_latency, idx);
+        histogram_incr(&event_latency, HISTOGRAM_POWER, lat);
         break;
     default:
-        array_incr(&other_latency, idx);
+        histogram_incr(&other_latency, HISTOGRAM_POWER, lat);
         break;
     }
 

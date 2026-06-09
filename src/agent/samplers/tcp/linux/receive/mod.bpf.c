@@ -42,8 +42,8 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
     u64 mdev_ns, srtt_ns;
 
     ts = (struct tcp_sock*)(sk);
-    bpf_probe_read_kernel(&srtt_us, sizeof(srtt_us), &ts->srtt_us);
-    bpf_probe_read_kernel(&mdev_us, sizeof(mdev_us), &ts->mdev_us);
+    srtt_us = BPF_CORE_READ(ts, srtt_us);
+    mdev_us = BPF_CORE_READ(ts, mdev_us);
 
     // NOTE: srtt is stored as 8x the value in microseconds but we want to
     // record nanoseconds.

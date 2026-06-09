@@ -25,7 +25,11 @@ struct {
 SEC("kprobe/tcp_retransmit_skb")
 int BPF_KPROBE(tcp_retransmit_skb, struct sock* sk, struct sk_buff* skb, int segs) {
     u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
-    array_incr(&counters, idx);
+
+    // segs is the number of TCP segments in the skb, which is greater than
+    // one when TSO/GSO is in use; counting calls would undercount
+    // retransmitted packets
+    array_add(&counters, idx, (u64)(segs > 0 ? segs : 1));
 
     return 0;
 }

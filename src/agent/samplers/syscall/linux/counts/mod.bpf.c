@@ -223,8 +223,10 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
 
     struct task_struct* current = (struct task_struct*)bpf_get_current_task();
 
-    if (bpf_core_field_exists(current->sched_task_group)) {
-        int cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
+    // runtime NULL check (bpf_core_field_exists is a compile-time BTF check)
+    void* task_group = BPF_CORE_READ(current, sched_task_group);
+    if (task_group) {
+        u32 cgroup_id = BPF_CORE_READ(current, sched_task_group, css.id);
 
         if (cgroup_id < MAX_CGROUPS) {
 

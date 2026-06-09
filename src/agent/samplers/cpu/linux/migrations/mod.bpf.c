@@ -92,8 +92,10 @@ static __always_inline int account__sched_switch(u64* ctx) {
             array_incr(&migrations, to_idx);
 
             // handle per-cgroup accounting
-            if (bpf_core_field_exists(next->sched_task_group)) {
-                int cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
+            // runtime NULL check (bpf_core_field_exists is compile-time only)
+            void* task_group = BPF_CORE_READ(next, sched_task_group);
+            if (task_group) {
+                u32 cgroup_id = BPF_CORE_READ(next, sched_task_group, css.id);
 
                 if (cgroup_id < MAX_CGROUPS) {
                     int ret = handle_new_cgroup(next, &cgroup_serial_numbers, &cgroup_info);
