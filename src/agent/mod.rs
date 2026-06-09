@@ -4,6 +4,7 @@ mod config;
 mod exposition;
 mod external_metrics;
 mod metrics;
+pub mod sampler_status;
 mod samplers;
 
 use config::Config;
