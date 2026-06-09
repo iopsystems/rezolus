@@ -48,7 +48,8 @@ int BPF_PROG(netif_receive_skb, struct sk_buff* skb) {
 }
 
 SEC("raw_tp/net_dev_start_xmit")
-int BPF_PROG(tcp_cleanup_rbuf, struct sk_buff* skb, struct net_device* dev, void* txq, bool more) {
+int BPF_PROG(net_dev_start_xmit, struct sk_buff* skb, struct net_device* dev, void* txq,
+             bool more) {
     u64 len;
     u32 idx;
 

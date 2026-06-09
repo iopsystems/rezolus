@@ -3,12 +3,11 @@
 // Copyright (c) 2023 The Rezolus Authors
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/core_fixes.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
-
-extern int LINUX_KERNEL_VERSION __kconfig;
 
 #define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
@@ -145,7 +144,8 @@ static __always_inline int classify_status(int status) {
     }
 }
 
-static int handle_block_rq_complete(struct request* rq, int error, unsigned int nr_bytes) {
+static int __always_inline handle_block_rq_complete(struct request* rq, int error,
+                                                    unsigned int nr_bytes) {
     u32 idx, op;
     unsigned int cmd_flags;
 
@@ -160,21 +160,25 @@ static int handle_block_rq_complete(struct request* rq, int error, unsigned int 
         idx = idx + COUNTER_GROUP_WIDTH / 2;
         array_add(&counters, idx, nr_bytes);
 
-        idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
+        // flush completions transfer no data (nr_bytes is always 0), so a
+        // size observation would just pile zeros into the first bucket
+        if (nr_bytes > 0) {
+            idx = value_to_index(nr_bytes, HISTOGRAM_POWER);
 
-        switch (op) {
-        case REQ_OP_READ:
-            array_incr(&read_size, idx);
-            break;
-        case REQ_OP_WRITE:
-            array_incr(&write_size, idx);
-            break;
-        case REQ_OP_FLUSH:
-            array_incr(&flush_size, idx);
-            break;
-        case REQ_OP_DISCARD:
-            array_incr(&discard_size, idx);
-            break;
+            switch (op) {
+            case REQ_OP_READ:
+                array_incr(&read_size, idx);
+                break;
+            case REQ_OP_WRITE:
+                array_incr(&write_size, idx);
+                break;
+            case REQ_OP_FLUSH:
+                array_incr(&flush_size, idx);
+                break;
+            case REQ_OP_DISCARD:
+                array_incr(&discard_size, idx);
+                break;
+            }
         }
 
         // Error path: bucket non-OK completions by class. Falls inside
@@ -189,13 +193,7 @@ static int handle_block_rq_complete(struct request* rq, int error, unsigned int 
     return 0;
 }
 
-SEC("raw_tp/block_rq_complete")
-int BPF_PROG(block_rq_complete, struct request* rq, int error, unsigned int nr_bytes) {
-    return handle_block_rq_complete(rq, error, nr_bytes);
-}
-
-SEC("raw_tp/block_rq_requeue")
-int BPF_PROG(block_rq_requeue, struct request* rq) {
+static int __always_inline handle_block_rq_requeue(struct request* rq) {
     unsigned int cmd_flags = BPF_CORE_READ(rq, cmd_flags);
     u32 op = cmd_flags & REQ_OP_MASK;
     if (op >= OP_BUCKETS)
@@ -204,6 +202,32 @@ int BPF_PROG(block_rq_requeue, struct request* rq) {
     u32 idx = bpf_get_smp_processor_id() * REQ_BANK_WIDTH + op;
     array_incr(&requeues, idx);
     return 0;
+}
+
+// tp_btf and raw_tp twins share the handlers above; the unused variant is
+// disabled at load time based on whether the kernel has its own BTF (see
+// disabled_programs in mod.rs). The requeue request pointer goes through
+// block_rq_tp_request() because kernels before v5.11 pass a leading
+// struct request_queue* argument.
+
+SEC("tp_btf/block_rq_complete")
+int BPF_PROG(block_rq_complete_btf, struct request* rq, int error, unsigned int nr_bytes) {
+    return handle_block_rq_complete(rq, error, nr_bytes);
+}
+
+SEC("raw_tp/block_rq_complete")
+int BPF_PROG(block_rq_complete_raw, struct request* rq, int error, unsigned int nr_bytes) {
+    return handle_block_rq_complete(rq, error, nr_bytes);
+}
+
+SEC("tp_btf/block_rq_requeue")
+int BPF_PROG(block_rq_requeue_btf) {
+    return handle_block_rq_requeue(block_rq_tp_request(ctx));
+}
+
+SEC("raw_tp/block_rq_requeue")
+int BPF_PROG(block_rq_requeue_raw) {
+    return handle_block_rq_requeue(block_rq_tp_request(ctx));
 }
 
 char LICENSE[] SEC("license") = "GPL";

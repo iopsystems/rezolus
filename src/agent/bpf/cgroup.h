@@ -31,7 +31,8 @@ struct cgroup_info {
  * Returns:
  *  - 0 on success
  *  - 1 if not a new cgroup (serial number matches)
- *  - -1 on error (invalid cgroup_id, lookup failure, etc.)
+ *  - -1 on error (invalid cgroup_id, lookup failure, or ringbuf full —
+ *    the serial number is left unchanged so the next event retries)
  */
 static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgroup_serial_numbers,
                                              void* cgroup_info_ringbuf) {
@@ -58,9 +59,10 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
     struct cgroup_info* cginfo =
         bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
     if (!cginfo) {
-        // Still update serial number even if ringbuf is full
-        bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-        return 0;
+        // The ringbuf is full. Leave the serial number unchanged so the next
+        // event for this cgroup retries the send — updating it here would
+        // permanently suppress the cgroup's name/hierarchy in userspace.
+        return -1;
     }
 
     __builtin_memset(cginfo, 0, sizeof(struct cgroup_info));
@@ -112,7 +114,8 @@ static __always_inline int handle_new_cgroup(struct task_struct* task, void* cgr
  * Returns:
  *  - 0 on success
  *  - 1 if not a new cgroup (serial number matches)
- *  - -1 on error (invalid cgroup_id, lookup failure, etc.)
+ *  - -1 on error (invalid cgroup_id, lookup failure, or ringbuf full —
+ *    the serial number is left unchanged so the next event retries)
  */
 static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state* css,
                                                       void* cgroup_serial_numbers,
@@ -140,9 +143,10 @@ static __always_inline int handle_new_cgroup_from_css(struct cgroup_subsys_state
     struct cgroup_info* cginfo =
         bpf_ringbuf_reserve(cgroup_info_ringbuf, sizeof(struct cgroup_info), 0);
     if (!cginfo) {
-        // Still update serial number even if ringbuf is full
-        bpf_map_update_elem(cgroup_serial_numbers, &cgroup_id, &serial_nr, BPF_ANY);
-        return 0;
+        // The ringbuf is full. Leave the serial number unchanged so the next
+        // event for this cgroup retries the send — updating it here would
+        // permanently suppress the cgroup's name/hierarchy in userspace.
+        return -1;
     }
 
     __builtin_memset(cginfo, 0, sizeof(struct cgroup_info));

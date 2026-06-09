@@ -3,12 +3,11 @@
 // Copyright (c) 2023 The Rezolus Authors
 
 #include <vmlinux.h>
+#include "../../../agent/bpf/core_fixes.h"
 #include "../../../agent/bpf/helpers.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
-
-extern int LINUX_KERNEL_VERSION __kconfig;
 
 #define COUNTER_GROUP_WIDTH 8
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
@@ -63,22 +62,15 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS);
 } discard_latency SEC(".maps");
 
-static int __always_inline trace_rq_start(struct request* rq, int issue) {
+static int __always_inline trace_rq_start(struct request* rq) {
     u64 ts = bpf_ktime_get_ns();
 
     bpf_map_update_elem(&start, &rq, &ts, 0);
     return 0;
 }
 
-static int handle_block_rq_insert(__u64* ctx) {
-    return trace_rq_start((void*)ctx[0], false);
-}
-
-static int handle_block_rq_issue(__u64* ctx) {
-    return trace_rq_start((void*)ctx[0], true);
-}
-
-static int handle_block_rq_complete(struct request* rq, int error, unsigned int nr_bytes) {
+static int __always_inline handle_block_rq_complete(struct request* rq, int error,
+                                                    unsigned int nr_bytes) {
     u64 delta, *tsp, ts = bpf_ktime_get_ns();
     u32 idx, op;
     unsigned int cmd_flags;
@@ -116,18 +108,39 @@ static int handle_block_rq_complete(struct request* rq, int error, unsigned int 
     return 0;
 }
 
+// tp_btf and raw_tp twins share the handlers above; the unused variant is
+// disabled at load time based on whether the kernel has its own BTF (see
+// disabled_programs in mod.rs). The request pointer goes through
+// block_rq_tp_request() because kernels before v5.11 pass a leading
+// struct request_queue* argument to insert/issue.
+
+SEC("tp_btf/block_rq_insert")
+int BPF_PROG(block_rq_insert_btf) {
+    return trace_rq_start(block_rq_tp_request(ctx));
+}
+
 SEC("raw_tp/block_rq_insert")
-int BPF_PROG(block_rq_insert) {
-    return handle_block_rq_insert(ctx);
+int BPF_PROG(block_rq_insert_raw) {
+    return trace_rq_start(block_rq_tp_request(ctx));
+}
+
+SEC("tp_btf/block_rq_issue")
+int BPF_PROG(block_rq_issue_btf) {
+    return trace_rq_start(block_rq_tp_request(ctx));
 }
 
 SEC("raw_tp/block_rq_issue")
-int BPF_PROG(block_rq_issue) {
-    return handle_block_rq_issue(ctx);
+int BPF_PROG(block_rq_issue_raw) {
+    return trace_rq_start(block_rq_tp_request(ctx));
+}
+
+SEC("tp_btf/block_rq_complete")
+int BPF_PROG(block_rq_complete_btf, struct request* rq, int error, unsigned int nr_bytes) {
+    return handle_block_rq_complete(rq, error, nr_bytes);
 }
 
 SEC("raw_tp/block_rq_complete")
-int BPF_PROG(block_rq_complete, struct request* rq, int error, unsigned int nr_bytes) {
+int BPF_PROG(block_rq_complete_raw, struct request* rq, int error, unsigned int nr_bytes) {
     return handle_block_rq_complete(rq, error, nr_bytes);
 }
 

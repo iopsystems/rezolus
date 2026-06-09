@@ -218,8 +218,11 @@ static u32 value_to_index(u64 value, u8 grouping_power) {
     } else {
         u64 power = 63 - clz(value);
         u64 bin = power - grouping_power + 1;
-        u64 offset = (value - (1 << power)) >> (power - grouping_power);
+        // the shift bases must be 64-bit: power can be up to 63, and `1 <<
+        // power` (int) is UB for power >= 31, which mis-bucketed all values
+        // >= 2^31 (~2.15s for nanosecond latencies)
+        u64 offset = (value - (1ULL << power)) >> (power - grouping_power);
 
-        return (bin * (1 << grouping_power) + offset);
+        return (bin * (1ULL << grouping_power) + offset);
     }
 }

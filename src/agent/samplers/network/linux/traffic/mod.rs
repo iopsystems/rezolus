@@ -71,8 +71,8 @@ impl OpenSkelExt for ModSkel<'_> {
             self.progs.netif_receive_skb.insn_cnt()
         );
         debug!(
-            "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
-            self.progs.tcp_cleanup_rbuf.insn_cnt()
+            "{NAME} net_dev_start_xmit() BPF instruction count: {}",
+            self.progs.net_dev_start_xmit.insn_cnt()
         );
     }
 }

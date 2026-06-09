@@ -39,6 +39,19 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("write_latency", &BLOCKIO_WRITE_LATENCY)
     .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY)
     .histogram("discard_latency", &BLOCKIO_DISCARD_LATENCY)
+    .disabled_programs(if kernel_has_btf() {
+        &[
+            "block_rq_insert_raw",
+            "block_rq_issue_raw",
+            "block_rq_complete_raw",
+        ]
+    } else {
+        &[
+            "block_rq_insert_btf",
+            "block_rq_issue_btf",
+            "block_rq_complete_btf",
+        ]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -63,16 +76,16 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} block_rq_insert() BPF instruction count: {}",
-            self.progs.block_rq_insert.insn_cnt()
+            "{NAME} block_rq_insert_btf() BPF instruction count: {}",
+            self.progs.block_rq_insert_btf.insn_cnt()
         );
         debug!(
-            "{NAME} block_rq_issue() BPF instruction count: {}",
-            self.progs.block_rq_issue.insn_cnt()
+            "{NAME} block_rq_issue_btf() BPF instruction count: {}",
+            self.progs.block_rq_issue_btf.insn_cnt()
         );
         debug!(
-            "{NAME} block_rq_complete() BPF instruction count: {}",
-            self.progs.block_rq_complete.insn_cnt()
+            "{NAME} block_rq_complete_btf() BPF instruction count: {}",
+            self.progs.block_rq_complete_btf.insn_cnt()
         );
     }
 }

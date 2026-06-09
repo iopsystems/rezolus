@@ -104,6 +104,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("write_size", &BLOCKIO_WRITE_SIZE)
     .histogram("flush_size", &BLOCKIO_FLUSH_SIZE)
     .histogram("discard_size", &BLOCKIO_DISCARD_SIZE)
+    .disabled_programs(if kernel_has_btf() {
+        &["block_rq_complete_raw", "block_rq_requeue_raw"]
+    } else {
+        &["block_rq_complete_btf", "block_rq_requeue_btf"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -131,12 +136,12 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} block_rq_complete() BPF instruction count: {}",
-            self.progs.block_rq_complete.insn_cnt()
+            "{NAME} block_rq_complete_btf() BPF instruction count: {}",
+            self.progs.block_rq_complete_btf.insn_cnt()
         );
         debug!(
-            "{NAME} block_rq_requeue() BPF instruction count: {}",
-            self.progs.block_rq_requeue.insn_cnt()
+            "{NAME} block_rq_requeue_btf() BPF instruction count: {}",
+            self.progs.block_rq_requeue_btf.insn_cnt()
         );
     }
 }

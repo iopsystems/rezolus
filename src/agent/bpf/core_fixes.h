@@ -6,6 +6,7 @@
 
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
+#include <bpf/bpf_helpers.h>
 
 /**
  * commit 2f064a59a1 ("sched: Change task_struct::state") changes
@@ -97,6 +98,28 @@ static __always_inline bool renamedata_has_old_mnt_userns_field(void) {
     if (bpf_core_field_exists(struct renamedata___x, old_mnt_userns))
         return true;
     return false;
+}
+
+/**
+ * commit a54895fa057c ("block: remove the request_queue argument to the block
+ * tracepoints") drops the leading `struct request_queue *` argument from the
+ * block_rq_insert, block_rq_issue, and block_rq_requeue tracepoints in kernel
+ * v5.11+. On older kernels the `struct request *` is the second raw
+ * tracepoint argument. LINUX_KERNEL_VERSION is resolved to a constant at load
+ * time, so the verifier prunes the dead branch.
+ * see:
+ *     https://github.com/torvalds/linux/commit/a54895fa057c
+ */
+extern int LINUX_KERNEL_VERSION __kconfig;
+
+#ifndef KERNEL_VERSION
+#define KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+#endif
+
+static __always_inline struct request* block_rq_tp_request(__u64* ctx) {
+    if (LINUX_KERNEL_VERSION < KERNEL_VERSION(5, 11, 0))
+        return (struct request*)ctx[1];
+    return (struct request*)ctx[0];
 }
 
 /**
