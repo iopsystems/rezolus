@@ -39,19 +39,27 @@ The skill accepts an optional branch name argument:
      ```
    - If already on a feature branch, use the current branch
 
-4. **Stage and commit**:
+4. **Sync docs version label** (idempotent — runs every PR):
+
+   ```bash
+   ./scripts/sync-docs-version.sh
+   ```
+
+   Updates `site/docs/*.html`'s sidebar version label to the latest stable release tag. If it modifies any file, include the change in the same commit. If nothing changes, no-op.
+
+5. **Stage and commit**:
    - Stage the relevant changed files by name (avoid `git add -A`)
    - Write a commit message following the repo's conventional commit style (`type(scope): description`)
    - Common types: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`
    - Include `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>` trailer
    - Use a HEREDOC for the commit message
 
-5. **Push to origin**:
+6. **Push to origin**:
    ```bash
    git push -u origin <branch-name>
    ```
 
-6. **Open PR against upstream**:
+7. **Open PR against upstream**:
    - The upstream repo is `iopsystems/rezolus`
    - The fork remote is `origin` (determine the owner from `git remote -v`)
    - Use `gh pr create` with `--repo iopsystems/rezolus` and `--head <fork-owner>:<branch-name>`
@@ -74,7 +82,7 @@ The skill accepts an optional branch name argument:
    )"
    ```
 
-7. **Report the PR URL** to the user.
+8. **Report the PR URL** to the user.
 
 ## Version bumps
 
