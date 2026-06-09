@@ -364,7 +364,7 @@ where
                 }
             }
 
-            let mut skel = match open_skel.load() {
+            let skel = match open_skel.load() {
                 Ok(skel) => skel,
                 Err(e) => {
                     crate::agent::sampler_status::set_failed(self.name, e.to_string());
