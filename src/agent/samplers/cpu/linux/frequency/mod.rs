@@ -27,7 +27,6 @@ mod stats;
 
 use stats::*;
 
-#[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -39,6 +38,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
         inner: inner.into(),
     })))
 }
+
+#[distributed_slice(SAMPLERS)]
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
+    crate::agent::samplers::SamplerEntry { name: NAME, init };
 
 struct Frequency {
     inner: Mutex<FrequencyInner>,

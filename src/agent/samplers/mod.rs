@@ -15,8 +15,14 @@ mod scheduler;
 mod syscall;
 mod tcp;
 
+/// A registered sampler: its stable name plus its init function.
+pub struct SamplerEntry {
+    pub name: &'static str,
+    pub init: fn(config: Arc<Config>) -> SamplerResult,
+}
+
 #[distributed_slice]
-pub static SAMPLERS: [fn(config: Arc<Config>) -> SamplerResult] = [..];
+pub static SAMPLERS: [SamplerEntry] = [..];
 
 #[async_trait]
 pub trait Sampler: Send + Sync {

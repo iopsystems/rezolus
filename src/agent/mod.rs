@@ -63,9 +63,16 @@ pub fn run(config: PathBuf) {
 
     let mut samplers = Vec::new();
 
-    for init in SAMPLERS {
-        if let Ok(Some(s)) = init(config.clone()) {
-            samplers.push(s);
+    for entry in SAMPLERS {
+        match (entry.init)(config.clone()) {
+            Ok(Some(s)) => {
+                // BPF samplers already recorded active + per-program detail in
+                // the builder; this only fills in non-BPF samplers.
+                crate::agent::sampler_status::set_active_if_absent(entry.name);
+                samplers.push(s);
+            }
+            Ok(None) => crate::agent::sampler_status::set_disabled(entry.name),
+            Err(e) => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
         }
     }
 
