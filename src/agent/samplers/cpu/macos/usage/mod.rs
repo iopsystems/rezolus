@@ -13,7 +13,6 @@ mod stats;
 
 use stats::*;
 
-#[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -25,6 +24,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
         inner: Arc::new(Mutex::new(inner)),
     })))
 }
+
+#[distributed_slice(SAMPLERS)]
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
+    crate::agent::samplers::SamplerEntry { name: NAME, init };
 
 pub struct Usage {
     inner: Arc<Mutex<UsageInner>>,

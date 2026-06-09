@@ -318,11 +318,18 @@ where
                     }
                     Err(e) => {
                         error!("Failed to load external BTF from {}: {}", btf_path, e);
+                        crate::agent::sampler_status::set_failed(self.name, e.to_string());
                         return Err(e);
                     }
                 }
             } else {
-                (self.skel)().open(open_object)?
+                match (self.skel)().open(open_object) {
+                    Ok(skel) => skel,
+                    Err(e) => {
+                        crate::agent::sampler_status::set_failed(self.name, e.to_string());
+                        return Err(e);
+                    }
+                }
             };
 
             // If enabled_programs is set, disable autoload for programs not in the list
@@ -357,17 +364,65 @@ where
                 }
             }
 
-            let mut skel = open_skel.load()?;
+            let skel = match open_skel.load() {
+                Ok(skel) => skel,
+                Err(e) => {
+                    crate::agent::sampler_status::set_failed(self.name, e.to_string());
+                    return Err(e);
+                }
+            };
 
             skel.log_prog_instructions();
 
-            match skel.attach() {
-                Ok(_) => {}
-                Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
-                    debug!("Some BPF probes skipped due to missing kernel symbols");
+            // Attach each program individually so one failing probe (missing
+            // kernel symbol, no kprobe support, etc.) does not prevent the
+            // others in this skeleton from attaching. Records per-program
+            // status. Load/verify failures above remain fatal; only attach
+            // failures are tolerated here.
+            let mut links: Vec<libbpf_rs::Link> = Vec::new();
+            let mut prog_status: Vec<crate::agent::sampler_status::ProgramStatus> = Vec::new();
+            for prog in skel.object().progs_mut() {
+                if !prog.autoload() {
+                    continue; // intentionally-disabled tp_btf/raw_tp twin
                 }
-                Err(e) => return Err(e),
+                let prog_name = prog.name().to_string_lossy().to_string();
+                match prog.attach() {
+                    Ok(link) => {
+                        links.push(link);
+                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
+                            name: prog_name,
+                            attached: true,
+                            error: None,
+                        });
+                    }
+                    Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
+                        debug!(
+                            "{} program '{}' not attached (no kernel support): {}",
+                            self.name, prog_name, e
+                        );
+                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
+                            name: prog_name,
+                            attached: false,
+                            error: Some("no kernel support (ENOENT)".to_string()),
+                        });
+                    }
+                    Err(e) => {
+                        warn!(
+                            "{} program '{}' failed to attach, skipping: {}",
+                            self.name, prog_name, e
+                        );
+                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
+                            name: prog_name,
+                            attached: false,
+                            error: Some(e.to_string()),
+                        });
+                    }
+                }
             }
+            crate::agent::sampler_status::set_active_with_programs(self.name, prog_status);
+            // `_links` must outlive the loop for the sampler thread's lifetime;
+            // dropping a Link detaches its program.
+            let _links = links;
 
             let mut counters: Vec<Counters> = self
                 .counters

@@ -20,7 +20,6 @@ use crate::agent::*;
 
 use std::sync::Arc;
 
-#[distributed_slice(SAMPLERS)]
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -41,6 +40,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
     Ok(Some(Box::new(bpf)))
 }
+
+#[distributed_slice(SAMPLERS)]
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
+    crate::agent::samplers::SamplerEntry { name: NAME, init };
 
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {

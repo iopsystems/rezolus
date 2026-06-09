@@ -41,6 +41,7 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
         .route("/metrics/json", get(json))
         .route("/metrics/descriptions", get(descriptions))
         .route("/systeminfo", get(system_info))
+        .route("/samplers", get(samplers))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -82,6 +83,10 @@ async fn descriptions() -> axum::response::Json<std::collections::HashMap<String
         }
     }
     axum::response::Json(result)
+}
+
+async fn samplers() -> axum::response::Json<Vec<crate::agent::sampler_status::SamplerStatus>> {
+    axum::response::Json(crate::agent::sampler_status::snapshot())
 }
 
 async fn system_info() -> axum::response::Response {
