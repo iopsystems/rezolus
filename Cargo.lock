@@ -2802,6 +2802,7 @@ dependencies = [
  "libbpf-rs",
  "libbpf-sys",
  "libc",
+ "libloading",
  "linkme",
  "memmap2",
  "metriken",

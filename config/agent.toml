@@ -109,6 +109,10 @@ enabled = true
 # requires Turing+ GPU and is only available when built with --features cupti.
 [samplers.gpu_nvidia]
 
+# Produces AMD GPU metrics using the ROCm SMI library (librocm_smi64.so),
+# loaded at runtime. Disabled automatically on hosts without ROCm or AMD GPUs.
+[samplers.gpu_amd]
+
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
 
