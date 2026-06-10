@@ -43,8 +43,16 @@ pub enum ClockType {
 }
 
 /// `rsmi_frequencies_t`.
+///
+/// IMPORTANT: this must match the C layout exactly, including the leading
+/// `bool has_deep_sleep` field. Omitting it makes this struct smaller than the
+/// C one, so `rsmi_dev_gpu_clk_freq_get` writes past the buffer and corrupts
+/// the stack (intermittent segfaults), and shifts `current`/`frequency` so the
+/// reported clock is wrong. `#[repr(C)]` reproduces the C padding: `bool` at
+/// offset 0, `num_supported` at 4, `current` at 8, `frequency` at 16.
 #[repr(C)]
 struct RsmiFrequencies {
+    has_deep_sleep: bool,
     num_supported: u32,
     current: u32,
     frequency: [u64; RSMI_MAX_NUM_FREQUENCIES],
@@ -53,6 +61,7 @@ struct RsmiFrequencies {
 impl Default for RsmiFrequencies {
     fn default() -> Self {
         Self {
+            has_deep_sleep: false,
             num_supported: 0,
             current: 0,
             frequency: [0; RSMI_MAX_NUM_FREQUENCIES],
