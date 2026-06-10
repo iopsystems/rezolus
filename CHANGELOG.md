@@ -1,13 +1,22 @@
 ## [Unreleased]
 
+## [5.15.0] - 2026-06-10
+
 ### Added
 
+- Agent: resilient BPF attach and sampler status. The BPF builder now
+  attaches each program individually and tolerates per-program failures
+  (load/verify failures stay fatal), so a single dead probe no longer
+  takes down its sibling programs. A new `GET /samplers` endpoint
+  reports each sampler as `active`/`disabled`/`failed` with per-program
+  attach detail, and recordings capture this status under
+  `per_source_metadata.<source>.sampler_status`. (#954)
 - GPU (NVIDIA): `gpu_tensor_utilization` now breaks out per-tensor-pipe
   activity via a `pipe` label — `hmma` (FP16/BF16, and FP32 matmul that
   runs as TF32), `imma` (integer), and `dfma` (FP64) — alongside the
   existing aggregate (`pipe=any`). Collected from NVML GPM, so it
   requires Hopper+ and is reported only where the corresponding pipe is
-  supported.
+  supported. (#946)
 
 ### Fixed
 
@@ -18,6 +27,16 @@
   `kernel_has_btf()`, and `syscall_counts` uses `bpf_get_current_task()`
   instead of `bpf_get_current_task_btf()`. CO-RE still uses the external
   BTF file (`btf_path`). Stock BTF kernels are unaffected. (#948)
+- BPF sampler correctness fixes from a full review against
+  `docs/principles.md`: histogram bucketing used 32-bit shifts,
+  mis-bucketing values ≥ 2³¹ (long-tail latencies ≥ ~2.15 s were
+  misreported); blockio latency tracking silently dropped all requests
+  on kernels < 5.11 due to a tracepoint argument layout difference;
+  scheduler/runqueue could charge runqueue-wait and off-cpu time to the
+  wrong cgroup; a full ringbuf no longer permanently suppresses a
+  cgroup's name; `tcp_retransmit` now counts segments instead of calls
+  (it undercounted with TSO/GSO); plus smaller metadata, histogram, and
+  defensive-check fixes. (#956)
 
 ## [5.14.0] - 2026-06-03
 
@@ -851,7 +870,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.14.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.15.0...HEAD
+[5.15.0]: https://github.com/iopsystems/rezolus/compare/v5.14.0...v5.15.0
 [5.14.0]: https://github.com/iopsystems/rezolus/compare/v5.13.0...v5.14.0
 [5.13.0]: https://github.com/iopsystems/rezolus/compare/v5.12.1...v5.13.0
 [5.12.1]: https://github.com/iopsystems/rezolus/compare/v5.12.0...v5.12.1

@@ -63,6 +63,8 @@ pub fn set_failed(name: &'static str, error: String) {
 }
 
 /// Record a sampler as active with its per-program attach detail.
+/// Only called from the BPF builder, which is Linux-only.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn set_active_with_programs(name: &'static str, programs: Vec<ProgramStatus>) {
     registry().lock().unwrap().insert(
         name,
