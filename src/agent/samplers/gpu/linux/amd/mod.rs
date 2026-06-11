@@ -6,7 +6,7 @@
 //! the sampler gracefully returns `Ok(None)` at init time and reports as
 //! disabled (not failed).
 
-const NAME: &str = "gpu_amd";
+const NAME: &str = "gpu_amd_smi";
 
 use crate::agent::*;
 
