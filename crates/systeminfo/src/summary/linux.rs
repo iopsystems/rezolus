@@ -314,7 +314,25 @@ fn collect_nics() -> Vec<NicSummary> {
 }
 
 fn collect_gpus() -> Vec<GpuSummary> {
-    collect_nvidia_gpus()
+    // Prefer the library-based hwinfo collector (NVIDIA via NVML + AMD via ROCm
+    // SMI, with total memory and richer detail). Fall back to scraping the
+    // NVIDIA proc interface when the vendor libraries aren't installed.
+    let gpus: Vec<GpuSummary> = crate::hwinfo::gpu::get_gpus()
+        .into_iter()
+        .map(|g| GpuSummary {
+            name: g.name,
+            vendor: g.vendor,
+            memory_bytes: g.memory_bytes,
+            driver: g.driver,
+            numa_node: g.numa_node,
+        })
+        .collect();
+
+    if gpus.is_empty() {
+        collect_nvidia_gpus()
+    } else {
+        gpus
+    }
 }
 
 fn collect_nvidia_gpus() -> Vec<GpuSummary> {

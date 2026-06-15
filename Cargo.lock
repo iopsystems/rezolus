@@ -3347,6 +3347,7 @@ dependencies = [
 name = "systeminfo"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "log",
  "serde",
  "serde_json",

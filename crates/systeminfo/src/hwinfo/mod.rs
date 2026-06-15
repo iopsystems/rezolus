@@ -3,6 +3,7 @@ use crate::Result;
 mod cache;
 mod cpu;
 mod cpufreq;
+pub mod gpu;
 mod interrupt;
 mod memory;
 mod net;
@@ -15,6 +16,7 @@ pub use self::cpu::Cpu;
 pub use self::cpu::CpuSmt;
 pub use self::cpufreq::CpuFreqBoosting;
 pub use self::cpufreq::Cpufreq;
+pub use self::gpu::Gpu;
 pub use self::interrupt::Interrupt;
 pub use self::memory::Memory;
 pub use self::net::{Interface, Queues};
@@ -33,6 +35,8 @@ pub struct HwInfo {
     pub network: Vec<Interface>,
     pub nodes: Vec<Node>,
     pub interrupts: Vec<Interrupt>,
+    #[serde(default)]
+    pub gpus: Vec<Gpu>,
 }
 
 impl HwInfo {
@@ -47,6 +51,7 @@ impl HwInfo {
             network: self::net::get_interfaces(),
             nodes: self::node::get_nodes()?,
             interrupts: self::interrupt::get_interrupts(),
+            gpus: self::gpu::get_gpus(),
         })
     }
 
