@@ -158,3 +158,138 @@ pub const KEY_REPORT: &str = "report";
 
 /// Canonical `KEY_REPORT` value written by the current writer.
 pub const REPORT_VALUE_TRIMMED: &str = "trimmed";
+
+/// Server-side mirror of the WASM `synthesize_manifest` in
+/// `crates/viewer/src/lib.rs` — needed so compare-mode Save-as-Report
+/// works when the manifest wasn't carried in from a pre-built A/B tar.
+pub fn synthesize_ab_manifest(
+    baseline_alias: Option<&str>,
+    baseline_filename: &str,
+    baseline_sources: &[String],
+    experiment_alias: Option<&str>,
+    experiment_filename: &str,
+    experiment_sources: &[String],
+    category: Option<&str>,
+) -> AbContainers {
+    fn resolve_alias(alias: Option<&str>, filename: &str, fallback: &str) -> String {
+        if let Some(a) = alias {
+            if !a.is_empty() {
+                return a.to_string();
+            }
+        }
+        let base = std::path::Path::new(filename)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if !base.is_empty() {
+            base.to_string()
+        } else {
+            fallback.to_string()
+        }
+    }
+    AbContainers {
+        version: AbContainers::SCHEMA_VERSION,
+        baseline: AbSide {
+            alias: resolve_alias(baseline_alias, baseline_filename, "baseline"),
+            sources: baseline_sources.to_vec(),
+        },
+        experiment: AbSide {
+            alias: resolve_alias(experiment_alias, experiment_filename, "experiment"),
+            sources: experiment_sources.to_vec(),
+        },
+        category: category.map(|s| s.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod synthesize_tests {
+    use super::*;
+
+    fn srcs(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn uses_explicit_aliases_when_set() {
+        let m = synthesize_ab_manifest(
+            Some("before"),
+            "baseline.parquet",
+            &srcs(&["rezolus"]),
+            Some("after"),
+            "experiment.parquet",
+            &srcs(&["rezolus"]),
+            None,
+        );
+        assert_eq!(m.version, AbContainers::SCHEMA_VERSION);
+        assert_eq!(m.baseline.alias, "before");
+        assert_eq!(m.experiment.alias, "after");
+        assert_eq!(m.baseline.sources, vec!["rezolus".to_string()]);
+        assert_eq!(m.experiment.sources, vec!["rezolus".to_string()]);
+        assert_eq!(m.category, None);
+    }
+
+    #[test]
+    fn falls_back_to_filename_basename_when_no_alias() {
+        let m = synthesize_ab_manifest(
+            None,
+            "/tmp/foo/baseline.parquet",
+            &srcs(&["rezolus"]),
+            None,
+            "experiment.parquet",
+            &srcs(&["rezolus"]),
+            None,
+        );
+        assert_eq!(m.baseline.alias, "baseline.parquet");
+        assert_eq!(m.experiment.alias, "experiment.parquet");
+    }
+
+    #[test]
+    fn empty_filename_falls_back_to_baseline_experiment_literal() {
+        let m = synthesize_ab_manifest(
+            None,
+            "",
+            &srcs(&["rezolus"]),
+            None,
+            "",
+            &srcs(&["rezolus"]),
+            None,
+        );
+        assert_eq!(m.baseline.alias, "baseline");
+        assert_eq!(m.experiment.alias, "experiment");
+    }
+
+    #[test]
+    fn passes_category_through() {
+        let m = synthesize_ab_manifest(
+            Some("a"),
+            "a.parquet",
+            &srcs(&["rezolus"]),
+            Some("b"),
+            "b.parquet",
+            &srcs(&["rezolus"]),
+            Some("inference-library"),
+        );
+        assert_eq!(m.category, Some("inference-library".to_string()));
+    }
+
+    #[test]
+    fn multi_source_each_side_independent() {
+        let m = synthesize_ab_manifest(
+            Some("a"),
+            "a.parquet",
+            &srcs(&["rezolus", "vllm"]),
+            Some("b"),
+            "b.parquet",
+            &srcs(&["rezolus", "sglang"]),
+            None,
+        );
+        assert_eq!(
+            m.baseline.sources,
+            vec!["rezolus".to_string(), "vllm".to_string()]
+        );
+        assert_eq!(
+            m.experiment.sources,
+            vec!["rezolus".to_string(), "sglang".to_string()]
+        );
+    }
+}
