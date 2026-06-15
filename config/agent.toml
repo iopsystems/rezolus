@@ -113,6 +113,22 @@ enabled = true
 # loaded at runtime. Disabled automatically on hosts without ROCm or AMD GPUs.
 [samplers.gpu_amd_smi]
 
+# Produces AMD GPU hardware performance counter metrics (waves, VALU,
+# instruction/L1/L2 caches, memory-bandwidth requests) via rocprofiler-sdk's
+# device counting service, loaded at runtime. Requires the CAP_PERFMON
+# capability. Disabled automatically on hosts without ROCm or AMD GPUs. Note:
+# on RDNA GPUs some counters only read non-zero when the GPU is in a stable
+# power state (see docs/amd_gpu_counters.md); this sampler does not change the
+# power state.
+#
+# `sampling_window` controls how long each device-counting window accumulates
+# before the counters are read and published (default "1s"). Shorter windows
+# reduce metric staleness and give finer time resolution at the cost of higher
+# collection overhead. With multiple GPUs, a given GPU is refreshed once per
+# (window x number of GPUs).
+[samplers.gpu_amd_pmu]
+# sampling_window = "1s"
+
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
 
