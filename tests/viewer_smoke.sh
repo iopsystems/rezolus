@@ -192,6 +192,40 @@ eq "two-file compare save: manifest version" \
 [ -n "$(echo "$ab_manifest" | jq -r .experiment.alias)" ] \
     || fail "two-file compare save: empty experiment.alias" "" "non-empty" "$LOGDIR/file.log"
 
+echo "==> reload the saved tarball, save again, manifest survives round-trip"
+PORT_ROUNDTRIP=18506
+./target/debug/rezolus view "$SAVE_RESP" \
+    --listen 127.0.0.1:$PORT_ROUNDTRIP \
+    > "$LOGDIR/roundtrip.log" 2>&1 &
+PID_ROUNDTRIP=$!
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_ROUNDTRIP 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
+wait_for_port $PORT_ROUNDTRIP || {
+    echo "--- log for round-trip viewer ---"
+    cat "$LOGDIR/roundtrip.log"
+    exit 1
+}
+
+ROUNDTRIP_RESP="$LOGDIR/two-file-save-2.parquet.ab.tar"
+curl -fsS -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
+    "http://127.0.0.1:$PORT_ROUNDTRIP/api/v1/save_with_selection" \
+    -o "$ROUNDTRIP_RESP"
+
+# Reload-then-save should carry the synthesizer's first-pass aliases.
+first_baseline_alias=$(tar xfO "$SAVE_RESP" ab.json | jq -r .baseline.alias)
+first_experiment_alias=$(tar xfO "$SAVE_RESP" ab.json | jq -r .experiment.alias)
+roundtrip_baseline_alias=$(tar xfO "$ROUNDTRIP_RESP" ab.json | jq -r .baseline.alias)
+roundtrip_experiment_alias=$(tar xfO "$ROUNDTRIP_RESP" ab.json | jq -r .experiment.alias)
+eq "round-trip baseline alias preserved" \
+    "$roundtrip_baseline_alias" "$first_baseline_alias" "$LOGDIR/roundtrip.log"
+eq "round-trip experiment alias preserved" \
+    "$roundtrip_experiment_alias" "$first_experiment_alias" "$LOGDIR/roundtrip.log"
+
+kill $PID_ROUNDTRIP 2>/dev/null || true
+wait $PID_ROUNDTRIP 2>/dev/null || true
+
 echo "==> DELETE /api/v1/captures/experiment detaches"
 curl -fsS -X DELETE "http://127.0.0.1:$PORT_FILE/api/v1/captures/experiment" >/dev/null
 sleep 1
