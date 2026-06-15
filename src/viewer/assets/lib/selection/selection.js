@@ -869,7 +869,6 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
         const hasChartSelection = cs?.hasActiveSelection();
         const hasHistograms = notebookStore.entries.some(e => isHistogramPlot(e));
         const hasAnyNote = notebookStore.entries.some(e => e.note && e.note.length > 0);
-        const inTwoFileCompare = attrs.compareMode && !attrs.combinedAB;
         const downloadIcon = m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>');
 
         const header = m('div.selection-header', [
@@ -908,10 +907,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
 
             m('div.selection-actions', [
                 m('button.selection-btn', {
-                    disabled: inTwoFileCompare,
-                    title: inTwoFileCompare
-                        ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
-                        : 'Embed selection + notes in the loaded parquet',
+                    title: 'Embed selection + notes in the loaded parquet',
                     onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
                     'Save as Report (parquet, Selection & Notes) ',
