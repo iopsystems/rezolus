@@ -107,15 +107,4 @@ impl Config {
 
         enabled
     }
-
-    /// The configured sampling window for a sampler, falling back to the
-    /// `defaults` section, then to `default` if neither is set. Only meaningful
-    /// for samplers that perform interval-based collection.
-    pub fn sampling_window(&self, name: &str, default: std::time::Duration) -> std::time::Duration {
-        self.samplers
-            .get(name)
-            .and_then(|v| v.sampling_window())
-            .or_else(|| self.defaults.sampling_window())
-            .unwrap_or(default)
-    }
 }

@@ -46,7 +46,6 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::sync::Mutex;
-use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // C types (all rocprofiler handles are a single u64 `handle`).
@@ -219,17 +218,24 @@ struct Syms {
 // the STATE mutex. They borrow from libraries kept alive for the process.
 unsafe impl Send for Syms {}
 
-/// Per-GPU-agent device-counting state, built in the initialize callback.
+/// Per-GPU-agent device-counting state. The context and counter config are
+/// built in the `tool_initialize` callback, then the context is started once
+/// after `hsa_init()` (it cannot be started before HSA is loaded) and runs
+/// until shutdown.
 struct AgentState {
     ctx: ContextId,
-    /// The single-pass counter config sampled for this agent.
+    /// The single-pass counter config; passed to the device-counting callback
+    /// via the `PENDING_CONFIG` thread-local when the context is started.
     config: CounterConfigId,
-    /// Counter id -> name, for attributing records, and the names successfully
-    /// included in the config (a subset of the requested set).
+    /// Counter id -> name, for attributing records.
     id_to_name: HashMap<u64, String>,
+    /// The counter names successfully included in the config (a subset of the
+    /// requested set), retained for diagnostics/logging.
     kept: Vec<String>,
+    /// Whether `start_context` succeeded for this agent.
+    started: bool,
 }
-// SAFETY: only accessed under the STATE mutex / from the single sampling thread.
+// SAFETY: only accessed under the STATE mutex.
 unsafe impl Send for AgentState {}
 
 struct State {
@@ -403,11 +409,16 @@ fn setup_agent(syms: &Syms, id: AgentId, wanted: &[&str]) -> Result<AgentState, 
             ));
         }
 
+        // NOTE: the context is NOT started here. `tool_initialize` runs inside
+        // `rocprofiler_force_configure`, which executes BEFORE `hsa_init()`, and
+        // `start_context` requires HSA to be loaded (else HSA_NOT_LOADED). The
+        // contexts are started later in `Rocprofiler::new`, after `hsa_init()`.
         Ok(AgentState {
             ctx,
             config: cfg,
             id_to_name,
             kept,
+            started: false,
         })
     }
 }
@@ -549,7 +560,8 @@ impl Rocprofiler {
             return Err(format!("rocprofiler_force_configure failed: {st}"));
         }
 
-        // tool_initialize has now run and built the per-agent contexts. Bring up
+        // tool_initialize has now run and built the per-agent contexts and
+        // counter configs (but did NOT start them — HSA wasn't up yet). Bring up
         // HSA so the device counting service is live.
         let hsa_st = unsafe { hsa_init() };
 
@@ -569,10 +581,28 @@ impl Rocprofiler {
             return Err(e);
         }
 
+        // Now that HSA is loaded, start each agent's context once. It runs
+        // continuously, so the counters accumulate and each later read returns
+        // the running cumulative total. The device-counting callback fires
+        // synchronously inside start_context on this thread and reads the config
+        // from the PENDING_CONFIG thread-local, so set it just before.
+        if let Some(syms) = state.syms.as_ref() {
+            for agent in state.agents.iter_mut() {
+                PENDING_CONFIG.with(|c| c.set(agent.config.handle));
+                let st = unsafe { (syms.start_context)(agent.ctx) };
+                PENDING_CONFIG.with(|c| c.set(0));
+                agent.started = st == ROCPROFILER_STATUS_SUCCESS;
+                if !agent.started {
+                    crate::debug!("gpu_amd_pmu: start_context failed: {st}");
+                }
+            }
+        }
+        state.agents.retain(|a| a.started);
+
         let num_agents = state.agents.len();
         if num_agents == 0 {
             *guard = None;
-            return Err("no usable GPU agents".into());
+            return Err("no GPU agent contexts could be started".into());
         }
 
         // Log which counters each agent ended up with.
@@ -594,17 +624,22 @@ impl Rocprofiler {
         self.num_agents
     }
 
-    /// Sample agent `idx` over `window`. Returns counter name -> device-level
-    /// sum (summed across hardware instances).
-    pub fn sample(&self, idx: usize, window: Duration) -> Result<HashMap<String, f64>, String> {
-        let mut guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
-        let state = guard.as_mut().ok_or("rocprofiler not initialized")?;
+    /// Read the current cumulative counter totals for agent `idx`. Returns a
+    /// map of counter name -> device-level cumulative value (summed across
+    /// hardware instances).
+    ///
+    /// The context was started once at init and runs continuously, so each read
+    /// returns the running total since startup — a monotonic counter, ideal for
+    /// `rate()` downstream. The `STATE` mutex serializes reads: rocprofiler
+    /// rejects overlapping `sample_device_counting_service` calls with
+    /// `CONTEXT_ERROR`, and the agent's async `refresh()` can run concurrently.
+    pub fn sample(&self, idx: usize) -> Result<HashMap<String, f64>, String> {
+        let guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
+        let state = guard.as_ref().ok_or("rocprofiler not initialized")?;
         let syms = state.syms.as_ref().ok_or("symbols missing")?;
         let agent = state.agents.get(idx).ok_or("agent index out of range")?;
 
         let ctx = agent.ctx;
-        let cfg = agent.config;
-        PENDING_CONFIG.with(|c| c.set(cfg.handle));
 
         let mut out = vec![
             CounterRecord {
@@ -619,25 +654,14 @@ impl Rocprofiler {
         let mut count = out.len();
 
         let st = unsafe {
-            if (syms.start_context)(ctx) != ROCPROFILER_STATUS_SUCCESS {
-                PENDING_CONFIG.with(|c| c.set(0));
-                return Err("start_context failed".into());
-            }
-            // Hold the window without keeping other threads blocked on STATE:
-            // the sampling thread owns STATE for the sample, which is fine since
-            // it is the only caller of `sample`.
-            std::thread::sleep(window);
-            let st = (syms.sample_device_counting)(
+            (syms.sample_device_counting)(
                 ctx,
                 UserData { value: 0 },
                 ROCPROFILER_COUNTER_FLAG_NONE,
                 out.as_mut_ptr(),
                 &mut count,
-            );
-            let _ = (syms.stop_context)(ctx);
-            st
+            )
         };
-        PENDING_CONFIG.with(|c| c.set(0));
 
         if st != ROCPROFILER_STATUS_SUCCESS {
             return Err(format!("sample_device_counting_service failed: {st}"));
@@ -664,6 +688,15 @@ impl Drop for Rocprofiler {
     fn drop(&mut self) {
         if let Ok(mut guard) = STATE.lock() {
             if let Some(state) = guard.as_mut() {
+                // Stop the per-agent contexts we started at init.
+                if let Some(syms) = state.syms.as_ref() {
+                    for agent in state.agents.iter().filter(|a| a.started) {
+                        // SAFETY: balances the start_context in `new`.
+                        unsafe {
+                            let _ = (syms.stop_context)(agent.ctx);
+                        }
+                    }
+                }
                 if let Some(shut_down) = state.hsa_shut_down.take() {
                     // SAFETY: balances the hsa_init() in `new`.
                     unsafe {
