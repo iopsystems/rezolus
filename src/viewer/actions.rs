@@ -28,6 +28,11 @@ use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
+// MetricsSource::source() may be a JSON array (multi-source) or a single label.
+fn parse_source_field(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| vec![raw.to_string()])
+}
+
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
 /// Background task that polls a live agent and ingests snapshots.
@@ -595,24 +600,31 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         let trim_columns = payload.trim_columns;
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
-        let ab_manifest = state.combined_ab_marker.read().clone();
+        let ab_manifest_runtime = state.combined_ab_marker.read().clone();
+        let experiment_path = state.resolve_experiment_parquet_path();
+        let experiment_data = state.captures.get(CaptureId::Experiment);
 
-        if let Some(manifest) = ab_manifest {
-            // parquet_path here is the EXTRACTED baseline parquet (set by
-            // init_file_mode_combined_ab); the experiment side lives at
-            // cli_experiment_path. Both paths outlive the process via the
-            // mem::forget'd extractor handle.
-            let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
-                return ApiResponse::<()>::err(
-                    "combined-A/B state missing experiment_path",
-                    "internal_error",
+        // Compare mode: experiment attached -> tarball with manifest
+        // (loaded or synthesized from per-slot runtime state).
+        if let (Some(experiment_path), Some(experiment_data)) = (experiment_path, experiment_data) {
+            let manifest = ab_manifest_runtime.unwrap_or_else(|| {
+                let baseline_alias = state.captures.alias(CaptureId::Baseline);
+                let experiment_alias = state.captures.alias(CaptureId::Experiment);
+                let baseline_filename = state.captures.filename(CaptureId::Baseline);
+                let experiment_filename = state.captures.filename(CaptureId::Experiment);
+                let baseline_sources = parse_source_field(&baseline_data.source());
+                let experiment_sources = parse_source_field(&experiment_data.source());
+                let category = state.category_name.read().clone();
+                crate::parquet_metadata::synthesize_ab_manifest(
+                    baseline_alias.as_deref(),
+                    &baseline_filename,
+                    &baseline_sources,
+                    experiment_alias.as_deref(),
+                    &experiment_filename,
+                    &experiment_sources,
+                    category.as_deref(),
                 )
-                .into_response();
-            };
-            let experiment_data = state
-                .captures
-                .get(CaptureId::Experiment)
-                .expect("experiment slot must be attached in combined-A/B mode");
+            });
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
@@ -634,6 +646,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             return finalize_report_attachment_tarball(result);
         }
 
+        // Single-capture save.
         let result = tokio::task::spawn_blocking({
             let body = selection_json.clone();
             move || {
