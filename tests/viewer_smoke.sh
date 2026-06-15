@@ -170,6 +170,28 @@ sleep 1
 mode=$(mode_at $PORT_FILE)
 eq "experiment attached → compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/file.log"
 
+echo "==> POST /api/v1/save_with_selection in two-file compare returns a tarball"
+SAVE_RESP="$LOGDIR/two-file-save.parquet.ab.tar"
+curl -fsS -X POST \
+    -H 'Content-Type: application/json' \
+    -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
+    "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
+    -o "$SAVE_RESP"
+
+ab_listing=$(tar tf "$SAVE_RESP" 2>&1 | tr '\n' ' ')
+case "$ab_listing" in
+    *baseline.parquet*experiment.parquet*ab.json*|*baseline.parquet*ab.json*experiment.parquet*|*experiment.parquet*baseline.parquet*ab.json*|*experiment.parquet*ab.json*baseline.parquet*|*ab.json*baseline.parquet*experiment.parquet*|*ab.json*experiment.parquet*baseline.parquet*) : ;;
+    *) fail "two-file compare save: tarball missing expected entries" "$ab_listing" "baseline.parquet, experiment.parquet, ab.json" "$LOGDIR/file.log" ;;
+esac
+
+ab_manifest=$(tar xfO "$SAVE_RESP" ab.json)
+eq "two-file compare save: manifest version" \
+    "$(echo "$ab_manifest" | jq -r .version)" "1" "$LOGDIR/file.log"
+[ -n "$(echo "$ab_manifest" | jq -r .baseline.alias)" ] \
+    || fail "two-file compare save: empty baseline.alias" "" "non-empty" "$LOGDIR/file.log"
+[ -n "$(echo "$ab_manifest" | jq -r .experiment.alias)" ] \
+    || fail "two-file compare save: empty experiment.alias" "" "non-empty" "$LOGDIR/file.log"
+
 echo "==> DELETE /api/v1/captures/experiment detaches"
 curl -fsS -X DELETE "http://127.0.0.1:$PORT_FILE/api/v1/captures/experiment" >/dev/null
 sleep 1
