@@ -618,7 +618,13 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
 });
 
 const exportJSON = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
+    const isCompare = !!attrs.compareMode;
+    const defaultPrefix = isCompare
+        ? composeAbReportPrefix(
+            attrs.baselineAlias || attrs.filename,
+            attrs.experimentAlias || attrs.experimentFilename,
+        ) + '-selection'
+        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
