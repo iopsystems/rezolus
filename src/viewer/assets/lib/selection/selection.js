@@ -9,6 +9,7 @@ import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTUR
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
+import { composeAbReportPrefix } from './ab_filename.js';
 import { ViewerApi } from '../viewer_api.js';
 import { eventsStore } from '../events/events_store.js';
 import { renderMarkdown, renderMarkdownInline } from '../ui/markdown.js';
@@ -716,7 +717,17 @@ const loadJsonIntoSelection = (json, filename) => {
 };
 
 const saveToParquet = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
+    const isCompare = !!attrs.compareMode;
+    // Compare mode produces an A/B tarball — modal default uses both
+    // sides' labels so the user sees `<a>_vs_<b>.parquet.ab.tar`
+    // instead of `<baseline>-report.parquet.ab.tar`.
+    const defaultPrefix = isCompare
+        ? composeAbReportPrefix(
+            attrs.baselineAlias || attrs.filename,
+            attrs.experimentAlias || attrs.experimentFilename,
+        )
+        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
+    const defaultExt = isCompare ? '.parquet.ab.tar' : '.parquet';
     const cs = attrs.chartsState;
     const hasZoom = cs && !cs.isDefaultZoom();
     const checkboxes = [
@@ -725,7 +736,7 @@ const saveToParquet = async (store, attrs) => {
     if (hasZoom) {
         checkboxes.push({ key: 'trim', label: 'Trim to selected time range', checked: false });
     }
-    const result = await showSaveModal(defaultPrefix, '.parquet', checkboxes);
+    const result = await showSaveModal(defaultPrefix, defaultExt, checkboxes);
     if (!result) return;
     const filename = result.filename;
     const trimToSelection = result.trim;
@@ -749,12 +760,20 @@ const saveToParquet = async (store, attrs) => {
         // /api/v1/save_with_selection; the WASM adapter projects the
         // source bytes locally. Both return { bytes, mime, extension }.
         const { bytes, mime, extension } = await ViewerApi.saveWithSelection(payload);
-        // If the user accepted the default `.parquet` filename, swap the
-        // extension to whatever the adapter reported (AB tarballs come
-        // back with `.parquet.ab.tar`).
-        const finalName = extension && filename.endsWith('.parquet') && extension !== '.parquet'
-            ? filename.slice(0, -'.parquet'.length) + extension
-            : filename;
+        // Replace any default modal extension with what the adapter
+        // actually produced (handles users keeping the default in either
+        // mode + handles users editing the prefix without re-typing the
+        // extension). Skips swap if the user typed a custom extension.
+        const knownExts = ['.parquet.ab.tar', '.ab.tar', '.parquet'];
+        let finalName = filename;
+        if (extension) {
+            for (const ext of knownExts) {
+                if (filename.endsWith(ext)) {
+                    finalName = filename.slice(0, -ext.length) + extension;
+                    break;
+                }
+            }
+        }
         const blob = new Blob([bytes], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
