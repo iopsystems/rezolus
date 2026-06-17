@@ -256,6 +256,94 @@ uses instrumentation that already ships.
 3. **PR 3 (discussion-gated) — network RX** via socket-layer consolidation with
    the `tcp/*` samplers, if symmetric RX/TX attribution is wanted.
 
+## Alternative for network: interface as the tenant proxy
+
+Worth serious consideration as the *primary* network approach rather than cgroup
+attribution. In virtualization, each guest already gets a dedicated host-side
+netdev (QEMU/virtio `tap`/`vhost-net`, `macvtap`, an SR-IOV **VF representor** in
+switchdev mode, or a `veth` for containers). So **per-interface == per-tenant by
+construction** on the host, with no in-kernel cgroup bookkeeping.
+
+### Why it's stronger than cgroup attribution for network
+
+- **Solves the RX problem.** `skb->dev` is populated on *both* hooks
+  (`netif_receive_skb` and `net_dev_start_xmit`) — unlike `skb->sk`, which is
+  NULL on RX before demux. Symmetric RX+TX, no NULL-branch.
+- **Cheaper chain.** `skb → dev → ifindex` (2 derefs) vs. blockio's 4.
+- **Matches the operator's mental model.** The thing they provision per tenant
+  *is* the interface.
+
+### Where it breaks (must be documented)
+
+- **Kernel-bypass datapaths**: OVS-DPDK, vhost-user, and SR-IOV VF *passthrough*
+  (no representor) never traverse a host kernel netdev, so the netif hooks never
+  fire — Rezolus cannot see that traffic at all. (SR-IOV in **switchdev** mode
+  does expose a per-VF representor netdev, which the hooks see.)
+- **Shared interfaces**: if several VMs share one host netdev (some macvlan/bridge
+  setups), per-interface ≠ per-tenant.
+- **ifindex reuse/churn**: tap devices are created/destroyed per VM lifecycle and
+  ifindex is reused. Userspace must track link add/del and handle reuse (zero
+  counters, re-stamp name) exactly as the cgroup path handles serial numbers and
+  the task path handles PID start-times.
+
+### BPF + userspace shape
+
+- BPF: key `network/traffic` counters by `BPF_CORE_READ(skb, dev, ifindex)`,
+  bounds-checked against a `MAX_IFINDEX` array (principle 5 — ifindex is a
+  bounded-ish int; document the ceiling like `MAX_CPUS`). No new probe.
+- Userspace: resolve `ifindex → ifname` via the existing sysfs discovery pattern
+  (`read_dir("/sys/class/net")`, as `network/ethtool` already does) or netlink for
+  churn. `ifname` is the stable **join key** for tenant mapping.
+
+> Note: `network_interfaces` today exposes only *global* drop/tx_busy/tx_complete/
+> tx_timeout counters — it is **not** per-interface. So this is a real addition,
+> not a relabel of existing data.
+
+### Finding the tenant ↔ interface mapping (layered, most → least authoritative)
+
+1. **libvirt — authoritative on a libvirt/KVM host.** `virsh domiflist <domain>`
+   gives `(host tap ifname, MAC, source bridge)`; or parse the domain XML
+   (`/run/libvirt/qemu/<domain>.xml`, `<interface><target dev='vnet7'/><mac .../>`).
+   Domain name/UUID = tenant id. Refresh on libvirt lifecycle events. Note: the
+   default `vnetN` names are *sequential*, not tenant-encoding — you must go
+   through libvirt to map them.
+2. **Orchestrator-encoded names (no API call — the name carries the id).**
+   - OpenStack/Neutron: `tapXXXXXXXX-XX` embeds the first 11 chars of the Neutron
+     **port UUID** → join to port → `device_id` (instance) → project/tenant.
+     Hybrid-plug `qvo/qvb` veth pairs encode the same.
+   - Kubernetes/CNI: `cali…`/`veth…`/`lxc…` → pod via CNI host state
+     (`/var/run/calico`, kubelet pod list, etc.).
+3. **sysfs + process attribution (generic fallback, no orchestrator).**
+   `/sys/class/net/<if>/{address,ifindex,master,tun_flags}` identifies tap
+   devices, their MAC and bridge. A tap is an open fd on the owning QEMU process;
+   map that pid → VM via its cgroup path
+   `machine.slice/machine-qemu-\x2d<id>-<name>.scope` — **the cgroup samplers
+   already parse exactly this path**, so the tap→VM join reuses existing logic.
+   `bridge fdb show` cross-references guest MAC ↔ tap.
+4. **Control-plane inventory by MAC / PCI-VF index** (EC2 ENI, Azure NIC) where
+   the host doesn't name interfaces by tenant; MAC or VF index is the join key
+   into the provider's port database.
+
+### Where the mapping should live (principle 9)
+
+Prefer: **agent emits interface-keyed metrics (`ifname`/`ifindex` label); the
+tenant join happens downstream.** Keeps the agent generic and dependency-free (no
+libvirt/Neutron client, no extra privilege/coupling); the operator's relabel/
+metadata layer joins `ifname → tenant` from their own inventory — consistent with
+"agent exposes detail; aggregation/labeling lives downstream" and the parquet
+per-source-metadata model. Optionally offer a **config-gated, source-pluggable
+resolver** in userspace (static map file, name-regex, or libvirt) that stamps a
+`vm`/`tenant` label at discovery time — analogous to today's cgroup_info metadata
+stamping — for operators who want labels applied at the source.
+
+### Symmetry for block I/O
+
+The same "assigned device as tenant proxy" idea applies to disk when each VM has a
+dedicated backing block device/LV: key `blockio` by `dev_t` (`rq → rq_disk →`
+major/minor) and join device → VM downstream. Where VMs share a backing device or
+use file-backed images on a shared filesystem, that breaks down and the `bi_blkg`
+cgroup attribution above is the better signal. The two are complementary.
+
 ## Open questions (need a decision before coding network)
 
 1. **Network RX attribution:** accept TX-only at the device hook (option 1), or
