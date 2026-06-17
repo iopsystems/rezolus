@@ -155,22 +155,63 @@ violates the bounded-memory discipline (principles 8, 13). v1 ships per-cgroup
 **counters only** (ops + bytes). If distributions are needed later, gate them
 behind config and/or a sparse representation — separate proposal.
 
-## Overhead assessment (principle 1)
+## Overhead assessment, baselined against `cpu/usage`'s cgroup tax (principle 1)
 
-- **Per-event work:** one extra pointer-chase (`rq→bio→bi_blkg→blkcg→css.id`) and
-  one `array_add` on the completion/xmit path. No new hot-path probe (we reuse the
-  existing attaches), no helpers from the refused list, O(1) per event.
-- **Ringbuf:** fires only on first observation of each cgroup (serial-number
-  gate), not per I/O — consistent with principle 3.
-- **Memory:** `MAX_CGROUPS (4096) × u64` per counter map. With ~6 new maps that's
-  a few hundred KB — negligible next to the existing per-PID arrays.
-- **Consolidation note:** `block_rq_complete` is already shared logic between
-  `blockio/latency` and `blockio/requests` (flagged in principles "Known drift").
-  Add the cgroup counters in `blockio/requests` only; don't add a second attach.
+The right baseline is the **existing per-cgroup CPU sampler** (`cgroup_cpu_usage`),
+which is already deployed always-on fleetwide. The work this proposal adds to the
+blockio/network hooks is the *same cgroup-attribution "tax"* that `cpu/usage`
+already pays on top of its base accounting. Decomposed, that tax is:
 
-Net: stays within the always-on fleetwide budget. The one workload to watch is
-millions of IOPS / Mpps (principle 1 caveat) — same ceiling the existing probes
-already have; we add a constant to it.
+| Step (per event) | Cost | `cpu/usage` today | This proposal |
+|---|---|---|---|
+| Resolve cgroup id (pointer chase to a `css.id`) | a few `BPF_CORE_READ`s | `task → sched_task_group → css.id` (**2 derefs**) | blockio: `rq → bio → bi_blkg → blkcg → css.id` (**4 derefs**); network: `skb → sk → sk_cgrp_data` (**2–3 derefs**) |
+| New-cgroup gate (`handle_new_cgroup*`) | 1 array lookup + serial compare; ringbuf **only on first sighting** | identical (shared `cgroup.h` helper) | identical (shared helper) |
+| Accumulate | 1–2 `array_add` (relaxed atomic) into a `MAX_CGROUPS` array | 2 (`cgroup_user`,`cgroup_system`) | 2 (ops + bytes / packets + bytes) |
+
+So the **marginal per-event cost is essentially the cpu baseline's cgroup
+portion**, with one wrinkle: blockio's id chain is ~2 dereferences longer (each a
+bounded `bpf_probe_read_kernel`), so its tax is modestly higher per event than
+cpu's; network's is comparable to cpu's (plus one NULL-`sk` branch on RX). All
+O(1), no refused helpers, no new probe (we extend existing attaches).
+
+**The axis that actually differs is event rate, not per-event cost.** The cgroup
+tax is constant per event; aggregate overhead = tax × hook firing rate. Ordering
+the three hosts hooks by worst-case rate:
+
+| Sampler | Host hook | Event-rate ceiling |
+|---|---|---|
+| `cpu/usage` (baseline) | `cpuacct_account_field` | ~per-task-per-tick — modest, scales with runnable tasks |
+| `blockio/requests` | `block_rq_complete` | **millions of IOPS** on NVMe under fio |
+| `network/traffic` | `netif_receive_skb` / `net_dev_start_xmit` | **Mpps** at line rate — the highest |
+
+This is exactly principle 1's named ceiling. The conclusion: **per-event, this is
+no worse than a sampler we already run fleetwide; the thing to respect is that the
+completion/packet hooks can fire far more often than tick accounting, so the same
+tax multiplies further on extreme IOPS/pps workloads.** That is an argument about
+*which hook to attribute at* (and how often it fires), not about the cgroup
+machinery itself.
+
+**Memory & userspace:** identical shape to `cpu/usage` — `MAX_CGROUPS (4096) ×
+u64` per counter map (cpu's cgroup maps are 2 × 4096 × 8 = 64 KB; blockio ~256 KB,
+network ~128 KB), plus the shared serial-number array and ringbuf. Userspace
+refresh is the same mmap-direct, O(active cgroups) read the cpu cgroup sampler
+already does (principle 13). Negligible and already-proven.
+
+**Consolidation note:** `block_rq_complete` is already shared logic between
+`blockio/latency` and `blockio/requests` (flagged in principles "Known drift").
+Add the cgroup counters in `blockio/requests` only; don't add a second attach.
+
+### Measure it, don't guess
+
+Every sampler already exports `rezolus_bpf_run_time` and `rezolus_bpf_run_count`
+(see `BPF_RUN_TIME`/`BPF_RUN_COUNT`). The honest way to size this is empirical:
+take `run_time / run_count` (mean ns per probe invocation) for `cpu_usage` as the
+established baseline, then compare the same ratio for `blockio_requests` /
+`network_traffic` **before and after** adding the cgroup path, under a load
+generator that drives the hook hard (fio for blockio, a packet generator for
+network). The delta in mean-ns-per-event is the cgroup tax; multiply by expected
+fleet event rates to bound aggregate cost. This avoids hand-waved cycle counts and
+uses instrumentation that already ships.
 
 ## File-by-file change list
 
