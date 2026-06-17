@@ -237,7 +237,97 @@ pub async fn upload_parquet(
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
+    if super::ab_extract::looks_like_ab_tarball(&temp_path) {
+        return ingest_combined_ab_from_path(&state, temp_path, filename);
+    }
     ingest_baseline_from_path(&state, temp_path, filename)
+}
+
+/// Runtime-upload version of `init_file_mode_combined_ab` (mod.rs).
+/// Mirrors the CLI state-mutation but returns an HTTP envelope instead
+/// of exiting on failure, and skips strict `--category` validation
+/// (manifest's category, if any, is applied as-is).
+fn ingest_combined_ab_from_path(
+    state: &AppState,
+    tar_path: PathBuf,
+    display_filename: String,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let extracted = match super::ab_extract::extract_ab_tarball(&tar_path) {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(
+                format!("failed to extract combined-A/B tarball: {e}"),
+                "invalid_parquet",
+            );
+        }
+    };
+    let manifest = extracted.manifest.clone();
+
+    let open = |label: &str, path: &std::path::Path| -> Result<Arc<dyn MetricsSource>, String> {
+        ParquetReader::open_with_pool(path, Arc::clone(&state.pool))
+            .map(|r| Arc::new(r.with_filename(display_filename.clone())) as Arc<dyn MetricsSource>)
+            .map_err(|e| format!("failed to load {label} parquet from tarball: {e}"))
+    };
+    let baseline_reader = match open("baseline", &extracted.baseline_path) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(e, "invalid_parquet");
+        }
+    };
+    let experiment_reader = match open("experiment", &extracted.experiment_path) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(e, "invalid_parquet");
+        }
+    };
+
+    let (baseline_systeminfo, baseline_selection, baseline_file_meta) =
+        extract_parquet_metadata(&extracted.baseline_path);
+    let baseline_multinode = build_multinode_systeminfo(&extracted.baseline_path);
+    let (experiment_systeminfo, _experiment_selection, experiment_file_meta) =
+        extract_parquet_metadata(&extracted.experiment_path);
+    let experiment_multinode = build_multinode_systeminfo(&extracted.experiment_path);
+    let file_checksum = compute_file_checksum(&tar_path);
+
+    state.replace_baseline(baseline_reader);
+    *state.parquet_path.write() = Some(extracted.baseline_path.clone());
+    *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
+    *state.experiment_parquet_path.write() = None;
+    state
+        .captures
+        .set_baseline_systeminfo(baseline_multinode.or(baseline_systeminfo));
+    *state.selection.write() = baseline_selection;
+    *state.file_checksum.write() = file_checksum;
+    state
+        .captures
+        .set_baseline_file_metadata(baseline_file_meta);
+    *state.trimmed_report_marker.write() = super::read_footer_kv(
+        &extracted.baseline_path,
+        crate::parquet_metadata::KEY_REPORT,
+    );
+    state
+        .captures
+        .set_baseline_alias(Some(manifest.baseline.alias.clone()));
+    state.captures.attach_experiment(
+        experiment_reader,
+        experiment_multinode.or(experiment_systeminfo),
+        experiment_file_meta,
+        Some(manifest.experiment.alias.clone()),
+    );
+    *state.category_name.write() = manifest.category.clone();
+    *state.combined_ab_marker.write() = Some(manifest);
+
+    // Keep the extracted tempdir alive — both per-side parquet paths
+    // reference it. CLI does the same in `init_file_mode_combined_ab`.
+    std::mem::forget(extracted);
+
+    regenerate_dashboards(state);
+
+    let _ = std::fs::remove_file(&tar_path);
+    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
 }
 
 /// Shared baseline-ingest path used by upload and load_url. Takes
