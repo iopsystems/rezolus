@@ -396,7 +396,7 @@ where
                         });
                     }
                     Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
-                        debug!(
+                        warn!(
                             "{} program '{}' not attached (no kernel support): {}",
                             self.name, prog_name, e
                         );
