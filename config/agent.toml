@@ -119,8 +119,11 @@ enabled = true
 # capability. Disabled automatically on hosts without ROCm or AMD GPUs. Note:
 # on RDNA GPUs some counters only read non-zero when the GPU is in a stable
 # power state (see docs/amd_gpu_counters.md); this sampler does not change the
-# power state.
+# power state. When the PMU is enabled, AMD HSA runtime system creates one background thread that
+# keeps busy polling, that could push the Rezolus CPU utilization to 100% on one core.
+# This high CPU utilization might cause problem for some applications, so we disable this sampler by default.
 [samplers.gpu_amd_pmu]
+enabled = false
 
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
