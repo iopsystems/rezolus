@@ -4,11 +4,12 @@
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
 import { CgroupSelector } from './features/cgroup_selector.js';
+import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -62,6 +63,8 @@ let fileMetadata = null;
 let nodeList = [];
 let nodeVersions = {};
 let selectedNode = null;
+let gpuList = [];          // GPU ids present in the recording (e.g. [0, 1])
+let selectedGpus = [];     // selected GPU ids filtering the GPU section, [] = all
 let serviceInstances = {};
 let selectedInstances = {};
 let activeCgroupPattern = null;
@@ -302,6 +305,13 @@ const loadSection = async (section) => {
     const data = await ViewerApi.getSection(section);
     if (!data) return null;
 
+    // Pick up the GPU id list from the GPU view's metadata so the GPU selector
+    // dropdown can be populated.
+    const gpuSel = data.metadata?.gpu_selector;
+    if (gpuSel?.enabled && Array.isArray(gpuSel.ids)) {
+        gpuList = gpuSel.ids.slice();
+    }
+
     const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
     return cacheSectionResponse(section, processedData);
 };
@@ -350,6 +360,20 @@ const changeNode = async (nodeName) => {
     if (!onServiceRoute) {
         await reloadCurrentSection();
     }
+};
+
+const changeGpu = async (gpuIds) => {
+    selectedGpus = Array.isArray(gpuIds) ? gpuIds.slice() : [];
+    setSelectedGpus(selectedGpus);
+    // Only the GPU section's charts depend on this; drop its cached data and
+    // reload so the queries re-run with the id filter applied.
+    clearNonServiceResponses(sectionCacheState);
+    for (const route of Array.from(heatmapDataCache.keys())) {
+        if (route === '/gpu') heatmapDataCache.delete(route);
+    }
+    chartsState.clear();
+    m.redraw();
+    await reloadCurrentSection();
 };
 
 const changeInstance = async (serviceName, instanceId) => {
@@ -438,6 +462,10 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     selectedNode,
     nodeVersions,
     onNodeChange: changeNode,
+    gpuList,
+    selectedGpus,
+    gpuSelectorActive: (m.route.get() || '').startsWith('/gpu'),
+    onGpuChange: changeGpu,
     extra: {
         // Default compare state so TopNav renders the badge in every
         // code path (Main.view, single-chart route, service route).
@@ -627,6 +655,18 @@ const SectionContent = {
                     }, heatmapLoading ? 'LOADING...' : (heatmapEnabled ? 'SHOW PERCENTILES' : 'SHOW HEATMAPS')),
                 ]),
             ]),
+            // GPU section: a two-panel selector (matching the cgroups UI) that
+            // filters the non-per-GPU charts to a subset of GPU ids. Shown only
+            // when the recording has more than one GPU. Per-GPU charts (queries
+            // grouped `by (id)`) always show all GPUs.
+            sectionRoute === '/gpu' && gpuList.length > 1 && m(GpuSelector, {
+                ids: gpuList,
+                selected: selectedGpus,
+                onChange: changeGpu,
+                // GPU details (name/model, memory) from System Info, keyed by id,
+                // so each entry shows the device model alongside its id.
+                gpus: systemInfoData?.gpus || [],
+            }),
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
             ),

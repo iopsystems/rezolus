@@ -6,17 +6,23 @@
 //!
 //! ## Reading model
 //!
-//! The device counting context is started **once** at init and runs
-//! continuously; the hardware counters then accumulate from that point. Each
-//! `rocprofiler_sample_device_counting_service` call returns the running
-//! cumulative total (the values reset only on `stop_context`, which we do only
-//! at shutdown). So `refresh()` simply reads the current totals on demand — no
-//! background thread, no blocking window — and publishes them as monotonic
-//! counters that the viewer turns into rates.
+//! The RDNA per-WGP hardware counters are **32-bit and saturate** (clamp, not
+//! wrap) within ~34-275ms of busy time, so they cannot be read as a running
+//! cumulative total — a continuously-running context would pin them at their
+//! ceiling. Instead, a per-GPU background worker thread brackets each short
+//! window with `start_context` (which resets the counters to 0) ... sleep ...
+//! `sample` ... `stop_context`, and accumulates each window's delta into a
+//! running total. This keeps every per-window read well under the 2^32 ceiling
+//! while still presenting monotonic counters that the viewer turns into rates.
 //!
-//! rocprofiler rejects overlapping reads on a context with `CONTEXT_ERROR`, and
-//! `refresh()` runs concurrently with other samplers, so reads are serialized
-//! by the `STATE` mutex inside [`rocprofiler`].
+//! Bracketing every window with start/stop is only cheap (~150us instead of
+//! ~18ms) because we set `ROCPROFILER_DEVICE_LOCK_AT_START=1`, which acquires
+//! the KFD device-profiling lock once at config time rather than per start.
+//!
+//! rocprofiler is a single per-process tool, so the worker threads' start/
+//! sample/stop calls are serialized by the `STATE` mutex inside [`rocprofiler`];
+//! the per-window sleep is done without the lock. `refresh()` just reads the
+//! accumulated totals (no GPU I/O).
 //!
 //! ## Power state
 //!
@@ -43,19 +49,29 @@ use std::sync::Arc;
 /// The single-pass counter set we collect. These fit the RDNA per-block slot
 /// budget (SQ ≤ 8, GL2C ≤ 4, etc.). Each maps to a metric in `pmu_stats`.
 const COUNTERS: &[&str] = &[
+    // GRBM (2): GPU busy
     "GRBM_COUNT",
-    "SQ_WAVES_sum",
+    "GRBM_GUI_ACTIVE",
+    // SQ (6): waves, busy/wave cycles, VALU/SALU/LDS instruction mix.
+    // SQ_WAVE_CYCLES is a per-WGP 32-bit accumulator that saturates within
+    // ~34-275ms of busy time; the worker thread brackets each window with
+    // start/stop (which resets the counters) so it stays unsaturated. See
+    // docs/amd_gpu_pmu_events.md and `rocprofiler.rs`.
+    "SQ_WAVES",
     "SQ_BUSY_CYCLES",
+    "SQ_WAVE_CYCLES",
     "SQ_INSTS_VALU",
-    "SQ_INST_CYCLES_VALU",
+    "SQ_INSTS_SALU",
+    "SQ_INSTS_LDS",
+    // SQC (2): instruction cache. SQ and SQC share an 8-counter register pool on
+    // RDNA4 (validated on gfx1201); SQ(6) + SQC(2) = 8 is at the ceiling.
     "SQC_ICACHE_REQ",
     "SQC_ICACHE_HITS",
-    "TCP_REQ",
-    "TCP_REQ_MISS",
-    "GL2C_EA_RDREQ_sum",
-    "GL2C_EA_WRREQ_sum",
-    "GL2C_HIT_sum",
-    "GL2C_MISS_sum",
+    // GL2C (4): L2 cache + memory bandwidth
+    "GL2C_EA_RDREQ",
+    "GL2C_EA_WRREQ",
+    "GL2C_HIT",
+    "GL2C_MISS",
 ];
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -63,10 +79,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // Loading the libraries, registering, and HSA init (which builds the
-    // per-agent device-counting contexts and counter configs, and starts each
-    // context) all happen here. rocprofiler is a single per-process tool; the
-    // state lives in a global it owns (see `rocprofiler.rs`).
+    // Loading the libraries, registering, HSA init (which builds the per-agent
+    // device-counting contexts and counter configs), and spawning the per-GPU
+    // worker threads all happen here. rocprofiler is a single per-process tool;
+    // the state lives in a global it owns (see `rocprofiler.rs`).
     let rocp = match Rocprofiler::new(COUNTERS) {
         Ok(Some(r)) => r,
         Ok(None) => {
@@ -98,9 +114,9 @@ impl Sampler for AmdPmu {
     }
 
     async fn refresh(&self) {
-        // Read the current cumulative counter totals for each GPU on demand.
-        // Reads are cheap (no blocking window) and serialized inside the
-        // rocprofiler layer.
+        // Read the running counter totals for each GPU. The totals are maintained
+        // by per-GPU background worker threads (which bracket each window with
+        // start/stop); this is just a cheap in-memory read, no GPU I/O.
         for idx in 0..self.rocp.num_agents() {
             match self.rocp.sample(idx) {
                 Ok(sums) => publish(idx, &sums),
@@ -110,12 +126,11 @@ impl Sampler for AmdPmu {
     }
 }
 
-/// Publish the cumulative device-level counter totals for GPU `id` into the
-/// metrics. Each sampled value is the running total since the context started,
-/// but `CounterGroup` only exposes `add`, so we advance the stored counter by
-/// the delta from its current value. This keeps it monotonic and converged to
-/// the absolute total while tolerating the rare case where a re-read returns a
-/// slightly lower value (treated as no change).
+/// Publish the running device-level counter totals for GPU `id` into the
+/// metrics. Each value is a monotonic running total (the sum of per-window
+/// deltas accumulated by the worker thread), but `CounterGroup` only exposes
+/// `add`, so we advance the stored counter by the delta from its current value.
+/// This keeps it monotonic and converged to the total.
 fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
     let advance = |name: &str, metric: &metriken::CounterGroup| {
         if let Some(&v) = sums.get(name) {
@@ -130,16 +145,17 @@ fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
     };
 
     advance("GRBM_COUNT", &GPU_GRBM_COUNT);
-    advance("SQ_WAVES_sum", &GPU_SQ_WAVES);
+    advance("GRBM_GUI_ACTIVE", &GPU_GRBM_GUI_ACTIVE);
+    advance("SQ_WAVES", &GPU_SQ_WAVES);
     advance("SQ_BUSY_CYCLES", &GPU_SQ_BUSY_CYCLES);
+    advance("SQ_WAVE_CYCLES", &GPU_SQ_WAVE_CYCLES);
     advance("SQ_INSTS_VALU", &GPU_SQ_INSTS_VALU);
-    advance("SQ_INST_CYCLES_VALU", &GPU_SQ_INST_CYCLES_VALU);
+    advance("SQ_INSTS_SALU", &GPU_SQ_INSTS_SALU);
+    advance("SQ_INSTS_LDS", &GPU_SQ_INSTS_LDS);
     advance("SQC_ICACHE_REQ", &GPU_SQC_ICACHE_REQ);
     advance("SQC_ICACHE_HITS", &GPU_SQC_ICACHE_HITS);
-    advance("TCP_REQ", &GPU_TCP_REQ);
-    advance("TCP_REQ_MISS", &GPU_TCP_REQ_MISS);
-    advance("GL2C_EA_RDREQ_sum", &GPU_GL2C_EA_RDREQ);
-    advance("GL2C_EA_WRREQ_sum", &GPU_GL2C_EA_WRREQ);
-    advance("GL2C_HIT_sum", &GPU_GL2C_HIT);
-    advance("GL2C_MISS_sum", &GPU_GL2C_MISS);
+    advance("GL2C_EA_RDREQ", &GPU_GL2C_EA_RDREQ);
+    advance("GL2C_EA_WRREQ", &GPU_GL2C_EA_WRREQ);
+    advance("GL2C_HIT", &GPU_GL2C_HIT);
+    advance("GL2C_MISS", &GPU_GL2C_MISS);
 }

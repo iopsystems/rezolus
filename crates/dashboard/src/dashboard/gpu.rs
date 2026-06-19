@@ -1,25 +1,51 @@
 use crate::MetricsSource;
 use crate::plot::*;
 
+/// The metrics we probe for GPU presence / id enumeration.
+const GPU_PROBE_METRICS: &[&str] = &[
+    "gpu_utilization",
+    "gpu_memory",
+    "gpu_temperature",
+    "gpu_power_usage",
+    "gpu_clock",
+    "gpu_memory_utilization",
+    "gpmu_clock",
+];
+
 /// True iff the recording has more than one GPU. Per-device charts are
 /// suppressed when this is false because they degenerate to the aggregate.
 fn has_multiple_gpus(data: &dyn MetricsSource) -> bool {
-    [
-        "gpu_utilization",
-        "gpu_memory",
-        "gpu_temperature",
-        "gpu_power_usage",
-        "gpu_clock",
-        "gpu_memory_utilization",
-        "gpu_dram_bandwidth_utilization",
-    ]
-    .iter()
-    .any(|m| metric_unique_label_count(data, m, "id") > 1)
+    GPU_PROBE_METRICS
+        .iter()
+        .any(|m| metric_unique_label_count(data, m, "id") > 1)
+}
+
+/// The distinct GPU `id` values present in the recording, sorted numerically.
+fn gpu_ids(data: &dyn MetricsSource) -> Vec<i64> {
+    let mut ids: Vec<i64> = GPU_PROBE_METRICS
+        .iter()
+        .flat_map(|m| data.label_values(m, "id"))
+        .filter_map(|v| v.parse::<i64>().ok())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_gpu = has_multiple_gpus(data);
+
+    // Tell the frontend which GPU ids exist so it can render the GPU selector
+    // (a dropdown to view the non-per-GPU charts for a single GPU or the
+    // aggregate). Only meaningful with more than one GPU.
+    let ids = gpu_ids(data);
+    if ids.len() > 1 {
+        view.metadata.insert(
+            "gpu_selector".to_string(),
+            serde_json::json!({ "enabled": true, "ids": ids }),
+        );
+    }
 
     let mut utilization = Group::new("Utilization", "utilization");
 
@@ -32,7 +58,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         gpu.plot_promql(
             PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage)
-                .percentage_range(),
+                .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_utilization) / 100".to_string(),
         );
     } else {
@@ -56,7 +82,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "mem-ctrl-pct-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range(),
+            .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_memory_utilization) / 100".to_string(),
         );
     } else {
@@ -85,7 +111,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-tensor-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range(),
+            .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
         );
     } else {
@@ -109,7 +135,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-sm-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range(),
+            .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_sm_utilization) / 100".to_string(),
         );
         sm.plot_promql(
@@ -123,7 +149,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-sm-ocp-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range(),
+            .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
         );
     } else {
@@ -162,11 +188,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let per_device = memory.subgroup("Per-Device Capacity");
         per_device.describe("Memory used and free broken out by GPU id.");
         per_device.plot_promql(
-            PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes),
+            PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes).with_row_label("GPU"),
             "sum by (id) (gpu_memory{state=\"used\"})".to_string(),
         );
         per_device.plot_promql(
-            PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes),
+            PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes).with_row_label("GPU"),
             "sum by (id) (gpu_memory{state=\"free\"})".to_string(),
         );
     }
@@ -189,7 +215,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-dram-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range(),
+            .percentage_range().with_row_label("GPU"),
             "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
         );
     } else {
@@ -262,7 +288,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         draw.plot_promql(
             PlotOpts::gauge("Power (Per-GPU)", "power-watts-per-gpu", Unit::Count)
-                .with_axis_label("Watts"),
+                .with_axis_label("Watts").with_row_label("GPU"),
             "sum by (id) (gpu_power_usage) / 1000".to_string(),
         );
     } else {
@@ -285,11 +311,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     let temps = thermal.subgroup("Temperatures");
     temps.describe("Per-device temperatures and the hottest GPU across the system.");
+    // AMD reports multiple temperature sensors per GPU (edge/junction/memory).
+    // Use max (not sum) when aggregating so each value is the hottest sensor
+    // reading rather than a meaningless sum across sensors. The "Max" chart is
+    // the single hottest sensor across all (selected) GPUs.
     if multi_gpu {
         temps.plot_promql(
             PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count)
-                .with_axis_label("°C"),
-            "sum by (id) (gpu_temperature)".to_string(),
+                .with_axis_label("°C").with_row_label("GPU"),
+            "max by (id) (gpu_temperature)".to_string(),
         );
         temps.plot_promql(
             PlotOpts::gauge("Max (°C)", "temp-max", Unit::Count).with_axis_label("°C"),
@@ -327,5 +357,169 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view.group(clocks);
 
+    amd_pmu(&mut view);
+
     view
+}
+
+/// AMD GPU hardware performance counters (the `gpu_amd_pmu` sampler) and the
+/// metrics derived from them. These raw counters are monotonic, so rates are
+/// taken with `rate()`. Only populated on AMD hosts; the charts are empty
+/// otherwise. See `docs/amd_gpu_pmu_events.md`.
+fn amd_pmu(view: &mut View) {
+    let mut pmu = Group::new("AMD GPU Performance Counters", "amd-pmu");
+
+    // ----- GPU busy / compute -----
+    let busy = pmu.subgroup("Compute Activity");
+    busy.describe(
+        "GPU busy fraction and vector-ALU throughput, derived from GRBM and SQ hardware counters.",
+    );
+    // Average number of WGPs actively executing waves = rate(SQ_BUSY_CYCLES) /
+    // rate(GRBM_COUNT). SQ_BUSY_CYCLES is summed per-WGP, so dividing by total
+    // clocks gives the mean count of busy WGPs.
+    busy.plot_promql(
+        PlotOpts::gauge("Active Workgroup Processors", "amd-active-wgp", Unit::Count)
+            .with_axis_label("WGPs"),
+        "sum(rate(gpmu_busy_cycles[5m])) / sum(rate(gpmu_clock[5m]))".to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::counter("VALU Instructions/s", "amd-valu-rate", Unit::Count)
+            .with_axis_label("instr/s"),
+        "sum(rate(gpmu_valu_instructions[5m]))".to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::counter("SALU Instructions/s", "amd-salu-rate", Unit::Count)
+            .with_axis_label("instr/s"),
+        "sum(rate(gpmu_salu_instructions[5m]))".to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::counter("LDS Instructions/s", "amd-lds-rate", Unit::Count)
+            .with_axis_label("instr/s"),
+        "sum(rate(gpmu_lds_instructions[5m]))".to_string(),
+    );
+    // Estimated total instructions/s = VALU + SALU + LDS issue rates.
+    busy.plot_promql(
+        PlotOpts::counter(
+            "Estimated Total Instructions (VALU + LDS + SALU)",
+            "amd-total-insts",
+            Unit::Count,
+        )
+        .with_axis_label("instr/s"),
+        "sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
+         + sum(rate(gpmu_lds_instructions[5m]))"
+            .to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::counter("Total Busy Cycles/s", "amd-total-busy-cycles", Unit::Count)
+            .with_axis_label("cycles/s"),
+        "sum(rate(gpmu_busy_cycles[5m]))".to_string(),
+    );
+    // Estimated IPC = estimated total instructions / total busy cycles.
+    busy.plot_promql(
+        PlotOpts::gauge(
+            "Estimated IPC (Estimated Total Instructions / Total Busy Cycles)",
+            "amd-est-ipc",
+            Unit::Count,
+        )
+        .with_axis_label("instr/cycle"),
+        "(sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
+         + sum(rate(gpmu_lds_instructions[5m]))) / sum(rate(gpmu_busy_cycles[5m]))"
+            .to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::counter("Waves/s", "amd-waves-rate", Unit::Count).with_axis_label("waves/s"),
+        "sum(rate(gpmu_waves[5m]))".to_string(),
+    );
+    // Estimated instructions per wave = estimated total instructions / waves.
+    busy.plot_promql(
+        PlotOpts::gauge(
+            "Estimated Instructions Per Wave (Estimated Total Instructions / Waves)",
+            "amd-insts-per-wave",
+            Unit::Count,
+        )
+        .with_axis_label("instr/wave"),
+        "(sum(rate(gpmu_valu_instructions[5m])) + sum(rate(gpmu_salu_instructions[5m])) \
+         + sum(rate(gpmu_lds_instructions[5m]))) / sum(rate(gpmu_waves[5m]))"
+            .to_string(),
+    );
+    busy.plot_promql(
+        PlotOpts::gauge("Cycles Per Wave", "amd-cycles-per-wave", Unit::Count)
+            .with_axis_label("cycles/wave"),
+        "sum(rate(gpmu_busy_cycles[5m])) / sum(rate(gpmu_waves[5m]))".to_string(),
+    );
+    // Average resident waves per active WGP cycle = rate(SQ_WAVE_CYCLES) /
+    // rate(SQ_BUSY_CYCLES). Both are per-WGP wave-cycle counters, so the ratio
+    // is the mean number of waves in flight while a WGP is busy. Computed from
+    // rates (not cumulative totals) so it stays correct as long as the
+    // per-interval delta doesn't saturate the per-WGP 32-bit accumulator.
+    busy.plot_promql(
+        PlotOpts::gauge(
+            "Average Waves Per Workgroup Processors",
+            "amd-waves-per-wgp",
+            Unit::Count,
+        )
+        .with_axis_label("waves/active cycle"),
+        "sum(rate(gpmu_wave_cycles[5m])) / sum(rate(gpmu_busy_cycles[5m]))".to_string(),
+    );
+    // Average resident waves per GPU = rate(SQ_WAVE_CYCLES) /
+    // rate(GRBM_GUI_ACTIVE). Normalizes wave-cycles by GPU-active cycles instead
+    // of WGP-busy cycles, giving the mean waves in flight across the whole GPU.
+    busy.plot_promql(
+        PlotOpts::gauge("Average Waves Per GPU", "amd-waves-per-gpu", Unit::Count)
+            .with_axis_label("waves/active cycle"),
+        "sum(rate(gpmu_wave_cycles[5m])) / sum(rate(gpmu_active_clock[5m]))".to_string(),
+    );
+
+    // ----- Caches -----
+    let caches = pmu.subgroup("Caches");
+    caches.describe(
+        "Instruction-cache and L2 cache hit rates, derived from SQC and GL2C hardware counters.",
+    );
+    caches.plot_promql(
+        PlotOpts::gauge("Instruction Cache Hit %", "amd-icache-hit", Unit::Percentage)
+            .percentage_range(),
+        "sum(rate(gpmu_icache_hits[5m])) / sum(rate(gpmu_icache_requests[5m]))".to_string(),
+    );
+    caches.plot_promql(
+        PlotOpts::gauge("L2 Cache Hit %", "amd-l2-hit", Unit::Percentage).percentage_range(),
+        "sum(rate(gpmu_l2_hits[5m])) / (sum(rate(gpmu_l2_hits[5m])) + sum(rate(gpmu_l2_misses[5m])))"
+            .to_string(),
+    );
+
+    // ----- Memory bandwidth -----
+    // GL2C<->VRAM requests, weighted by transaction size. RDNA reads are
+    // predominantly 128-byte, writes predominantly 64-byte cache-line bursts.
+    let bw = pmu.subgroup("Memory Bandwidth");
+    bw.describe(
+        "L2<->VRAM bandwidth, derived from GL2C read/write request counters \
+         (reads weighted 128B, writes 64B).",
+    );
+    bw.plot_promql(
+        PlotOpts::counter(
+            "Estimated Read Bandwidth (VRAM Read Requests x 128B)",
+            "amd-mem-read-bw",
+            Unit::Datarate,
+        ),
+        "sum(rate(gpmu_vram_read_requests[5m])) * 128".to_string(),
+    );
+    bw.plot_promql(
+        PlotOpts::counter(
+            "Estimated Write Bandwidth (VRAM Write Requests x 64B)",
+            "amd-mem-write-bw",
+            Unit::Datarate,
+        ),
+        "sum(rate(gpmu_vram_write_requests[5m])) * 64".to_string(),
+    );
+    bw.plot_promql(
+        PlotOpts::counter("VRAM Read Requests", "amd-vram-read-req", Unit::Count)
+            .with_axis_label("requests/s"),
+        "sum(rate(gpmu_vram_read_requests[5m]))".to_string(),
+    );
+    bw.plot_promql(
+        PlotOpts::counter("VRAM Write Requests", "amd-vram-write-req", Unit::Count)
+            .with_axis_label("requests/s"),
+        "sum(rate(gpmu_vram_write_requests[5m]))".to_string(),
+    );
+
+    view.group(pmu);
 }

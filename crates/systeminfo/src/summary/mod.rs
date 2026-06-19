@@ -109,6 +109,8 @@ pub struct NicSummary {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GpuSummary {
+    /// Device index, matching the `id` label on GPU metrics.
+    pub index: usize,
     /// Device name (e.g., "NVIDIA A100", "Apple M2 Max")
     pub name: Option<String>,
     /// Vendor identifier (e.g., "nvidia", "apple")

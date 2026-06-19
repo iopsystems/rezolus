@@ -1,15 +1,150 @@
+# AMD GPU telemetry in Rezolus: SMI and PMU samplers
+
+Rezolus collects AMD GPU telemetry through **two complementary samplers**, both
+under `src/agent/samplers/gpu/linux/amd/`:
+
+| Sampler | Name | Source | What it measures |
+|---|---|---|---|
+| **SMI** | `gpu_amd_smi` | ROCm SMI library (`librocm_smi64.so`) | Board-level telemetry: power, temperature, clocks, VRAM, fan, SMI-level utilization. Metric prefix `gpu_*`. |
+| **PMU** | `gpu_amd_pmu` | rocprofiler-sdk device counting service | Hardware performance counters: clocks, waves, instruction mix, caches, memory traffic. Metric prefix `gpmu_*`. |
+
+They answer different questions — *"is the board healthy / how hot / how much
+power"* (SMI) vs *"what is the shader array actually doing"* (PMU) — and are kept
+separate because they have very different cost, privilege, and reliability
+profiles. Both load their vendor library at runtime via `dlopen`, so the agent
+still **compiles and runs on hosts without ROCm or an AMD GPU** (each sampler
+returns `Ok(None)` at init and reports as disabled, not failed).
+
+---
+
+## Design summary
+
+### Why two samplers, not one
+
+The SMI library and the rocprofiler-sdk are entirely different stacks with
+different constraints:
+
+- **SMI is cheap, safe, and always-on.** `librocm_smi64.so` reads sysfs/ioctl
+  board sensors. No special privilege beyond device access, no GPU lock, no
+  workload interference, and the values are always valid regardless of GPU
+  power state. This is the baseline GPU telemetry every fleet host should have.
+- **PMU is powerful but expensive and fragile.** Reading hardware performance
+  counters requires `CAP_PERFMON`, takes an **exclusive per-GPU device
+  profiling lock**, and on RDNA only reads correct values under a pinned power
+  state. It is opt-in and intended for hosts where deeper GPU profiling is
+  worth the cost.
+
+Folding both into one sampler would force the cheap, always-safe SMI metrics to
+inherit the PMU's privilege and reliability constraints. Keeping them separate
+lets an operator run SMI everywhere and enable PMU only where wanted.
+
+### The SMI sampler (`gpu_amd_smi`)
+
+- Loads `librocm_smi64.so` via `dlopen`, calls `rsmi_init(0)`, enumerates
+  devices with `rsmi_num_monitor_devices`, and reads each board sensor.
+- `refresh()` is a **direct synchronous read** of the current sensor values into
+  gauge metrics keyed by GPU `id` — no background thread, no GPU lock, no
+  windowing. Sensors are point-in-time gauges (temperature, power, clocks,
+  VRAM), so reading "now" is exactly the right semantics.
+- AMD exposes **multiple temperature sensors per GPU** (`edge`, `junction`,
+  `memory`), each a separate series with a `sensor` label sharing the same `id`.
+  Dashboards must aggregate with `max`, not `sum`, or they double/triple-count.
+- The metric **names overlap with the NVIDIA sampler** (`gpu_utilization`,
+  `gpu_memory`, `gpu_clock`, `gpu_temperature`, `gpu_power_usage`, ...) by
+  design — a vendor-neutral schema. The `vendor` label (`"amd"` / `"nvidia"`)
+  distinguishes them.
+
+### The PMU sampler (`gpu_amd_pmu`)
+
+The PMU sampler is the focus of the rest of this document. Its design is shaped
+by three hard facts about AMD device-level counters (each explained in detail
+below):
+
+1. **The hardware per-WGP counter registers are 32-bit and *saturate*** (clamp,
+   not wrap) within ~34–275 ms of busy time — far shorter than a normal sample
+   interval.
+2. **The only way to reset/window a counter is `start_context` → `stop_context`**
+   (the AQL start packet resets the registers); there is no read-and-reset and
+   no in-API window parameter.
+3. **By default each `start_context`/`stop_context` takes a ~18 ms KFD device-lock
+   ioctl**, but setting `ROCPROFILER_DEVICE_LOCK_AT_START=1` acquires the lock
+   once at config time, dropping per-cycle start/stop to **~150 µs**.
+
+Given those, the sampler uses a **per-GPU background worker thread that brackets
+each short window** (`rocprofiler.rs`):
+
+```
+# once at init: load libs, force-configure, hsa_init, build per-agent
+# device-counting context + single-pass counter config.
+# Set ROCPROFILER_DEVICE_LOCK_AT_START=1 BEFORE any rocprofiler/HSA init.
+
+# per GPU, a worker thread loops forever:
+start_context(ctx)          # resets the per-WGP counters to 0 (~38 us)
+sleep(WINDOW = 40 ms)       # counters accumulate; lock NOT held during sleep
+sample_device_counting()    # read this window's per-WGP deltas (~0.4 ms)
+stop_context(ctx)           # freeze
+accumulate the per-window delta into a shared running total
+
+# refresh() just reads the shared running total — a cheap in-memory read,
+# no GPU I/O. The totals are monotonic, so the viewer turns them into rates
+# with rate() exactly like any other Rezolus counter.
+```
+
+Why this shape:
+
+- **Bracketing each window resets the 32-bit registers**, so each per-window
+  delta stays far below the saturation ceiling. Summing those deltas into a
+  64-bit accumulator gives a monotonic counter that takes **~7 months** of full
+  load to overflow (and `rate()` handles even that).
+- **The worker sleeps (does not busy-wait) during the window**, so it costs
+  ~1 % CPU. The ~150 µs of start/stop/read work per 40 ms iteration is
+  negligible because of the device-lock-at-start flag.
+- **`refresh()` does no GPU work** — it reads the in-memory accumulator under a
+  mutex. The expensive GPU interaction is fully decoupled from the agent's
+  sampling cadence.
+- **rocprofiler is a single per-process tool**, so all worker threads serialize
+  their start/sample/stop calls through one global `STATE` mutex; only the
+  per-window sleep runs lock-free.
+
+This replaced an earlier "start the context once and read the cumulative total
+on demand" model. That model was simpler but **fundamentally broken**: a
+continuously-running context never resets the 32-bit registers, so they pin at
+their ceiling within the first second of uptime and read a flat value forever.
+The windowed-worker model is what AMD's own `device_counting_sync_client.cpp`
+sample does, for the same reason.
+
+### Cost, privilege, and reliability notes that drive the design
+
+- **Exclusive device lock.** Only one profiler can hold a GPU's profiling lock.
+  If a second profiler (another `amd-pmc-watch`, `rocprofv3`, or a vLLM with
+  profiling active) is running, it gets locked out and reads zeros. So the
+  agent must be the only profiler on its GPUs.
+- **`CAP_PERFMON`**, not full root (see "Privileges").
+- **Stable power state.** On RDNA many SQ counters read 0 (or free-run with
+  garbage) unless the GPU is pinned to a stable power level
+  (`amd-smi set -g N -l stable_std`). The sampler does **not** change the power
+  state by default — pinning clamps the clock (~1.6–1.85 GHz) and perturbs real
+  workloads — so those counters only read correctly when an operator opts into
+  the stable state. Clock/GRBM/SQ_WAVES/SQ_BUSY/GL2C counters work regardless.
+- **An HSA runtime thread.** `hsa_init()` (required to arm rocprofiler, see
+  below) spawns an HSA background thread that busy-polls a signal at ~100 % of
+  one core. This is inherent to bringing up HSA at all — it appears identically
+  in the bare `amd-pmc-watch` tool — and is the dominant CPU cost of enabling
+  the PMU sampler, independent of our read model.
+
+---
+
 # Reading AMD GPU device counters without the HIP runtime
 
-This note explains how Rezolus can read **device-wide AMD GPU hardware
+This note explains how Rezolus reads **device-wide AMD GPU hardware
 performance counters** (the PMCs that `rocprofv3` programs) from the agent
 process **without initializing the HIP runtime** and without instrumenting the
-GPU workload. It is the design basis for the planned PMC layer of the
-`gpu_amd_smi` sampler (`src/agent/samplers/gpu/linux/amd/`).
+GPU workload. It is the design basis for the `gpu_amd_pmu` sampler
+(`src/agent/samplers/gpu/linux/amd/pmu/`).
 
 The telemetry layer (power, temperature, clocks, VRAM, SMI-level utilization)
-is a separate concern handled by `rocm_smi.rs` and described in
-[`gpu_amd_smi.md`](gpu_amd_smi.md); this note is only about the hardware counter
-layer.
+is a separate concern handled by `rocm_smi.rs` / the `gpu_amd_smi` sampler and
+summarized above; this note is only about the hardware counter layer.
 
 ## The right primitive: rocprofiler-sdk device counting service
 
@@ -32,23 +167,257 @@ Properties that make it the correct fit:
   HIP/HSA runtime. The agent samples the device; the workload runs untouched
   in other processes.
 
-### Core sampling loop
+### Core lifecycle
+
+The context and counter config are built **once per agent**, then a per-GPU
+worker thread **brackets each window** with start/stop (because the counters
+saturate and must be read as per-window deltas — see "How the AMD device PMU
+counters work"):
 
 ```
+# setup (per agent), once
 create_context
-create_buffer
-configure_device_counting_service(... set_profile callback ...)
-create_counter_config(agent, counter_ids, n, &profile)   // resolve names -> ids
-loop every interval:
-    start_context
-    (wait the sample window)
-    rocprofiler_sample_device_counting_service(ctx, ..., out, &out_size)
-    stop_context
+create_buffer  +  create/assign callback thread
+configure_device_counting_service(... config-selection callback ...)
+create_counter_config(agent, counter_ids, n, &config)   // resolve names -> ids
+# (ROCPROFILER_DEVICE_LOCK_AT_START=1 set before init makes start/stop cheap)
+
+# per-GPU worker thread, looping:
+start_context                       // AQL start: reset counters to 0, begin counting
+sleep(WINDOW = 40 ms)               // lock NOT held during the sleep
+sample_device_counting_service(...) // read this window's per-instance values
+stop_context                        // freeze
+sum the per-instance records -> per-counter delta; add into a running total
+
+# each refresh() (on demand): read the in-memory running total — no GPU I/O
+
+# shutdown
+join workers  +  hsa_shut_down
 ```
 
-Counter names are resolved to IDs per agent via
-`rocprofiler_iterate_agent_supported_counters` +
-`rocprofiler_query_counter_info`.
+The implementation lives in
+`src/agent/samplers/gpu/linux/amd/pmu/rocprofiler.rs`. The next two sections
+walk through how counter events are configured and how reads work.
+
+## How the AMD device PMU counters work
+
+Understanding the read model requires understanding the hardware. The following
+applies to RDNA (gfx10/11/12); CDNA differs in block names and some widths.
+
+### Counters live in hardware blocks, replicated per instance
+
+GPU performance counters are physical registers inside named hardware **blocks**:
+
+| Block | What it covers | Counters Rezolus uses |
+|---|---|---|
+| **GRBM** | Graphics register bus manager — global front-end clocks | `GRBM_COUNT`, `GRBM_GUI_ACTIVE` |
+| **SQ** | Sequencer — wavefronts, instruction issue (VALU/SALU/LDS), busy/wave cycles | `SQ_WAVES`, `SQ_BUSY_CYCLES`, `SQ_WAVE_CYCLES`, `SQ_INSTS_VALU/SALU/LDS` |
+| **SQC** | Sequencer cache — instruction (and scalar) cache | `SQC_ICACHE_REQ`, `SQC_ICACHE_HITS` |
+| **GL2C** | Graphics L2 cache slices — L2 hits/misses and L2↔VRAM traffic | `GL2C_HIT`, `GL2C_MISS`, `GL2C_EA_RDREQ`, `GL2C_EA_WRREQ` |
+| **TA / TCP** | Texture addresser / L0 cache (not currently used) | — |
+
+Each block is **physically replicated** across the GPU. An SQ counter is not one
+register — it exists per **WGP** (Workgroup Processor, the RDNA compute-unit
+pair), per **Shader Array (SA)**, per **Shader Engine (SE)**. On the gfx1201 test
+part that is 4 SE × 2 SA × 4 WGP = **32 SQ instances**. GL2C is replicated per L2
+slice (32 instances on the same part). So a single counter read returns **one
+record per hardware instance**, each tagged with its `(SE, SA, WGP)` dimension
+coordinates.
+
+**Rezolus sums the per-instance records into one device-wide value per counter.**
+(The dimension coordinates are available via
+`rocprofiler_query_record_dimension_position` if per-WGP breakdown is ever
+wanted, but the always-on agent reports the device sum.)
+
+### The registers are narrow and saturate
+
+Each per-instance register is **32-bit** and **clamps at `2^32 − 1`** on
+overflow — it does **not** wrap. There is no overflow flag and no way to recover
+the true count once clamped. This is the single most important fact for the
+design:
+
+- A summed device value therefore tops out at `N × (2^32 − 1)` — e.g. 32 ×
+  (2³²−1) = 137,438,953,440 for the SQ counters. Seeing exactly that value means
+  every instance has saturated.
+- How fast a counter saturates depends on its accumulation rate, which depends
+  on the workload. Measured on gfx1201 under load:
+  - `SQ_WAVE_CYCLES` (sums wave-cycles across 32 WGPs at GPU clock): **~34–275 ms**.
+  - `SQ_BUSY_CYCLES` (plain busy-cycle counter): **~1.8–2.7 s** (≈ `2^32 / clock`).
+  - Plain instruction counters: somewhere in between, workload-dependent.
+
+Because even the slowest of these saturates in seconds — well under a useful
+cumulative sampling horizon — **counters cannot be read as a running total.**
+They must be read as **per-window deltas**, where each window is short enough that
+no instance overflows.
+
+### Resetting a counter requires a start/stop cycle
+
+The only way to zero the registers is the AQL **start packet**, which the SDK
+emits inside `start_context` (the packet literally does *reset counters, then
+begin counting*). The **read packet** (`sample_device_counting_service`) reads
+the current values **without** resetting, and the **stop packet** freezes them.
+There is no read-and-reset call and no window/interval parameter on the sample
+API. So a correct windowed read is:
+
+```
+start_context   # AQL start packet: reset to 0, begin counting
+... wait ...     # the window
+sample           # AQL read packet: snapshot current per-instance values
+stop_context     # AQL stop packet: freeze
+```
+
+This is exactly the loop the worker thread runs. The value delivered for each
+record is a `double` (`rocprofiler_counter_record_t.counter_value`); the integer
+hardware counts fit exactly below 2⁵³, and derived/ratio counters carry genuine
+fractional values.
+
+### Single-pass slot budget
+
+A block has a small fixed number of physical counter slots, and the SDK programs
+**one pass** (it does not time-multiplex). On gfx1201 the **SQ and SQC blocks
+share an 8-slot register pool**, so `SQ(n) + SQC(m)` must be ≤ 8 or
+`rocprofiler_create_counter_config` aborts with "Invalid Register used". GL2C
+has its own budget (~4). This is why Rezolus's SQ/SQC set is exactly at the
+ceiling (6 SQ + 2 SQC = 8) and adding any SQ/SQC counter requires dropping
+another. Other blocks (GRBM, TA, TCP) have separate budgets with headroom.
+
+### Stable power state
+
+On RDNA, many SQ counters only read non-zero when the GPU is pinned to a stable
+power level; at the default `auto` level they read 0 (or free-run with garbage).
+The globally-accumulated counters (GRBM, `SQ_WAVES`, `SQ_BUSY_CYCLES`) and the
+GL2C/SQC counters work regardless. See finding #3 below for details.
+
+## Configuring the counter events
+
+Configuring counters happens in two phases because rocprofiler-sdk imposes
+ordering rules (context/config creation must happen inside the tool
+`initialize` callback; `start_context` must happen after `hsa_init()`).
+
+### Phase 1 — build the context, service, and counter config (`setup_agent`)
+
+```
+create_context(&ctx)                                     # rocprofiler_create_context
+create_buffer(ctx, ..., LOSSLESS, noop_cb, &buf)         # rocprofiler_create_buffer
+create_callback_thread(&th) ; assign_callback_thread(buf, th)
+configure_device_counting_service(ctx, buf, agent,       # rocprofiler_configure_device_counting_service
+                                  device_counting_cb)    #   registers the config-selection callback
+```
+
+At this point the device-counting service is wired to the context, but **no
+specific counters are chosen yet**. Selecting them:
+
+```
+# 1. List every counter the agent supports, as opaque numeric IDs.
+iterate_agent_supported_counters(agent, cb)              # rocprofiler_iterate_agent_supported_counters
+# 2. Resolve each ID to its name to build a name -> id map.
+for each id: query_counter_info(id, V0, &info)           # rocprofiler_query_counter_info  (reads info.name)
+# 3. Pick the IDs for the counters WE want (the COUNTERS list); skip any the
+#    agent does not support; also record id -> name for labeling records later.
+# 4. Bundle the chosen IDs into a single counter config (a.k.a. profile). This
+#    is where the per-block single-pass slot budget is enforced — too many
+#    counters in one block makes this call fail.
+create_counter_config(agent, ids.ptr, ids.len, &config)  # rocprofiler_create_counter_config
+```
+
+rocprofiler identifies counters by **numeric IDs, not names**, so steps 1–2
+exist purely to translate our human-readable `COUNTERS` list (e.g.
+`"SQ_INSTS_VALU"`) into the `rocprofiler_counter_id_t`s that
+`create_counter_config` needs. The resulting `config`
+(`rocprofiler_counter_config_id_t`) is stored per agent.
+
+### Phase 2 — arm the config (`start_context`, after `hsa_init()`)
+
+The config exists but isn't active until the context starts — and rocprofiler
+**asks for the config via a callback** rather than taking it as an argument:
+
+```
+PENDING_CONFIG.set(agent.config.handle)   # thread-local: which config to use
+start_context(ctx)                        # rocprofiler_start_context
+   └─ rocprofiler SYNCHRONOUSLY invokes device_counting_cb on THIS thread:
+          device_counting_cb(ctx, _agent, set_config, _) {
+              handle = PENDING_CONFIG.get()
+              set_config(ctx, config{handle})   # ← hands the config to rocprofiler
+          }
+PENDING_CONFIG.set(0)                     # clear it
+```
+
+This two-callback indirection is the non-obvious part: you don't pass counters
+to `start_context` directly. You register a service callback in Phase 1
+(`configure_device_counting_service`), and rocprofiler calls back into it during
+`start_context` to *fetch* the config you want active. The config is delivered
+to the callback through a **thread-local** (`PENDING_CONFIG`) because the
+callback fires synchronously on the same thread that called `start_context`,
+which avoids a global lock.
+
+Once `start_context` returns, the chosen counters are programmed into the
+hardware counter registers (in every instance of each block) and accumulating.
+
+#### rocprofiler-sdk functions used for configuration
+
+| Step | Function | Purpose |
+| --- | --- | --- |
+| 1 | `rocprofiler_create_context` | Create the collection container |
+| 2 | `rocprofiler_create_buffer` | Output buffer for records |
+| 3 | `rocprofiler_create_callback_thread` / `..._assign_callback_thread` | Buffer callback plumbing |
+| 4 | `rocprofiler_configure_device_counting_service` | Attach the device-wide service + register the config-selection callback |
+| 5 | `rocprofiler_iterate_agent_supported_counters` | List the agent's counters (as IDs) |
+| 6 | `rocprofiler_query_counter_info` | Get each counter's name → build name↔ID map |
+| 7 | `rocprofiler_create_counter_config` | Bundle chosen IDs into a config (enforces the slot budget) |
+| 8 | `rocprofiler_start_context` | Activate; fires the callback that delivers the config via `set_config` |
+
+## Reading the counters
+
+The context started in Phase 2 runs continuously, so the hardware counters
+accumulate from that point. Each read returns the **running cumulative total**
+(values reset only on `stop_context`, which we do only at shutdown). This is why
+there is no background thread and no per-read start/stop window: `refresh()`
+just reads on demand.
+
+```
+sample(idx):                                          # called from refresh(), per GPU
+    lock STATE                                        # serialize: rocprofiler rejects
+                                                       #   overlapping reads (CONTEXT_ERROR)
+    out = buffer[MAX_RECORDS]
+    sample_device_counting_service(ctx, {}, NONE,     # rocprofiler_sample_device_counting_service
+                                   out.ptr, &count)   #   writes one record PER HARDWARE INSTANCE
+    # e.g. 4 SQ counters x 32 WGP instances = 128 records
+    sums = {}
+    for rec in out[..count]:
+        query_record_counter_id(rec.id, &cid)         # rocprofiler_query_record_counter_id
+        name = id_to_name[cid]                        #   which counter is this record?
+        sums[name] += rec.counter_value               # ← SUM across instances
+    return sums                                       # one value per counter (device-level)
+```
+
+Key points:
+
+- **One read, many records.** `sample_device_counting_service` returns one
+  `rocprofiler_counter_record_t` **per (counter × hardware instance)** — e.g.
+  `SQ_INSTS_VALU` comes back as 32 records (one per WGP instance), each with a
+  `counter_value` and dimension info.
+- **Summed to device level.** The sampler sums all instances of a counter into a
+  single number (`sums[name] += rec.counter_value`). The exposed metric (e.g.
+  `gpmu_valu_instructions`) is that single sum, not 32 separate values. The
+  per-instance breakdown (shader engine / shader array / WGP / L2-slice) is
+  carried in the records' dimensions but currently discarded.
+- **Reads are serialized.** Reads run inside `refresh()`, which executes
+  concurrently with other samplers (and possibly overlapping scrapes).
+  rocprofiler rejects overlapping `sample` calls on a context with
+  `CONTEXT_ERROR`, so the read is taken under the `STATE` mutex — which also
+  guards the shared library/agent state.
+- **Cumulative → counter metric.** Because each value is a running total, the
+  sampler publishes it into a monotonic `CounterGroup` (advancing it by the
+  delta from its current value, since `CounterGroup` exposes `add`/`value` but
+  no `set`). The viewer then derives rates.
+
+#### rocprofiler-sdk functions used for reading
+
+| Function | Purpose |
+| --- | --- |
+| `rocprofiler_sample_device_counting_service` | Read all per-instance counter records for the agent |
+| `rocprofiler_query_record_counter_id` | Map a record back to the counter it belongs to |
+| (`rocprofiler_stop_context` at shutdown) | Stop the context started at init |
 
 ## Why HIP is not required (but HSA init is)
 
@@ -154,9 +523,11 @@ To read AMD GPU device counters without HIP:
 2. In the agent process, initialize **only the HSA runtime** (`hsa_init()`) —
    this opens KFD, enumerates GPU agents, and triggers rocprofiler tool
    activation. HIP is not needed.
-3. Register the rocprofiler tool, build a single-pass counter profile (names
-   resolved per agent), then `start_context` → `sample_device_counting_service`
-   → `stop_context` each interval.
+3. Register the rocprofiler tool, build a single-pass counter config (names
+   resolved per agent), `start_context` **once**, then call
+   `sample_device_counting_service` on demand for the running cumulative totals
+   (`stop_context` only at shutdown). See "Configuring the counter events" and
+   "Reading the counters" above.
 4. Run with **`CAP_PERFMON`** (not full root).
 5. Sum counter records across hardware-instance dimensions to get device-level
    values; use architecture-correct counter names (verify with

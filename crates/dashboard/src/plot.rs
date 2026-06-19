@@ -426,6 +426,11 @@ pub struct FormatConfig {
     range: Option<Range>,
 
     value_label: Option<String>, // label used in tooltips for the value
+
+    // Entity each heatmap row represents in tooltips (e.g. "CPU", "GPU").
+    // Defaults to "CPU" in the viewer when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    row_label: Option<String>,
 }
 
 impl PlotOpts {
@@ -520,6 +525,12 @@ impl PlotOpts {
         self
     }
 
+    /// Set the entity each heatmap row represents in tooltips (e.g. "GPU").
+    pub fn with_row_label<T: Into<String>>(mut self, row_label: T) -> Self {
+        self.format.row_label = Some(row_label.into());
+        self
+    }
+
     pub fn with_log_scale(mut self, log_scale: bool) -> Self {
         self.format.log_scale = Some(log_scale);
         self
@@ -544,6 +555,7 @@ impl FormatConfig {
             log_scale: None,
             range: None,
             value_label: None,
+            row_label: None,
         }
     }
 }

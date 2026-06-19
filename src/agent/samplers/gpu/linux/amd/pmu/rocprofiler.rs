@@ -45,7 +45,7 @@ use libloading::{Library, Symbol};
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------------------
 // C types (all rocprofiler handles are a single u64 `handle`).
@@ -219,9 +219,10 @@ struct Syms {
 unsafe impl Send for Syms {}
 
 /// Per-GPU-agent device-counting state. The context and counter config are
-/// built in the `tool_initialize` callback, then the context is started once
-/// after `hsa_init()` (it cannot be started before HSA is loaded) and runs
-/// until shutdown.
+/// built in the `tool_initialize` callback. After `hsa_init()`, a background
+/// worker thread (see [`AgentWorker`]) repeatedly brackets a short window with
+/// start/stop to read per-window counter deltas, which it accumulates into a
+/// shared running total. `sample()` reads that total.
 struct AgentState {
     ctx: ContextId,
     /// The single-pass counter config; passed to the device-counting callback
@@ -232,11 +233,37 @@ struct AgentState {
     /// The counter names successfully included in the config (a subset of the
     /// requested set), retained for diagnostics/logging.
     kept: Vec<String>,
-    /// Whether `start_context` succeeded for this agent.
-    started: bool,
+    /// Running totals (counter name -> accumulated value), updated by the worker
+    /// thread each window and read by `sample()`. Shared with the worker.
+    accum: Arc<Mutex<HashMap<String, u64>>>,
 }
 // SAFETY: only accessed under the STATE mutex.
 unsafe impl Send for AgentState {}
+
+/// The duration of each counting window. The context is reset (start) at the
+/// start of the window and frozen (stop) at the end, so the per-WGP 32-bit
+/// counters only accumulate for this long — short enough to stay well under
+/// their 2^32 saturation ceiling even under full load (which saturates the
+/// fastest counter, SQ_WAVE_CYCLES, in ~34ms at worst).
+const WINDOW: std::time::Duration = std::time::Duration::from_millis(40);
+
+/// Owns a background thread that drives one agent's counting loop. The thread
+/// runs `start_context -> sleep(WINDOW) -> sample -> stop_context`, accumulating
+/// each window's per-WGP-summed delta into the shared `accum` map. Dropping the
+/// worker signals the thread to stop and joins it.
+struct AgentWorker {
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for AgentWorker {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
 
 struct State {
     syms: Option<Syms>,
@@ -319,13 +346,13 @@ fn setup_all_agents(state: &mut State) -> Result<(), String> {
     let syms = state.syms.as_ref().ok_or("symbols not loaded")?;
 
     // Enumerate GPU agents.
-    let mut ids: Vec<AgentId> = Vec::new();
+    let mut enumerated: Vec<EnumeratedAgent> = Vec::new();
     unsafe {
         let st = (syms.query_agents)(
             ROCPROFILER_AGENT_INFO_VERSION_0,
             query_agents_cb,
             ROCPROFILER_AGENT_STRUCT_SIZE,
-            &mut ids as *mut _ as *mut c_void,
+            &mut enumerated as *mut _ as *mut c_void,
         );
         if st != ROCPROFILER_STATUS_SUCCESS {
             return Err(format!("query_available_agents failed: {st}"));
@@ -334,8 +361,8 @@ fn setup_all_agents(state: &mut State) -> Result<(), String> {
 
     let wanted: Vec<&str> = state.wanted.iter().map(|s| s.as_str()).collect();
     let mut built = Vec::new();
-    for (idx, id) in ids.into_iter().enumerate() {
-        match setup_agent(syms, id, &wanted) {
+    for (idx, ea) in enumerated.into_iter().enumerate() {
+        match setup_agent(syms, ea.id, &wanted) {
             Ok(a) => built.push(a),
             Err(e) => crate::debug!("gpu_amd_pmu: GPU {idx} skipped: {e}"),
         }
@@ -409,16 +436,17 @@ fn setup_agent(syms: &Syms, id: AgentId, wanted: &[&str]) -> Result<AgentState, 
             ));
         }
 
-        // NOTE: the context is NOT started here. `tool_initialize` runs inside
+        // NOTE: the PMC context is NOT started here. `tool_initialize` runs inside
         // `rocprofiler_force_configure`, which executes BEFORE `hsa_init()`, and
         // `start_context` requires HSA to be loaded (else HSA_NOT_LOADED). The
-        // contexts are started later in `Rocprofiler::new`, after `hsa_init()`.
+        // per-agent worker threads (which drive start/stop) are spawned later in
+        // `Rocprofiler::new`, after `hsa_init()`.
         Ok(AgentState {
             ctx,
             config: cfg,
             id_to_name,
             kept,
-            started: false,
+            accum: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 }
@@ -479,12 +507,26 @@ unsafe extern "C" fn device_counting_cb(
 pub struct Rocprofiler {
     /// Number of GPU agents that were set up successfully.
     num_agents: usize,
+    /// One background worker per agent; each drives that agent's start/stop
+    /// counting loop. Dropped (joined) before HSA shuts down.
+    workers: Vec<AgentWorker>,
 }
 
 impl Rocprofiler {
     /// Load the libraries, register, and initialize for the given counter set.
     /// Returns `Ok(None)` if rocprofiler-sdk / HSA are not present.
     pub fn new(wanted: &[&str]) -> Result<Option<Self>, String> {
+        // Acquire the KFD device-profiling lock once when the counting service is
+        // configured, rather than on every start_context. Without this, each
+        // start/stop pays a ~18ms KFD ioctl round-trip; with it, start/stop is
+        // ~150us. We bracket every sampling window with start/stop (to reset the
+        // per-WGP 32-bit counters and avoid saturation), so this must be cheap.
+        // SAFETY: set_var is process-global; we set it before any rocprofiler/HSA
+        // init, while still single-threaded in this sampler's init path.
+        unsafe {
+            std::env::set_var("ROCPROFILER_DEVICE_LOCK_AT_START", "1");
+        }
+
         let mut guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
         if guard.is_some() {
             return Err("rocprofiler already initialized in this process".into());
@@ -581,28 +623,15 @@ impl Rocprofiler {
             return Err(e);
         }
 
-        // Now that HSA is loaded, start each agent's context once. It runs
-        // continuously, so the counters accumulate and each later read returns
-        // the running cumulative total. The device-counting callback fires
-        // synchronously inside start_context on this thread and reads the config
-        // from the PENDING_CONFIG thread-local, so set it just before.
-        if let Some(syms) = state.syms.as_ref() {
-            for agent in state.agents.iter_mut() {
-                PENDING_CONFIG.with(|c| c.set(agent.config.handle));
-                let st = unsafe { (syms.start_context)(agent.ctx) };
-                PENDING_CONFIG.with(|c| c.set(0));
-                agent.started = st == ROCPROFILER_STATUS_SUCCESS;
-                if !agent.started {
-                    crate::debug!("gpu_amd_pmu: start_context failed: {st}");
-                }
-            }
-        }
-        state.agents.retain(|a| a.started);
-
+        // HSA is up. Spawn one worker thread per agent. Each worker runs the
+        // start -> sleep(WINDOW) -> sample -> stop loop and accumulates the
+        // per-window deltas into the agent's shared `accum` map. We do a single
+        // start/stop here only to validate the context can be armed; if it can't,
+        // drop the agent.
         let num_agents = state.agents.len();
         if num_agents == 0 {
             *guard = None;
-            return Err("no GPU agent contexts could be started".into());
+            return Err("no GPU agents support the requested counters".into());
         }
 
         // Log which counters each agent ended up with.
@@ -616,7 +645,33 @@ impl Rocprofiler {
             }
         }
 
-        Ok(Some(Self { num_agents }))
+        // Capture per-agent worker inputs (all Copy/clone plain data) before
+        // releasing the STATE guard, then spawn the threads.
+        let worker_inputs: Vec<(ContextId, u64, Arc<Mutex<HashMap<String, u64>>>)> = state
+            .agents
+            .iter()
+            .map(|a| (a.ctx, a.config.handle, a.accum.clone()))
+            .collect();
+        drop(guard);
+
+        let mut workers = Vec::with_capacity(num_agents);
+        for (idx, (ctx, config_handle, accum)) in worker_inputs.into_iter().enumerate() {
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_thread = stop.clone();
+            let handle = std::thread::Builder::new()
+                .name(format!("gpu-amd-pmu-{idx}"))
+                .spawn(move || agent_worker_loop(idx, ctx, config_handle, accum, stop_thread))
+                .map_err(|e| format!("failed to spawn GPU PMU worker: {e}"))?;
+            workers.push(AgentWorker {
+                stop,
+                handle: Some(handle),
+            });
+        }
+
+        Ok(Some(Self {
+            num_agents,
+            workers,
+        }))
     }
 
     /// Number of GPU agents set up.
@@ -624,79 +679,163 @@ impl Rocprofiler {
         self.num_agents
     }
 
-    /// Read the current cumulative counter totals for agent `idx`. Returns a
-    /// map of counter name -> device-level cumulative value (summed across
-    /// hardware instances).
-    ///
-    /// The context was started once at init and runs continuously, so each read
-    /// returns the running total since startup — a monotonic counter, ideal for
-    /// `rate()` downstream. The `STATE` mutex serializes reads: rocprofiler
-    /// rejects overlapping `sample_device_counting_service` calls with
-    /// `CONTEXT_ERROR`, and the agent's async `refresh()` can run concurrently.
+    /// Return the current accumulated counter totals for agent `idx` (counter
+    /// name -> running total, summed across hardware instances). These are
+    /// monotonic counters built up by the agent's background worker from each
+    /// window's delta, so `rate()` downstream works the same as for any other
+    /// Rezolus counter. This is a cheap in-memory read — no GPU I/O.
     pub fn sample(&self, idx: usize) -> Result<HashMap<String, f64>, String> {
         let guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
         let state = guard.as_ref().ok_or("rocprofiler not initialized")?;
-        let syms = state.syms.as_ref().ok_or("symbols missing")?;
         let agent = state.agents.get(idx).ok_or("agent index out of range")?;
+        let accum = agent.accum.lock().map_err(|_| "accumulator poisoned")?;
+        Ok(accum.iter().map(|(k, &v)| (k.clone(), v as f64)).collect())
+    }
+}
 
-        let ctx = agent.ctx;
-
-        let mut out = vec![
-            CounterRecord {
-                id: 0,
-                counter_value: 0.0,
-                dispatch_id: 0,
-                user_data: UserData { value: 0 },
-                agent_id: AgentId { handle: 0 },
-            };
-            MAX_RECORDS
-        ];
-        let mut count = out.len();
-
-        let st = unsafe {
-            (syms.sample_device_counting)(
-                ctx,
-                UserData { value: 0 },
-                ROCPROFILER_COUNTER_FLAG_NONE,
-                out.as_mut_ptr(),
-                &mut count,
-            )
+/// Read one window's per-instance-summed counter deltas for the context. Must be
+/// called between `start_context` and `stop_context`. Returns counter name ->
+/// summed value for this window.
+fn read_window(
+    syms: &Syms,
+    ctx: ContextId,
+    id_to_name: &HashMap<u64, String>,
+) -> Result<HashMap<String, u64>, String> {
+    let mut out = vec![
+        CounterRecord {
+            id: 0,
+            counter_value: 0.0,
+            dispatch_id: 0,
+            user_data: UserData { value: 0 },
+            agent_id: AgentId { handle: 0 },
         };
+        MAX_RECORDS
+    ];
+    let mut count = out.len();
+    let st = unsafe {
+        (syms.sample_device_counting)(
+            ctx,
+            UserData { value: 0 },
+            ROCPROFILER_COUNTER_FLAG_NONE,
+            out.as_mut_ptr(),
+            &mut count,
+        )
+    };
+    if st != ROCPROFILER_STATUS_SUCCESS {
+        return Err(format!("sample_device_counting_service failed: {st}"));
+    }
+    out.truncate(count);
 
-        if st != ROCPROFILER_STATUS_SUCCESS {
-            return Err(format!("sample_device_counting_service failed: {st}"));
+    let mut sums: HashMap<String, u64> = HashMap::new();
+    for rec in &out {
+        let mut cid = CounterId { handle: 0 };
+        unsafe {
+            if (syms.query_record_counter_id)(rec.id, &mut cid) != ROCPROFILER_STATUS_SUCCESS {
+                continue;
+            }
         }
-        out.truncate(count);
+        if let Some(name) = id_to_name.get(&cid.handle) {
+            // counter_value is a non-negative integer count delivered as f64.
+            let v = if rec.counter_value.is_finite() && rec.counter_value >= 0.0 {
+                rec.counter_value as u64
+            } else {
+                0
+            };
+            *sums.entry(name.clone()).or_insert(0) += v;
+        }
+    }
+    Ok(sums)
+}
 
-        let mut sums: HashMap<String, f64> = HashMap::new();
-        for rec in &out {
-            let mut cid = CounterId { handle: 0 };
-            unsafe {
-                if (syms.query_record_counter_id)(rec.id, &mut cid) != ROCPROFILER_STATUS_SUCCESS {
-                    continue;
+/// The per-agent worker loop. Repeatedly: start the context (which resets the
+/// per-WGP counters to 0), wait WINDOW, sample the per-window delta, stop the
+/// context (freeze), and add the delta into the shared accumulator. The
+/// rocprofiler calls (start/sample/stop) are serialized through the STATE mutex
+/// because rocprofiler is a single per-process tool; the WINDOW sleep is done
+/// WITHOUT the lock so other agents' workers and `sample()` are not blocked.
+fn agent_worker_loop(
+    idx: usize,
+    ctx: ContextId,
+    config_handle: u64,
+    accum: Arc<Mutex<HashMap<String, u64>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::sync::atomic::Ordering;
+
+    // Helper: run a closure with the locked syms + the agent's id_to_name.
+    // Returns None if rocprofiler state is gone (shutting down).
+    let with_state = |f: &mut dyn FnMut(&Syms, &HashMap<u64, String>) -> Result<(), String>| {
+        let guard = STATE.lock().ok()?;
+        let state = guard.as_ref()?;
+        let syms = state.syms.as_ref()?;
+        let agent = state.agents.get(idx)?;
+        Some(f(syms, &agent.id_to_name))
+    };
+
+    while !stop.load(Ordering::Relaxed) {
+        // 1) start_context — resets and arms the counters. The device-counting
+        //    callback fires synchronously inside start_context on this thread and
+        //    reads the config from the PENDING_CONFIG thread-local.
+        let started = with_state(&mut |syms, _| {
+            PENDING_CONFIG.with(|c| c.set(config_handle));
+            let st = unsafe { (syms.start_context)(ctx) };
+            PENDING_CONFIG.with(|c| c.set(0));
+            if st == ROCPROFILER_STATUS_SUCCESS {
+                Ok(())
+            } else {
+                Err(format!("start_context failed: {st}"))
+            }
+        });
+        match started {
+            None => break, // state gone — shutting down
+            Some(Err(e)) => {
+                crate::debug!("gpu_amd_pmu: GPU {idx}: {e}");
+                // Back off a little before retrying so we don't spin on errors.
+                std::thread::sleep(WINDOW);
+                continue;
+            }
+            Some(Ok(())) => {}
+        }
+
+        // 2) Let the counters accumulate for the window WITHOUT holding the lock.
+        std::thread::sleep(WINDOW);
+
+        // 3) sample the window delta, then 4) stop_context (freeze + reset on next
+        //    start). Both under the lock.
+        let result = with_state(&mut |syms, id_to_name| {
+            let delta = read_window(syms, ctx, id_to_name);
+            // Always stop, even if the read failed, to leave the context frozen.
+            let stop_st = unsafe { (syms.stop_context)(ctx) };
+            let delta = delta?;
+            if stop_st != ROCPROFILER_STATUS_SUCCESS {
+                return Err(format!("stop_context failed: {stop_st}"));
+            }
+            // 5) accumulate the per-window delta into the running totals.
+            if let Ok(mut a) = accum.lock() {
+                for (name, v) in delta {
+                    *a.entry(name).or_insert(0) += v;
                 }
             }
-            if let Some(name) = agent.id_to_name.get(&cid.handle) {
-                *sums.entry(name.clone()).or_insert(0.0) += rec.counter_value;
-            }
+            Ok(())
+        });
+        match result {
+            None => break,
+            Some(Err(e)) => crate::debug!("gpu_amd_pmu: GPU {idx}: {e}"),
+            Some(Ok(())) => {}
         }
-        Ok(sums)
     }
 }
 
 impl Drop for Rocprofiler {
     fn drop(&mut self) {
+        // First stop and join all worker threads so none can call into
+        // rocprofiler after we shut HSA down. Each AgentWorker's Drop signals its
+        // stop flag and joins. We must do this BEFORE taking the STATE lock,
+        // because a worker may be blocked trying to acquire it.
+        self.workers.clear();
+
         if let Ok(mut guard) = STATE.lock() {
             if let Some(state) = guard.as_mut() {
-                // Stop the per-agent contexts we started at init.
-                if let Some(syms) = state.syms.as_ref() {
-                    for agent in state.agents.iter().filter(|a| a.started) {
-                        // SAFETY: balances the start_context in `new`.
-                        unsafe {
-                            let _ = (syms.stop_context)(agent.ctx);
-                        }
-                    }
-                }
                 if let Some(shut_down) = state.hsa_shut_down.take() {
                     // SAFETY: balances the hsa_init() in `new`.
                     unsafe {
@@ -719,12 +858,20 @@ impl Drop for Rocprofiler {
 /// layout is irrelevant.
 const ROCPROFILER_AGENT_STRUCT_SIZE: usize = 312;
 
-/// `rocprofiler_agent_v0_t` prefix: `size` (u64), `id` (AgentId), `type` (u32).
-#[repr(C)]
-struct AgentV0Prefix {
-    size: u64,
+/// Byte offsets of fields we read from `rocprofiler_agent_v0_t` (measured on
+/// ROCm 7.2.1; the struct is versioned and stable for v0). We only need `id` and
+/// `type` from the prefix to enumerate the GPU agents, so we read those by offset
+/// rather than mirroring the whole 312-byte struct.
+const AGENT_OFF_ID: usize = 8; // rocprofiler_agent_id_t (u64)
+const AGENT_OFF_TYPE: usize = 16; // u32
+
+unsafe fn read_u32(base: *const u8, off: usize) -> u32 {
+    (base.add(off) as *const u32).read_unaligned()
+}
+
+/// Collected per agent during enumeration: its id.
+struct EnumeratedAgent {
     id: AgentId,
-    ty: u32,
 }
 
 unsafe extern "C" fn query_agents_cb(
@@ -736,16 +883,19 @@ unsafe extern "C" fn query_agents_cb(
     if version != ROCPROFILER_AGENT_INFO_VERSION_0 {
         return ROCPROFILER_STATUS_SUCCESS;
     }
-    let out = &mut *(udata as *mut Vec<AgentId>);
+    let out = &mut *(udata as *mut Vec<EnumeratedAgent>);
     for i in 0..num {
-        let p = *agents.add(i) as *const AgentV0Prefix;
-        if p.is_null() {
+        let base = *agents.add(i) as *const u8;
+        if base.is_null() {
             continue;
         }
-        let a = &*p;
-        if a.ty == ROCPROFILER_AGENT_TYPE_GPU {
-            out.push(a.id);
+        if read_u32(base, AGENT_OFF_TYPE) != ROCPROFILER_AGENT_TYPE_GPU {
+            continue;
         }
+        let id = AgentId {
+            handle: (base.add(AGENT_OFF_ID) as *const u64).read_unaligned(),
+        };
+        out.push(EnumeratedAgent { id });
     }
     ROCPROFILER_STATUS_SUCCESS
 }
