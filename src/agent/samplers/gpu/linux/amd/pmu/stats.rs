@@ -47,7 +47,7 @@ pub static GPU_SQ_BUSY_CYCLES: CounterGroup = CounterGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpmu_wave_cycles",
-    description = "The number of residence waves * active cycles of all Workgroup processors"
+    description = "The number of residence waves * active cycles of all Workgroup processors",
     metadata = { vendor = "amd", counter = "SQ_WAVE_CYCLES" }
 )]
 pub static GPU_SQ_WAVE_CYCLES: CounterGroup = CounterGroup::new(MAX_GPUS);
