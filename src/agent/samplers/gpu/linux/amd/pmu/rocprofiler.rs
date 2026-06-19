@@ -172,19 +172,30 @@ type FnCreateBuffer = unsafe extern "C" fn(
 ) -> RocprofilerStatus;
 type FnCreateCbThread = unsafe extern "C" fn(*mut CallbackThreadId) -> RocprofilerStatus;
 type FnAssignCbThread = unsafe extern "C" fn(BufferId, CallbackThreadId) -> RocprofilerStatus;
-type FnConfigureDeviceCounting =
-    unsafe extern "C" fn(ContextId, BufferId, AgentId, DeviceCountingCb, *mut c_void)
-        -> RocprofilerStatus;
-type FnSampleDeviceCounting =
-    unsafe extern "C" fn(ContextId, UserData, u32, *mut CounterRecord, *mut usize)
-        -> RocprofilerStatus;
+type FnConfigureDeviceCounting = unsafe extern "C" fn(
+    ContextId,
+    BufferId,
+    AgentId,
+    DeviceCountingCb,
+    *mut c_void,
+) -> RocprofilerStatus;
+type FnSampleDeviceCounting = unsafe extern "C" fn(
+    ContextId,
+    UserData,
+    u32,
+    *mut CounterRecord,
+    *mut usize,
+) -> RocprofilerStatus;
 type FnIterateCounters =
     unsafe extern "C" fn(AgentId, IterateCountersCb, *mut c_void) -> RocprofilerStatus;
 type FnQueryCounterInfo = unsafe extern "C" fn(CounterId, u32, *mut c_void) -> RocprofilerStatus;
 type FnQueryRecordCounterId = unsafe extern "C" fn(u64, *mut CounterId) -> RocprofilerStatus;
-type FnCreateCounterConfig =
-    unsafe extern "C" fn(AgentId, *const CounterId, usize, *mut CounterConfigId)
-        -> RocprofilerStatus;
+type FnCreateCounterConfig = unsafe extern "C" fn(
+    AgentId,
+    *const CounterId,
+    usize,
+    *mut CounterConfigId,
+) -> RocprofilerStatus;
 
 type FnHsaInit = unsafe extern "C" fn() -> HsaStatus;
 type FnHsaShutDown = unsafe extern "C" fn() -> HsaStatus;
@@ -534,12 +545,11 @@ impl Rocprofiler {
 
         // SAFETY: loading system shared libraries is inherently unsafe; we
         // trust the ROCm-provided libraries.
-        let rocp = match unsafe {
-            load_first(&["librocprofiler-sdk.so", "librocprofiler-sdk.so.1"])
-        } {
-            Some(lib) => Box::new(lib),
-            None => return Ok(None),
-        };
+        let rocp =
+            match unsafe { load_first(&["librocprofiler-sdk.so", "librocprofiler-sdk.so.1"]) } {
+                Some(lib) => Box::new(lib),
+                None => return Ok(None),
+            };
         let hsa = match unsafe { load_first(&["libhsa-runtime64.so", "libhsa-runtime64.so.1"]) } {
             Some(lib) => Box::new(lib),
             None => return Ok(None),
@@ -562,15 +572,9 @@ impl Rocprofiler {
                     &rocp,
                     b"rocprofiler_sample_device_counting_service",
                 )?,
-                iterate_counters: required(
-                    &rocp,
-                    b"rocprofiler_iterate_agent_supported_counters",
-                )?,
+                iterate_counters: required(&rocp, b"rocprofiler_iterate_agent_supported_counters")?,
                 query_counter_info: required(&rocp, b"rocprofiler_query_counter_info")?,
-                query_record_counter_id: required(
-                    &rocp,
-                    b"rocprofiler_query_record_counter_id",
-                )?,
+                query_record_counter_id: required(&rocp, b"rocprofiler_query_record_counter_id")?,
                 create_counter_config: required(&rocp, b"rocprofiler_create_counter_config")?,
             };
             let force_configure: Symbol<FnForceConfigure> =

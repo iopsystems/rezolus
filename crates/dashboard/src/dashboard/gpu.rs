@@ -58,7 +58,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         gpu.plot_promql(
             PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage)
-                .percentage_range().with_row_label("GPU"),
+                .percentage_range()
+                .with_row_label("GPU"),
             "sum by (id) (gpu_utilization) / 100".to_string(),
         );
     } else {
@@ -82,7 +83,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "mem-ctrl-pct-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range().with_row_label("GPU"),
+            .percentage_range()
+            .with_row_label("GPU"),
             "sum by (id) (gpu_memory_utilization) / 100".to_string(),
         );
     } else {
@@ -111,7 +113,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-tensor-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range().with_row_label("GPU"),
+            .percentage_range()
+            .with_row_label("GPU"),
             "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
         );
     } else {
@@ -135,7 +138,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-sm-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range().with_row_label("GPU"),
+            .percentage_range()
+            .with_row_label("GPU"),
             "sum by (id) (gpu_sm_utilization) / 100".to_string(),
         );
         sm.plot_promql(
@@ -149,7 +153,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-sm-ocp-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range().with_row_label("GPU"),
+            .percentage_range()
+            .with_row_label("GPU"),
             "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
         );
     } else {
@@ -188,11 +193,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let per_device = memory.subgroup("Per-Device Capacity");
         per_device.describe("Memory used and free broken out by GPU id.");
         per_device.plot_promql(
-            PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes).with_row_label("GPU"),
+            PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes)
+                .with_row_label("GPU"),
             "sum by (id) (gpu_memory{state=\"used\"})".to_string(),
         );
         per_device.plot_promql(
-            PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes).with_row_label("GPU"),
+            PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes)
+                .with_row_label("GPU"),
             "sum by (id) (gpu_memory{state=\"free\"})".to_string(),
         );
     }
@@ -215,7 +222,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "gpu-dram-act-per-gpu",
                 Unit::Percentage,
             )
-            .percentage_range().with_row_label("GPU"),
+            .percentage_range()
+            .with_row_label("GPU"),
             "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
         );
     } else {
@@ -288,7 +296,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
         draw.plot_promql(
             PlotOpts::gauge("Power (Per-GPU)", "power-watts-per-gpu", Unit::Count)
-                .with_axis_label("Watts").with_row_label("GPU"),
+                .with_axis_label("Watts")
+                .with_row_label("GPU"),
             "sum by (id) (gpu_power_usage) / 1000".to_string(),
         );
     } else {
@@ -318,7 +327,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if multi_gpu {
         temps.plot_promql(
             PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count)
-                .with_axis_label("°C").with_row_label("GPU"),
+                .with_axis_label("°C")
+                .with_row_label("GPU"),
             "max by (id) (gpu_temperature)".to_string(),
         );
         temps.plot_promql(
@@ -476,8 +486,12 @@ fn amd_pmu(view: &mut View) {
         "Instruction-cache and L2 cache hit rates, derived from SQC and GL2C hardware counters.",
     );
     caches.plot_promql(
-        PlotOpts::gauge("Instruction Cache Hit %", "amd-icache-hit", Unit::Percentage)
-            .percentage_range(),
+        PlotOpts::gauge(
+            "Instruction Cache Hit %",
+            "amd-icache-hit",
+            Unit::Percentage,
+        )
+        .percentage_range(),
         "sum(rate(gpmu_icache_hits[5m])) / sum(rate(gpmu_icache_requests[5m]))".to_string(),
     );
     caches.plot_promql(

@@ -164,20 +164,27 @@ mod nvidia {
         let mem_fn = lib.get::<FnDeviceMemory>(b"nvmlDeviceGetMemoryInfo").ok();
         let pci_fn = lib.get::<FnDevicePci>(b"nvmlDeviceGetPciInfo_v3").ok();
         let numa_fn = lib.get::<FnDeviceNuma>(b"nvmlDeviceGetNumaNodeId").ok();
-        let cap_fn = lib.get::<FnDeviceCudaCap>(b"nvmlDeviceGetCudaComputeCapability").ok();
-        let gen_fn = lib.get::<FnDevicePcieGen>(b"nvmlDeviceGetCurrPcieLinkGeneration").ok();
-        let width_fn = lib.get::<FnDevicePcieWidth>(b"nvmlDeviceGetCurrPcieLinkWidth").ok();
+        let cap_fn = lib
+            .get::<FnDeviceCudaCap>(b"nvmlDeviceGetCudaComputeCapability")
+            .ok();
+        let gen_fn = lib
+            .get::<FnDevicePcieGen>(b"nvmlDeviceGetCurrPcieLinkGeneration")
+            .ok();
+        let width_fn = lib
+            .get::<FnDevicePcieWidth>(b"nvmlDeviceGetCurrPcieLinkWidth")
+            .ok();
         let cores_fn = lib.get::<FnDeviceCores>(b"nvmlDeviceGetNumGpuCores").ok();
 
         // Driver version is per-system, queried once.
-        let driver = lib.get::<FnSystemDriver>(b"nvmlSystemGetDriverVersion").ok().and_then(
-            |f| {
+        let driver = lib
+            .get::<FnSystemDriver>(b"nvmlSystemGetDriverVersion")
+            .ok()
+            .and_then(|f| {
                 let mut buf = [0 as c_char; 80];
                 (f(buf.as_mut_ptr(), buf.len() as c_uint) == NVML_SUCCESS)
                     .then(|| cstr(&buf))
                     .flatten()
-            },
-        );
+            });
 
         let mut count: c_uint = 0;
         if count_fn(&mut count) != NVML_SUCCESS {
@@ -295,11 +302,12 @@ mod amd {
         // SAFETY: loading a system shared library is inherently unsafe; we trust
         // the ROCm-provided library and only call documented RSMI functions.
         unsafe {
-            let lib =
-                match Library::new("librocm_smi64.so").or_else(|_| Library::new("librocm_smi64.so.1")) {
-                    Ok(l) => l,
-                    Err(_) => return Vec::new(),
-                };
+            let lib = match Library::new("librocm_smi64.so")
+                .or_else(|_| Library::new("librocm_smi64.so.1"))
+            {
+                Ok(l) => l,
+                Err(_) => return Vec::new(),
+            };
 
             let init: Symbol<FnInit> = match lib.get(b"rsmi_init") {
                 Ok(s) => s,
@@ -330,8 +338,12 @@ mod amd {
         let name_fn = lib.get::<FnName>(b"rsmi_dev_name_get").ok();
         let mem_fn = lib.get::<FnMemTotal>(b"rsmi_dev_memory_total_get").ok();
         let pci_fn = lib.get::<FnPciId>(b"rsmi_dev_pci_id_get").ok();
-        let numa_fn = lib.get::<FnNumaNode>(b"rsmi_topo_get_numa_node_number").ok();
-        let gfx_fn = lib.get::<FnTargetGfx>(b"rsmi_dev_target_graphics_version_get").ok();
+        let numa_fn = lib
+            .get::<FnNumaNode>(b"rsmi_topo_get_numa_node_number")
+            .ok();
+        let gfx_fn = lib
+            .get::<FnTargetGfx>(b"rsmi_dev_target_graphics_version_get")
+            .ok();
 
         // Driver version is per-system: rsmi_version_str_get(DRIVER, buf, len).
         let driver = lib
