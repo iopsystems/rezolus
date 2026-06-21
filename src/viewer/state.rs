@@ -198,6 +198,14 @@ impl AppState {
         self.combined_ab_marker.read().is_some()
     }
 
+    /// Single lookup that hides the CLI-vs-HTTP-attach split; CLI wins.
+    pub fn resolve_experiment_parquet_path(&self) -> Option<std::path::PathBuf> {
+        self.cli_experiment_path
+            .read()
+            .clone()
+            .or_else(|| self.experiment_parquet_path.read().clone())
+    }
+
     pub fn is_trimmed_report(&self) -> bool {
         self.trimmed_report_marker.read().is_some()
     }

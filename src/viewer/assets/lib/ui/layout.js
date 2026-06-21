@@ -18,11 +18,12 @@ const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="non
 
 // Open a one-shot hidden <input type=file> and forward the selected
 // file to the caller's onPick. Returns an onclick handler so the site
-// can wire it directly to a button.
+// can wire it directly to a button. Accepts both bare parquets and
+// combined-A/B tarballs (`.parquet.ab.tar`).
 export const openParquetPicker = (onPick) => () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.parquet,application/octet-stream';
+    input.accept = '.parquet,.ab.tar,.tar,application/octet-stream,application/x-tar';
     input.onchange = async () => {
         const file = input.files && input.files[0];
         if (file && onPick) await onPick(file);
@@ -130,9 +131,11 @@ const TopNav = {
                         ]),
                     ]);
                 })(),
-                attrs.onUploadParquet && !liveMode && !compareMode && m('button.transport-btn.import-btn', {
+                attrs.onUploadParquet && !liveMode && m('button.transport-btn.import-btn', {
                     onclick: openParquetPicker(attrs.onUploadParquet),
-                    title: 'Upload parquet file',
+                    title: compareMode
+                        ? 'Replace current view (parquet or combined-A/B tarball)'
+                        : 'Upload parquet or combined-A/B tarball',
                 }, [
                     m('span', 'Load Parquet'),
                     m.trust(UPLOAD_ICON_SVG),

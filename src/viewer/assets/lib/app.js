@@ -528,6 +528,7 @@ const SectionContent = {
                 experimentQueryRange,
                 baselineAlias,
                 experimentAlias,
+                experimentFilename,
                 combinedAB,
             });
         }

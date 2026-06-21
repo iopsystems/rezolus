@@ -9,6 +9,7 @@ import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTUR
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
+import { composeAbReportPrefix } from './ab_filename.js';
 import { ViewerApi } from '../viewer_api.js';
 import { eventsStore } from '../events/events_store.js';
 import { renderMarkdown, renderMarkdownInline } from '../ui/markdown.js';
@@ -617,7 +618,13 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
 });
 
 const exportJSON = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
+    const isCompare = !!attrs.compareMode;
+    const defaultPrefix = isCompare
+        ? composeAbReportPrefix(
+            attrs.baselineAlias || attrs.filename,
+            attrs.experimentAlias || attrs.experimentFilename,
+        ) + '-selection'
+        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-selection';
     const result = await showSaveModal(defaultPrefix, '.json');
     if (!result) return;
     const filename = result.filename;
@@ -716,7 +723,17 @@ const loadJsonIntoSelection = (json, filename) => {
 };
 
 const saveToParquet = async (store, attrs) => {
-    const defaultPrefix = (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
+    const isCompare = !!attrs.compareMode;
+    // Compare mode produces an A/B tarball — modal default uses both
+    // sides' labels so the user sees `<a>_vs_<b>.parquet.ab.tar`
+    // instead of `<baseline>-report.parquet.ab.tar`.
+    const defaultPrefix = isCompare
+        ? composeAbReportPrefix(
+            attrs.baselineAlias || attrs.filename,
+            attrs.experimentAlias || attrs.experimentFilename,
+        )
+        : (attrs.filename || 'rezolus-capture').replace(/\.parquet$/, '') + '-report';
+    const defaultExt = isCompare ? '.parquet.ab.tar' : '.parquet';
     const cs = attrs.chartsState;
     const hasZoom = cs && !cs.isDefaultZoom();
     const checkboxes = [
@@ -725,7 +742,7 @@ const saveToParquet = async (store, attrs) => {
     if (hasZoom) {
         checkboxes.push({ key: 'trim', label: 'Trim to selected time range', checked: false });
     }
-    const result = await showSaveModal(defaultPrefix, '.parquet', checkboxes);
+    const result = await showSaveModal(defaultPrefix, defaultExt, checkboxes);
     if (!result) return;
     const filename = result.filename;
     const trimToSelection = result.trim;
@@ -749,12 +766,20 @@ const saveToParquet = async (store, attrs) => {
         // /api/v1/save_with_selection; the WASM adapter projects the
         // source bytes locally. Both return { bytes, mime, extension }.
         const { bytes, mime, extension } = await ViewerApi.saveWithSelection(payload);
-        // If the user accepted the default `.parquet` filename, swap the
-        // extension to whatever the adapter reported (AB tarballs come
-        // back with `.parquet.ab.tar`).
-        const finalName = extension && filename.endsWith('.parquet') && extension !== '.parquet'
-            ? filename.slice(0, -'.parquet'.length) + extension
-            : filename;
+        // Replace any default modal extension with what the adapter
+        // actually produced (handles users keeping the default in either
+        // mode + handles users editing the prefix without re-typing the
+        // extension). Skips swap if the user typed a custom extension.
+        const knownExts = ['.parquet.ab.tar', '.ab.tar', '.parquet'];
+        let finalName = filename;
+        if (extension) {
+            for (const ext of knownExts) {
+                if (filename.endsWith(ext)) {
+                    finalName = filename.slice(0, -ext.length) + extension;
+                    break;
+                }
+            }
+        }
         const blob = new Blob([bytes], { type: mime });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -869,7 +894,6 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
         const hasChartSelection = cs?.hasActiveSelection();
         const hasHistograms = notebookStore.entries.some(e => isHistogramPlot(e));
         const hasAnyNote = notebookStore.entries.some(e => e.note && e.note.length > 0);
-        const inTwoFileCompare = attrs.compareMode && !attrs.combinedAB;
         const downloadIcon = m.trust('<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/><path d="M8 10V2m0 8l-3-3m3 3l3-3"/></svg>');
 
         const header = m('div.selection-header', [
@@ -908,10 +932,7 @@ Object.assign(NotebookView, chartLoaderMixin(notebookStore, NotebookView), {
 
             m('div.selection-actions', [
                 m('button.selection-btn', {
-                    disabled: inTwoFileCompare,
-                    title: inTwoFileCompare
-                        ? 'Two-file A/B mode has no single parquet to embed in. Use `parquet combine --ab` first.'
-                        : 'Embed selection + notes in the loaded parquet',
+                    title: 'Embed selection + notes in the loaded parquet',
                     onclick: () => saveToParquet(notebookStore, attrs),
                 }, [
                     'Save as Report (parquet, Selection & Notes) ',

@@ -28,6 +28,11 @@ use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
+// MetricsSource::source() may be a JSON array (multi-source) or a single label.
+fn parse_source_field(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| vec![raw.to_string()])
+}
+
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
 /// Background task that polls a live agent and ingests snapshots.
@@ -232,7 +237,97 @@ pub async fn upload_parquet(
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
+    if super::ab_extract::looks_like_ab_tarball(&temp_path) {
+        return ingest_combined_ab_from_path(&state, temp_path, filename);
+    }
     ingest_baseline_from_path(&state, temp_path, filename)
+}
+
+/// Runtime-upload version of `init_file_mode_combined_ab` (mod.rs).
+/// Mirrors the CLI state-mutation but returns an HTTP envelope instead
+/// of exiting on failure, and skips strict `--category` validation
+/// (manifest's category, if any, is applied as-is).
+fn ingest_combined_ab_from_path(
+    state: &AppState,
+    tar_path: PathBuf,
+    display_filename: String,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let extracted = match super::ab_extract::extract_ab_tarball(&tar_path) {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(
+                format!("failed to extract combined-A/B tarball: {e}"),
+                "invalid_parquet",
+            );
+        }
+    };
+    let manifest = extracted.manifest.clone();
+
+    let open = |label: &str, path: &std::path::Path| -> Result<Arc<dyn MetricsSource>, String> {
+        ParquetReader::open_with_pool(path, Arc::clone(&state.pool))
+            .map(|r| Arc::new(r.with_filename(display_filename.clone())) as Arc<dyn MetricsSource>)
+            .map_err(|e| format!("failed to load {label} parquet from tarball: {e}"))
+    };
+    let baseline_reader = match open("baseline", &extracted.baseline_path) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(e, "invalid_parquet");
+        }
+    };
+    let experiment_reader = match open("experiment", &extracted.experiment_path) {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tar_path);
+            return ApiResponse::err(e, "invalid_parquet");
+        }
+    };
+
+    let (baseline_systeminfo, baseline_selection, baseline_file_meta) =
+        extract_parquet_metadata(&extracted.baseline_path);
+    let baseline_multinode = build_multinode_systeminfo(&extracted.baseline_path);
+    let (experiment_systeminfo, _experiment_selection, experiment_file_meta) =
+        extract_parquet_metadata(&extracted.experiment_path);
+    let experiment_multinode = build_multinode_systeminfo(&extracted.experiment_path);
+    let file_checksum = compute_file_checksum(&tar_path);
+
+    state.replace_baseline(baseline_reader);
+    *state.parquet_path.write() = Some(extracted.baseline_path.clone());
+    *state.cli_experiment_path.write() = Some(extracted.experiment_path.clone());
+    *state.experiment_parquet_path.write() = None;
+    state
+        .captures
+        .set_baseline_systeminfo(baseline_multinode.or(baseline_systeminfo));
+    *state.selection.write() = baseline_selection;
+    *state.file_checksum.write() = file_checksum;
+    state
+        .captures
+        .set_baseline_file_metadata(baseline_file_meta);
+    *state.trimmed_report_marker.write() = super::read_footer_kv(
+        &extracted.baseline_path,
+        crate::parquet_metadata::KEY_REPORT,
+    );
+    state
+        .captures
+        .set_baseline_alias(Some(manifest.baseline.alias.clone()));
+    state.captures.attach_experiment(
+        experiment_reader,
+        experiment_multinode.or(experiment_systeminfo),
+        experiment_file_meta,
+        Some(manifest.experiment.alias.clone()),
+    );
+    *state.category_name.write() = manifest.category.clone();
+    *state.combined_ab_marker.write() = Some(manifest);
+
+    // Keep the extracted tempdir alive — both per-side parquet paths
+    // reference it. CLI does the same in `init_file_mode_combined_ab`.
+    std::mem::forget(extracted);
+
+    regenerate_dashboards(state);
+
+    let _ = std::fs::remove_file(&tar_path);
+    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
 }
 
 /// Shared baseline-ingest path used by upload and load_url. Takes
@@ -595,24 +690,31 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         let trim_columns = payload.trim_columns;
         // Bind to a local so the temporary read guard from .read() doesn't
         // extend through the `if let` body and trip Send across the await.
-        let ab_manifest = state.combined_ab_marker.read().clone();
+        let ab_manifest_runtime = state.combined_ab_marker.read().clone();
+        let experiment_path = state.resolve_experiment_parquet_path();
+        let experiment_data = state.captures.get(CaptureId::Experiment);
 
-        if let Some(manifest) = ab_manifest {
-            // parquet_path here is the EXTRACTED baseline parquet (set by
-            // init_file_mode_combined_ab); the experiment side lives at
-            // cli_experiment_path. Both paths outlive the process via the
-            // mem::forget'd extractor handle.
-            let Some(experiment_path) = state.cli_experiment_path.read().clone() else {
-                return ApiResponse::<()>::err(
-                    "combined-A/B state missing experiment_path",
-                    "internal_error",
+        // Compare mode: experiment attached -> tarball with manifest
+        // (loaded or synthesized from per-slot runtime state).
+        if let (Some(experiment_path), Some(experiment_data)) = (experiment_path, experiment_data) {
+            let manifest = ab_manifest_runtime.unwrap_or_else(|| {
+                let baseline_alias = state.captures.alias(CaptureId::Baseline);
+                let experiment_alias = state.captures.alias(CaptureId::Experiment);
+                let baseline_filename = state.captures.filename(CaptureId::Baseline);
+                let experiment_filename = state.captures.filename(CaptureId::Experiment);
+                let baseline_sources = parse_source_field(&baseline_data.source());
+                let experiment_sources = parse_source_field(&experiment_data.source());
+                let category = state.category_name.read().clone();
+                crate::parquet_metadata::synthesize_ab_manifest(
+                    baseline_alias.as_deref(),
+                    &baseline_filename,
+                    &baseline_sources,
+                    experiment_alias.as_deref(),
+                    &experiment_filename,
+                    &experiment_sources,
+                    category.as_deref(),
                 )
-                .into_response();
-            };
-            let experiment_data = state
-                .captures
-                .get(CaptureId::Experiment)
-                .expect("experiment slot must be attached in combined-A/B mode");
+            });
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
@@ -634,6 +736,7 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             return finalize_report_attachment_tarball(result);
         }
 
+        // Single-capture save.
         let result = tokio::task::spawn_blocking({
             let body = selection_json.clone();
             move || {
