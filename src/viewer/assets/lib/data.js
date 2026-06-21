@@ -393,7 +393,12 @@ const createDataApi = ({
         return q;
     };
 
-    const processDashboardData = async (data, activeCgroupPattern, sectionRoute) => {
+    // freshMetadata: bypass the module-level metadata cache (forces the
+    // query window's maxTime to track the live TSDB instead of freezing
+    // at first-fetch). Live-mode auto-refresh sets this; file-mode and
+    // initial loads leave it off so the cache still saves a round-trip.
+    const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false } = {}) => {
+        if (freshMetadata) cachedMetadata = null;
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 

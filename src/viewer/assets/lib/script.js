@@ -168,7 +168,11 @@ const refreshCurrentSection = async () => {
     try {
         const data = await ViewerApi.getSection(section, true);
 
-        const promises = [processDashboardData(data, getActiveCgroupPattern(), currentRoute)];
+        // freshMetadata: TSDB grows continuously in live mode; without
+        // this the query window stays frozen at first-fetch maxTime and
+        // charts visibly stop updating even though /api/v1/query_range
+        // would serve fresh data if asked.
+        const promises = [processDashboardData(data, getActiveCgroupPattern(), currentRoute, { freshMetadata: true })];
         if (getHeatmapEnabled()) {
             promises.push(fetchSectionHeatmapData(currentRoute, data.groups));
         }
