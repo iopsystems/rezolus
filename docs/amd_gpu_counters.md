@@ -644,6 +644,57 @@ the live agent (`rocprofiler_iterate_agent_supported_counters`) and verify with
 `rocprofv3-avail list --pmc`. The generic `derived_counters.xml` expressions
 reference `TCC_*` but resolve to `GL2C_*` on RDNA.
 
+## 9. `sample_device_counting_service` leaks ~80 bytes per call (ROCm 7.2.1)
+
+**There is a small memory leak inside rocprofiler-sdk's per-sample read path.**
+Each `rocprofiler_sample_device_counting_service` call leaks roughly **80 bytes**
+on ROCm 7.2.1 (gfx1201). This is a **library bug, not a Rezolus bug** — the
+agent's own Rust code (`rocprofiler.rs`, `mod.rs`) allocates nothing per sample;
+the per-window `out` buffer and the bounded 14-key accumulator are reused/freed.
+
+How it was isolated:
+
+- A standalone loop of **all the ROCm SMI getters** (`librocm_smi64.so`) over
+  50,000 iterations does **not** leak — RSS is flat. So the SMI sampler
+  (`gpu_amd_smi`) is clean.
+- A loop of `start_context → sample → stop_context` (via `amd-pmc-watch`) leaks
+  ~4 KB/s at a 20 ms interval (~80 B/sample).
+- A **sample-only** loop on a *continuously running* context (no per-cycle
+  start/stop) leaks at the **same** rate. This pins the leak on
+  `sample_device_counting_service` itself, not on start/stop.
+- Restarting the process reclaims everything (RSS returns to the ~130 MB
+  baseline), confirming it is heap growth, not a fixed cost.
+
+Likely source (from the SDK source, `counters/device_counting.cpp`
+→ `agent_async_handler`): the per-read `EvaluateAST::evaluate(...)` /
+`set_out_id(...)` path appears to accumulate state on the long-lived AST objects
+each read. Not conclusively pinpointed; reported as a library issue.
+
+**Impact at Rezolus's settings.** With one sample per 40 ms `WINDOW`
+(≈25 samples/s/GPU), the leak is **~0.18 GB/day** (~7 MB/hour). An agent left
+running ~11 days reaches ~2 GB — matching the observed growth.
+
+**Why it cannot be fixed in-process.** rocprofiler contexts can only be created
+inside the `tool_initialize` callback (everything else returns
+`CONFIGURATION_LOCKED`), and there is **no `rocprofiler_destroy_context`**. So the
+agent cannot tear down and rebuild the counting context mid-run to reclaim the
+leaked memory — the only full reclaim is a process restart.
+
+**Mitigation options (none applied yet — this is a documented finding):**
+
+- *Duty-cycle the sampler* — measure one short window then idle for the rest of
+  the interval, sampling ~1×/s instead of ~25×/s (a ~25× leak reduction to
+  ~7 MB/day). Trade-off: the published counters would reflect only the short
+  counting window, so the rate-based dashboards undercount unless the delta is
+  scaled by `interval/window`, which adds extrapolation error.
+- *Bigger `WINDOW`* (e.g. 150 ms) keeps rates continuous and correct and cuts the
+  leak ~4× (~45 MB/day), but risks 32-bit saturation under very heavy load.
+- *Operational cap* — since `gpu_amd_pmu` is opt-in, run the systemd unit with a
+  `MemoryMax=` + `Restart=on-failure` so the agent is recycled before it grows
+  unbounded. The SMI sampler is unaffected and can stay always-on.
+
+The right long-term fix is upstream in rocprofiler-sdk.
+
 ## What this means for the Rezolus AMD PMC sampler
 
 - ✅ On RDNA4 (with `stable_std`) we *can* get device-wide GPU busy %, VALU
