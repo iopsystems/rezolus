@@ -76,6 +76,8 @@ pub fn run(config: PathBuf) {
         }
     }
 
+    log_sampler_health_summary();
+
     let samplers = Arc::new(samplers.into_boxed_slice());
 
     // Initialize external metrics store if enabled
@@ -135,4 +137,69 @@ pub fn run(config: PathBuf) {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+}
+
+/// Emit a single classified summary of sampler health after init, mirroring
+/// the `/samplers` endpoint. Replaces scattered per-probe attach warnings:
+/// degraded/failed at `warn!`, unsupported at `info!`, plus a one-line tally.
+fn log_sampler_health_summary() {
+    use crate::agent::sampler_status::{ProbeVerdict, SamplerHealth, SamplerState};
+
+    let statuses = crate::agent::sampler_status::snapshot();
+    let mut healthy = 0usize;
+    let mut unsupported = 0usize;
+    let mut degraded = 0usize;
+    let mut failed = 0usize;
+
+    for s in &statuses {
+        match (&s.state, s.health) {
+            (SamplerState::Failed { error }, _) => {
+                failed += 1;
+                warn!("sampler {}: failed — {}", s.name, error);
+            }
+            (_, Some(SamplerHealth::Failed)) => {
+                failed += 1;
+                warn!("sampler {}: failed", s.name);
+            }
+            (_, Some(SamplerHealth::Degraded)) => {
+                degraded += 1;
+                let probes: Vec<String> = s
+                    .programs
+                    .iter()
+                    .filter(|p| p.verdict == ProbeVerdict::Broken)
+                    .map(|p| {
+                        format!(
+                            "{} ({})",
+                            p.label.as_deref().unwrap_or(&p.name),
+                            p.error.as_deref().unwrap_or("not attached")
+                        )
+                    })
+                    .collect();
+                warn!("sampler {}: degraded — {}", s.name, probes.join(", "));
+            }
+            (_, Some(SamplerHealth::Unsupported)) => {
+                unsupported += 1;
+                let probes: Vec<String> = s
+                    .programs
+                    .iter()
+                    .filter(|p| p.verdict == ProbeVerdict::Unsupported)
+                    .map(|p| {
+                        format!(
+                            "{} (no kernel support)",
+                            p.label.as_deref().unwrap_or(&p.name)
+                        )
+                    })
+                    .collect();
+                info!("sampler {}: unsupported — {}", s.name, probes.join(", "));
+            }
+            (_, Some(SamplerHealth::Healthy)) => healthy += 1,
+            (SamplerState::Disabled, None) => {}
+            (SamplerState::Active, None) => healthy += 1, // non-BPF sampler
+        }
+    }
+
+    info!(
+        "samplers: {} healthy, {} unsupported, {} degraded, {} failed",
+        healthy, unsupported, degraded, failed
+    );
 }
