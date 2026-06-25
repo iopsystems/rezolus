@@ -15,6 +15,11 @@ profiles. Both load their vendor library at runtime via `dlopen`, so the agent
 still **compiles and runs on hosts without ROCm or an AMD GPU** (each sampler
 returns `Ok(None)` at init and reports as disabled, not failed).
 
+The PMU layer is additionally exposed as an **on-demand recorder source**
+(`rezolus record --gpu-amd-pmu`), which reuses the sampler's exact
+counter-reading engine to capture `gpmu_*` metrics to a parquet file without
+running the agent. See [On-demand PMU recording](#on-demand-pmu-recording-rezolus-record---gpu-amd-pmu).
+
 ---
 
 ## Design summary
@@ -131,6 +136,66 @@ sample does, for the same reason.
   one core. This is inherent to bringing up HSA at all — it appears identically
   in the bare `amd-pmc-watch` tool — and is the dominant CPU cost of enabling
   the PMU sampler, independent of our read model.
+
+### On-demand PMU recording (`rezolus record --gpu-amd-pmu`)
+
+The same PMU layer is also exposed as an **on-demand recorder source**, for
+capturing GPU hardware counters to a parquet file without running the always-on
+agent. It is the recorder analogue of the `gpu_amd_pmu` sampler and reuses the
+*identical* counter-reading engine — there is exactly one implementation of the
+windowed-worker read model.
+
+**Shared engine, two front-ends.** The rocprofiler wrapper (`Rocprofiler` in
+`pmu/rocprofiler.rs`), the counter catalog (`pmu/catalog.rs`), and the
+perf-level control (`pmu/perf_level.rs`) all live under the sampler's module and
+are reused verbatim by the recorder (`src/recorder/pmu.rs`). So:
+
+- The recorder spawns the **same per-GPU background worker threads** that bracket
+  each 40 ms window with `start_context`/`stop_context` (overflow avoidance is
+  internal to `Rocprofiler` — the recorder does not reimplement it).
+- The recorder's per-tick read is the **same cheap in-memory accumulator read**
+  the sampler's `refresh()` does. The recorder's `--interval` (e.g. `1s`) is
+  fully decoupled from the fixed 40 ms windowing.
+- The **default event set and the counter → metric mapping are one source of
+  truth** in `catalog.rs` (`DEFAULT_COUNTERS` + the `gpmu_*` table), shared by
+  both. A recorded file is therefore indistinguishable from one scraped off an
+  agent running the sampler: same `gpmu_*` names, same `vendor`/`counter`/`id`
+  labels.
+
+**What the recorder adds on top of the shared engine:**
+
+- **Configurable GPU + event selection.** `--gpu-amd-pmu-gpus 0,1` (or the
+  `[gpu_amd_pmu] gpus` TOML key) restricts which GPUs are published;
+  `--gpu-amd-pmu-events` overrides the default counter set. GPU indices match the
+  sampler's numbering (rocprofiler agent enumeration order).
+- **Optional perf-level control.** `--gpu-perf-level stable_std` (or the
+  `gpu_perf_level` config key, also honored by the sampler) sets the GPU power
+  state via `amd-smi set -l` **before** rocprofiler init, so the counting
+  contexts are armed in the stable state — without it, the RDNA per-SIMD counters
+  read 0 (see "Stable power state"). Default is unset (power state untouched).
+  `determinism` is recognized but not settable through `-l` and is skipped with a
+  warning. **Caveat:** the set only arms the per-SIMD counters when it causes an
+  *actual* state transition; if the GPU is already at the target level the
+  `amd-smi` call is a no-op and those counters may stay unarmed.
+- **Self-describing output.** The recorder captures `systeminfo::summary()` (the
+  same host hardware JSON the agent serves at `/systeminfo`) at init and writes
+  it to the parquet `systeminfo` metadata, so a standalone PMU recording carries
+  CPU/memory/GPU/NIC details with no agent in the loop. It also emits
+  `descriptions` (metric → help text) and `sampling_interval_ms`.
+
+**How it plugs into the recorder.** PMU is modeled as a local "endpoint"
+(`EndpointKind::AmdPmu`) alongside scraped HTTP endpoints. Instead of an HTTP
+scrape, each tick reads the GPU directly and builds a `metriken_exposition`
+`SnapshotV2` of `gpmu_*` counters; that snapshot then flows through the **same
+msgpack → parquet → combine path** as scraped data. So PMU can be recorded
+standalone (`--gpu-amd-pmu`), or combined with a scraped agent / Prometheus
+endpoint into one file — in the combined case the agent endpoint supplies
+`systeminfo` and PMU adds the counters.
+
+**Same constraints as the sampler.** The recorder process needs `CAP_PERFMON`,
+takes the exclusive per-GPU device-profiling lock (so it can't run alongside the
+agent's PMU sampler on the same GPU), pays the same HSA busy-poll thread cost,
+and is subject to the same stable-power-state requirement on RDNA.
 
 ---
 

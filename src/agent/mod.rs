@@ -5,7 +5,7 @@ mod exposition;
 mod external_metrics;
 mod metrics;
 pub mod sampler_status;
-mod samplers;
+pub(crate) mod samplers;
 
 use config::Config;
 use external_metrics::{ExternalMetricsStore, Protocol, ServerState};

@@ -59,6 +59,14 @@ target/release/rezolus record http://localhost:4241 output.parquet
 target/release/rezolus record --metadata source=llm-perf http://host:9090/metrics output.parquet
 # Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw},
 # --metadata key=value (repeatable), --interval, --duration.
+# Multi-endpoint / PMU recording via TOML config (see config/record.toml):
+target/release/rezolus record --config config/record.toml
+# On-demand AMD GPU PMU recording (Linux, needs CAP_PERFMON + ROCm; reads the GPU
+# directly, no agent required). --gpu-amd-pmu-gpus and --gpu-amd-pmu-events
+# default to all GPUs and the gpu_amd_pmu sampler's event set respectively:
+sudo target/release/rezolus record --gpu-amd-pmu -o gpu.parquet
+sudo target/release/rezolus record --gpu-amd-pmu --gpu-amd-pmu-gpus 0,1 \
+    --gpu-amd-pmu-events GRBM_COUNT,SQ_WAVES -o gpu.parquet
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]

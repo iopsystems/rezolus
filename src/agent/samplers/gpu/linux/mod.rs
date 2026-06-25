@@ -1,2 +1,2 @@
-mod amd;
+pub(crate) mod amd;
 mod nvidia;

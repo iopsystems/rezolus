@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 mod blockio;
 mod cpu;
-mod gpu;
+pub(crate) mod gpu;
 mod memory;
 mod network;
 mod rezolus;

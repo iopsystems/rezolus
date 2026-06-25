@@ -38,45 +38,32 @@ const NAME: &str = "gpu_amd_pmu";
 
 use crate::agent::*;
 
-mod rocprofiler;
+pub(crate) mod catalog;
+pub(crate) mod perf_level;
+pub(crate) mod rocprofiler;
 mod stats;
 
-use rocprofiler::Rocprofiler;
+use catalog::DEFAULT_COUNTERS as COUNTERS;
+pub(crate) use perf_level::PerfLevel;
+pub(crate) use rocprofiler::Rocprofiler;
 use stats::*;
 
 use std::sync::Arc;
 
-/// The single-pass counter set we collect. These fit the RDNA per-block slot
-/// budget (SQ ≤ 8, GL2C ≤ 4, etc.). Each maps to a metric in `pmu_stats`.
-const COUNTERS: &[&str] = &[
-    // GRBM (2): GPU busy
-    "GRBM_COUNT",
-    "GRBM_GUI_ACTIVE",
-    // SQ (6): waves, busy/wave cycles, VALU/SALU/LDS instruction mix.
-    // SQ_WAVE_CYCLES is a per-WGP 32-bit accumulator that saturates within
-    // ~34-275ms of busy time; the worker thread brackets each window with
-    // start/stop (which resets the counters) so it stays unsaturated. See
-    // docs/amd_gpu_pmu_events.md and `rocprofiler.rs`.
-    "SQ_WAVES",
-    "SQ_BUSY_CYCLES",
-    "SQ_WAVE_CYCLES",
-    "SQ_INSTS_VALU",
-    "SQ_INSTS_SALU",
-    "SQ_INSTS_LDS",
-    // SQC (2): instruction cache. SQ and SQC share an 8-counter register pool on
-    // RDNA4 (validated on gfx1201); SQ(6) + SQC(2) = 8 is at the ceiling.
-    "SQC_ICACHE_REQ",
-    "SQC_ICACHE_HITS",
-    // GL2C (4): L2 cache + memory bandwidth
-    "GL2C_EA_RDREQ",
-    "GL2C_EA_WRREQ",
-    "GL2C_HIT",
-    "GL2C_MISS",
-];
-
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
+    }
+
+    // Optionally pin the GPU performance level before rocprofiler init, so the
+    // counting contexts are armed while the GPU is already in the requested
+    // state. On RDNA the per-SIMD counters only accumulate in a stable power
+    // state; see `perf_level`. Default (None) leaves the power state untouched.
+    if let Some(level_str) = config.gpu_perf_level(NAME) {
+        let level = level_str
+            .parse::<PerfLevel>()
+            .map_err(|e| anyhow::anyhow!("{NAME}: {e}"))?;
+        perf_level::apply_all(level);
     }
 
     // Loading the libraries, registering, HSA init (which builds the per-agent

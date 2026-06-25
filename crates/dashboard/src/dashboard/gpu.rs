@@ -37,10 +37,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let multi_gpu = has_multiple_gpus(data);
 
     // Tell the frontend which GPU ids exist so it can render the GPU selector
-    // (a dropdown to view the non-per-GPU charts for a single GPU or the
-    // aggregate). Only meaningful with more than one GPU.
+    // (a two-panel picker to view the non-per-GPU charts for a single GPU or the
+    // aggregate). Shown whenever at least one GPU is present so the selector is
+    // always available on the GPU dashboard, even on a single-GPU host.
     let ids = gpu_ids(data);
-    if ids.len() > 1 {
+    if !ids.is_empty() {
         view.metadata.insert(
             "gpu_selector".to_string(),
             serde_json::json!({ "enabled": true, "ids": ids }),
