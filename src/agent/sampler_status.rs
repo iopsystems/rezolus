@@ -279,7 +279,7 @@ mod tests {
             module: "ixgbe".into(),
         };
         assert_eq!(
-            classify_program(&i, false, true, false),
+            classify_program(&i, false, false, false),
             ProbeVerdict::NotApplicable
         );
     }
@@ -312,5 +312,14 @@ mod tests {
     fn rollup_healthy_when_all_ok_or_na() {
         let v = vec![ProbeVerdict::Ok, ProbeVerdict::NotApplicable];
         assert_eq!(rollup_health(true, &v), SamplerHealth::Healthy);
+    }
+    #[test]
+    fn rollup_degraded_beats_unsupported() {
+        let v = vec![ProbeVerdict::Unsupported, ProbeVerdict::Broken];
+        assert_eq!(rollup_health(true, &v), SamplerHealth::Degraded);
+    }
+    #[test]
+    fn rollup_healthy_when_loaded_and_empty() {
+        assert_eq!(rollup_health(true, &[]), SamplerHealth::Healthy);
     }
 }
