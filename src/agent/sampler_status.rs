@@ -11,6 +11,8 @@ pub struct SamplerStatus {
     pub name: String,
     #[serde(flatten)]
     pub state: SamplerState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<SamplerHealth>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub programs: Vec<ProgramStatus>,
 }
@@ -31,6 +33,18 @@ pub struct ProgramStatus {
     pub attached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<ProbeIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub expected: bool,
+    #[serde(default = "default_verdict")]
+    pub verdict: ProbeVerdict,
+}
+
+fn default_verdict() -> ProbeVerdict {
+    ProbeVerdict::Ok
 }
 
 fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
@@ -45,6 +59,7 @@ pub fn set_disabled(name: &'static str) {
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Disabled,
+            health: None,
             programs: Vec::new(),
         },
     );
@@ -57,6 +72,7 @@ pub fn set_failed(name: &'static str, error: String) {
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Failed { error },
+            health: None,
             programs: Vec::new(),
         },
     );
@@ -71,6 +87,7 @@ pub fn set_active_with_programs(name: &'static str, programs: Vec<ProgramStatus>
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Active,
+            health: None,
             programs,
         },
     );
@@ -87,6 +104,7 @@ pub fn set_active_if_absent(name: &'static str) {
         .or_insert_with(|| SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Active,
+            health: None,
             programs: Vec::new(),
         });
 }
@@ -195,16 +213,25 @@ mod tests {
         let s = SamplerStatus {
             name: "cpu_usage".into(),
             state: SamplerState::Active,
+            health: None,
             programs: vec![
                 ProgramStatus {
                     name: "softirq_enter".into(),
                     attached: true,
                     error: None,
+                    intent: Some(ProbeIntent::Required),
+                    label: None,
+                    expected: true,
+                    verdict: ProbeVerdict::Ok,
                 },
                 ProgramStatus {
                     name: "cpuacct_account_field_kprobe".into(),
                     attached: false,
                     error: Some("no kernel support (ENOENT)".into()),
+                    intent: Some(ProbeIntent::Required),
+                    label: None,
+                    expected: false,
+                    verdict: ProbeVerdict::Unsupported,
                 },
             ],
         };
@@ -222,6 +249,7 @@ mod tests {
         let json = serde_json::to_string(&SamplerStatus {
             name: "gpu".into(),
             state: SamplerState::Disabled,
+            health: None,
             programs: Vec::new(),
         })
         .unwrap();
@@ -235,6 +263,7 @@ mod tests {
             state: SamplerState::Failed {
                 error: "boom".into(),
             },
+            health: None,
             programs: Vec::new(),
         })
         .unwrap();
@@ -321,5 +350,48 @@ mod tests {
     #[test]
     fn rollup_healthy_when_loaded_and_empty() {
         assert_eq!(rollup_health(true, &[]), SamplerHealth::Healthy);
+    }
+
+    #[test]
+    fn program_status_serializes_intent_and_verdict() {
+        let p = ProgramStatus {
+            name: "ena_tx_timeout".into(),
+            attached: false,
+            error: Some("no kernel support (ENOENT)".into()),
+            intent: Some(ProbeIntent::Driver {
+                module: "ena".into(),
+            }),
+            label: Some("ENA tx timeout".into()),
+            expected: false,
+            verdict: ProbeVerdict::NotApplicable,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains(r#""verdict":"not_applicable""#));
+        assert!(json.contains(r#""module":"ena""#));
+        let back: ProgramStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn old_program_status_without_new_fields_still_deserializes() {
+        // Payload produced before this change (no intent/verdict/etc.).
+        let json = r#"{"name":"softirq_enter","attached":true}"#;
+        let p: ProgramStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(p.name, "softirq_enter");
+        assert!(p.attached);
+        assert_eq!(p.intent, None);
+        assert_eq!(p.verdict, ProbeVerdict::Ok);
+    }
+
+    #[test]
+    fn sampler_status_carries_health() {
+        let s = SamplerStatus {
+            name: "cpu_usage".into(),
+            state: SamplerState::Active,
+            health: Some(SamplerHealth::Unsupported),
+            programs: Vec::new(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""health":"unsupported""#));
     }
 }
