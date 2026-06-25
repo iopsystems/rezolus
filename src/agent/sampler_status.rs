@@ -119,20 +119,15 @@ pub fn snapshot() -> Vec<SamplerStatus> {
 }
 
 /// Author-declared meaning of a BPF program's attach.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum ProbeIntent {
     /// Must attach on every supported kernel. Default for unclassified probes.
+    #[default]
     Required,
     /// Per-device probe; expected to attach iff `module` (the sysfs module
     /// name, e.g. `virtio_net`) is bound to a present device.
     Driver { module: String },
-}
-
-impl Default for ProbeIntent {
-    fn default() -> Self {
-        ProbeIntent::Required
-    }
 }
 
 /// Per-probe outcome after classification.
@@ -165,6 +160,10 @@ pub enum SamplerHealth {
 
 /// Classify one probe. Pure function. `is_enoent` is meaningful only when
 /// `attached` is false. `module_present` is meaningful only for `Driver`.
+///
+/// Called from the BPF builder (Linux-only); on other platforms it is exercised
+/// only by unit tests, so suppress the dead-code lint there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn classify_program(
     intent: &ProbeIntent,
     attached: bool,
@@ -195,14 +194,18 @@ pub fn classify_program(
 /// Roll up per-probe verdicts into a sampler health, in strict precedence:
 /// failed (load error) > degraded (any broken) > unsupported (any enoent) >
 /// healthy.
+///
+/// Called from the BPF builder (Linux-only); on other platforms it is exercised
+/// only by unit tests, so suppress the dead-code lint there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn rollup_health(loaded_ok: bool, verdicts: &[ProbeVerdict]) -> SamplerHealth {
     if !loaded_ok {
         return SamplerHealth::Failed;
     }
-    if verdicts.iter().any(|v| *v == ProbeVerdict::Broken) {
+    if verdicts.contains(&ProbeVerdict::Broken) {
         return SamplerHealth::Degraded;
     }
-    if verdicts.iter().any(|v| *v == ProbeVerdict::Unsupported) {
+    if verdicts.contains(&ProbeVerdict::Unsupported) {
         return SamplerHealth::Unsupported;
     }
     SamplerHealth::Healthy
