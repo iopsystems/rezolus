@@ -116,7 +116,7 @@ pub fn snapshot() -> Vec<SamplerStatus> {
 
 /// Author-declared meaning of a BPF program's attach.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "intent")]
+#[serde(rename_all = "snake_case", tag = "type")]
 pub enum ProbeIntent {
     /// Must attach on every supported kernel. Default for unclassified probes.
     Required,
@@ -221,7 +221,7 @@ mod tests {
                     error: None,
                     intent: Some(ProbeIntent::Required),
                     label: None,
-                    expected: true,
+                    expected: false,
                     verdict: ProbeVerdict::Ok,
                 },
                 ProgramStatus {
@@ -367,6 +367,7 @@ mod tests {
         };
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains(r#""verdict":"not_applicable""#));
+        assert!(json.contains(r#""intent":{"type":"driver""#));
         assert!(json.contains(r#""module":"ena""#));
         let back: ProgramStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
@@ -393,5 +394,16 @@ mod tests {
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""health":"unsupported""#));
+        let back: SamplerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn old_sampler_status_without_health_still_deserializes() {
+        let json = r#"{"name":"gpu","state":"disabled"}"#;
+        let s: SamplerStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.name, "gpu");
+        assert_eq!(s.health, None);
+        assert!(s.programs.is_empty());
     }
 }
