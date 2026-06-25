@@ -459,6 +459,28 @@ where
                     verdict,
                 });
             }
+            // Guard against typos in declared probe names: every program named
+            // in an intent/label override must correspond to a real attached or
+            // attempted program. A mismatch means the override silently does
+            // nothing. Debug-only — names are stringly-typed.
+            #[cfg(debug_assertions)]
+            {
+                let actual: std::collections::HashSet<&str> =
+                    prog_status.iter().map(|p| p.name.as_str()).collect();
+                for declared in self
+                    .program_intents
+                    .keys()
+                    .chain(self.program_labels.keys())
+                {
+                    debug_assert!(
+                        actual.contains(*declared),
+                        "{}: declared program '{}' not found among attached/attempted programs {:?}",
+                        self.name,
+                        declared,
+                        actual
+                    );
+                }
+            }
             let verdicts: Vec<crate::agent::sampler_status::ProbeVerdict> =
                 prog_status.iter().map(|p| p.verdict).collect();
             let health = crate::agent::sampler_status::rollup_health(true, &verdicts);
