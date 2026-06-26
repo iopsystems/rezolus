@@ -4,6 +4,7 @@
 use crate::agent::sampler_status::{
     AgentStatus, ProbeVerdict, SamplerHealth, SamplerState, SamplerStatus,
 };
+use clap::{value_parser, Arg, ArgAction, Command};
 use std::time::Duration;
 
 /// Render the one-line agent header: version, humanized uptime, humanized ttl.
@@ -85,6 +86,61 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
     (format!("{tally}{lines}"), problem)
 }
 
+pub fn command() -> Command {
+    Command::new("status")
+        .about("Fetch and display agent status (version, uptime, sampler health)")
+        .arg(
+            Arg::new("ENDPOINT")
+                .help("Agent base URL, e.g. http://localhost:4241")
+                .required(true)
+                .index(1)
+                .value_parser(value_parser!(String)),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .help("Emit the raw /status JSON")
+                .action(ArgAction::SetTrue),
+        )
+}
+
+pub fn run(args: &clap::ArgMatches) {
+    let endpoint = args.get_one::<String>("ENDPOINT").unwrap();
+    let json = args.get_flag("json");
+    let url = format!("{}/status", endpoint.trim_end_matches('/'));
+
+    let body = match reqwest::blocking::get(&url)
+        .and_then(|r| r.error_for_status())
+        .and_then(|r| r.text())
+    {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("fetching {url}: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if json {
+        println!("{body}");
+        return;
+    }
+
+    let status: AgentStatus = match serde_json::from_str(&body) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("parsing /status response: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("{}", render_header(&status));
+    let (text, problem) = render_samplers(&status.samplers);
+    print!("{text}");
+    if problem {
+        std::process::exit(1);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,62 +212,5 @@ mod tests {
         assert!(!problem);
         assert!(text.contains("0 healthy, 1 unsupported, 0 degraded, 0 failed"));
         assert!(text.contains("CPU time by category"));
-    }
-}
-
-use clap::{value_parser, Arg, ArgAction, Command};
-
-pub fn command() -> Command {
-    Command::new("status")
-        .about("Fetch and display agent status (version, uptime, sampler health)")
-        .arg(
-            Arg::new("ENDPOINT")
-                .help("Agent base URL, e.g. http://localhost:4241")
-                .required(true)
-                .index(1)
-                .value_parser(value_parser!(String)),
-        )
-        .arg(
-            Arg::new("json")
-                .long("json")
-                .help("Emit the raw /status JSON")
-                .action(ArgAction::SetTrue),
-        )
-}
-
-pub fn run(args: &clap::ArgMatches) {
-    let endpoint = args.get_one::<String>("ENDPOINT").unwrap();
-    let json = args.get_flag("json");
-    let url = format!("{}/status", endpoint.trim_end_matches('/'));
-
-    let body = match reqwest::blocking::get(&url)
-        .and_then(|r| r.error_for_status())
-        .and_then(|r| r.text())
-    {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("fetching {url}: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    if json {
-        println!("{body}");
-        return;
-    }
-
-    let status: AgentStatus = match serde_json::from_str(&body) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("parsing /status response: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    println!("{}", render_header(&status));
-    let (text, problem) = render_samplers(&status.samplers);
-    print!("{text}");
-    if problem {
-        std::process::exit(1);
     }
 }
