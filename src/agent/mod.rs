@@ -178,11 +178,11 @@ fn log_sampler_health_summary() {
         match (&s.state, s.health) {
             (SamplerState::Failed { error }, _) => {
                 failed += 1;
-                warn!("sampler {}: failed — {}", s.name, error);
+                error!("sampler {}: failed — {}", s.name, error);
             }
             (_, Some(SamplerHealth::Failed)) => {
                 failed += 1;
-                warn!("sampler {}: failed", s.name);
+                error!("sampler {}: failed", s.name);
             }
             (_, Some(SamplerHealth::Degraded)) => {
                 degraded += 1;
