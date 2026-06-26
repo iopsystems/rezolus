@@ -1,5 +1,6 @@
 mod builder;
 mod counters;
+pub mod drivers;
 mod histogram;
 mod sync_primitive;
 

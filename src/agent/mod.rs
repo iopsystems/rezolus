@@ -11,6 +11,27 @@ use config::Config;
 use external_metrics::{ExternalMetricsStore, Protocol, ServerState};
 use samplers::{Sampler, SamplerResult, SAMPLERS};
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
+/// Process start time, recorded once at the top of `run()`. Read by the
+/// `/status` endpoint to report uptime.
+static AGENT_START: OnceLock<Instant> = OnceLock::new();
+
+/// Record the agent's start time. Idempotent; the first call wins.
+fn record_agent_start() {
+    let _ = AGENT_START.set(Instant::now());
+}
+
+/// Seconds since the agent started, or 0 if never recorded (e.g. a unit test
+/// that does not call `run()`).
+pub(crate) fn agent_uptime_seconds() -> u64 {
+    AGENT_START
+        .get()
+        .map(|start| start.elapsed().as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(target_os = "linux")]
 use metrics::GroupMetadata;
 
@@ -38,6 +59,8 @@ pub const MAX_PID: usize = 4194304;
 ///
 /// This is the default mode for running Rezolus.
 pub fn run(config: PathBuf) {
+    record_agent_start();
+
     let config: Arc<Config> = {
         debug!("loading config: {config:?}");
         match Config::load(&config) {
@@ -75,6 +98,8 @@ pub fn run(config: PathBuf) {
             Err(e) => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
         }
     }
+
+    log_sampler_health_summary();
 
     let samplers = Arc::new(samplers.into_boxed_slice());
 
@@ -135,4 +160,69 @@ pub fn run(config: PathBuf) {
     loop {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
+}
+
+/// Emit a single classified summary of sampler health after init, mirroring
+/// the `/samplers` endpoint. Replaces scattered per-probe attach warnings:
+/// degraded/failed at `warn!`, unsupported at `info!`, plus a one-line tally.
+fn log_sampler_health_summary() {
+    use crate::agent::sampler_status::{ProbeVerdict, SamplerHealth, SamplerState};
+
+    let statuses = crate::agent::sampler_status::snapshot();
+    let mut healthy = 0usize;
+    let mut unsupported = 0usize;
+    let mut degraded = 0usize;
+    let mut failed = 0usize;
+
+    for s in &statuses {
+        match (&s.state, s.health) {
+            (SamplerState::Failed { error }, _) => {
+                failed += 1;
+                error!("sampler {}: failed — {}", s.name, error);
+            }
+            (_, Some(SamplerHealth::Failed)) => {
+                failed += 1;
+                error!("sampler {}: failed", s.name);
+            }
+            (_, Some(SamplerHealth::Degraded)) => {
+                degraded += 1;
+                let probes: Vec<String> = s
+                    .programs
+                    .iter()
+                    .filter(|p| p.verdict == ProbeVerdict::Broken)
+                    .map(|p| {
+                        format!(
+                            "{} ({})",
+                            p.label.as_deref().unwrap_or(&p.name),
+                            p.error.as_deref().unwrap_or("not attached")
+                        )
+                    })
+                    .collect();
+                warn!("sampler {}: degraded — {}", s.name, probes.join(", "));
+            }
+            (_, Some(SamplerHealth::Unsupported)) => {
+                unsupported += 1;
+                let probes: Vec<String> = s
+                    .programs
+                    .iter()
+                    .filter(|p| p.verdict == ProbeVerdict::Unsupported)
+                    .map(|p| {
+                        format!(
+                            "{} (no kernel support)",
+                            p.label.as_deref().unwrap_or(&p.name)
+                        )
+                    })
+                    .collect();
+                info!("sampler {}: unsupported — {}", s.name, probes.join(", "));
+            }
+            (_, Some(SamplerHealth::Healthy)) => healthy += 1,
+            (SamplerState::Disabled, None) => {}
+            (SamplerState::Active, None) => healthy += 1, // non-BPF sampler
+        }
+    }
+
+    info!(
+        "samplers: {} healthy, {} unsupported, {} degraded, {} failed",
+        healthy, unsupported, degraded, failed
+    );
 }

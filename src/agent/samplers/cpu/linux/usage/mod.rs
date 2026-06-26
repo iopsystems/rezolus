@@ -169,6 +169,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     } else {
         &["handle__sched_process_exit_btf"]
     })
+    // Losing this kprobe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
+    // entire CPU-time-by-category breakdown; label it so the health reason is
+    // legible.
+    .required_programs(&[("cpuacct_account_field_kprobe", "CPU time by category")])
     .build()?;
 
     Ok(Some(Box::new(bpf)))

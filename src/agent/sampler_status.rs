@@ -11,8 +11,20 @@ pub struct SamplerStatus {
     pub name: String,
     #[serde(flatten)]
     pub state: SamplerState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<SamplerHealth>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub programs: Vec<ProgramStatus>,
+}
+
+/// Aggregate agent status returned by the `/status` endpoint: identity +
+/// liveness header plus the full per-sampler health detail.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentStatus {
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub ttl_seconds: u64,
+    pub samplers: Vec<SamplerStatus>,
 }
 
 /// Whether a sampler is running, disabled by config, or failed to initialize.
@@ -31,6 +43,18 @@ pub struct ProgramStatus {
     pub attached: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<ProbeIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub expected: bool,
+    #[serde(default = "default_verdict")]
+    pub verdict: ProbeVerdict,
+}
+
+fn default_verdict() -> ProbeVerdict {
+    ProbeVerdict::Ok
 }
 
 fn registry() -> &'static Mutex<BTreeMap<&'static str, SamplerStatus>> {
@@ -45,6 +69,7 @@ pub fn set_disabled(name: &'static str) {
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Disabled,
+            health: None,
             programs: Vec::new(),
         },
     );
@@ -57,20 +82,26 @@ pub fn set_failed(name: &'static str, error: String) {
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Failed { error },
+            health: None,
             programs: Vec::new(),
         },
     );
 }
 
-/// Record a sampler as active with its per-program attach detail.
+/// Record a sampler as active with its per-program detail and computed health.
 /// Only called from the BPF builder, which is Linux-only.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn set_active_with_programs(name: &'static str, programs: Vec<ProgramStatus>) {
+pub fn set_active_with_programs(
+    name: &'static str,
+    health: SamplerHealth,
+    programs: Vec<ProgramStatus>,
+) {
     registry().lock().unwrap().insert(
         name,
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Active,
+            health: Some(health),
             programs,
         },
     );
@@ -87,6 +118,7 @@ pub fn set_active_if_absent(name: &'static str) {
         .or_insert_with(|| SamplerStatus {
             name: name.to_string(),
             state: SamplerState::Active,
+            health: None,
             programs: Vec::new(),
         });
 }
@@ -94,6 +126,99 @@ pub fn set_active_if_absent(name: &'static str) {
 /// Snapshot of all sampler statuses, sorted by name (BTreeMap order).
 pub fn snapshot() -> Vec<SamplerStatus> {
     registry().lock().unwrap().values().cloned().collect()
+}
+
+/// Author-declared meaning of a BPF program's attach.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum ProbeIntent {
+    /// Must attach on every supported kernel. Default for unclassified probes.
+    #[default]
+    Required,
+    /// Per-device probe; expected to attach iff `driver` (the sysfs driver
+    /// name, e.g. `virtio_net`, `mlx5_core`) is bound to a present device.
+    Driver { driver: String },
+}
+
+/// Per-probe outcome after classification.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProbeVerdict {
+    /// Attached as expected.
+    Ok,
+    /// Required probe absent due to ENOENT — kernel lacks the symbol.
+    Unsupported,
+    /// Should have attached but did not (non-ENOENT error, or a present-driver
+    /// probe that failed).
+    Broken,
+    /// Driver probe whose driver is not bound to any present device — silent.
+    NotApplicable,
+}
+
+/// Per-sampler health rollup.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplerHealth {
+    Healthy,
+    /// A capability is unavailable on this kernel (ENOENT-gated). Informational.
+    Unsupported,
+    /// Something that should work broke.
+    Degraded,
+    /// Load/verify error — completely non-functional.
+    Failed,
+}
+
+/// Classify one probe. Pure function. `is_enoent` is meaningful only when
+/// `attached` is false. `driver_present` is meaningful only for `Driver`.
+///
+/// Called from the BPF builder (Linux-only); on other platforms it is exercised
+/// only by unit tests, so suppress the dead-code lint there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn classify_program(
+    intent: &ProbeIntent,
+    attached: bool,
+    is_enoent: bool,
+    driver_present: bool,
+) -> ProbeVerdict {
+    if attached {
+        return ProbeVerdict::Ok;
+    }
+    match intent {
+        ProbeIntent::Required => {
+            if is_enoent {
+                ProbeVerdict::Unsupported
+            } else {
+                ProbeVerdict::Broken
+            }
+        }
+        ProbeIntent::Driver { .. } => {
+            if driver_present {
+                ProbeVerdict::Broken
+            } else {
+                ProbeVerdict::NotApplicable
+            }
+        }
+    }
+}
+
+/// Roll up per-probe verdicts into a sampler health, in strict precedence:
+/// failed (load error) > degraded (any broken) > unsupported (any enoent) >
+/// healthy.
+///
+/// Called from the BPF builder (Linux-only); on other platforms it is exercised
+/// only by unit tests, so suppress the dead-code lint there.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn rollup_health(loaded_ok: bool, verdicts: &[ProbeVerdict]) -> SamplerHealth {
+    if !loaded_ok {
+        return SamplerHealth::Failed;
+    }
+    if verdicts.contains(&ProbeVerdict::Broken) {
+        return SamplerHealth::Degraded;
+    }
+    if verdicts.contains(&ProbeVerdict::Unsupported) {
+        return SamplerHealth::Unsupported;
+    }
+    SamplerHealth::Healthy
 }
 
 #[cfg(test)]
@@ -105,16 +230,25 @@ mod tests {
         let s = SamplerStatus {
             name: "cpu_usage".into(),
             state: SamplerState::Active,
+            health: None,
             programs: vec![
                 ProgramStatus {
                     name: "softirq_enter".into(),
                     attached: true,
                     error: None,
+                    intent: Some(ProbeIntent::Required),
+                    label: None,
+                    expected: false,
+                    verdict: ProbeVerdict::Ok,
                 },
                 ProgramStatus {
                     name: "cpuacct_account_field_kprobe".into(),
                     attached: false,
                     error: Some("no kernel support (ENOENT)".into()),
+                    intent: Some(ProbeIntent::Required),
+                    label: None,
+                    expected: false,
+                    verdict: ProbeVerdict::Unsupported,
                 },
             ],
         };
@@ -132,6 +266,7 @@ mod tests {
         let json = serde_json::to_string(&SamplerStatus {
             name: "gpu".into(),
             state: SamplerState::Disabled,
+            health: None,
             programs: Vec::new(),
         })
         .unwrap();
@@ -145,10 +280,169 @@ mod tests {
             state: SamplerState::Failed {
                 error: "boom".into(),
             },
+            health: None,
             programs: Vec::new(),
         })
         .unwrap();
         assert!(json.contains(r#""state":"failed""#));
         assert!(json.contains(r#""error":"boom""#));
+    }
+
+    #[test]
+    fn classify_required_attached_is_ok() {
+        assert_eq!(
+            classify_program(&ProbeIntent::Required, true, false, false),
+            ProbeVerdict::Ok
+        );
+    }
+    #[test]
+    fn classify_required_enoent_is_unsupported() {
+        assert_eq!(
+            classify_program(&ProbeIntent::Required, false, true, false),
+            ProbeVerdict::Unsupported
+        );
+    }
+    #[test]
+    fn classify_required_other_error_is_broken() {
+        assert_eq!(
+            classify_program(&ProbeIntent::Required, false, false, false),
+            ProbeVerdict::Broken
+        );
+    }
+    #[test]
+    fn classify_driver_present_not_attached_is_broken() {
+        let i = ProbeIntent::Driver {
+            driver: "ena".into(),
+        };
+        assert_eq!(
+            classify_program(&i, false, true, true),
+            ProbeVerdict::Broken
+        );
+    }
+    #[test]
+    fn classify_driver_absent_not_attached_is_not_applicable() {
+        let i = ProbeIntent::Driver {
+            driver: "ixgbe".into(),
+        };
+        assert_eq!(
+            classify_program(&i, false, false, false),
+            ProbeVerdict::NotApplicable
+        );
+    }
+    #[test]
+    fn classify_driver_attached_is_ok() {
+        let i = ProbeIntent::Driver {
+            driver: "ena".into(),
+        };
+        assert_eq!(classify_program(&i, true, false, true), ProbeVerdict::Ok);
+    }
+    #[test]
+    fn rollup_failed_when_load_error() {
+        assert_eq!(rollup_health(false, &[]), SamplerHealth::Failed);
+    }
+    #[test]
+    fn rollup_degraded_on_broken() {
+        let v = vec![ProbeVerdict::Ok, ProbeVerdict::Broken];
+        assert_eq!(rollup_health(true, &v), SamplerHealth::Degraded);
+    }
+    #[test]
+    fn rollup_unsupported_on_enoent_only() {
+        let v = vec![
+            ProbeVerdict::Ok,
+            ProbeVerdict::Unsupported,
+            ProbeVerdict::NotApplicable,
+        ];
+        assert_eq!(rollup_health(true, &v), SamplerHealth::Unsupported);
+    }
+    #[test]
+    fn rollup_healthy_when_all_ok_or_na() {
+        let v = vec![ProbeVerdict::Ok, ProbeVerdict::NotApplicable];
+        assert_eq!(rollup_health(true, &v), SamplerHealth::Healthy);
+    }
+    #[test]
+    fn rollup_degraded_beats_unsupported() {
+        let v = vec![ProbeVerdict::Unsupported, ProbeVerdict::Broken];
+        assert_eq!(rollup_health(true, &v), SamplerHealth::Degraded);
+    }
+    #[test]
+    fn rollup_healthy_when_loaded_and_empty() {
+        assert_eq!(rollup_health(true, &[]), SamplerHealth::Healthy);
+    }
+
+    #[test]
+    fn program_status_serializes_intent_and_verdict() {
+        let p = ProgramStatus {
+            name: "ena_tx_timeout".into(),
+            attached: false,
+            error: Some("no kernel support (ENOENT)".into()),
+            intent: Some(ProbeIntent::Driver {
+                driver: "ena".into(),
+            }),
+            label: Some("ENA tx timeout".into()),
+            expected: false,
+            verdict: ProbeVerdict::NotApplicable,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        assert!(json.contains(r#""verdict":"not_applicable""#));
+        assert!(json.contains(r#""intent":{"type":"driver""#));
+        assert!(json.contains(r#""driver":"ena""#));
+        let back: ProgramStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn old_program_status_without_new_fields_still_deserializes() {
+        // Payload produced before this change (no intent/verdict/etc.).
+        let json = r#"{"name":"softirq_enter","attached":true}"#;
+        let p: ProgramStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(p.name, "softirq_enter");
+        assert!(p.attached);
+        assert_eq!(p.intent, None);
+        assert_eq!(p.verdict, ProbeVerdict::Ok);
+    }
+
+    #[test]
+    fn sampler_status_carries_health() {
+        let s = SamplerStatus {
+            name: "cpu_usage".into(),
+            state: SamplerState::Active,
+            health: Some(SamplerHealth::Unsupported),
+            programs: Vec::new(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""health":"unsupported""#));
+        let back: SamplerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
+
+    #[test]
+    fn old_sampler_status_without_health_still_deserializes() {
+        let json = r#"{"name":"gpu","state":"disabled"}"#;
+        let s: SamplerStatus = serde_json::from_str(json).unwrap();
+        assert_eq!(s.name, "gpu");
+        assert_eq!(s.health, None);
+        assert!(s.programs.is_empty());
+    }
+
+    #[test]
+    fn agent_status_round_trips() {
+        let s = AgentStatus {
+            version: "5.15.1-alpha.2".into(),
+            uptime_seconds: 11532,
+            ttl_seconds: 60,
+            samplers: vec![SamplerStatus {
+                name: "cpu_usage".into(),
+                state: SamplerState::Active,
+                health: Some(SamplerHealth::Healthy),
+                programs: Vec::new(),
+            }],
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""version":"5.15.1-alpha.2""#));
+        assert!(json.contains(r#""uptime_seconds":11532"#));
+        assert!(json.contains(r#""ttl_seconds":60"#));
+        let back: AgentStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.uptime_seconds, 11532);
+        assert_eq!(back.samplers.len(), 1);
     }
 }

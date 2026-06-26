@@ -239,6 +239,12 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     /// drop the unused variant when a sampler ships both a `tp_btf` and a
     /// `raw_tp` version of a hook.
     disabled_programs: Option<HashSet<&'static str>>,
+    /// Optional per-program intent overrides. Programs absent from this map
+    /// default to `ProbeIntent::Required`. Used to mark per-driver probes.
+    program_intents: HashMap<&'static str, crate::agent::sampler_status::ProbeIntent>,
+    /// Optional human capability labels per program, for readable health
+    /// reasons. Intent stays whatever `program_intents` says (default Required).
+    program_labels: HashMap<&'static str, &'static str>,
 }
 
 impl<T: 'static> Builder<T>
@@ -267,6 +273,8 @@ where
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
             disabled_programs: None,
+            program_intents: HashMap::new(),
+            program_labels: HashMap::new(),
         }
     }
 
@@ -379,8 +387,11 @@ where
             // others in this skeleton from attaching. Records per-program
             // status. Load/verify failures above remain fatal; only attach
             // failures are tolerated here.
+            let bound_drivers = crate::agent::bpf::drivers::bound_drivers();
             let mut links: Vec<libbpf_rs::Link> = Vec::new();
-            let mut prog_status: Vec<crate::agent::sampler_status::ProgramStatus> = Vec::new();
+            // (name, attached, is_enoent, error_string) collected first, then
+            // classified against declared intent + bound drivers below.
+            let mut raw: Vec<(String, bool, bool, Option<String>)> = Vec::new();
             for prog in skel.object().progs_mut() {
                 if !prog.autoload() {
                     continue; // intentionally-disabled tp_btf/raw_tp twin
@@ -389,37 +400,97 @@ where
                 match prog.attach() {
                     Ok(link) => {
                         links.push(link);
-                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
-                            name: prog_name,
-                            attached: true,
-                            error: None,
-                        });
+                        raw.push((prog_name, true, false, None));
                     }
                     Err(e) if e.kind() == libbpf_rs::ErrorKind::NotFound => {
-                        warn!(
+                        debug!(
                             "{} program '{}' not attached (no kernel support): {}",
                             self.name, prog_name, e
                         );
-                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
-                            name: prog_name,
-                            attached: false,
-                            error: Some("no kernel support (ENOENT)".to_string()),
-                        });
+                        raw.push((
+                            prog_name,
+                            false,
+                            true,
+                            Some("no kernel support (ENOENT)".to_string()),
+                        ));
                     }
                     Err(e) => {
-                        warn!(
+                        debug!(
                             "{} program '{}' failed to attach, skipping: {}",
                             self.name, prog_name, e
                         );
-                        prog_status.push(crate::agent::sampler_status::ProgramStatus {
-                            name: prog_name,
-                            attached: false,
-                            error: Some(e.to_string()),
-                        });
+                        raw.push((prog_name, false, false, Some(e.to_string())));
                     }
                 }
             }
-            crate::agent::sampler_status::set_active_with_programs(self.name, prog_status);
+
+            // Classify each attempted program against its declared intent and
+            // the set of drivers bound to present devices.
+            let mut prog_status: Vec<crate::agent::sampler_status::ProgramStatus> = Vec::new();
+            for (name, attached, is_enoent, error) in raw {
+                let intent = self
+                    .program_intents
+                    .get(name.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                let driver_present = match &intent {
+                    crate::agent::sampler_status::ProbeIntent::Driver { driver } => {
+                        bound_drivers.contains(driver)
+                    }
+                    _ => false,
+                };
+                let verdict = crate::agent::sampler_status::classify_program(
+                    &intent,
+                    attached,
+                    is_enoent,
+                    driver_present,
+                );
+                let label = self
+                    .program_labels
+                    .get(name.as_str())
+                    .map(|s| s.to_string());
+                // A required probe is always expected to attach; a driver probe
+                // only when its driver is bound to a present device.
+                let expected = match &intent {
+                    crate::agent::sampler_status::ProbeIntent::Required => true,
+                    crate::agent::sampler_status::ProbeIntent::Driver { .. } => driver_present,
+                };
+                prog_status.push(crate::agent::sampler_status::ProgramStatus {
+                    name,
+                    attached,
+                    error,
+                    intent: Some(intent),
+                    label,
+                    expected,
+                    verdict,
+                });
+            }
+            // Guard against typos in declared probe names: every program named
+            // in an intent/label override must correspond to a real attached or
+            // attempted program. A mismatch means the override silently does
+            // nothing. Debug-only — names are stringly-typed.
+            #[cfg(debug_assertions)]
+            {
+                let actual: std::collections::HashSet<&str> =
+                    prog_status.iter().map(|p| p.name.as_str()).collect();
+                for declared in self
+                    .program_intents
+                    .keys()
+                    .chain(self.program_labels.keys())
+                {
+                    debug_assert!(
+                        actual.contains(*declared),
+                        "{}: declared program '{}' not found among attached/attempted programs {:?}",
+                        self.name,
+                        declared,
+                        actual
+                    );
+                }
+            }
+            let verdicts: Vec<crate::agent::sampler_status::ProbeVerdict> =
+                prog_status.iter().map(|p| p.verdict).collect();
+            let health = crate::agent::sampler_status::rollup_health(true, &verdicts);
+            crate::agent::sampler_status::set_active_with_programs(self.name, health, prog_status);
             // `_links` must outlive the loop for the sampler thread's lifetime;
             // dropping a Link detaches its program.
             let _links = links;
@@ -744,6 +815,33 @@ where
     /// ```
     pub fn disabled_programs(mut self, names: &[&'static str]) -> Self {
         self.disabled_programs = Some(names.iter().copied().collect());
+        self
+    }
+
+    /// Attach human capability labels to programs so health reasons read well
+    /// (e.g. `("cpuacct_account_field_kprobe", "CPU time by category")`).
+    /// Intent is unaffected (stays `Required` unless also set via
+    /// [`Self::driver_programs`]).
+    pub fn required_programs(mut self, items: &[(&'static str, &'static str)]) -> Self {
+        for (prog, label) in items {
+            self.program_labels.insert(prog, label);
+        }
+        self
+    }
+
+    /// Declare per-driver probes. `driver` is the sysfs driver name (e.g.
+    /// `virtio_net`, `mlx5_core`), which may differ from the probe symbol
+    /// prefix. Such a probe is expected to attach iff its driver is bound to a
+    /// present device; otherwise its non-attach is silent (not a problem).
+    pub fn driver_programs(mut self, items: &[(&'static str, &'static str)]) -> Self {
+        for (prog, driver) in items {
+            self.program_intents.insert(
+                prog,
+                crate::agent::sampler_status::ProbeIntent::Driver {
+                    driver: (*driver).to_string(),
+                },
+            );
+        }
         self
     }
 }

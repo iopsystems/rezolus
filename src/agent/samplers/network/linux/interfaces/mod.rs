@@ -41,6 +41,23 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .counters("counters", counters)
+    // Per-driver tx_timeout kprobes: only the driver(s) bound to present NICs
+    // should attach. Keys are the BPF program (C function) names, which differ
+    // from the SEC() kprobe targets for virtio/mlx4/mlx5.
+    .driver_programs(&[
+        ("virtio_tx_timeout", "virtio_net"),
+        ("ena_tx_timeout", "ena"),
+        ("gve_tx_timeout", "gve"),
+        ("mlx4_tx_timeout", "mlx4_en"),
+        ("mlx5_tx_timeout", "mlx5_core"),
+        ("e1000_tx_timeout", "e1000e"),
+        ("igb_tx_timeout", "igb"),
+        ("ixgbe_tx_timeout", "ixgbe"),
+        ("i40e_tx_timeout", "i40e"),
+        ("ice_tx_timeout", "ice"),
+        ("bnxt_tx_timeout", "bnxt_en"),
+        ("tg3_tx_timeout", "tg3"),
+    ])
     .build()?;
 
     Ok(Some(Box::new(bpf)))
