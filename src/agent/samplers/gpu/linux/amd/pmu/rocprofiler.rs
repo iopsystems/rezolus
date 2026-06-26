@@ -287,7 +287,7 @@ struct State {
     initialized: bool,
     hsa_shut_down: Option<Symbol<'static, FnHsaShutDown>>,
     /// Keep the dlopen handles alive for the whole process.
-    _libs: Vec<Box<Library>>,
+    _libs: Vec<Library>,
 }
 
 // SAFETY: all access is serialized through the Mutex; the contained symbols are
@@ -547,11 +547,11 @@ impl Rocprofiler {
         // trust the ROCm-provided libraries.
         let rocp =
             match unsafe { load_first(&["librocprofiler-sdk.so", "librocprofiler-sdk.so.1"]) } {
-                Some(lib) => Box::new(lib),
+                Some(lib) => lib,
                 None => return Ok(None),
             };
         let hsa = match unsafe { load_first(&["libhsa-runtime64.so", "libhsa-runtime64.so.1"]) } {
-            Some(lib) => Box::new(lib),
+            Some(lib) => lib,
             None => return Ok(None),
         };
 
@@ -650,7 +650,9 @@ impl Rocprofiler {
         }
 
         // Capture per-agent worker inputs (all Copy/clone plain data) before
-        // releasing the STATE guard, then spawn the threads.
+        // releasing the STATE guard, then spawn the threads. The tuple type is
+        // self-documenting here (ctx, config handle, shared accumulator).
+        #[allow(clippy::type_complexity)]
         let worker_inputs: Vec<(ContextId, u64, Arc<Mutex<HashMap<String, u64>>>)> = state
             .agents
             .iter()
@@ -768,6 +770,7 @@ fn agent_worker_loop(
 
     // Helper: run a closure with the locked syms + the agent's id_to_name.
     // Returns None if rocprofiler state is gone (shutting down).
+    #[allow(clippy::type_complexity)]
     let with_state = |f: &mut dyn FnMut(&Syms, &HashMap<u64, String>) -> Result<(), String>| {
         let guard = STATE.lock().ok()?;
         let state = guard.as_ref()?;
