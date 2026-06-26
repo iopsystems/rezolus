@@ -12,7 +12,7 @@ use crate::agent::*;
 
 use tokio::sync::Mutex;
 
-pub(crate) mod pmu;
+mod pmu;
 mod rocm_smi;
 mod stats;
 

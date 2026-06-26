@@ -43,22 +43,9 @@ pub enum EndpointStatus {
     Pending,
 }
 
-/// How an endpoint's data is obtained.
-#[derive(Debug, PartialEq, Eq)]
-pub enum EndpointKind {
-    /// Scraped over HTTP (Rezolus msgpack or Prometheus text).
-    Http,
-    /// Read locally from the host's AMD GPU hardware counters (PMU). No HTTP
-    /// scrape; the recorder samples the GPU directly each tick. Only constructed
-    /// on Linux, where PMU recording is supported.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    AmdPmu,
-}
-
 /// Runtime state for a single endpoint during recording.
 pub struct EndpointState {
     pub config: EndpointConfig,
-    pub kind: EndpointKind,
     pub status: EndpointStatus,
     pub detected_protocol: Option<Protocol>,
     pub scrape_url: Option<Url>,
@@ -74,33 +61,8 @@ impl EndpointState {
         let detected_protocol = config.protocol.clone();
         Self {
             config,
-            kind: EndpointKind::Http,
             status: EndpointStatus::Pending,
             detected_protocol,
-            scrape_url: None,
-            systeminfo: None,
-            descriptions: None,
-            sampler_status: None,
-            first_success_ns: None,
-            last_success_ns: None,
-        }
-    }
-
-    /// A local AMD GPU PMU source. It is immediately `Active` (no probe), has no
-    /// scrape URL, and is read directly from the GPU each tick. Only constructed
-    /// on Linux, where PMU recording is supported.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn new_amd_pmu(source: String) -> Self {
-        Self {
-            config: EndpointConfig {
-                url: Url::parse("pmu://amd/local").expect("static URL"),
-                source: Some(source),
-                role: None,
-                protocol: None,
-            },
-            kind: EndpointKind::AmdPmu,
-            status: EndpointStatus::Active,
-            detected_protocol: None,
             scrape_url: None,
             systeminfo: None,
             descriptions: None,

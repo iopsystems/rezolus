@@ -2,13 +2,11 @@ use super::*;
 
 mod config;
 mod endpoint;
-#[cfg(target_os = "linux")]
-mod pmu;
 mod prometheus;
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
-use endpoint::{infer_source_name, EndpointKind, EndpointState, EndpointStatus, Protocol};
+use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
 use std::path::Path;
 
 pub fn command() -> Command {
@@ -88,55 +86,6 @@ pub fn command() -> Command {
                 .short('m')
                 .help("Add file-level parquet metadata (key=value)")
                 .action(clap::ArgAction::Append),
-        )
-        .arg(
-            clap::Arg::new("OUTPUT_FLAG")
-                .long("output")
-                .short('o')
-                .help("Path to the output file (alternative to the positional OUTPUT)")
-                .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(PathBuf)),
-        )
-        .arg(
-            clap::Arg::new("GPU_AMD_PMU")
-                .long("gpu-amd-pmu")
-                .help("Record AMD GPU hardware performance counters from the local host")
-                .action(clap::ArgAction::SetTrue),
-        )
-        .arg(
-            clap::Arg::new("GPU_AMD_PMU_GPUS")
-                .long("gpu-amd-pmu-gpus")
-                .help("GPU indices to record (comma-separated); defaults to all detected GPUs")
-                .value_delimiter(',')
-                .value_parser(value_parser!(usize))
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
-            clap::Arg::new("GPU_AMD_PMU_EVENTS")
-                .long("gpu-amd-pmu-events")
-                .help("PMU event names to record (comma-separated); defaults to the sampler's set")
-                .value_delimiter(',')
-                .action(clap::ArgAction::Append),
-        )
-        .arg(
-            clap::Arg::new("GPU_PERF_LEVEL")
-                .long("gpu-perf-level")
-                .help(
-                    "Set the AMD GPU performance level before recording (default: leave as-is). \
-                     Many RDNA per-SIMD PMU counters only read non-zero in a stable power state.",
-                )
-                .value_parser([
-                    "auto",
-                    "low",
-                    "high",
-                    "manual",
-                    "stable_std",
-                    "stable_peak",
-                    "stable_min_mclk",
-                    "stable_min_sclk",
-                    "determinism",
-                ])
-                .action(clap::ArgAction::Set),
         )
         .arg(
             clap::Arg::new("NODE")
@@ -491,70 +440,9 @@ pub fn run(config: RecordingConfig) {
         .map(|ep| EndpointState::new(ep.clone()))
         .collect();
 
-    // Set up the local AMD GPU PMU source, if requested. It reads the GPU
-    // directly (no HTTP), so it joins `endpoints` as an already-active
-    // `EndpointKind::AmdPmu` entry; its `PmuSource` is held separately and keyed
-    // by the endpoint index. There is at most one PMU source.
-    #[cfg(target_os = "linux")]
-    let mut pmu_source: Option<(usize, pmu::PmuSource)> = None;
-    #[cfg(target_os = "linux")]
-    if let Some(ref pmu_cfg) = config.pmu {
-        // Parse the perf level up front so an invalid value (e.g. from the TOML
-        // config) fails fast with a clear error rather than silently no-op'ing.
-        let gpu_perf_level = match &pmu_cfg.gpu_perf_level {
-            Some(s) => match s.parse::<pmu::PerfLevel>() {
-                Ok(level) => Some(level),
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    std::process::exit(1);
-                }
-            },
-            None => None,
-        };
-        let pmu_recording = pmu::PmuConfig {
-            gpus: pmu_cfg.gpus.clone(),
-            events: pmu_cfg.events.clone(),
-            gpu_perf_level,
-        };
-        match pmu::PmuSource::new(&pmu_recording) {
-            Ok(Some(source)) => {
-                // PMU defaults to the "rezolus" source name so it combines with
-                // agent data; a user --metadata source=NAME still overrides the
-                // label written to parquet (see build_parquet_converter).
-                let mut ep = EndpointState::new_amd_pmu("rezolus".to_string());
-                ep.descriptions = source.descriptions_json();
-                ep.systeminfo = source.systeminfo_json();
-                let idx = endpoints.len();
-                endpoints.push(ep);
-                pmu_source = Some((idx, source));
-                info!("recording AMD GPU PMU counters from the local host");
-            }
-            Ok(None) => {
-                eprintln!(
-                    "error: AMD GPU PMU recording requested but no ROCm runtime / AMD GPU was found"
-                );
-                std::process::exit(1);
-            }
-            Err(e) => {
-                eprintln!("error: failed to initialize AMD GPU PMU recording: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    if config.pmu.is_some() {
-        eprintln!("error: AMD GPU PMU recording is only supported on Linux");
-        std::process::exit(1);
-    }
-
     // Probe all endpoints (best-effort startup)
     rt.block_on(async {
         for ep in &mut endpoints {
-            // PMU sources are local and already active; nothing to probe.
-            if ep.kind == EndpointKind::AmdPmu {
-                continue;
-            }
             match probe_endpoint(&client, &ep.config).await {
                 Some((protocol, url)) => {
                     if ep.config.source.is_none() {
@@ -654,14 +542,11 @@ pub fn run(config: RecordingConfig) {
                 .unwrap_or_default()
                 .as_nanos() as u64;
 
-            // Scrape all active HTTP endpoints concurrently. PMU sources are
-            // read locally (no HTTP) and handled separately below.
+            // Scrape all active endpoints concurrently
             let active_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
-                .filter(|(_, ep)| {
-                    ep.status == EndpointStatus::Active && ep.kind == EndpointKind::Http
-                })
+                .filter(|(_, ep)| ep.status == EndpointStatus::Active)
                 .map(|(i, _)| i)
                 .collect();
 
@@ -674,20 +559,7 @@ pub fn run(config: RecordingConfig) {
                 })
                 .collect();
 
-            // `mut` is only needed when a PMU result is pushed (Linux).
-            #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
-            let mut results = futures::future::join_all(scrape_futures).await;
-
-            // Read the local AMD GPU PMU source (if any) and append its already-
-            // serialized msgpack snapshot as a successful "scrape" result, so it
-            // flows through the same write path as scraped data.
-            #[cfg(target_os = "linux")]
-            if let Some((idx, ref source)) = pmu_source {
-                let snapshot = source.snapshot();
-                let bytes = rmp_serde::encode::to_vec(&snapshot)
-                    .map_err(|e| format!("PMU serialize error: {e}"));
-                results.push((idx, bytes));
-            }
+            let results = futures::future::join_all(scrape_futures).await;
 
             for (idx, result) in results {
                 match result {

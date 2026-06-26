@@ -656,11 +656,10 @@ const SectionContent = {
                 ]),
             ]),
             // GPU section: a two-panel selector (matching the cgroups UI) that
-            // filters the non-per-GPU charts to a subset of GPU ids. Shown
-            // whenever the recording has at least one GPU, so the selector is
-            // always present on the GPU dashboard. Per-GPU charts (queries
+            // filters the non-per-GPU charts to a subset of GPU ids. Shown only
+            // when the recording has more than one GPU. Per-GPU charts (queries
             // grouped `by (id)`) always show all GPUs.
-            sectionRoute === '/gpu' && gpuList.length >= 1 && m(GpuSelector, {
+            sectionRoute === '/gpu' && gpuList.length > 1 && m(GpuSelector, {
                 ids: gpuList,
                 selected: selectedGpus,
                 onChange: changeGpu,

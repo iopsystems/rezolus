@@ -92,18 +92,6 @@ impl Config {
         &self.external_metrics
     }
 
-    /// The configured AMD GPU performance level for `name`, falling back to the
-    /// `defaults` section. `None` means leave the GPU power state untouched.
-    /// Only consumed by the Linux-only `gpu_amd_pmu` sampler.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn gpu_perf_level(&self, name: &str) -> Option<String> {
-        self.samplers
-            .get(name)
-            .and_then(|v| v.gpu_perf_level())
-            .or_else(|| self.defaults.gpu_perf_level())
-            .map(|s| s.to_string())
-    }
-
     pub fn enabled(&self, name: &str) -> bool {
         let enabled = self
             .samplers
