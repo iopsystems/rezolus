@@ -10,8 +10,8 @@ pub use builder::{BpfProgStats, PerfEvent};
 use std::path::Path;
 use std::sync::OnceLock;
 
-use crate::agent::GroupMetadata;
 use crate::agent::samplers::Sampler;
+use crate::agent::GroupMetadata;
 use crate::*;
 
 /// Returns true if the running kernel exposes its own BTF
