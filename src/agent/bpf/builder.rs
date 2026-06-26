@@ -449,13 +449,19 @@ where
                     .program_labels
                     .get(name.as_str())
                     .map(|s| s.to_string());
+                // A required probe is always expected to attach; a driver probe
+                // only when its module is bound to a present device.
+                let expected = match &intent {
+                    crate::agent::sampler_status::ProbeIntent::Required => true,
+                    crate::agent::sampler_status::ProbeIntent::Driver { .. } => module_present,
+                };
                 prog_status.push(crate::agent::sampler_status::ProgramStatus {
                     name,
                     attached,
                     error,
                     intent: Some(intent),
                     label,
-                    expected: module_present,
+                    expected,
                     verdict,
                 });
             }
