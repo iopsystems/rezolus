@@ -22,7 +22,7 @@ mod mcp;
 mod parquet_metadata;
 mod parquet_tools;
 mod recorder;
-mod samplers_cli;
+mod status_cli;
 mod viewer;
 
 mod common;
@@ -80,7 +80,7 @@ fn main() {
         .subcommand(mcp::command())
         .subcommand(parquet_tools::command())
         .subcommand(recorder::command())
-        .subcommand(samplers_cli::command())
+        .subcommand(status_cli::command())
         .subcommand(viewer::command())
         .get_matches();
 
@@ -113,8 +113,8 @@ fn main() {
 
             recorder::run(config)
         }
-        Some(("samplers", args)) => {
-            samplers_cli::run(args);
+        Some(("status", args)) => {
+            status_cli::run(args);
         }
         Some(("view", args)) => {
             let config = viewer::Config::try_from(args.clone()).expect("failed to configure");
