@@ -11,6 +11,27 @@ use config::Config;
 use external_metrics::{ExternalMetricsStore, Protocol, ServerState};
 use samplers::{Sampler, SamplerResult, SAMPLERS};
 
+use std::sync::OnceLock;
+use std::time::Instant;
+
+/// Process start time, recorded once at the top of `run()`. Read by the
+/// `/status` endpoint to report uptime.
+static AGENT_START: OnceLock<Instant> = OnceLock::new();
+
+/// Record the agent's start time. Idempotent; the first call wins.
+fn record_agent_start() {
+    let _ = AGENT_START.set(Instant::now());
+}
+
+/// Seconds since the agent started, or 0 if never recorded (e.g. a unit test
+/// that does not call `run()`).
+pub(crate) fn agent_uptime_seconds() -> u64 {
+    AGENT_START
+        .get()
+        .map(|start| start.elapsed().as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(target_os = "linux")]
 use metrics::GroupMetadata;
 
@@ -38,6 +59,8 @@ pub const MAX_PID: usize = 4194304;
 ///
 /// This is the default mode for running Rezolus.
 pub fn run(config: PathBuf) {
+    record_agent_start();
+
     let config: Arc<Config> = {
         debug!("loading config: {config:?}");
         match Config::load(&config) {

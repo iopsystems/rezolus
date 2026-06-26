@@ -3,10 +3,15 @@ use crate::agent::*;
 use axum::extract::State;
 use axum::routing::get;
 use axum::Router;
+use std::sync::OnceLock;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
+
+/// Snapshot-cache TTL in seconds, captured from config in `serve()`. Read by
+/// the `/status` handler.
+static STATUS_TTL_SECONDS: OnceLock<u64> = OnceLock::new();
 
 mod snapshot;
 
@@ -22,6 +27,8 @@ pub async fn serve(
         samplers,
         external_store,
     )));
+
+    let _ = STATUS_TTL_SECONDS.set(config.general().ttl().as_secs());
 
     let app: Router = app(state);
 
@@ -42,6 +49,7 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
         .route("/metrics/descriptions", get(descriptions))
         .route("/systeminfo", get(system_info))
         .route("/samplers", get(samplers))
+        .route("/status", get(status))
         .with_state(state)
         .layer(
             ServiceBuilder::new()
@@ -87,6 +95,15 @@ async fn descriptions() -> axum::response::Json<std::collections::HashMap<String
 
 async fn samplers() -> axum::response::Json<Vec<crate::agent::sampler_status::SamplerStatus>> {
     axum::response::Json(crate::agent::sampler_status::snapshot())
+}
+
+async fn status() -> axum::response::Json<crate::agent::sampler_status::AgentStatus> {
+    axum::response::Json(crate::agent::sampler_status::AgentStatus {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        uptime_seconds: crate::agent::agent_uptime_seconds(),
+        ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
+        samplers: crate::agent::sampler_status::snapshot(),
+    })
 }
 
 async fn system_info() -> axum::response::Response {
