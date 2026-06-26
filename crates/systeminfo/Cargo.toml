@@ -14,6 +14,12 @@ serde.workspace = true
 serde_json.workspace = true
 walkdir.workspace = true
 
+# Used to dlopen the vendor GPU libraries (libnvidia-ml, librocm_smi64) at
+# runtime for hardware inventory. Linux-only: these libraries don't exist
+# elsewhere, and the GPU collector is gated to Linux.
+[target.'cfg(target_os = "linux")'.dependencies]
+libloading.workspace = true
+
 
 [[bin]]
 name = "systeminfo"
