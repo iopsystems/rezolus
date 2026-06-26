@@ -425,7 +425,7 @@ where
             }
 
             // Classify each attempted program against its declared intent and
-            // the set of bound NIC drivers.
+            // the set of drivers bound to present devices.
             let mut prog_status: Vec<crate::agent::sampler_status::ProgramStatus> = Vec::new();
             for (name, attached, is_enoent, error) in raw {
                 let intent = self
