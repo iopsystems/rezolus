@@ -135,9 +135,9 @@ pub enum ProbeIntent {
     /// Must attach on every supported kernel. Default for unclassified probes.
     #[default]
     Required,
-    /// Per-device probe; expected to attach iff `module` (the sysfs module
-    /// name, e.g. `virtio_net`) is bound to a present device.
-    Driver { module: String },
+    /// Per-device probe; expected to attach iff `driver` (the sysfs driver
+    /// name, e.g. `virtio_net`, `mlx5_core`) is bound to a present device.
+    Driver { driver: String },
 }
 
 /// Per-probe outcome after classification.
@@ -151,7 +151,7 @@ pub enum ProbeVerdict {
     /// Should have attached but did not (non-ENOENT error, or a present-driver
     /// probe that failed).
     Broken,
-    /// Driver probe for a module not present on this machine — silent.
+    /// Driver probe whose driver is not bound to any present device — silent.
     NotApplicable,
 }
 
@@ -169,7 +169,7 @@ pub enum SamplerHealth {
 }
 
 /// Classify one probe. Pure function. `is_enoent` is meaningful only when
-/// `attached` is false. `module_present` is meaningful only for `Driver`.
+/// `attached` is false. `driver_present` is meaningful only for `Driver`.
 ///
 /// Called from the BPF builder (Linux-only); on other platforms it is exercised
 /// only by unit tests, so suppress the dead-code lint there.
@@ -178,7 +178,7 @@ pub fn classify_program(
     intent: &ProbeIntent,
     attached: bool,
     is_enoent: bool,
-    module_present: bool,
+    driver_present: bool,
 ) -> ProbeVerdict {
     if attached {
         return ProbeVerdict::Ok;
@@ -192,7 +192,7 @@ pub fn classify_program(
             }
         }
         ProbeIntent::Driver { .. } => {
-            if module_present {
+            if driver_present {
                 ProbeVerdict::Broken
             } else {
                 ProbeVerdict::NotApplicable
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn classify_driver_present_not_attached_is_broken() {
         let i = ProbeIntent::Driver {
-            module: "ena".into(),
+            driver: "ena".into(),
         };
         assert_eq!(
             classify_program(&i, false, true, true),
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn classify_driver_absent_not_attached_is_not_applicable() {
         let i = ProbeIntent::Driver {
-            module: "ixgbe".into(),
+            driver: "ixgbe".into(),
         };
         assert_eq!(
             classify_program(&i, false, false, false),
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn classify_driver_attached_is_ok() {
         let i = ProbeIntent::Driver {
-            module: "ena".into(),
+            driver: "ena".into(),
         };
         assert_eq!(classify_program(&i, true, false, true), ProbeVerdict::Ok);
     }
@@ -376,7 +376,7 @@ mod tests {
             attached: false,
             error: Some("no kernel support (ENOENT)".into()),
             intent: Some(ProbeIntent::Driver {
-                module: "ena".into(),
+                driver: "ena".into(),
             }),
             label: Some("ENA tx timeout".into()),
             expected: false,
@@ -385,7 +385,7 @@ mod tests {
         let json = serde_json::to_string(&p).unwrap();
         assert!(json.contains(r#""verdict":"not_applicable""#));
         assert!(json.contains(r#""intent":{"type":"driver""#));
-        assert!(json.contains(r#""module":"ena""#));
+        assert!(json.contains(r#""driver":"ena""#));
         let back: ProgramStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
     }

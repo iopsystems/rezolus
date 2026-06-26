@@ -387,7 +387,7 @@ where
             // others in this skeleton from attaching. Records per-program
             // status. Load/verify failures above remain fatal; only attach
             // failures are tolerated here.
-            let bound_drivers = crate::agent::bpf::net_drivers::bound_net_drivers();
+            let bound_drivers = crate::agent::bpf::drivers::bound_drivers();
             let mut links: Vec<libbpf_rs::Link> = Vec::new();
             // (name, attached, is_enoent, error_string) collected first, then
             // classified against declared intent + bound drivers below.
@@ -433,9 +433,9 @@ where
                     .get(name.as_str())
                     .cloned()
                     .unwrap_or_default();
-                let module_present = match &intent {
-                    crate::agent::sampler_status::ProbeIntent::Driver { module } => {
-                        bound_drivers.contains(module)
+                let driver_present = match &intent {
+                    crate::agent::sampler_status::ProbeIntent::Driver { driver } => {
+                        bound_drivers.contains(driver)
                     }
                     _ => false,
                 };
@@ -443,17 +443,17 @@ where
                     &intent,
                     attached,
                     is_enoent,
-                    module_present,
+                    driver_present,
                 );
                 let label = self
                     .program_labels
                     .get(name.as_str())
                     .map(|s| s.to_string());
                 // A required probe is always expected to attach; a driver probe
-                // only when its module is bound to a present device.
+                // only when its driver is bound to a present device.
                 let expected = match &intent {
                     crate::agent::sampler_status::ProbeIntent::Required => true,
-                    crate::agent::sampler_status::ProbeIntent::Driver { .. } => module_present,
+                    crate::agent::sampler_status::ProbeIntent::Driver { .. } => driver_present,
                 };
                 prog_status.push(crate::agent::sampler_status::ProgramStatus {
                     name,
@@ -829,16 +829,16 @@ where
         self
     }
 
-    /// Declare per-driver probes. `module` is the sysfs module name (e.g.
-    /// `virtio_net`), which may differ from the probe symbol prefix. Such a
-    /// probe is expected to attach iff its module is bound to a present device;
-    /// otherwise its non-attach is silent (not a problem).
+    /// Declare per-driver probes. `driver` is the sysfs driver name (e.g.
+    /// `virtio_net`, `mlx5_core`), which may differ from the probe symbol
+    /// prefix. Such a probe is expected to attach iff its driver is bound to a
+    /// present device; otherwise its non-attach is silent (not a problem).
     pub fn driver_programs(mut self, items: &[(&'static str, &'static str)]) -> Self {
-        for (prog, module) in items {
+        for (prog, driver) in items {
             self.program_intents.insert(
                 prog,
                 crate::agent::sampler_status::ProbeIntent::Driver {
-                    module: (*module).to_string(),
+                    driver: (*driver).to_string(),
                 },
             );
         }

@@ -1,7 +1,7 @@
 mod builder;
 mod counters;
+pub mod drivers;
 mod histogram;
-pub mod net_drivers;
 mod sync_primitive;
 
 pub use builder::Builder as BpfBuilder;
