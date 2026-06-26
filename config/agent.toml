@@ -122,6 +122,10 @@ enabled = true
 # power state. When the PMU is enabled, AMD HSA runtime system creates one background thread that
 # keeps busy polling, that could push the Rezolus CPU utilization to 100% on one core.
 # This high CPU utilization might cause problem for some applications, so we disable this sampler by default.
+#
+# This sampler is OPT-IN ONLY: it is never enabled by the [defaults] section. It
+# stays off unless this section explicitly sets `enabled = true` (commenting the
+# section out leaves it disabled, not enabled).
 [samplers.gpu_amd_pmu]
 enabled = false
 # Optionally pin the AMD GPU performance level at startup. Default (unset) leaves

@@ -22,6 +22,12 @@ fn enabled() -> bool {
     true
 }
 
+/// Samplers that are never enabled by the `[defaults]` fallback — they must be
+/// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
+/// section. Reserved for samplers whose cost makes accidental activation
+/// (e.g. via an absent/commented config) unacceptable.
+const OPT_IN_SAMPLERS: &[&str] = &["gpu_amd_pmu"];
+
 fn listen() -> String {
     "0.0.0.0:4241".into()
 }
@@ -105,11 +111,23 @@ impl Config {
     }
 
     pub fn enabled(&self, name: &str) -> bool {
-        let enabled = self
-            .samplers
-            .get(name)
-            .and_then(|v| v.enabled())
-            .unwrap_or(self.defaults.enabled().unwrap_or(enabled()));
+        // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
+        // they require explicit `enabled = true` in their own section. These are
+        // costly/privileged enough that an absent or commented-out config must
+        // not accidentally enable them (e.g. `gpu_amd_pmu` needs CAP_PERFMON,
+        // takes an exclusive per-GPU profiling lock, and spins an HSA thread at
+        // ~100% of one core).
+        let enabled = if OPT_IN_SAMPLERS.contains(&name) {
+            self.samplers
+                .get(name)
+                .and_then(|v| v.enabled())
+                .unwrap_or(false)
+        } else {
+            self.samplers
+                .get(name)
+                .and_then(|v| v.enabled())
+                .unwrap_or(self.defaults.enabled().unwrap_or(enabled()))
+        };
 
         if enabled {
             debug!("'{name}' sampler is enabled");
@@ -118,5 +136,53 @@ impl Config {
         }
 
         enabled
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(toml: &str) -> Config {
+        toml::from_str(toml).expect("valid config")
+    }
+
+    #[test]
+    fn opt_in_sampler_off_when_section_absent() {
+        // [defaults] enabled = true, but the opt-in sampler has no section.
+        let c = config("[defaults]\nenabled = true\n");
+        assert!(
+            !c.enabled("gpu_amd_pmu"),
+            "opt-in sampler must not follow defaults=true"
+        );
+        // A normal sampler does follow defaults=true.
+        assert!(c.enabled("cpu_usage"));
+    }
+
+    #[test]
+    fn opt_in_sampler_off_when_section_present_without_enabled() {
+        // Section present but no explicit `enabled` -> still off.
+        let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\n");
+        assert!(!c.enabled("gpu_amd_pmu"));
+    }
+
+    #[test]
+    fn opt_in_sampler_on_only_when_explicitly_enabled() {
+        let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\nenabled = true\n");
+        assert!(c.enabled("gpu_amd_pmu"));
+    }
+
+    #[test]
+    fn opt_in_sampler_off_when_explicitly_disabled() {
+        let c = config("[samplers.gpu_amd_pmu]\nenabled = false\n");
+        assert!(!c.enabled("gpu_amd_pmu"));
+    }
+
+    #[test]
+    fn defaults_false_disables_normal_samplers() {
+        let c = config("[defaults]\nenabled = false\n");
+        assert!(!c.enabled("cpu_usage"));
+        // Opt-in sampler is still off too.
+        assert!(!c.enabled("gpu_amd_pmu"));
     }
 }
