@@ -38,9 +38,11 @@ const NAME: &str = "gpu_amd_pmu";
 
 use crate::agent::*;
 
+mod perf_level;
 mod rocprofiler;
 mod stats;
 
+use perf_level::PerfLevel;
 use rocprofiler::Rocprofiler;
 use stats::*;
 
@@ -77,6 +79,17 @@ const COUNTERS: &[&str] = &[
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
+    }
+
+    // Optionally pin the GPU performance level before rocprofiler init, so the
+    // counting contexts are armed while the GPU is already in the requested
+    // state. On RDNA the per-SIMD counters only accumulate in a stable power
+    // state; see `perf_level`. Default (None) leaves the power state untouched.
+    if let Some(level_str) = config.gpu_perf_level(NAME) {
+        let level = level_str
+            .parse::<PerfLevel>()
+            .map_err(|e| anyhow::anyhow!("{NAME}: {e}"))?;
+        perf_level::apply_all(level);
     }
 
     // Loading the libraries, registering, HSA init (which builds the per-agent

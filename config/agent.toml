@@ -124,6 +124,13 @@ enabled = true
 # This high CPU utilization might cause problem for some applications, so we disable this sampler by default.
 [samplers.gpu_amd_pmu]
 enabled = false
+# Optionally pin the AMD GPU performance level at startup. Default (unset) leaves
+# the power state untouched. Many RDNA per-SIMD counters (VALU/SALU/LDS, L2/VRAM
+# bandwidth) only read non-zero in a stable power state. One of: auto, low, high,
+# manual, stable_std, stable_peak, stable_min_mclk, stable_min_sclk, determinism.
+# Requires amd-smi on PATH. Note: stable_* levels pin clocks and perturb real
+# workloads, so use with care on production hosts.
+# gpu_perf_level = "stable_std"
 
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
