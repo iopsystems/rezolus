@@ -17,6 +17,16 @@ pub struct SamplerStatus {
     pub programs: Vec<ProgramStatus>,
 }
 
+/// Aggregate agent status returned by the `/status` endpoint: identity +
+/// liveness header plus the full per-sampler health detail.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentStatus {
+    pub version: String,
+    pub uptime_seconds: u64,
+    pub ttl_seconds: u64,
+    pub samplers: Vec<SamplerStatus>,
+}
+
 /// Whether a sampler is running, disabled by config, or failed to initialize.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
@@ -412,5 +422,27 @@ mod tests {
         assert_eq!(s.name, "gpu");
         assert_eq!(s.health, None);
         assert!(s.programs.is_empty());
+    }
+
+    #[test]
+    fn agent_status_round_trips() {
+        let s = AgentStatus {
+            version: "5.15.1-alpha.2".into(),
+            uptime_seconds: 11532,
+            ttl_seconds: 60,
+            samplers: vec![SamplerStatus {
+                name: "cpu_usage".into(),
+                state: SamplerState::Active,
+                health: Some(SamplerHealth::Healthy),
+                programs: Vec::new(),
+            }],
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""version":"5.15.1-alpha.2""#));
+        assert!(json.contains(r#""uptime_seconds":11532"#));
+        assert!(json.contains(r#""ttl_seconds":60"#));
+        let back: AgentStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.uptime_seconds, 11532);
+        assert_eq!(back.samplers.len(), 1);
     }
 }
