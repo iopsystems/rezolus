@@ -11,7 +11,7 @@
 
 use metriken::*;
 
-const MAX_GPUS: usize = 32;
+use super::super::MAX_GPUS;
 
 // ----- GRBM: front-end clocks (GPU busy) -----
 
@@ -68,12 +68,12 @@ pub static GPU_SQ_INSTS_SALU: CounterGroup = CounterGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpmu_lds_instructions",
-    description = " Total LDS (local data share) instructions issued by all Workgroup processors",
+    description = "Total LDS (local data share) instructions issued by all Workgroup processors",
     metadata = { vendor = "amd", counter = "SQ_INSTS_LDS" }
 )]
 pub static GPU_SQ_INSTS_LDS: CounterGroup = CounterGroup::new(MAX_GPUS);
 
-// ----- SQC: instruction cache + LDS activity -----
+// ----- SQC: instruction cache -----
 
 #[metric(
     name = "gpmu_icache_requests",

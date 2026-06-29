@@ -33,6 +33,17 @@
 //! unless an operator sets it. See `docs/amd_gpu_counters.md`.
 //!
 //! Requires the `CAP_PERFMON` capability.
+//!
+//! ## GPU `id` labels
+//!
+//! The `id` label is the **rocprofiler GPU-agent enumeration order**, while the
+//! `gpu_amd_smi` sampler's `id` follows `rsmi_num_monitor_devices` order. In
+//! practice both enumerate GPUs by ascending PCI bus address, so the two `id`s
+//! line up on typical hosts (verified on a 2-GPU gfx1201+gfx1036 box: both map
+//! `id=0 -> 0000:03:00.0`, `id=1 -> 0000:36:00.0`). The orders are *not
+//! contractually guaranteed* to match, though, so for hard correlation across
+//! the two samplers — especially on unusual topologies or partitioned GPUs —
+//! prefer physical identity (e.g. PCI BDF) over `id`.
 
 const NAME: &str = "gpu_amd_pmu";
 
@@ -145,6 +156,20 @@ impl Sampler for AmdPmu {
 /// `add`, so we advance the stored counter by the delta from its current value.
 /// This keeps it monotonic and converged to the total.
 fn publish(id: usize, sums: &std::collections::HashMap<String, f64>) {
+    // Metric groups are sized for `MAX_GPUS`; a higher id would be silently
+    // dropped by `CounterGroup::add` (returns Err). Skip it and warn once.
+    if id >= super::MAX_GPUS {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            warn!(
+                "{NAME}: GPU {id} exceeds MAX_GPUS ({}); its counters are not recorded",
+                super::MAX_GPUS
+            );
+        }
+        return;
+    }
+
     let advance = |name: &str, metric: &metriken::CounterGroup| {
         if let Some(&v) = sums.get(name) {
             if v.is_finite() && v >= 0.0 {

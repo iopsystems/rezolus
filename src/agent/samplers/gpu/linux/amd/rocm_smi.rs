@@ -85,8 +85,14 @@ type FnPciThroughput = unsafe extern "C" fn(u32, *mut u64, *mut u64, *mut u64) -
 
 /// A loaded ROCm SMI library with `rsmi_init()` already called.
 ///
-/// `Drop` calls `rsmi_shut_down()`. The `_lib` field owns the dlopen handle and
-/// must outlive every symbol; it is declared last so it drops last.
+/// `Drop` calls `rsmi_shut_down()`. The `_lib` field owns the dlopen handle.
+/// The `Symbol<'static>` fields are resolved function pointers into the loaded
+/// shared object's code; they remain valid only while the library stays loaded
+/// (i.e. until `_lib` is dropped and `dlclose` runs). The library is declared
+/// last so it is dropped last, ensuring no symbol is called after `dlclose`.
+/// (Their soundness depends on the library not being *unloaded* before the last
+/// call — not on the address of the `Library` value, which the symbols do not
+/// point into, so moving the `Library` is fine.)
 pub struct RocmSmi {
     shut_down: Symbol<'static, FnShutDown>,
     num_devices: Symbol<'static, FnNumDevices>,
@@ -100,15 +106,19 @@ pub struct RocmSmi {
     energy_count: Option<Symbol<'static, FnEnergyCount>>,
     clk_freq: Symbol<'static, FnClkFreq>,
     pci_throughput: Option<Symbol<'static, FnPciThroughput>>,
-    // SAFETY: must be dropped last; owns the memory the symbols point into.
+    // Keeps the dlopen handle loaded. Declared last so it is dropped (and
+    // dlclose'd) after every Symbol field, so no symbol is called post-unload.
     _lib: Box<Library>,
 }
 
 /// Look up a required symbol, returning an error if it is missing.
 ///
-/// SAFETY: the returned `Symbol` borrows from `*lib`; we transmute its lifetime
-/// to `'static` and rely on `RocmSmi` keeping `lib` alive (and dropping it
-/// last) for soundness.
+/// SAFETY: `lib.get()` resolves the symbol to a function pointer in the loaded
+/// library; we transmute its lifetime to `'static`. After the transmute the
+/// `Symbol` no longer borrows `lib` — it holds the raw pointer — so the only
+/// requirement is that the library stays loaded (i.e. `RocmSmi` keeps `_lib`
+/// alive) until the last call. It does not depend on where the `Library` value
+/// lives in memory.
 unsafe fn required<T>(lib: &Library, name: &[u8]) -> Result<Symbol<'static, T>, libloading::Error> {
     let sym: Symbol<T> = lib.get(name)?;
     Ok(std::mem::transmute::<Symbol<T>, Symbol<'static, T>>(sym))
@@ -259,7 +269,11 @@ impl RocmSmi {
             return Err(());
         }
         let idx = freq.current as usize;
-        if idx >= RSMI_MAX_NUM_FREQUENCIES {
+        // `current` must index a *populated* entry: < num_supported (the number
+        // of valid frequencies) and within the array. Checking only the array
+        // bound would let an out-of-range-but-in-array `current` read a stale 0.
+        let num_supported = (freq.num_supported as usize).min(RSMI_MAX_NUM_FREQUENCIES);
+        if idx >= num_supported {
             return Err(());
         }
         Ok(freq.frequency[idx])

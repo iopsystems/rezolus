@@ -42,10 +42,11 @@
 #![allow(non_camel_case_types)]
 
 use libloading::{Library, Symbol};
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
 // C types (all rocprofiler handles are a single u64 `handle`).
@@ -113,6 +114,11 @@ struct CounterRecord {
     user_data: UserData,
     agent_id: AgentId,
 }
+// Lock the layout the comment above promises; a mismatch with the C ABI would
+// corrupt every counter read.
+const _: () = assert!(std::mem::size_of::<CounterRecord>() == 40);
+const _: () = assert!(std::mem::offset_of!(CounterRecord, counter_value) == 8);
+const _: () = assert!(std::mem::offset_of!(CounterRecord, agent_id) == 32);
 
 /// `rocprofiler_counter_info_v0_t`. We only read `id` and `name`.
 #[repr(C)]
@@ -225,8 +231,11 @@ struct Syms {
     query_record_counter_id: Symbol<'static, FnQueryRecordCounterId>,
     create_counter_config: Symbol<'static, FnCreateCounterConfig>,
 }
-// SAFETY: the symbols are plain C function pointers; calling them is guarded by
-// the STATE mutex. They borrow from libraries kept alive for the process.
+// SAFETY: the symbols are resolved function pointers into the loaded libraries
+// (after the 'static transmute they no longer borrow the `Library` values, so
+// moving the libraries into `State._libs` is fine). They stay valid as long as
+// the libraries remain loaded — `State._libs` keeps them loaded for the process
+// lifetime. Calls are serialized through the STATE mutex.
 unsafe impl Send for Syms {}
 
 /// Per-GPU-agent device-counting state. The context and counter config are
@@ -286,7 +295,10 @@ struct State {
     init_error: Option<String>,
     initialized: bool,
     hsa_shut_down: Option<Symbol<'static, FnHsaShutDown>>,
-    /// Keep the dlopen handles alive for the whole process.
+    /// Keeps the dlopen'd libraries loaded for the whole process. The resolved
+    /// `Symbol<'static>` function pointers in `Syms`/`hsa_shut_down` stay valid
+    /// only while these are loaded; they do not point into the `Library` values
+    /// themselves, so storing them inline in a `Vec` (rather than boxed) is fine.
     _libs: Vec<Library>,
 }
 
@@ -337,10 +349,7 @@ unsafe extern "C" fn rocp_configure(
 /// created. Enumerates GPU agents and builds a device-counting context +
 /// single-pass counter config for each, storing them in [`STATE`].
 unsafe extern "C" fn tool_initialize(_finalize: *mut c_void, _tool_data: *mut c_void) -> i32 {
-    let mut guard = match STATE.lock() {
-        Ok(g) => g,
-        Err(_) => return -1,
-    };
+    let mut guard = STATE.lock();
     let state = match guard.as_mut() {
         Some(s) => s,
         None => return -1,
@@ -538,7 +547,7 @@ impl Rocprofiler {
             std::env::set_var("ROCPROFILER_DEVICE_LOCK_AT_START", "1");
         }
 
-        let mut guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
+        let mut guard = STATE.lock();
         if guard.is_some() {
             return Err("rocprofiler already initialized in this process".into());
         }
@@ -602,7 +611,7 @@ impl Rocprofiler {
 
         let st = unsafe { force_configure(rocp_configure) };
         if st != ROCPROFILER_STATUS_SUCCESS {
-            *STATE.lock().map_err(|_| "rocprofiler state poisoned")? = None;
+            *STATE.lock() = None;
             return Err(format!("rocprofiler_force_configure failed: {st}"));
         }
 
@@ -611,7 +620,7 @@ impl Rocprofiler {
         // HSA so the device counting service is live.
         let hsa_st = unsafe { hsa_init() };
 
-        let mut guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
+        let mut guard = STATE.lock();
         let state = guard.as_mut().ok_or("rocprofiler state vanished")?;
 
         if hsa_st != HSA_STATUS_SUCCESS {
@@ -691,10 +700,10 @@ impl Rocprofiler {
     /// window's delta, so `rate()` downstream works the same as for any other
     /// Rezolus counter. This is a cheap in-memory read — no GPU I/O.
     pub fn sample(&self, idx: usize) -> Result<HashMap<String, f64>, String> {
-        let guard = STATE.lock().map_err(|_| "rocprofiler state poisoned")?;
+        let guard = STATE.lock();
         let state = guard.as_ref().ok_or("rocprofiler not initialized")?;
         let agent = state.agents.get(idx).ok_or("agent index out of range")?;
-        let accum = agent.accum.lock().map_err(|_| "accumulator poisoned")?;
+        let accum = agent.accum.lock();
         Ok(accum.iter().map(|(k, &v)| (k.clone(), v as f64)).collect())
     }
 }
@@ -772,7 +781,7 @@ fn agent_worker_loop(
     // Returns None if rocprofiler state is gone (shutting down).
     #[allow(clippy::type_complexity)]
     let with_state = |f: &mut dyn FnMut(&Syms, &HashMap<u64, String>) -> Result<(), String>| {
-        let guard = STATE.lock().ok()?;
+        let guard = STATE.lock();
         let state = guard.as_ref()?;
         let syms = state.syms.as_ref()?;
         let agent = state.agents.get(idx)?;
@@ -818,10 +827,9 @@ fn agent_worker_loop(
                 return Err(format!("stop_context failed: {stop_st}"));
             }
             // 5) accumulate the per-window delta into the running totals.
-            if let Ok(mut a) = accum.lock() {
-                for (name, v) in delta {
-                    *a.entry(name).or_insert(0) += v;
-                }
+            let mut a = accum.lock();
+            for (name, v) in delta {
+                *a.entry(name).or_insert(0) += v;
             }
             Ok(())
         });
@@ -841,17 +849,18 @@ impl Drop for Rocprofiler {
         // because a worker may be blocked trying to acquire it.
         self.workers.clear();
 
-        if let Ok(mut guard) = STATE.lock() {
-            if let Some(state) = guard.as_mut() {
-                if let Some(shut_down) = state.hsa_shut_down.take() {
-                    // SAFETY: balances the hsa_init() in `new`.
-                    unsafe {
-                        let _ = shut_down();
-                    }
+        // parking_lot::Mutex never poisons, so HSA shutdown always runs even if a
+        // panic previously occurred under the lock.
+        let mut guard = STATE.lock();
+        if let Some(state) = guard.as_mut() {
+            if let Some(shut_down) = state.hsa_shut_down.take() {
+                // SAFETY: balances the hsa_init() in `new`.
+                unsafe {
+                    let _ = shut_down();
                 }
             }
-            *guard = None;
         }
+        *guard = None;
     }
 }
 
@@ -896,7 +905,19 @@ unsafe extern "C" fn query_agents_cb(
         if base.is_null() {
             continue;
         }
-        if read_u32(base, AGENT_OFF_TYPE) != ROCPROFILER_AGENT_TYPE_GPU {
+        let agent_type = read_u32(base, AGENT_OFF_TYPE);
+        // Valid types are NONE(0)/CPU(1)/GPU(2). Anything else means our
+        // hard-coded AGENT_OFF_TYPE offset no longer matches the library's
+        // `rocprofiler_agent_v0_t` layout — flag it rather than silently
+        // skipping every agent.
+        if agent_type > ROCPROFILER_AGENT_TYPE_GPU {
+            crate::debug!(
+                "gpu_amd_pmu: implausible agent type {agent_type} at offset \
+                 {AGENT_OFF_TYPE}; rocprofiler agent struct layout may have changed"
+            );
+            continue;
+        }
+        if agent_type != ROCPROFILER_AGENT_TYPE_GPU {
             continue;
         }
         let id = AgentId {
@@ -936,6 +957,10 @@ const BUFFER_WATERMARK: usize = 8192;
 /// comfortably above the largest instance count seen (per-WGP ≈ 32–64).
 const MAX_RECORDS: usize = 8192;
 
+/// SAFETY: resolves `name` to a function pointer in `lib` and transmutes its
+/// lifetime to `'static`. After the transmute the `Symbol` holds the raw pointer
+/// and no longer borrows `lib`, so it is the caller's responsibility to keep the
+/// library loaded (via `State._libs`) until the last call.
 unsafe fn required<T>(lib: &Library, name: &[u8]) -> Result<Symbol<'static, T>, String> {
     let sym: Symbol<T> = lib
         .get(name)

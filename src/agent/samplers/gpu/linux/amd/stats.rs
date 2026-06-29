@@ -1,6 +1,6 @@
 use metriken::*;
 
-const MAX_GPUS: usize = 32;
+use super::MAX_GPUS;
 
 // Memory
 

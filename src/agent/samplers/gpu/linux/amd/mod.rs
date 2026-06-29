@@ -8,6 +8,11 @@
 
 const NAME: &str = "gpu_amd_smi";
 
+/// Maximum number of GPUs tracked by the AMD metric groups (both the SMI and PMU
+/// samplers). Shared so the two `stats.rs` files agree on one cap. GPUs with an
+/// index >= this are dropped by `CounterGroup`/`GaugeGroup` (logged once).
+pub(crate) const MAX_GPUS: usize = 32;
+
 use crate::agent::*;
 
 use tokio::sync::Mutex;
@@ -135,6 +140,9 @@ impl AmdInner {
              * clocks
              */
 
+            // RDNA exposes a single SYS (gfx) clock that serves both graphics and
+            // compute, so both metrics are intentionally sourced from it and will
+            // always read identically on these GPUs.
             if let Ok(hz) = self.rocm.clock_hz(id, ClockType::System) {
                 let hz = hz as i64;
                 let _ = GPU_CLOCK_GRAPHICS.set(id, hz);
