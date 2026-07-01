@@ -46,7 +46,7 @@ const DEFAULT_OUTPUT: &str = "rezolus.parquet";
 /// Resolve the recording URL from the `--url` flag and the deprecated
 /// positional URL. Returns `(url, positional_was_used)`. Errors if both are
 /// supplied.
-pub fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url, bool), String> {
+fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url, bool), String> {
     match (flag, positional) {
         (Some(_), Some(_)) => {
             Err("specify either --url or the positional URL, not both".to_string())
@@ -59,7 +59,7 @@ pub fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url,
 
 /// Resolve the output path from `-o/--output` and the deprecated positional
 /// OUTPUT. Returns `(path, positional_was_used)`. Errors if both are supplied.
-pub fn resolve_output(
+fn resolve_output(
     flag: Option<&Path>,
     positional: Option<&Path>,
 ) -> Result<(PathBuf, bool), String> {
@@ -308,17 +308,24 @@ mod tests {
     }
 
     #[test]
-    fn resolve_output_default_and_deprecation() {
+    fn resolve_output_defaults_to_rezolus_parquet() {
         let (out, dep) = resolve_output(None, None).unwrap();
         assert_eq!(out, PathBuf::from("rezolus.parquet"));
         assert!(!dep);
+    }
 
+    #[test]
+    fn resolve_output_positional_is_deprecated() {
         let pos = PathBuf::from("legacy.parquet");
         let (out, dep) = resolve_output(None, Some(&pos)).unwrap();
         assert_eq!(out, pos);
         assert!(dep);
+    }
 
+    #[test]
+    fn resolve_output_both_is_error() {
         let flag = PathBuf::from("new.parquet");
+        let pos = PathBuf::from("legacy.parquet");
         assert!(resolve_output(Some(&flag), Some(&pos)).is_err());
     }
 

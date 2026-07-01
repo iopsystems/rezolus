@@ -106,7 +106,7 @@ pub fn command() -> Command {
                 .help("Metrics endpoint to record (default http://localhost:4241)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
-                .conflicts_with_all(["CONFIG_FILE", "ENDPOINT"]),
+                .conflicts_with_all(["CONFIG_FILE", "ENDPOINT", "URL"]),
         )
         .arg(
             clap::Arg::new("OUTPUT_FLAG")
@@ -114,7 +114,8 @@ pub fn command() -> Command {
                 .short('o')
                 .help("Path to the output file (default rezolus.parquet)")
                 .action(clap::ArgAction::Set)
-                .value_parser(value_parser!(PathBuf)),
+                .value_parser(value_parser!(PathBuf))
+                .conflicts_with("OUTPUT"),
         )
         .arg(
             clap::Arg::new("COMMAND")
