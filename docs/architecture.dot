@@ -1,93 +1,75 @@
-// Rezolus component & data-flow diagram
+// Rezolus — what you can do with it (user's view)
 //
 // Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
 //          dot -Tpng docs/architecture.dot -o docs/architecture.png
 //
-// A single `rezolus` binary provides every role shown in the middle band.
-// Arrows show how data flows between what Rezolus observes, the roles that
-// process it, the artifacts they produce, and the external systems that
-// consume them.
+// Everything below is the one `rezolus` binary — you just pick the
+// subcommand for the job. Arrows read as "what you do next".
 
 digraph rezolus {
   rankdir=LR;
   fontname="Helvetica";
   labelloc="t";
-  label="Rezolus — components & data flow (one binary, many roles)";
-  fontsize=18;
-  nodesep=0.35;
-  ranksep=1.0;
+  label="What you can do with Rezolus";
+  fontsize=22;
+  nodesep=0.45;
+  ranksep=0.75;
   bgcolor="white";
 
-  node [fontname="Helvetica", fontsize=11, style="filled", penwidth=1.2];
-  edge [fontname="Helvetica", fontsize=9, color="#555555"];
+  node [fontname="Helvetica", fontsize=14, shape=box, style="rounded,filled", penwidth=1.4, margin="0.22,0.14"];
+  edge [fontname="Helvetica", fontsize=12, color="#607d8b"];
 
-  // ---- What Rezolus observes -------------------------------------------
-  subgraph cluster_sources {
-    label="Observed systems";
-    style="rounded,filled";
-    color="#c8ddb0";
-    fillcolor="#eef5e3";
-    fontname="Helvetica"; fontsize=13;
+  // ---- What you're watching --------------------------------------------
+  system [label=<<b>Your systems</b><br/><font point-size="11">CPU · GPU · kernel · scheduler<br/>syscalls · block I/O · network<br/>containers · services</font>>,
+          fillcolor="#e8f5e0", color="#7cb342"];
 
-    kernel   [label="Kernel & CPU\n(eBPF, perf events)\nscheduler · syscalls · block I/O\nTCP/network · cache · TLB", shape=box, fillcolor="#dcedc8"];
-    gpu      [label="GPU\n(NVIDIA NVML/GPM,\nApple on macOS)", shape=box, fillcolor="#dcedc8"];
-    services [label="Services & inference\n(vLLM · SGLang · Valkey)\nPrometheus endpoints", shape=box, fillcolor="#dcedc8"];
-  }
+  // ---- The always-on collector -----------------------------------------
+  agent [label=<<b>rezolus agent</b><br/><font point-size="11">always-on collector</font>>,
+         fillcolor="#bbdefb", color="#1976d2", penwidth=1.8];
 
-  // ---- The single binary and its roles ---------------------------------
-  subgraph cluster_binary {
-    label="rezolus (single binary)";
-    style="rounded,filled";
-    color="#7aa7d9";
-    fillcolor="#e9f1fb";
-    fontname="Helvetica"; fontsize=14;
+  // ---- Live: stream and watch ------------------------------------------
+  exporter [label=<<b>rezolus exporter</b><br/><font point-size="11">Prometheus metrics endpoint</font>>, fillcolor="#e3f2fd", color="#1976d2"];
+  view     [label=<<b>rezolus view</b><br/><font point-size="11">interactive dashboard</font>>,     fillcolor="#e3f2fd", color="#1976d2"];
 
-    agent     [label="Agent\ncollects via samplers,\nserves msgpack over HTTP\n(:4241)", shape=box, fillcolor="#bbdefb"];
-    exporter  [label="Exporter\nsummarizes histograms →\nPrometheus exposition", shape=box, fillcolor="#bbdefb"];
-    recorder  [label="Recorder\nsnapshots → Parquet\n(on demand)", shape=box, fillcolor="#bbdefb"];
-    hindsight [label="Hindsight\non-disk ring buffer,\ndump after an incident", shape=box, fillcolor="#bbdefb"];
-    viewer    [label="Viewer\nweb dashboard,\nin-browser PromQL (WASM)", shape=box, fillcolor="#bbdefb"];
-    pqtools   [label="Parquet Tools\nmetadata · annotate · combine", shape=box, fillcolor="#bbdefb"];
-    mcp       [label="MCP Server\nPromQL · anomaly detection ·\ncorrelation for LLMs", shape=box, fillcolor="#bbdefb"];
-  }
+  // ---- Capture to a file -----------------------------------------------
+  record    [label=<<b>rezolus record</b><br/><font point-size="11">save a recording</font>>,                 fillcolor="#e3f2fd", color="#1976d2"];
+  hindsight [label=<<b>rezolus hindsight</b><br/><font point-size="11">go back in time<br/>after an incident</font>>, fillcolor="#e3f2fd", color="#1976d2"];
 
-  // ---- Artifacts & external consumers ----------------------------------
-  subgraph cluster_out {
-    label="Artifacts & consumers";
-    style="rounded,filled";
-    color="#e6c48a";
-    fillcolor="#fbf3e2";
-    fontname="Helvetica"; fontsize=13;
+  // ---- Work with recordings --------------------------------------------
+  mcp     [label=<<b>rezolus mcp</b><br/><font point-size="11">AI-guided analysis</font>>,          fillcolor="#e3f2fd", color="#1976d2"];
+  pqtools [label=<<b>rezolus parquet</b><br/><font point-size="11">inspect · annotate · combine</font>>, fillcolor="#e3f2fd", color="#1976d2"];
 
-    parquet    [label="Parquet files\n(recordings)", shape=cylinder, fillcolor="#ffe0b2"];
-    prometheus [label="Prometheus / Grafana", shape=box, fillcolor="#ffe0b2"];
-    browser    [label="Browser", shape=box, fillcolor="#ffe0b2"];
-    llm        [label="LLM assistant", shape=box, fillcolor="#ffe0b2"];
-  }
+  // ---- The recording artifact ------------------------------------------
+  recording [label=<<b>Recording</b><br/><font point-size="11">.parquet file</font>>,
+             shape=cylinder, fillcolor="#ffe0b2", color="#f57c00"];
 
-  // ---- Collection: sources feed the agent ------------------------------
-  kernel   -> agent [label="in-kernel\nhistograms"];
-  gpu      -> agent;
-  services -> recorder [label="scrape\nPrometheus", style=dashed];
+  // ---- Where the value lands -------------------------------------------
+  grafana [label=<<b>Prometheus / Grafana</b>>, fillcolor="#eceff1", color="#90a4ae"];
+  browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae"];
+  llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
 
-  // ---- Agent's msgpack snapshot fans out to every reader ---------------
-  agent -> exporter  [label="msgpack\n/metrics/binary", color="#1565c0", penwidth=1.6];
-  agent -> recorder  [label="msgpack", color="#1565c0", penwidth=1.6];
-  agent -> hindsight [label="msgpack", color="#1565c0", penwidth=1.6];
-  agent -> viewer    [label="msgpack (live)", color="#1565c0", penwidth=1.6];
+  // ---- Collect ----------------------------------------------------------
+  system -> agent [label="collect"];
 
-  // ---- Producing artifacts ---------------------------------------------
-  exporter  -> prometheus [label="scrape", style=dashed];
-  recorder  -> parquet;
-  hindsight -> parquet [label="snapshot\non trigger"];
+  // ---- Live from the agent ---------------------------------------------
+  agent -> exporter [label="expose"];
+  agent -> view     [label="watch live"];
+  agent -> record   [label="save"];
+  agent -> hindsight [label="always-on buffer"];
 
-  // ---- Consuming artifacts (back-edges; unconstrained so they route
-  //      cleanly without distorting the left-to-right ranks) ------------
-  parquet -> viewer  [color="#8d6e63", constraint=false];
-  parquet -> mcp     [color="#8d6e63", constraint=false];
-  parquet -> pqtools [label="inspect · annotate ·\ncombine", color="#8d6e63", constraint=false];
+  exporter -> grafana [label="scrape"];
 
-  // ---- Human / machine consumers ---------------------------------------
-  viewer -> browser [label="dashboard", dir=both];
-  mcp    -> llm [label="MCP / stdio", dir=both];
+  // ---- Produce a recording ---------------------------------------------
+  record    -> recording;
+  hindsight -> recording [label="dump on trigger"];
+
+  // ---- Do things with the recording (view sits with the live actions;
+  //      this edge is unconstrained so it doesn't stretch the layout) ----
+  recording -> view    [label="explore", color="#8d6e63", constraint=false];
+  recording -> mcp     [label="analyze", color="#8d6e63"];
+  recording -> pqtools [label="manage",  color="#8d6e63"];
+
+  // ---- Outcomes ---------------------------------------------------------
+  view -> browser [dir=both];
+  mcp  -> llm     [dir=both];
 }
