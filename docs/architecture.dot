@@ -26,6 +26,14 @@ digraph rezolus {
       <tr><td align="center" balign="center"><font point-size="11">CPU · GPU · kernel · scheduler<br/>syscalls · block I/O · network<br/>containers · services</font></td></tr>
     </table>>];
 
+  // ---- A service that exposes its own metrics (scraped straight into
+  //      record, bypassing the agent) --------------------------------
+  service [fillcolor="#e8f5e0", color="#7cb342", group="gRecord", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>Target services</b></td></tr>
+      <tr><td align="center" balign="center"><font point-size="11">Prometheus-compatible endpoint<br/>vLLM · SGLang · Valkey</font></td></tr>
+    </table>>];
+
   // ---- The always-on collector (pink: runs as root, eBPF in kernel) -----
   agent [fillcolor="#f8bbd0", color="#c2185b", penwidth=1.8, label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
@@ -46,7 +54,7 @@ digraph rezolus {
     </table>>];
 
   // ---- Capture to a file -----------------------------------------------
-  record [fillcolor="#e3f2fd", color="#1976d2", label=<
+  record [fillcolor="#e3f2fd", color="#1976d2", group="gRecord", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
       <tr><td align="center"><b>rezolus record</b></td></tr>
       <tr><td align="center"><font point-size="11">save a recording</font></td></tr>
@@ -70,7 +78,7 @@ digraph rezolus {
     </table>>];
 
   // ---- The recording artifact ------------------------------------------
-  recording [shape=cylinder, fillcolor="#ffe0b2", color="#f57c00", group="gRec", label=<
+  recording [shape=cylinder, fillcolor="#ffe0b2", color="#f57c00", group="gRecord", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
       <tr><td align="center"><b>Recording</b></td></tr>
       <tr><td align="center"><font point-size="11">.parquet file</font></td></tr>
@@ -84,7 +92,7 @@ digraph rezolus {
   // ---- Layout: rows keep the picture compact; invisible edges pin the
   //      left-to-right order within each row --------------------------
   // Row 1: the expose/capture subcommands.
-  {rank=same; exporter; record; hindsight; exporter -> record -> hindsight [style=invis];}
+  {rank=same; exporter; hindsight; record; exporter -> hindsight -> record [style=invis];}
   // Row 2: the recording and its artifacts; view sits on the far right,
   // right next to the recording it opens, so 'open recording' is a clean
   // horizontal edge.
@@ -95,10 +103,15 @@ digraph rezolus {
 
   // ---- Collect ----------------------------------------------------------
   system -> agent [label="collect"];
+  // A target service can be scraped straight into record, without the agent.
+  // Keep 'service' on the agent's level; the gRecord group keeps it directly
+  // above 'record' (rightmost command) for a short, clean scrape edge.
+  {rank=same; agent; service;}
+  service -> record [label="scrape", style=dashed];
 
   // ---- Live from the agent ---------------------------------------------
   agent -> exporter  [label="expose"];
-  agent -> view      [label="watch live"];
+  agent:e -> view:n  [label="watch live"];
   agent -> record    [label="save"];
   agent -> hindsight [label="always-on buffer"];
 
