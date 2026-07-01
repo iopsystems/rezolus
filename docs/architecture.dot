@@ -72,7 +72,7 @@ digraph rezolus {
   hindsight -> recording [label="dump on trigger"];
 
   // ---- Do things with the recording ------------------------------------
-  recording -> view    [label="explore", color="#8d6e63", constraint=false];
+  recording -> view    [label="open recording", color="#8d6e63", constraint=false];
   recording -> mcp     [label="analyze", color="#8d6e63"];
   recording -> pqtools [label="manage",  color="#8d6e63"];
 

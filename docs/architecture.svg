@@ -135,7 +135,7 @@
 <title>hindsight&#45;&gt;recording</title>
 <path fill="none" stroke="#607d8b" d="M668.43,-240.68C655.16,-223.54 637.83,-201.17 623.18,-182.26"/>
 <polygon fill="#607d8b" stroke="#607d8b" points="625.77,-179.88 616.87,-174.11 620.23,-184.16 625.77,-179.88"/>
-<text text-anchor="middle" x="695.5" y="-204.28" font-family="Helvetica,sans-Serif" font-size="12.00">dump on trigger</text>
+<text text-anchor="middle" x="696.5" y="-204.28" font-family="Helvetica,sans-Serif" font-size="12.00">dump on trigger</text>
 </g>
 <!-- mcp -->
 <g id="node7" class="node">
@@ -169,9 +169,9 @@
 <!-- recording&#45;&gt;view -->
 <g id="edge11" class="edge">
 <title>recording&#45;&gt;view</title>
-<path fill="none" stroke="#8d6e63" d="M537.89,-168.47C489.54,-189.79 419.75,-220.57 370.67,-242.22"/>
-<polygon fill="#8d6e63" stroke="#8d6e63" points="369.18,-239.05 361.45,-246.29 372.01,-245.45 369.18,-239.05"/>
-<text text-anchor="middle" x="484" y="-204.28" font-family="Helvetica,sans-Serif" font-size="12.00">explore</text>
+<path fill="none" stroke="#8d6e63" d="M537.94,-162.71C508.61,-173.1 472.21,-186.74 440.5,-200.88 413.07,-213.1 383.31,-228.54 359.39,-241.52"/>
+<polygon fill="#8d6e63" stroke="#8d6e63" points="357.62,-238.49 350.53,-246.36 360.98,-244.64 357.62,-238.49"/>
+<text text-anchor="middle" x="486" y="-204.28" font-family="Helvetica,sans-Serif" font-size="12.00">open recording</text>
 </g>
 <!-- recording&#45;&gt;mcp -->
 <g id="edge12" class="edge">
@@ -185,7 +185,7 @@
 <title>recording&#45;&gt;pqtools</title>
 <path fill="none" stroke="#8d6e63" d="M618.23,-112.05C633.18,-93.99 652.16,-71.05 667.05,-53.04"/>
 <polygon fill="#8d6e63" stroke="#8d6e63" points="669.9,-55.09 673.58,-45.15 664.51,-50.63 669.9,-55.09"/>
-<text text-anchor="middle" x="675.5" y="-75.4" font-family="Helvetica,sans-Serif" font-size="12.00">manage</text>
+<text text-anchor="middle" x="676.5" y="-75.4" font-family="Helvetica,sans-Serif" font-size="12.00">manage</text>
 </g>
 <!-- llm&#45;&gt;mcp -->
 </g>
