@@ -57,9 +57,9 @@
 <!-- agent&#45;&gt;view -->
 <g id="edge10" class="edge">
 <title>agent&#45;&gt;view</title>
-<path fill="none" stroke="#607d8b" d="M493.77,-394.46C529.42,-383.94 572.83,-370.79 611.5,-358.12 652.11,-344.83 697,-329.02 733.85,-315.75"/>
-<polygon fill="#607d8b" stroke="#607d8b" points="735.32,-318.94 743.53,-312.25 732.94,-312.36 735.32,-318.94"/>
-<text text-anchor="middle" x="680" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">watch live</text>
+<path fill="none" stroke="#607d8b" d="M493.71,-394.65C529.64,-384.12 573.48,-370.91 612.5,-358.12 653.09,-344.83 697.95,-328.96 734.69,-315.64"/>
+<polygon fill="#607d8b" stroke="#607d8b" points="736.14,-318.84 744.34,-312.14 733.74,-312.26 736.14,-318.84"/>
+<text text-anchor="middle" x="681" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">watch live</text>
 </g>
 <!-- record -->
 <g id="node5" class="node">
@@ -73,7 +73,7 @@
 <title>agent&#45;&gt;record</title>
 <path fill="none" stroke="#607d8b" d="M402.78,-384.97C391.65,-365.72 377.3,-340.91 365.88,-321.14"/>
 <polygon fill="#607d8b" stroke="#607d8b" points="368.89,-319.36 360.86,-312.46 362.83,-322.87 368.89,-319.36"/>
-<text text-anchor="middle" x="399.5" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">save</text>
+<text text-anchor="middle" x="400.5" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">save</text>
 </g>
 <!-- hindsight -->
 <g id="node6" class="node">
@@ -88,7 +88,7 @@
 <title>agent&#45;&gt;hindsight</title>
 <path fill="none" stroke="#607d8b" d="M457.87,-384.97C479.88,-366.9 507.88,-343.93 531.15,-324.83"/>
 <polygon fill="#607d8b" stroke="#607d8b" points="533.66,-327.3 539.17,-318.26 529.22,-321.89 533.66,-327.3"/>
-<text text-anchor="middle" x="552.5" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">always&#45;on buffer</text>
+<text text-anchor="middle" x="553.5" y="-348.52" font-family="Helvetica,sans-Serif" font-size="12.00">always&#45;on buffer</text>
 </g>
 <!-- exporter&#45;&gt;record -->
 <!-- grafana -->
@@ -104,21 +104,6 @@
 <polygon fill="#607d8b" stroke="#607d8b" points="106,-181.16 102.5,-171.16 99,-181.16 106,-181.16"/>
 <text text-anchor="middle" x="123" y="-218.53" font-family="Helvetica,sans-Serif" font-size="12.00">scrape</text>
 </g>
-<!-- recording -->
-<g id="node9" class="node">
-<title>recording</title>
-<path fill="#ffe0b2" stroke="#f57c00" stroke-width="1.4" d="M633,-181.8C633,-185.33 607.68,-188.19 576.5,-188.19 545.32,-188.19 520,-185.33 520,-181.8 520,-181.8 520,-124.32 520,-124.32 520,-120.8 545.32,-117.94 576.5,-117.94 607.68,-117.94 633,-120.8 633,-124.32 633,-124.32 633,-181.8 633,-181.8"/>
-<path fill="none" stroke="#f57c00" stroke-width="1.4" d="M633,-181.8C633,-178.28 607.68,-175.41 576.5,-175.41 545.32,-175.41 520,-178.28 520,-181.8"/>
-<text text-anchor="start" x="537.5" y="-156.86" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="14.00">Recording</text>
-<text text-anchor="start" x="543.5" y="-141.26" font-family="Helvetica,sans-Serif" font-size="11.00">.parquet file</text>
-</g>
-<!-- view&#45;&gt;recording -->
-<g id="edge16" class="edge">
-<title>view&#45;&gt;recording</title>
-<path fill="none" stroke="#8d6e63" d="M722.79,-265.2C653.44,-249 568.14,-228.93 567.5,-228.12 558.74,-217.05 559.07,-201.98 562.34,-188.33"/>
-<polygon fill="#8d6e63" stroke="#8d6e63" points="722.36,-268.69 732.9,-267.56 723.96,-261.87 722.36,-268.69"/>
-<text text-anchor="middle" x="573.87" y="-244.29" font-family="Helvetica,sans-Serif" font-size="12.00">open recording</text>
-</g>
 <!-- browser -->
 <g id="node11" class="node">
 <title>browser</title>
@@ -133,11 +118,19 @@
 <polygon fill="#607d8b" stroke="#607d8b" points="814,-181.16 810.5,-171.16 807,-181.16 814,-181.16"/>
 </g>
 <!-- record&#45;&gt;hindsight -->
+<!-- recording -->
+<g id="node9" class="node">
+<title>recording</title>
+<path fill="#ffe0b2" stroke="#f57c00" stroke-width="1.4" d="M633,-181.8C633,-185.33 607.68,-188.19 576.5,-188.19 545.32,-188.19 520,-185.33 520,-181.8 520,-181.8 520,-124.32 520,-124.32 520,-120.8 545.32,-117.94 576.5,-117.94 607.68,-117.94 633,-120.8 633,-124.32 633,-124.32 633,-181.8 633,-181.8"/>
+<path fill="none" stroke="#f57c00" stroke-width="1.4" d="M633,-181.8C633,-178.28 607.68,-175.41 576.5,-175.41 545.32,-175.41 520,-178.28 520,-181.8"/>
+<text text-anchor="start" x="537.5" y="-156.86" font-family="Helvetica,sans-Serif" font-weight="bold" font-size="14.00">Recording</text>
+<text text-anchor="start" x="543.5" y="-141.26" font-family="Helvetica,sans-Serif" font-size="11.00">.parquet file</text>
+</g>
 <!-- record&#45;&gt;recording -->
 <g id="edge14" class="edge">
 <title>record&#45;&gt;recording</title>
-<path fill="none" stroke="#607d8b" d="M389.49,-261.03C424.18,-241.19 473.5,-212.98 512.79,-190.51"/>
-<polygon fill="#607d8b" stroke="#607d8b" points="514.57,-193.52 521.52,-185.51 511.1,-187.44 514.57,-193.52"/>
+<path fill="none" stroke="#607d8b" d="M369.65,-261.05C384.54,-246.28 404.9,-227.94 425.5,-215.12 451.7,-198.83 483.01,-185.33 510.3,-175.2"/>
+<polygon fill="#607d8b" stroke="#607d8b" points="511.57,-178.46 519.77,-171.76 509.18,-171.89 511.57,-178.46"/>
 </g>
 <!-- hindsight&#45;&gt;view -->
 <!-- hindsight&#45;&gt;recording -->
@@ -162,6 +155,13 @@
 <text text-anchor="start" x="596.5" y="-13.7" font-family="Helvetica,sans-Serif" font-size="11.00">inspect · annotate · combine</text>
 </g>
 <!-- mcp&#45;&gt;pqtools -->
+<!-- recording&#45;&gt;view -->
+<g id="edge16" class="edge">
+<title>recording&#45;&gt;view</title>
+<path fill="none" stroke="#8d6e63" d="M562.34,-188.33C559.07,-201.98 558.74,-217.05 567.5,-228.12 568.14,-228.93 653.44,-249 722.79,-265.2"/>
+<polygon fill="#8d6e63" stroke="#8d6e63" points="722.36,-268.69 732.9,-267.56 723.96,-261.87 722.36,-268.69"/>
+<text text-anchor="middle" x="573.87" y="-244.29" font-family="Helvetica,sans-Serif" font-size="12.00">open recording</text>
+</g>
 <!-- recording&#45;&gt;mcp -->
 <g id="edge17" class="edge">
 <title>recording&#45;&gt;mcp</title>

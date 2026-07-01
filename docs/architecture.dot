@@ -106,9 +106,10 @@ digraph rezolus {
   record    -> recording;
   hindsight -> recording [label="dump on trigger", weight=10];
 
-  // ---- Open a recording in the viewer. Drawn as a downward edge with a
-  //      reversed arrowhead so it routes cleanly instead of hooking back.
-  view -> recording [dir=back, xlabel="open recording", color="#8d6e63", constraint=false];
+  // ---- Open a recording in the viewer. constraint=false keeps this edge
+  //      from disturbing the ranks (already pinned above); xlabel keeps the
+  //      label from bending the spline.
+  recording -> view [xlabel="open recording", color="#8d6e63", constraint=false];
 
   // ---- Analyze / manage a recording ------------------------------------
   recording -> mcp     [label="analyze", color="#8d6e63"];
