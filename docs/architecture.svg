@@ -128,8 +128,8 @@
 <!-- record&#45;&gt;recording -->
 <g id="edge14" class="edge">
 <title>record&#45;&gt;recording</title>
-<path fill="none" stroke="#607d8b" d="M350.12,-246.26C355.03,-231.49 363.6,-212.55 377.5,-200.88 413.8,-170.39 465.74,-156.22 506.89,-149.64"/>
-<polygon fill="#607d8b" stroke="#607d8b" points="507.46,-153.09 516.83,-148.16 506.43,-146.17 507.46,-153.09"/>
+<path fill="none" stroke="#607d8b" d="M365.44,-246.32C380.31,-231.95 401.32,-213.46 422.5,-200.88 448.73,-185.29 479.98,-172.61 507.15,-163.21"/>
+<polygon fill="#607d8b" stroke="#607d8b" points="508.6,-166.42 516.96,-159.9 506.36,-159.78 508.6,-166.42"/>
 </g>
 <!-- hindsight&#45;&gt;view -->
 <!-- hindsight&#45;&gt;recording -->
@@ -170,10 +170,10 @@
 </g>
 <!-- recording&#45;&gt;view -->
 <g id="edge16" class="edge">
-<title>recording&#45;&gt;view</title>
-<path fill="none" stroke="#8d6e63" d="M516.78,-160.52C484.26,-173 453.11,-191.71 472.5,-213.88 502.17,-247.8 629.07,-233.32 673.5,-240.88 687.82,-243.31 702.97,-246.17 717.68,-249.1"/>
-<polygon fill="#8d6e63" stroke="#8d6e63" points="717.29,-252.59 727.78,-251.13 718.67,-245.72 717.29,-252.59"/>
-<text text-anchor="middle" x="518" y="-204.28" font-family="Helvetica,sans-Serif" font-size="12.00">open recording</text>
+<title>recording:e&#45;&gt;view:sw</title>
+<path fill="none" stroke="#8d6e63" d="M629.5,-142.94C643.26,-142.94 636.32,-162.56 628.5,-173.88 610.72,-199.61 580.87,-174.86 563.5,-200.88 560.29,-205.68 559.81,-209.43 563.5,-213.88 608.52,-268.2 668.82,-199.77 719.74,-238.1"/>
+<polygon fill="#8d6e63" stroke="#8d6e63" points="717.66,-240.94 727.5,-244.88 722.27,-235.66 717.66,-240.94"/>
+<text text-anchor="middle" x="633.72" y="-229.2" font-family="Helvetica,sans-Serif" font-size="12.00">open recording</text>
 </g>
 <!-- recording&#45;&gt;mcp -->
 <g id="edge17" class="edge">
