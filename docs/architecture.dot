@@ -108,7 +108,7 @@ digraph rezolus {
 
   // ---- Open a recording in the viewer. Drawn as a downward edge with a
   //      reversed arrowhead so it routes cleanly instead of hooking back.
-  view:sw -> recording:e [dir=back, xlabel="open recording", color="#8d6e63", constraint=false];
+  view -> recording [dir=back, xlabel="open recording", color="#8d6e63", constraint=false];
 
   // ---- Analyze / manage a recording ------------------------------------
   recording -> mcp     [label="analyze", color="#8d6e63"];
