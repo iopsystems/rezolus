@@ -546,19 +546,65 @@ pub fn run(config: RecordingConfig) {
         })
         .collect();
 
-    if config.duration.is_some() {
+    if config.command.is_some() {
+        info!("recording while command runs... ctrl-c to stop early");
+    } else if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
     } else {
         info!("recording metrics... ctrl-c to end the recording");
     }
 
-    rt.block_on(async {
+    let wrapped = config.command.is_some();
+
+    let outcome: Option<child::Outcome> = rt.block_on(async {
+        // Spawn the wrapped command only after probing/writers succeeded, so a
+        // failed setup never starts an expensive workload.
+        let mut child = if let Some(ref cmd) = config.command {
+            match child::spawn(cmd) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!("error: failed to start command: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
+        };
+        let mut outcome: Option<child::Outcome> = None;
+
         let interval_dur: Duration = config.interval.into();
         let start = Instant::now() + interval_dur;
+        let cap_deadline: Option<Instant> =
+            config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
 
         while STATE.load(Ordering::Relaxed) == RUNNING {
-            if let Some(duration) = config.duration.map(Into::<Duration>::into) {
+            if wrapped {
+                // Poll the wrapped command: exit ends recording, cap kills it.
+                if let Some(c) = child.as_mut() {
+                    match c.try_wait() {
+                        Ok(Some(status)) => {
+                            outcome = Some(child::Outcome::Exited(child::map_exit_code(status)));
+                            child = None;
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!("failed to poll command: {e}");
+                        }
+                    }
+                    if let Some(deadline) = cap_deadline {
+                        if Instant::now() >= deadline {
+                            info!("--duration reached, stopping command");
+                            if let Some(mut c) = child.take() {
+                                child::terminate(&mut c, child::TERM_GRACE).await;
+                            }
+                            outcome = Some(child::Outcome::Capped);
+                            break;
+                        }
+                    }
+                }
+            } else if let Some(duration) = config.duration.map(Into::<Duration>::into) {
                 if start.elapsed() >= duration {
                     break;
                 }
@@ -709,6 +755,15 @@ pub fn run(config: RecordingConfig) {
                         converter,
                     });
                 }
+            }
+        }
+
+        // If the loop ended via ctrl-c (STATE flip) while the wrapped command
+        // is still alive, terminate and reap it so we never orphan the child.
+        if let Some(mut c) = child.take() {
+            let status = child::terminate(&mut c, child::TERM_GRACE).await;
+            if outcome.is_none() {
+                outcome = Some(child::Outcome::Exited(child::map_exit_code(status)));
             }
         }
 
@@ -893,7 +948,13 @@ pub fn run(config: RecordingConfig) {
                 }
             }
         }
+
+        outcome
     });
+
+    if let Some(o) = outcome {
+        std::process::exit(o.exit_code());
+    }
 }
 
 #[cfg(test)]
