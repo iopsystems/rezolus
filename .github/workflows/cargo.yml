@@ -242,6 +242,19 @@ jobs:
           sudo ./target/release/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
           ./target/release/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
+          # wrap mode: record a command against the live agent for its lifetime
+          ./target/release/rezolus record --url http://127.0.0.1:4241 -o wrap.parquet -- sleep 3
+          test -s wrap.parquet
+          # exit-code propagation: a wrapped 'false' must exit non-zero
+          code=0
+          ./target/release/rezolus record -o false.parquet -- false || code=$?
+          test "$code" -ne 0
+          # --duration cap: a long command is terminated and record exits 124 quickly
+          start=$(date +%s)
+          code=0
+          ./target/release/rezolus record --duration 2s -o cap.parquet -- sleep 60 || code=$?
+          test "$code" -eq 124
+          test "$(( $(date +%s) - start ))" -lt 10
       - name: smoketest
         if: ${{ matrix.profile == 'debug' }}
         shell: bash
@@ -250,6 +263,19 @@ jobs:
           sudo ./target/debug/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
           ./target/debug/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
+          # wrap mode: record a command against the live agent for its lifetime
+          ./target/debug/rezolus record --url http://127.0.0.1:4241 -o wrap.parquet -- sleep 3
+          test -s wrap.parquet
+          # exit-code propagation: a wrapped 'false' must exit non-zero
+          code=0
+          ./target/debug/rezolus record -o false.parquet -- false || code=$?
+          test "$code" -ne 0
+          # --duration cap: a long command is terminated and record exits 124 quickly
+          start=$(date +%s)
+          code=0
+          ./target/debug/rezolus record --duration 2s -o cap.parquet -- sleep 60 || code=$?
+          test "$code" -eq 124
+          test "$(( $(date +%s) - start ))" -lt 10
 
   check-success:
     name: verify all tests pass

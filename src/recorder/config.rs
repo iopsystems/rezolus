@@ -5,6 +5,7 @@ use clap::ArgMatches;
 use reqwest::Url;
 use serde::Deserialize;
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -33,6 +34,43 @@ pub struct RecordingConfig {
     pub separate: bool,
     pub metadata: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
+    /// When set, record only while this command runs (perf-record style).
+    pub command: Option<Vec<String>>,
+}
+
+/// Default endpoint used when neither `--url` nor a positional URL is given.
+const DEFAULT_URL: &str = "http://localhost:4241";
+/// Default output file used when neither `-o` nor a positional OUTPUT is given.
+const DEFAULT_OUTPUT: &str = "rezolus.parquet";
+
+/// Resolve the recording URL from the `--url` flag and the deprecated
+/// positional URL. Returns `(url, positional_was_used)`. Errors if both are
+/// supplied.
+fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url, bool), String> {
+    match (flag, positional) {
+        (Some(_), Some(_)) => {
+            Err("specify either --url or the positional URL, not both".to_string())
+        }
+        (Some(u), None) => Ok((u.clone(), false)),
+        (None, Some(u)) => Ok((u.clone(), true)),
+        (None, None) => Ok((Url::parse(DEFAULT_URL).unwrap(), false)),
+    }
+}
+
+/// Resolve the output path from `-o/--output` and the deprecated positional
+/// OUTPUT. Returns `(path, positional_was_used)`. Errors if both are supplied.
+fn resolve_output(
+    flag: Option<&Path>,
+    positional: Option<&Path>,
+) -> Result<(PathBuf, bool), String> {
+    match (flag, positional) {
+        (Some(_), Some(_)) => {
+            Err("specify either -o/--output or the positional OUTPUT, not both".to_string())
+        }
+        (Some(p), None) => Ok((p.to_path_buf(), false)),
+        (None, Some(p)) => Ok((p.to_path_buf(), true)),
+        (None, None) => Ok((PathBuf::from(DEFAULT_OUTPUT), false)),
+    }
 }
 
 impl RecordingConfig {
@@ -55,6 +93,16 @@ impl RecordingConfig {
                     .map(|(k, v)| (k.to_string(), v.to_string()))
             })
             .collect();
+
+        let command: Option<Vec<String>> = args
+            .get_many::<String>("COMMAND")
+            .map(|vals| vals.map(|s| s.to_string()).collect());
+
+        // Resolve output once (used by every mode except --config, which
+        // prefers its TOML output when -o is not given).
+        let out_flag = args.get_one::<PathBuf>("OUTPUT_FLAG").map(|p| p.as_path());
+        let out_pos = args.get_one::<PathBuf>("OUTPUT").map(|p| p.as_path());
+        let (resolved_output, output_deprecated) = resolve_output(out_flag, out_pos)?;
 
         // Mode 1: --config file.toml
         if let Some(config_path) = args.get_one::<PathBuf>("CONFIG_FILE") {
@@ -98,15 +146,22 @@ impl RecordingConfig {
                 return Err("config file must define at least one endpoint".to_string());
             }
 
+            let output = if args.get_one::<PathBuf>("OUTPUT_FLAG").is_some() {
+                resolved_output.clone()
+            } else {
+                PathBuf::from(toml_cfg.recording.output)
+            };
+
             return Ok(RecordingConfig {
                 interval,
                 duration,
                 format,
                 verbose,
-                output: PathBuf::from(toml_cfg.recording.output),
+                output,
                 separate,
                 metadata,
                 endpoints: toml_cfg.endpoints,
+                command: command.clone(),
             });
         }
 
@@ -120,35 +175,30 @@ impl RecordingConfig {
                 return Err("at least one --endpoint is required".to_string());
             }
 
-            // OUTPUT is required for --endpoint mode
-            let output = args
-                .get_one::<PathBuf>("OUTPUT")
-                .ok_or_else(|| "OUTPUT is required when using --endpoint".to_string())?
-                .to_path_buf();
-
             return Ok(RecordingConfig {
                 interval,
                 duration,
                 format,
                 verbose,
-                output,
+                output: resolved_output.clone(),
                 separate,
                 metadata,
                 endpoints,
+                command: command.clone(),
             });
         }
 
-        // Mode 3: positional <URL> <OUTPUT> (backward compat)
-        let url = args
-            .get_one::<Url>("URL")
-            .ok_or_else(|| {
-                "must specify one of: <URL> <OUTPUT>, --endpoint, or --config".to_string()
-            })?
-            .clone();
-        let output = args
-            .get_one::<PathBuf>("OUTPUT")
-            .ok_or_else(|| "OUTPUT is required".to_string())?
-            .to_path_buf();
+        // Mode 3: --url / positional <URL>, single endpoint.
+        let url_flag = args.get_one::<Url>("URL_FLAG");
+        let url_pos = args.get_one::<Url>("URL");
+        let (url, url_deprecated) = resolve_url(url_flag, url_pos)?;
+
+        if url_deprecated {
+            eprintln!("note: the positional URL is deprecated, use --url");
+        }
+        if output_deprecated {
+            eprintln!("note: the positional OUTPUT is deprecated, use -o/--output");
+        }
 
         let source = metadata
             .iter()
@@ -167,10 +217,11 @@ impl RecordingConfig {
             duration,
             format,
             verbose,
-            output,
+            output: resolved_output,
             separate,
             metadata,
             endpoints: vec![endpoint],
+            command,
         })
     }
 }
@@ -225,6 +276,58 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
 mod tests {
     use super::*;
     use crate::recorder::endpoint::Protocol;
+
+    #[test]
+    fn resolve_url_defaults_to_localhost() {
+        let (url, deprecated) = resolve_url(None, None).unwrap();
+        assert_eq!(url.as_str(), "http://localhost:4241/");
+        assert!(!deprecated);
+    }
+
+    #[test]
+    fn resolve_url_flag_wins() {
+        let flag = Url::parse("http://example:9090").unwrap();
+        let (url, deprecated) = resolve_url(Some(&flag), None).unwrap();
+        assert_eq!(url.as_str(), "http://example:9090/");
+        assert!(!deprecated);
+    }
+
+    #[test]
+    fn resolve_url_positional_is_deprecated() {
+        let pos = Url::parse("http://host:4241").unwrap();
+        let (url, deprecated) = resolve_url(None, Some(&pos)).unwrap();
+        assert_eq!(url.as_str(), "http://host:4241/");
+        assert!(deprecated);
+    }
+
+    #[test]
+    fn resolve_url_both_is_error() {
+        let a = Url::parse("http://a:1").unwrap();
+        let b = Url::parse("http://b:2").unwrap();
+        assert!(resolve_url(Some(&a), Some(&b)).is_err());
+    }
+
+    #[test]
+    fn resolve_output_defaults_to_rezolus_parquet() {
+        let (out, dep) = resolve_output(None, None).unwrap();
+        assert_eq!(out, PathBuf::from("rezolus.parquet"));
+        assert!(!dep);
+    }
+
+    #[test]
+    fn resolve_output_positional_is_deprecated() {
+        let pos = PathBuf::from("legacy.parquet");
+        let (out, dep) = resolve_output(None, Some(&pos)).unwrap();
+        assert_eq!(out, pos);
+        assert!(dep);
+    }
+
+    #[test]
+    fn resolve_output_both_is_error() {
+        let flag = PathBuf::from("new.parquet");
+        let pos = PathBuf::from("legacy.parquet");
+        assert!(resolve_output(Some(&flag), Some(&pos)).is_err());
+    }
 
     #[test]
     fn test_parse_endpoint_str_full() {

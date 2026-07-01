@@ -1,5 +1,6 @@
 use super::*;
 
+mod child;
 mod config;
 mod endpoint;
 mod prometheus;
@@ -98,6 +99,33 @@ pub fn command() -> Command {
                 .long("instance")
                 .help("Instance name for service data (written to parquet metadata)")
                 .action(clap::ArgAction::Set),
+        )
+        .arg(
+            clap::Arg::new("URL_FLAG")
+                .long("url")
+                .help("Metrics endpoint to record (default http://localhost:4241)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(Url))
+                .conflicts_with_all(["CONFIG_FILE", "ENDPOINT", "URL"]),
+        )
+        .arg(
+            clap::Arg::new("OUTPUT_FLAG")
+                .long("output")
+                .short('o')
+                .help("Path to the output file (default rezolus.parquet)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf))
+                .conflicts_with("OUTPUT"),
+        )
+        .arg(
+            clap::Arg::new("COMMAND")
+                .help("Command to run; record for its lifetime (everything after --)")
+                .action(clap::ArgAction::Set)
+                .index(3)
+                .num_args(1..)
+                .last(true)
+                .allow_hyphen_values(true)
+                .value_parser(value_parser!(String)),
         )
 }
 
@@ -518,19 +546,71 @@ pub fn run(config: RecordingConfig) {
         })
         .collect();
 
-    if config.duration.is_some() {
+    if config.command.is_some() {
+        info!("recording while command runs... ctrl-c to stop early");
+    } else if config.duration.is_some() {
         info!("recording metrics... ctrl-c to terminate early");
     } else {
         info!("recording metrics... ctrl-c to end the recording");
     }
 
-    rt.block_on(async {
+    let wrapped = config.command.is_some();
+
+    let outcome: Option<child::Outcome> = rt.block_on(async {
+        // Spawn the wrapped command only after probing/writers succeeded, so a
+        // failed setup never starts an expensive workload.
+        let mut child = if let Some(ref cmd) = config.command {
+            match child::spawn(cmd) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!("error: failed to start command: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            None
+        };
+        let mut outcome: Option<child::Outcome> = None;
+
         let interval_dur: Duration = config.interval.into();
         let start = Instant::now() + interval_dur;
+        // In wrapped mode the cap is intentionally measured from command spawn
+        // (`Instant::now()`), which differs from the non-wrapped path's `start`
+        // reference (now + interval). Do not unify these — they are distinct by
+        // design: the cap bounds the child's lifetime, `start` bounds recording.
+        let cap_deadline: Option<Instant> =
+            config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
 
         while STATE.load(Ordering::Relaxed) == RUNNING {
-            if let Some(duration) = config.duration.map(Into::<Duration>::into) {
+            if wrapped {
+                // Poll the wrapped command: exit ends recording, cap kills it.
+                if let Some(c) = child.as_mut() {
+                    match c.try_wait() {
+                        Ok(Some(status)) => {
+                            let code = child::map_exit_code(status);
+                            info!("command exited (code {code}), finalizing recording");
+                            outcome = Some(child::Outcome::Exited(code));
+                            child = None;
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!("failed to poll command: {e}");
+                        }
+                    }
+                    if let Some(deadline) = cap_deadline {
+                        if Instant::now() >= deadline {
+                            info!("--duration reached, stopping command");
+                            if let Some(mut c) = child.take() {
+                                child::terminate(&mut c, child::TERM_GRACE).await;
+                            }
+                            outcome = Some(child::Outcome::Capped);
+                            break;
+                        }
+                    }
+                }
+            } else if let Some(duration) = config.duration.map(Into::<Duration>::into) {
                 if start.elapsed() >= duration {
                     break;
                 }
@@ -684,6 +764,15 @@ pub fn run(config: RecordingConfig) {
             }
         }
 
+        // If the loop ended via ctrl-c (STATE flip) while the wrapped command
+        // is still alive, terminate and reap it so we never orphan the child.
+        if let Some(mut c) = child.take() {
+            let status = child::terminate(&mut c, child::TERM_GRACE).await;
+            if outcome.is_none() {
+                outcome = Some(child::Outcome::Exited(child::map_exit_code(status)));
+            }
+        }
+
         // ── Finalization ──────────────────────────────────────────────────
 
         for ew in writers.iter_mut().flatten() {
@@ -696,6 +785,10 @@ pub fn run(config: RecordingConfig) {
             .count();
 
         if active_count == 0 {
+            if wrapped {
+                warn!("command exited before any metrics were recorded");
+                return outcome;
+            }
             eprintln!("error: no data was recorded from any endpoint");
             std::process::exit(1);
         }
@@ -865,12 +958,53 @@ pub fn run(config: RecordingConfig) {
                 }
             }
         }
+
+        outcome
     });
+
+    if let Some(o) = outcome {
+        // Flush buffered logs before exiting the process: std::process::exit
+        // skips destructors, so drop the log drain explicitly first.
+        drop(_log_drain);
+        std::process::exit(o.exit_code());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_arg_graph_is_valid() {
+        // Catches malformed clap wiring (e.g. positional index collisions)
+        // at test time instead of panicking at runtime.
+        command().debug_assert();
+    }
+
+    #[test]
+    fn from_args_populates_command_from_trailing_args() {
+        let matches = command()
+            .try_get_matches_from(["record", "--", "echo", "hello"])
+            .expect("parse");
+        let config = RecordingConfig::from_args(&matches).expect("config");
+        assert_eq!(
+            config.command,
+            Some(vec!["echo".to_string(), "hello".to_string()])
+        );
+        // Defaults apply when no --url/-o are given.
+        assert_eq!(config.output, PathBuf::from("rezolus.parquet"));
+        assert_eq!(config.endpoints.len(), 1);
+        assert_eq!(config.endpoints[0].url.as_str(), "http://localhost:4241/");
+    }
+
+    #[test]
+    fn from_args_without_command_is_none() {
+        let matches = command()
+            .try_get_matches_from(["record", "--url", "http://host:4241"])
+            .expect("parse");
+        let config = RecordingConfig::from_args(&matches).expect("config");
+        assert!(config.command.is_none());
+    }
 
     #[test]
     fn test_separate_output_path() {
