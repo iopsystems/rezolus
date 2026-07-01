@@ -7,6 +7,11 @@ use tokio::process::Child;
 
 /// Spawn a wrapped command with inherited stdio (stdin/stdout/stderr pass
 /// straight through to the terminal, like `perf record` / `time`).
+///
+/// The child is made the leader of a new process group (`process_group(0)`, so
+/// its pgid equals its pid) so that [`terminate`] can signal the entire group —
+/// reaching workers a shell or benchmark harness forks, not just the direct
+/// child.
 pub fn spawn(command: &[String]) -> std::io::Result<Child> {
     let (program, args) = command
         .split_first()
@@ -16,24 +21,33 @@ pub fn spawn(command: &[String]) -> std::io::Result<Child> {
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
+        .process_group(0)
         .spawn()
 }
 
-/// Terminate a running child: SIGTERM, wait up to `grace`, then SIGKILL.
-/// Returns the child's final `ExitStatus`.
+/// Terminate a running child's process group: SIGTERM, wait up to `grace`, then
+/// SIGKILL. Signals the whole group (see [`spawn`]) so forked workers are
+/// cleaned up too. Returns the child leader's final `ExitStatus`.
 pub async fn terminate(child: &mut Child, grace: Duration) -> ExitStatus {
-    if let Some(pid) = child.id() {
-        // SAFETY: sending a signal to a pid we own; return value ignored
-        // because the child may have already exited between checks.
+    // The child is its own process group leader, so its pid is the pgid.
+    let pgid = child.id().map(|p| p as libc::pid_t);
+    if let Some(pgid) = pgid {
+        // SAFETY: signalling a process group we created; return value ignored
+        // because members may have already exited between checks.
         unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
+            libc::killpg(pgid, libc::SIGTERM);
         }
     }
     match tokio::time::timeout(grace, child.wait()).await {
         Ok(Ok(status)) => status,
         _ => {
-            // Grace elapsed or wait errored: force kill and reap.
-            let _ = child.kill().await;
+            // Grace elapsed or wait errored: force-kill the whole group and reap
+            // the leader.
+            if let Some(pgid) = pgid {
+                unsafe {
+                    libc::killpg(pgid, libc::SIGKILL);
+                }
+            }
             child
                 .wait()
                 .await
@@ -143,5 +157,47 @@ mod tests {
     #[tokio::test]
     async fn spawn_empty_command_errors() {
         assert!(spawn(&[]).is_err());
+    }
+
+    #[tokio::test]
+    async fn terminate_kills_forked_grandchild() {
+        use std::io::Read;
+
+        // A shell backgrounds a grandchild `sleep` and records its pid, then
+        // waits. `terminate` must kill the whole process group (shell + the
+        // backgrounded sleep), not just the shell.
+        let pid_file =
+            std::env::temp_dir().join(format!("rz_grandchild_{}.pid", std::process::id()));
+        let _ = std::fs::remove_file(&pid_file);
+        let script = format!("sleep 300 & echo $! > {} ; wait", pid_file.display());
+        let mut child = spawn(&["sh".to_string(), "-c".to_string(), script]).unwrap();
+
+        // Wait for the shell to publish the grandchild pid.
+        let gpid: i32 = loop {
+            if let Ok(mut f) = std::fs::File::open(&pid_file) {
+                let mut s = String::new();
+                let _ = f.read_to_string(&mut s);
+                if let Ok(pid) = s.trim().parse::<i32>() {
+                    break pid;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        terminate(&mut child, Duration::from_millis(500)).await;
+        // Give the kernel a moment to deliver signals and reap.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // kill(pid, 0) probes existence: it fails with ESRCH once the
+        // grandchild is gone.
+        let alive = unsafe { libc::kill(gpid, 0) } == 0;
+        let _ = std::fs::remove_file(&pid_file);
+        if alive {
+            // Cleanup so a failing test doesn't leak the process.
+            unsafe {
+                libc::kill(gpid, libc::SIGKILL);
+            }
+        }
+        assert!(!alive, "grandchild {gpid} survived group terminate");
     }
 }

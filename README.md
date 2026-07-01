@@ -194,8 +194,9 @@ rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o rezol
 ```
 
 When wrapping a command, `--duration` also acts as a safety cap: if the command
-outlives it, recording stops and the command is terminated. The positional
-`<URL> <OUTPUT>` form still works but is deprecated in favor of `--url`/`-o`.
+outlives it, recording stops and the command — along with any worker processes
+it spawned — is terminated. The positional `<URL> <OUTPUT>` form still works but
+is deprecated in favor of `--url`/`-o`.
 
 ### Viewer
 
