@@ -83,13 +83,15 @@ digraph rezolus {
 
   // ---- Layout: rows keep the picture compact; invisible edges pin the
   //      left-to-right order within each row --------------------------
-  // view sits on the far right (next to the recording it opens); the
-  // other three are the expose/capture subcommands.
-  {rank=same; exporter; record; hindsight; view; exporter -> record -> hindsight -> view [style=invis];}
-  {rank=same; grafana; recording; browser; grafana -> recording -> browser [style=invis];}
+  // Row 1: the expose/capture subcommands.
+  {rank=same; exporter; record; hindsight; exporter -> record -> hindsight [style=invis];}
+  // Row 2: the recording and its artifacts; view sits on the far right,
+  // right next to the recording it opens, so 'open recording' is a clean
+  // horizontal edge.
+  {rank=same; grafana; recording; view; grafana -> recording -> view [style=invis];}
   // mcp and parquet sit side by side directly under the recording, with
   // the AI assistant to the left of mcp.
-  {rank=same; llm; mcp; pqtools; llm -> mcp -> pqtools [style=invis];}
+  {rank=same; llm; mcp; pqtools; browser; llm -> mcp -> pqtools -> browser [style=invis];}
 
   // ---- Collect ----------------------------------------------------------
   system -> agent [label="collect"];
@@ -106,10 +108,9 @@ digraph rezolus {
   record    -> recording;
   hindsight -> recording [label="dump on trigger", weight=10];
 
-  // ---- Open a recording in the viewer. constraint=false keeps this edge
-  //      from disturbing the ranks (already pinned above); xlabel keeps the
-  //      label from bending the spline.
-  recording:ne -> view [xlabel="open recording", color="#8d6e63", constraint=false];
+  // ---- Open a recording in the viewer. view shares the recording's row,
+  //      so this is a straight horizontal edge (no back-edge, no crossing).
+  recording -> view [label="open recording", color="#8d6e63", constraint=false];
 
   // ---- Analyze / manage a recording ------------------------------------
   recording -> mcp     [label="analyze", color="#8d6e63"];
