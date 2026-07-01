@@ -25,12 +25,12 @@ digraph rezolus {
          fillcolor="#bbdefb", color="#1976d2", penwidth=1.8];
 
   // ---- Live: stream and watch ------------------------------------------
-  exporter [label=<<b>rezolus exporter</b><br/><font point-size="11">Prometheus metrics endpoint</font>>, fillcolor="#e3f2fd", color="#1976d2"];
-  view     [label=<<b>rezolus view</b><br/><font point-size="11">interactive dashboard</font>>,     fillcolor="#e3f2fd", color="#1976d2"];
+  exporter [label=<<b>rezolus exporter</b><br/><font point-size="11">Prometheus metrics endpoint</font>>, fillcolor="#e3f2fd", color="#1976d2", group="gExp"];
+  view     [label=<<b>rezolus view</b><br/><font point-size="11">interactive dashboard</font>>,     fillcolor="#e3f2fd", color="#1976d2", group="gView"];
 
   // ---- Capture to a file -----------------------------------------------
   record    [label=<<b>rezolus record</b><br/><font point-size="11">save a recording</font>>,                 fillcolor="#e3f2fd", color="#1976d2"];
-  hindsight [label=<<b>rezolus hindsight</b><br/><font point-size="11">go back in time<br/>after an incident</font>>, fillcolor="#e3f2fd", color="#1976d2"];
+  hindsight [label=<<b>rezolus hindsight</b><br/><font point-size="11">go back in time<br/>after an incident</font>>, fillcolor="#e3f2fd", color="#1976d2", group="gRec"];
 
   // ---- Work with recordings --------------------------------------------
   mcp     [label=<<b>rezolus mcp</b><br/><font point-size="11">AI-guided analysis</font>>,          fillcolor="#e3f2fd", color="#1976d2"];
@@ -38,11 +38,11 @@ digraph rezolus {
 
   // ---- The recording artifact ------------------------------------------
   recording [label=<<b>Recording</b><br/><font point-size="11">.parquet file</font>>,
-             shape=cylinder, fillcolor="#ffe0b2", color="#f57c00"];
+             shape=cylinder, fillcolor="#ffe0b2", color="#f57c00", group="gRec"];
 
   // ---- Where the value lands -------------------------------------------
-  grafana [label=<<b>Prometheus / Grafana</b>>, fillcolor="#eceff1", color="#90a4ae"];
-  browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae"];
+  grafana [label=<<b>Prometheus / Grafana</b>>, fillcolor="#eceff1", color="#90a4ae", group="gExp"];
+  browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae", group="gView"];
   llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
 
   // ---- Layout: rows keep the picture compact; invisible edges pin the
@@ -64,11 +64,11 @@ digraph rezolus {
   agent -> record    [label="save"];
   agent -> hindsight [label="always-on buffer"];
 
-  exporter -> grafana [label="scrape"];
+  exporter -> grafana [label="scrape", weight=10];
 
   // ---- Produce a recording ---------------------------------------------
   record    -> recording;
-  hindsight -> recording [label="dump on trigger"];
+  hindsight -> recording [label="dump on trigger", weight=10];
 
   // ---- Do things with the recording ------------------------------------
   recording -> view    [label="open recording", color="#8d6e63", constraint=false];
@@ -76,6 +76,6 @@ digraph rezolus {
   recording -> pqtools [label="manage",  color="#8d6e63"];
 
   // ---- Outcomes ---------------------------------------------------------
-  view -> browser [dir=both];
+  view -> browser [dir=both, weight=10];
   mcp  -> llm     [label="ask", dir=both, constraint=false];
 }
