@@ -168,13 +168,34 @@ management — see [HTTP Endpoint](#http-endpoint-optional) below.
 
 ### Recorder
 
-Connects to a running agent and records metrics into a Parquet file for
-benchmarking, lab tests, or offline workload characterization. It auto-detects
-Rezolus agent vs Prometheus sources and supports custom file-level metadata.
+Records metrics into a Parquet file for benchmarking, lab tests, or offline
+workload characterization. It auto-detects Rezolus agent vs Prometheus sources
+and supports custom file-level metadata.
+
+Like `perf record`, it can wrap a workload and capture for exactly its lifetime,
+finalizing when the command exits:
 
 ```bash
-rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
+rezolus record -- ./my-benchmark --threads 8
 ```
+
+By default this records the local agent (`http://localhost:4241`) into
+`rezolus.parquet`. Override the endpoint with `--url` and the output with `-o`:
+
+```bash
+rezolus record --url http://host:4241 -o run.parquet -- ./driver
+```
+
+Or record a fixed window instead, until `--duration` elapses or you press
+ctrl-c:
+
+```bash
+rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o rezolus.parquet
+```
+
+When wrapping a command, `--duration` also acts as a safety cap: if the command
+outlives it, recording stops and the command is terminated. The positional
+`<URL> <OUTPUT>` form still works but is deprecated in favor of `--url`/`-o`.
 
 ### Viewer
 
@@ -243,8 +264,15 @@ workload and understand what conditions you'd want to replicate in test.
 Collect a per-second recording for 15 minutes, then open it:
 
 ```bash
-rezolus record --interval 1s --duration 15m http://localhost:4241 rezolus.parquet
+rezolus record --interval 1s --duration 15m -o rezolus.parquet
 rezolus view rezolus.parquet
+```
+
+Or wrap a benchmark and capture only while it runs:
+
+```bash
+rezolus record -o run.parquet -- ./my-benchmark
+rezolus view run.parquet
 ```
 
 ### DevOps and SRE troubleshooting
@@ -306,8 +334,8 @@ sudo target/release/rezolus config/agent.toml
 # run the exporter
 sudo target/release/rezolus exporter config/exporter.toml
 
-# record metrics to a parquet file
-target/release/rezolus record http://localhost:4241 rezolus.parquet
+# record metrics to a parquet file (until ctrl-c, or wrap a command with `-- cmd`)
+target/release/rezolus record -o rezolus.parquet
 
 # run hindsight
 target/release/rezolus hindsight config/hindsight.toml
