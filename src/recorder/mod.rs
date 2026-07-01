@@ -963,6 +963,9 @@ pub fn run(config: RecordingConfig) {
     });
 
     if let Some(o) = outcome {
+        // Flush buffered logs before exiting the process: std::process::exit
+        // skips destructors, so drop the log drain explicitly first.
+        drop(_log_drain);
         std::process::exit(o.exit_code());
     }
 }
@@ -970,6 +973,38 @@ pub fn run(config: RecordingConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_arg_graph_is_valid() {
+        // Catches malformed clap wiring (e.g. positional index collisions)
+        // at test time instead of panicking at runtime.
+        command().debug_assert();
+    }
+
+    #[test]
+    fn from_args_populates_command_from_trailing_args() {
+        let matches = command()
+            .try_get_matches_from(["record", "--", "echo", "hello"])
+            .expect("parse");
+        let config = RecordingConfig::from_args(&matches).expect("config");
+        assert_eq!(
+            config.command,
+            Some(vec!["echo".to_string(), "hello".to_string()])
+        );
+        // Defaults apply when no --url/-o are given.
+        assert_eq!(config.output, PathBuf::from("rezolus.parquet"));
+        assert_eq!(config.endpoints.len(), 1);
+        assert_eq!(config.endpoints[0].url.as_str(), "http://localhost:4241/");
+    }
+
+    #[test]
+    fn from_args_without_command_is_none() {
+        let matches = command()
+            .try_get_matches_from(["record", "--url", "http://host:4241"])
+            .expect("parse");
+        let config = RecordingConfig::from_args(&matches).expect("config");
+        assert!(config.command.is_none());
+    }
 
     #[test]
     fn test_separate_output_path() {
