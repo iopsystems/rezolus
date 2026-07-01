@@ -110,6 +110,8 @@ const TopNav = {
                 }
                 return null;
             })(),
+            // GPU selection lives in the GPU section body (a two-panel picker
+            // mirroring the cgroups selector), not in the top nav.
             // Three sibling buttons sit next to REZOLUS in single-capture
             // mode: file metadata (filename text + dropdown), Load Parquet,
             // Load Selection. Compare mode puts filename + per-side Load

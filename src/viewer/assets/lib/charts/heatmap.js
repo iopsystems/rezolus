@@ -110,6 +110,10 @@ export function configureHeatmap(chart) {
     const range = format.range;
     const yAxisLabel = format.y_axis_label || format.axis_label;
     const valueLabel = format.value_label;
+    // The entity each heatmap row represents (CPU, GPU, ...), used in tooltips so
+    // GPU charts say "GPU 0", not "CPU 0". Set explicitly via the dashboard's
+    // row_label; defaults to "CPU".
+    const rowEntity = format.row_label || 'CPU';
 
     // Configure tooltip with unit formatting if specified
     const customXFormatterForTooltip = chart.spec.xAxisFormatter;
@@ -139,7 +143,7 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                CPU ${cpu}
+                                ${rowEntity} ${cpu}
                             </span>
                             <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fgMuted};">
                                 no data
@@ -168,7 +172,7 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                CPU ${cpu}
+                                ${rowEntity} ${cpu}
                             </span>
                         </div>
                         <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
@@ -207,7 +211,7 @@ export function configureHeatmap(chart) {
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                            CPU ${cpu}
+                            ${rowEntity} ${cpu}
                         </span>
                         ${label}
                         <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">

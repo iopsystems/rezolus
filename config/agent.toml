@@ -109,6 +109,33 @@ enabled = true
 # requires Turing+ GPU and is only available when built with --features cupti.
 [samplers.gpu_nvidia]
 
+# Produces AMD GPU metrics using the ROCm SMI library (librocm_smi64.so),
+# loaded at runtime. Disabled automatically on hosts without ROCm or AMD GPUs.
+[samplers.gpu_amd_smi]
+
+# Produces AMD GPU hardware performance counter metrics (waves, VALU,
+# instruction/L1/L2 caches, memory-bandwidth requests) via rocprofiler-sdk's
+# device counting service, loaded at runtime. Requires the CAP_PERFMON
+# capability. Disabled automatically on hosts without ROCm or AMD GPUs. Note:
+# on RDNA GPUs some counters only read non-zero when the GPU is in a stable
+# power state (see docs/amd_gpu_counters.md); this sampler does not change the
+# power state. When the PMU is enabled, AMD HSA runtime system creates one background thread that
+# keeps busy polling, that could push the Rezolus CPU utilization to 100% on one core.
+# This high CPU utilization might cause problem for some applications, so we disable this sampler by default.
+#
+# This sampler is OPT-IN ONLY: it is never enabled by the [defaults] section. It
+# stays off unless this section explicitly sets `enabled = true` (commenting the
+# section out leaves it disabled, not enabled).
+[samplers.gpu_amd_pmu]
+enabled = false
+# Optionally pin the AMD GPU performance level at startup. Default (unset) leaves
+# the power state untouched. Many RDNA per-SIMD counters (VALU/SALU/LDS, L2/VRAM
+# bandwidth) only read non-zero in a stable power state. One of: auto, low, high,
+# manual, stable_std, stable_peak, stable_min_mclk, stable_min_sclk, determinism.
+# Requires amd-smi on PATH. Note: stable_* levels pin clocks and perturb real
+# workloads, so use with care on production hosts.
+# gpu_perf_level = "stable_std"
+
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
 

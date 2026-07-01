@@ -172,7 +172,7 @@ fn collect_gpus() -> Vec<GpuSummary> {
     let mut gpus = Vec::new();
 
     if let Some(displays) = json.get("SPDisplaysDataType").and_then(|v| v.as_array()) {
-        for gpu in displays {
+        for (index, gpu) in displays.iter().enumerate() {
             let name = gpu
                 .get("sppci_model")
                 .and_then(|v| v.as_str())
@@ -202,6 +202,7 @@ fn collect_gpus() -> Vec<GpuSummary> {
             };
 
             gpus.push(GpuSummary {
+                index,
                 name,
                 vendor,
                 memory_bytes,

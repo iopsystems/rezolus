@@ -37,9 +37,18 @@ export const queryRangeForCapture = (captureId, query, start, end, step) =>
 
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
+let _selectedGpus = [];        // GPU `id`s to filter the GPU section by; [] = all
 
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
+
+// When non-empty, the GPU section's non-per-GPU charts are filtered to these
+// GPU `id`s. Empty means show the aggregate (avg/sum across all GPUs). Per-GPU
+// charts (those with `by (id)`) always show all GPUs and ignore this.
+const setSelectedGpus = (ids) => {
+    _selectedGpus = Array.isArray(ids) ? ids.map(String) : [];
+};
+const getSelectedGpus = () => _selectedGpus;
 
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
@@ -62,9 +71,9 @@ const PROMQL_KEYWORDS = new Set([
 //   metric{existing}  → metric{existing,label="value"}
 //   metric[5m]        → metric{label="value"}[5m]
 //   metric            → metric{label="value"}   (bare, in expressions)
-const injectLabel = (query, labelName, labelValue) => {
+const injectLabel = (query, labelName, labelValue, op = '=') => {
     if (!labelName || !labelValue) return query;
-    const selector = `${labelName}="${labelValue}"`;
+    const selector = `${labelName}${op}"${labelValue}"`;
 
     // Single-pass regex that matches either:
     //   (1) identifier{...}  — metric with existing label selector
@@ -111,6 +120,11 @@ const injectLabel = (query, labelName, labelValue) => {
         return `${name}{${selector}}`;
     });
 };
+
+// Inject a regex label selector (label=~"a|b"). Used for selecting a subset of
+// GPU ids.
+const injectLabelRegex = (query, labelName, regexValue) =>
+    injectLabel(query, labelName, regexValue, '=~');
 
 const substituteCgroupPattern = (query, pattern) => {
     query = query.replace(/,?\s*name!~"[^"]*"/g, '');
@@ -385,6 +399,17 @@ const createDataApi = ({
         }
         if (_selectedNode && sectionRoute && !sectionRoute.startsWith('/service/')) {
             q = injectLabel(q, 'node', _selectedNode);
+        }
+        // On the GPU section, filter the non-per-GPU charts to the selected GPU
+        // `id`s. Per-GPU charts group `by (id)` to draw one line per GPU and
+        // must always show all GPUs, so they are exempt. Empty selection = all.
+        if (_selectedGpus.length > 0 && sectionRoute === '/gpu' && !/by\s*\(\s*id\s*\)/.test(q)) {
+            if (_selectedGpus.length === 1) {
+                q = injectLabel(q, 'id', _selectedGpus[0]);
+            } else {
+                // Match any of the selected ids via a regex label selector.
+                q = injectLabelRegex(q, 'id', _selectedGpus.join('|'));
+            }
         }
         if (injectTopologyLabels && serviceName) {
             const inst = _selectedInstances[serviceName];
@@ -690,8 +715,11 @@ export {
     getStepOverride,
     setSelectedNode,
     getSelectedNode,
+    setSelectedGpus,
+    getSelectedGpus,
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,
+    injectLabelRegex,
     buildEffectiveQuery,
 };

@@ -1,1 +1,2 @@
+mod amd;
 mod nvidia;
