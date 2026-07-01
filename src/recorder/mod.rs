@@ -574,6 +574,10 @@ pub fn run(config: RecordingConfig) {
 
         let interval_dur: Duration = config.interval.into();
         let start = Instant::now() + interval_dur;
+        // In wrapped mode the cap is intentionally measured from command spawn
+        // (`Instant::now()`), which differs from the non-wrapped path's `start`
+        // reference (now + interval). Do not unify these — they are distinct by
+        // design: the cap bounds the child's lifetime, `start` bounds recording.
         let cap_deadline: Option<Instant> =
             config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
@@ -584,7 +588,9 @@ pub fn run(config: RecordingConfig) {
                 if let Some(c) = child.as_mut() {
                     match c.try_wait() {
                         Ok(Some(status)) => {
-                            outcome = Some(child::Outcome::Exited(child::map_exit_code(status)));
+                            let code = child::map_exit_code(status);
+                            info!("command exited (code {code}), finalizing recording");
+                            outcome = Some(child::Outcome::Exited(code));
                             child = None;
                             break;
                         }
@@ -779,6 +785,10 @@ pub fn run(config: RecordingConfig) {
             .count();
 
         if active_count == 0 {
+            if wrapped {
+                warn!("command exited before any metrics were recorded");
+                return outcome;
+            }
             eprintln!("error: no data was recorded from any endpoint");
             std::process::exit(1);
         }
