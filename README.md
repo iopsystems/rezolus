@@ -23,24 +23,19 @@ miss, then lets you export, record, replay, and analyze it.
 
 ## Why Rezolus?
 
-Most monitoring tools average performance data into per-second or per-minute
-points. That smooths away exactly the behavior that matters: the latency tail, a
-brief throttling event, a burst of retransmits, a scheduler stall. Rezolus is
-built to keep that detail.
+Rezolus effortlessly tracks the details you need to understand production so you can reach for the fine-grained insights when you need them, even in retrospect.
 
+- **Configurable time resolution.** Defaulting to per-second collection, Rezolus offers much finer time resolution out of the box, and can be tuned to even finer intervals.
 - **Distributions, not averages.** Latency, sizes, and utilization are captured
-  as high-resolution histograms in the kernel, so you see the full shape — p50,
-  p99, p99.9, and the long tail — not just a mean.
-- **Low enough overhead to leave on.** eBPF samplers aggregate in-kernel and are
-  read over a shared-memory map, so Rezolus is designed to run always-on,
+  as high-resolution histograms, so you see the full shape or any quantile (including the long tail), not just a mean.
+- **Low overhead, leave it on.** eBPF samplers run in kernel and are
+  read over a pre-allocated memory maps, so Rezolus is designed to run always-on,
   fleet-wide, in production. See [`docs/principles.md`](docs/principles.md) for
   the design rules the BPF samplers commit to.
-- **Go back in time.** When per-second collection is too expensive but you still
-  need fine-grained data, **Hindsight** keeps a high-resolution ring buffer on
-  disk so you can snapshot system state *after* an incident has already
+- **Go back in time.** Don't pay the cost of per-second _aggregation_, only pay for storing fine-grained data when you need it. **Hindsight** keeps a high-resolution ring buffer on
+  disk so you can snapshot system state _after_ an incident has already
   happened.
-- **Your data stays yours.** The Viewer runs its PromQL engine in your browser
-  (compiled to WebAssembly), so recordings never have to leave your machine.
+- **Data governance and sharing.** Data can be exported into existing obs pipelines or stored as Parquet files. The Viewer runs locally or even inside your browser, making data ownership both flexible and simple.
 
 ---
 
@@ -49,45 +44,19 @@ built to keep that detail.
 - **Systems telemetry via eBPF** — CPU usage, scheduler runqueue latency,
   syscall latency and counts, block I/O, TCP/network internals, and more,
   captured as high-resolution histograms instead of averages.
-- **Rich CPU performance counters** — IPC (cycles and instructions), branch
+- **Rich performance counters** — IPC (cycles and instructions), branch
   prediction, DTLB and L3 cache behavior, TLB flushes, migrations, and
   frequency, per core and per cgroup.
 - **GPU telemetry** — NVIDIA via NVML and GPM, including per-tensor-pipe
-  utilization (HMMA for FP16/BF16, IMMA for INT8, DFMA for FP64) on Hopper and
-  newer, plus SM utilization/occupancy, DRAM bandwidth, PCIe throughput, power,
+  utilization, plus SM utilization/occupancy, DRAM bandwidth, PCIe throughput, power,
   energy, clocks, and temperature. Apple GPU metrics on macOS.
 - **Container-aware** — per-cgroup CPU cycles/instructions, migrations, syscalls,
   and CFS bandwidth/throttling, so you can attribute behavior per container.
 - **Service & inference telemetry** — runtime-loaded templates that turn
-  service metrics into KPI dashboards, including vLLM (prefill / decode), SGLang
+  service metrics into KPI dashboards, such as vLLM (prefill / decode), SGLang
   (router / prefill / decode), and Valkey.
-- **Hindsight** — an always-on, on-disk ring buffer that lets you snapshot
-  high-resolution state *after* an incident has already happened.
-- **Recorder** — capture metric snapshots to Parquet for benchmarking,
-  workload characterization, and offline analysis.
-- **Viewer** — an interactive web dashboard with in-browser PromQL, live
-  streaming from an agent, and A/B compare mode with diff and quantile heatmaps.
-- **MCP server** — LLM-guided analysis: query recordings with PromQL, detect
-  anomalies, and analyze metric correlations from an AI assistant.
 - **Integrates with your stack** — Prometheus-compatible export from the
   Exporter, and Parquet for portable storage and offline analysis.
-
-### Capability matrix
-
-| Domain | Sources | Notes |
-|---|---|---|
-| CPU / scheduler / syscalls | eBPF, perf events | Per-cgroup; latency histograms |
-| CPU performance counters | perf events | IPC, branch, DTLB, L3, TLB flush, frequency |
-| Block I/O | eBPF | Latency and size distributions by operation |
-| Network / TCP | eBPF, ethtool/sysfs | Throughput, retransmits, connect/packet latency |
-| Memory | meminfo, vmstat | System memory and paging activity |
-| GPU (NVIDIA) | NVML, GPM | Per-pipe tensor utilization on Hopper+; PCIe, energy |
-| GPU (Apple) | macOS sampler | Apple GPU metrics |
-| Services / inference | Service templates | vLLM, SGLang, Valkey |
-
-> **Platform requirements:** eBPF samplers require Linux kernel 5.8+ and root,
-> on x86_64 or ARM64. macOS support is limited to basic CPU and Apple GPU
-> metrics — use the Viewer and Recorder to work with remote Linux agents.
 
 See the [metrics documentation][metrics] for the full list of metrics Rezolus
 supports.
@@ -180,7 +149,7 @@ sudo systemctl restart rezolus-exporter
 
 Sometimes per-second collection is too expensive, and some problems are
 impossible to understand without fine-grained data. Hindsight keeps a
-high-resolution ring buffer on disk so you can record a snapshot *after* a
+high-resolution ring buffer on disk so you can record a snapshot _after_ a
 problem has already occurred — effectively going back in time to root-cause a
 production incident at full resolution.
 
@@ -287,7 +256,7 @@ distribution-aware metrics.
 
 When per-second collection is too expensive and a problem is hard to understand
 without fine-grained data, enable **Hindsight**: its on-disk ring buffer lets you
-dump a high-resolution snapshot *after* an incident, so you can go back in time
+dump a high-resolution snapshot _after_ an incident, so you can go back in time
 and root-cause the issue at full resolution.
 
 ### AI inference and services
@@ -370,10 +339,10 @@ The artifacts land in `site/viewer/pkg/`. See
 Rezolus has three services, each with its own configuration file in
 `/etc/rezolus/`:
 
-| Service | Config | Default |
-|---|---|---|
-| `rezolus` (agent) | `agent.toml` | enabled |
-| `rezolus-exporter` | `exporter.toml` | enabled |
+| Service             | Config           | Default  |
+| ------------------- | ---------------- | -------- |
+| `rezolus` (agent)   | `agent.toml`     | enabled  |
+| `rezolus-exporter`  | `exporter.toml`  | enabled  |
 | `rezolus-hindsight` | `hindsight.toml` | disabled |
 
 Each sampler can be individually enabled or disabled, and its collection
