@@ -12,8 +12,8 @@ digraph rezolus {
   labelloc="t";
   label="What you can do with Rezolus";
   fontsize=22;
-  nodesep=0.45;
-  ranksep=0.75;
+  nodesep=0.4;
+  ranksep=0.9;
   bgcolor="white";
 
   node [fontname="Helvetica", fontsize=14, shape=box, style="rounded,filled", penwidth=1.4, margin="0.22,0.14"];
@@ -48,13 +48,23 @@ digraph rezolus {
   browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae"];
   llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
 
+  // ---- Layout: stack nodes into columns for a squarer picture ----------
+  // "Your systems" sits directly above the agent.
+  {rank=same; system; agent;}
+  // The live subcommands (plus the AI assistant, pinned here so it lands
+  // to the left of the mcp box).
+  {rank=same; exporter; view; record; hindsight; llm;}
+  // The recording and everything that consumes it share one column, so
+  // mcp and parquet stack directly below the recording.
+  {rank=same; grafana; browser; recording; mcp; pqtools;}
+
   // ---- Collect ----------------------------------------------------------
-  system -> agent [label="collect"];
+  system -> agent [label="collect", constraint=false];
 
   // ---- Live from the agent ---------------------------------------------
-  agent -> exporter [label="expose"];
-  agent -> view     [label="watch live"];
-  agent -> record   [label="save"];
+  agent -> exporter  [label="expose"];
+  agent -> view      [label="watch live"];
+  agent -> record    [label="save"];
   agent -> hindsight [label="always-on buffer"];
 
   exporter -> grafana [label="scrape"];
@@ -63,13 +73,12 @@ digraph rezolus {
   record    -> recording;
   hindsight -> recording [label="dump on trigger"];
 
-  // ---- Do things with the recording (view sits with the live actions;
-  //      this edge is unconstrained so it doesn't stretch the layout) ----
+  // ---- Do things with the recording ------------------------------------
   recording -> view    [label="explore", color="#8d6e63", constraint=false];
   recording -> mcp     [label="analyze", color="#8d6e63"];
   recording -> pqtools [label="manage",  color="#8d6e63"];
 
   // ---- Outcomes ---------------------------------------------------------
   view -> browser [dir=both];
-  mcp  -> llm     [dir=both];
+  llm  -> mcp     [label="ask", dir=both, constraint=false];
 }
