@@ -1,6 +1,6 @@
 # Rezolus
 
-**High-resolution, low-overhead performance telemetry for Linux systems, GPUs,
+**High-resolution, low-overhead performance telemetry for your systems, GPUs,
 and the services running on top.**
 
 Rezolus is a telemetry agent that captures detailed performance data across your
