@@ -13,6 +13,10 @@ miss, then lets you export, record, replay, and analyze it.
 > captures after the fact (**Hindsight**), records to disk (**Recorder**), and
 > explores (**Viewer**) — all from a single binary.
 
+![Rezolus components and data flow: a single binary provides the Agent, Exporter, Recorder, Hindsight, Viewer, Parquet Tools, and MCP server roles, collecting from the kernel/CPU/GPU/services and producing Parquet recordings and Prometheus metrics for browsers, dashboards, and LLM assistants.](docs/architecture.svg)
+
+<sub>Source: [`docs/architecture.dot`](docs/architecture.dot) — regenerate with `dot -Tsvg docs/architecture.dot -o docs/architecture.svg`.</sub>
+
 ---
 
 ## Why Rezolus?
