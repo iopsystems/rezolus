@@ -7,13 +7,13 @@
 // subcommand for the job. Arrows read as "what you do next".
 
 digraph rezolus {
-  rankdir=LR;
+  rankdir=TB;
   fontname="Helvetica";
   labelloc="t";
   label="What you can do with Rezolus";
   fontsize=22;
-  nodesep=0.4;
-  ranksep=0.9;
+  nodesep=0.5;
+  ranksep=0.75;
   bgcolor="white";
 
   node [fontname="Helvetica", fontsize=14, shape=box, style="rounded,filled", penwidth=1.4, margin="0.22,0.14"];
@@ -48,18 +48,16 @@ digraph rezolus {
   browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae"];
   llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
 
-  // ---- Layout: stack nodes into columns for a squarer picture ----------
-  // "Your systems" sits directly above the agent.
-  {rank=same; system; agent;}
-  // The live subcommands (plus the AI assistant, pinned here so it lands
-  // to the left of the mcp box).
-  {rank=same; exporter; view; record; hindsight; llm;}
-  // The recording and everything that consumes it share one column, so
-  // mcp and parquet stack directly below the recording.
-  {rank=same; grafana; browser; recording; mcp; pqtools;}
+  // ---- Layout: rows keep the picture compact ---------------------------
+  {rank=same; exporter; view; record; hindsight;}
+  {rank=same; grafana; browser; recording;}
+  // mcp and parquet sit side by side directly under the recording, with
+  // the AI assistant to the left of mcp. The invisible edges pin the
+  // left-to-right order of this row.
+  {rank=same; llm; mcp; pqtools; llm -> mcp -> pqtools [style=invis];}
 
   // ---- Collect ----------------------------------------------------------
-  system -> agent [label="collect", constraint=false];
+  system -> agent [label="collect"];
 
   // ---- Live from the agent ---------------------------------------------
   agent -> exporter  [label="expose"];
@@ -80,5 +78,5 @@ digraph rezolus {
 
   // ---- Outcomes ---------------------------------------------------------
   view -> browser [dir=both];
-  llm  -> mcp     [label="ask", dir=both, constraint=false];
+  mcp  -> llm     [label="ask", dir=both, constraint=false];
 }
