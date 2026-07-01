@@ -45,12 +45,14 @@ digraph rezolus {
   browser [label=<<b>Your browser</b>>,          fillcolor="#eceff1", color="#90a4ae"];
   llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
 
-  // ---- Layout: rows keep the picture compact ---------------------------
-  {rank=same; exporter; view; record; hindsight;}
-  {rank=same; grafana; browser; recording;}
+  // ---- Layout: rows keep the picture compact; invisible edges pin the
+  //      left-to-right order within each row --------------------------
+  // view sits on the far right (next to the recording it opens); the
+  // other three are the expose/capture subcommands.
+  {rank=same; exporter; record; hindsight; view; exporter -> record -> hindsight -> view [style=invis];}
+  {rank=same; grafana; recording; browser; grafana -> recording -> browser [style=invis];}
   // mcp and parquet sit side by side directly under the recording, with
-  // the AI assistant to the left of mcp. The invisible edges pin the
-  // left-to-right order of this row.
+  // the AI assistant to the left of mcp.
   {rank=same; llm; mcp; pqtools; llm -> mcp -> pqtools [style=invis];}
 
   // ---- Collect ----------------------------------------------------------
