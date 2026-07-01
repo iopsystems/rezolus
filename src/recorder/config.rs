@@ -5,6 +5,7 @@ use clap::ArgMatches;
 use reqwest::Url;
 use serde::Deserialize;
 
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -33,6 +34,43 @@ pub struct RecordingConfig {
     pub separate: bool,
     pub metadata: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
+    /// When set, record only while this command runs (perf-record style).
+    pub command: Option<Vec<String>>,
+}
+
+/// Default endpoint used when neither `--url` nor a positional URL is given.
+const DEFAULT_URL: &str = "http://localhost:4241";
+/// Default output file used when neither `-o` nor a positional OUTPUT is given.
+const DEFAULT_OUTPUT: &str = "rezolus.parquet";
+
+/// Resolve the recording URL from the `--url` flag and the deprecated
+/// positional URL. Returns `(url, positional_was_used)`. Errors if both are
+/// supplied.
+pub fn resolve_url(flag: Option<&Url>, positional: Option<&Url>) -> Result<(Url, bool), String> {
+    match (flag, positional) {
+        (Some(_), Some(_)) => {
+            Err("specify either --url or the positional URL, not both".to_string())
+        }
+        (Some(u), None) => Ok((u.clone(), false)),
+        (None, Some(u)) => Ok((u.clone(), true)),
+        (None, None) => Ok((Url::parse(DEFAULT_URL).unwrap(), false)),
+    }
+}
+
+/// Resolve the output path from `-o/--output` and the deprecated positional
+/// OUTPUT. Returns `(path, positional_was_used)`. Errors if both are supplied.
+pub fn resolve_output(
+    flag: Option<&Path>,
+    positional: Option<&Path>,
+) -> Result<(PathBuf, bool), String> {
+    match (flag, positional) {
+        (Some(_), Some(_)) => {
+            Err("specify either -o/--output or the positional OUTPUT, not both".to_string())
+        }
+        (Some(p), None) => Ok((p.to_path_buf(), false)),
+        (None, Some(p)) => Ok((p.to_path_buf(), true)),
+        (None, None) => Ok((PathBuf::from(DEFAULT_OUTPUT), false)),
+    }
 }
 
 impl RecordingConfig {
@@ -107,6 +145,7 @@ impl RecordingConfig {
                 separate,
                 metadata,
                 endpoints: toml_cfg.endpoints,
+                command: None,
             });
         }
 
@@ -135,6 +174,7 @@ impl RecordingConfig {
                 separate,
                 metadata,
                 endpoints,
+                command: None,
             });
         }
 
@@ -171,6 +211,7 @@ impl RecordingConfig {
             separate,
             metadata,
             endpoints: vec![endpoint],
+            command: None,
         })
     }
 }
@@ -225,6 +266,51 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
 mod tests {
     use super::*;
     use crate::recorder::endpoint::Protocol;
+
+    #[test]
+    fn resolve_url_defaults_to_localhost() {
+        let (url, deprecated) = resolve_url(None, None).unwrap();
+        assert_eq!(url.as_str(), "http://localhost:4241/");
+        assert!(!deprecated);
+    }
+
+    #[test]
+    fn resolve_url_flag_wins() {
+        let flag = Url::parse("http://example:9090").unwrap();
+        let (url, deprecated) = resolve_url(Some(&flag), None).unwrap();
+        assert_eq!(url.as_str(), "http://example:9090/");
+        assert!(!deprecated);
+    }
+
+    #[test]
+    fn resolve_url_positional_is_deprecated() {
+        let pos = Url::parse("http://host:4241").unwrap();
+        let (url, deprecated) = resolve_url(None, Some(&pos)).unwrap();
+        assert_eq!(url.as_str(), "http://host:4241/");
+        assert!(deprecated);
+    }
+
+    #[test]
+    fn resolve_url_both_is_error() {
+        let a = Url::parse("http://a:1").unwrap();
+        let b = Url::parse("http://b:2").unwrap();
+        assert!(resolve_url(Some(&a), Some(&b)).is_err());
+    }
+
+    #[test]
+    fn resolve_output_default_and_deprecation() {
+        let (out, dep) = resolve_output(None, None).unwrap();
+        assert_eq!(out, PathBuf::from("rezolus.parquet"));
+        assert!(!dep);
+
+        let pos = PathBuf::from("legacy.parquet");
+        let (out, dep) = resolve_output(None, Some(&pos)).unwrap();
+        assert_eq!(out, pos);
+        assert!(dep);
+
+        let flag = PathBuf::from("new.parquet");
+        assert!(resolve_output(Some(&flag), Some(&pos)).is_err());
+    }
 
     #[test]
     fn test_parse_endpoint_str_full() {
