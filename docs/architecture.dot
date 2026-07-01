@@ -9,9 +9,6 @@
 digraph rezolus {
   rankdir=TB;
   fontname="Helvetica";
-  labelloc="t";
-  label="What you can do with Rezolus";
-  fontsize=22;
   nodesep=0.5;
   ranksep=0.75;
   bgcolor="white";
