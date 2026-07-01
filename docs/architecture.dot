@@ -1,0 +1,135 @@
+// Rezolus — what you can do with it (user's view)
+//
+// Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
+//          dot -Tpng docs/architecture.dot -o docs/architecture.png
+//
+// Everything below is the one `rezolus` binary — you just pick the
+// subcommand for the job. Arrows read as "what you do next".
+//
+// Labels use small HTML tables so the text centers (plain <br/> labels
+// left-align in some Graphviz builds).
+
+digraph rezolus {
+  rankdir=TB;
+  fontname="Helvetica";
+  nodesep=0.5;
+  ranksep=0.75;
+  bgcolor="white";
+
+  node [fontname="Helvetica", fontsize=14, shape=box, style="rounded,filled", penwidth=1.4, margin="0.22,0.14"];
+  edge [fontname="Helvetica", fontsize=12, color="#607d8b"];
+
+  // ---- What you're watching --------------------------------------------
+  system [fillcolor="#e8f5e0", color="#7cb342", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>Target systems</b></td></tr>
+      <tr><td align="center" balign="center"><font point-size="11">CPU · GPU · kernel · scheduler<br/>syscalls · block I/O · network<br/>containers · services</font></td></tr>
+    </table>>];
+
+  // ---- A service that exposes its own metrics (scraped straight into
+  //      record, bypassing the agent) --------------------------------
+  service [fillcolor="#e8f5e0", color="#7cb342", group="gRecord", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>Target services</b></td></tr>
+      <tr><td align="center" balign="center"><font point-size="11">Prometheus-compatible endpoint<br/>vLLM · SGLang · Valkey</font></td></tr>
+    </table>>];
+
+  // ---- The always-on collector (pink: runs as root, eBPF in kernel) -----
+  agent [fillcolor="#f8bbd0", color="#c2185b", penwidth=1.8, label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus agent</b></td></tr>
+      <tr><td align="center" balign="center"><font point-size="11">always-on collector<br/>root · in-kernel eBPF</font></td></tr>
+    </table>>];
+
+  // ---- Live: stream and watch ------------------------------------------
+  exporter [fillcolor="#e3f2fd", color="#1976d2", group="gExp", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus exporter</b></td></tr>
+      <tr><td align="center"><font point-size="11">Prometheus metrics endpoint</font></td></tr>
+    </table>>];
+  view [fillcolor="#e3f2fd", color="#1976d2", group="gView", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus view</b></td></tr>
+      <tr><td align="center"><font point-size="11">interactive dashboard</font></td></tr>
+    </table>>];
+
+  // ---- Capture to a file -----------------------------------------------
+  record [fillcolor="#e3f2fd", color="#1976d2", group="gRecord", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus record</b></td></tr>
+      <tr><td align="center"><font point-size="11">save a recording</font></td></tr>
+    </table>>];
+  hindsight [fillcolor="#e3f2fd", color="#1976d2", group="gRec", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus hindsight</b></td></tr>
+      <tr><td align="center" balign="center"><font point-size="11">go back in time<br/>after an incident</font></td></tr>
+    </table>>];
+
+  // ---- Work with recordings --------------------------------------------
+  mcp [fillcolor="#e3f2fd", color="#1976d2", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus mcp</b></td></tr>
+      <tr><td align="center"><font point-size="11">AI-guided analysis</font></td></tr>
+    </table>>];
+  pqtools [fillcolor="#e3f2fd", color="#1976d2", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>rezolus parquet</b></td></tr>
+      <tr><td align="center"><font point-size="11">inspect · annotate · combine</font></td></tr>
+    </table>>];
+
+  // ---- The recording artifact ------------------------------------------
+  recording [shape=cylinder, fillcolor="#ffe0b2", color="#f57c00", group="gRecord", label=<
+    <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
+      <tr><td align="center"><b>Recording</b></td></tr>
+      <tr><td align="center"><font point-size="11">.parquet file</font></td></tr>
+    </table>>];
+
+  // ---- Where the value lands -------------------------------------------
+  grafana [label=<<b>Prometheus / Grafana</b>>, fillcolor="#eceff1", color="#90a4ae", group="gExp"];
+  browser [label=<<b>User's browser</b>>,        fillcolor="#eceff1", color="#90a4ae", group="gView"];
+  llm     [label=<<b>AI assistant</b>>,           fillcolor="#eceff1", color="#90a4ae"];
+
+  // ---- Layout: rows keep the picture compact; invisible edges pin the
+  //      left-to-right order within each row --------------------------
+  // Row 1: the expose/capture subcommands.
+  {rank=same; exporter; hindsight; record; exporter -> hindsight -> record [style=invis];}
+  // Row 2: the recording and its artifacts; view sits on the far right,
+  // right next to the recording it opens, so 'open recording' is a clean
+  // horizontal edge.
+  {rank=same; grafana; recording; view; grafana -> recording -> view [style=invis];}
+  // mcp and parquet sit side by side directly under the recording, with
+  // the AI assistant to the left of mcp.
+  {rank=same; llm; mcp; pqtools; browser; llm -> mcp -> pqtools -> browser [style=invis];}
+
+  // ---- Collect ----------------------------------------------------------
+  system -> agent [label="collect"];
+  // A target service can be scraped straight into record, without the agent.
+  // Keep 'service' on the agent's level; the gRecord group keeps it directly
+  // above 'record' (rightmost command) for a short, clean scrape edge.
+  {rank=same; agent; service;}
+  service -> record [label="scrape", style=dashed];
+
+  // ---- Live from the agent ---------------------------------------------
+  agent -> exporter  [label="expose"];
+  agent:e -> view:n  [label="watch live"];
+  agent -> record    [label="save"];
+  agent -> hindsight [label="always-on buffer"];
+
+  exporter -> grafana [label="scrape", weight=10];
+
+  // ---- Produce a recording ---------------------------------------------
+  record    -> recording;
+  hindsight -> recording [label="dump on trigger", weight=10];
+
+  // ---- Open a recording in the viewer. view shares the recording's row,
+  //      so this is a straight horizontal edge (no back-edge, no crossing).
+  recording -> view [label="open recording", color="#8d6e63", constraint=false];
+
+  // ---- Analyze / manage a recording ------------------------------------
+  recording -> mcp     [label="analyze", color="#8d6e63"];
+  recording -> pqtools [label="manage",  color="#8d6e63"];
+
+  // ---- Outcomes ---------------------------------------------------------
+  view -> browser [dir=both, weight=10];
+  llm  -> mcp     [label="ask", dir=both, constraint=false];
+}
