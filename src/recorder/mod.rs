@@ -100,6 +100,32 @@ pub fn command() -> Command {
                 .help("Instance name for service data (written to parquet metadata)")
                 .action(clap::ArgAction::Set),
         )
+        .arg(
+            clap::Arg::new("URL_FLAG")
+                .long("url")
+                .help("Metrics endpoint to record (default http://localhost:4241)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(Url))
+                .conflicts_with_all(["CONFIG_FILE", "ENDPOINT"]),
+        )
+        .arg(
+            clap::Arg::new("OUTPUT_FLAG")
+                .long("output")
+                .short('o')
+                .help("Path to the output file (default rezolus.parquet)")
+                .action(clap::ArgAction::Set)
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            clap::Arg::new("COMMAND")
+                .help("Command to run; record for its lifetime (everything after --)")
+                .action(clap::ArgAction::Set)
+                .index(3)
+                .num_args(1..)
+                .last(true)
+                .allow_hyphen_values(true)
+                .value_parser(value_parser!(String)),
+        )
 }
 
 /// Probe a single endpoint to detect its protocol and resolve the scrape URL.
