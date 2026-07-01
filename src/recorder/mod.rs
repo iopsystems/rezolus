@@ -1,5 +1,6 @@
 use super::*;
 
+mod child;
 mod config;
 mod endpoint;
 mod prometheus;
