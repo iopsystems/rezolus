@@ -94,6 +94,16 @@ impl RecordingConfig {
             })
             .collect();
 
+        let command: Option<Vec<String>> = args
+            .get_many::<String>("COMMAND")
+            .map(|vals| vals.map(|s| s.to_string()).collect());
+
+        // Resolve output once (used by every mode except --config, which
+        // prefers its TOML output when -o is not given).
+        let out_flag = args.get_one::<PathBuf>("OUTPUT_FLAG").map(|p| p.as_path());
+        let out_pos = args.get_one::<PathBuf>("OUTPUT").map(|p| p.as_path());
+        let (resolved_output, output_deprecated) = resolve_output(out_flag, out_pos)?;
+
         // Mode 1: --config file.toml
         if let Some(config_path) = args.get_one::<PathBuf>("CONFIG_FILE") {
             let contents = std::fs::read_to_string(config_path)
@@ -136,16 +146,22 @@ impl RecordingConfig {
                 return Err("config file must define at least one endpoint".to_string());
             }
 
+            let output = if args.get_one::<PathBuf>("OUTPUT_FLAG").is_some() {
+                resolved_output.clone()
+            } else {
+                PathBuf::from(toml_cfg.recording.output)
+            };
+
             return Ok(RecordingConfig {
                 interval,
                 duration,
                 format,
                 verbose,
-                output: PathBuf::from(toml_cfg.recording.output),
+                output,
                 separate,
                 metadata,
                 endpoints: toml_cfg.endpoints,
-                command: None,
+                command: command.clone(),
             });
         }
 
@@ -159,36 +175,30 @@ impl RecordingConfig {
                 return Err("at least one --endpoint is required".to_string());
             }
 
-            // OUTPUT is required for --endpoint mode
-            let output = args
-                .get_one::<PathBuf>("OUTPUT")
-                .ok_or_else(|| "OUTPUT is required when using --endpoint".to_string())?
-                .to_path_buf();
-
             return Ok(RecordingConfig {
                 interval,
                 duration,
                 format,
                 verbose,
-                output,
+                output: resolved_output.clone(),
                 separate,
                 metadata,
                 endpoints,
-                command: None,
+                command: command.clone(),
             });
         }
 
-        // Mode 3: positional <URL> <OUTPUT> (backward compat)
-        let url = args
-            .get_one::<Url>("URL")
-            .ok_or_else(|| {
-                "must specify one of: <URL> <OUTPUT>, --endpoint, or --config".to_string()
-            })?
-            .clone();
-        let output = args
-            .get_one::<PathBuf>("OUTPUT")
-            .ok_or_else(|| "OUTPUT is required".to_string())?
-            .to_path_buf();
+        // Mode 3: --url / positional <URL>, single endpoint.
+        let url_flag = args.get_one::<Url>("URL_FLAG");
+        let url_pos = args.get_one::<Url>("URL");
+        let (url, url_deprecated) = resolve_url(url_flag, url_pos)?;
+
+        if url_deprecated {
+            eprintln!("note: the positional URL is deprecated, use --url");
+        }
+        if output_deprecated {
+            eprintln!("note: the positional OUTPUT is deprecated, use -o/--output");
+        }
 
         let source = metadata
             .iter()
@@ -207,11 +217,11 @@ impl RecordingConfig {
             duration,
             format,
             verbose,
-            output,
+            output: resolved_output,
             separate,
             metadata,
             endpoints: vec![endpoint],
-            command: None,
+            command,
         })
     }
 }
