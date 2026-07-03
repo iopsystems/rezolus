@@ -135,6 +135,19 @@ CLAUDE.md), and any residual ambiguity if you hit the cap without a clean pass.
 
 ## Notes
 
+- **Verify, never guess.** Read the actual parser/config before documenting a
+  value format, default, or config key. On `record` this caught a wrong TOML key
+  (`[[endpoints]]`, not `[[endpoint]]`) and a wrong claim about `--duration` under
+  command-wrapping; on `parquet combine --ab` it confirmed the `baseline=`/
+  `experiment=` values are matched against a file's embedded *source name*, not
+  its filename. If you can't confirm it from code, don't write it.
+- **Lead with canonical flags; mark deprecated ones.** Check the arg parser /
+  config for deprecation paths before writing. `record` printed runtime
+  deprecation notes for positional `URL`/`OUTPUT` while its help still led with
+  them — the help should lead with the canonical form and label the old one.
+- **Keep each PR's diff tight.** One mode's `command()` builder plus the matching
+  README/CLAUDE.md lines makes review trivial; base it on the default branch, not
+  a feature branch.
 - **Keep ground truth immutable.** The single most common way to fool yourself
   here is to "fix" the expected command mid-loop to match what the subagent
   produced. Don't. If the intended usage was wrong, that's a code/design bug, not
