@@ -1,5 +1,6 @@
-.cargo
+.cargo/*
 !.cargo/config.toml
+!.cargo/audit.toml
 .claude/*
 !.claude/skills/
 !.claude/scripts/
