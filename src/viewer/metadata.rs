@@ -504,13 +504,6 @@ fn classify_sources(
                         .map_or(false, |obj| obj.contains_key(NESTED_SAMPLER_STATUS))
                 })
             });
-            let has_systeminfo = group.map_or(false, |g| {
-                g.values().any(|entry| {
-                    entry
-                        .as_object()
-                        .map_or(false, |obj| obj.contains_key("systeminfo"))
-                })
-            });
             let node = group.and_then(|g| {
                 g.values().find_map(|entry| {
                     entry
@@ -526,7 +519,6 @@ fn classify_sources(
             let kind = detect_source_kind(
                 source,
                 has_sampler_status,
-                has_systeminfo,
                 has_template,
                 &metric_names,
             );
@@ -546,11 +538,10 @@ fn classify_sources(
             .get(KEY_SOURCE)
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let has_systeminfo = kv_map.contains_key("systeminfo");
         // Sampler status is not present at the top level in single-source files.
         let has_template = service_names.contains(source);
 
-        let kind = detect_source_kind(source, false, has_systeminfo, has_template, &metric_names);
+        let kind = detect_source_kind(source, false, has_template, &metric_names);
         if kind != SourceKind::Service {
             let name = resolve_source_name(kind, source, None, filename_stem);
             entries.push(dashboard::dashboard::SourceEntry {

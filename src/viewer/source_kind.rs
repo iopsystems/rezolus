@@ -20,12 +20,11 @@ pub const REZOLUS_SELF_ANCHORS: &[&str] = &[
 pub fn detect_source_kind(
     source: &str,
     has_sampler_status: bool,
-    has_systeminfo: bool,
     has_template: bool,
     metric_names: &[String],
 ) -> SourceKind {
-    // Tier 1: metadata markers.
-    if source == "rezolus" || has_sampler_status || has_systeminfo {
+    // Tier 1: metadata markers (source tag, sampler_status). Drop spoofable systeminfo.
+    if source == "rezolus" || has_sampler_status {
         return SourceKind::Rezolus;
     }
     if has_template {
@@ -69,36 +68,36 @@ mod tests {
 
     #[test]
     fn metadata_marker_source_rezolus() {
-        assert_eq!(detect_source_kind("rezolus", false, false, false, &[]), SourceKind::Rezolus);
+        assert_eq!(detect_source_kind("rezolus", false, false, &[]), SourceKind::Rezolus);
     }
 
     #[test]
     fn metadata_marker_sampler_status() {
-        assert_eq!(detect_source_kind("anything", true, false, false, &[]), SourceKind::Rezolus);
+        assert_eq!(detect_source_kind("anything", true, false, &[]), SourceKind::Rezolus);
     }
 
     #[test]
     fn template_makes_service() {
-        assert_eq!(detect_source_kind("llm-perf", false, false, true, &[]), SourceKind::Service);
+        assert_eq!(detect_source_kind("llm-perf", false, true, &[]), SourceKind::Service);
     }
 
     #[test]
     fn self_sampler_fingerprint_linux() {
         let m = names(&["rezolus_cpu_usage", "rezolus_rusage", "cpu_usage"]);
-        assert_eq!(detect_source_kind("", false, false, false, &m), SourceKind::Rezolus);
+        assert_eq!(detect_source_kind("", false, false, &m), SourceKind::Rezolus);
     }
 
     #[test]
     fn self_sampler_fingerprint_macos_no_bpf() {
         // macOS recording: rusage self-metrics present, NO rezolus_bpf_* at all.
         let m = names(&["rezolus_cpu_usage", "rezolus_memory_usage_resident_set_size"]);
-        assert_eq!(detect_source_kind("", false, false, false, &m), SourceKind::Rezolus);
+        assert_eq!(detect_source_kind("", false, false, &m), SourceKind::Rezolus);
     }
 
     #[test]
     fn foreign_metrics_are_simple() {
         let m = names(&["http_requests_total", "queue_depth"]);
-        assert_eq!(detect_source_kind("", false, false, false, &m), SourceKind::Simple);
+        assert_eq!(detect_source_kind("", false, false, &m), SourceKind::Simple);
     }
 
     #[test]
