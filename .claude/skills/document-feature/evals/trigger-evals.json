@@ -1,0 +1,22 @@
+[
+  {"query": "just added a --sample-rate flag to `rezolus record`, can you make sure the help text actually explains it? last time an agent guessed the value format wrong and it blew up", "should_trigger": true},
+  {"query": "I renamed --listen to --bind on the viewer subcommand. the docs still say --listen everywhere, update them", "should_trigger": true},
+  {"query": "we added a whole new `rezolus replay` subcommand but it has basically no help text yet. write the --help copy and the readme section for it", "should_trigger": true},
+  {"query": "the record command's help is super thin — an LLM agent couldn't figure out how to point it at a prometheus endpoint vs a rezolus agent. fix it so it's obvious", "should_trigger": true},
+  {"query": "changed the default collection interval on the exporter from 1s to 10s. need the help output and the readme running-modes bit to reflect the new default", "should_trigger": true},
+  {"query": "add docs for the new --separate flag i just put on the recorder, and double check someone could actually predict the output filenames from the help", "should_trigger": true},
+  {"query": "our mcp subcommands' --help is basically useless for an agent driving them. improve it and verify a fresh agent can actually construct the right invocation", "should_trigger": true},
+  {"query": "I exposed a new --proxy-allow option on `rezolus view`. write the help text for it and make sure it reads clearly enough that claude could use it", "should_trigger": true},
+  {"query": "the readme still claims `rezolus record` takes a single endpoint but it does multi-endpoint now with --endpoint. bring the docs up to date", "should_trigger": true},
+  {"query": "before I open this PR with the three new flags on hindsight, can you make sure the CLI help for them is good enough that an automated agent could drive it without guessing", "should_trigger": true},
+  {"query": "the `rezolus record` subcommand panics when the prometheus endpoint returns a 500. can you dig into why and fix the crash", "should_trigger": false},
+  {"query": "add a new eBPF sampler under src/agent/samplers/cpu for measuring last-level-cache misses, wire it into the SAMPLERS slice", "should_trigger": false},
+  {"query": "update the README installation section — the homebrew formula got renamed from rezolus to iop-rezolus", "should_trigger": false},
+  {"query": "write a doc comment for the parse_endpoint_str function in recorder/config.rs explaining the string grammar it parses", "should_trigger": false},
+  {"query": "the --interval flag on record isn't actually being applied, it always samples at 1s no matter what I pass. find the bug", "should_trigger": false},
+  {"query": "help me draft a CONTRIBUTING.md with the build/test/fmt commands and the PR conventions for this repo", "should_trigger": false},
+  {"query": "run `rezolus record` against localhost:4241 for 30 seconds and show me what the parquet metadata looks like", "should_trigger": false},
+  {"query": "implement a csv output format in the recorder — add the serialization code path so --format csv writes rows", "should_trigger": false},
+  {"query": "the columns in the top-level `rezolus --help` output are misaligned on narrow terminals, can you fix the clap formatting/wrapping", "should_trigger": false},
+  {"query": "document the parquet column-metadata keys (metric_type, labels) in docs/ so downstream tools know how to read our files", "should_trigger": false}
+]
