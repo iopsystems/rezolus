@@ -38,6 +38,7 @@ mod proxy_allow;
 
 mod ab_extract;
 mod actions;
+pub mod metric_catalog;
 mod metadata;
 mod report_save;
 mod routes;
