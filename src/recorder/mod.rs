@@ -12,17 +12,42 @@ use std::path::Path;
 
 pub fn command() -> Command {
     Command::new("record")
-        .about("On-demand recording to a file")
+        .about("On-demand recording of metrics to a file")
+        .long_about(
+            "Scrape a metrics endpoint at a fixed interval and write the samples to a file.\n\n\
+             The source is auto-detected: a Rezolus agent (msgpack) or a Prometheus-compatible\n\
+             endpoint.\n\n\
+             WHAT TO RECORD (choose one): --url for a single endpoint (default\n\
+             http://localhost:4241), --endpoint (repeatable) for several at once, or --config\n\
+             for a TOML file. Write the result with -o/--output (default rezolus.parquet).\n\
+             (The positional URL and OUTPUT still work but are deprecated; prefer --url / -o.)\n\n\
+             HOW LONG TO RECORD (choose one): --duration for a fixed window, nothing to run\n\
+             until Ctrl-C, or `-- <command>` to record for exactly the lifetime of a wrapped\n\
+             command (perf-record style) — it stops when the command exits.\n\n\
+             EXAMPLES:\n    \
+             # Record a local agent for 5 minutes\n    \
+             rezolus record --url http://localhost:4241 -o out.parquet --duration 5m\n\n    \
+             # Record a Prometheus endpoint, tagging the source in the file metadata\n    \
+             rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
+             # Record only while a benchmark runs, then stop (defaults: localhost:4241 -> rezolus.parquet)\n    \
+             rezolus record -- ./bench.sh --iters 100\n\n    \
+             # Same, writing to a named file\n    \
+             rezolus record -o bench.parquet -- ./bench.sh\n\n    \
+             # High-resolution capture: sample every 100ms for 30 seconds\n    \
+             rezolus record --url http://localhost:4241 -o out.parquet --interval 100ms --duration 30s\n\n    \
+             # Record several endpoints into separate per-endpoint files\n    \
+             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o combined.parquet",
+        )
         .arg(
             clap::Arg::new("URL")
-                .help("Metrics endpoint (Rezolus agent or Prometheus)")
+                .help("Deprecated positional form of --url; prefer --url")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
                 .index(1),
         )
         .arg(
             clap::Arg::new("OUTPUT")
-                .help("Path to the output file")
+                .help("Deprecated positional form of -o/--output; prefer -o")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .index(2),
@@ -30,7 +55,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("CONFIG_FILE")
                 .long("config")
-                .help("TOML config file for multi-endpoint recording")
+                .help("Record endpoints defined in a TOML file: a [recording] table (output, interval, format, separate) plus [[endpoints]] entries mirroring the --endpoint fields (url, source, role, protocol)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with_all(["URL"]),
@@ -38,14 +63,14 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("ENDPOINT")
                 .long("endpoint")
-                .help("Endpoint: url[,source=name][,role=role][,protocol=msgpack|prometheus]")
+                .help("Add an endpoint as url[,source=name][,role=label][,protocol=msgpack|prometheus]; role is a free-form tag (conventionally service or loadgen); repeat for several (e.g. http://host:9090/metrics,source=svc,role=service,protocol=prometheus)")
                 .action(clap::ArgAction::Append)
                 .conflicts_with_all(["URL", "CONFIG_FILE"]),
         )
         .arg(
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one parquet file per endpoint instead of combining")
+                .help("Write one parquet file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path (source falls back to host-port, e.g. localhost-4241, when not set via source=)")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -59,7 +84,7 @@ pub fn command() -> Command {
             clap::Arg::new("INTERVAL")
                 .long("interval")
                 .short('i')
-                .help("Sets the collection interval")
+                .help("Time between samples, as a duration like 1s, 100ms, or 500us")
                 .action(clap::ArgAction::Set)
                 .default_value("1s")
                 .value_parser(value_parser!(humantime::Duration)),
@@ -68,7 +93,7 @@ pub fn command() -> Command {
             clap::Arg::new("DURATION")
                 .long("duration")
                 .short('d')
-                .help("Sets the collection duration")
+                .help("How long to record before stopping, as a duration like 30s or 5m; omit to record until Ctrl-C. When wrapping a command, acts as a time cap that also terminates the command if it exceeds it")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(humantime::Duration)),
         )
@@ -76,7 +101,7 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Sets the collection format")
+                .help("Output format: parquet (columnar, queryable) or raw (concatenated msgpack snapshots)")
                 .action(clap::ArgAction::Set)
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
@@ -85,7 +110,7 @@ pub fn command() -> Command {
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add file-level parquet metadata (key=value)")
+                .help("Add a file-level metadata tag as key=value (e.g. source=llm-perf); repeat for multiple tags")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -103,7 +128,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("URL_FLAG")
                 .long("url")
-                .help("Metrics endpoint to record (default http://localhost:4241)")
+                .help("Single metrics endpoint to record; auto-detects Rezolus agent vs Prometheus (default http://localhost:4241)")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Url))
                 .conflicts_with_all(["CONFIG_FILE", "ENDPOINT", "URL"]),
@@ -119,7 +144,7 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("COMMAND")
-                .help("Command to run; record for its lifetime (everything after --)")
+                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100")
                 .action(clap::ArgAction::Set)
                 .index(3)
                 .num_args(1..)
