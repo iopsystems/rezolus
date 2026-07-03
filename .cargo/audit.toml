@@ -1,0 +1,15 @@
+# cargo-audit configuration.
+#
+# Advisories listed here are transitive and blocked upstream — we cannot resolve
+# them by bumping our own dependencies. Revisit whenever the upstream crate cuts
+# a release that pulls the patched version.
+[advisories]
+ignore = [
+    # quick-xml >=0.41.0 fixes both, but it arrives only via `plist`, whose
+    # newest release (1.9.0) still pins quick-xml ^0.39. We reach quick-xml
+    # solely through plist's macOS property-list parsing of our own
+    # system_profiler output — not attacker-controlled XML — so the parse-time
+    # DoS exposure here is negligible until plist bumps.
+    "RUSTSEC-2026-0194", # quick-xml: quadratic runtime on duplicate attribute names
+    "RUSTSEC-2026-0195", # quick-xml: unbounded namespace-declaration allocation (NsReader DoS)
+]
