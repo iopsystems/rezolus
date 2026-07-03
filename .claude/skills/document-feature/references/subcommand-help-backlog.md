@@ -74,3 +74,17 @@ the most agent-facing surface, so worth polishing once the thinner ones are done
 
 ## Done
 - `record` — PR #983.
+- `view` — `long_about` with worked examples for all four input modes (file, A/B,
+  live, upload-only) + advanced-flag notes (`--proxy-*`, `--category`).
+- `parquet` (+ `metadata`/`annotate`/`combine`/`filter`) — top-level `long_about`
+  and per-subcommand `long_about`s with examples; `combine --ab` now spells out
+  that `baseline=`/`experiment=` take a file's embedded source name, not filename.
+- `exporter`, `hindsight` — `long_about` describing the mode, the config keys, the
+  scrape-interval / ring-buffer + SIGHUP model, pointing at `config/`.
+- top-level `rezolus` + `agent` — root `long_about` overviewing every mode
+  (incl. `status`) and the default no-subcommand agent `CONFIG` form.
+- `mcp` — top-level examples block + remaining subcommand `long_about`s
+  (`describe-recording`, `describe-metrics`, `analyze-correlation`).
+
+Verified with blind user-simulation agents (16 task→command pairs, all passed) and
+fresh-eyes critics per surface; README + CLAUDE.md "Running Modes" synced.

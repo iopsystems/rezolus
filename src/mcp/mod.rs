@@ -574,6 +574,26 @@ impl TryFrom<ArgMatches> for Config {
 pub fn command() -> Command {
     Command::new("mcp")
         .about("Run Rezolus MCP server for AI analysis or execute analysis commands")
+        .long_about(
+            "AI-assisted analysis of a parquet recording. With no subcommand, runs as a Model\n\
+             Context Protocol server over stdio for an LLM client. Each subcommand also runs\n\
+             one-shot from the CLI, printing the same analysis to stdout.\n\n\
+             SUBCOMMANDS:\n    \
+             describe-recording   Summarize a recording (source, version, time range, duration)\n    \
+             describe-metrics     List every metric in a recording with its type and labels\n    \
+             query                Run a PromQL query against a recording\n    \
+             detect-anomalies     Flag anomalies for one metric, or exhaustively across all\n    \
+             analyze-correlation  Correlate two PromQL series over the recording\n\n\
+             A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
+             (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
+             EXAMPLES:\n    \
+             # Run as a stdio MCP server for an LLM client\n    \
+             rezolus mcp\n\n    \
+             # One-shot: list the metrics in a recording\n    \
+             rezolus mcp describe-metrics file.parquet\n\n    \
+             # One-shot: run a PromQL query\n    \
+             rezolus mcp query file.parquet \"sum(rate(cpu_cycles[1m]))\"",
+        )
         .arg(
             clap::Arg::new("VERBOSE")
                 .long("verbose")
@@ -584,6 +604,16 @@ pub fn command() -> Command {
         .subcommand(
             Command::new("analyze-correlation")
                 .about("Analyze correlation between two metrics using the full recording")
+                .long_about(
+                    "Compute how two PromQL series move together across the whole recording\n\
+                     (Pearson correlation plus supporting stats). Useful for testing a hunch\n\
+                     that one metric drives another — e.g. does CPU usage track memory growth.\n\n\
+                     Both arguments are full PromQL expressions, not bare metric names; wrap\n\
+                     counters in rate()/irate() as you would in a query.\n\n\
+                     EXAMPLE:\n    \
+                     rezolus mcp analyze-correlation file.parquet \\\n        \
+                     \"irate(cgroup_cpu_usage[1m])\" \"cgroup_memory_used\"",
+                )
                 .arg(
                     clap::Arg::new("FILE")
                         .help("Parquet file to analyze")
@@ -607,6 +637,13 @@ pub fn command() -> Command {
         .subcommand(
             Command::new("describe-recording")
                 .about("Describe the contents of a recording file")
+                .long_about(
+                    "Print a high-level summary of a recording: source, Rezolus version, the\n\
+                     wall-clock time range it spans, and total duration. Start here to confirm\n\
+                     you have the right file before querying it.\n\n\
+                     EXAMPLE:\n    \
+                     rezolus mcp describe-recording file.parquet",
+                )
                 .arg(
                     clap::Arg::new("FILE")
                         .help("Parquet file to describe")
@@ -618,6 +655,14 @@ pub fn command() -> Command {
         .subcommand(
             Command::new("describe-metrics")
                 .about("List and describe all metrics available in a recording")
+                .long_about(
+                    "List every metric in a recording with its type (counter/gauge/histogram),\n\
+                     help text, and labels. Run this before `query` or `analyze-correlation` to\n\
+                     find exact metric names and see how to phrase a PromQL expression for each\n\
+                     type.\n\n\
+                     EXAMPLE:\n    \
+                     rezolus mcp describe-metrics file.parquet",
+                )
                 .arg(
                     clap::Arg::new("FILE")
                         .help("Parquet file to analyze")

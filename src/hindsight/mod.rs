@@ -10,10 +10,26 @@ use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
 
 pub fn command() -> Command {
     Command::new("hindsight")
-        .about("Continuous recording to an on-disk ring buffer")
+        .about("Continuously record to an on-disk ring buffer for after-the-fact snapshots")
+        .long_about(
+            "Long-running daemon that pulls from a Rezolus agent and keeps a rolling,\n\
+             high-resolution ring buffer on disk. When an incident happens you snapshot the\n\
+             buffer to a parquet file — effectively recording the minutes *before* the trigger,\n\
+             at a resolution finer than your normal observability stack keeps.\n\n\
+             Configuration is a TOML file (the only argument). It sets the sampling interval\n\
+             ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
+             e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
+             ([general] output). See config/hindsight.toml for a documented starting point.\n\n\
+             TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to the output file without\n\
+             stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
+             remote status/dump requests instead.\n\n\
+             EXAMPLE:\n    \
+             # Run the ring-buffer daemon using the example config\n    \
+             rezolus hindsight config/hindsight.toml",
+        )
         .arg(
             clap::Arg::new("CONFIG")
-                .help("Rezolus Hindsight configuration file")
+                .help("Path to the hindsight TOML config (e.g. config/hindsight.toml); see that file for interval/duration/source/output")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
                 .required(true)

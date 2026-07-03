@@ -65,11 +65,34 @@ fn main() {
 
     let cli = Command::new(env!("CARGO_BIN_NAME"))
         .version(env!("CARGO_PKG_VERSION"))
-        .long_about("Rezolus provides high-resolution systems performance telemetry.")
+        .about("High-resolution systems performance telemetry")
+        .long_about(
+            "Rezolus is a high-resolution systems performance telemetry agent. One binary runs\n\
+             in several roles; the first three are long-running services, the rest are on-demand\n\
+             tools.\n\n\
+             MODES:\n    \
+             agent      (default) Collect system metrics via eBPF/perf and serve them over HTTP.\n\
+             \x20              Run with no subcommand: `rezolus <config.toml>`.\n    \
+             exporter   Re-expose an agent's metrics on a Prometheus-compatible endpoint.\n    \
+             hindsight  Keep an on-disk ring buffer for after-the-fact incident snapshots.\n    \
+             record     Scrape an endpoint to a parquet file (optionally wrapping a command).\n    \
+             view       Serve a web dashboard for a recording or a live agent.\n    \
+             mcp        AI analysis tools (PromQL, anomaly detection, correlation) over a file.\n    \
+             parquet    Inspect and transform parquet recordings (metadata/annotate/combine/filter).\n    \
+             status     Print a running agent's status/sampler health: `rezolus status <endpoint>`.\n\n\
+             The agent is the source everything else reads from; start there, then reach for a\n\
+             tool. Run `rezolus <mode> --help` for a mode's options and examples.\n\n\
+             EXAMPLES:\n    \
+             # Run the agent (needs root for eBPF on Linux)\n    \
+             sudo rezolus config/agent.toml\n\n    \
+             # Record the local agent for 5 minutes, then view it\n    \
+             rezolus record --duration 5m -o out.parquet\n    \
+             rezolus view out.parquet",
+        )
         .subcommand_negates_reqs(true)
         .arg(
             clap::Arg::new("CONFIG")
-                .help("Configuration file")
+                .help("Agent config file (default mode when no subcommand is given), e.g. config/agent.toml")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
                 .required(true)

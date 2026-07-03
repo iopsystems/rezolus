@@ -82,7 +82,37 @@ enum Source {
 
 pub fn command() -> Command {
     Command::new("view")
-        .about("View a Rezolus artifact or live agent")
+        .about("Serve an interactive web dashboard for a recording or live agent")
+        .long_about(
+            "Launch a local web dashboard to explore Rezolus metrics. PromQL runs in the\n\
+             browser (WASM), so data stays on your machine. A browser is opened automatically\n\
+             unless REZOLUS_NO_OPEN is set.\n\n\
+             WHAT TO VIEW (pick one input form):\n    \
+             - a parquet recording:      rezolus view rezolus.parquet\n    \
+             - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
+             - a live agent:             rezolus view http://host:4241\n    \
+             - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
+             Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
+             display label; the internal slots stay baseline/experiment. The second positional\n\
+             (A/B experiment) is only honored when the first is a parquet file — live and\n\
+             upload-only modes attach a second capture from the browser instead.\n\n\
+             By default the viewer binds 127.0.0.1 on a random free port; pass --listen to fix\n\
+             the address (e.g. to reach it from another host).\n\n\
+             The --templates/--category flags (service-extension dashboards) and the --proxy-*\n\
+             flags (in-browser 'load from URL' fetching) are advanced; the input forms above\n\
+             need none of them.\n\n\
+             EXAMPLES:\n    \
+             # Open a single recording\n    \
+             rezolus view rezolus.parquet\n\n    \
+             # A/B compare two recordings with display labels\n    \
+             rezolus view redis=baseline.parquet valkey=experiment.parquet\n\n    \
+             # Stream live from a remote agent on a fixed address\n    \
+             rezolus view http://host:4241 --listen 127.0.0.1:8080\n\n    \
+             # Upload-only mode: start with no file, then upload from the browser\n    \
+             rezolus view\n\n    \
+             # A/B compare using a category bridge view (both sources must be category members)\n    \
+             rezolus view a.parquet b.parquet --category inference-library",
+        )
         .arg(
             clap::Arg::new("INPUT")
                 .help(
@@ -133,10 +163,12 @@ pub fn command() -> Command {
                 .long("category")
                 .value_name("NAME")
                 .help(
-                    "Activate category mode using the named category template \
-                     (e.g. `inference-library`). Each capture's detected source \
-                     (from the parquet metadata) must appear in the category \
-                     template's `members` list.",
+                    "Activate the A/B 'category bridge' view using the named category \
+                     template (e.g. `inference-library`). NAME must match a category \
+                     template known to the viewer (built-in, or from --templates). Each \
+                     capture's detected source (from the parquet metadata) must appear in \
+                     that template's `members` list. Only meaningful when comparing two \
+                     captures.",
                 )
                 .action(clap::ArgAction::Set),
         )
@@ -145,11 +177,13 @@ pub fn command() -> Command {
                 .long("proxy-allow")
                 .value_name("HOST_PATTERN")
                 .help(
-                    "Enable the URL proxy and whitelist a host pattern \
+                    "Let the browser's 'load from URL' feature fetch parquet/agent \
+                     URLs through this server, and whitelist a host pattern \
                      (repeatable). Patterns are shell-style with `*` matching \
-                     a single DNS label — e.g. `*.s3.amazonaws.com`, \
-                     `bucket.example.internal`. Without this flag the proxy \
-                     stays disabled and the browser must fetch URLs directly.",
+                     a single DNS label — e.g. `--proxy-allow '*.s3.amazonaws.com'`, \
+                     `--proxy-allow bucket.example.internal`. Without this flag the \
+                     proxy stays disabled and the browser fetches URLs directly. Not \
+                     needed for the file/live/upload input forms.",
                 )
                 .action(clap::ArgAction::Append),
         )

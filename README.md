@@ -231,12 +231,16 @@ File operations for parquet recordings:
 - **Annotate** — embed service extension KPI definitions for custom viewer
   dashboards.
 - **Combine** — merge a Rezolus parquet with service-level parquet files,
-  joining on timestamps to produce a unified multi-source recording.
+  joining on timestamps to produce a unified multi-source recording, or package
+  two captures as an A/B tarball for the viewer's compare mode.
+- **Filter** — drop metric columns not referenced by a file's service extension
+  KPIs, shrinking the recording.
 
 ```bash
 rezolus parquet metadata -i rezolus.parquet
 rezolus parquet annotate rezolus.parquet --queries ext.json
 rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
+rezolus parquet filter rezolus.parquet -o slim.parquet
 ```
 
 ### MCP Server

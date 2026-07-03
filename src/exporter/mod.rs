@@ -26,10 +26,25 @@ use snapshot::snapshot;
 
 pub fn command() -> Command {
     Command::new("exporter")
-        .about("Exposition of metrics from a Rezolus agent")
+        .about("Serve a Rezolus agent's metrics on a Prometheus-compatible endpoint")
+        .long_about(
+            "Long-running service that pulls from a Rezolus agent's msgpack endpoint and\n\
+             re-exposes the metrics in Prometheus text format for a Prometheus/VictoriaMetrics\n\
+             scraper to collect.\n\n\
+             Configuration is a TOML file (the only argument). It sets the agent to read from\n\
+             ([general] source, default 127.0.0.1:4241), the address to serve `/metrics` on\n\
+             ([general] listen, default 0.0.0.0:4242), and whether to expose full histogram\n\
+             buckets vs. summary percentiles ([prometheus]).\n\n\
+             Set [general] interval (default 1s) to match your Prometheus scrape interval:\n\
+             shorter than the scrape leaves gaps between summary samples, longer serves stale\n\
+             data. See config/exporter.toml for a documented starting point.\n\n\
+             EXAMPLE:\n    \
+             # Expose a local agent to Prometheus using the example config\n    \
+             rezolus exporter config/exporter.toml",
+        )
         .arg(
             clap::Arg::new("CONFIG")
-                .help("Rezolus exporter configuration file")
+                .help("Path to the exporter TOML config (e.g. config/exporter.toml); see that file for the [general]/[prometheus] keys")
                 .value_parser(value_parser!(PathBuf))
                 .action(clap::ArgAction::Set)
                 .required(true)
