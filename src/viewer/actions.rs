@@ -361,7 +361,7 @@ pub fn ingest_baseline_from_path(
         let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
         validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None)
+        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None, &[])
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
@@ -518,7 +518,7 @@ pub async fn connect_agent(
         .filename(url.to_string())
         .build();
     let new_store_arc: Arc<dyn MetricsSource> = Arc::new(new_store.clone());
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
+    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
 
     state.replace_baseline(new_store_arc);
     *state.sections.write() = LazySectionStore::new(context);

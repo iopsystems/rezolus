@@ -779,7 +779,7 @@ fn init_live_mode(
     let store_arc: std::sync::Arc<dyn metriken_query::MetricsSource> =
         std::sync::Arc::new(store.clone());
     let state = AppState::with_pool(store_arc, registry.clone(), pool);
-    let context = dashboard::dashboard::build_dashboard_context(None, &[], None);
+    let context = dashboard::dashboard::build_dashboard_context(None, &[], None, &[]);
     *state.sections.write() = state::LazySectionStore::new(context);
     state.live.store(true, Ordering::Relaxed);
     state.captures.set_baseline_systeminfo(info.sysinfo);

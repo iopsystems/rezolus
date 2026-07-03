@@ -161,7 +161,7 @@ impl Viewer {
         let context = if is_trimmed_report(&file_metadata) {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &[], None)
+            dashboard::dashboard::build_dashboard_context(None, &[], None, &[])
         };
 
         Ok(Viewer {
@@ -337,6 +337,7 @@ impl Viewer {
                 None,
                 &service_refs,
                 None, // single-capture: no category
+                &[],
             )
         };
         self.context = context;
@@ -630,7 +631,7 @@ impl WasmCaptureRegistry {
         let context = if report_mode {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &service_refs, category)
+            dashboard::dashboard::build_dashboard_context(None, &service_refs, category, &[])
         };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
