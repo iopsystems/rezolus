@@ -74,7 +74,9 @@ target/release/rezolus parquet metadata -i file.parquet --json      # JSON outpu
 target/release/rezolus parquet metadata -i file.parquet --field source
 target/release/rezolus parquet annotate file.parquet                # add service extension KPIs
 target/release/rezolus parquet annotate file.parquet --queries ext.json
-target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet
+target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
+target/release/rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
+target/release/rezolus parquet filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
 
 # MCP - AI analysis server or CLI commands
 target/release/rezolus mcp                                                    # stdio server
@@ -98,7 +100,7 @@ The binary operates in seven modes via subcommands:
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect), `annotate` (add service extension KPIs), `combine` (merge multi-source files).
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect), `annotate` (add service extension KPIs), `combine` (merge multi-source files or build an A/B tarball), `filter` (drop columns not needed by KPIs).
 
 ### Sampler Architecture
 
