@@ -55,6 +55,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/selection", get(selection_handler))
         .route("/sections", get(sections_handler))
         .route("/file_metadata", get(file_metadata_handler))
+        .route("/metrics", get(metrics_handler))
         .route(
             "/upload",
             axum::routing::post(actions::upload_parquet)
@@ -260,6 +261,45 @@ async fn file_metadata_handler(
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         body,
+    )
+        .into_response()
+}
+
+// ── Metric catalog ────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct MetricsParam {
+    #[serde(default)]
+    capture: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+}
+
+async fn metrics_handler(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<MetricsParam>,
+) -> Response {
+    let capture_id = CaptureId::parse_opt(p.capture.as_deref());
+    let Some(data) = state.captures.get(capture_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let descriptions = state
+        .captures
+        .file_metadata(capture_id)
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("descriptions").and_then(|d| d.as_object()).cloned())
+        .unwrap_or_default();
+    let source = p.source.clone().unwrap_or_else(|| data.source());
+    let metrics = super::metric_catalog::assemble_catalog(
+        data.as_ref(),
+        &descriptions,
+        p.source.as_deref(),
+    );
+    let body = super::metric_catalog::MetricsResponse { source, metrics };
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&body).unwrap(),
     )
         .into_response()
 }
