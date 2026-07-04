@@ -216,6 +216,32 @@ impl Viewer {
         .unwrap()
     }
 
+    /// Returns the metric catalog JSON compatible with /api/v1/metrics.
+    ///
+    /// Mirrors the server-side handler: parses the `descriptions` map from
+    /// file metadata, runs the catalog assembler, and wraps in MetricsResponse.
+    pub fn metrics(&self, source: Option<String>) -> String {
+        let descriptions = self
+            .file_metadata
+            .get("descriptions")
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        let resolved_source = source
+            .clone()
+            .unwrap_or_else(|| self.reader.source());
+        let metrics = dashboard::metric_catalog::assemble_catalog(
+            self.reader.as_ref(),
+            &descriptions,
+            source.as_deref(),
+        );
+        let response = dashboard::metric_catalog::MetricsResponse {
+            source: resolved_source,
+            metrics,
+        };
+        serde_json::to_string(&response).unwrap()
+    }
+
     /// Returns systeminfo JSON from parquet file metadata.
     ///
     /// For multi-node combined files (>1 node in per_source_metadata), returns
@@ -493,6 +519,10 @@ impl WasmCaptureRegistry {
 
     pub fn info(&self, capture: &str) -> Result<String, JsValue> {
         self.require_slot(capture).map(|v| v.info())
+    }
+
+    pub fn metrics(&self, capture: &str, source: Option<String>) -> Result<String, JsValue> {
+        self.require_slot(capture).map(|v| v.metrics(source))
     }
 
     pub fn systeminfo(&self, capture: &str) -> Option<String> {

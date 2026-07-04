@@ -290,12 +290,12 @@ async fn metrics_handler(
         .and_then(|v| v.get("descriptions").and_then(|d| d.as_object()).cloned())
         .unwrap_or_default();
     let source = p.source.clone().unwrap_or_else(|| data.source());
-    let metrics = super::metric_catalog::assemble_catalog(
+    let metrics = dashboard::metric_catalog::assemble_catalog(
         data.as_ref(),
         &descriptions,
         p.source.as_deref(),
     );
-    let body = super::metric_catalog::MetricsResponse { source, metrics };
+    let body = dashboard::metric_catalog::MetricsResponse { source, metrics };
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
