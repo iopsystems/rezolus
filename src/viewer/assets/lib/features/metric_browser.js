@@ -13,6 +13,7 @@
 
 import { buildDefaultQuery } from '../charts/metric_types.js';
 import { ViewerApi } from '../viewer_api.js';
+import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
 
 // Build a section-style plot spec for a metric. Carrying `promql_query`
 // (not just opts) is what lets the section pipeline populate data and the
@@ -59,6 +60,10 @@ export function MetricBrowserView(sourceName) {
             st.metrics = [];
             st.loading = true;
             st.error = null;
+            // Multi-key table sort (systemslab-style). Plain-click a header to
+            // sort by it; shift-click to add secondary/tertiary keys.
+            st.sortKeys = DEFAULT_SORT.slice();
+            st.onSort = (col, shift) => { st.sortKeys = cycleSortKeys(st.sortKeys, col, shift); };
             // name -> { plot, status: 'loading'|'ready'|'error', error? }
             st.selected = new Map();
 
@@ -116,9 +121,10 @@ export function MetricBrowserView(sourceName) {
             const st = vnode.state;
             const { interval, Group, sectionRoute } = vnode.attrs;
             const f = st.filter.trim().toLowerCase();
-            const rows = f
+            const filtered = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
                 : st.metrics;
+            const rows = sortMetrics(filtered, st.sortKeys);
 
             const entries = [...st.selected.entries()];
             const readyPlots = entries
@@ -149,9 +155,23 @@ export function MetricBrowserView(sourceName) {
                 st.loading && m('p', 'Loading metrics…'),
 
                 !st.loading && !st.error && m('table.metric-table', [
-                    m('thead', m('tr',
-                        ['', 'name', 'type', 'series', 'labels', 'description']
-                            .map((h) => m('th', h)))),
+                    m('thead', m('tr', [
+                        m('th', ''), // checkbox column — not sortable
+                        ...['name', 'type', 'series', 'labels', 'description'].map((col) => {
+                            const idx = st.sortKeys.findIndex((k) => k.col === col);
+                            const dir = idx !== -1 ? st.sortKeys[idx].dir : null;
+                            return m('th.sortable', {
+                                onclick: (e) => { st.onSort(col, e.shiftKey); },
+                                title: 'Click to sort; Shift-click to add a sort key',
+                            }, [
+                                col,
+                                dir && m('span.sort-ind', [
+                                    dir === 'asc' ? ' ▲' : ' ▼',
+                                    st.sortKeys.length > 1 && m('sup.sort-rank', String(idx + 1)),
+                                ]),
+                            ]);
+                        }),
+                    ])),
                     m('tbody', rows.map((info) => {
                         const isSel = st.selected.has(info.name);
                         return m('tr', {

@@ -2953,6 +2953,25 @@ main {
     white-space: nowrap;
 }
 
+.metric-table thead th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.metric-table thead th.sortable:hover {
+    color: var(--fg);
+}
+
+.metric-table .sort-ind {
+    color: var(--accent);
+}
+
+.metric-table .sort-rank {
+    font-size: 0.65em;
+    margin-left: 1px;
+    color: var(--accent);
+}
+
 .metric-table td {
     padding: 0.45rem 1.25rem;
     border-bottom: 1px solid var(--border-subtle);
