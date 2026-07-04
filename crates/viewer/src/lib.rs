@@ -227,9 +227,7 @@ impl Viewer {
             .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let resolved_source = source
-            .clone()
-            .unwrap_or_else(|| self.reader.source());
+        let resolved_source = source.clone().unwrap_or_else(|| self.reader.source());
         let metrics = dashboard::metric_catalog::assemble_catalog(
             self.reader.as_ref(),
             &descriptions,

@@ -216,7 +216,10 @@ mod tests {
 
     #[test]
     fn simple_only_file_has_no_builtins_and_one_source_section() {
-        let sources = vec![SourceEntry { name: "myapp".into(), is_rezolus: false }];
+        let sources = vec![SourceEntry {
+            name: "myapp".into(),
+            is_rezolus: false,
+        }];
         let ctx = build_dashboard_context(None, &[], None, &sources);
         let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
         assert!(routes.contains(&"/source/myapp"));
@@ -227,8 +230,14 @@ mod tests {
     #[test]
     fn mixed_file_shows_builtins_and_source_section() {
         let sources = vec![
-            SourceEntry { name: "rezolus".into(), is_rezolus: true },
-            SourceEntry { name: "myapp".into(), is_rezolus: false },
+            SourceEntry {
+                name: "rezolus".into(),
+                is_rezolus: true,
+            },
+            SourceEntry {
+                name: "myapp".into(),
+                is_rezolus: false,
+            },
         ];
         let ctx = build_dashboard_context(None, &[], None, &sources);
         let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();

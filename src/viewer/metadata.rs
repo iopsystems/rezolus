@@ -431,8 +431,13 @@ pub fn regenerate_dashboards(state: &AppState) {
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
 
-    let sources = classify_sources(baseline_path.as_deref(), state.baseline_data().as_ref(), &service_exts);
-    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category, &sources);
+    let sources = classify_sources(
+        baseline_path.as_deref(),
+        state.baseline_data().as_ref(),
+        &service_exts,
+    );
+    let context =
+        dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category, &sources);
     *state.sections.write() = LazySectionStore::new(context);
 }
 
@@ -497,11 +502,11 @@ fn classify_sources(
         for (source, group_val) in psm {
             // Each group is a map of sub-keys → entry objects.
             let group = group_val.as_object();
-            let has_sampler_status = group.map_or(false, |g| {
+            let has_sampler_status = group.is_some_and(|g| {
                 g.values().any(|entry| {
                     entry
                         .as_object()
-                        .map_or(false, |obj| obj.contains_key(NESTED_SAMPLER_STATUS))
+                        .is_some_and(|obj| obj.contains_key(NESTED_SAMPLER_STATUS))
                 })
             });
             let node = group.and_then(|g| {
@@ -516,17 +521,11 @@ fn classify_sources(
             });
             let has_template = service_names.contains(source.as_str());
 
-            let kind = detect_source_kind(
-                source,
-                has_sampler_status,
-                has_template,
-                &metric_names,
-            );
+            let kind = detect_source_kind(source, has_sampler_status, has_template, &metric_names);
             if kind == SourceKind::Service {
                 continue;
             }
-            let name =
-                resolve_source_name(kind, source, node.as_deref(), filename_stem);
+            let name = resolve_source_name(kind, source, node.as_deref(), filename_stem);
             entries.push(dashboard::dashboard::SourceEntry {
                 name,
                 is_rezolus: kind == SourceKind::Rezolus,

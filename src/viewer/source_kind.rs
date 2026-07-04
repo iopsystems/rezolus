@@ -31,7 +31,10 @@ pub fn detect_source_kind(
         return SourceKind::Service;
     }
     // Tier 2: cross-platform self-sampler fingerprint.
-    if metric_names.iter().any(|n| REZOLUS_SELF_ANCHORS.contains(&n.as_str())) {
+    if metric_names
+        .iter()
+        .any(|n| REZOLUS_SELF_ANCHORS.contains(&n.as_str()))
+    {
         return SourceKind::Rezolus;
     }
     SourceKind::Simple
@@ -46,7 +49,10 @@ pub fn resolve_source_name(
     filename_stem: Option<&str>,
 ) -> String {
     match kind {
-        SourceKind::Rezolus => node.filter(|s| !s.is_empty()).unwrap_or("rezolus").to_string(),
+        SourceKind::Rezolus => node
+            .filter(|s| !s.is_empty())
+            .unwrap_or("rezolus")
+            .to_string(),
         SourceKind::Service => source.to_string(),
         SourceKind::Simple => {
             if !source.is_empty() {
@@ -64,34 +70,54 @@ pub fn resolve_source_name(
 mod tests {
     use super::*;
 
-    fn names(v: &[&str]) -> Vec<String> { v.iter().map(|s| s.to_string()).collect() }
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
 
     #[test]
     fn metadata_marker_source_rezolus() {
-        assert_eq!(detect_source_kind("rezolus", false, false, &[]), SourceKind::Rezolus);
+        assert_eq!(
+            detect_source_kind("rezolus", false, false, &[]),
+            SourceKind::Rezolus
+        );
     }
 
     #[test]
     fn metadata_marker_sampler_status() {
-        assert_eq!(detect_source_kind("anything", true, false, &[]), SourceKind::Rezolus);
+        assert_eq!(
+            detect_source_kind("anything", true, false, &[]),
+            SourceKind::Rezolus
+        );
     }
 
     #[test]
     fn template_makes_service() {
-        assert_eq!(detect_source_kind("llm-perf", false, true, &[]), SourceKind::Service);
+        assert_eq!(
+            detect_source_kind("llm-perf", false, true, &[]),
+            SourceKind::Service
+        );
     }
 
     #[test]
     fn self_sampler_fingerprint_linux() {
         let m = names(&["rezolus_cpu_usage", "rezolus_rusage", "cpu_usage"]);
-        assert_eq!(detect_source_kind("", false, false, &m), SourceKind::Rezolus);
+        assert_eq!(
+            detect_source_kind("", false, false, &m),
+            SourceKind::Rezolus
+        );
     }
 
     #[test]
     fn self_sampler_fingerprint_macos_no_bpf() {
         // macOS recording: rusage self-metrics present, NO rezolus_bpf_* at all.
-        let m = names(&["rezolus_cpu_usage", "rezolus_memory_usage_resident_set_size"]);
-        assert_eq!(detect_source_kind("", false, false, &m), SourceKind::Rezolus);
+        let m = names(&[
+            "rezolus_cpu_usage",
+            "rezolus_memory_usage_resident_set_size",
+        ]);
+        assert_eq!(
+            detect_source_kind("", false, false, &m),
+            SourceKind::Rezolus
+        );
     }
 
     #[test]
@@ -102,10 +128,25 @@ mod tests {
 
     #[test]
     fn name_resolution() {
-        assert_eq!(resolve_source_name(SourceKind::Rezolus, "rezolus", Some("node7"), None), "node7");
-        assert_eq!(resolve_source_name(SourceKind::Rezolus, "rezolus", None, Some("x")), "rezolus");
-        assert_eq!(resolve_source_name(SourceKind::Simple, "svc", None, Some("cap")), "svc");
-        assert_eq!(resolve_source_name(SourceKind::Simple, "", None, Some("cap")), "cap");
-        assert_eq!(resolve_source_name(SourceKind::Simple, "", None, None), "metrics");
+        assert_eq!(
+            resolve_source_name(SourceKind::Rezolus, "rezolus", Some("node7"), None),
+            "node7"
+        );
+        assert_eq!(
+            resolve_source_name(SourceKind::Rezolus, "rezolus", None, Some("x")),
+            "rezolus"
+        );
+        assert_eq!(
+            resolve_source_name(SourceKind::Simple, "svc", None, Some("cap")),
+            "svc"
+        );
+        assert_eq!(
+            resolve_source_name(SourceKind::Simple, "", None, Some("cap")),
+            "cap"
+        );
+        assert_eq!(
+            resolve_source_name(SourceKind::Simple, "", None, None),
+            "metrics"
+        );
     }
 }
