@@ -227,11 +227,15 @@ const Sidebar = {
         const overviewSection = visibleSections.find((s) => s.name === 'Overview');
         const exceptionsSection = visibleSections.find((s) => s.name === 'Exceptions');
         const serviceSections = visibleSections.filter((s) => s.route.startsWith('/service/'));
+        // Foreign (non-Rezolus) source sections get their own "Metrics" group;
+        // "Samplers" is reserved for the Rezolus agent's built-in samplers.
+        const metricSections = visibleSections.filter((s) => s.route.startsWith('/source/'));
         const samplerSections = visibleSections.filter(
             (s) => s.name !== 'Query Explorer'
                 && s.name !== 'Overview'
                 && s.name !== 'Exceptions'
-                && !s.route.startsWith('/service/'),
+                && !s.route.startsWith('/service/')
+                && !s.route.startsWith('/source/'),
         );
 
         return [
@@ -334,6 +338,17 @@ const Sidebar = {
                     label,
                 );
             }),
+
+            metricSections.length > 0 && m('div.sidebar-label', 'Metrics'),
+
+            metricSections.map((section) => m(
+                m.route.Link,
+                {
+                    class: attrs.activeSection === section ? 'selected' : '',
+                    href: section.route,
+                },
+                section.name,
+            )),
 
             queryExplorer && [
                 m('div.sidebar-separator'),

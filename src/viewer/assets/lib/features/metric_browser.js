@@ -69,7 +69,13 @@ export function MetricBrowserView(sourceName) {
 
             ViewerApi.getMetrics(sourceName)
                 .then((resp) => {
-                    st.metrics = (resp && resp.metrics) || [];
+                    // The `source` label is universal within this section (it's
+                    // what scopes the section), so drop it from every metric's
+                    // displayed/sorted label list.
+                    st.metrics = ((resp && resp.metrics) || []).map((mi) => ({
+                        ...mi,
+                        label_keys: (mi.label_keys || []).filter((k) => k !== 'source'),
+                    }));
                     st.loading = false;
                     m.redraw();
                 })
