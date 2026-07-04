@@ -1,6 +1,9 @@
 /** Default percentile quantiles used across the viewer. */
 export const DEFAULT_PERCENTILES = [0.5, 0.9, 0.99, 0.999, 0.9999];
 
+/** Default rate window for counter metrics (PromQL rate() function). */
+export const DEFAULT_RATE_WINDOW = '5m';
+
 /**
  * Maps semantic metric types to compatible chart styles.
  *
@@ -136,4 +139,23 @@ export function buildHistogramHeatmapSpec(spec, heatmapData, optsOverrides) {
         min_value: heatmapData.min_value,
         max_value: heatmapData.max_value,
     };
+}
+
+/**
+ * Builds a default PromQL query for a metric based on its type.
+ *
+ * @param {object} metricInfo - An object with name and metric_type
+ * @param {string} metricInfo.name - The metric name
+ * @param {string} metricInfo.metric_type - The type: 'gauge', 'counter', or 'histogram'
+ * @returns {string} The default PromQL query for the metric
+ */
+export function buildDefaultQuery(metricInfo) {
+    const { name, metric_type } = metricInfo;
+    if (metric_type === 'histogram') {
+        return buildHistogramQuery(name, 'percentiles', DEFAULT_PERCENTILES);
+    }
+    if (metric_type === 'counter') {
+        return `rate(${name}[${DEFAULT_RATE_WINDOW}])`;
+    }
+    return name; // gauge
 }
