@@ -1,21 +1,24 @@
 // metric_browser.js — interactive catalog for a foreign (non-Rezolus)
 // source. Renders a searchable metric table; selecting a row runs the
-// type-appropriate default query and mounts an inline Chart.
+// type-appropriate default query and renders the resulting chart through
+// the SAME section pipeline the dashboard uses.
 //
-// This is the Query Explorer's query→Chart path (features/explorers.js)
-// driven by table selection instead of a text box. The Chart/ChartsState
-// wiring mirrors SingleChartView: one ChartsState for the section, a plot
-// object per selected metric populated via applyResultToPlot after the
-// query resolves, and a freshly-spread spec passed to Chart each render so
-// echarts reconfigures when the data reference changes.
+// Charts are rendered via the shared `Group` component (passed in from
+// app.js), so selected metrics get titles, style switching, the heatmap
+// toggle, and the histogram Full/Tail spectrum controls for free — the
+// controls' fetch wiring keys off `spec.promql_query`, which the older
+// bare-`Chart` render omitted (that's why titles were blank and Full/Tail
+// did nothing). The per-metric query is run via `runQuery` (app.js's
+// processDashboardData wrapper) which populates the plot spec in place.
 
-import { ChartsState, Chart } from '../charts/chart.js';
-import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 import { buildDefaultQuery } from '../charts/metric_types.js';
 import { ViewerApi } from '../viewer_api.js';
 
-// Histograms need opts.subtype so resolveStyle() picks 'scatter'; gauge
-// and counter infer their style from the result shape.
+// Build a section-style plot spec for a metric. Carrying `promql_query`
+// (not just opts) is what lets the section pipeline populate data and the
+// scatter Full/Tail controls fetch their spectra. Histograms need
+// opts.subtype so resolveStyle() picks 'scatter'; gauge and counter infer
+// their style from the result shape.
 const specForMetric = (info) => {
     const opts = {
         id: `source-metric-${info.name}`,
@@ -24,7 +27,7 @@ const specForMetric = (info) => {
         type: info.metric_type,
     };
     if (info.metric_type === 'histogram') opts.subtype = 'percentiles';
-    return { opts };
+    return { promql_query: buildDefaultQuery(info), opts };
 };
 
 // The component must keep a stable vnode identity across redraws or Mithril
@@ -46,7 +49,6 @@ export function MetricBrowserView(sourceName) {
             st.error = null;
             // name -> { plot, status: 'loading'|'ready'|'error', error? }
             st.selected = new Map();
-            st.chartsState = new ChartsState();
 
             ViewerApi.getMetrics(sourceName)
                 .then((resp) => {
@@ -72,17 +74,22 @@ export function MetricBrowserView(sourceName) {
                 st.selected.set(info.name, entry);
                 m.redraw();
 
+                // runQuery is app.js's processDashboardData wrapper: it runs
+                // the plot's promql_query and mutates the plot in place with
+                // data/_resolvedStyle, exactly like a real section.
+                const runQuery = vnode.attrs.runQuery;
                 try {
-                    const response = await executePromQLRangeQuery(buildDefaultQuery(info));
+                    await runQuery(plot);
                     // The row may have been deselected while the query was
                     // in flight; don't resurrect it.
                     if (st.selected.get(info.name) !== entry) return;
-                    if (response && response.status === 'success' && response.data && response.data.result) {
-                        applyResultToPlot(plot, response);
+                    const hasData = Array.isArray(plot.data)
+                        && plot.data.some((s) => Array.isArray(s) && s.length > 0);
+                    if (hasData) {
                         entry.status = 'ready';
                     } else {
                         entry.status = 'error';
-                        entry.error = (response && response.error) || 'Query returned no data';
+                        entry.error = 'Query returned no data';
                     }
                 } catch (e) {
                     if (st.selected.get(info.name) !== entry) return;
@@ -93,17 +100,26 @@ export function MetricBrowserView(sourceName) {
             };
         },
 
-        onremove(vnode) {
-            if (vnode.state.chartsState) vnode.state.chartsState.clear();
-        },
-
         view(vnode) {
             const st = vnode.state;
-            const interval = vnode.attrs.interval;
+            const { interval, Group, sectionRoute } = vnode.attrs;
             const f = st.filter.trim().toLowerCase();
             const rows = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
                 : st.metrics;
+
+            const entries = [...st.selected.entries()];
+            const readyPlots = entries
+                .filter(([, e]) => e.status === 'ready')
+                .map(([, e]) => e.plot);
+
+            // Ready charts render through the shared Group component so they
+            // get titles + style switching + heatmap/spectrum controls. Pass
+            // an empty group name and sectionName so Group doesn't prefix
+            // titles with `source: <name>:` (see createGroupComponent's
+            // titlePrefix logic). Group renders null for an all-empty group,
+            // but readyPlots are non-empty by construction.
+            const group = { name: '', id: 'source-metrics', subgroups: [{ name: null, description: null, plots: readyPlots }] };
 
             return m('div.metric-browser', [
                 m('div.section-header-row', [
@@ -146,25 +162,39 @@ export function MetricBrowserView(sourceName) {
                     })),
                 ]),
 
-                m('div.metric-charts', [...st.selected.entries()].map(([name, entry]) => {
-                    if (entry.status === 'error') {
-                        return m('div.query-chart', { key: name }, [
-                            m('h3', name),
-                            m('div.error-message', entry.error || 'Query failed'),
-                        ]);
-                    }
-                    // Spread a fresh spec per render so Chart.onupdate sees a
-                    // changed spec/data reference and reconfigures echarts;
-                    // passing the same mutated object would make dataChanged
-                    // always false.
-                    return m('div.query-chart', { key: name }, [
-                        m(Chart, {
-                            spec: { ...entry.plot, opts: { ...entry.plot.opts } },
-                            chartsState: st.chartsState,
+                m('div.metric-charts', [
+                    // Loading / error rows for metrics whose query is in
+                    // flight or failed. Group only renders plots with data,
+                    // so these transient states get their own lightweight
+                    // rows (keeping title + feedback visible), rather than a
+                    // bare-Chart render that would lose title/controls. Kept
+                    // in a wrapper so this list's keyed rows don't sit as
+                    // siblings of the unkeyed Group (Mithril forbids mixing).
+                    m('div.metric-pending', entries.flatMap(([name, entry]) => {
+                        if (entry.status === 'loading') {
+                            return [m('div.query-chart', { key: name }, [
+                                m('h3', name),
+                                m('p', 'Loading…'),
+                            ])];
+                        }
+                        if (entry.status === 'error') {
+                            return [m('div.query-chart', { key: name }, [
+                                m('h3', name),
+                                m('div.error-message', entry.error || 'Query failed'),
+                            ])];
+                        }
+                        return [];
+                    })),
+                    // Ready charts, rendered through the section pipeline.
+                    readyPlots.length > 0 && Group && m('div#groups',
+                        m(Group, {
+                            ...group,
+                            sectionRoute,
+                            sectionName: '',
                             interval,
                         }),
-                    ]);
-                })),
+                    ),
+                ]),
             ]);
         },
     };

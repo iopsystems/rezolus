@@ -596,8 +596,24 @@ const SectionContent = {
 
         if (sectionRoute.startsWith('/source/')) {
             const srcName = sectionRoute.slice('/source/'.length);
+            // Run one plot's query through the same pipeline the dashboard
+            // uses so the plot spec is populated identically (data,
+            // _resolvedStyle) and Group gives it a title + working
+            // heatmap/spectrum controls. processDashboardData mutates the
+            // plot in place; we wrap it in a throwaway one-group payload.
+            const runQuery = (plot) => processDashboardData(
+                { groups: [{ name: '', subgroups: [{ name: null, plots: [plot] }] }] },
+                null,
+                sectionRoute,
+            );
             return m('div#section-content', [
-                m(MetricBrowserView(srcName), { sourceName: srcName, interval }),
+                m(MetricBrowserView(srcName), {
+                    sourceName: srcName,
+                    interval,
+                    Group,
+                    sectionRoute,
+                    runQuery,
+                }),
             ]);
         }
 
