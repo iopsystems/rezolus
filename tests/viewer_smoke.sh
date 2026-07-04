@@ -340,5 +340,52 @@ sections=$(curl -fsS "http://127.0.0.1:$PORT_REPORT/api/v1/sections")
 section_count=$(echo "$sections" | jq -r '.data.sections | length')
 eq "report mode section count" "$section_count"                          "0"    "$LOGDIR/report.log"
 
+# Simple-capture mode: non-Rezolus parquet (Prometheus source).
+# Fixture regeneration:
+#   cat > /tmp/metrics <<'PROM'
+#   # HELP http_requests_total Total HTTP requests
+#   # TYPE http_requests_total counter
+#   http_requests_total{method="get",route="/"} 42
+#   http_requests_total{method="post",route="/api"} 7
+#   # HELP queue_depth Pending items
+#   # TYPE queue_depth gauge
+#   queue_depth 3
+#   PROM
+#   ( cd /tmp && python3 -m http.server 18651 >/dev/null 2>&1 & echo $! > /tmp/prom.pid )
+#   sleep 1
+#   target/debug/rezolus record --interval 1s --duration 3s \
+#       http://127.0.0.1:18651/metrics site/viewer/data/simple_capture.parquet
+#   kill "$(cat /tmp/prom.pid)"
+PORT_SIMPLE=18507
+PARQUET_SIMPLE=site/viewer/data/simple_capture.parquet
+echo "==> simple-capture: non-Rezolus parquet fixture"
+./target/debug/rezolus view "$PARQUET_SIMPLE" \
+    --listen 127.0.0.1:$PORT_SIMPLE \
+    > "$LOGDIR/simple.log" 2>&1 &
+PID_SIMPLE=$!
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED $PID_REPORT $PID_SIMPLE 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+
+wait_for_port $PORT_SIMPLE || {
+    echo "--- log for simple-capture viewer ---"
+    cat "$LOGDIR/simple.log"
+    exit 1
+}
+
+BASE="http://127.0.0.1:$PORT_SIMPLE"
+
+echo "==> simple-capture: /api/v1/metrics returns non-empty typed catalog"
+metrics_json=$(curl -fsS "$BASE/api/v1/metrics")
+echo "$metrics_json" | jq -e '.metrics | length > 0' >/dev/null \
+    || fail "simple-capture metrics catalog empty" "$metrics_json" "non-empty .metrics" "$LOGDIR/simple.log"
+echo "$metrics_json" | jq -e '.metrics[0] | has("name") and has("metric_type") and has("series_count")' >/dev/null \
+    || fail "simple-capture metrics entry missing required fields" "$(echo "$metrics_json" | jq '.metrics[0]')" "name+metric_type+series_count" "$LOGDIR/simple.log"
+
+echo "==> simple-capture: /api/v1/sections has /source/ entry, no /cpu built-in"
+sections_json=$(curl -fsS "$BASE/api/v1/sections")
+echo "$sections_json" | jq -e '[.data.sections[].route] | any(startswith("/source/"))' >/dev/null \
+    || fail "simple-capture sections missing /source/ route" "$sections_json" "route starting with /source/" "$LOGDIR/simple.log"
+echo "$sections_json" | jq -e '[.data.sections[].route] | any(. == "/cpu") | not' >/dev/null \
+    || fail "simple-capture sections has /cpu built-in (should be suppressed)" "$sections_json" "no /cpu route" "$LOGDIR/simple.log"
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"
