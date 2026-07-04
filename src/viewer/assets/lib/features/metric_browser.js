@@ -4,10 +4,10 @@
 //
 // This is the Query Explorer's query→Chart path (features/explorers.js)
 // driven by table selection instead of a text box. The Chart/ChartsState
-// wiring intentionally mirrors SingleChartView: one ChartsState for the
-// section, a plot object per selected metric populated via
-// applyResultToPlot after the query resolves, then chartsState.clear() to
-// force echarts to reconfigure.
+// wiring mirrors SingleChartView: one ChartsState for the section, a plot
+// object per selected metric populated via applyResultToPlot after the
+// query resolves, and a freshly-spread spec passed to Chart each render so
+// echarts reconfigures when the data reference changes.
 
 import { ChartsState, Chart } from '../charts/chart.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
@@ -27,8 +27,17 @@ const specForMetric = (info) => {
     return { opts };
 };
 
-export function createMetricBrowser(sourceName, interval) {
-    return {
+// The component must keep a stable vnode identity across redraws or Mithril
+// tears it down and remounts it (losing filter/selection/chartsState and
+// re-firing getMetrics). A plain module-level object would share state
+// across sources, so memoize one stable component per sourceName.
+const componentBySource = new Map();
+
+export function MetricBrowserView(sourceName) {
+    let component = componentBySource.get(sourceName);
+    if (component) return component;
+
+    component = {
         oninit(vnode) {
             const st = vnode.state;
             st.filter = '';
@@ -64,15 +73,17 @@ export function createMetricBrowser(sourceName, interval) {
                 m.redraw();
 
                 try {
-                    const result = await executePromQLRangeQuery(buildDefaultQuery(info));
+                    const response = await executePromQLRangeQuery(buildDefaultQuery(info));
                     // The row may have been deselected while the query was
                     // in flight; don't resurrect it.
                     if (st.selected.get(info.name) !== entry) return;
-                    applyResultToPlot(plot, result);
-                    entry.status = 'ready';
-                    // Force echarts to reconfigure against the freshly
-                    // populated spec (same trick SingleChartView uses).
-                    st.chartsState.clear();
+                    if (response && response.status === 'success' && response.data && response.data.result) {
+                        applyResultToPlot(plot, response);
+                        entry.status = 'ready';
+                    } else {
+                        entry.status = 'error';
+                        entry.error = (response && response.error) || 'Query returned no data';
+                    }
                 } catch (e) {
                     if (st.selected.get(info.name) !== entry) return;
                     entry.status = 'error';
@@ -88,6 +99,7 @@ export function createMetricBrowser(sourceName, interval) {
 
         view(vnode) {
             const st = vnode.state;
+            const interval = vnode.attrs.interval;
             const f = st.filter.trim().toLowerCase();
             const rows = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
@@ -141,9 +153,13 @@ export function createMetricBrowser(sourceName, interval) {
                             m('div.error-message', entry.error || 'Query failed'),
                         ]);
                     }
+                    // Spread a fresh spec per render so Chart.onupdate sees a
+                    // changed spec/data reference and reconfigures echarts;
+                    // passing the same mutated object would make dataChanged
+                    // always false.
                     return m('div.query-chart', { key: name }, [
                         m(Chart, {
-                            spec: entry.plot,
+                            spec: { ...entry.plot, opts: { ...entry.plot.opts } },
                             chartsState: st.chartsState,
                             interval,
                         }),
@@ -152,4 +168,7 @@ export function createMetricBrowser(sourceName, interval) {
             ]);
         },
     };
+
+    componentBySource.set(sourceName, component);
+    return component;
 }

@@ -18,7 +18,7 @@ import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
-import { createMetricBrowser } from './features/metric_browser.js';
+import { MetricBrowserView } from './features/metric_browser.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import {
@@ -597,7 +597,7 @@ const SectionContent = {
         if (sectionRoute.startsWith('/source/')) {
             const srcName = sectionRoute.slice('/source/'.length);
             return m('div#section-content', [
-                m(createMetricBrowser(srcName, interval)),
+                m(MetricBrowserView(srcName), { sourceName: srcName, interval }),
             ]);
         }
 
