@@ -126,12 +126,13 @@ export function MetricBrowserView(sourceName) {
                 .map(([, e]) => e.plot);
 
             // Ready charts render through the shared Group component so they
-            // get titles + style switching + heatmap/spectrum controls. Pass
-            // an empty group name and sectionName so Group doesn't prefix
-            // titles with `source: <name>:` (see createGroupComponent's
-            // titlePrefix logic). Group renders null for an all-empty group,
-            // but readyPlots are non-empty by construction.
-            const group = { name: '', id: 'source-metrics', subgroups: [{ name: null, description: null, plots: readyPlots }] };
+            // get titles + style switching + heatmap/spectrum controls. The
+            // group name becomes the section's <h2> heading; title-prefixing
+            // keys off sectionName (kept '' below) not the group name, so this
+            // heading doesn't prefix the per-chart titles (see
+            // createGroupComponent's titlePrefix logic). Group renders null for
+            // an all-empty group, but readyPlots are non-empty by construction.
+            const group = { name: 'Selected metrics', id: 'source-metrics', subgroups: [{ name: null, description: null, plots: readyPlots }] };
 
             return m('div.metric-browser', [
                 m('div.section-header-row', [
