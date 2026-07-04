@@ -26,8 +26,20 @@ const specForMetric = (info) => {
         description: info.description || '',
         type: info.metric_type,
     };
-    if (info.metric_type === 'histogram') opts.subtype = 'percentiles';
-    return { promql_query: buildDefaultQuery(info), opts };
+    // The section pipeline (buildEffectiveQuery) wraps histograms itself from
+    // opts.type/subtype, so a histogram's promql_query must be the RAW metric —
+    // passing buildDefaultQuery's already-wrapped histogram_quantiles(...) would
+    // double-wrap it (`histogram_quantiles(..., histogram_quantiles(...))`) and
+    // return no data. Counters/gauges are not re-wrapped by the pipeline, so they
+    // carry their buildDefaultQuery form (rate(...) / raw).
+    let promql_query;
+    if (info.metric_type === 'histogram') {
+        opts.subtype = 'percentiles';
+        promql_query = info.name;
+    } else {
+        promql_query = buildDefaultQuery(info);
+    }
+    return { promql_query, opts };
 };
 
 // The component must keep a stable vnode identity across redraws or Mithril
