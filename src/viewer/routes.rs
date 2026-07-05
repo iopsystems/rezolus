@@ -283,13 +283,13 @@ async fn metrics_handler(
     let Some(data) = state.captures.get(capture_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    let source = p.source.clone().unwrap_or_else(|| data.source());
     let descriptions = state
         .captures
         .file_metadata(capture_id)
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("descriptions").and_then(|d| d.as_object()).cloned())
+        .map(|v| dashboard::metric_catalog::resolve_descriptions(&v, &source))
         .unwrap_or_default();
-    let source = p.source.clone().unwrap_or_else(|| data.source());
     let metrics = dashboard::metric_catalog::assemble_catalog(
         data.as_ref(),
         &descriptions,

@@ -221,13 +221,14 @@ impl Viewer {
     /// Mirrors the server-side handler: parses the `descriptions` map from
     /// file metadata, runs the catalog assembler, and wraps in MetricsResponse.
     pub fn metrics(&self, source: Option<String>) -> String {
-        let descriptions = self
-            .file_metadata
-            .get("descriptions")
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .and_then(|v| v.as_object().cloned())
-            .unwrap_or_default();
         let resolved_source = source.clone().unwrap_or_else(|| self.reader.source());
+        let meta = serde_json::json!({
+            "descriptions": self.file_metadata.get("descriptions")
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+            "per_source_metadata": self.file_metadata.get("per_source_metadata")
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+        });
+        let descriptions = dashboard::metric_catalog::resolve_descriptions(&meta, &resolved_source);
         let metrics = dashboard::metric_catalog::assemble_catalog(
             self.reader.as_ref(),
             &descriptions,

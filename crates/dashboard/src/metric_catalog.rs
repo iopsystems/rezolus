@@ -37,6 +37,28 @@ fn info_for(
     }
 }
 
+/// Resolve the effective descriptions map for `source`: the per-source
+/// `per_source_metadata.<source>.descriptions` if present, else the legacy
+/// top-level `descriptions`, else empty.
+pub fn resolve_descriptions(
+    file_metadata: &serde_json::Value,
+    source: &str,
+) -> serde_json::Map<String, serde_json::Value> {
+    file_metadata
+        .get("per_source_metadata")
+        .and_then(|p| p.get(source))
+        .and_then(|s| s.get("descriptions"))
+        .and_then(|d| d.as_object())
+        .cloned()
+        .or_else(|| {
+            file_metadata
+                .get("descriptions")
+                .and_then(|d| d.as_object())
+                .cloned()
+        })
+        .unwrap_or_default()
+}
+
 /// Assemble the metric catalog from a source's schema.
 ///
 /// `_source_filter` is reserved for combined-file filtering (Task 5);
@@ -66,6 +88,20 @@ pub fn assemble_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_descriptions_prefers_per_source_then_top_level() {
+        let meta = serde_json::json!({
+            "descriptions": { "m": "top" },
+            "per_source_metadata": { "svc": { "descriptions": { "m": "per-source" } } }
+        });
+        assert_eq!(resolve_descriptions(&meta, "svc")["m"], "per-source");
+        // source without a per-source entry -> top-level fallback
+        assert_eq!(resolve_descriptions(&meta, "other")["m"], "top");
+        // neither present -> empty
+        let empty = serde_json::json!({});
+        assert!(resolve_descriptions(&empty, "svc").is_empty());
+    }
     use std::collections::BTreeMap;
 
     fn labels_from(sets: &[&[(&str, &str)]]) -> Vec<BTreeMap<String, String>> {
