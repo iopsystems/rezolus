@@ -19,4 +19,4 @@ Conventions:
 
 | Date | Effort | Status |
 |------|--------|--------|
-| 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature](2026-07-06-drive-health-sampler.md) | Open (intent landed, pre-build) |
+| 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature (module-free)](2026-07-06-drive-health-sampler.md) | Phase 1 GO — shipped via pass-through ioctls, no module (SATA hw-verified; NVMe fixtures). Phases 2–3 open |

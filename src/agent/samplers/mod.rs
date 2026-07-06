@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 mod blockio;
 mod cpu;
+mod drivehealth;
 mod gpu;
 mod memory;
 mod network;
