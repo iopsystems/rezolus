@@ -1,5 +1,5 @@
 ---
-name: keeping-an-engineering-journal
+name: engineering-journal
 description: Use when starting or picking up a non-trivial effort (feature, investigation, perf probe, refactor, migration) in a shared repo where teammates or future agents must coordinate or hand off; when a repo has no durable in-tree record of decisions and dead-ends; when you're about to drop a well-measured negative result; or when bootstrapping a journal from a repo's commit history.
 ---
 
