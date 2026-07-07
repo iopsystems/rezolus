@@ -19,4 +19,6 @@ Conventions:
 
 | Date | Effort | Status |
 |------|--------|--------|
+| 2026-07-03 | [Viewer support for "simple capture" parquets](2026-07-03-simple-capture-viewer.md) | Implemented — in review (PR #989) |
+| 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Implemented — in review (PR #989) |
 | 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature](2026-07-06-drive-health-sampler.md) | Open (intent landed, pre-build) |

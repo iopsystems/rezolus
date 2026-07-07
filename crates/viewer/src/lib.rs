@@ -161,7 +161,7 @@ impl Viewer {
         let context = if is_trimmed_report(&file_metadata) {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &[], None)
+            dashboard::dashboard::build_dashboard_context(None, &[], None, &[])
         };
 
         Ok(Viewer {
@@ -214,6 +214,31 @@ impl Viewer {
             histogram_names: self.reader.histogram_names(),
         })
         .unwrap()
+    }
+
+    /// Returns the metric catalog JSON compatible with /api/v1/metrics.
+    ///
+    /// Mirrors the server-side handler: parses the `descriptions` map from
+    /// file metadata, runs the catalog assembler, and wraps in MetricsResponse.
+    pub fn metrics(&self, source: Option<String>) -> String {
+        let resolved_source = source.clone().unwrap_or_else(|| self.reader.source());
+        let meta = serde_json::json!({
+            "descriptions": self.file_metadata.get("descriptions")
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+            "per_source_metadata": self.file_metadata.get("per_source_metadata")
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+        });
+        let descriptions = dashboard::metric_catalog::resolve_descriptions(&meta, &resolved_source);
+        let metrics = dashboard::metric_catalog::assemble_catalog(
+            self.reader.as_ref(),
+            &descriptions,
+            source.as_deref(),
+        );
+        let response = dashboard::metric_catalog::MetricsResponse {
+            source: resolved_source,
+            metrics,
+        };
+        serde_json::to_string(&response).unwrap()
     }
 
     /// Returns systeminfo JSON from parquet file metadata.
@@ -337,6 +362,7 @@ impl Viewer {
                 None,
                 &service_refs,
                 None, // single-capture: no category
+                &[],
             )
         };
         self.context = context;
@@ -494,6 +520,10 @@ impl WasmCaptureRegistry {
         self.require_slot(capture).map(|v| v.info())
     }
 
+    pub fn metrics(&self, capture: &str, source: Option<String>) -> Result<String, JsValue> {
+        self.require_slot(capture).map(|v| v.metrics(source))
+    }
+
     pub fn systeminfo(&self, capture: &str) -> Option<String> {
         self.slot(capture).and_then(|v| v.systeminfo())
     }
@@ -630,7 +660,7 @@ impl WasmCaptureRegistry {
         let context = if report_mode {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &service_refs, category)
+            dashboard::dashboard::build_dashboard_context(None, &service_refs, category, &[])
         };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();

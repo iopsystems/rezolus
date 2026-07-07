@@ -431,8 +431,126 @@ pub fn regenerate_dashboards(state: &AppState) {
         .as_ref()
         .and_then(|p| std::fs::metadata(p).ok().map(|m| m.len()));
 
-    let context = dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category);
+    let sources = classify_sources(
+        baseline_path.as_deref(),
+        state.baseline_data().as_ref(),
+        &service_exts,
+    );
+    let context =
+        dashboard::dashboard::build_dashboard_context(filesize, &service_refs, category, &sources);
     *state.sections.write() = LazySectionStore::new(context);
+}
+
+/// Classify all non-service sources present in the baseline parquet into
+/// `SourceEntry` descriptors for the dashboard nav. Service sources are
+/// excluded — they already appear via `service_exts`.
+///
+/// Single-source files are fully supported. Combined files make a best-effort
+/// pass over `per_source_metadata` keys with the information available.
+fn classify_sources(
+    baseline_path: Option<&std::path::Path>,
+    baseline_data: &dyn metriken_query::MetricsSource,
+    service_exts: &[(String, ServiceExtension)],
+) -> Vec<dashboard::dashboard::SourceEntry> {
+    use super::source_kind::{detect_source_kind, resolve_source_name, SourceKind};
+    use crate::parquet_metadata::{KEY_PER_SOURCE_METADATA, KEY_SOURCE, NESTED_SAMPLER_STATUS};
+
+    // Nothing to classify without a parquet file (live mode).
+    let path = match baseline_path {
+        Some(p) => p,
+        None => return vec![],
+    };
+
+    // Read raw kv from parquet.
+    let kv_map: serde_json::Map<String, serde_json::Value> = (|| {
+        let f = std::fs::File::open(path).ok()?;
+        let reader = parquet::file::serialized_reader::SerializedFileReader::new(f).ok()?;
+        let kv = reader.metadata().file_metadata().key_value_metadata()?;
+        let mut map = serde_json::Map::new();
+        for pair in kv {
+            if let Some(ref val) = pair.value {
+                let json_val = serde_json::from_str(val)
+                    .unwrap_or_else(|_| serde_json::Value::String(val.clone()));
+                map.insert(pair.key.clone(), json_val);
+            }
+        }
+        Some(map)
+    })()
+    .unwrap_or_default();
+
+    let service_names: std::collections::HashSet<&str> =
+        service_exts.iter().map(|(s, _)| s.as_str()).collect();
+
+    // Metric names for fingerprint detection.
+    let mut metric_names: Vec<String> = baseline_data.counter_names();
+    metric_names.extend(baseline_data.gauge_names());
+    metric_names.extend(baseline_data.histogram_names());
+
+    let filename_stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        // strip .parquet.ab extension chains
+        .map(|s| s.trim_end_matches(".parquet"));
+
+    let mut entries: Vec<dashboard::dashboard::SourceEntry> = Vec::new();
+
+    // Combined file: per_source_metadata keys enumerate sources.
+    if let Some(psm) = kv_map
+        .get(KEY_PER_SOURCE_METADATA)
+        .and_then(|v| v.as_object())
+    {
+        for (source, group_val) in psm {
+            // Each group is a map of sub-keys → entry objects.
+            let group = group_val.as_object();
+            let has_sampler_status = group.is_some_and(|g| {
+                g.values().any(|entry| {
+                    entry
+                        .as_object()
+                        .is_some_and(|obj| obj.contains_key(NESTED_SAMPLER_STATUS))
+                })
+            });
+            let node = group.and_then(|g| {
+                g.values().find_map(|entry| {
+                    entry
+                        .as_object()
+                        .and_then(|obj| obj.get("node"))
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                })
+            });
+            let has_template = service_names.contains(source.as_str());
+
+            let kind = detect_source_kind(source, has_sampler_status, has_template, &metric_names);
+            if kind == SourceKind::Service {
+                continue;
+            }
+            let name = resolve_source_name(kind, source, node.as_deref(), filename_stem);
+            entries.push(dashboard::dashboard::SourceEntry {
+                name,
+                is_rezolus: kind == SourceKind::Rezolus,
+            });
+        }
+    } else {
+        // Single-source file: use the top-level `source` key.
+        let source = kv_map
+            .get(KEY_SOURCE)
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        // Sampler status is not present at the top level in single-source files.
+        let has_template = service_names.contains(source);
+
+        let kind = detect_source_kind(source, false, has_template, &metric_names);
+        if kind != SourceKind::Service {
+            let name = resolve_source_name(kind, source, None, filename_stem);
+            entries.push(dashboard::dashboard::SourceEntry {
+                name,
+                is_rezolus: kind == SourceKind::Rezolus,
+            });
+        }
+    }
+
+    entries
 }
 
 #[cfg(test)]

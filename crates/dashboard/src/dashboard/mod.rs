@@ -37,6 +37,13 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Rezolus", "/rezolus", rezolus::generate),
 ];
 
+/// Passive descriptor handed down by the viewer. The dashboard crate does not
+/// classify — it renders what it is told.
+pub struct SourceEntry {
+    pub name: String,
+    pub is_rezolus: bool,
+}
+
 /// Owned context produced by `build_dashboard_context`. Carries
 /// everything `generate_section` needs to render any single section on
 /// demand without re-deriving the dedup / category-fallback logic.
@@ -58,10 +65,15 @@ pub struct DashboardContext {
 /// Build the navigation list and other shared state needed to render
 /// dashboard sections lazily. The dedup + category-fallback logic lives
 /// here exclusively; `generate_section` consumes the resulting context.
+///
+/// `sources` lists every non-service source present in the recording.
+/// Empty slice → legacy behavior (all built-ins shown). Non-empty with no
+/// Rezolus entry → built-ins suppressed (simple-capture case).
 pub fn build_dashboard_context(
     filesize: Option<u64>,
     service_exts: &[(&str, &ServiceExtension)],
     category: Option<(&str, &CategoryExtension)>,
+    sources: &[SourceEntry],
 ) -> DashboardContext {
     // Two captures of the same service collapse into a single nav entry —
     // both render through the same template and the existing compare-mode
@@ -82,38 +94,51 @@ pub fn build_dashboard_context(
     // generator can't produce, no orphaned member sections).
     let category_active = category.is_some() && unique_service_exts.len() == 2;
 
-    // Build the section list. In category mode, a single category section
-    // replaces the per-member sections; otherwise the per-member loop
-    // runs as before.
-    let mut sections: Vec<Section> = std::iter::once(Section {
-        name: "Overview".to_string(),
-        route: "/overview".to_string(),
-    })
-    .chain(SECTION_META.iter().map(|(name, route, _)| Section {
-        name: (*name).to_string(),
-        route: (*route).to_string(),
-    }))
-    .collect();
+    // Empty sources = legacy caller; any Rezolus entry = show built-ins.
+    let show_builtins = sources.is_empty() || sources.iter().any(|s| s.is_rezolus);
 
+    let mut sections: Vec<Section> = Vec::new();
+
+    if show_builtins {
+        sections.push(Section {
+            name: "Overview".to_string(),
+            route: "/overview".to_string(),
+        });
+        sections.extend(SECTION_META.iter().map(|(name, route, _)| Section {
+            name: (*name).to_string(),
+            route: (*route).to_string(),
+        }));
+    }
+
+    // Service/category sections go after built-ins, before source: entries.
     if category_active {
         let (category_name, _) = category.unwrap();
         sections.insert(
-            1,
+            if show_builtins { 1 } else { 0 },
             Section {
                 name: category_name.to_string(),
                 route: format!("/service/{category_name}"),
             },
         );
     } else {
+        let insert_pos = if show_builtins { 1 } else { 0 };
         for (i, (source_name, _)) in unique_service_exts.iter().enumerate() {
             sections.insert(
-                1 + i,
+                insert_pos + i,
                 Section {
                     name: source_name.to_string(),
                     route: format!("/service/{source_name}"),
                 },
             );
         }
+    }
+
+    // One nav entry per non-Rezolus (Simple) source.
+    for s in sources.iter().filter(|s| !s.is_rezolus) {
+        sections.push(Section {
+            name: format!("source: {}", s.name),
+            route: format!("/source/{}", s.name),
+        });
     }
 
     let throughput_query = unique_service_exts
@@ -190,8 +215,40 @@ mod tests {
     use super::*;
 
     #[test]
+    fn simple_only_file_has_no_builtins_and_one_source_section() {
+        let sources = vec![SourceEntry {
+            name: "myapp".into(),
+            is_rezolus: false,
+        }];
+        let ctx = build_dashboard_context(None, &[], None, &sources);
+        let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+        assert!(routes.contains(&"/source/myapp"));
+        assert!(!routes.contains(&"/overview"));
+        assert!(!routes.contains(&"/cpu"));
+    }
+
+    #[test]
+    fn mixed_file_shows_builtins_and_source_section() {
+        let sources = vec![
+            SourceEntry {
+                name: "rezolus".into(),
+                is_rezolus: true,
+            },
+            SourceEntry {
+                name: "myapp".into(),
+                is_rezolus: false,
+            },
+        ];
+        let ctx = build_dashboard_context(None, &[], None, &sources);
+        let routes: Vec<&str> = ctx.sections.iter().map(|s| s.route.as_str()).collect();
+        assert!(routes.contains(&"/overview"));
+        assert!(routes.contains(&"/cpu"));
+        assert!(routes.contains(&"/source/myapp"));
+    }
+
+    #[test]
     fn build_context_produces_full_navigation() {
-        let ctx = build_dashboard_context(None, &[], None);
+        let ctx = build_dashboard_context(None, &[], None, &[]);
 
         // Sections must be: Overview, then SECTION_META in order. No
         // service / category entries when none supplied.
@@ -216,7 +273,7 @@ mod tests {
     #[test]
     fn generate_section_renders_known_routes_returns_none_for_unknown() {
         let data = metriken_query::MemoryStore::builder().build();
-        let ctx = build_dashboard_context(None, &[], None);
+        let ctx = build_dashboard_context(None, &[], None, &[]);
 
         // Overview renders.
         let overview = generate_section(&data, "/overview", &ctx).expect("overview some");
@@ -276,7 +333,7 @@ mod tests {
         let data = metriken_query::MemoryStore::builder().build();
 
         // Per-service flow (no category).
-        let ctx = build_dashboard_context(None, &[("vllm", &vllm)], None);
+        let ctx = build_dashboard_context(None, &[("vllm", &vllm)], None, &[]);
         let view = generate_section(&data, "/service/vllm", &ctx).expect("vllm renders");
         let json = serde_json::to_string(&view).unwrap();
         assert!(json.contains("\"service_name\""));
@@ -305,6 +362,7 @@ mod tests {
             None,
             &[("vllm", &vllm), ("sglang", &sglang)],
             Some(("inference-library", &category)),
+            &[],
         );
         // Category renders at /service/<category-name>.
         let view =
@@ -373,6 +431,7 @@ mod tests {
             None,
             &[("vllm", &vllm), ("sglang", &sglang)],
             Some(("inference-library", &category)),
+            &[],
         );
 
         // Category nav entry present.
@@ -418,7 +477,7 @@ mod tests {
         };
         let vllm_b = vllm_a.clone();
 
-        let ctx = build_dashboard_context(None, &[("vllm", &vllm_a), ("vllm", &vllm_b)], None);
+        let ctx = build_dashboard_context(None, &[("vllm", &vllm_a), ("vllm", &vllm_b)], None, &[]);
 
         // Nav contains exactly one /service/vllm entry.
         let vllm_count = ctx

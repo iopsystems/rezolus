@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/features/metric_browser.js

@@ -132,8 +132,8 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 - `source` - Recording source: `"rezolus"` (single) or `["rezolus","llm-perf"]` (combined).
 - `sampling_interval_ms` - Collection interval in milliseconds.
 - `systeminfo` - JSON hardware summary from agent.
-- `descriptions` - JSON map of metric name to help text.
-- `per_source_metadata` - Per-source map with `version`, `role` ("service"/"loadgen"), and `service_queries` (ServiceExtension KPI definitions).
+- `descriptions` - JSON map of metric name to help text. Present in single-source files; combined files nest this under `per_source_metadata.<source>.descriptions` instead.
+- `per_source_metadata` - Per-source map with `version`, `role` ("service"/"loadgen"), `service_queries` (ServiceExtension KPI definitions), and `descriptions` (metric name → help text, combined files only).
 
 ### Service Extensions
 

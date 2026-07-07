@@ -15,7 +15,7 @@ fn main() {
     // Render every section in the navigation list. The lazy API replaces
     // the old eager `generate` shim — same coverage, just hand-walked.
     let data = metriken_query::MemoryStore::builder().build();
-    let ctx = build_dashboard_context(None, &[], None);
+    let ctx = build_dashboard_context(None, &[], None, &[]);
     let mut rendered: HashMap<String, String> = HashMap::new();
     for section in &ctx.sections {
         if let Some(view) = generate_section(&data, &section.route, &ctx) {

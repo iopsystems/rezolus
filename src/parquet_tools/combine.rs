@@ -983,32 +983,6 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
         });
     }
 
-    // descriptions: union-merge all JSON maps
-    let mut merged_descriptions: serde_json::Map<String, serde_json::Value> =
-        serde_json::Map::new();
-    for input in inputs {
-        if let Some(desc_str) = input
-            .kv_metadata
-            .iter()
-            .find(|kv| kv.key == KEY_DESCRIPTIONS)
-            .and_then(|kv| kv.value.as_deref())
-        {
-            if let Ok(desc_map) =
-                serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(desc_str)
-            {
-                for (k, v) in desc_map {
-                    merged_descriptions.entry(k).or_insert(v);
-                }
-            }
-        }
-    }
-    if !merged_descriptions.is_empty() {
-        result.push(KeyValue {
-            key: KEY_DESCRIPTIONS.to_string(),
-            value: Some(serde_json::to_string(&merged_descriptions)?),
-        });
-    }
-
     // per_source_metadata: nested by source name, then by node/instance ID.
     // Structure: { "rezolus": { "web01": {...}, "web02": {...} },
     //              "vllm":    { "0": {...}, "1": {...} } }
@@ -1099,6 +1073,27 @@ fn merge_metadata(inputs: &[InputFile]) -> Result<Vec<KeyValue>, Box<dyn std::er
                 if let Some(ref node) = input.node {
                     map.entry(NESTED_NODE.to_string())
                         .or_insert(serde_json::Value::String(node.clone()));
+                }
+            }
+        }
+
+        // Nest this input's top-level descriptions at the source group level
+        // (sibling of the node/instance sub-keys) so each source keeps its
+        // own help text rather than losing collisions in a union-merge.
+        let input_desc: Option<serde_json::Value> = input
+            .kv_metadata
+            .iter()
+            .find(|kv| kv.key == KEY_DESCRIPTIONS)
+            .and_then(|kv| kv.value.as_ref())
+            .and_then(|s| serde_json::from_str(s).ok());
+        if let Some(ref desc) = input_desc {
+            for source_name in &source_names {
+                let source_group = per_source
+                    .entry(source_name.clone())
+                    .or_insert_with(|| serde_json::json!({}));
+                if let Some(map) = source_group.as_object_mut() {
+                    map.entry(NESTED_DESCRIPTIONS.to_string())
+                        .or_insert_with(|| desc.clone());
                 }
             }
         }
@@ -2428,6 +2423,121 @@ mod tests {
             err.to_string().contains("experiment"),
             "orphan input (no experiment match) should be named in error: {err}"
         );
+    }
+
+    /// Like `make_test_file` but also writes a top-level `descriptions` KV.
+    fn make_test_file_with_descriptions(
+        timestamps: &[u64],
+        metric_name: &str,
+        metric_values: &[Option<i64>],
+        source: &str,
+        sampling_interval_ms: &str,
+        descriptions: serde_json::Value,
+    ) -> (NamedTempFile, PathBuf) {
+        let ts_field =
+            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
+                ("metric_type".to_string(), "timestamp".to_string()),
+                ("unit".to_string(), "nanoseconds".to_string()),
+            ]));
+        let dur_field =
+            Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([
+                ("metric_type".to_string(), "duration".to_string()),
+                ("unit".to_string(), "nanoseconds".to_string()),
+            ]));
+        let metric_field = Field::new(metric_name, DataType::Int64, true).with_metadata(
+            HashMap::from([("metric_type".to_string(), "gauge".to_string())]),
+        );
+        let schema = Arc::new(Schema::new(vec![ts_field, dur_field, metric_field]));
+        let ts_array = UInt64Array::from(timestamps.to_vec());
+        let dur_array = UInt64Array::from(vec![None::<u64>; timestamps.len()]);
+        let metric_array = Int64Array::from(metric_values.to_vec());
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(ts_array),
+                Arc::new(dur_array),
+                Arc::new(metric_array),
+            ],
+        )
+        .unwrap();
+        let kv = vec![
+            KeyValue {
+                key: KEY_SOURCE.to_string(),
+                value: Some(source.to_string()),
+            },
+            KeyValue {
+                key: KEY_SAMPLING_INTERVAL_MS.to_string(),
+                value: Some(sampling_interval_ms.to_string()),
+            },
+            KeyValue {
+                key: KEY_DESCRIPTIONS.to_string(),
+                value: Some(serde_json::to_string(&descriptions).unwrap()),
+            },
+        ];
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(kv))
+            .build();
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let file = std::fs::File::create(&path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        (tmp, path)
+    }
+
+    #[test]
+    fn combine_nests_descriptions_per_source_no_collision() {
+        // Two sources share the metric name "m" but with different help text;
+        // combined output must preserve both under per_source_metadata, not
+        // union-merge them into a lossy top-level descriptions key.
+        let (_ta, pa) = make_test_file_with_descriptions(
+            &[SEC, 2 * SEC],
+            "m",
+            &[Some(1), Some(2)],
+            "a",
+            "1000",
+            serde_json::json!({"m": "desc A"}),
+        );
+        let (_tb, pb) = make_test_file_with_descriptions(
+            &[SEC, 2 * SEC],
+            "m",
+            &[Some(3), Some(4)],
+            "b",
+            "1000",
+            serde_json::json!({"m": "desc B"}),
+        );
+
+        let out_tmp = NamedTempFile::new().unwrap();
+        let out_path = out_tmp.path().to_path_buf();
+
+        let mut inputs = vec![load(&pa), load(&pb)];
+        validate_labels(&mut inputs).unwrap();
+        combine_and_write(&inputs, &out_path, CombineOptions::default()).unwrap();
+
+        let meta_reader =
+            SerializedFileReader::new(std::fs::File::open(&out_path).unwrap()).unwrap();
+        let kv = meta_reader
+            .metadata()
+            .file_metadata()
+            .key_value_metadata()
+            .unwrap();
+
+        // Descriptions must be nested per-source, not in the top-level key.
+        assert!(
+            kv.iter().all(|kv| kv.key != KEY_DESCRIPTIONS),
+            "combined file must not have a top-level descriptions key"
+        );
+
+        let psm_str = kv
+            .iter()
+            .find(|kv| kv.key == KEY_PER_SOURCE_METADATA)
+            .and_then(|kv| kv.value.as_deref())
+            .expect("per_source_metadata must be present");
+        let psm: serde_json::Value = serde_json::from_str(psm_str).unwrap();
+
+        assert_eq!(psm["a"][NESTED_DESCRIPTIONS]["m"], "desc A");
+        assert_eq!(psm["b"][NESTED_DESCRIPTIONS]["m"], "desc B");
     }
 
     #[test]

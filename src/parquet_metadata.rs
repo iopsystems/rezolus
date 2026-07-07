@@ -94,6 +94,11 @@ pub const NESTED_INSTANCE: &str = "instance";
 /// `/samplers` endpoint). Present only for Rezolus-agent sources.
 pub const NESTED_SAMPLER_STATUS: &str = "sampler_status";
 
+/// Per-source metric descriptions (metric name → help text). Nested under
+/// `per_source_metadata.<source>` in combined files; single-source files use
+/// the top-level `descriptions` key instead.
+pub const NESTED_DESCRIPTIONS: &str = "descriptions";
+
 // ── Viewer hints ─────────────────────────────────────────────────────
 
 /// The default rezolus node to display when the viewer opens a combined

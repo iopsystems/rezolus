@@ -18,6 +18,7 @@ import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
+import { MetricBrowserView } from './features/metric_browser.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import {
@@ -593,6 +594,29 @@ const SectionContent = {
             });
         }
 
+        if (sectionRoute.startsWith('/source/')) {
+            const srcName = sectionRoute.slice('/source/'.length);
+            // Run one plot's query through the same pipeline the dashboard
+            // uses so the plot spec is populated identically (data,
+            // _resolvedStyle) and Group gives it a title + working
+            // heatmap/spectrum controls. processDashboardData mutates the
+            // plot in place; we wrap it in a throwaway one-group payload.
+            const runQuery = (plot) => processDashboardData(
+                { groups: [{ name: '', subgroups: [{ name: null, plots: [plot] }] }] },
+                null,
+                sectionRoute,
+            );
+            return m('div#section-content', [
+                m(MetricBrowserView(srcName), {
+                    sourceName: srcName,
+                    interval,
+                    Group,
+                    sectionRoute,
+                    runQuery,
+                }),
+            ]);
+        }
+
         if (sectionRoute.startsWith('/service/')) {
             const svcName = sectionRoute.replace('/service/', '');
             return renderServiceSection(attrs, Group, sectionRoute, sectionName, interval, {
@@ -786,11 +810,24 @@ const initDashboard = (config = {}) => {
     // rendered map at all.
     const categoryName = config.categoryName || null;
     const serviceNames = Object.keys(serviceInstances || {});
+    // Simple-capture fallback: a foreign source has no Overview/built-in
+    // sections, only `/source/<name>` entries. Land on the first one so
+    // the user doesn't hit an empty `/overview` that this capture never
+    // emitted. Rezolus/service files keep their existing landing.
+    const bootstrapSections = getCachedSections();
+    const hasOverview = bootstrapSections.some((s) => s.route === '/overview');
+    const firstSourceRoute = bootstrapSections.find(
+        (s) => s.route && s.route.startsWith('/source/'),
+    )?.route;
     const defaultRoute = reportMode
         ? '/report'
         : (categoryName
             ? `/service/${categoryName}`
-            : (serviceNames.length > 0 ? `/service/${serviceNames[0]}` : '/overview'));
+            : (serviceNames.length > 0
+                ? `/service/${serviceNames[0]}`
+                : (hasOverview
+                    ? '/overview'
+                    : (firstSourceRoute || '/overview'))));
 
     // A stale hash (e.g. `#/service/llm-perf` from a previous session
     // or external link to a different capture) would otherwise drive
@@ -878,6 +915,43 @@ const initDashboard = (config = {}) => {
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
+        // Foreign-source sections. Unlike built-in/service sections these
+        // carry no server-rendered groups — the MetricBrowser (mounted by
+        // SectionContent's `/source/` branch) fetches its own catalog via
+        // ViewerApi.getMetrics and runs per-metric queries client-side.
+        // So there's nothing to loadSection here; just resolve the
+        // activeSection and hand it to Main.
+        '/source/:sourceName': {
+            onmatch(params, requestedPath) {
+                if (m.route.get() === requestedPath) {
+                    return new Promise(function () {});
+                }
+                if (requestedPath !== m.route.get()) {
+                    chartsState.charts.clear();
+                    window.scrollTo(0, 0);
+                }
+                const sectionRoute = `/source/${params.sourceName}`;
+                return {
+                    view() {
+                        const activeSection = getCachedSections().find(
+                            (s) => s.route === sectionRoute,
+                        ) || { name: `source: ${params.sourceName}`, route: sectionRoute };
+                        // Interval isn't strictly required — Chart tolerates
+                        // its absence (QueryExplorer passes none) and the
+                        // query window is derived from metadata. Borrow it
+                        // from any cached section when present.
+                        const anyCached = Object.values(sectionResponseCache)[0];
+                        return m(Main, {
+                            activeSection,
+                            groups: [],
+                            sections: getCachedSections(),
+                            compareMode,
+                            interval: anyCached?.interval,
+                        });
+                    },
+                };
+            },
+        },
         '/about': {
             render() {
                 return m('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem' },
