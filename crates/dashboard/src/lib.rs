@@ -1,5 +1,6 @@
 pub mod dashboard;
 pub mod events;
+pub mod metric_catalog;
 mod plot;
 mod service_extension;
 

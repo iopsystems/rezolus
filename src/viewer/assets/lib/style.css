@@ -2915,3 +2915,92 @@ main {
     color: var(--danger, #f85149);
 }
 
+/* ==========================================================================
+   Metric Browser (source: <name> sections)
+   ========================================================================== */
+
+.metric-browser {
+    padding: 0 var(--content-padding);
+}
+
+.metric-search {
+    display: block;
+    margin: 0.75rem 0 1.25rem;
+    padding: 0.4rem 0.75rem;
+    width: 100%;
+    max-width: 320px;
+    background: var(--bg-secondary);
+    color: var(--fg);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
+
+.metric-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.metric-table thead th {
+    text-align: left;
+    padding: 0.5rem 1.25rem;
+    color: var(--fg-secondary);
+    font-weight: 500;
+    font-size: 0.8rem;
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+}
+
+.metric-table thead th.sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+.metric-table thead th.sortable:hover {
+    color: var(--fg);
+}
+
+.metric-table .sort-ind {
+    color: var(--accent);
+}
+
+.metric-table .sort-rank {
+    font-size: 0.65em;
+    margin-left: 1px;
+    color: var(--accent);
+}
+
+.metric-table td {
+    padding: 0.45rem 1.25rem;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: top;
+}
+
+/* Checkbox column: tight, not the same generous gap as data columns. */
+.metric-table th:first-child,
+.metric-table td:first-child {
+    width: 1.5rem;
+    padding-right: 0.25rem;
+}
+
+.metric-table tbody tr {
+    cursor: pointer;
+}
+
+.metric-table tbody tr:hover {
+    background: var(--bg-card-hover);
+}
+
+.metric-table tbody tr.selected {
+    background: var(--accent-subtle);
+}
+
+.metric-charts {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+
