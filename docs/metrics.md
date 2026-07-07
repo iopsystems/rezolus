@@ -206,9 +206,21 @@ sensitive — included for stable cross-reboot fleet identity, and omitted when
 unavailable (SATA serial via ATA IDENTIFY is deferred; NVMe serial comes from
 sysfs).
 
+For NVMe, the same SMART/Health log read also yields **thermal-throttling
+counters**. These are monotonic, so a coarse read cadence never misses an event —
+`rate(drive_temperature_critical_time[5m])` reads as fraction of time throttled
+(≈1.0 = continuously throttled), which is the direct signal for diagnosing NVMe
+thermal throttling. The `drive_thermal_throttle_*` counters populate only when the
+drive has Host-Controlled Thermal Management enabled; the warning/critical time
+counters are always maintained by the controller.
+
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `drive_temperature` | The current drive temperature in degrees Celsius | `device` (kernel name, e.g. `nvme0`, `sda`), `type={nvme,sata}`, `model`, `serial` (when available) |
+| `drive_temperature_warning_time` | Cumulative seconds at/above the NVMe warning temperature threshold (WCTEMP) | `device`, `type=nvme`, `model`, `serial` |
+| `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
+| `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+| `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 
 ## GPU
 

@@ -192,6 +192,46 @@ hardware tests.
 **Docs updated in the shipping change:** `docs/metrics.md`, `config/agent.toml`,
 `docs/principles.md` (principles 16/17 examples), and this entry.
 
+## Design note & follow-up (2026-07-07): async freshness + throttle counters
+
+Reviewing the shipped design surfaced that `drivehealth` is the first sampler
+whose refresh is **not time-bounded to the snapshot**: the temperature gauge holds
+the last *completed* off-cycle read, so a snapshot value can be anywhere from 0 to
+`interval` old, and — critically — the consumer can't tell how old. Reducing the
+TTL/`interval` only raises the *trigger* rate; it neither bounds nor reveals
+staleness, because nothing time-bounds ioctl completion (only the loose 5 s
+per-command timeout), and the `reading` guard means a slow drive silently
+stretches the effective cadence to `min(interval, read-time)`. Observed read cost
+is itself highly variable (76 ms–2.3 s for 23 SATA drives across runs), which
+underscores the point.
+
+**Decisions (owner):**
+1. **Longer-term direction — prefer synchronous/time-bounded reads where
+   affordable.** The clean fix for freshness is to read inline on the sample cycle
+   when the per-bus read cost is *measured* cheap (restoring the "current as of
+   snapshot" invariant), reserving async+throttle for genuinely expensive reads
+   (large SATA JBODs), and there exposing an explicit read-age. Gated on measuring
+   NVMe read cost on real hardware (none available here). **Not yet implemented** —
+   recorded as the intended architecture.
+2. **Immediate fix — thermal-throttle *counters*, keep temperature coarse.** For
+   the actual use case (diagnosing suspected NVMe thermal throttling), the SMART
+   log we already read (page 0x02) carries **monotonic** throttle telemetry:
+   Warning/Critical Composite Temperature Time and host thermal-management
+   transition counts/durations. Being counters, they are **cadence-robust** — a
+   60 s read misses no event, and `rate()` over them is exactly the throttle
+   signal. This sidesteps the freshness problem entirely for the question that
+   matters, so temperature stays as-is.
+
+**Shipped (this follow-up):** `nvme.rs` `parse_health` decodes the throttle fields
+from the same log read (unit-tested); new counters
+`drive_temperature_warning_time` / `_critical_time` (seconds) and
+`drive_thermal_throttle_time` / `_transitions` (`level={1,2}`), NVMe-only, wired
+through `device.rs` (`DriveReading`) and set alongside the temperature gauge. No
+cadence change. Fixture-verified; **NVMe hardware validation pending** (reopen
+condition — same NVMe-host gap as the temperature path). The TMT counters populate
+only when Host-Controlled Thermal Management is enabled; Warning/Critical time are
+always maintained.
+
 ## Superseded design note
 
 An earlier hwmon-based cut of this sampler was implemented and reached GO for the

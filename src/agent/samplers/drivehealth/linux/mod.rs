@@ -37,6 +37,34 @@ mod stats;
 use device::*;
 use stats::*;
 
+/// The NVMe-only throttle counter groups, in a fixed order, for per-drive label
+/// application at discovery.
+static NVME_COUNTER_GROUPS: &[&dyn GroupMetadata] = &[
+    &DRIVE_TEMPERATURE_WARNING_TIME,
+    &DRIVE_TEMPERATURE_CRITICAL_TIME,
+    &DRIVE_THERMAL_THROTTLE_TIME_1,
+    &DRIVE_THERMAL_THROTTLE_TIME_2,
+    &DRIVE_THERMAL_THROTTLE_TRANSITIONS_1,
+    &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
+];
+
+/// Apply the per-drive labels (`device`, `type`, and `model`/`serial` when
+/// present) to one metric group at index `idx`.
+fn label_group(group: &dyn GroupMetadata, idx: usize, drive: &Drive) {
+    group.insert_metadata(idx, "device".to_string(), drive.device.clone());
+    group.insert_metadata(
+        idx,
+        "type".to_string(),
+        drive.drive_type.as_str().to_string(),
+    );
+    if !drive.model.is_empty() {
+        group.insert_metadata(idx, "model".to_string(), drive.model.clone());
+    }
+    if !drive.serial.is_empty() {
+        group.insert_metadata(idx, "serial".to_string(), drive.serial.clone());
+    }
+}
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -75,19 +103,14 @@ impl DriveHealth {
 
         // Per-index labels are read once at discovery and never change for the
         // life of the process (startup-only discovery; hotplug is out of scope
-        // for Phase 1).
+        // for Phase 1). Temperature is labeled for every drive; the NVMe-only
+        // throttle counters are labeled only for NVMe drives.
         for (idx, drive) in drives.iter().enumerate() {
-            DRIVE_TEMPERATURE.insert_metadata(idx, "device".to_string(), drive.device.clone());
-            DRIVE_TEMPERATURE.insert_metadata(
-                idx,
-                "type".to_string(),
-                drive.drive_type.as_str().to_string(),
-            );
-            if !drive.model.is_empty() {
-                DRIVE_TEMPERATURE.insert_metadata(idx, "model".to_string(), drive.model.clone());
-            }
-            if !drive.serial.is_empty() {
-                DRIVE_TEMPERATURE.insert_metadata(idx, "serial".to_string(), drive.serial.clone());
+            label_group(&DRIVE_TEMPERATURE, idx, drive);
+            if drive.drive_type == DriveType::Nvme {
+                for group in NVME_COUNTER_GROUPS {
+                    label_group(*group, idx, drive);
+                }
             }
         }
 
@@ -142,11 +165,25 @@ impl Sampler for DriveHealth {
         let drives = self.drives.clone();
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
-            let temps = read_temperatures(&drives);
-            let ok = temps.iter().filter(|t| t.is_some()).count();
-            for (idx, temp) in temps.into_iter().enumerate() {
-                if let Some(celsius) = temp {
+            let readings = read_all(&drives);
+            let ok = readings
+                .iter()
+                .filter(|r| r.temperature_c.is_some())
+                .count();
+            for (idx, r) in readings.into_iter().enumerate() {
+                if let Some(celsius) = r.temperature_c {
                     let _ = DRIVE_TEMPERATURE.set(idx, celsius);
+                }
+                // NVMe thermal-throttle counters (from the same log-page read).
+                if let Some(h) = r.nvme {
+                    let _ = DRIVE_TEMPERATURE_WARNING_TIME.set(idx, h.warning_temp_time_s);
+                    let _ = DRIVE_TEMPERATURE_CRITICAL_TIME.set(idx, h.critical_temp_time_s);
+                    let _ = DRIVE_THERMAL_THROTTLE_TIME_1.set(idx, h.thermal_mgmt_time_s[0]);
+                    let _ = DRIVE_THERMAL_THROTTLE_TIME_2.set(idx, h.thermal_mgmt_time_s[1]);
+                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_1
+                        .set(idx, h.thermal_mgmt_transitions[0]);
+                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_2
+                        .set(idx, h.thermal_mgmt_transitions[1]);
                 }
             }
             debug!("{NAME}: read {ok}/{} drive temperatures", drives.len());

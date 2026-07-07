@@ -123,19 +123,29 @@ Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md)
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
-Phase 1 (temperature) shipped in #992 via read-only pass-through ioctls — SATA ATA
-PASS-THROUGH (`ata.rs`) and NVMe Get Log Page 0x02 (`nvme.rs`) — no kernel module.
+Phase 1 (temperature) + NVMe thermal-throttle counters shipped in #992 via
+read-only pass-through ioctls — SATA ATA PASS-THROUGH (`ata.rs`) and NVMe Get Log
+Page 0x02 (`nvme.rs`) — no kernel module.
 
-- **NVMe temperature — hardware validation** — Open. The NVMe path is
-  fixture-verified only; no NVMe drive was on the GO-check host. *Reopen:* confirm
-  `drive_temperature{type=nvme}` with a plausible value and populated serial on a
-  host with an NVMe drive.
+- **NVMe hardware validation** — Open. The NVMe path (temperature *and* the new
+  `drive_thermal_throttle_*` / `drive_temperature_{warning,critical}_time`
+  counters) is fixture-verified only; no NVMe drive was on the GO-check host.
+  *Reopen:* confirm on a host with an NVMe drive (bonus: one that has actually
+  throttled, to exercise nonzero counters).
+- **Time-bounded / synchronous refresh** — Roadmap. `drivehealth` is the first
+  sampler whose refresh isn't time-bounded to the snapshot (temperature gauge may
+  be up to `interval` stale, unobservably). Intended fix: read inline on the
+  sample cycle where the per-bus cost is *measured* affordable; async+throttle only
+  for expensive reads, and there expose a read-age. *Gated on* measuring NVMe read
+  cost on real hardware. See the journal's "async freshness" design note. (The
+  throttle counters made this non-urgent — they're monotonic and cadence-robust.)
 - **SAS (true SCSI) temperature** — Roadmap. SATA (incl. SATA-behind-SAS) ships via
   ATA pass-through; pure-SAS drives need SCSI LOG SENSE page 0x0D. Deferred — no
   SAS-only hardware to verify against.
-- **Phase 2 — NVMe SMART-log health** — Roadmap. Wear (`percentage_used`),
-  available spare, critical-warning bits, media errors, power-on hours — extends
-  the Phase-1 NVMe Get Log Page 0x02 read (`nvme.rs`).
+- **Phase 2 — NVMe SMART-log health (remainder)** — Roadmap. Wear
+  (`percentage_used`), available spare, critical-warning bits, media errors,
+  power-on hours — extends the Phase-1 NVMe Get Log Page 0x02 read (`nvme.rs`). The
+  *thermal-throttle* subset of Phase 2 already shipped in #992.
 - **Phase 3 — ATA/SATA + SAS SMART attributes** — Roadmap. Vendor-specific
   attribute parsing (reallocated sectors, etc.) over the pass-through path
   (`ata.rs`).

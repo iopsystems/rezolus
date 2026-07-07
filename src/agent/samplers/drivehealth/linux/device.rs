@@ -105,27 +105,44 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
     out
 }
 
-/// Read one drive's temperature (°C) via the appropriate pass-through ioctl.
-fn read_temperature(drive: &Drive) -> Option<i64> {
+/// One drive's decoded reading. Every drive reports `temperature_c`; NVMe drives
+/// additionally carry thermal-throttle counters from the same log-page read.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DriveReading {
+    pub temperature_c: Option<i64>,
+    pub nvme: Option<super::nvme::NvmeHealth>,
+}
+
+/// Read one drive via the appropriate read-only pass-through ioctl.
+fn read_one(drive: &Drive) -> DriveReading {
     match drive.drive_type {
-        DriveType::Nvme => super::nvme::read_temperature(&drive.node),
-        DriveType::Sata => super::ata::read_temperature(&drive.node),
+        DriveType::Nvme => {
+            let nvme = super::nvme::read_health(&drive.node);
+            DriveReading {
+                temperature_c: nvme.as_ref().and_then(|h| h.temperature_c),
+                nvme,
+            }
+        }
+        DriveType::Sata => DriveReading {
+            temperature_c: super::ata::read_temperature(&drive.node),
+            nvme: None,
+        },
     }
 }
 
-/// Read every drive's temperature concurrently, returning results in the same
-/// order as `drives`. Each read is a blocking device command, so reads run one
-/// thread per drive to bound the burst to a single drive's latency. A drive
-/// whose read fails yields `None`.
-pub fn read_temperatures(drives: &[Drive]) -> Vec<Option<i64>> {
+/// Read every drive concurrently, returning results in the same order as
+/// `drives`. Each read is a blocking device command, so reads run one thread per
+/// drive to bound the burst to a single drive's latency. A drive whose read
+/// fails yields an empty `DriveReading`.
+pub fn read_all(drives: &[Drive]) -> Vec<DriveReading> {
     std::thread::scope(|scope| {
         let handles: Vec<_> = drives
             .iter()
-            .map(|drive| scope.spawn(move || read_temperature(drive)))
+            .map(|drive| scope.spawn(move || read_one(drive)))
             .collect();
         handles
             .into_iter()
-            .map(|h| h.join().unwrap_or(None))
+            .map(|h| h.join().unwrap_or_default())
             .collect()
     })
 }
@@ -186,19 +203,23 @@ mod tests {
         let drives = enumerate();
         println!("enumerated {} drive(s)", drives.len());
         let start = std::time::Instant::now();
-        let temps = read_temperatures(&drives);
+        let readings = read_all(&drives);
         let elapsed = start.elapsed();
-        for (d, t) in drives.iter().zip(&temps) {
+        for (d, r) in drives.iter().zip(&readings) {
             println!(
-                "  {:>6} {:<4} -> {:?} C   node={:?} model={:?}",
+                "  {:>6} {:<4} -> {:?} C   node={:?} model={:?}  nvme={:?}",
                 d.device,
                 d.drive_type.as_str(),
-                t,
+                r.temperature_c,
                 d.node,
-                d.model
+                d.model,
+                r.nvme
             );
         }
-        let ok = temps.iter().filter(|t| t.is_some()).count();
+        let ok = readings
+            .iter()
+            .filter(|r| r.temperature_c.is_some())
+            .count();
         println!(
             "read {}/{} drives in {:?} ({:?}/drive avg)",
             ok,
