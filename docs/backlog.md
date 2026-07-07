@@ -1,13 +1,15 @@
 # Backlog
 
-Deferred work and reopen conditions, consolidated from the [engineering
-journal](journal/README.md). Each item is grounded in a journal entry (the
-"why" and the mechanism) and, where relevant, a code path. This is the
-*ordering* layer; the journal entries are the record. When you pick one up,
-read its source entry first, and close it out there.
+The repo's consolidated backlog. Most items are **deferred/reopen conditions from
+the [engineering journal](journal/README.md)** — each links its source entry (the
+"why" and mechanism) and, where relevant, a code path; the journal entries are the
+record, this file is the *ordering* layer. The last section holds **net-new
+capability requests** not yet tied to an effort. When you pick an item up, read
+its source (entry or origin) first, and close it out there.
 
 Status key: **Open** (actionable now), **Roadmap** (planned next phase),
-**By design** (documented limitation, reopen only if the assumption changes).
+**By design** (documented limitation, reopen only if the assumption changes),
+**Idea** (net-new capability, not yet scoped).
 
 ## Viewer — compare mode (A/B)
 
@@ -46,8 +48,9 @@ Source: [viewer chart & heatmap UX](journal/2026-04-19-viewer-chart-ux.md).
   percentiles are all derivable from one `metriken quantiles()` call on one
   histogram column; the current #938 design emits separate `histogram_mean` /
   `histogram_count` / `histogram_quantiles` queries. Consolidating cuts parquet
-  columns and query fan-out. *Reopen:* when touching dashboard chart generation or
-  the histogram/percentile query paths.
+  columns and query fan-out. Touches dashboard chart generation
+  (`crates/dashboard/src/dashboard/*.rs`) and the viewer's histogram/percentile
+  query paths. *Reopen:* when touching either.
 - **In-chart label filtering** — Open. No way to hide series by label predicate
   (e.g. exclude `GPU=0`) or auto-hide flat/inactive series, so aggregates silently
   include dead series. *Reopen:* when working the chart toolbar, or after further
@@ -144,3 +147,45 @@ Source: [`document-feature` skill](journal/2026-07-02-document-feature-skill.md)
 - The per-subcommand `--help` backlog (view/parquet/exporter/hindsight/agent/mcp)
   from #986 is **cleared** — applied across all subcommands in #987 and the backlog
   doc retired in #988. Kept here only as a pointer; not open.
+
+## Desired future capabilities
+
+Net-new instrumentation/feature ideas — mostly raised during the Exceptions
+dashboard work (#873). Each notes *what* and *why it matters operationally*;
+implementation is decided per item. These are **Idea**-state (not yet scoped to an
+effort); promote one to a journal entry when it's picked up.
+
+- **Hardirq instrumentation** — Idea. Per-CPU hardware-interrupt delivery rate,
+  broken down by source (per-device IRQ, IPI, LAPIC timer). Rezolus tracks softirq
+  cost per CPU but not hardirq. *Why:* on CPU-isolated hosts any hardirq on an
+  isolated CPU is a misconfiguration; on VMs, IPI traffic pays a multiplied VMEXIT
+  cost; the LAPIC-timer rate shows whether `nohz_full` actually quiets the tick.
+- **Per-CPU block-IO completion distribution** — Idea. `blockio_operations`
+  aggregates across CPUs; a per-CPU breakdown shows how completions spread across
+  cores. *Why:* lopsided completion (one CPU draining most) signals IRQ-affinity
+  misconfig on multi-queue devices — invisible today until tail latency spikes.
+- **IO submitter→completer CPU correlation** — Idea. Directly measure the fraction
+  of IOs that complete on a different CPU than they were submitted from. *Why:*
+  verifies `rq_affinity`; cross-CPU completion routing costs cache/NUMA traffic on
+  every IO, and there's no metric that confirms it's working.
+- **Protocol-level IO error breakdown** — Idea. `blockio_errors` buckets
+  `blk_status_t` into 7 coarse classes; go deeper into protocol codes (NVMe SCT/SC,
+  SCSI sense keys) to distinguish Media Error vs Aborted-by-Host vs Capacity
+  Exceeded. *Why:* the coarse classes say "is storage misbehaving"; protocol codes
+  say "how" — triage without `dmesg` archaeology.
+- **Per-cgroup off-CPU latency distribution** — Idea. `cgroup_scheduler_offcpu` is
+  a counter (total ns blocked); a per-cgroup histogram distinguishes many-short
+  blocks from few-long. *Why:* two cgroups with equal total off-CPU time can have
+  very different tail latency — the shape is the diagnostic (long tail → lock/IO
+  stalls; short-and-many → scheduler interleaving).
+- **System-configuration visibility** — Idea. Surface boot/runtime config that sets
+  performance posture: CPU isolation (`isolcpus`, `nohz_full`, cgroup `cpuset`),
+  block tuning (IO scheduler, completion affinity, NVMe queue mode), IRQ affinity.
+  *Why:* lets dashboards flag drift (e.g. a completion landing on an `isolcpus` CPU)
+  and lets fleets compare intent vs reality at scale.
+- **Streaming data adapter for embed-friendly charts** — Idea (partly shipped). The
+  `<rezolus-chart>` web component + local WASM data adapter shipped in #915; the
+  remaining piece is a server-streamed (SSE/Datastar) data adapter behind the same
+  `Plot`/`View` descriptor + component API, for live data — plus a `<rezolus-section>`
+  wrapper. *Why:* a clean split between the static file-mode viewer and a future
+  streaming server viewer without forking the frontend.

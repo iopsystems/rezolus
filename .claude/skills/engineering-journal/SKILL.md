@@ -65,11 +65,13 @@ For a repo without a journal: cluster the commit history into thematic **arcs/ca
 
 ## Keep the backlog in sync
 
-`docs/backlog.md` is a **derived index** of the journal's deferred/reopen items —
-the *ordering* layer over the entries. It is not a second source of truth: every
-item traces back to the journal entry that owns its "why" and mechanism. Because
-it is derived, it goes stale unless updated *with* the journal, so treat it as
-part of every journal change:
+`docs/backlog.md` is the repo's consolidated backlog — the *ordering* layer over
+the work. Most items are the journal's deferred/reopen items mirrored here, each
+tracing back to the journal entry that owns its "why" and mechanism (it may also
+carry net-new follow-ups/capability requests not yet tied to an effort — those
+cite their own origin). The journal-derived portion is not a second source of
+truth; because it is derived it goes stale unless updated *with* the journal, so
+treat it as part of every journal change:
 
 - **Adding an entry** (open or retrospective) whose Deferred/Reopen/limitations
   section lists items → add those items to `docs/backlog.md`, each linking its
