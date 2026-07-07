@@ -1,12 +1,10 @@
 # Viewer support for "simple capture" parquets
 
 - **Opened:** 2026-07-03
-- **Status:** IMPLEMENTED — in review as **PR #989** (iopsystems/rezolus). Closes when #989 merges.
+- **Status:** SHIPPED — merged in **PR #989** (iopsystems/rezolus, squash `c3babff3`).
 - **Design/plan:** brainstormed → spec → plan → subagent-driven execution (9 tasks, each independently reviewed) → whole-branch review (READY).
 
-This entry absorbs the original design + plan docs (previously
-`docs/design/2026-07-03-simple-capture-viewer{,-plan}.md`, removed in favor of
-this record).
+This entry is the design record for the effort (it absorbs the original brainstorming spec + plan).
 
 ## Problem
 

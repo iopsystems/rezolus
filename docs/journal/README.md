@@ -17,8 +17,16 @@ Conventions:
 
 ## Entries
 
+Entries before 2026-07-06 were reconstructed retrospectively from design docs,
+merged PRs, and project notes; each is grounded in real commits/PRs.
+
 | Date | Effort | Status |
 |------|--------|--------|
-| 2026-07-03 | [Viewer support for "simple capture" parquets](2026-07-03-simple-capture-viewer.md) | Implemented — in review (PR #989) |
-| 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Implemented — in review (PR #989) |
+| 2026-04-18 | [Viewer performance and JS restructure](2026-04-18-viewer-perf-restructure.md) | Shipped (merged) |
+| 2026-04-19 | [Viewer chart & heatmap UX](2026-04-19-viewer-chart-ux.md) | Shipped (merged) |
+| 2026-04-21 | [A/B compare mode for the viewer](2026-04-21-ab-compare-mode.md) | Shipped (merged) |
+| 2026-05-10 | [Selection → Notebook → Report](2026-05-10-selection-notebook-report.md) | Shipped (merged) |
+| 2026-07-02 | [`document-feature` skill — agent-verified CLI help](2026-07-02-document-feature-skill.md) | Shipped (merged) |
+| 2026-07-03 | [Viewer support for "simple capture" parquets](2026-07-03-simple-capture-viewer.md) | Shipped (PR #989) |
+| 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Shipped (PR #989) |
 | 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature (module-free)](2026-07-06-drive-health-sampler.md) | Phase 1 GO — shipped via pass-through ioctls, no module (SATA hw-verified; NVMe fixtures). Phases 2–3 open |

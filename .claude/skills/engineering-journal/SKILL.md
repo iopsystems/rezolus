@@ -27,16 +27,33 @@ Issues/PRs are the *task* layer — discrete units, assignment, notifications. T
 ## The lifecycle (per effort)
 
 1. **Pick & scope.** Gather requirements. Grep the journal + git log for prior art first — don't re-litigate a settled question.
-2. **Open — land intent on `main`.** Write the entry: goal/hypothesis, requirements, GO/NO-GO criteria (number-gated where possible), plan. Commit via PR to `main` so the effort is visible *before* you build. This is the coordination move.
+2. **Open — land intent on `main`.** Write the entry: goal/hypothesis, requirements, GO/NO-GO criteria (number-gated where possible), plan. Commit via PR to `main` so the effort is visible *before* you build. This is the coordination move. If the entry names deferred/reopen items, mirror them into `docs/backlog.md` in the same commit (see "Keep the backlog in sync").
 3. **Go / no-go.** Probe or price it cheaply before building. Record the verdict honestly.
 4. **Implement & test.**
-5. **Close out — in the implementing PR.** Update the entry with the outcome (shipped / NO-GO + numbers + mechanism) and update any docs the change affects. Landing the work closes the record in the same PR.
+5. **Close out — in the implementing PR.** Update the entry with the outcome (shipped / NO-GO + numbers + mechanism) and update any docs the change affects. Reconcile `docs/backlog.md`: add any new deferred items this effort leaves behind, and **remove or mark done every backlog item this landing completes or deprecates** — in the same PR. Landing the work closes the record.
 
 A NO-GO closes out the same way: land the negative result with its mechanism and a reopen condition ("revisit if new hardware / data / regime"). Merge negative probes; don't abandon them.
 
 ## Ground every claim in code
 
-The journal's authority is that it traces to source: real commit SHAs, file paths, spec/note files, measured numbers — never invented figures. When you update or reconstruct an entry, re-verify against current code; **stale claims are the main failure mode.** If a detail isn't in the source, say so or omit it.
+The journal's authority is that it traces to source: real commit SHAs, PR numbers, source-code paths (`src/…`, `crates/…`), measured numbers — never invented figures, and never a transient design/spec doc that may be deleted (absorb its content instead — see below). When you update or reconstruct an entry, re-verify against current code; **stale claims are the main failure mode.** If a detail isn't in the source, say so or omit it.
+
+## Absorb the design doc — the entry is self-contained
+
+An effort's design often starts life as a **separate** spec/plan/brainstorm doc
+(from a planning skill, an ad-hoc `docs/design/` or scratch location). Do **not**
+leave that doc beside the journal and link to it: parallel records drift, and a
+scratch doc that later gets deleted turns the journal's links into dangling
+references.
+
+When you journal an effort, **lift the design doc's durable content — the goal,
+the decisions and their rationale, the GO/NO-GO, the dead-ends — into the journal
+entry itself, then remove the consumed spec/plan doc in the same PR.** The entry
+*becomes* the design record (as this skill's own entries do). A useful check: after
+writing, `grep` the entry for any path you are about to delete — if a fact only
+lives behind such a reference, lift it inline; then the reference goes. The entry
+must read completely on its own, citing only things that persist (SHAs, PRs,
+code paths).
 
 ## Sampler efforts carry a *measured* overhead number
 
@@ -48,7 +65,32 @@ Factual, not diaristic or triumphant. NO-GOs and falsifications are first-class,
 
 ## Retrospective mode (bootstrap)
 
-For a repo without a journal: cluster the commit history into thematic **arcs/campaigns**, write one grounded entry per arc from its commit range + design docs + notes (one drafter per arc parallelizes well), and add a series index. Same grounding and voice rules.
+For a repo without a journal: cluster the commit history into thematic **arcs/campaigns**, write one grounded entry per arc from its commit range + design docs + notes (one drafter per arc parallelizes well), and add a series index. Same grounding and voice rules — **lift the design docs' key decisions into the entries and remove the consumed docs** (see "Absorb the design doc"); the entries, not the scratch docs, are the record.
+
+## Keep the backlog in sync
+
+`docs/backlog.md` is the repo's consolidated backlog — the *ordering* layer over
+the work. Most items are the journal's deferred/reopen items mirrored here, each
+tracing back to the journal entry that owns its "why" and mechanism (it may also
+carry net-new follow-ups/capability requests not yet tied to an effort — those
+cite their own origin). The journal-derived portion is not a second source of
+truth; because it is derived it goes stale unless updated *with* the journal, so
+treat it as part of every journal change:
+
+- **Adding an entry** (open or retrospective) whose Deferred/Reopen/limitations
+  section lists items → add those items to `docs/backlog.md`, each linking its
+  source entry and carrying its reopen condition.
+- **Updating an entry** — new deferred items, or a resolved one → mirror the
+  change in the backlog (add / edit / drop).
+- **Landing work that completes or deprecates a backlog item** → remove it (or
+  mark it done with the PR that closed it) in the same PR. A backlog that still
+  lists shipped work is worse than none — it sends people to re-do or re-litigate
+  finished efforts.
+
+Keep items grounded (link the entry, cite code paths / PRs), and mark state
+(Open / Roadmap / By-design) rather than deleting the reasoning. If the repo has a
+dedicated backlog/roadmap skill, defer ordering and prioritization to it; this
+skill still keeps `docs/backlog.md` *consistent with the journal*.
 
 ## Optional: publish as docs
 
@@ -56,7 +98,7 @@ The journal can feed a doc site in **whatever the repo already uses** (mdBook, a
 
 ## Related
 
-Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO ledger / reopen conditions, belong to a backlog/roadmap skill (if present). The journal records a single effort; the backlog orders them.
+The journal records a single effort; `docs/backlog.md` (see "Keep the backlog in sync") is the consolidated index of their deferred/reopen items, kept in step with the journal by this skill. *Prioritizing* which effort to pick next is a separate concern — defer it to a dedicated backlog/roadmap skill if the repo has one.
 
 ## Common rationalizations
 
@@ -69,6 +111,7 @@ Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO 
 | "I'll write it up after it ships." | Land the record in the same PR. "After" = never, or an unverified reconstruction. |
 | "Close enough on the numbers." | Ground every figure in a source or omit it. Invented numbers destroy the record's authority. |
 | "The sampler refresh is a small sysfs read — obviously cheap." | Cheap is a *measured* number. `drivehealth`'s "small sysfs read" was ~83 ms/refresh (an ATA command per drive). A legitimate principle-15 exception is exactly where no cost alarm fires — measure it. |
+| "The spec doc already says all this — I'll just link it." | A separate spec drifts from the code and dangles when the doc is deleted. Lift its decisions into the entry and remove the doc; the entry *is* the design record. |
 
 ## Red flags — stop
 
@@ -77,3 +120,5 @@ Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO 
 - Dropping a negative result instead of landing it.
 - Reaching for a GitHub issue as the *only* record of a non-trivial effort.
 - Writing "bounded" / "low overhead" in a sampler effort's GO criteria or close-out with no measured µs number behind it.
+- Leaving a separate spec/plan/scratch doc beside the entry and linking to it, instead of lifting its content in and removing it — especially a doc slated for deletion (the link will dangle).
+- Landing work that finishes or deprecates a backlog item without removing it from `docs/backlog.md`, or adding a journal entry's deferred items without mirroring them into the backlog.
