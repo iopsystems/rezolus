@@ -104,6 +104,15 @@ enabled = true
 # host_processor_info() is used
 [samplers.cpu_usage]
 
+# Reports per-drive temperature for NVMe and SATA drives via read-only
+# pass-through ioctls (like smartctl) — no kernel module required. Drives are
+# discovered once at startup. Because each read is a device command and
+# temperature moves slowly, reads are throttled to `interval` (default 60s) and
+# run off the scrape/TTL cycle. Needs CAP_SYS_RAWIO (already held for eBPF);
+# unprivileged or with no supported drive it emits no series.
+[samplers.drivehealth]
+# interval = "60s"
+
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
 # requires Turing+ GPU and is only available when built with --features cupti.

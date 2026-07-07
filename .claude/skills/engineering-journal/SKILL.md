@@ -55,6 +55,10 @@ lives behind such a reference, lift it inline; then the reference goes. The entr
 must read completely on its own, citing only things that persist (SHAs, PRs,
 code paths).
 
+## Sampler efforts carry a *measured* overhead number
+
+If the effort adds or changes a sampler — or changes core code that affects samplers — the GO/NO-GO criteria and the close-out MUST carry the **measured** per-refresh overhead (µs at fleet-representative scale, from the agent's `sampling latency` debug line), never "bounded"/"low"/"negligible". If the refresh reads a non-mmap source (sysfs device command, ioctl, SMI/library call, page-table walk), also record the **cadence decision** (throttle to the sampler's own interval + dispatch off the sample cycle). This is where "measured numbers" above is non-negotiable, and it is most dangerous for a *legitimate* sysfs/procfs exception, where no cost alarm fires for you — an unmeasured overhead claim there is not a GO. See `docs/principles.md` principles 13, 16, 17. For the full pass, use the **reviewing-samplers** skill.
+
 ## Honest-ledger voice
 
 Factual, not diaristic or triumphant. NO-GOs and falsifications are first-class, with their mechanism. Flag what you couldn't measure. Don't overclaim — the record is trusted only if it's honest about what didn't work and what's uncertain.
@@ -106,6 +110,7 @@ The journal records a single effort; `docs/backlog.md` (see "Keep the backlog in
 | "It's a dead end — nothing to record." | The dead-end is the highest-value entry. Record the mechanism and the reopen condition. |
 | "I'll write it up after it ships." | Land the record in the same PR. "After" = never, or an unverified reconstruction. |
 | "Close enough on the numbers." | Ground every figure in a source or omit it. Invented numbers destroy the record's authority. |
+| "The sampler refresh is a small sysfs read — obviously cheap." | Cheap is a *measured* number. `drivehealth`'s "small sysfs read" was ~83 ms/refresh (an ATA command per drive). A legitimate principle-15 exception is exactly where no cost alarm fires — measure it. |
 | "The spec doc already says all this — I'll just link it." | A separate spec drifts from the code and dangles when the doc is deleted. Lift its decisions into the entry and remove the doc; the entry *is* the design record. |
 
 ## Red flags — stop
@@ -114,5 +119,6 @@ The journal records a single effort; `docs/backlog.md` (see "Keep the backlog in
 - Recording an outcome you didn't verify against code.
 - Dropping a negative result instead of landing it.
 - Reaching for a GitHub issue as the *only* record of a non-trivial effort.
+- Writing "bounded" / "low overhead" in a sampler effort's GO criteria or close-out with no measured µs number behind it.
 - Leaving a separate spec/plan/scratch doc beside the entry and linking to it, instead of lifting its content in and removing it — especially a doc slated for deletion (the link will dangle).
 - Landing work that finishes or deprecates a backlog item without removing it from `docs/backlog.md`, or adding a journal entry's deferred items without mirroring them into the backlog.

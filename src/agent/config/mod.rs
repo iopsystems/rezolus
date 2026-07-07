@@ -110,6 +110,20 @@ impl Config {
             .map(|s| s.to_string())
     }
 
+    /// The configured read interval for `name` (per-sampler override, falling
+    /// back to the `defaults` section). `None` if unset anywhere, in which case
+    /// the sampler applies its own built-in default. Consumed by `drivehealth`,
+    /// which reads drive temperature on this cadence off the sample cycle.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn sampler_interval(&self, name: &str) -> Option<std::time::Duration> {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.interval())
+            .or_else(|| self.defaults.interval())
+            .and_then(|s| s.parse::<humantime::Duration>().ok())
+            .map(|d| *d)
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -142,6 +156,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     fn config(toml: &str) -> Config {
         toml::from_str(toml).expect("valid config")
@@ -184,5 +199,26 @@ mod tests {
         assert!(!c.enabled("cpu_usage"));
         // Opt-in sampler is still off too.
         assert!(!c.enabled("gpu_amd_pmu"));
+    }
+
+    #[test]
+    fn sampler_interval_override_defaults_and_absent() {
+        // Per-sampler override wins.
+        let c = config("[samplers.drivehealth]\ninterval = \"30s\"\n");
+        assert_eq!(
+            c.sampler_interval("drivehealth"),
+            Some(Duration::from_secs(30))
+        );
+
+        // Falls back to the [defaults] section.
+        let c = config("[defaults]\ninterval = \"90s\"\n");
+        assert_eq!(
+            c.sampler_interval("drivehealth"),
+            Some(Duration::from_secs(90))
+        );
+
+        // Unset anywhere -> None (sampler applies its own default).
+        let c = config("[defaults]\nenabled = true\n");
+        assert_eq!(c.sampler_interval("drivehealth"), None);
     }
 }

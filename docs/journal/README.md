@@ -29,4 +29,4 @@ merged PRs, and project notes; each is grounded in real commits/PRs.
 | 2026-07-02 | [`document-feature` skill — agent-verified CLI help](2026-07-02-document-feature-skill.md) | Shipped (merged) |
 | 2026-07-03 | [Viewer support for "simple capture" parquets](2026-07-03-simple-capture-viewer.md) | Shipped (PR #989) |
 | 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Shipped (PR #989) |
-| 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature](2026-07-06-drive-health-sampler.md) | Open (intent landed, pre-build) |
+| 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature (module-free)](2026-07-06-drive-health-sampler.md) | Phase 1 GO — shipped via pass-through ioctls, no module (SATA hw-verified; NVMe fixtures). Phases 2–3 open |

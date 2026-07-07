@@ -19,6 +19,8 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_perf](#cpu_perf)
   - [cpu_tlb_flush](#cpu_tlb_flush)
   - [cpu_usage](#cpu_usage)
+- [Drive](#drive)
+  - [drivehealth](#drivehealth)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
 - [Memory](#memory)
@@ -174,6 +176,51 @@ optimizing workloads.
 | `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
+
+## Drive
+
+Metrics related to physical drive health.
+
+### drivehealth
+
+Reports per-drive temperature for NVMe and SATA drives, read directly from the
+drive via **read-only pass-through ioctls** — the same mechanism `smartctl` and
+`hddtemp` use, with **no kernel module** (temperature has no BPF or perf hook;
+this is the deliberate device-read exception in `docs/principles.md`). SATA uses
+`SG_IO` ATA PASS-THROUGH (`SMART READ DATA`, attribute 194); NVMe uses the admin
+Get Log Page 0x02 (Composite Temperature). Drives are enumerated once at startup
+from `/sys/block` and `/sys/class/nvme`.
+
+Because each read is a device command (measured ~7.6 ms/drive) and temperature
+moves on the order of seconds, reads are throttled and offloaded from the
+scrape/TTL sample cycle: at most once per `interval` the sampler dispatches the
+reads (all drives in parallel) to a blocking thread pool and returns
+immediately, so the sample cycle stays ~microseconds; the gauge retains its last
+value between reads. The cadence defaults to 60s and is configurable via
+`interval` in `[samplers.drivehealth]`.
+
+Pass-through ioctls require `CAP_SYS_RAWIO` (the agent already runs privileged
+for eBPF); unprivileged, reads fail closed — zero series, no error. Hosts with
+no supported drive likewise emit no series. The `serial` label is potentially
+sensitive — included for stable cross-reboot fleet identity, and omitted when
+unavailable (SATA serial via ATA IDENTIFY is deferred; NVMe serial comes from
+sysfs).
+
+For NVMe, the same SMART/Health log read also yields **thermal-throttling
+counters**. These are monotonic, so a coarse read cadence never misses an event —
+`rate(drive_temperature_critical_time[5m])` reads as fraction of time throttled
+(≈1.0 = continuously throttled), which is the direct signal for diagnosing NVMe
+thermal throttling. The `drive_thermal_throttle_*` counters populate only when the
+drive has Host-Controlled Thermal Management enabled; the warning/critical time
+counters are always maintained by the controller.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `drive_temperature` | The current drive temperature in degrees Celsius | `device` (kernel name, e.g. `nvme0`, `sda`), `type={nvme,sata}`, `model`, `serial` (when available) |
+| `drive_temperature_warning_time` | Cumulative seconds at/above the NVMe warning temperature threshold (WCTEMP) | `device`, `type=nvme`, `model`, `serial` |
+| `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
+| `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+| `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 
 ## GPU
 

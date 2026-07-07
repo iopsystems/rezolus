@@ -432,6 +432,81 @@ parsing the file, but the choice should be deliberate, not the default.
   every refresh when the same data is reachable from a BPF probe or a
   perf counter at comparable or lower cost.
 
+### 16. Measure sampler overhead; ship the number
+
+"Bounded", "low", "negligible", "small" are claims about a *number*. State
+the number. A sampler's per-refresh cost is measured on real hardware at
+fleet-representative scale and reported in the effort's record (journal
+close-out / PR), the same way a benchmark is. Overhead reasoned from code
+shape is a guess, not a measurement — and guesses about cost are wrong in
+exactly the cases that matter.
+
+*Why this matters — the failure mode is specific.* The cost alarms in this
+doc (principles 13, 15) fire loudly for an *obvious* offender like per-refresh
+`/proc` parsing. They do **not** fire for a sampler that is a *legitimate*
+principle-15 exception — sysfs is genuinely the only source (drive temperature,
+a vendor SMI temperature call, an ioctl). There, "prefer BPF" has nothing to
+say, so nothing catches an expensive read *except measuring it*. The
+`drivehealth` sampler was reasoned as "bounded per-refresh cost — MET"; the
+first measurement showed **~83 ms per refresh** for 22 drives, because reading a
+drive's temperature issues a command to the physical drive (~4–8 ms each) —
+invisible to code review, obvious on the first measurement (the per-sampler
+`sampling latency: N us` debug line). The exception is exactly where you must
+measure, because it is exactly where no other check protects you.
+
+**How to measure.** Build; run the agent with only the sampler enabled and
+`[log] level = "debug"`; scrape a few times; read the `<name> sampling
+latency: N us` line. Do it at the worst case the fleet will hit (max drive /
+CPU / process / interface count), not the dev box's trivial count.
+
+**How to apply.**
+- Every sampler add/change reports a *measured* per-refresh cost (µs at
+  representative scale) in its journal close-out / PR.
+- A refresh that touches a non-mmap source (sysfs, an ioctl, an SMI/library
+  call, a page-table walk) is measured, never assumed cheap — that is where
+  cost hides.
+- Measure the worst case, not the dev box: cost usually scales with device /
+  CPU / process count.
+
+**What we refuse.**
+- "Bounded" / "low overhead" as a GO claim with no measured number behind it.
+- Reasoning about refresh cost from code shape instead of measuring it.
+- Measuring only on a host with a trivial device / process count.
+
+### 17. Expensive userspace reads: throttle and decouple from the scrape cadence
+
+Principle 10 (consumers drive cadence, no agent-side clock) holds *because*
+normal reads are free mmap loads. When a userspace refresh instead reads an
+**expensive or slow** source — sysfs that issues a device command
+(`drivetemp` → ATA), a vendor SMI/library call, an ioctl, a page-table walk —
+letting consumers drive it at the snapshot-TTL rate (up to ~100 Hz) is exactly
+wrong: it burns CPU, hammers hardware with commands, defeats device power
+management, and adds no signal for a value that moves on the order of seconds.
+
+Such a sampler reads on its **own bounded cadence** (a configurable interval,
+throttled independent of the TTL) and serves the cached value from `refresh()`.
+The read runs **off the async worker** (`spawn_blocking` or a background
+thread), never inline, so a slow or hung device read cannot stall the runtime
+or block other samplers. This is a deliberate, *documented* departure from
+principle 10, justified by the source being a command/walk rather than an mmap
+load. `drivehealth` applies this: it reads temperature via pass-through ioctl
+(no module), throttled to a 60 s default interval and dispatched via
+`spawn_blocking`, so `refresh()`'s sample-cycle contribution is ~2 µs while the
+~176 ms full-drive sweep (23 drives, measured) runs off-cycle once per interval.
+
+**How to apply.**
+- A refresh over a non-mmap, cost-bearing source gets its own minimum re-read
+  interval (configurable), and serves cached values between reads.
+- Dispatch the read off the async runtime; add a bound/timeout where the
+  source can hang (a spun-down or failing drive).
+- Document the principle-10 departure in the sampler module, with the reason.
+
+**What we refuse.**
+- A synchronous, cost-bearing device / procfs read on the sample cycle at
+  scrape cadence.
+- Blocking a Tokio worker on a device read inside `refresh()`.
+- An undocumented cadence departure from principle 10.
+
 ---
 
 ## Reviewing or writing a sampler — operational checklist
@@ -479,6 +554,17 @@ change. Each item is a yes/no question, or "justify in a comment."
 - **Userspace cost.** Will the new userspace refresh path be O(active
   keys), bounded constant, or O(N) in some workload-driven metric? Prefer
   the first two. (Principle 13.)
+- **Refresh cost (measured, not asserted).** State the *measured* per-refresh
+  cost (µs, from the `sampling latency` debug line) at fleet-representative
+  scale — max drive / CPU / process / interface count, not the dev box. An
+  unmeasured "bounded" is not an answer, and is most dangerous for samplers
+  that are a legitimate principle-15 exception (no cost alarm fires for them).
+  (Principle 16.)
+- **Cadence for expensive reads.** Does the refresh read a non-mmap,
+  cost-bearing source (sysfs device command, SMI/library call, ioctl,
+  page-table walk)? If so, it must read on its own bounded interval decoupled
+  from the scrape cycle and run off the async worker, with the principle-10
+  departure documented. (Principle 17.)
 - **Verifier-friendly patterns.** Defensive bounds checks
   (`if (id >= MAX) return 0;`), `__always_inline` helpers, branch trees
   in place of loops, `bpf_ringbuf_reserve` for large structs — these are
