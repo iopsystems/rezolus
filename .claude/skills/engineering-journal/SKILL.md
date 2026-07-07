@@ -36,7 +36,24 @@ A NO-GO closes out the same way: land the negative result with its mechanism and
 
 ## Ground every claim in code
 
-The journal's authority is that it traces to source: real commit SHAs, file paths, spec/note files, measured numbers — never invented figures. When you update or reconstruct an entry, re-verify against current code; **stale claims are the main failure mode.** If a detail isn't in the source, say so or omit it.
+The journal's authority is that it traces to source: real commit SHAs, PR numbers, source-code paths (`src/…`, `crates/…`), measured numbers — never invented figures, and never a transient design/spec doc that may be deleted (absorb its content instead — see below). When you update or reconstruct an entry, re-verify against current code; **stale claims are the main failure mode.** If a detail isn't in the source, say so or omit it.
+
+## Absorb the design doc — the entry is self-contained
+
+An effort's design often starts life as a **separate** spec/plan/brainstorm doc
+(from a planning skill, an ad-hoc `docs/design/` or scratch location). Do **not**
+leave that doc beside the journal and link to it: parallel records drift, and a
+scratch doc that later gets deleted turns the journal's links into dangling
+references.
+
+When you journal an effort, **lift the design doc's durable content — the goal,
+the decisions and their rationale, the GO/NO-GO, the dead-ends — into the journal
+entry itself, then remove the consumed spec/plan doc in the same PR.** The entry
+*becomes* the design record (as this skill's own entries do). A useful check: after
+writing, `grep` the entry for any path you are about to delete — if a fact only
+lives behind such a reference, lift it inline; then the reference goes. The entry
+must read completely on its own, citing only things that persist (SHAs, PRs,
+code paths).
 
 ## Honest-ledger voice
 
@@ -44,7 +61,7 @@ Factual, not diaristic or triumphant. NO-GOs and falsifications are first-class,
 
 ## Retrospective mode (bootstrap)
 
-For a repo without a journal: cluster the commit history into thematic **arcs/campaigns**, write one grounded entry per arc from its commit range + design docs + notes (one drafter per arc parallelizes well), and add a series index. Same grounding and voice rules.
+For a repo without a journal: cluster the commit history into thematic **arcs/campaigns**, write one grounded entry per arc from its commit range + design docs + notes (one drafter per arc parallelizes well), and add a series index. Same grounding and voice rules — **lift the design docs' key decisions into the entries and remove the consumed docs** (see "Absorb the design doc"); the entries, not the scratch docs, are the record.
 
 ## Optional: publish as docs
 
@@ -64,6 +81,7 @@ Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO 
 | "It's a dead end — nothing to record." | The dead-end is the highest-value entry. Record the mechanism and the reopen condition. |
 | "I'll write it up after it ships." | Land the record in the same PR. "After" = never, or an unverified reconstruction. |
 | "Close enough on the numbers." | Ground every figure in a source or omit it. Invented numbers destroy the record's authority. |
+| "The spec doc already says all this — I'll just link it." | A separate spec drifts from the code and dangles when the doc is deleted. Lift its decisions into the entry and remove the doc; the entry *is* the design record. |
 
 ## Red flags — stop
 
@@ -71,3 +89,4 @@ Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO 
 - Recording an outcome you didn't verify against code.
 - Dropping a negative result instead of landing it.
 - Reaching for a GitHub issue as the *only* record of a non-trivial effort.
+- Leaving a separate spec/plan/scratch doc beside the entry and linking to it, instead of lifting its content in and removing it — especially a doc slated for deletion (the link will dangle).
