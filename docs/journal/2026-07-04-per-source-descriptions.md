@@ -1,12 +1,10 @@
 # Per-source metric descriptions in combined parquets
 
 - **Opened:** 2026-07-04
-- **Status:** IMPLEMENTED — in review as part of **PR #989**. Closes when #989 merges.
+- **Status:** SHIPPED — merged as part of **PR #989** (`c3babff3`).
 - **Prior:** surfaced while building [simple-capture viewer support](2026-07-03-simple-capture-viewer.md).
 
-This entry absorbs the original design + plan docs (previously
-`docs/design/2026-07-04-per-source-descriptions{,-plan}.md`, removed in favor of
-this record).
+This entry is the design record for the effort (it absorbs the original brainstorming spec + plan).
 
 ## Problem
 
