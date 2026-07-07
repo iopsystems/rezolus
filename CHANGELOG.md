@@ -1,5 +1,45 @@
 ## [Unreleased]
 
+## [5.16.0] - 2026-07-07
+
+### Added
+
+- Agent (AMD GPU): new `gpu_amd_smi` sampler collects AMD GPU
+  utilization, memory, power, temperature, and clock metrics via ROCm
+  SMI, with a matching viewer dashboard. NVIDIA GPU metrics now carry a
+  `vendor="nvidia"` label so multi-vendor fleets can be distinguished.
+  (#973)
+- Agent (AMD GPU): additional `gpu_amd_pmu` sampler reads AMD GPU
+  hardware performance counters directly. It has high CPU and memory
+  overhead and is therefore disabled by default; enable it explicitly
+  and set the desired `perf_level`. (#973)
+- Agent (drive health): `drivehealth` reports per-drive temperature via
+  SMART pass-through ioctls, alongside the existing health metrics.
+  (#992)
+- Agent: sampler health classification and a new `rezolus agent status`
+  command that reports each sampler as active/disabled/failed. (#977)
+- Recorder: perf-record-style command wrapping — `rezolus record` can
+  launch and record around a target command, capturing metrics for the
+  span of that process. (#981)
+- Viewer: "Save as Report" in two-file A/B compare mode, exporting the
+  current comparison as a shareable report. (#960)
+- Viewer: support for arbitrary "simple capture" parquets, with
+  per-source detection and a Metrics browser for exploring their
+  columns. (#989)
+
+### Fixed
+
+- Viewer: live mode now refreshes metadata so the chart query window
+  tracks the TSDB as it grows. (#974)
+- BPF: samplers now emit a warning when a program fails to attach due to
+  a missing kernel symbol, instead of failing silently. (#972)
+
+### Changed
+
+- Every subcommand's `--help` output was reworked to be self-explanatory
+  and agent-usable, and the README was reorganized to emphasize use
+  cases and the full feature set. (#976, #987, #983)
+
 ## [5.15.0] - 2026-06-10
 
 ### Added
@@ -870,7 +910,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.15.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.16.0...HEAD
+[5.16.0]: https://github.com/iopsystems/rezolus/compare/v5.15.0...v5.16.0
 [5.15.0]: https://github.com/iopsystems/rezolus/compare/v5.14.0...v5.15.0
 [5.14.0]: https://github.com/iopsystems/rezolus/compare/v5.13.0...v5.14.0
 [5.13.0]: https://github.com/iopsystems/rezolus/compare/v5.12.1...v5.13.0
