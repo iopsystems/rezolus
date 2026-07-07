@@ -27,10 +27,10 @@ Issues/PRs are the *task* layer — discrete units, assignment, notifications. T
 ## The lifecycle (per effort)
 
 1. **Pick & scope.** Gather requirements. Grep the journal + git log for prior art first — don't re-litigate a settled question.
-2. **Open — land intent on `main`.** Write the entry: goal/hypothesis, requirements, GO/NO-GO criteria (number-gated where possible), plan. Commit via PR to `main` so the effort is visible *before* you build. This is the coordination move.
+2. **Open — land intent on `main`.** Write the entry: goal/hypothesis, requirements, GO/NO-GO criteria (number-gated where possible), plan. Commit via PR to `main` so the effort is visible *before* you build. This is the coordination move. If the entry names deferred/reopen items, mirror them into `docs/backlog.md` in the same commit (see "Keep the backlog in sync").
 3. **Go / no-go.** Probe or price it cheaply before building. Record the verdict honestly.
 4. **Implement & test.**
-5. **Close out — in the implementing PR.** Update the entry with the outcome (shipped / NO-GO + numbers + mechanism) and update any docs the change affects. Landing the work closes the record in the same PR.
+5. **Close out — in the implementing PR.** Update the entry with the outcome (shipped / NO-GO + numbers + mechanism) and update any docs the change affects. Reconcile `docs/backlog.md`: add any new deferred items this effort leaves behind, and **remove or mark done every backlog item this landing completes or deprecates** — in the same PR. Landing the work closes the record.
 
 A NO-GO closes out the same way: land the negative result with its mechanism and a reopen condition ("revisit if new hardware / data / regime"). Merge negative probes; don't abandon them.
 
@@ -63,13 +63,36 @@ Factual, not diaristic or triumphant. NO-GOs and falsifications are first-class,
 
 For a repo without a journal: cluster the commit history into thematic **arcs/campaigns**, write one grounded entry per arc from its commit range + design docs + notes (one drafter per arc parallelizes well), and add a series index. Same grounding and voice rules — **lift the design docs' key decisions into the entries and remove the consumed docs** (see "Absorb the design doc"); the entries, not the scratch docs, are the record.
 
+## Keep the backlog in sync
+
+`docs/backlog.md` is a **derived index** of the journal's deferred/reopen items —
+the *ordering* layer over the entries. It is not a second source of truth: every
+item traces back to the journal entry that owns its "why" and mechanism. Because
+it is derived, it goes stale unless updated *with* the journal, so treat it as
+part of every journal change:
+
+- **Adding an entry** (open or retrospective) whose Deferred/Reopen/limitations
+  section lists items → add those items to `docs/backlog.md`, each linking its
+  source entry and carrying its reopen condition.
+- **Updating an entry** — new deferred items, or a resolved one → mirror the
+  change in the backlog (add / edit / drop).
+- **Landing work that completes or deprecates a backlog item** → remove it (or
+  mark it done with the PR that closed it) in the same PR. A backlog that still
+  lists shipped work is worse than none — it sends people to re-do or re-litigate
+  finished efforts.
+
+Keep items grounded (link the entry, cite code paths / PRs), and mark state
+(Open / Roadmap / By-design) rather than deleting the reasoning. If the repo has a
+dedicated backlog/roadmap skill, defer ordering and prioritization to it; this
+skill still keeps `docs/backlog.md` *consistent with the journal*.
+
 ## Optional: publish as docs
 
 The journal can feed a doc site in **whatever the repo already uses** (mdBook, another SSG, plain markdown, the repo's existing docs) — don't impose a toolchain. Journals stay source-of-truth; the site consumes them. A concrete worked example (private-by-construction mdBook with a build + link-check gate) and reusable scripts are in `publishing-example.md`.
 
 ## Related
 
-Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO ledger / reopen conditions, belong to a backlog/roadmap skill (if present). The journal records a single effort; the backlog orders them.
+The journal records a single effort; `docs/backlog.md` (see "Keep the backlog in sync") is the consolidated index of their deferred/reopen items, kept in step with the journal by this skill. *Prioritizing* which effort to pick next is a separate concern — defer it to a dedicated backlog/roadmap skill if the repo has one.
 
 ## Common rationalizations
 
@@ -90,3 +113,4 @@ Prioritizing and picking *which* effort, and maintaining the consolidated NO-GO 
 - Dropping a negative result instead of landing it.
 - Reaching for a GitHub issue as the *only* record of a non-trivial effort.
 - Leaving a separate spec/plan/scratch doc beside the entry and linking to it, instead of lifting its content in and removing it — especially a doc slated for deletion (the link will dangle).
+- Landing work that finishes or deprecates a backlog item without removing it from `docs/backlog.md`, or adding a journal entry's deferred items without mirroring them into the backlog.
