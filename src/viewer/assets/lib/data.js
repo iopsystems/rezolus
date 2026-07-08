@@ -11,6 +11,35 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
+// Default { start, end, step } for an overview range query: the WHOLE
+// recording at its NATIVE sampling interval. Decimation for display is
+// echarts' job (`sampling: 'lttb'` on line/scatter, the heatmap
+// resolution stores for heatmaps) — a purely presentational pass that
+// preserves extrema.
+//
+// We deliberately do NOT decimate by widening the PromQL step. `step` is
+// a query-*semantics* parameter, not a decimation knob:
+//   - Histograms ignore `step` outright — output resolution is set by
+//     their `stride` arg — so a coarse step bounds nothing for them.
+//   - Counters honor `step` but need their rate window rewritten to
+//     match (rewriteCounterQuery), and any coarse step averages away the
+//     spikes we care about.
+// Widening step therefore corrupts the queries (mismatched per-type
+// resolution, skipped rewrites) without reliably bounding payload. The
+// real payload bound is server-side min/max decimation applied AFTER
+// evaluation (the reducer / DisplayResult envelope) — tracked separately.
+//
+// `_stepOverride` (the Granularity selector) still wins; it drives the
+// stride/rate rewrites via buildEffectiveQuery so a user-chosen coarse
+// step stays self-consistent.
+export const defaultRangeFor = (meta) => {
+    const start = meta.minTime;
+    const end = meta.maxTime;
+    const interval = (Number.isFinite(meta.interval) && meta.interval > 0) ? meta.interval : 1;
+    const step = _stepOverride || Math.max(1, interval);
+    return { start, end, step };
+};
+
 // Query rewriting for non-default granularity (step override).
 // When the user picks a coarser step (e.g. 15s instead of auto ~1s), raw
 // queries must be adjusted so that values are properly smoothed over the
@@ -333,15 +362,11 @@ const createDataApi = ({
     const executePromQLRangeQuery = async (query, metadata) => {
         const meta = metadata || cachedMetadata || await fetchMetadata();
 
-        const minTime = meta.minTime;
-        const maxTime = meta.maxTime;
-        const duration = maxTime - minTime;
+        // Whole recording at native step; echarts LTTB decimates for
+        // display. See defaultRangeFor for why we don't decimate via step.
+        const { start, end, step } = defaultRangeFor(meta);
 
-        const windowDuration = Math.min(3600, duration);
-        const start = Math.max(minTime, maxTime - windowDuration);
-        const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
-
-        return queryRange(query, start, maxTime, step);
+        return queryRange(query, start, end, step);
     };
 
     // Apply the same per-plot query transforms the baseline path applies.
@@ -558,11 +583,7 @@ const createDataApi = ({
         let r = range;
         if (!r) {
             const meta = cachedMetadata || await fetchMetadata();
-            const duration = meta.maxTime - meta.minTime;
-            const windowDuration = Math.min(3600, duration);
-            const start = Math.max(meta.minTime, meta.maxTime - windowDuration);
-            const step = _stepOverride || Math.max(1, Math.floor(windowDuration / 500));
-            r = { start, end: meta.maxTime, step };
+            r = defaultRangeFor(meta);
         }
         return queryRange(wrappedQuery, r.start, r.end, r.step, captureId);
     };

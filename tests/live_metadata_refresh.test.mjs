@@ -32,7 +32,7 @@ const matrixOk = {
 const makeApi = (metaSeq, queryRangeCalls) => createDataApi({
     getMetadata: async () => {
         const next = metaSeq.shift() ?? metaSeq[metaSeq.length - 1];
-        return next ?? { status: 'success', data: { minTime: 0, maxTime: 0 } };
+        return next ?? { status: 'success', data: { minTime: 0, maxTime: 0, interval: 1 } };
     },
     queryRange: async (query, start, end, step) => {
         queryRangeCalls.push({ query, start, end, step });
@@ -43,8 +43,8 @@ const makeApi = (metaSeq, queryRangeCalls) => createDataApi({
 
 test('processDashboardData: default behavior caches metadata across calls', async () => {
     const metas = [
-        { status: 'success', data: { minTime: 1000, maxTime: 2000 } },
-        { status: 'success', data: { minTime: 1000, maxTime: 3000 } },
+        { status: 'success', data: { minTime: 1000, maxTime: 2000, interval: 1 } },
+        { status: 'success', data: { minTime: 1000, maxTime: 3000, interval: 1 } },
     ];
     const calls = [];
     const api = makeApi(metas, calls);
@@ -59,8 +59,8 @@ test('processDashboardData: default behavior caches metadata across calls', asyn
 
 test('processDashboardData: { freshMetadata: true } refetches metadata, advances query window', async () => {
     const metas = [
-        { status: 'success', data: { minTime: 1000, maxTime: 2000 } },
-        { status: 'success', data: { minTime: 1000, maxTime: 3000 } },
+        { status: 'success', data: { minTime: 1000, maxTime: 2000, interval: 1 } },
+        { status: 'success', data: { minTime: 1000, maxTime: 3000, interval: 1 } },
     ];
     const calls = [];
     const api = makeApi(metas, calls);
