@@ -1,5 +1,15 @@
 ## [Unreleased]
 
+## [5.16.1] - 2026-07-08
+
+### Fixed
+
+- Viewer: chart queries now fetch the whole recording at its native
+  sampling interval instead of a decimated trailing window, so charts
+  render on load and short-lived spikes are no longer averaged away
+  before they reach the display. The native sampling interval is now
+  exposed by the metadata endpoints (server and WASM). (#995)
+
 ## [5.16.0] - 2026-07-07
 
 ### Added
@@ -910,7 +920,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.16.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.16.1...HEAD
+[5.16.1]: https://github.com/iopsystems/rezolus/compare/v5.16.0...v5.16.1
 [5.16.0]: https://github.com/iopsystems/rezolus/compare/v5.15.0...v5.16.0
 [5.15.0]: https://github.com/iopsystems/rezolus/compare/v5.14.0...v5.15.0
 [5.14.0]: https://github.com/iopsystems/rezolus/compare/v5.13.0...v5.14.0
