@@ -407,10 +407,20 @@ async fn metadata(
     };
     // time_range is in seconds; metadata endpoint returns seconds too.
     let (min_time, max_time) = data.time_range().unwrap_or((0.0, 0.0));
+    // Normalize a degenerate interval (0 for a metadata-less capture,
+    // f64::MAX for an empty multi-file reader) to 0.0 so the frontend's
+    // `interval || 1` fallback engages instead of producing an absurd step.
+    let interval = data.interval();
+    let interval = if interval.is_finite() && interval > 0.0 {
+        interval
+    } else {
+        0.0
+    };
     let filename = state.captures.filename(capture);
     let mut meta = serde_json::json!({
         "minTime": min_time,
         "maxTime": max_time,
+        "interval": interval,
         "filename": filename,
     });
     if let Some(alias) = state.captures.alias(capture) {

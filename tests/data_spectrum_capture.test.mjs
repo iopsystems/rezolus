@@ -73,8 +73,8 @@ test('fetchQuantileSpectrumForPlot: experiment without range falls back to basel
     assert.ok(r);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].captureId, CAPTURE_EXPERIMENT);
-    // Range should derive from baseline meta: end = maxTime (200),
-    // start = max(minTime, maxTime - 3600) = 100 (since duration < 3600).
+    // Range derives from baseline meta: end = maxTime (200),
+    // start = minTime (100) — full range at native interval.
     assert.equal(calls[0].end, 200);
     assert.equal(calls[0].start, 100);
 });

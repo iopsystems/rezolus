@@ -108,9 +108,12 @@
             if (!Number.isFinite(minTime) || !Number.isFinite(maxTime) || maxTime <= minTime) {
                 throw new Error('no recording time range (no parquet loaded?)');
             }
-            const windowDuration = Math.min(3600, maxTime - minTime);
-            const start = Math.max(minTime, maxTime - windowDuration);
-            const step = Math.max(1, Math.floor(windowDuration / 500));
+            // Whole recording at native step; echarts LTTB decimates for
+            // display. We don't decimate via a coarse PromQL step — it's
+            // ignored by histograms and corrupts counter rate semantics.
+            // Mirrors defaultRangeFor in ../data.js.
+            const start = minTime;
+            const step = Math.max(1, meta.interval || 1);
 
             const node = await selectedNode();
             const query = node

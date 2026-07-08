@@ -123,6 +123,11 @@ struct MetadataData {
     min_time: f64,
     #[serde(rename = "maxTime")]
     max_time: f64,
+    // Native sampling interval (seconds). The frontend uses this to pick
+    // the query step; without it, data.js falls back to a 1s step and a
+    // coarse recording is over-queried. Mirror of the server viewer's
+    // /api/v1/metadata `interval` field.
+    interval: f64,
     #[serde(rename = "fileChecksum")]
     file_checksum: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,6 +196,13 @@ impl Viewer {
             data: MetadataData {
                 min_time,
                 max_time,
+                // Normalize a degenerate interval (0, or f64::MAX from an
+                // empty multi-file reader) to 0.0 so the frontend's
+                // `interval || 1` fallback engages. Mirrors routes.rs.
+                interval: {
+                    let i = self.reader.interval();
+                    if i.is_finite() && i > 0.0 { i } else { 0.0 }
+                },
                 file_checksum: String::new(),
                 alias: self.alias.clone(),
             },
