@@ -41,7 +41,6 @@ mod actions;
 mod metadata;
 mod report_save;
 mod routes;
-mod source_kind;
 mod state;
 
 use capture_registry::CaptureId;

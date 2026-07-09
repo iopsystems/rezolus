@@ -55,6 +55,41 @@ fn empty_dashboard_context() -> dashboard::dashboard::DashboardContext {
     dashboard::dashboard::DashboardContext::default()
 }
 
+/// Classify the sources in a loaded parquet into the `SourceEntry` list the
+/// dashboard renderer consumes. Delegates to `dashboard::source_kind` — the
+/// SAME classifier the axum server calls in `src/viewer/metadata.rs` — so both
+/// backends produce identical section lists (a simple-capture parquet gets its
+/// `source:` nav entry in the WASM viewer, not just the server). `service_names`
+/// are the sources already covered by a service template (excluded here).
+fn classify_sources(
+    reader: &ParquetReader,
+    file_metadata: &std::collections::HashMap<String, String>,
+    service_names: &std::collections::HashSet<&str>,
+) -> Vec<dashboard::dashboard::SourceEntry> {
+    // Reassemble file-level metadata as a JSON object — same shape the server
+    // reads from the parquet footer (valid JSON embeds as-is, else a string).
+    let mut map = serde_json::Map::new();
+    for (key, val) in file_metadata {
+        let json_val =
+            serde_json::from_str(val).unwrap_or_else(|_| serde_json::Value::String(val.clone()));
+        map.insert(key.clone(), json_val);
+    }
+
+    let mut metric_names: Vec<String> = reader.counter_names();
+    metric_names.extend(reader.gauge_names());
+    metric_names.extend(reader.histogram_names());
+
+    let filename = reader.filename_or_default();
+    let filename_stem = filename.strip_suffix(".parquet").unwrap_or(&filename);
+
+    dashboard::source_kind::classify_sources(
+        &serde_json::Value::Object(map),
+        &metric_names,
+        service_names,
+        Some(filename_stem),
+    )
+}
+
 /// Build a synthetic `AbContainers` manifest from two attached viewers
 /// at Save-as-Report time. The WASM viewer's compare mode loads two
 /// independent parquets (no real tar manifest involved), so we
@@ -166,7 +201,15 @@ impl Viewer {
         let context = if is_trimmed_report(&file_metadata) {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &[], None, &[])
+            // No templates loaded yet (init_templates refines this later); with
+            // an empty service set a simple capture still classifies as its own
+            // source, so its section is present even before templates arrive.
+            let sources = classify_sources(
+                reader.as_ref(),
+                &file_metadata,
+                &std::collections::HashSet::new(),
+            );
+            dashboard::dashboard::build_dashboard_context(None, &[], None, &sources)
         };
 
         Ok(Viewer {
@@ -260,28 +303,26 @@ impl Viewer {
     /// files, returns the flat systeminfo string.
     pub fn systeminfo(&self) -> Option<String> {
         // Try multi-node first
-        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
-            if let Ok(psm) =
+        if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
+            && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                if let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object()) {
-                    let mut nodes = serde_json::Map::new();
-                    for (sub_key, entry) in rez_group {
-                        let obj = match entry.as_object() {
-                            Some(o) => o,
-                            None => continue,
-                        };
-                        let sysinfo_val = match obj.get("systeminfo") {
-                            Some(v) => v,
-                            None => continue,
-                        };
-                        let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
-                        nodes.insert(node_name.to_string(), sysinfo_val.clone());
-                    }
-                    if nodes.len() > 1 {
-                        return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
-                    }
-                }
+            && let Some(rez_group) = psm.get("rezolus").and_then(|v| v.as_object())
+        {
+            let mut nodes = serde_json::Map::new();
+            for (sub_key, entry) in rez_group {
+                let obj = match entry.as_object() {
+                    Some(o) => o,
+                    None => continue,
+                };
+                let sysinfo_val = match obj.get("systeminfo") {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let node_name = obj.get("node").and_then(|v| v.as_str()).unwrap_or(sub_key);
+                nodes.insert(node_name.to_string(), sysinfo_val.clone());
+            }
+            if nodes.len() > 1 {
+                return serde_json::to_string(&serde_json::Value::Object(nodes)).ok();
             }
         }
         // Fall back to flat systeminfo
@@ -366,15 +407,19 @@ impl Viewer {
             .iter()
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
+        let service_names: std::collections::HashSet<&str> =
+            service_exts.iter().map(|(name, _)| name.as_str()).collect();
 
         let context = if is_trimmed_report(&self.file_metadata) {
             empty_dashboard_context()
         } else {
+            let sources =
+                classify_sources(self.reader.as_ref(), &self.file_metadata, &service_names);
             dashboard::dashboard::build_dashboard_context(
                 None,
                 &service_refs,
                 None, // single-capture: no category
-                &[],
+                &sources,
             )
         };
         self.context = context;
@@ -401,17 +446,16 @@ impl Viewer {
     ) -> Vec<(String, dashboard::ServiceExtension)> {
         let mut service_exts: Vec<(String, dashboard::ServiceExtension)> = Vec::new();
 
-        if let Some(psm_str) = self.file_metadata.get("per_source_metadata") {
-            if let Ok(psm) =
+        if let Some(psm_str) = self.file_metadata.get("per_source_metadata")
+            && let Ok(psm) =
                 serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(psm_str)
-            {
-                for (source_type, _group) in &psm {
-                    if source_type == "rezolus" {
-                        continue;
-                    }
-                    if let Some(ext) = registry.get(source_type) {
-                        service_exts.push((source_type.clone(), ext.clone()));
-                    }
+        {
+            for (source_type, _group) in &psm {
+                if source_type == "rezolus" {
+                    continue;
+                }
+                if let Some(ext) = registry.get(source_type) {
+                    service_exts.push((source_type.clone(), ext.clone()));
                 }
             }
         }
@@ -636,6 +680,16 @@ impl WasmCaptureRegistry {
             .iter()
             .map(|(name, ext)| (name.as_str(), ext))
             .collect();
+        let service_names: std::collections::HashSet<&str> =
+            service_exts.iter().map(|(name, _)| name.as_str()).collect();
+        // Classify the baseline's sources (representative for compare mode) so
+        // built-in gating matches the single-capture path. Immutable borrow —
+        // released before the `as_mut()` assignments below.
+        let sources = self
+            .baseline
+            .as_ref()
+            .map(|b| classify_sources(b.reader.as_ref(), &b.file_metadata, &service_names))
+            .unwrap_or_default();
 
         // Fall back to per-member rendering when the requested category
         // doesn't activate cleanly — same shape as the server runtime's
@@ -672,7 +726,7 @@ impl WasmCaptureRegistry {
         let context = if report_mode {
             empty_dashboard_context()
         } else {
-            dashboard::dashboard::build_dashboard_context(None, &service_refs, category, &[])
+            dashboard::dashboard::build_dashboard_context(None, &service_refs, category, &sources)
         };
         if let Some(baseline) = self.baseline.as_mut() {
             baseline.context = context.clone();
