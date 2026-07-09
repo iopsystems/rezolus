@@ -155,6 +155,35 @@ Page 0x02 (`nvme.rs`) — no kernel module.
 - **Hotplug discovery** — Open. Phase 1 discovers drives once at startup; drives
   added later are missed. *Reopen:* if hotplug matters.
 
+## metriken — measurement uncertainty (arc)
+
+Source: [measurement uncertainty](journal/2026-07-08-measurement-uncertainty.md).
+Cross-cutting foundational arc, **temporal-first**: drop the unified-timestamp
+myth (samplers sample at different instants, some with large intra-collection
+spread), plot them together honestly, and put **error bars on rates**. Core lands
+in metriken; rezolus is first consumer. Value-uncertainty is modeled but deferred
+(except the counter increment quantum, needed for rate error bars). Phased.
+
+- **Phase 1 — primitive + capture + wire** — Roadmap (next). Model
+  `(value, window[t_begin,t_end], kind, start_epoch, counter quantum)` in metriken;
+  drivehealth captures tight per-device windows; extend exposition (`SnapshotV3`)
+  so windows are visible on the snapshot; read HZ for the tick quantum.
+- **Phase 2 — archive + plot-together** — Roadmap. Common `.mtk`/`.rez` archive
+  (tar of per-cohort parquet + manifest) + recorder + v2→v3 converter; viewer plots
+  heterogeneous cohorts on one axis.
+- **Phase 3 — rate error bars end-to-end** (headline) — Roadmap. TSDB carries
+  windows+quantum+epoch; `rate()`/`increase()` return error bars; correlation
+  ceiling in the viewer. May land on the live path before the archive.
+- **Phase 4 — cross-host clock uncertainty** — Roadmap. NTP offset/frequency/root
+  dispersion as a first-class term → honest cross-host correlation.
+- **Phase 5 — fuller value uncertainty** (histogram percentile bounds, gauge
+  precision) + statistical propagation + MCP confidence — Roadmap.
+- **Open decisions** — interval-vs-statistical propagation math (pin before
+  Phase 3/4); query back-compat for the error-bearing `rate()` return type;
+  archive name + manifest schema; archive PII posture; metriken `next` branch vs
+  hard-fork + no crates.io publish until migration is solid (a real cross-team
+  gate).
+
 ## Tooling / skills
 
 Source: [`document-feature` skill](journal/2026-07-02-document-feature-skill.md).
