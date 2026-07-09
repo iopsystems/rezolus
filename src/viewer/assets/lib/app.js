@@ -19,6 +19,7 @@ import { initTheme } from './ui/theme.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
+import { createSourceRoutes } from './features/source_routes.js';
 import { createGroupComponent, getCachedSectionMeta, buildClientOnlySectionView } from './viewer_core.js';
 import { renderSectionNotes } from './sections/section_notes.js';
 import {
@@ -915,43 +916,24 @@ const initDashboard = (config = {}) => {
             withSharedSections: withCachedSections,
             getDefaultRoute: () => defaultRoute,
         }),
-        // Foreign-source sections. Unlike built-in/service sections these
-        // carry no server-rendered groups — the MetricBrowser (mounted by
-        // SectionContent's `/source/` branch) fetches its own catalog via
-        // ViewerApi.getMetrics and runs per-metric queries client-side.
-        // So there's nothing to loadSection here; just resolve the
-        // activeSection and hand it to Main.
-        '/source/:sourceName': {
-            onmatch(params, requestedPath) {
-                if (m.route.get() === requestedPath) {
-                    return new Promise(function () {});
-                }
-                if (requestedPath !== m.route.get()) {
-                    chartsState.charts.clear();
-                    window.scrollTo(0, 0);
-                }
-                const sectionRoute = `/source/${params.sourceName}`;
-                return {
-                    view() {
-                        const activeSection = getCachedSections().find(
-                            (s) => s.route === sectionRoute,
-                        ) || { name: `source: ${params.sourceName}`, route: sectionRoute };
-                        // Interval isn't strictly required — Chart tolerates
-                        // its absence (QueryExplorer passes none) and the
-                        // query window is derived from metadata. Borrow it
-                        // from any cached section when present.
-                        const anyCached = Object.values(sectionResponseCache)[0];
-                        return m(Main, {
-                            activeSection,
-                            groups: [],
-                            sections: getCachedSections(),
-                            compareMode,
-                            interval: anyCached?.interval,
-                        });
-                    },
-                };
-            },
-        },
+        // Foreign-source ("simple capture") sections + their expanded single
+        // charts. Unlike built-in/service sections these carry no
+        // server-rendered groups — the MetricBrowser fetches its own catalog
+        // and runs per-metric queries client-side — so the chart route
+        // reconstructs one chart from the catalog. See features/source_routes.js.
+        ...createSourceRoutes({
+            sectionResponseCache,
+            ViewerApi,
+            processDashboardData,
+            applyResultToPlot,
+            SingleChartView,
+            TopNav,
+            topNavAttrs,
+            Main,
+            getSections: getCachedSections,
+            getCompareMode: () => compareMode,
+            chartsState,
+        }),
         '/about': {
             render() {
                 return m('div', { style: 'display:flex;align-items:center;justify-content:center;min-height:100vh;padding:2rem' },
