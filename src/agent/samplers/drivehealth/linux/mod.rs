@@ -228,7 +228,17 @@ mod tests {
 
         rt.block_on(async {
             sampler.refresh().await; // dispatches spawn_blocking
-            tokio::time::sleep(Duration::from_secs(2)).await; // let reads finish
+                                     // Reads run on the blocking pool; a full JBOD takes 0.2–2.3 s and the
+                                     // latency swings run to run, so poll (up to ~10 s) rather than a
+                                     // fragile fixed sleep.
+            for _ in 0..40 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if (0..sampler.drives.len()).any(|i| DRIVE_TEMPERATURE.value(i).is_some()) {
+                    break;
+                }
+            }
+            // Let any straggler parallel reads land before we assert.
+            tokio::time::sleep(Duration::from_millis(500)).await;
         });
 
         let set: Vec<(usize, i64)> = (0..sampler.drives.len())
