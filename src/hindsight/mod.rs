@@ -421,7 +421,10 @@ fn perform_dump_to_file(
         return DumpToFileResponse::error("failed to rewind packed file".to_string());
     }
 
-    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+    let mut converter = MsgpackToParquet::with_options(
+        ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
+    )
+    .metadata(
         "sampling_interval_ms".to_string(),
         config.general().interval().as_millis().to_string(),
     );
