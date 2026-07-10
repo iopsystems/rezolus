@@ -33,6 +33,7 @@ pub fn snapshot(
             name,
             value: curr.value,
             metadata,
+            window: None,
         })
     }
 
@@ -50,6 +51,7 @@ pub fn snapshot(
             name,
             value: curr.value,
             metadata,
+            window: None,
         })
     }
 
@@ -97,6 +99,7 @@ pub fn snapshot(
                             name: name.clone(),
                             value,
                             metadata,
+                            window: None,
                         })
                     }
                 }
@@ -129,6 +132,7 @@ pub fn snapshot(
                 name,
                 value,
                 metadata,
+                window: None,
             })
         }
     }

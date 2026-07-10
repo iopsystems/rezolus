@@ -118,11 +118,13 @@ fn create(
                 name,
                 value,
                 metadata,
+                window: None,
             }),
             Some(Value::Gauge(value)) => s.gauges.push(Gauge {
                 name,
                 value,
                 metadata,
+                window: None,
             }),
             Some(Value::CounterGroup(g)) => {
                 if let Some(values) = g.load_counters() {
@@ -144,6 +146,7 @@ fn create(
                             name: format!("{metric_id}x{counter_id}"),
                             value: *value,
                             metadata,
+                            window: g.load_window(counter_id),
                         })
                     }
                 }
@@ -169,6 +172,7 @@ fn create(
                             name: format!("{metric_id}x{gauge_id}"),
                             value: *value,
                             metadata,
+                            window: g.load_window(gauge_id),
                         })
                     }
                 }
@@ -188,6 +192,7 @@ fn create(
                         name,
                         value,
                         metadata,
+                        window: None,
                     })
                 }
             }
@@ -214,6 +219,7 @@ fn create(
                     name,
                     value,
                     metadata,
+                    window: None,
                 });
             }
             ExternalMetricValue::Gauge(value) => {
@@ -221,6 +227,7 @@ fn create(
                     name,
                     value,
                     metadata,
+                    window: None,
                 });
             }
             ExternalMetricValue::Histogram {
@@ -238,6 +245,7 @@ fn create(
                         name,
                         value,
                         metadata,
+                        window: None,
                     });
                 }
             }

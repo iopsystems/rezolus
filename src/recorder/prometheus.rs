@@ -107,6 +107,7 @@ impl PrometheusConverter {
                         name: id,
                         value: v as u64,
                         metadata: self.build_metadata(&sample.metric, &labels),
+                        window: None,
                     });
                 }
                 prometheus_parse::Value::Gauge(v) => {
@@ -118,6 +119,7 @@ impl PrometheusConverter {
                         name: id,
                         value: v as i64,
                         metadata: self.build_metadata(&sample.metric, &labels),
+                        window: None,
                     });
                 }
                 prometheus_parse::Value::Untyped(v) => {
@@ -139,12 +141,14 @@ impl PrometheusConverter {
                             name: id,
                             value: v as u64,
                             metadata,
+                            window: None,
                         });
                     } else {
                         gauges.push(Gauge {
                             name: id,
                             value: v as i64,
                             metadata,
+                            window: None,
                         });
                     }
                 }
@@ -161,6 +165,7 @@ impl PrometheusConverter {
                             name: id,
                             value: h,
                             metadata,
+                            window: None,
                         });
                     }
                 }
@@ -178,6 +183,7 @@ impl PrometheusConverter {
                             name: id,
                             value: quantile.count as i64,
                             metadata: self.build_metadata(&sample.metric, &q_labels),
+                            window: None,
                         });
                     }
                 }
