@@ -31,3 +31,4 @@ merged PRs, and project notes; each is grounded in real commits/PRs.
 | 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Shipped (PR #989) |
 | 2026-07-06 | [Drive health sampler — Phase 1: all-drive temperature (module-free)](2026-07-06-drive-health-sampler.md) | Phase 1 GO — shipped via pass-through ioctls, no module (SATA hw-verified; NVMe fixtures). Phases 2–3 open |
 | 2026-07-08 | [Measurement uncertainty — acquisition windows, multi-timeline plotting, rate error bars](2026-07-08-measurement-uncertainty.md) | Open — vision/intent landed, pre-build. Cross-cutting arc (metriken core, rezolus first consumer); temporal-first; phased |
+| 2026-07-10 | [Measurement uncertainty — Phase 1: observation acquisition windows](2026-07-10-measurement-uncertainty-phase-1.md) | Open — design landed, pre-build. metriken format + drivehealth per-device windows, visible on the snapshot |
