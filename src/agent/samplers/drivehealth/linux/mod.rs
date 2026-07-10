@@ -239,5 +239,23 @@ mod tests {
             println!("  idx {i} = {v} C");
         }
         assert!(!set.is_empty(), "no gauge values populated after refresh");
+
+        // Each populated drive must also carry a non-zero acquisition window.
+        for (i, _) in set.iter().take(5) {
+            let w = DRIVE_TEMPERATURE
+                .load_window(*i)
+                .unwrap_or_else(|| panic!("no window recorded for drive {i}"));
+            println!(
+                "  idx {i} window = [{}, {}] ({} ns)",
+                w.begin_ns,
+                w.end_ns,
+                w.width_ns()
+            );
+            assert!(w.end_ns >= w.begin_ns);
+            assert!(
+                w.width_ns() > 0,
+                "read window should be non-zero for drive {i}"
+            );
+        }
     }
 }
