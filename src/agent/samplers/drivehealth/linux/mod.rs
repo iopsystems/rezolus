@@ -171,8 +171,13 @@ impl Sampler for DriveHealth {
                 .filter(|r| r.temperature_c.is_some())
                 .count();
             for (idx, r) in readings.into_iter().enumerate() {
+                // Bind the window before r.nvme is moved below.
+                let win = r.window;
                 if let Some(celsius) = r.temperature_c {
                     let _ = DRIVE_TEMPERATURE.set(idx, celsius);
+                }
+                if let Some(w) = win {
+                    DRIVE_TEMPERATURE.set_window(idx, w.begin_ns, w.end_ns);
                 }
                 // NVMe thermal-throttle counters (from the same log-page read).
                 if let Some(h) = r.nvme {
@@ -184,6 +189,14 @@ impl Sampler for DriveHealth {
                         .set(idx, h.thermal_mgmt_transitions[0]);
                     let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_2
                         .set(idx, h.thermal_mgmt_transitions[1]);
+                    if let Some(w) = win {
+                        DRIVE_TEMPERATURE_WARNING_TIME.set_window(idx, w.begin_ns, w.end_ns);
+                        DRIVE_TEMPERATURE_CRITICAL_TIME.set_window(idx, w.begin_ns, w.end_ns);
+                        DRIVE_THERMAL_THROTTLE_TIME_1.set_window(idx, w.begin_ns, w.end_ns);
+                        DRIVE_THERMAL_THROTTLE_TIME_2.set_window(idx, w.begin_ns, w.end_ns);
+                        DRIVE_THERMAL_THROTTLE_TRANSITIONS_1.set_window(idx, w.begin_ns, w.end_ns);
+                        DRIVE_THERMAL_THROTTLE_TRANSITIONS_2.set_window(idx, w.begin_ns, w.end_ns);
+                    }
                 }
             }
             debug!("{NAME}: read {ok}/{} drive temperatures", drives.len());
