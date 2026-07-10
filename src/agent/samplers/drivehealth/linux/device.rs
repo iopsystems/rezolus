@@ -261,7 +261,11 @@ mod tests {
         });
         assert_eq!(val, 7);
         assert!(window.end_ns >= window.begin_ns);
-        assert!(window.width_ns() >= 4_000_000, "≥4ms: {}", window.width_ns());
+        assert!(
+            window.width_ns() >= 4_000_000,
+            "≥4ms: {}",
+            window.width_ns()
+        );
     }
 
     #[test]
