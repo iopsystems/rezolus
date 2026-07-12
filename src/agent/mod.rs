@@ -5,6 +5,8 @@ mod exposition;
 mod external_metrics;
 mod metrics;
 pub mod sampler_status;
+#[cfg(target_os = "linux")]
+mod timing;
 mod samplers;
 
 use config::Config;

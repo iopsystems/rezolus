@@ -4,9 +4,9 @@
 //! `/sys/block/sd*`. Each drive carries the `/dev` node its temperature is read
 //! from via a read-only pass-through ioctl ([`super::ata`] / [`super::nvme`]).
 
+use crate::agent::timing::timed;
 use metriken::Window;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriveType {
@@ -115,21 +115,6 @@ pub struct DriveReading {
     pub nvme: Option<super::nvme::NvmeHealth>,
     /// Acquisition window of this device's read (wall begin, wall begin+elapsed).
     pub window: Option<Window>,
-}
-
-/// Run `read` while capturing a wall-clock acquisition window: begin is wall
-/// time before the call; end is begin + monotonic elapsed (immune to an NTP
-/// step during the read).
-fn timed<T>(read: impl FnOnce() -> T) -> (T, Window) {
-    let begin_wall = SystemTime::now();
-    let begin_mono = Instant::now();
-    let out = read();
-    let elapsed_ns = begin_mono.elapsed().as_nanos() as u64;
-    let begin_ns = begin_wall
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
-    (out, Window::new(begin_ns, begin_ns + elapsed_ns))
 }
 
 /// Read one drive via the appropriate read-only pass-through ioctl.
@@ -250,21 +235,6 @@ mod tests {
             drives.len(),
             elapsed,
             elapsed.checked_div(drives.len() as u32).unwrap_or_default()
-        );
-    }
-
-    #[test]
-    fn timed_captures_a_nonzero_window_covering_the_read() {
-        let (val, window) = timed(|| {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            7
-        });
-        assert_eq!(val, 7);
-        assert!(window.end_ns >= window.begin_ns);
-        assert!(
-            window.width_ns() >= 4_000_000,
-            "≥4ms: {}",
-            window.width_ns()
         );
     }
 
