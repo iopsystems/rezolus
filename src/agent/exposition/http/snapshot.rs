@@ -127,54 +127,58 @@ fn create(
                 window: None,
             }),
             Some(Value::CounterGroup(g)) => {
-                if let Some(values) = g.load_counters() {
-                    for (counter_id, value) in values.iter().enumerate() {
-                        if *value == 0 {
-                            continue;
-                        }
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), counter_id.to_string());
-
-                        if let Some(m) = g.load_metadata(counter_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.counters.push(Counter {
-                            name: format!("{metric_id}x{counter_id}"),
-                            value: *value,
-                            metadata,
-                            window: g.load_window(counter_id),
-                        })
+                for counter_id in 0..g.entries() {
+                    // Atomic pair read: value + window under one lock, so a
+                    // concurrent writer can never pair a fresh value with a
+                    // stale window (drivehealth's async tear surface).
+                    let (value, window) = g.load_with_window(counter_id);
+                    let Some(value) = value else { continue };
+                    if value == 0 {
+                        continue;
                     }
+                    let mut metadata = metadata.clone();
+
+                    metadata.insert("id".to_string(), counter_id.to_string());
+
+                    if let Some(m) = g.load_metadata(counter_id) {
+                        for (k, v) in m {
+                            metadata.insert(k, v);
+                        }
+                    }
+
+                    s.counters.push(Counter {
+                        name: format!("{metric_id}x{counter_id}"),
+                        value,
+                        metadata,
+                        window,
+                    })
                 }
             }
             Some(Value::GaugeGroup(g)) => {
-                if let Some(values) = g.load_gauges() {
-                    for (gauge_id, value) in values.iter().enumerate() {
-                        if *value == i64::MIN {
-                            continue;
-                        }
-
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), gauge_id.to_string());
-
-                        if let Some(m) = g.load_metadata(gauge_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.gauges.push(Gauge {
-                            name: format!("{metric_id}x{gauge_id}"),
-                            value: *value,
-                            metadata,
-                            window: g.load_window(gauge_id),
-                        })
+                for gauge_id in 0..g.entries() {
+                    // Atomic pair read (see CounterGroup arm above).
+                    let (value, window) = g.load_with_window(gauge_id);
+                    let Some(value) = value else { continue };
+                    if value == i64::MIN {
+                        continue;
                     }
+
+                    let mut metadata = metadata.clone();
+
+                    metadata.insert("id".to_string(), gauge_id.to_string());
+
+                    if let Some(m) = g.load_metadata(gauge_id) {
+                        for (k, v) in m {
+                            metadata.insert(k, v);
+                        }
+                    }
+
+                    s.gauges.push(Gauge {
+                        name: format!("{metric_id}x{gauge_id}"),
+                        value,
+                        metadata,
+                        window,
+                    })
                 }
             }
             Some(Value::Histogram(h)) => {
