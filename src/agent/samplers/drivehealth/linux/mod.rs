@@ -24,6 +24,7 @@ const NAME: &str = "drivehealth";
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 use crate::agent::*;
+use metriken::WindowedCounterGroup;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -171,31 +172,25 @@ impl Sampler for DriveHealth {
                 .filter(|r| r.temperature_c.is_some())
                 .count();
             for (idx, r) in readings.into_iter().enumerate() {
-                // Bind the window before r.nvme is moved below.
+                // Bind the window before r.nvme is moved below. A valid reading always
+                // carries its acquisition window (device::read_one), so value + window are
+                // written together via the enforced wrapper — the tear surface is gone.
                 let win = r.window;
-                if let Some(celsius) = r.temperature_c {
-                    let _ = DRIVE_TEMPERATURE.set(idx, celsius);
-                }
-                if let Some(w) = win {
-                    DRIVE_TEMPERATURE.set_window(idx, w.begin_ns, w.end_ns);
+                if let (Some(celsius), Some(w)) = (r.temperature_c, win) {
+                    DRIVE_TEMPERATURE.set_with_window(idx, celsius, w);
                 }
                 // NVMe thermal-throttle counters (from the same log-page read).
-                if let Some(h) = r.nvme {
-                    let _ = DRIVE_TEMPERATURE_WARNING_TIME.set(idx, h.warning_temp_time_s);
-                    let _ = DRIVE_TEMPERATURE_CRITICAL_TIME.set(idx, h.critical_temp_time_s);
-                    let _ = DRIVE_THERMAL_THROTTLE_TIME_1.set(idx, h.thermal_mgmt_time_s[0]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TIME_2.set(idx, h.thermal_mgmt_time_s[1]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_1
-                        .set(idx, h.thermal_mgmt_transitions[0]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_2
-                        .set(idx, h.thermal_mgmt_transitions[1]);
-                    if let Some(w) = win {
-                        DRIVE_TEMPERATURE_WARNING_TIME.set_window(idx, w.begin_ns, w.end_ns);
-                        DRIVE_TEMPERATURE_CRITICAL_TIME.set_window(idx, w.begin_ns, w.end_ns);
-                        DRIVE_THERMAL_THROTTLE_TIME_1.set_window(idx, w.begin_ns, w.end_ns);
-                        DRIVE_THERMAL_THROTTLE_TIME_2.set_window(idx, w.begin_ns, w.end_ns);
-                        DRIVE_THERMAL_THROTTLE_TRANSITIONS_1.set_window(idx, w.begin_ns, w.end_ns);
-                        DRIVE_THERMAL_THROTTLE_TRANSITIONS_2.set_window(idx, w.begin_ns, w.end_ns);
+                if let (Some(h), Some(w)) = (r.nvme, win) {
+                    let counters: [(&WindowedCounterGroup, u64); 6] = [
+                        (&DRIVE_TEMPERATURE_WARNING_TIME, h.warning_temp_time_s),
+                        (&DRIVE_TEMPERATURE_CRITICAL_TIME, h.critical_temp_time_s),
+                        (&DRIVE_THERMAL_THROTTLE_TIME_1, h.thermal_mgmt_time_s[0]),
+                        (&DRIVE_THERMAL_THROTTLE_TIME_2, h.thermal_mgmt_time_s[1]),
+                        (&DRIVE_THERMAL_THROTTLE_TRANSITIONS_1, h.thermal_mgmt_transitions[0]),
+                        (&DRIVE_THERMAL_THROTTLE_TRANSITIONS_2, h.thermal_mgmt_transitions[1]),
+                    ];
+                    for (group, value) in counters {
+                        group.set_with_window(idx, value, w);
                     }
                 }
             }
@@ -252,9 +247,8 @@ mod tests {
 
         // Each populated drive must also carry a non-zero acquisition window.
         for (i, _) in set.iter().take(5) {
-            let w = DRIVE_TEMPERATURE
-                .load_window(*i)
-                .unwrap_or_else(|| panic!("no window recorded for drive {i}"));
+            let (_, w) = DRIVE_TEMPERATURE.load_with_window(*i);
+            let w = w.unwrap_or_else(|| panic!("no window recorded for drive {i}"));
             println!(
                 "  idx {i} window = [{}, {}] ({} ns)",
                 w.begin_ns,
