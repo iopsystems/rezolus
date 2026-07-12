@@ -186,8 +186,14 @@ impl Sampler for DriveHealth {
                         (&DRIVE_TEMPERATURE_CRITICAL_TIME, h.critical_temp_time_s),
                         (&DRIVE_THERMAL_THROTTLE_TIME_1, h.thermal_mgmt_time_s[0]),
                         (&DRIVE_THERMAL_THROTTLE_TIME_2, h.thermal_mgmt_time_s[1]),
-                        (&DRIVE_THERMAL_THROTTLE_TRANSITIONS_1, h.thermal_mgmt_transitions[0]),
-                        (&DRIVE_THERMAL_THROTTLE_TRANSITIONS_2, h.thermal_mgmt_transitions[1]),
+                        (
+                            &DRIVE_THERMAL_THROTTLE_TRANSITIONS_1,
+                            h.thermal_mgmt_transitions[0],
+                        ),
+                        (
+                            &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
+                            h.thermal_mgmt_transitions[1],
+                        ),
                     ];
                     for (group, value) in counters {
                         group.set_with_window(idx, value, w);
@@ -261,5 +267,50 @@ mod tests {
                 "read window should be non-zero for drive {i}"
             );
         }
+    }
+
+    /// The real async tear case in miniature: a background writer loops
+    /// `set_with_window` on a windowed gauge group (as drivehealth's
+    /// `spawn_blocking` read does) while a reader loops `load_with_window`. The
+    /// writer links value -> window (begin_ns == value, end_ns == value + 1), so
+    /// a torn read — a value from one write paired with a window from another —
+    /// is caught by the assertions. With the enforced wrapper's single-lock pair
+    /// read/write, this must never fire.
+    #[test]
+    fn concurrent_scrape_never_tears_value_and_window() {
+        use metriken::{Window, WindowedGaugeGroup};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // A single-entry windowed gauge group standing in for DRIVE_TEMPERATURE.
+        let group = WindowedGaugeGroup::new(1);
+        let stop = AtomicBool::new(false);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut k: i64 = 1;
+                while !stop.load(Ordering::Relaxed) {
+                    let kk = k as u64;
+                    group.set_with_window(0, k, Window::new(kk, kk + 1));
+                    k += 1;
+                    if k == i64::MAX {
+                        k = 1;
+                    }
+                }
+            });
+
+            for _ in 0..2_000_000 {
+                let (value, window) = group.load_with_window(0);
+                if let (Some(v), Some(w)) = (value, window) {
+                    let vv = v as u64;
+                    assert_eq!(
+                        w.begin_ns, vv,
+                        "torn read: value {v} paired with stale window {w:?}"
+                    );
+                    assert_eq!(w.end_ns, vv + 1, "torn read: mismatched window end");
+                }
+            }
+
+            stop.store(true, Ordering::Relaxed);
+        });
     }
 }
