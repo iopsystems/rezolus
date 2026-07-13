@@ -1,0 +1,1 @@
+../../../../src/viewer/assets/lib/charts/source_metric.js

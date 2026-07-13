@@ -21,7 +21,7 @@ use metriken_query::{MemoryStore, MetricsSource, ParquetReader};
 
 use super::capture_registry::CaptureId;
 use super::metadata::{
-    build_multinode_systeminfo, compute_file_checksum, extract_parquet_metadata,
+    build_multinode_systeminfo, classify_sources, compute_file_checksum, extract_parquet_metadata,
     extract_service_extension_metadata, regenerate_dashboards, validate_service_extensions,
 };
 use super::report_save;
@@ -361,7 +361,11 @@ pub fn ingest_baseline_from_path(
         let mut service_exts = extract_service_extension_metadata(&temp_path, &state.templates);
         validate_service_extensions(reader_arc.as_ref(), &mut service_exts);
         let service_refs: Vec<_> = service_exts.iter().map(|(s, e)| (s.as_str(), e)).collect();
-        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None, &[])
+        // Classify sources so an uploaded simple-capture parquet gets its
+        // source: section here too — matching CLI load (regenerate_dashboards)
+        // and the WASM viewer, all of which share this classifier.
+        let sources = classify_sources(Some(&temp_path), reader_arc.as_ref(), &service_exts);
+        ::dashboard::dashboard::build_dashboard_context(filesize, &service_refs, None, &sources)
     };
     let (systeminfo, selection, file_meta) = extract_parquet_metadata(&temp_path);
     let file_checksum = compute_file_checksum(&temp_path);
@@ -598,7 +602,8 @@ fn snapshots_to_parquet(
     let reader = Cursor::new(raw);
     let mut output = Vec::new();
     let mut converter = metriken_exposition::MsgpackToParquet::with_options(
-        metriken_exposition::ParquetOptions::new(),
+        metriken_exposition::ParquetOptions::new()
+            .max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
     )
     .metadata("sampling_interval_ms".to_string(), "1000".to_string());
 

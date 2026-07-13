@@ -11,37 +11,13 @@
 // did nothing). The per-metric query is run via `runQuery` (app.js's
 // processDashboardData wrapper) which populates the plot spec in place.
 
-import { buildDefaultQuery } from '../charts/metric_types.js';
+import { specForSourceMetric } from '../charts/source_metric.js';
 import { ViewerApi } from '../viewer_api.js';
 import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
 
-// Build a section-style plot spec for a metric. Carrying `promql_query`
-// (not just opts) is what lets the section pipeline populate data and the
-// scatter Full/Tail controls fetch their spectra. Histograms need
-// opts.subtype so resolveStyle() picks 'scatter'; gauge and counter infer
-// their style from the result shape.
-const specForMetric = (info) => {
-    const opts = {
-        id: `source-metric-${info.name}`,
-        title: info.name,
-        description: info.description || '',
-        type: info.metric_type,
-    };
-    // The section pipeline (buildEffectiveQuery) wraps histograms itself from
-    // opts.type/subtype, so a histogram's promql_query must be the RAW metric —
-    // passing buildDefaultQuery's already-wrapped histogram_quantiles(...) would
-    // double-wrap it (`histogram_quantiles(..., histogram_quantiles(...))`) and
-    // return no data. Counters/gauges are not re-wrapped by the pipeline, so they
-    // carry their buildDefaultQuery form (rate(...) / raw).
-    let promql_query;
-    if (info.metric_type === 'histogram') {
-        opts.subtype = 'percentiles';
-        promql_query = info.name;
-    } else {
-        promql_query = buildDefaultQuery(info);
-    }
-    return { promql_query, opts };
-};
+// Plot-spec construction lives in charts/source_metric.js so this inline render
+// and the /source/:sourceName/chart/:chartId single-chart route derive the SAME
+// spec (and the same opts.id, which is the chart-URL handle).
 
 // The component must keep a stable vnode identity across redraws or Mithril
 // tears it down and remounts it (losing filter/selection/chartsState and
@@ -92,7 +68,7 @@ export function MetricBrowserView(sourceName) {
                     return;
                 }
 
-                const plot = specForMetric(info);
+                const plot = specForSourceMetric(info);
                 const entry = { plot, status: 'loading' };
                 st.selected.set(info.name, entry);
                 m.redraw();
