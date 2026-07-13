@@ -432,7 +432,10 @@ fn convert_to_parquet(
     let output =
         tempfile::tempfile().map_err(|e| format!("failed to create output temp file: {}", e))?;
 
-    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+    let mut converter = MsgpackToParquet::with_options(
+        ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
+    )
+    .metadata(
         "sampling_interval_ms".to_string(),
         interval.as_millis().to_string(),
     );

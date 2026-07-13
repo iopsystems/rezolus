@@ -343,7 +343,10 @@ fn build_parquet_converter(
     ep: &EndpointState,
     prom_converter: &Option<prometheus::PrometheusConverter>,
 ) -> MsgpackToParquet {
-    let mut converter = MsgpackToParquet::with_options(ParquetOptions::new()).metadata(
+    let mut converter = MsgpackToParquet::with_options(
+        ParquetOptions::new().max_batch_size(parquet_metadata::MAX_ROW_GROUP_SIZE),
+    )
+    .metadata(
         "sampling_interval_ms".to_string(),
         config.interval.as_millis().to_string(),
     );

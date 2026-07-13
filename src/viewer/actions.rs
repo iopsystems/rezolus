@@ -602,7 +602,8 @@ fn snapshots_to_parquet(
     let reader = Cursor::new(raw);
     let mut output = Vec::new();
     let mut converter = metriken_exposition::MsgpackToParquet::with_options(
-        metriken_exposition::ParquetOptions::new(),
+        metriken_exposition::ParquetOptions::new()
+            .max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
     )
     .metadata("sampling_interval_ms".to_string(), "1000".to_string());
 

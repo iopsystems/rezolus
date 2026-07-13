@@ -34,9 +34,12 @@ pub const KEY_SELECTION: &str = "selection";
 pub const KEY_DESCRIPTIONS: &str = "descriptions";
 pub const KEY_EVENTS: &str = "events";
 
-/// Matches metriken-exposition's ParquetWriter default; row group sizing
-/// stays consistent with what the recorder produces.
-pub const MAX_ROW_GROUP_SIZE: usize = 50_000;
+/// Row group size for saved reports; stays consistent with what the recorder
+/// produces (`rezolus::parquet_metadata::MAX_ROW_GROUP_SIZE`). Kept smaller
+/// than metriken-exposition's 50k default so the viewer's windowed (zoom)
+/// reads decode far fewer row groups — see that constant for the measured
+/// drill-down/size tradeoff.
+pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 // ── Payload types ────────────────────────────────────────────────────
 
