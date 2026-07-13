@@ -95,7 +95,11 @@ impl AmdInner {
 
             if let (Ok(total), Ok(used)) = (self.rocm.memory_total(id), self.rocm.memory_used(id)) {
                 GPU_MEMORY_USED.set_with_window(id, used as i64, acq.window());
-                GPU_MEMORY_FREE.set_with_window(id, total.saturating_sub(used) as i64, acq.window());
+                GPU_MEMORY_FREE.set_with_window(
+                    id,
+                    total.saturating_sub(used) as i64,
+                    acq.window(),
+                );
             }
 
             /*

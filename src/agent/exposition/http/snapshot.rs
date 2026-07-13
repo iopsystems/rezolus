@@ -281,7 +281,9 @@ mod tests {
             window: Some(win),
         };
         let snap = create(SystemTime::now(), Duration::from_secs(5), vec![ext]);
-        let Snapshot::V2(s) = snap else { panic!("expected V2") };
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
         let c = s
             .counters
             .iter()

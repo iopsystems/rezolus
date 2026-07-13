@@ -134,7 +134,8 @@ pub static BLOCKIO_READ_ERR_IO: WindowedLazyCounter = WindowedLazyCounter::new(C
     description = "Terminal block IO failures",
     metadata = { op = "read", error = "timeout", unit = "operations" }
 )]
-pub static BLOCKIO_READ_ERR_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_READ_ERR_TIMEOUT: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
@@ -148,21 +149,24 @@ pub static BLOCKIO_READ_ERR_NOSPC: WindowedLazyCounter = WindowedLazyCounter::ne
     description = "Terminal block IO failures",
     metadata = { op = "read", error = "target", unit = "operations" }
 )]
-pub static BLOCKIO_READ_ERR_TARGET: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_READ_ERR_TARGET: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "read", error = "protection", unit = "operations" }
 )]
-pub static BLOCKIO_READ_ERR_PROTECTION: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_READ_ERR_PROTECTION: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "read", error = "unsupported", unit = "operations" }
 )]
-pub static BLOCKIO_READ_ERR_UNSUPPORTED: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_READ_ERR_UNSUPPORTED: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
@@ -184,42 +188,48 @@ pub static BLOCKIO_WRITE_ERR_IO: WindowedLazyCounter = WindowedLazyCounter::new(
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "timeout", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_TIMEOUT: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "nospc", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_NOSPC: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_NOSPC: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "target", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_TARGET: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_TARGET: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "protection", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_PROTECTION: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_PROTECTION: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "unsupported", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_UNSUPPORTED: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_UNSUPPORTED: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "write", error = "other", unit = "operations" }
 )]
-pub static BLOCKIO_WRITE_ERR_OTHER: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_WRITE_ERR_OTHER: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 // op = flush
 #[metric(
@@ -234,42 +244,48 @@ pub static BLOCKIO_FLUSH_ERR_IO: WindowedLazyCounter = WindowedLazyCounter::new(
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "timeout", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_TIMEOUT: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "nospc", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_NOSPC: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_NOSPC: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "target", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_TARGET: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_TARGET: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "protection", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_PROTECTION: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_PROTECTION: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "unsupported", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_UNSUPPORTED: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_UNSUPPORTED: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "flush", error = "other", unit = "operations" }
 )]
-pub static BLOCKIO_FLUSH_ERR_OTHER: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_FLUSH_ERR_OTHER: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 // op = discard
 #[metric(
@@ -284,42 +300,48 @@ pub static BLOCKIO_DISCARD_ERR_IO: WindowedLazyCounter = WindowedLazyCounter::ne
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "timeout", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_TIMEOUT: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "nospc", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_NOSPC: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_NOSPC: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "target", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_TARGET: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_TARGET: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "protection", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_PROTECTION: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_PROTECTION: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "unsupported", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_UNSUPPORTED: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_UNSUPPORTED: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
     metadata = { op = "discard", error = "other", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_ERR_OTHER: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_ERR_OTHER: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);
 
 /*
  * blockio_requeues — block layer put a request back on the queue
@@ -354,4 +376,5 @@ pub static BLOCKIO_FLUSH_REQUEUE: WindowedLazyCounter = WindowedLazyCounter::new
     description = "Block IO requests put back on the queue for retry",
     metadata = { op = "discard", unit = "operations" }
 )]
-pub static BLOCKIO_DISCARD_REQUEUE: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static BLOCKIO_DISCARD_REQUEUE: WindowedLazyCounter =
+    WindowedLazyCounter::new(Counter::default);

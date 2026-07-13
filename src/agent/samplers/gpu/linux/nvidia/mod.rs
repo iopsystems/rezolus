@@ -191,7 +191,11 @@ impl NvidiaInner {
 
                 if let Ok(utilization) = device.utilization_rates() {
                     GPU_UTILIZATION.set_with_window(id, utilization.gpu as i64, acq.window());
-                    GPU_MEMORY_UTILIZATION.set_with_window(id, utilization.memory as i64, acq.window());
+                    GPU_MEMORY_UTILIZATION.set_with_window(
+                        id,
+                        utilization.memory as i64,
+                        acq.window(),
+                    );
                 }
 
                 /*
@@ -228,25 +232,53 @@ impl NvidiaInner {
                                 for result in results.into_iter().flatten() {
                                     match result.metric_id {
                                         GpmMetricId::SmUtil => {
-                                            GPU_SM_UTILIZATION.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_SM_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::SmOccupancy => {
-                                            GPU_SM_OCCUPANCY.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_SM_OCCUPANCY.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::DramBwUtil => {
-                                            GPU_DRAM_BW_UTILIZATION.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_DRAM_BW_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::AnyTensorUtil => {
-                                            GPU_TENSOR_UTILIZATION.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_TENSOR_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::HmmaTensorUtil => {
-                                            GPU_TENSOR_UTILIZATION_HMMA.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_TENSOR_UTILIZATION_HMMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::ImmaTensorUtil => {
-                                            GPU_TENSOR_UTILIZATION_IMMA.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_TENSOR_UTILIZATION_IMMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::DfmaTensorUtil => {
-                                            GPU_TENSOR_UTILIZATION_DFMA.set_with_window(id, result.value as i64, acq.window());
+                                            GPU_TENSOR_UTILIZATION_DFMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         _ => {}
                                     }
