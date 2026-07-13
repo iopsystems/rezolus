@@ -57,11 +57,17 @@ impl ExternalMetricsStore {
             return false;
         }
 
+        let ingest_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+
         let metric = ExternalMetric {
             name,
             labels,
             value,
             last_updated: Instant::now(),
+            window: Some(metriken::Window::new(ingest_ns, ingest_ns)),
         };
 
         metrics.insert(key, metric);
@@ -263,6 +269,20 @@ mod tests {
         assert_eq!(stats.received, 2);
         assert_eq!(stats.parse_errors, 1);
         assert_eq!(stats.expired, 0);
+    }
+
+    #[test]
+    fn upsert_stamps_ingestion_window() {
+        let store = make_store(1000);
+        assert!(store.upsert(
+            "m".to_string(),
+            HashMap::new(),
+            ExternalMetricValue::Counter(1),
+        ));
+        let active = store.get_active();
+        let w = active[0].window.expect("ingestion window recorded");
+        assert!(w.end_ns >= w.begin_ns);
+        assert!(w.begin_ns > 0, "wall-clock ingestion time recorded");
     }
 
     #[test]

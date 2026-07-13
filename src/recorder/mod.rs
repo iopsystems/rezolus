@@ -674,7 +674,7 @@ pub fn run(config: RecordingConfig) {
                             let bytes = if let Some(ref mut conv) = ew.converter {
                                 // Prometheus: parse text → snapshot → msgpack
                                 let text = String::from_utf8_lossy(&body);
-                                let snapshot = conv.convert(&text);
+                                let snapshot = conv.convert(&text, now_ns);
                                 match rmp_serde::encode::to_vec(&snapshot) {
                                     Ok(b) => b,
                                     Err(e) => {
