@@ -1,0 +1,148 @@
+// Render a decoded display-mode boxplot series (see data.js
+// `decodeDisplayBinary`) as echarts series: a robust median line, plus two
+// nested filled bands — the inner `[lo,hi]` typical-spread band and the outer
+// `[min,max]` extremes band. The outer band is what keeps a decimated spike
+// visible; the median line does not chase it.
+//
+// Bands use the standard echarts "stacked area" idiom: an invisible baseline
+// line at the lower bound, then a line carrying (upper - lower) stacked on top
+// whose `areaStyle` fills the gap. No `sampling` — the data is already
+// decimated server-side, so every point should render.
+
+const zipMs = (t, col) => {
+    const n = t.length;
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = [t[i] * 1000, col[i]]; // s -> ms
+    return out;
+};
+
+const zipDiffMs = (t, base, top) => {
+    const n = t.length;
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = [t[i] * 1000, top[i] - base[i]];
+    return out;
+};
+
+// Distinct colors per series. Band fills are the series color at low opacity
+// (applied by echarts via areaStyle.opacity, so any CSS color works).
+const PALETTE = ['#4e79a7', '#e15759', '#59a14f', '#f28e2b', '#76b7b2', '#af7aa1', '#edc948', '#ff9da7'];
+
+// Build the echarts series array for one decoded boxplot series.
+// `s`: { t, min, lo, median, hi, max } (arrays / Float64Arrays).
+//
+// `opts.stackId` MUST be unique per series in a chart — echarts stacks every
+// series sharing a stack string, so two series with the same name (e.g. a
+// per-CPU counter, 12 series all named `cpu_cycles`) would otherwise sum into
+// one garbled band. Default derives from the name, which is only safe for a
+// single-series chart; multi-series callers pass a unique id (the index).
+export function buildBoxplotSeries(s, opts = {}) {
+    const {
+        name = s.metric?.__name__ || 'series',
+        stackId = name,
+        lineColor = PALETTE[0],
+        // Band fills are the SERIES color at these opacities. We let echarts
+        // apply the opacity to `lineColor` directly rather than baking an rgba,
+        // because `lineColor` is often a CSS-var-resolved value (rgb()/hsl()),
+        // not a #hex — so hand-parsing it produced a broken, near-invisible
+        // fill that didn't match the line.
+        innerOpacity = 0.45,
+        outerOpacity = 0.28,
+        // Percentile charts want just the min/max envelope + median (the inner
+        // p25/p75 band is redundant there and adds clutter across 4-5 series).
+        outerOnly = false,
+        // Multi-series line charts draw their own median lines (with gap/clamp/
+        // step handling) and only want the band from here — skip the median.
+        noMedian = false,
+    } = opts;
+
+    // Invisible baseline line that only establishes the stack floor. Hidden
+    // from the tooltip so only the median row shows.
+    const base = (data, stack) => ({
+        type: 'line',
+        data,
+        stack,
+        symbol: 'none',
+        silent: true,
+        tooltip: { show: false },
+        lineStyle: { opacity: 0 },
+        z: 1,
+    });
+    // Line carrying (upper - lower); its areaStyle fills from the stack floor,
+    // in the series color at `opacity`.
+    const fill = (data, stack, opacity) => ({
+        type: 'line',
+        data,
+        stack,
+        symbol: 'none',
+        silent: true,
+        tooltip: { show: false },
+        lineStyle: { opacity: 0 },
+        areaStyle: { color: lineColor, opacity },
+        z: 1,
+    });
+
+    const out = [
+        // outer extremes band [min, max] — the spike envelope
+        base(zipMs(s.t, s.min), `${stackId} outer`),
+        fill(zipDiffMs(s.t, s.min, s.max), `${stackId} outer`, outerOpacity),
+    ];
+    if (!outerOnly) {
+        // inner typical-spread band [lo, hi]
+        out.push(
+            base(zipMs(s.t, s.lo), `${stackId} inner`),
+            fill(zipDiffMs(s.t, s.lo, s.hi), `${stackId} inner`, innerOpacity),
+        );
+    }
+    // robust median line on top (skipped when the caller draws its own line)
+    if (!noMedian) {
+        out.push({
+            name,
+            type: 'line',
+            data: zipMs(s.t, s.median),
+            symbol: 'none',
+            lineStyle: { color: lineColor, width: 1.5 },
+            emphasis: { focus: 'series' },
+            z: 3,
+        });
+    }
+    return out;
+}
+
+// Label a series from its distinguishing labels (drop __name__ and the noisy
+// endpoint/source), e.g. `cpu_cycles{id=0}`, for a readable legend.
+const seriesLabel = (metric, i) => {
+    const name = metric?.__name__ || `series ${i}`;
+    const rest = Object.entries(metric || {})
+        .filter(([k]) => k !== '__name__' && k !== 'endpoint' && k !== 'source')
+        .map(([k, v]) => `${k}=${v}`)
+        .join(',');
+    return rest ? `${name}{${rest}}` : name;
+};
+
+// Assemble a full echarts option rendering every series in a decoded display
+// response as boxplot bands. Each series gets a UNIQUE stack id (index) and
+// its own color, so multi-series queries (e.g. a per-CPU counter) render as
+// distinct boxplots instead of collapsing into one stack.
+export function boxplotChartOption(decoded, opts = {}) {
+    const decodedSeries = decoded.series || [];
+    const series = decodedSeries.flatMap((s, i) =>
+        buildBoxplotSeries(s, {
+            name: seriesLabel(s.metric, i),
+            stackId: `s${i}`,
+            lineColor: PALETTE[i % PALETTE.length],
+            ...opts,
+        }),
+    );
+    const multi = decodedSeries.length > 1;
+    return {
+        animation: false,
+        tooltip: { trigger: 'axis' },
+        legend: multi
+            ? { type: 'scroll', top: 0, data: decodedSeries.map((s, i) => seriesLabel(s.metric, i)) }
+            : undefined,
+        grid: { left: 64, right: 20, top: multi ? 34 : 16, bottom: 40 },
+        xAxis: { type: 'time' },
+        yAxis: { type: 'value', scale: true },
+        series,
+    };
+}

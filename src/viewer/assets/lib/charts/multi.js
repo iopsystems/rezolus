@@ -16,6 +16,7 @@ import {
     FONTS,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
+import { buildBoxplotSeries } from './boxplot.js';
 
 /**
  * Configures the Chart based on Chart.spec
@@ -117,6 +118,44 @@ export function configureMultiSeriesChart(chart) {
         series.push(otherSeries);
     }
 
+    // Display mode: draw the outer min/max envelope band behind each series so
+    // decimated spikes aren't smoothed away by the median line (multi charts draw
+    // their own lines above, so noMedian). Reuses the boxplot columns already
+    // fetched (chart.spec.boxplot), clamped to range like the lines. z=0 keeps
+    // the bands behind every line (which are z≥1). The band fills carry no name,
+    // so they stay out of the legend.
+    const boxcols = (Array.isArray(chart.spec.boxplot) && chart.spec.boxplot.length === lineCount)
+        ? chart.spec.boxplot
+        : null;
+    if (boxcols && chart.spec.boxplotDecimated) {
+        const clampCol = (arr) => {
+            if (!range || (range.max == null && range.min == null)) return arr;
+            const out = new Float64Array(arr.length);
+            for (let i = 0; i < arr.length; i++) {
+                let v = arr[i];
+                if (range.max != null && v > range.max) v = range.max;
+                else if (range.min != null && v < range.min) v = range.min;
+                out[i] = v;
+            }
+            return out;
+        };
+        for (let k = 0; k < lineCount; k++) {
+            const s = boxcols[k];
+            if (!s || !s.t || s.t.length === 0) continue;
+            const band = buildBoxplotSeries(
+                { ...s, min: clampCol(s.min), max: clampCol(s.max) },
+                {
+                    stackId: `mb${k}`,
+                    lineColor: cgroupColors[k],
+                    outerOnly: true,
+                    noMedian: true,
+                },
+            );
+            for (const bs of band) bs.z = 0;
+            series.push(...band);
+        }
+    }
+
     const option = {
         ...baseOption,
         grid: { ...baseOption.grid, top: String(CHART_GRID_TOP_WITH_LEGEND) },
@@ -128,7 +167,9 @@ export function configureMultiSeriesChart(chart) {
             itemWidth: 10,
             itemHeight: 10,
             itemGap: 12,
-            data: series.map(s => s.name),
+            // Only the named line series belong in the legend — the band fills
+            // added below carry no name.
+            data: series.map(s => s.name).filter(Boolean),
             textStyle: {
                 color: COLORS.fgSecondary,
                 ...FONTS.legend,

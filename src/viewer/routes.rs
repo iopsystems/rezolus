@@ -28,7 +28,10 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use std::sync::atomic::Ordering;
 
-use metriken_query::{QueryError, QueryResult};
+use metriken_query::{
+    DisplayOptions, DisplayResult, DisplaySeries, HistogramHeatmapResult, QueryError, QueryResult,
+    Reducer,
+};
 
 use super::actions;
 use super::capture_registry::{self, CaptureId};
@@ -322,6 +325,16 @@ struct RangeQueryParams {
     step: f64,
     #[serde(default)]
     capture: Option<String>,
+    /// `display` selects the decimated boxplot response (binary). Absent =
+    /// today's PromQL-compatible JSON matrix.
+    #[serde(default)]
+    format: Option<String>,
+    /// Point budget per series for display mode. Default 500.
+    #[serde(default)]
+    points: Option<usize>,
+    /// Inner-band quantiles as `"lo,hi"` (e.g. `"0.25,0.75"`). Default IQR.
+    #[serde(default)]
+    band: Option<String>,
 }
 
 /// Run `f` against the resolved capture's data source; on a missing
@@ -355,10 +368,163 @@ async fn instant_query(
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<QueryResult>> {
+) -> Response {
+    if params.format.as_deref() == Some("display") {
+        return range_query_display(&state, &params);
+    }
     run_query(&state, params.capture.as_deref(), |data| {
         data.query_range(&params.query, params.start, params.end, params.step)
     })
+    .into_response()
+}
+
+/// Parse an `"lo,hi"` band argument, falling back to the interquartile range.
+fn parse_band(s: Option<&str>) -> [f64; 2] {
+    s.and_then(|s| {
+        let (a, b) = s.split_once(',')?;
+        Some([a.trim().parse().ok()?, b.trim().parse().ok()?])
+    })
+    .unwrap_or([0.25, 0.75])
+}
+
+/// Display-mode range query: decimate to per-bucket boxplots and return the
+/// binary columnar wire format (see `encode_display_binary`). Non-`Series`
+/// results (heatmap/scalar/vector) fall back to JSON.
+fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response {
+    let capture = CaptureId::parse_opt(params.capture.as_deref());
+    let Some(data) = state.captures.get(capture) else {
+        return ApiResponse::<serde_json::Value>::err(
+            format!("capture '{capture:?}' not attached"),
+            "capture_not_found",
+        )
+        .into_response();
+    };
+    let opts = DisplayOptions {
+        budget: params.points.unwrap_or(500),
+        reducer: Reducer::Boxplot,
+        band: parse_band(params.band.as_deref()),
+    };
+    match data.as_ref().query_range_display(
+        &params.query,
+        params.start,
+        params.end,
+        params.step,
+        &opts,
+    ) {
+        Ok(DisplayResult::Series { result, budget }) => encode_display_binary(&result, budget),
+        Ok(DisplayResult::HistogramHeatmap { result }) => encode_heatmap_binary(&result),
+        Ok(other) => ApiResponse::ok(other).into_response(),
+        Err(e) => {
+            ApiResponse::<serde_json::Value>::err(e.to_string(), state::promql_error_type(&e))
+                .into_response()
+        }
+    }
+}
+
+/// Encode display `Series` as a compact binary body:
+///
+/// ```text
+/// [u32 LE headerLen][JSON header][pad to 8B][f64 LE column blobs]
+/// ```
+///
+/// The JSON header carries per-series labels + provenance + point count `n`;
+/// the blob is, per series in order, the six columns `t,min,lo,median,hi,max`
+/// each `n` little-endian f64. Padding keeps the first f64 8-byte aligned so
+/// the client can view columns as `Float64Array`s with zero copies.
+fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Response {
+    let header = serde_json::json!({
+        "resultType": "series",
+        "budget": budget,
+        "series": series
+            .iter()
+            .map(|s| serde_json::json!({
+                "metric": s.metric,
+                "nativeInterval": s.native_interval,
+                "rawPoints": s.raw_points,
+                "reducer": s.reducer,
+                "band": s.band,
+                "decimated": s.decimated,
+                "n": s.points.len(),
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let header_bytes = serde_json::to_vec(&header).unwrap_or_default();
+    let total_floats: usize = series.iter().map(|s| s.points.len() * 6).sum();
+
+    let mut buf = Vec::with_capacity(4 + header_bytes.len() + 8 + total_floats * 8);
+    buf.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&header_bytes);
+    while buf.len() % 8 != 0 {
+        buf.push(0);
+    }
+    for s in series {
+        for p in &s.points {
+            buf.extend_from_slice(&p.t.to_le_bytes());
+        }
+        for p in &s.points {
+            buf.extend_from_slice(&p.min.to_le_bytes());
+        }
+        for p in &s.points {
+            buf.extend_from_slice(&p.lo.to_le_bytes());
+        }
+        for p in &s.points {
+            buf.extend_from_slice(&p.median.to_le_bytes());
+        }
+        for p in &s.points {
+            buf.extend_from_slice(&p.hi.to_le_bytes());
+        }
+        for p in &s.points {
+            buf.extend_from_slice(&p.max.to_le_bytes());
+        }
+    }
+
+    ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()
+}
+
+/// Encode a histogram bucket heatmap as a compact binary body:
+///
+/// ```text
+/// [u32 LE headerLen][JSON header][pad to 8B]
+/// [f64 timestamps][f64 counts][u32 timeIdx][u32 bucketIdx]
+/// ```
+///
+/// The JSON header carries `bucketBounds`, `minValue`/`maxValue`, and the two
+/// counts (`nTimestamps`, `nTriples`). Ordering the f64 columns first keeps
+/// every column naturally aligned so the client views them as typed arrays with
+/// zero copies — no JSON parse of the (potentially large) triples array.
+fn encode_heatmap_binary(hm: &HistogramHeatmapResult) -> Response {
+    let n_ts = hm.timestamps.len();
+    let n_tr = hm.data.len();
+    let header = serde_json::json!({
+        "resultType": "histogram_heatmap",
+        "bucketBounds": hm.bucket_bounds,
+        "minValue": hm.min_value,
+        "maxValue": hm.max_value,
+        "nTimestamps": n_ts,
+        "nTriples": n_tr,
+    });
+    let header_bytes = serde_json::to_vec(&header).unwrap_or_default();
+
+    let mut buf = Vec::with_capacity(4 + header_bytes.len() + 8 + n_ts * 8 + n_tr * 16);
+    buf.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&header_bytes);
+    while buf.len() % 8 != 0 {
+        buf.push(0);
+    }
+    for t in &hm.timestamps {
+        buf.extend_from_slice(&t.to_le_bytes());
+    }
+    for (_, _, count) in &hm.data {
+        buf.extend_from_slice(&count.to_le_bytes());
+    }
+    for (time_idx, _, _) in &hm.data {
+        buf.extend_from_slice(&(*time_idx as u32).to_le_bytes());
+    }
+    for (_, bucket_idx, _) in &hm.data {
+        buf.extend_from_slice(&(*bucket_idx as u32).to_le_bytes());
+    }
+
+    ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()
 }
 
 async fn label_names(State(_state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<String>>> {

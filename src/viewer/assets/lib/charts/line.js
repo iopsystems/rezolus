@@ -19,6 +19,7 @@ import {
     COLORS,
 } from './base.js';
 import { FONTS } from './util/fonts.js';
+import { buildBoxplotSeries } from './boxplot.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -73,7 +74,20 @@ export function configureLineChart(chart) {
         seriesList[0].timeData,
     );
 
-    const echartsSeries = seriesList.flatMap((s) => {
+    // Display mode: when the plot carries decimated boxplot columns, render
+    // median line + inner/outer bands instead of a plain line. (Multi-series
+    // 'multi'-style plots route to multi.js and render median lines only for
+    // now; bands there are a follow-up.)
+    const boxplotCols = Array.isArray(chart.spec.boxplot) && chart.spec.boxplot.length
+        ? chart.spec.boxplot
+        : null;
+    const echartsSeries = boxplotCols
+        ? boxplotCols.flatMap((s, i) => buildBoxplotSeries(s, {
+            name: seriesList[i]?.name ?? (s.metric?.__name__ || `series ${i + 1}`),
+            stackId: `bp${i}`,
+            lineColor: seriesList[i]?.color || COLORS.accent,
+        }))
+        : seriesList.flatMap((s) => {
         const zippedRaw = s.timeData.map((t, i) => {
             const [v, raw] = clampToRange(s.valueData[i], range);
             return [t * 1000, v, raw];

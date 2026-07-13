@@ -389,6 +389,23 @@ export function getDataZoomConfig(minZoomSpan) {
     }];
 }
 
+// True when `option.series` has the same shape (count + per-index series type)
+// as what's currently rendered on the echart. Used to decide whether a zoom
+// drill-down refetch can be applied as an in-place merge (structure unchanged →
+// echarts diffs the data, no flash) or must rebuild (structure changed, e.g. a
+// percentile chart flipping between decimated bands (line) and native dots
+// (scatter) — a merge there would leave stale series overlaid).
+function sameSeriesShape(chart, option) {
+    if (!chart.echart) return false;
+    const cur = chart.echart.getOption()?.series;
+    const next = option?.series;
+    if (!Array.isArray(cur) || !Array.isArray(next) || cur.length !== next.length) return false;
+    for (let i = 0; i < next.length; i++) {
+        if ((cur[i]?.type || '') !== (next[i]?.type || '')) return false;
+    }
+    return true;
+}
+
 /**
  * Apply a chart option with notMerge and re-enable drag-to-zoom.
  *
@@ -405,9 +422,26 @@ export function getDataZoomConfig(minZoomSpan) {
  */
 export function applyChartOption(chart, option) {
     chart.domNode.classList.remove('no-data');
+    // Zoom drill-down refine: while a drill-down refetch is in flight
+    // (chartsState._zoomRefine), swap in the refetched window's data via a MERGE
+    // update so the echart isn't torn down and rebuilt — the chart sharpens in
+    // place with no flash. Gated entirely on the option so it generalizes across
+    // styles (line boxplots, percentile bands, bucket/quantile heatmaps):
+    //   • the option must carry a dataZoom (so we can reset the window; excludes
+    //     `multi`, which has none — a merge there would keep the drag selection);
+    //   • the series shape must match what's rendered (excludes a scatter that
+    //     flipped band↔dots, which would leave stale series overlaid).
+    // A merge keeps the prior dataZoom (the drag selection), so force it to the
+    // new window's full extent; the refetched data spans exactly that window.
+    const merge = !!(chart.chartsState && chart.chartsState._zoomRefine)
+        && Array.isArray(option.dataZoom)
+        && sameSeriesShape(chart, option);
+    if (merge) {
+        option = { ...option, dataZoom: option.dataZoom.map((dz) => ({ ...dz, start: 0, end: 100 })) };
+    }
     chart._suppressZoomEvents = true;
     try {
-        chart.echart.setOption(option, { notMerge: true });
+        chart.echart.setOption(option, { notMerge: !merge });
     } finally {
         chart._suppressZoomEvents = false;
     }
