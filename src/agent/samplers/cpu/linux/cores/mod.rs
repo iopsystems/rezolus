@@ -37,7 +37,11 @@ impl Sampler for Cores {
     }
 
     async fn refresh(&self) {
+        use crate::agent::timing::Acquisition;
+
         let mut file = self.file.lock().await;
+
+        let acq = Acquisition::begin();
 
         file.rewind().await.unwrap();
 
@@ -46,6 +50,8 @@ impl Sampler for Cores {
         let mut raw = String::new();
 
         let _ = file.read_to_string(&mut raw).await.unwrap();
+
+        let window = acq.window();
 
         for range in raw.trim().split(',') {
             let mut parts = range.split('-');
@@ -69,6 +75,6 @@ impl Sampler for Cores {
             }
         }
 
-        let _ = CPU_CORES.set(online as _);
+        CPU_CORES.set_with_window(online as _, window);
     }
 }

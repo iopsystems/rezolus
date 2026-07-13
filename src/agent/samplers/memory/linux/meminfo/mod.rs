@@ -2,7 +2,7 @@ const NAME: &str = "memory_meminfo";
 
 use crate::agent::*;
 
-use metriken::LazyGauge;
+use metriken::WindowedLazyGauge as LazyGauge;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
@@ -72,11 +72,17 @@ impl MeminfoInner {
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
+        use crate::agent::timing::Acquisition;
+
+        let acq = Acquisition::begin();
+
         self.file.rewind().await?;
 
         self.data.clear();
 
         self.file.read_to_string(&mut self.data).await?;
+
+        let window = acq.window();
 
         let lines = self.data.lines();
 
@@ -88,7 +94,7 @@ impl MeminfoInner {
 
             if let Some(gauge) = self.gauges.get_mut(*parts.first().unwrap()) {
                 if let Some(Ok(v)) = parts.get(1).map(|v| v.parse::<i64>()) {
-                    gauge.set(v * KIBIBYTES as i64);
+                    gauge.set_with_window(v * KIBIBYTES as i64, window);
                 }
             }
         }
