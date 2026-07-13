@@ -92,6 +92,20 @@ const ViewerApi = {
         return JSON.parse(registry.query_range(captureId, query, start, end, step));
     },
 
+    // Display-mode range query. The WASM backend returns the SAME compact binary
+    // body as the server (both via dashboard::display_wire), so the shared
+    // frontend decodes it identically. In-process, so there's no network to
+    // abort — `signal`/`captureId` opts match the server adapter's shape but the
+    // registry call is synchronous. A non-series result throws, so the caller
+    // falls back to the JSON query path exactly like the server adapter.
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline' } = {}) {
+        ensureAttached(captureId);
+        const bytes = registry.query_range_display(captureId, query, start, end, step, points, band || '');
+        // wasm-bindgen hands back a fresh Uint8Array; hand up a plain ArrayBuffer
+        // so decodeDisplayBinary / decodeHeatmapBinary can view it zero-copy.
+        return { buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    },
+
     async getInfo(captureId = 'baseline') {
         ensureAttached(captureId);
         return JSON.parse(registry.info(captureId));
