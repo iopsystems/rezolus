@@ -92,7 +92,7 @@ fn create(
     };
 
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
-        let value = metric.value();
+        let (value, stored_window) = metric.value_with_window();
 
         if value.is_none() {
             continue;
@@ -118,13 +118,13 @@ fn create(
                 name,
                 value,
                 metadata,
-                window: None,
+                window: stored_window,
             }),
             Some(Value::Gauge(value)) => s.gauges.push(Gauge {
                 name,
                 value,
                 metadata,
-                window: None,
+                window: stored_window,
             }),
             Some(Value::CounterGroup(g)) => {
                 for counter_id in 0..g.entries() {
@@ -196,7 +196,7 @@ fn create(
                         name,
                         value,
                         metadata,
-                        window: None,
+                        window: stored_window,
                     })
                 }
             }
@@ -205,6 +205,10 @@ fn create(
     }
 
     for metric in external_metrics.into_iter() {
+        // Capture the window before metric fields are consumed by the moves below.
+        // Window is Copy so this is free; precedence level 2 (external source stamp).
+        let window = metric.window;
+
         let mut metadata: HashMap<String, String> = [
             ("metric".to_string(), metric.name.clone()),
             ("source".to_string(), "external".to_string()),
@@ -223,7 +227,7 @@ fn create(
                     name,
                     value,
                     metadata,
-                    window: None,
+                    window,
                 });
             }
             ExternalMetricValue::Gauge(value) => {
@@ -231,7 +235,7 @@ fn create(
                     name,
                     value,
                     metadata,
-                    window: None,
+                    window,
                 });
             }
             ExternalMetricValue::Histogram {
@@ -249,7 +253,7 @@ fn create(
                         name,
                         value,
                         metadata,
-                        window: None,
+                        window,
                     });
                 }
             }
@@ -257,4 +261,32 @@ fn create(
     }
 
     Snapshot::V2(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue};
+    use metriken::Window;
+    use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn external_metric_carries_its_own_window_not_fleet_time() {
+        let win = Window::new(1_000, 2_000);
+        let ext = ExternalMetric {
+            name: "ext_counter".into(),
+            labels: Default::default(),
+            value: ExternalMetricValue::Counter(7),
+            last_updated: std::time::Instant::now(),
+            window: Some(win),
+        };
+        let snap = create(SystemTime::now(), Duration::from_secs(5), vec![ext]);
+        let Snapshot::V2(s) = snap else { panic!("expected V2") };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| c.metadata.get("metric").map(String::as_str) == Some("ext_counter"))
+            .expect("external counter present");
+        assert_eq!(c.window, Some(win), "external window preserved, not fleet");
+    }
 }

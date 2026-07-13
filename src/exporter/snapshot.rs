@@ -33,7 +33,7 @@ pub fn snapshot(
             name,
             value: curr.value,
             metadata,
-            window: None,
+            window: curr.window,
         })
     }
 
@@ -51,7 +51,7 @@ pub fn snapshot(
             name,
             value: curr.value,
             metadata,
-            window: None,
+            window: curr.window,
         })
     }
 
@@ -99,6 +99,9 @@ pub fn snapshot(
                             name: name.clone(),
                             value,
                             metadata,
+                            // Percentile summaries are computed from the delta between two
+                            // snapshots, not a direct metric read — no single acquisition
+                            // window applies.
                             window: None,
                         })
                     }
@@ -132,7 +135,7 @@ pub fn snapshot(
                 name,
                 value,
                 metadata,
-                window: None,
+                window: curr.window,
             })
         }
     }
