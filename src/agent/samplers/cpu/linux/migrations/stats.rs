@@ -29,14 +29,14 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "The number of process CPU migrations",
     metadata = { direction = "from" }
 )]
-pub static CPU_MIGRATIONS_FROM: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_MIGRATIONS_FROM: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_migrations",
     description = "The number of process CPU migrations",
     metadata = { direction = "to" }
 )]
-pub static CPU_MIGRATIONS_TO: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static CPU_MIGRATIONS_TO: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cgroup_cpu_migrations",

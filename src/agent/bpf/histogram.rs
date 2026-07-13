@@ -65,6 +65,8 @@ impl<'a> Histogram<'a> {
 
     pub fn refresh(&mut self) {
         let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
-        let _ = self.histogram.update_from(&buckets[0..self.buckets]);
+        let n = self.buckets;
+        let (slice, window) = crate::agent::timing::timed(|| &buckets[0..n]);
+        let _ = self.histogram.set_with_window(slice, window);
     }
 }

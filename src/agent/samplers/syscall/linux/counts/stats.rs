@@ -29,112 +29,112 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "other" }
 )]
-pub static SYSCALL_OTHER: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_OTHER: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "read" }
 )]
-pub static SYSCALL_READ: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_READ: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "write" }
 )]
-pub static SYSCALL_WRITE: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_WRITE: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "poll" }
 )]
-pub static SYSCALL_POLL: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_POLL: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "lock" }
 )]
-pub static SYSCALL_LOCK: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_LOCK: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "time" }
 )]
-pub static SYSCALL_TIME: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_TIME: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "sleep" }
 )]
-pub static SYSCALL_SLEEP: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_SLEEP: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "socket" }
 )]
-pub static SYSCALL_SOCKET: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_SOCKET: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "yield" }
 )]
-pub static SYSCALL_YIELD: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_YIELD: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "filesystem" }
 )]
-pub static SYSCALL_FILESYSTEM: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_FILESYSTEM: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "memory" }
 )]
-pub static SYSCALL_MEMORY: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_MEMORY: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "process" }
 )]
-pub static SYSCALL_PROCESS: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_PROCESS: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "query" }
 )]
-pub static SYSCALL_QUERY: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_QUERY: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "ipc" }
 )]
-pub static SYSCALL_IPC: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_IPC: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "timer" }
 )]
-pub static SYSCALL_TIMER: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_TIMER: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "event" }
 )]
-pub static SYSCALL_EVENT: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_EVENT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 /*
  * per-cgroup

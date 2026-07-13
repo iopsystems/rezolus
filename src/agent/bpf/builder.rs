@@ -5,7 +5,9 @@ use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
-use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
+use metriken::{
+    CounterGroup, LazyCounter, RwLockHistogram, WindowedCounterGroup, WindowedLazyCounter,
+};
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;
@@ -221,10 +223,10 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
     prog_stats: BpfProgStats,
-    counters: Vec<(&'static str, Vec<&'static LazyCounter>)>,
+    counters: Vec<(&'static str, Vec<&'static WindowedLazyCounter>)>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
-    cpu_counters: Vec<(&'static str, Vec<&'static CounterGroup>)>,
+    cpu_counters: Vec<(&'static str, Vec<&'static WindowedCounterGroup>)>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
     #[allow(clippy::type_complexity)]
@@ -697,7 +699,11 @@ where
     /// map name and the `counters` are a set of userspace lazy counters which
     /// must match the ordering used in the BPF map. See `Counters` for more
     /// details on the assumptions and requirements.
-    pub fn counters(mut self, name: &'static str, counters: Vec<&'static LazyCounter>) -> Self {
+    pub fn counters(
+        mut self,
+        name: &'static str,
+        counters: Vec<&'static WindowedLazyCounter>,
+    ) -> Self {
         self.counters.push((name, counters));
         self
     }
@@ -726,7 +732,7 @@ where
     pub fn cpu_counters(
         mut self,
         name: &'static str,
-        counters: Vec<&'static CounterGroup>,
+        counters: Vec<&'static WindowedCounterGroup>,
     ) -> Self {
         self.cpu_counters.push((name, counters));
         self

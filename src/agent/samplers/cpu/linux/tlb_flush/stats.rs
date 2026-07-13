@@ -29,42 +29,42 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "The number of tlb_flush events",
     metadata = { reason = "task_switch" }
 )]
-pub static TLB_FLUSH_TASK_SWITCH: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_TASK_SWITCH: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
     metadata = { reason = "remote_shootdown" }
 )]
-pub static TLB_FLUSH_REMOTE_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_REMOTE_SHOOTDOWN: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
     metadata = { reason = "local_shootdown" }
 )]
-pub static TLB_FLUSH_LOCAL_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_LOCAL_SHOOTDOWN: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
     metadata = { reason = "local_mm_shootdown" }
 )]
-pub static TLB_FLUSH_LOCAL_MM_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_LOCAL_MM_SHOOTDOWN: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
     metadata = { reason = "remote_send_ipi" }
 )]
-pub static TLB_FLUSH_REMOTE_SEND_IPI: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_REMOTE_SEND_IPI: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events with unknown reason (e.g., ARM64 where reason breakdown is unavailable)",
     metadata = { reason = "unknown" }
 )]
-pub static TLB_FLUSH_UNKNOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static TLB_FLUSH_UNKNOWN: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 /*
  * per-cgroup
