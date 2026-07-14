@@ -132,11 +132,16 @@ function renderPercentileBands(chart) {
         }
     }
 
+    // Stack lower quantiles on top (matching the scatter-dots convention) so a
+    // low percentile stays visible where it meets a higher one: cols are
+    // ascending, so index 0 gets the highest zBase. Stride by 4 (a series spans
+    // zBase+1..+3).
     const echartsSeries = renderCols.flatMap((s, i) => buildBoxplotSeries(s, {
         name: labels[i] || `p${i + 1}`,
         stackId: `pct${i}`,
         lineColor: SCATTER_PALETTE[i % SCATTER_PALETTE.length],
         outerOnly: true,
+        zBase: (renderCols.length - 1 - i) * 4,
     }));
 
     // OOB separator + shaded band, attached to the first band series.

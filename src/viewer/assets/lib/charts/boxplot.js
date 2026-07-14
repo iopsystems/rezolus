@@ -53,6 +53,10 @@ export function buildBoxplotSeries(s, opts = {}) {
         // Multi-series line charts draw their own median lines (with gap/clamp/
         // step handling) and only want the band from here — skip the median.
         noMedian = false,
+        // Draw-order offset so a caller with N series can stack them
+        // consistently: a higher zBase draws on top. Series' internal levels
+        // span zBase+1..zBase+3, so callers should stride zBase by ≥4.
+        zBase = 0,
     } = opts;
 
     // Invisible baseline line that only establishes the stack floor. Hidden
@@ -65,7 +69,7 @@ export function buildBoxplotSeries(s, opts = {}) {
         silent: true,
         tooltip: { show: false },
         lineStyle: { opacity: 0 },
-        z: 1,
+        z: zBase + 1,
     });
     // Line carrying (upper - lower); its areaStyle fills from the stack floor,
     // in the series color at `opacity`.
@@ -78,7 +82,7 @@ export function buildBoxplotSeries(s, opts = {}) {
         tooltip: { show: false },
         lineStyle: { opacity: 0 },
         areaStyle: { color: lineColor, opacity },
-        z: 1,
+        z: zBase + 1,
     });
 
     const out = [
@@ -102,7 +106,7 @@ export function buildBoxplotSeries(s, opts = {}) {
             symbol: 'none',
             lineStyle: { color: lineColor, width: 1.5 },
             emphasis: { focus: 'series' },
-            z: 3,
+            z: zBase + 3,
         });
     }
     return out;
@@ -114,7 +118,10 @@ export function buildBoxplotSeries(s, opts = {}) {
 // on overlap — thin bounding lines stay legible when baseline and experiment
 // overlap. Only the median carries a name/tooltip; the min/max lines are silent.
 export function buildEnvelopeLines(s, opts = {}) {
-    const { name = s.metric?.__name__ || 'series', color = PALETTE[0] } = opts;
+    // `zBase` orders captures consistently when overlaid: higher draws on top.
+    // Bounds sit at zBase+2, the median at zBase+3, so callers should stride
+    // zBase by ≥4 per capture.
+    const { name = s.metric?.__name__ || 'series', color = PALETTE[0], zBase = 0 } = opts;
     const bound = (col) => ({
         type: 'line',
         data: zipMs(s.t, col),
@@ -122,7 +129,7 @@ export function buildEnvelopeLines(s, opts = {}) {
         silent: true,
         tooltip: { show: false },
         lineStyle: { color, width: 1, opacity: 0.4 },
-        z: 2,
+        z: zBase + 2,
     });
     return [
         bound(s.min),
@@ -134,7 +141,7 @@ export function buildEnvelopeLines(s, opts = {}) {
             symbol: 'none',
             lineStyle: { color, width: 1.5 },
             emphasis: { focus: 'series' },
-            z: 3,
+            z: zBase + 3,
         },
     ];
 }

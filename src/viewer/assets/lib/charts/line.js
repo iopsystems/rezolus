@@ -86,13 +86,20 @@ export function configureLineChart(chart) {
             name: seriesList[i]?.name ?? (s.metric?.__name__ || `series ${i + 1}`),
             stackId: `bp${i}`,
             lineColor: seriesList[i]?.color || COLORS.accent,
+            zBase: (boxplotCols.length - 1 - i) * 4,
         }))
-        : seriesList.flatMap((s) => {
+        : seriesList.flatMap((s, i) => {
         // Compare-mode entry carrying a decimated boxplot (median + min/max):
         // render an envelope of LINES (median + faint min/max), per capture
         // color, so two captures' spreads overlay without muddy filled bands.
+        // Stack the first entry (baseline) on top for a consistent order, the
+        // same index → z convention the percentile bands use.
         if (s.boxplot) {
-            return buildEnvelopeLines(s.boxplot, { name: s.name, color: s.color });
+            return buildEnvelopeLines(s.boxplot, {
+                name: s.name,
+                color: s.color,
+                zBase: (seriesList.length - 1 - i) * 4,
+            });
         }
 
         const zippedRaw = s.timeData.map((t, i) => {
