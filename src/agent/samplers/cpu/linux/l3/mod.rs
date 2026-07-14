@@ -38,7 +38,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
 
 #[distributed_slice(SAMPLERS)]
 static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, init };
+    crate::agent::samplers::SamplerEntry { name: NAME, module: module_path!(), init };
 
 struct CpuL3 {
     inner: Mutex<CpuL3Inner>,
