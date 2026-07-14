@@ -393,6 +393,31 @@ fn build_parquet_converter(
     converter
 }
 
+/// File-level metadata for a `.rez` archive manifest, mirroring the keys
+/// `build_parquet_converter` writes (`sampling_interval_ms`, `source`,
+/// user `--metadata`, `systeminfo`, `descriptions`).
+fn build_rez_metadata(
+    config: &RecordingConfig,
+    ep: &EndpointState,
+) -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(
+        "sampling_interval_ms".to_string(),
+        config.interval.as_millis().to_string(),
+    );
+    m.insert("source".to_string(), ep.config.source_label().to_string());
+    for (k, v) in &config.metadata {
+        m.insert(k.clone(), v.clone());
+    }
+    if let Some(ref json) = ep.systeminfo {
+        m.insert("systeminfo".to_string(), json.clone());
+    }
+    if let Some(ref json) = ep.descriptions {
+        m.insert("descriptions".to_string(), json.clone());
+    }
+    m
+}
+
 /// Build the `per_source_metadata` JSON written by the recorder.
 ///
 /// When `source` is a JSON array, each name in the array becomes an entry
@@ -582,6 +607,15 @@ pub fn run(config: RecordingConfig) {
 
     let wrapped = config.command.is_some();
 
+    // `.rez` per-sampler archive mode: selected by a `.rez` extension or
+    // `--format rez`. Multi-source/A-B `.rez` is deferred; require one endpoint.
+    let rez_mode = rez::wants_rez(&config.output, config.format);
+    if rez_mode && endpoints.len() > 1 {
+        eprintln!("error: .rez output currently supports a single endpoint");
+        return;
+    }
+    let mut rez_recorder: Option<rez::RezRecorder> = None;
+
     let outcome: Option<child::Outcome> = rt.block_on(async {
         // Spawn the wrapped command only after probing/writers succeeded, so a
         // failed setup never starts an expensive workload.
@@ -696,6 +730,15 @@ pub fn run(config: RecordingConfig) {
                                             endpoints[idx].config.source_label(),
                                             endpoints[idx].config.url.as_str(),
                                         );
+                                        if rez_mode {
+                                            let rec = rez_recorder.get_or_insert_with(|| {
+                                                rez::RezRecorder::new(build_rez_metadata(
+                                                    &config,
+                                                    &endpoints[idx],
+                                                ))
+                                            });
+                                            rec.ingest(&snapshot, now_ns);
+                                        }
                                         match rmp_serde::encode::to_vec(&snapshot) {
                                             Ok(b) => b,
                                             Err(e) => {
@@ -817,6 +860,21 @@ pub fn run(config: RecordingConfig) {
             }
             eprintln!("error: no data was recorded from any endpoint");
             std::process::exit(1);
+        }
+
+        // `.rez` mode finalizes a per-sampler tar archive instead of parquet/raw.
+        if rez_mode {
+            match rez_recorder.take() {
+                Some(rec) => {
+                    if let Err(e) = rec.finalize(&config.output) {
+                        eprintln!("error saving .rez archive: {e}");
+                    } else {
+                        info!("wrote .rez archive to {}", config.output.display());
+                    }
+                }
+                None => eprintln!("error: no snapshots captured for .rez archive"),
+            }
+            return outcome;
         }
 
         match config.format {
@@ -984,8 +1042,9 @@ pub fn run(config: RecordingConfig) {
                 }
             }
             Format::Rez => {
-                // `.rez` recording is wired into the scrape loop separately.
-                eprintln!("error: .rez output is not yet supported");
+                // `.rez` output is finalized above via the `rez_mode` short-circuit,
+                // so this arm is never reached (Format::Rez always sets rez_mode).
+                unreachable!("rez output is finalized before the format match");
             }
         }
 
