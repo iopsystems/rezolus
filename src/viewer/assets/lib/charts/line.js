@@ -19,7 +19,7 @@ import {
     COLORS,
 } from './base.js';
 import { FONTS } from './util/fonts.js';
-import { buildBoxplotSeries } from './boxplot.js';
+import { buildBoxplotSeries, buildEnvelopeLines } from './boxplot.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -88,6 +88,13 @@ export function configureLineChart(chart) {
             lineColor: seriesList[i]?.color || COLORS.accent,
         }))
         : seriesList.flatMap((s) => {
+        // Compare-mode entry carrying a decimated boxplot (median + min/max):
+        // render an envelope of LINES (median + faint min/max), per capture
+        // color, so two captures' spreads overlay without muddy filled bands.
+        if (s.boxplot) {
+            return buildEnvelopeLines(s.boxplot, { name: s.name, color: s.color });
+        }
+
         const zippedRaw = s.timeData.map((t, i) => {
             const [v, raw] = clampToRange(s.valueData[i], range);
             return [t * 1000, v, raw];

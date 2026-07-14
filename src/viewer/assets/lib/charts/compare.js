@@ -146,25 +146,38 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
     const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.timeData);
     const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, experiment.timeData);
 
-    const seriesList = [];
-    if (Array.isArray(baseline.timeData) && baseline.timeData.length > 0) {
-        seriesList.push({
-            name: labelFor(captureLabels, CAPTURE_BASELINE),
-            color: BASELINE_COLOR,
-            timeData: rebase(baseline.timeData, baseSec),
-            valueData: baseline.valueData || [],
-            fill: false,
-        });
-    }
-    if (Array.isArray(experiment.timeData) && experiment.timeData.length > 0) {
-        seriesList.push({
-            name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
-            color: EXPERIMENT_COLOR,
-            timeData: rebase(experiment.timeData, expSec),
-            valueData: experiment.valueData || [],
-            fill: false,
-        });
-    }
+    // Build one overlay entry per capture. When the capture carries a decimated
+    // boxplot (min/max envelope), the entry is drawn ENTIRELY from it — median +
+    // min/max on the boxplot's own time grid (rebased to relative time) — so the
+    // median line and its envelope stay aligned. Otherwise fall back to the plain
+    // matrix line.
+    const entryFor = (cap, sec, name, color) => {
+        const bp = cap.boxplot;
+        if (bp && bp.t && bp.t.length > 0) {
+            const t = rebase(Array.from(bp.t), sec);
+            return {
+                name, color,
+                timeData: t,
+                valueData: Array.from(bp.median),
+                boxplot: { t, min: bp.min, max: bp.max, median: bp.median },
+                fill: false,
+            };
+        }
+        if (Array.isArray(cap.timeData) && cap.timeData.length > 0) {
+            return {
+                name, color,
+                timeData: rebase(cap.timeData, sec),
+                valueData: cap.valueData || [],
+                fill: false,
+            };
+        }
+        return null;
+    };
+
+    const seriesList = [
+        entryFor(baseline, baseSec, labelFor(captureLabels, CAPTURE_BASELINE), BASELINE_COLOR),
+        entryFor(experiment, expSec, labelFor(captureLabels, CAPTURE_EXPERIMENT), EXPERIMENT_COLOR),
+    ].filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
 
     return {

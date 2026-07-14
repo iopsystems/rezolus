@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBoxplotSeries, boxplotChartOption } from '../src/viewer/assets/lib/charts/boxplot.js';
+import { buildBoxplotSeries, boxplotChartOption, buildEnvelopeLines } from '../src/viewer/assets/lib/charts/boxplot.js';
 
 const sample = {
     metric: { __name__: 'memory_free' },
@@ -82,4 +82,26 @@ test('boxplotChartOption: series sharing __name__ get distinct stacks (no collis
     assert.ok(opt.legend, 'multi-series charts get a legend');
     // labels disambiguate by the distinguishing label, not the shared name
     assert.deepEqual(opt.legend.data, ['cpu_cycles{id=0}', 'cpu_cycles{id=1}', 'cpu_cycles{id=2}']);
+});
+
+test('buildEnvelopeLines: median line + faint min/max lines, no fill (A/B compare)', () => {
+    const s = {
+        metric: { __name__: 'cpu' },
+        t: [10, 11], min: [1, 1], lo: [2, 2], median: [3, 5], hi: [4, 4], max: [9, 9],
+    };
+    const out = buildEnvelopeLines(s, { name: 'baseline', color: '#abc' });
+    assert.equal(out.length, 3, 'min line + max line + median line');
+    // no filled areas — the whole point of the line-envelope
+    assert.ok(out.every((series) => !series.areaStyle), 'no areaStyle on any series');
+    // all in the given color
+    assert.ok(out.every((series) => series.lineStyle.color === '#abc'));
+    // min/max are faint + silent; median is full-weight + named
+    const [minL, maxL, med] = out;
+    assert.deepEqual(minL.data.map((p) => p[1]), [1, 1]);
+    assert.deepEqual(maxL.data.map((p) => p[1]), [9, 9]);
+    assert.ok(minL.silent && maxL.silent, 'bound lines are silent');
+    assert.equal(minL.lineStyle.opacity, 0.4);
+    assert.equal(med.name, 'baseline');
+    assert.deepEqual(med.data.map((p) => p[1]), [3, 5], 'median line carries the medians');
+    assert.equal(med.data[0][0], 10 * 1000, 't converted seconds -> ms');
 });

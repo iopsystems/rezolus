@@ -72,6 +72,15 @@ const defaultQueryRange = (query, start, end, step, captureId = 'baseline', sign
 export const queryRangeForCapture = (captureId, query, start, end, step) =>
     defaultQueryRange(query, start, end, step, captureId);
 
+// Display-mode variant for a specific capture: returns the decoded boxplot
+// series array ({t,min,lo,median,hi,max}, …) or null on a non-series / empty
+// result. Used by compare mode to draw each capture's min/max envelope.
+export const queryRangeDisplayForCapture = async (captureId, query, start, end, step, points = 500) => {
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points, captureId });
+    if (!res || !res.buffer) return null;
+    return decodeDisplayBinary(res.buffer).series;
+};
+
 // Decode the display-mode binary response (see routes.rs
 // `encode_display_binary`):
 //

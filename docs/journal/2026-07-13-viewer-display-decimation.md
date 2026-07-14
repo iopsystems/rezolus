@@ -109,12 +109,18 @@ feel instant. ~1.75× file-size cost, flagged for the maintainer; merged.
   parity test (needs the pkg build; `crates/viewer/build.sh` currently hits a wasm-pack
   `--release`/`--profile` flag conflict — pre-existing, unrelated to this change).
 
+## Landed after the initial writeup
+
+- **A/B compare-mode line-envelopes** — each capture's compare overlay now draws a min/max
+  envelope as thin, capture-colored lines (no fill — two filled bands muddy on overlap):
+  baseline from `spec.boxplot`, experiment via a per-capture display fetch
+  (`data.js queryRangeDisplayForCapture`), rendered by `boxplot.js buildEnvelopeLines`,
+  wired through `overlayLine` (`charts/compare.js`) and `extract*Capture` (`viewer_core.js`).
+  The median line and its envelope share the display fetch's time grid so they stay aligned.
+  *Browser verification of the two-capture overlay still pending.*
+
 ## Deferred (mirrored to `docs/backlog.md`)
 
-- **A/B compare-mode line-envelopes** — compare mode fetches via `queryRangeForCapture` (JSON
-  matrix, `multiSeries`), not the display path, so it has no band. Plan: route the per-capture
-  fetch through display for line/multi, render capture-colored *line-envelopes* (no fill —
-  two filled bands muddy on overlap).
 - **Live mock-agent + synthetic-live** — live mode connects to an agent msgpack endpoint, not
   a parquet; needs a mock server replaying synthetic snapshots to test the live path (and a
   decision on default rolling window + TSDB retention).

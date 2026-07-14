@@ -6,7 +6,7 @@ import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js'
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import {
-    queryRangeForCapture, buildEffectiveQuery,
+    queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot,
@@ -34,6 +34,8 @@ const extractBaselineCapture = (spec, options = {}) => {
             cap.timeData = [];
             cap.valueData = [];
         }
+        // Decimated boxplot columns (single series) for the compare envelope.
+        cap.boxplot = Array.isArray(spec.boxplot) ? (spec.boxplot[0] || null) : null;
         return cap;
     }
 
@@ -103,6 +105,9 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         const pair = promqlResultToLinePair(results);
         cap.timeData = pair.timeData;
         cap.valueData = pair.valueData;
+        // Decimated boxplot columns (fetched separately via display mode) for
+        // the compare envelope — null when the fetch failed or is pending.
+        cap.boxplot = Array.isArray(options.boxplot) ? (options.boxplot[0] || null) : null;
         return cap;
     }
 
@@ -228,6 +233,20 @@ const fetchExperimentResult = (vnode) => {
             );
             vnode.state.experimentResult = res;
             vnode.state._lastFetchedStep = step;
+            // Line charts also fetch the experiment's decimated boxplot so
+            // compare mode can draw its min/max envelope (the matrix above has
+            // no min/max). Best-effort — null leaves a plain median line. Match
+            // the baseline's point count so both envelopes have similar density.
+            vnode.state.experimentBoxplot = null;
+            if (resolvedStyle(spec) === 'line') {
+                const pts = (Array.isArray(spec.boxplot) && spec.boxplot[0]?.t?.length)
+                    ? spec.boxplot[0].t.length : 500;
+                try {
+                    vnode.state.experimentBoxplot = await queryRangeDisplayForCapture(
+                        CAPTURE_EXPERIMENT, query, range.start, range.end, step, pts,
+                    );
+                } catch (_) { /* leave null → plain line fallback */ }
+            }
             // Invalidate the memoized capture so view() re-extracts
             // against the freshly fetched result.
             vnode.state._capExpResult = null;
@@ -372,7 +391,7 @@ export const CompareChartWrapper = {
         }
         if (vnode.state._capExpResult !== vnode.state.experimentResult) {
             vnode.state._capExpResult = vnode.state.experimentResult;
-            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, captureExtractOpts);
+            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, { ...captureExtractOpts, boxplot: vnode.state.experimentBoxplot });
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;

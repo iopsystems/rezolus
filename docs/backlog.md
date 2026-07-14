@@ -86,11 +86,11 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
 
 Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.md) (PR #1006).
 
-- **A/B compare-mode line-envelopes** — Open. Compare mode fetches via
-  `queryRangeForCapture` (JSON matrix, `multiSeries`), not the display path, so it
-  shows no band. Route the per-capture fetch through display for line/multi and
-  render capture-colored *line-envelopes* (min/max as thin lines, no fill — two
-  filled bands muddy on overlap).
+- **A/B compare-mode line-envelopes** — Done (PR #1006). Each capture's line
+  overlay now carries a min/max envelope drawn as thin capture-colored lines (no
+  fill): baseline from `spec.boxplot`, experiment via a per-capture display fetch
+  (`queryRangeDisplayForCapture`), rendered by `buildEnvelopeLines`. *Browser
+  verification of the two-capture overlay still pending.*
 - **Live mock-agent + synthetic-live** — Open. Live mode connects to an agent
   msgpack endpoint, not a parquet; a mock server replaying synthetic snapshots is
   needed to test the live display path. Pairs with a decision on the default live

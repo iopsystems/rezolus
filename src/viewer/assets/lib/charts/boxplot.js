@@ -108,6 +108,37 @@ export function buildBoxplotSeries(s, opts = {}) {
     return out;
 }
 
+// Render a decoded boxplot series as an ENVELOPE OF LINES (no fill): a
+// full-weight median line plus faint, thin min and max lines, all in the same
+// color. Used by A/B compare mode, where two filled bands would blend into mud
+// on overlap — thin bounding lines stay legible when baseline and experiment
+// overlap. Only the median carries a name/tooltip; the min/max lines are silent.
+export function buildEnvelopeLines(s, opts = {}) {
+    const { name = s.metric?.__name__ || 'series', color = PALETTE[0] } = opts;
+    const bound = (col) => ({
+        type: 'line',
+        data: zipMs(s.t, col),
+        symbol: 'none',
+        silent: true,
+        tooltip: { show: false },
+        lineStyle: { color, width: 1, opacity: 0.4 },
+        z: 2,
+    });
+    return [
+        bound(s.min),
+        bound(s.max),
+        {
+            name,
+            type: 'line',
+            data: zipMs(s.t, s.median),
+            symbol: 'none',
+            lineStyle: { color, width: 1.5 },
+            emphasis: { focus: 'series' },
+            z: 3,
+        },
+    ];
+}
+
 // Label a series from its distinguishing labels (drop __name__ and the noisy
 // endpoint/source), e.g. `cpu_cycles{id=0}`, for a readable legend.
 const seriesLabel = (metric, i) => {
