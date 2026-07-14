@@ -129,6 +129,7 @@ impl RecordingConfig {
                     match s.as_str() {
                         "parquet" => Format::Parquet,
                         "raw" => Format::Raw,
+                        "rez" => Format::Rez,
                         other => return Err(format!("unknown format in config: {other}")),
                     }
                 } else {

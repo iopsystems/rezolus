@@ -654,6 +654,13 @@ impl RezRecorder {
     }
 }
 
+/// True when the recording should be written as a `.rez` archive: either the
+/// output path ends in `.rez` or `--format rez` was given.
+pub fn wants_rez(output: &Path, format: crate::Format) -> bool {
+    format == crate::Format::Rez
+        || output.extension().and_then(|e| e.to_str()) == Some("rez")
+}
+
 #[cfg(test)]
 pub(crate) mod recorder_tests_support {
     pub use super::recorder_tests::{counter, snap};
@@ -1090,5 +1097,20 @@ mod finalize_tests {
             other => panic!("expected gauge column, got {other:?}"),
         }
         assert_eq!(t.columns[0].windows, vec![Some(w)]);
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+    use crate::Format;
+    use std::path::Path;
+
+    #[test]
+    fn extension_or_format_selects_rez() {
+        assert!(wants_rez(Path::new("out.rez"), Format::Parquet));
+        assert!(wants_rez(Path::new("out.parquet"), Format::Rez));
+        assert!(!wants_rez(Path::new("out.parquet"), Format::Parquet));
+        assert!(!wants_rez(Path::new("out.raw"), Format::Raw));
     }
 }

@@ -49,6 +49,7 @@ static TERMINATING: usize = 2;
 enum Format {
     Parquet,
     Raw,
+    Rez,
 }
 
 fn main() {

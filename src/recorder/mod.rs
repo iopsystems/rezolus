@@ -983,6 +983,10 @@ pub fn run(config: RecordingConfig) {
                     // temp files cleaned up on drop
                 }
             }
+            Format::Rez => {
+                // `.rez` recording is wired into the scrape loop separately.
+                eprintln!("error: .rez output is not yet supported");
+            }
         }
 
         outcome
