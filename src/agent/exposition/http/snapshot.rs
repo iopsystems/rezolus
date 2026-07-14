@@ -91,6 +91,8 @@ fn create(
         histograms: Vec::new(),
     };
 
+    let sampler_mods = crate::agent::samplers::sampler_modules();
+
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
         let (value, stored_window) = metric.value_with_window();
 
@@ -110,6 +112,9 @@ fn create(
         for (k, v) in metric.metadata().iter() {
             metadata.insert(k.to_string(), v.to_string());
         }
+
+        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
+        metadata.insert("sampler".to_string(), sampler.to_string());
 
         let name = format!("{metric_id}");
 
@@ -267,8 +272,37 @@ fn create(
 mod tests {
     use super::*;
     use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue};
+    use metriken::metric;
     use metriken::Window;
     use std::time::{Duration, SystemTime};
+
+    #[metric(name = "snapshot_sampler_label_probe")]
+    static SAMPLER_LABEL_PROBE: metriken::Counter = metriken::Counter::new();
+
+    #[test]
+    fn built_snapshot_metric_carries_a_sampler_label() {
+        SAMPLER_LABEL_PROBE.increment();
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else { panic!("expected V2") };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| c.metadata.get("metric").map(String::as_str) == Some("snapshot_sampler_label_probe"))
+            .expect("probe counter present");
+        assert_eq!(c.metadata.get("sampler").map(String::as_str), Some("unattributed"));
+    }
+
+    #[test]
+    fn every_registered_sampler_module_self_attributes() {
+        let mods = crate::agent::samplers::sampler_modules();
+        for (module, name) in &mods {
+            assert_eq!(
+                crate::agent::samplers::attribute_sampler(module, &mods),
+                *name,
+                "sampler module {module} should attribute to {name}",
+            );
+        }
+    }
 
     #[test]
     fn external_metric_carries_its_own_window_not_fleet_time() {
