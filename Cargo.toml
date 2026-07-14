@@ -210,11 +210,12 @@ assets = [
 ]
 
 
-# TEMPORARY: pin metriken to the feat/display-reducer branch (iopsystems/metriken
-# PR #115) for the display-mode query API (query_range_display / DisplayResult).
-# Swap back to a published crates.io version once #115 lands, then drop this
-# patch block entirely.
+# TEMPORARY: pin metriken to the merge commit of iopsystems/metriken#115 (now on
+# main) for the display-mode query API (query_range_display / DisplayResult). The
+# feat/display-reducer branch was deleted on merge, so pin the exact rev rather
+# than a branch. Swap to a published crates.io version once metriken-query is
+# released, then drop this patch block entirely.
 [patch.crates-io]
-metriken = { git = "https://github.com/iopsystems/metriken", branch = "feat/display-reducer" }
-metriken-exposition = { git = "https://github.com/iopsystems/metriken", branch = "feat/display-reducer" }
-metriken-query = { git = "https://github.com/iopsystems/metriken", branch = "feat/display-reducer" }
+metriken = { git = "https://github.com/iopsystems/metriken", rev = "bba87e2b8f145232e9731c7729c8b79aa217a568" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", rev = "bba87e2b8f145232e9731c7729c8b79aa217a568" }
+metriken-query = { git = "https://github.com/iopsystems/metriken", rev = "bba87e2b8f145232e9731c7729c8b79aa217a568" }

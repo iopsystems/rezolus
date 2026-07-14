@@ -2009,7 +2009,7 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.9.2"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fdisplay-reducer#88e9689b68d88754dbc8f394cf3210486581b184"
+source = "git+https://github.com/iopsystems/metriken?rev=bba87e2b8f145232e9731c7729c8b79aa217a568#bba87e2b8f145232e9731c7729c8b79aa217a568"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2021,7 +2021,7 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.2.1"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fdisplay-reducer#88e9689b68d88754dbc8f394cf3210486581b184"
+source = "git+https://github.com/iopsystems/metriken?rev=bba87e2b8f145232e9731c7729c8b79aa217a568#bba87e2b8f145232e9731c7729c8b79aa217a568"
 dependencies = [
  "histogram",
  "linkme",
@@ -2032,7 +2032,7 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.5.1"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fdisplay-reducer#88e9689b68d88754dbc8f394cf3210486581b184"
+source = "git+https://github.com/iopsystems/metriken?rev=bba87e2b8f145232e9731c7729c8b79aa217a568#bba87e2b8f145232e9731c7729c8b79aa217a568"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2043,7 +2043,7 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.16.1"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fdisplay-reducer#88e9689b68d88754dbc8f394cf3210486581b184"
+source = "git+https://github.com/iopsystems/metriken?rev=bba87e2b8f145232e9731c7729c8b79aa217a568#bba87e2b8f145232e9731c7729c8b79aa217a568"
 dependencies = [
  "arrow",
  "chrono",
@@ -2057,7 +2057,7 @@ dependencies = [
 [[package]]
 name = "metriken-query"
 version = "0.11.0"
-source = "git+https://github.com/iopsystems/metriken?branch=feat%2Fdisplay-reducer#88e9689b68d88754dbc8f394cf3210486581b184"
+source = "git+https://github.com/iopsystems/metriken?rev=bba87e2b8f145232e9731c7729c8b79aa217a568#bba87e2b8f145232e9731c7729c8b79aa217a568"
 dependencies = [
  "arrow",
  "bytes",
