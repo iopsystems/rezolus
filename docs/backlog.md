@@ -82,6 +82,31 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
   `experiment_checksum` to the v3 payload and show a banner on mismatch (warn,
   don't refuse to render).
 
+## Viewer — display-mode decimation
+
+Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.md) (PR #1006).
+
+- **A/B compare-mode line-envelopes** — Open. Compare mode fetches via
+  `queryRangeForCapture` (JSON matrix, `multiSeries`), not the display path, so it
+  shows no band. Route the per-capture fetch through display for line/multi and
+  render capture-colored *line-envelopes* (min/max as thin lines, no fill — two
+  filled bands muddy on overlap).
+- **Live mock-agent + synthetic-live** — Open. Live mode connects to an agent
+  msgpack endpoint, not a parquet; a mock server replaying synthetic snapshots is
+  needed to test the live display path. Pairs with a decision on the default live
+  window (bounded rolling vs full history) and in-memory TSDB retention.
+- **Automated browser testing** — Idea. Drive the viewer headless (Chrome CDP) and
+  assert rendered chart options; the synthetic generator + scriptable viewer make
+  it tractable. A WASM-runtime parity test (server vs WASM display bytes for a
+  fixture) is the specific gap the `viewer-parity` skill calls for.
+- **`crates/viewer/build.sh` wasm-pack flag conflict** — Open (blocks local pkg
+  builds). Passes `--profile wasm-release` while wasm-pack 0.13.1 also adds
+  `--release`; the two are mutually exclusive. Blocks rebuilding the WASM viewer
+  pkg locally (and the WASM behavioral tests that need it).
+- **Reopen conditions for the 5 measured NO-GOs** (strided-median read, cumulative
+  histogram quantiles, decode worker, aggregation worker, M4) live in the journal
+  entry — don't re-litigate without the stated trigger.
+
 ## Viewer — performance / live mode
 
 Source: [viewer performance & JS restructure](journal/2026-04-18-viewer-perf-restructure.md).
