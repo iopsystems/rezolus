@@ -336,6 +336,97 @@ pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, R
     })
 }
 
+use std::io::Read;
+use std::path::Path;
+
+/// A decoded `.rez` archive (round-trip / test surface).
+pub struct RezArchive {
+    pub manifest: RezManifest,
+    pub tables: Vec<RezTable>,
+}
+
+fn append_tar_entry<W: std::io::Write>(
+    builder: &mut tar::Builder<W>,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), RezError> {
+    let mut header = tar::Header::new_gnu();
+    header.set_path(name)?;
+    header.set_size(bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder.append(&header, bytes)?;
+    Ok(())
+}
+
+/// Write `tables` + `metadata` to an uncompressed `.rez` tar at `path`.
+pub fn write_archive(
+    path: &Path,
+    tables: &[RezTable],
+    metadata: BTreeMap<String, String>,
+) -> Result<(), RezError> {
+    let mut index = Vec::with_capacity(tables.len());
+    let mut table_files: Vec<(String, Vec<u8>)> = Vec::with_capacity(tables.len());
+    for table in tables {
+        let file = format!("{}.parquet", table.sampler);
+        let bytes = write_table_parquet(table)?;
+        index.push(RezTableIndex {
+            sampler: table.sampler.clone(),
+            file: file.clone(),
+            columns: table.columns.iter().map(|c| c.name.clone()).collect(),
+            rows: table.timestamps.len() as u64,
+            cadence_ns: cadence_hint(&table.timestamps),
+        });
+        table_files.push((file, bytes));
+    }
+    let manifest = RezManifest {
+        version: REZ_SCHEMA_VERSION,
+        metadata,
+        tables: index,
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+
+    let out = std::fs::File::create(path)?;
+    let mut builder = tar::Builder::new(out);
+    builder.mode(tar::HeaderMode::Deterministic);
+    append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
+    for (name, bytes) in &table_files {
+        append_tar_entry(&mut builder, name, bytes)?;
+    }
+    builder.into_inner()?.sync_all()?;
+    Ok(())
+}
+
+/// Read a `.rez` archive back into its manifest + decoded tables.
+pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
+    let file = std::fs::File::open(path)?;
+    let mut archive = tar::Archive::new(file);
+
+    let mut manifest: Option<RezManifest> = None;
+    let mut parquet_bytes: HashMap<String, Vec<u8>> = HashMap::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?.to_string_lossy().into_owned();
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        if name == REZ_MANIFEST_NAME {
+            manifest = Some(serde_json::from_slice(&buf)?);
+        } else if name.ends_with(".parquet") {
+            parquet_bytes.insert(name, buf);
+        }
+    }
+    let manifest = manifest.ok_or("missing manifest.json")?;
+
+    let mut tables = Vec::with_capacity(manifest.tables.len());
+    for idx in &manifest.tables {
+        let bytes = parquet_bytes
+            .remove(&idx.file)
+            .ok_or_else(|| format!("missing table file {}", idx.file))?;
+        tables.push(read_table_parquet(idx.sampler.clone(), bytes)?);
+    }
+    Ok(RezArchive { manifest, tables })
+}
+
 #[cfg(test)]
 mod manifest_tests {
     use super::*;
@@ -451,5 +542,92 @@ mod table_tests {
             }
             _ => panic!("expected histogram"),
         }
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use metriken::Window;
+    use std::collections::HashMap;
+
+    fn counter_col(name: &str, vals: Vec<Option<u64>>, wins: Vec<Option<Window>>) -> RezColumn {
+        RezColumn {
+            name: name.to_string(),
+            metadata: [
+                ("metric".to_string(), name.to_string()),
+                ("metric_type".to_string(), "counter".to_string()),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            values: RezValues::Counter(vals),
+            windows: wins,
+        }
+    }
+
+    #[test]
+    fn archive_round_trips_multiple_tables() {
+        let a = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            columns: vec![counter_col(
+                "0",
+                vec![Some(1), Some(2)],
+                vec![
+                    Some(Window::new(500, 1_000)),
+                    Some(Window::new(1_400, 2_000)),
+                ],
+            )],
+        };
+        let b = RezTable {
+            sampler: "blockio_latency".to_string(),
+            timestamps: vec![1_000],
+            columns: vec![counter_col("9", vec![Some(7)], vec![None])],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("rec.rez");
+        let metadata: BTreeMap<String, String> =
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect();
+
+        write_archive(&out, &[a.clone(), b.clone()], metadata.clone()).unwrap();
+        let archive = read_archive(&out).unwrap();
+
+        assert_eq!(archive.manifest.version, REZ_SCHEMA_VERSION);
+        assert_eq!(archive.manifest.metadata, metadata);
+        assert_eq!(archive.manifest.tables.len(), 2);
+        assert_eq!(archive.tables.len(), 2);
+
+        let cpu = archive
+            .tables
+            .iter()
+            .find(|t| t.sampler == "cpu_usage")
+            .unwrap();
+        assert_eq!(cpu.timestamps, vec![1_000, 2_000]);
+        assert_eq!(
+            cpu.columns[0].windows,
+            vec![
+                Some(Window::new(500, 1_000)),
+                Some(Window::new(1_400, 2_000))
+            ]
+        );
+        let bio = archive
+            .tables
+            .iter()
+            .find(|t| t.sampler == "blockio_latency")
+            .unwrap();
+        assert_eq!(bio.timestamps, vec![1_000]);
+        assert_eq!(bio.columns[0].windows, vec![None]);
+
+        let cpu_idx = archive
+            .manifest
+            .tables
+            .iter()
+            .find(|t| t.sampler == "cpu_usage")
+            .unwrap();
+        assert_eq!(cpu_idx.file, "cpu_usage.parquet");
+        assert_eq!(cpu_idx.rows, 2);
+        assert_eq!(cpu_idx.cadence_ns, Some(1_000));
     }
 }
