@@ -427,6 +427,360 @@ pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     Ok(RezArchive { manifest, tables })
 }
 
+use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
+
+/// A borrowed snapshot entry, tagged by shape.
+enum Entry<'a> {
+    Counter(&'a Counter),
+    Gauge(&'a Gauge),
+    Histogram(&'a Histogram),
+}
+
+impl Entry<'_> {
+    fn name(&self) -> &str {
+        match self {
+            Entry::Counter(c) => &c.name,
+            Entry::Gauge(g) => &g.name,
+            Entry::Histogram(h) => &h.name,
+        }
+    }
+    fn metadata(&self) -> &HashMap<String, String> {
+        match self {
+            Entry::Counter(c) => &c.metadata,
+            Entry::Gauge(g) => &g.metadata,
+            Entry::Histogram(h) => &h.metadata,
+        }
+    }
+    fn window(&self) -> Option<Window> {
+        match self {
+            Entry::Counter(c) => c.window,
+            Entry::Gauge(g) => g.window,
+            Entry::Histogram(h) => h.window,
+        }
+    }
+    /// The `metric_type` string the parquet reader keys on to reconstruct the
+    /// column's value shape (counter vs gauge; histograms carry a `:buckets`
+    /// suffix, so their `metric_type` is informational).
+    fn metric_type(&self) -> &'static str {
+        match self {
+            Entry::Counter(_) => "counter",
+            Entry::Gauge(_) => "gauge",
+            Entry::Histogram(_) => "histogram",
+        }
+    }
+}
+
+/// A growing per-sampler table. Columns are sparse: shorter than the row count
+/// until padded (a metric absent in some rows gets `None` there).
+struct TableBuilder {
+    sampler: String,
+    timestamps: Vec<u64>,
+    order: Vec<String>,
+    columns: HashMap<String, RezColumn>,
+    last_key: Option<u64>,
+}
+
+impl TableBuilder {
+    fn new(sampler: String) -> Self {
+        Self {
+            sampler,
+            timestamps: Vec::new(),
+            order: Vec::new(),
+            columns: HashMap::new(),
+            last_key: None,
+        }
+    }
+
+    fn col_len(col: &RezColumn) -> usize {
+        match &col.values {
+            RezValues::Counter(v) => v.len(),
+            RezValues::Gauge(v) => v.len(),
+            RezValues::Histogram(v) => v.len(),
+        }
+    }
+
+    fn pad(col: &mut RezColumn, to: usize) {
+        while Self::col_len(col) < to {
+            match &mut col.values {
+                RezValues::Counter(v) => v.push(None),
+                RezValues::Gauge(v) => v.push(None),
+                RezValues::Histogram(v) => v.push(None),
+            }
+            col.windows.push(None);
+        }
+    }
+
+    fn push_row(&mut self, snapshot_ts: u64, entries: &[Entry<'_>]) {
+        let row = self.timestamps.len();
+        self.timestamps.push(snapshot_ts);
+        for e in entries {
+            let name = e.name().to_string();
+            let order = &mut self.order;
+            let col = self.columns.entry(name.clone()).or_insert_with(|| {
+                order.push(name.clone());
+                let values = match e {
+                    Entry::Counter(_) => RezValues::Counter(Vec::new()),
+                    Entry::Gauge(_) => RezValues::Gauge(Vec::new()),
+                    Entry::Histogram(_) => RezValues::Histogram(Vec::new()),
+                };
+                let mut metadata = e.metadata().clone();
+                metadata
+                    .entry("metric_type".to_string())
+                    .or_insert_with(|| e.metric_type().to_string());
+                RezColumn {
+                    name,
+                    metadata,
+                    values,
+                    windows: Vec::new(),
+                }
+            });
+            Self::pad(col, row);
+            match (e, &mut col.values) {
+                (Entry::Counter(c), RezValues::Counter(v)) => v.push(Some(c.value)),
+                (Entry::Gauge(g), RezValues::Gauge(v)) => v.push(Some(g.value)),
+                (Entry::Histogram(h), RezValues::Histogram(v)) => v.push(Some(h.value.clone())),
+                _ => {}
+            }
+            col.windows.push(e.window());
+        }
+    }
+
+    fn finish(mut self) -> RezTable {
+        let rows = self.timestamps.len();
+        let columns = self
+            .order
+            .iter()
+            .map(|name| {
+                let mut col = self.columns.remove(name).unwrap();
+                Self::pad(&mut col, rows);
+                col
+            })
+            .collect();
+        RezTable {
+            sampler: self.sampler,
+            timestamps: self.timestamps,
+            columns,
+        }
+    }
+}
+
+/// Accumulates scraped snapshots into per-sampler tables, deduping by each
+/// sampler's representative acquisition window.
+pub struct RezRecorder {
+    tables: BTreeMap<String, TableBuilder>,
+    metadata: BTreeMap<String, String>,
+}
+
+impl RezRecorder {
+    pub fn new(metadata: BTreeMap<String, String>) -> Self {
+        Self {
+            tables: BTreeMap::new(),
+            metadata,
+        }
+    }
+
+    /// Partition `snapshot`'s metrics by their `sampler` label; for each sampler
+    /// append a row iff its representative window (max `end_ns` among windowed
+    /// metrics) advanced, else key on `snapshot_ts` (windowless → per-poll row).
+    pub fn ingest(&mut self, snapshot: &Snapshot, snapshot_ts: u64) {
+        let (counters, gauges, histograms) = match snapshot {
+            Snapshot::V1(s) => (&s.counters, &s.gauges, &s.histograms),
+            Snapshot::V2(s) => (&s.counters, &s.gauges, &s.histograms),
+        };
+
+        let mut groups: BTreeMap<&str, Vec<Entry<'_>>> = BTreeMap::new();
+        for c in counters {
+            let s = c
+                .metadata
+                .get("sampler")
+                .map(String::as_str)
+                .unwrap_or("unattributed");
+            groups.entry(s).or_default().push(Entry::Counter(c));
+        }
+        for g in gauges {
+            let s = g
+                .metadata
+                .get("sampler")
+                .map(String::as_str)
+                .unwrap_or("unattributed");
+            groups.entry(s).or_default().push(Entry::Gauge(g));
+        }
+        for h in histograms {
+            let s = h
+                .metadata
+                .get("sampler")
+                .map(String::as_str)
+                .unwrap_or("unattributed");
+            groups.entry(s).or_default().push(Entry::Histogram(h));
+        }
+
+        for (sampler, entries) in groups {
+            let rep_end = entries
+                .iter()
+                .filter_map(|e| e.window())
+                .map(|w| w.end_ns)
+                .max();
+            let key = rep_end.unwrap_or(snapshot_ts);
+            let table = self
+                .tables
+                .entry(sampler.to_string())
+                .or_insert_with(|| TableBuilder::new(sampler.to_string()));
+            if let Some(last) = table.last_key {
+                if key <= last {
+                    continue; // window unchanged → same observation → skip
+                }
+            }
+            table.last_key = Some(key);
+            table.push_row(snapshot_ts, &entries);
+        }
+    }
+
+    /// Test/inspection helper: the current (unpadded) table builder view.
+    #[cfg(test)]
+    pub fn table(&self, sampler: &str) -> Option<&TableBuilder> {
+        self.tables.get(sampler)
+    }
+
+    /// Consume into finalized per-sampler tables.
+    pub fn finalize_tables(self) -> Vec<RezTable> {
+        self.tables.into_values().map(TableBuilder::finish).collect()
+    }
+
+    /// Finalize and write the `.rez` archive at `path`.
+    pub fn finalize(self, path: &Path) -> Result<(), RezError> {
+        let metadata = self.metadata.clone();
+        let tables = self.finalize_tables();
+        write_archive(path, &tables, metadata)
+    }
+}
+
+#[cfg(test)]
+mod recorder_tests {
+    use super::*;
+    use metriken::Window;
+    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn cmeta(metric: &str, sampler: &str) -> HashMap<String, String> {
+        [
+            ("metric".to_string(), metric.to_string()),
+            ("sampler".to_string(), sampler.to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters,
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
+        Counter {
+            name: name.to_string(),
+            value,
+            metadata: cmeta(name, sampler),
+            window,
+        }
+    }
+
+    #[test]
+    fn windowless_sampler_writes_one_row_per_poll() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        for i in 0..3u64 {
+            let ts = 1_000 + i;
+            r.ingest(&snap(ts, vec![counter("0", "cpu_perf", i, None)]), ts);
+        }
+        let t = r.table("cpu_perf").unwrap();
+        assert_eq!(t.timestamps.len(), 3);
+    }
+
+    #[test]
+    fn unchanged_window_dedups_to_one_row() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        let w = Window::new(900, 1_000);
+        for i in 0..3u64 {
+            r.ingest(
+                &snap(1_000 + i, vec![counter("0", "drivehealth", 5, Some(w))]),
+                1_000 + i,
+            );
+        }
+        assert_eq!(r.table("drivehealth").unwrap().timestamps.len(), 1);
+    }
+
+    #[test]
+    fn advancing_window_writes_one_row_per_advance() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        for i in 0..3u64 {
+            let end = 1_000 + i * 100;
+            r.ingest(
+                &snap(
+                    2_000 + i,
+                    vec![counter("0", "cpu_usage", i, Some(Window::new(end - 50, end)))],
+                ),
+                2_000 + i,
+            );
+        }
+        assert_eq!(r.table("cpu_usage").unwrap().timestamps.len(), 3);
+    }
+
+    #[test]
+    fn mixed_sampler_advances_on_windowed_and_carries_packed_column() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        // metric "0" windowed (advances), metric "1" packed/windowless, same sampler.
+        for i in 0..2u64 {
+            let end = 1_000 + i * 100;
+            r.ingest(
+                &snap(
+                    3_000 + i,
+                    vec![
+                        counter("0", "cpu_usage", i, Some(Window::new(end - 50, end))),
+                        counter("1", "cpu_usage", 42 + i, None),
+                    ],
+                ),
+                3_000 + i,
+            );
+        }
+        let t = r.table("cpu_usage").unwrap();
+        assert_eq!(t.timestamps.len(), 2);
+        let packed = t
+            .columns
+            .values()
+            .find(|c| c.name == "1")
+            .expect("packed column present");
+        match &packed.values {
+            RezValues::Counter(v) => assert_eq!(v, &vec![Some(42), Some(43)]),
+            _ => panic!("expected counter"),
+        }
+    }
+
+    #[test]
+    fn two_samplers_split_into_two_tables() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        r.ingest(
+            &snap(
+                1_000,
+                vec![
+                    counter("0", "cpu_usage", 1, Some(Window::new(900, 1_000))),
+                    counter("9", "blockio_latency", 2, Some(Window::new(900, 1_000))),
+                ],
+            ),
+            1_000,
+        );
+        let tables = r.finalize_tables();
+        assert_eq!(tables.len(), 2);
+        assert!(tables.iter().any(|t| t.sampler == "cpu_usage"));
+        assert!(tables.iter().any(|t| t.sampler == "blockio_latency"));
+    }
+}
+
 #[cfg(test)]
 mod manifest_tests {
     use super::*;
