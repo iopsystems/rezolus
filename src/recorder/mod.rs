@@ -4,6 +4,7 @@ mod child;
 mod config;
 mod endpoint;
 mod prometheus;
+mod rez;
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
