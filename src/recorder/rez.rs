@@ -655,6 +655,11 @@ impl RezRecorder {
 }
 
 #[cfg(test)]
+pub(crate) mod recorder_tests_support {
+    pub use super::recorder_tests::{counter, snap};
+}
+
+#[cfg(test)]
 mod recorder_tests {
     use super::*;
     use metriken::Window;
@@ -671,7 +676,7 @@ mod recorder_tests {
         .collect()
     }
 
-    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+    pub fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
         Snapshot::V2(SnapshotV2 {
             systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
             duration: std::time::Duration::ZERO,
@@ -682,7 +687,7 @@ mod recorder_tests {
         })
     }
 
-    fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
+    pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
         Counter {
             name: name.to_string(),
             value,
@@ -983,5 +988,107 @@ mod archive_tests {
         assert_eq!(cpu_idx.file, "cpu_usage.parquet");
         assert_eq!(cpu_idx.rows, 2);
         assert_eq!(cpu_idx.cadence_ns, Some(1_000));
+    }
+}
+
+#[cfg(test)]
+mod finalize_tests {
+    use super::recorder_tests_support::*;
+    use super::*;
+    use metriken::Window;
+    use metriken_exposition::{Gauge, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    #[test]
+    fn recorder_finalize_writes_readable_archive() {
+        let mut r = RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        // drivehealth: same window over 3 polls → 1 row.
+        let w = Window::new(900, 1_000);
+        for i in 0..3u64 {
+            r.ingest(
+                &snap(1_000 + i, vec![counter("0", "drivehealth", 5, Some(w))]),
+                1_000 + i,
+            );
+        }
+        // cpu_perf: windowless → 3 rows.
+        for i in 0..3u64 {
+            r.ingest(
+                &snap(2_000 + i, vec![counter("1", "cpu_perf", i, None)]),
+                2_000 + i,
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("rec.rez");
+        r.finalize(&out).unwrap();
+
+        let archive = read_archive(&out).unwrap();
+        assert_eq!(
+            archive.manifest.metadata.get("source").map(String::as_str),
+            Some("rezolus")
+        );
+        let dh = archive
+            .tables
+            .iter()
+            .find(|t| t.sampler == "drivehealth")
+            .unwrap();
+        assert_eq!(dh.timestamps.len(), 1);
+        assert_eq!(dh.columns[0].windows, vec![Some(Window::new(900, 1_000))]);
+        let perf = archive
+            .tables
+            .iter()
+            .find(|t| t.sampler == "cpu_perf")
+            .unwrap();
+        assert_eq!(perf.timestamps.len(), 3);
+        assert_eq!(perf.columns[0].windows, vec![None, None, None]);
+    }
+
+    // Added coverage: a GAUGE metric must round-trip through ingest→finalize→read
+    // (the recorder sets metric_type="gauge", which the parquet reader keys on).
+    #[test]
+    fn recorder_round_trips_a_gauge_column() {
+        let mut r = RezRecorder::new(BTreeMap::new());
+        let w = Window::new(1_900, 2_000);
+        let g = Gauge {
+            name: "0".to_string(),
+            value: -7,
+            metadata: [
+                ("metric".to_string(), "mem_free".to_string()),
+                ("sampler".to_string(), "memory_meminfo".to_string()),
+            ]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            window: Some(w),
+        };
+        let s = Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(2_000),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters: Vec::new(),
+            gauges: vec![g],
+            histograms: Vec::new(),
+        });
+        r.ingest(&s, 2_000);
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("g.rez");
+        r.finalize(&out).unwrap();
+        let archive = read_archive(&out).unwrap();
+        let t = archive
+            .tables
+            .iter()
+            .find(|t| t.sampler == "memory_meminfo")
+            .unwrap();
+        assert_eq!(t.columns.len(), 1);
+        match &t.columns[0].values {
+            RezValues::Gauge(v) => assert_eq!(v, &vec![Some(-7)]),
+            other => panic!("expected gauge column, got {other:?}"),
+        }
+        assert_eq!(t.columns[0].windows, vec![Some(w)]);
     }
 }
