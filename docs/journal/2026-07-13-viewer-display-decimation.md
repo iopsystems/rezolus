@@ -105,9 +105,10 @@ feel instant. ~1.75× file-size cost, flagged for the maintainer; merged.
 - Unit tests: binary decode round-trips (`display_binary_decode`, `display_heatmap_binary`),
   tile-cache clip/coverage (`display_tile_cache`), display eligibility + boxplot series.
 - `tests/viewer_smoke.sh` green after the `display_wire` refactor.
-- **Not yet done:** browser verification across all sections + live mode, and a WASM-runtime
-  parity test (needs the pkg build; `crates/viewer/build.sh` currently hits a wasm-pack
-  `--release`/`--profile` flag conflict — pre-existing, unrelated to this change).
+- **Browser verification (2026-07-15):** file-based compare mode verified across gauges (all
+  six `ab_*` scenarios), counters, and percentiles — see the validation-pass section below.
+  Still not done: **live mode** (needs a mock agent) and a WASM-runtime parity test (needs the
+  pkg build; `crates/viewer/build.sh` wasm-pack flag conflict fixed separately in #1007).
 
 ## Landed after the initial writeup
 
@@ -117,7 +118,47 @@ feel instant. ~1.75× file-size cost, flagged for the maintainer; merged.
   (`data.js queryRangeDisplayForCapture`), rendered by `boxplot.js buildEnvelopeLines`,
   wired through `overlayLine` (`charts/compare.js`) and `extract*Capture` (`viewer_core.js`).
   The median line and its envelope share the display fetch's time grid so they stay aligned.
-  *Browser verification of the two-capture overlay still pending.*
+
+## A/B compare validation pass (2026-07-15)
+
+Synthetic A/B eyeball scenarios (`AB_SCENARIOS` in `examples/gen_display_testdata.rs` —
+regression, improvement, overlap, spread, spike-in-one-capture, crossover; each a gauge with
+deterministic per-second wiggle so decimation buckets carry a real min/max) drove a browser
+validation pass that surfaced **four bugs no unit test caught**, all now fixed and
+regression-tested (`tests/compare_display_strip.test.mjs`, `tests/boxplot_series.test.mjs`):
+
+1. **Compare overlay clobbered by single-capture display bands.** `runQuery` attaches the
+   baseline's decimated `spec.boxplot`; `line.js`/`scatter.js` prioritize it over the compare
+   `multiSeries`, so the experiment was dropped (gauges) / the bands mixed into the split lines
+   (percentiles). Fix: `compare.js stripDisplay()` removes `boxplot`/`boxplotDecimated` from
+   every line/scatter compare spec (the per-capture envelope rides in `multiSeries[].boxplot`).
+2. **Legend/tooltip marker colors from echarts' default palette.** `buildEnvelopeLines` /
+   `buildBoxplotSeries` set only `lineStyle.color`; the marker is read from `itemStyle.color`.
+   Fix: set `itemStyle.color` on the median series.
+3. **Baseline/experiment on mismatched time grids.** Baseline decimates from its native step to
+   the budget grid; the experiment was fetched at the coarse ~500-point `queryRangeFromMeta`
+   step (native < budget ⇒ no decimation), so the overlaid series coincided only every few
+   samples and the axis tooltip flickered between one series and both. Fix: fetch the experiment
+   boxplot *and* the percentile display at the native step (`viewer_core.js`,
+   `app.js queryRangeFromMeta.interval`); the percentile scatter builds its series from the
+   decimated display (aligned grid), not the raw per-second matrix.
+4. **Envelope anchored on the wrong grid.** `overlayLine` rebased each envelope on the matrix
+   `timeData[0]`, but the decimated boxplot starts at a bucket-center time — shifting the
+   experiment ~1 s off the baseline (residual tooltip flicker after fix #3). Fix: `entryFor`
+   anchors each entry on the grid it actually draws.
+
+Also landed: the **A/B divergence band** (`boxplot.js buildDivergenceBand`, computed in
+`compare.js divergenceBandFor`, rendered in `line.js`) — a neutral, semi-transparent fill
+shading the gap between the two overlaid medians (line + percentile paths). It encodes
+difference by *area* (colorblind-safe — no third hue on the blue/green pair), collapses to a
+thin line on agreement, and is drawn only on a coincident x-grid (returns null otherwise, so it
+never fills across samples taken at different times — which is why the grid-alignment fixes had
+to land first).
+
+*Detour worth banking:* the "no data" that appeared mid-session was a **stale ES-module load**,
+not a code bug — the viewer serves `lib/*.js` with no `Cache-Control`/`ETag`, so a soft refresh
+after a rebuild mixes old and new modules. A hard reload cleared it. Cache headers on the
+viewer's JS assets are now a backlog item.
 
 ## Deferred (mirrored to `docs/backlog.md`)
 
@@ -125,5 +166,13 @@ feel instant. ~1.75× file-size cost, flagged for the maintainer; merged.
   a parquet; needs a mock server replaying synthetic snapshots to test the live path (and a
   decision on default rolling window + TSDB retention).
 - **Automated browser testing** — drive the viewer headless (Chrome CDP) and assert rendered
-  chart options; the synthetic data + scriptable viewer make this tractable now.
-- **`crates/viewer/build.sh` wasm-pack flag conflict** — blocks local pkg builds.
+  chart options; the synthetic data + scriptable viewer make this tractable now. (A throwaway
+  raw-socket CDP driver worked for `Runtime.evaluate` but the app holds a persistent connection
+  that hangs `--dump-dom`/load-idle waits — a real harness needs to poll, not wait for idle.)
+- **`crates/viewer/build.sh` wasm-pack flag conflict** — blocks local pkg builds (fixed in #1007).
+- **Cache headers on the viewer's JS assets** — `lib/*.js` ships with no `Cache-Control`/`ETag`,
+  so a soft refresh after a rebuild loads a stale/mixed module set (cost a debugging detour this
+  session; surfaced as a spurious "no data"). Add `no-cache`/ETags.
+- **`reloadCurrentSection` client-only-route guard** — it server-loads `/data/<route>.json` even
+  for client-only `source/` routes (metric browser), 404-ing and logging on every selection
+  change. Skip the reload for client-only routes.
