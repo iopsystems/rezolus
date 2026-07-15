@@ -1,7 +1,9 @@
 # Measurement uncertainty — `.rez` reader ecosystem (viewer / MCP / parquet-tools)
 
 - **Opened:** 2026-07-15
-- **Status:** In progress — **Phase A landed**, B/C pre-build. Sub-project (3) of
+- **Status:** In progress — **Phase A + Phase B core landed** (reader, viewer
+  file-mode, `parquet metadata`, MCP; upload-mode + a Prometheus guard deferred),
+  C pre-build. Sub-project (3) of
   the arc: make `.rez` archives *readable* everywhere a `.parquet` is today.
   Consumes the per-sampler `.rez` format (labels + per-sampler tables + per-metric
   windows) built in
@@ -29,15 +31,21 @@
       manifest, single-metric queries route to the engine.
     - **`parquet metadata`** — `-i file.rez` summarizes the manifest
       (recordings, labels, per-sampler tables + cadence); `--json` emits it.
-    - Full bin suite green (272 passed). **Still pending in Phase B:**
-      (i) **MCP** `.rez` support — larger than planned: the MCP CLI commands and
-      server cache hold a concrete `Arc<ParquetReader>`, so it needs a
-      `MetricsSource`-polymorphic refactor (cache type + 5 call sites), not a
-      one-line swap. (ii) **Viewer upload mode** — deferred: its ingest path
-      (`ingest_baseline_from_path`) is coupled to parquet-footer reads
+    - **MCP** (`0d8d5cc9`) — an `open_source()` helper dispatches `.rez`→
+      `RezReader`, else `ParquetReader`; the CLI commands and the server's
+      cached `get_reader` were made `MetricsSource`-polymorphic
+      (`Arc<dyn MetricsSource>`). The commands only ever used trait methods, so
+      the swap was mechanical. Smoke: `mcp describe-metrics file.rez` lists
+      metrics, no `:window_*` phantoms.
+    - Full bin suite green (273 passed); clippy clean on the touched files.
+    - **Deferred (minor, tracked):** (i) **Viewer upload mode** — its ingest
+      path (`ingest_baseline_from_path`) is coupled to parquet-footer reads
       (`compute_file_checksum`, `classify_sources(Some(path))`,
-      `extract_service_extension_metadata`). (iii) The **Prometheus + `.rez`
-      early guard** (was bundled with the MCP task).
+      `extract_service_extension_metadata`); a `.rez` upload variant is a small
+      follow-up. (ii) **Prometheus + `.rez` early guard** — endpoint protocol is
+      auto-detected at scrape time, so a clean early guard needs detection
+      restructuring; today a Prometheus-only `.rez` run errors at finalize
+      ("no snapshots captured"), which is functional if not ideal UX.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) for the query-engine
