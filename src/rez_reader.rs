@@ -46,6 +46,24 @@ impl RezReader {
         Self::from_recordings(recordings, filename, pool)
     }
 
+    /// Open a `.rez` as one `RezReader` **per recording**, paired with that
+    /// recording's labels. Used by the viewer to map a 2-recording `.rez` onto
+    /// baseline/experiment without cross-recording sampler-name collisions.
+    pub fn open_recordings(
+        path: &Path,
+        pool: Arc<BufferPool>,
+    ) -> Result<Vec<(BTreeMap<String, String>, RezReader)>, Box<dyn std::error::Error>> {
+        let (_manifest, recordings) = rez::read_archive_bytes(path)?;
+        let mut out = Vec::with_capacity(recordings.len());
+        for rec in recordings {
+            let labels = rec.labels.clone();
+            let filename = Some(rec.dir.clone());
+            let reader = Self::from_recordings(vec![rec], filename, Arc::clone(&pool))?;
+            out.push((labels, reader));
+        }
+        Ok(out)
+    }
+
     fn from_recordings(
         recordings: Vec<RecordingBytes>,
         filename: Option<String>,
@@ -332,6 +350,42 @@ mod tests {
             r.is_ok(),
             "single-sampler gauge query should succeed: {r:?}"
         );
+    }
+
+    #[test]
+    fn open_recordings_returns_one_reader_per_recording() {
+        // Build a 2-recording .rez by reading a 1-recording fixture and writing
+        // it twice under distinct dirs/arms via write_archive_bytes.
+        let (_d, p) = two_sampler_rez();
+        let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
+        let rec0 = m.recordings.into_iter().next().unwrap();
+        let bytes0: Vec<Vec<u8>> = rb
+            .into_iter()
+            .next()
+            .unwrap()
+            .tables
+            .into_iter()
+            .map(|(_, b)| b)
+            .collect();
+
+        let mut a = rec0.clone();
+        a.dir = "arm0".to_string();
+        a.labels.insert("arm".to_string(), "arm0".to_string());
+        let mut b = rec0.clone();
+        b.dir = "arm1".to_string();
+        b.labels.insert("arm".to_string(), "arm1".to_string());
+
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("two_rec.rez");
+        crate::recorder::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)])
+            .unwrap();
+
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let readers = RezReader::open_recordings(&out, pool).unwrap();
+        assert_eq!(readers.len(), 2);
+        assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
+        assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
+        assert!(!readers[0].1.counter_names().is_empty());
     }
 
     #[test]
