@@ -75,6 +75,19 @@ export const relativeTimeFormatter = (ms) => {
 // single-capture spec instead. Frozen so no strategy can mutate it.
 const FALLBACK = Object.freeze({ kind: 'fallback' });
 
+// A compare-mode render must not inherit the single-capture display-mode
+// fields that runQuery attaches (`boxplot` = the decimated bands,
+// `boxplotDecimated` = its "is decimated" flag). line.js and scatter.js
+// PRIORITIZE those over the compare `multiSeries`/split data, so a spec that
+// still carries them draws only the baseline's single-capture bands and drops
+// the experiment overlay entirely (and, for percentiles, mixes bands into the
+// split lines). The per-capture envelope travels inside `multiSeries[].boxplot`
+// instead, so the top-level field is not just redundant — it's harmful. Strip
+// it from every spec a line/scatter strategy hands back to Chart. (Extraction
+// of `cap.boxplot` from `spec.boxplot` happens earlier, in the wrapper, so the
+// envelope data is already captured before this runs.)
+const stripDisplay = (spec) => ({ ...spec, boxplot: undefined, boxplotDecimated: undefined });
+
 /**
  * Dispatch on chart style and delegate to the matching strategy.
  * Returns a tagged-union result; see the module docstring above for
@@ -143,18 +156,24 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline || !experiment) return false;
 
-    const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.timeData);
-    const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, experiment.timeData);
-
     // Build one overlay entry per capture. When the capture carries a decimated
     // boxplot (min/max envelope), the entry is drawn ENTIRELY from it — median +
     // min/max on the boxplot's own time grid (rebased to relative time) — so the
     // median line and its envelope stay aligned. Otherwise fall back to the plain
     // matrix line.
-    const entryFor = (cap, sec, name, color) => {
+    //
+    // The rebase anchor MUST come from whichever grid the entry actually draws.
+    // The decimated boxplot starts at a bucket-center time that differs from the
+    // raw matrix's first timestamp; anchoring the boxplot rebase on `cap.timeData`
+    // (the matrix) shifts this capture's envelope off the other's by that
+    // difference — which is exactly the residual ~1s offset that left the two
+    // medians on non-coincident x's and the axis tooltip flickering.
+    const entryFor = (cap, name, color) => {
         const bp = cap.boxplot;
         if (bp && bp.t && bp.t.length > 0) {
-            const t = rebase(Array.from(bp.t), sec);
+            const grid = Array.from(bp.t);
+            const sec = anchorSecondsFor(anchors, cap.id, grid);
+            const t = rebase(grid, sec);
             return {
                 name, color,
                 timeData: t,
@@ -164,6 +183,7 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
             };
         }
         if (Array.isArray(cap.timeData) && cap.timeData.length > 0) {
+            const sec = anchorSecondsFor(anchors, cap.id, cap.timeData);
             return {
                 name, color,
                 timeData: rebase(cap.timeData, sec),
@@ -175,19 +195,52 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
     };
 
     const seriesList = [
-        entryFor(baseline, baseSec, labelFor(captureLabels, CAPTURE_BASELINE), BASELINE_COLOR),
-        entryFor(experiment, expSec, labelFor(captureLabels, CAPTURE_EXPERIMENT), EXPERIMENT_COLOR),
+        entryFor(baseline, labelFor(captureLabels, CAPTURE_BASELINE), BASELINE_COLOR),
+        entryFor(experiment, labelFor(captureLabels, CAPTURE_EXPERIMENT), EXPERIMENT_COLOR),
     ].filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
 
     return {
         kind: 'spec',
         spec: {
-            ...spec,
+            ...stripDisplay(spec),
             multiSeries: seriesList,
+            divergenceBand: divergenceBandFor(seriesList),
             xAxisFormatter: relativeTimeFormatter,
         },
     };
+};
+
+// Neutral band shading the gap between the two overlaid medians. Returns null
+// unless both captures are present on a COINCIDENT x-grid — never fill across
+// mismatched x's (that would draw a meaningless ribbon between samples taken at
+// different times). Where the two medians are equal the band collapses to zero
+// (a thin line); where they diverge it widens.
+const divergenceBandFor = (seriesList) => {
+    if (seriesList.length !== 2) return null;
+    const [a, b] = seriesList;
+    const ta = a.timeData;
+    const tb = b.timeData;
+    const va = a.valueData;
+    const vb = b.valueData;
+    if (!Array.isArray(ta) || !Array.isArray(tb) || ta.length === 0 || ta.length !== tb.length) {
+        return null;
+    }
+    const lower = new Array(ta.length);
+    const upper = new Array(ta.length);
+    for (let i = 0; i < ta.length; i++) {
+        if (Math.abs(ta[i] - tb[i]) > 1e-6) return null; // grids not coincident
+        const x = va?.[i];
+        const y = vb?.[i];
+        if (x == null || y == null || Number.isNaN(x) || Number.isNaN(y)) {
+            lower[i] = null;
+            upper[i] = null;
+        } else {
+            lower[i] = Math.min(x, y);
+            upper[i] = Math.max(x, y);
+        }
+    }
+    return { t: ta, lower, upper };
 };
 
 /**
@@ -414,8 +467,26 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFo
         const b = mapB.get(label);
         const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, a.timeData);
         const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, b.timeData);
+        const multiSeries = [
+            {
+                name: labelFor(captureLabels, CAPTURE_BASELINE),
+                color: BASELINE_COLOR,
+                timeData: rebase(a.timeData, baseSec),
+                valueData: a.valueData,
+                fill: false,
+                scatter: asScatter,
+            },
+            {
+                name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
+                color: EXPERIMENT_COLOR,
+                timeData: rebase(b.timeData, expSec),
+                valueData: b.valueData,
+                fill: false,
+                scatter: asScatter,
+            },
+        ];
         return {
-            ...spec,
+            ...stripDisplay(spec),
             opts: {
                 ...spec.opts,
                 id: `${spec.opts.id || 'chart'}::${label}`,
@@ -426,24 +497,10 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFo
             // as a small header above this sub-chart. The full opts.title
             // stays around for tooltip/fallback use.
             _splitLabel: label,
-            multiSeries: [
-                {
-                    name: labelFor(captureLabels, CAPTURE_BASELINE),
-                    color: BASELINE_COLOR,
-                    timeData: rebase(a.timeData, baseSec),
-                    valueData: a.valueData,
-                    fill: false,
-                    scatter: asScatter,
-                },
-                {
-                    name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
-                    color: EXPERIMENT_COLOR,
-                    timeData: rebase(b.timeData, expSec),
-                    valueData: b.valueData,
-                    fill: false,
-                    scatter: asScatter,
-                },
-            ],
+            multiSeries,
+            // Same neutral gap-shading the line overlays get, per sub-chart:
+            // the difference between this quantile's baseline and experiment.
+            divergenceBand: divergenceBandFor(multiSeries),
             xAxisFormatter: relativeTimeFormatter,
         };
     });

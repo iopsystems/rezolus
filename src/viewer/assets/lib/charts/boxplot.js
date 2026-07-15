@@ -105,6 +105,10 @@ export function buildBoxplotSeries(s, opts = {}) {
             data: zipMs(s.t, s.median),
             symbol: 'none',
             lineStyle: { color: lineColor, width: 1.5 },
+            // Legend/tooltip markers read `itemStyle.color`, NOT `lineStyle.color`
+            // — without this echarts colors the marker from its default palette,
+            // so the legend swatch wouldn't match the drawn line.
+            itemStyle: { color: lineColor },
             emphasis: { focus: 'series' },
             z: zBase + 3,
         });
@@ -140,9 +144,41 @@ export function buildEnvelopeLines(s, opts = {}) {
             data: zipMs(s.t, s.median),
             symbol: 'none',
             lineStyle: { color, width: 1.5 },
+            // Legend/tooltip markers read `itemStyle.color`, not `lineStyle.color`;
+            // without it the marker falls back to echarts' palette and the
+            // baseline/experiment swatches don't match their overlay lines.
+            itemStyle: { color },
             emphasis: { focus: 'series' },
             z: zBase + 3,
         },
+    ];
+}
+
+// Neutral-filled band between two overlaid median lines (A/B compare mode):
+// shades the gap between baseline and experiment so agreement reads as a thin
+// line (band collapses to zero) and divergence as a widening ribbon. The fill
+// encodes difference by AREA, not a new hue, so it stays colorblind-safe (a
+// third color would regress the blue/green pair). `band`: { t (seconds),
+// lower, upper } — per-x min/max of the two medians; null entries leave a gap.
+// Drawn behind the median/envelope lines via a low `z`.
+export function buildDivergenceBand(band, opts = {}) {
+    const { color = '#94a3b8', opacity = 0.28, z = 0, stackId = 'divergence' } = opts;
+    const n = band.t.length;
+    const baseData = new Array(n);
+    const fillData = new Array(n);
+    for (let i = 0; i < n; i++) {
+        const lo = band.lower[i];
+        const hi = band.upper[i];
+        const gap = (lo == null || hi == null) ? null : hi - lo;
+        baseData[i] = [band.t[i] * 1000, lo == null ? null : lo];
+        fillData[i] = [band.t[i] * 1000, gap];
+    }
+    const common = { type: 'line', symbol: 'none', silent: true, tooltip: { show: false }, stack: stackId, z };
+    return [
+        // invisible baseline at the lower median
+        { ...common, data: baseData, lineStyle: { opacity: 0 } },
+        // stacked fill spanning up to the higher median
+        { ...common, data: fillData, lineStyle: { opacity: 0 }, areaStyle: { color, opacity } },
     ];
 }
 

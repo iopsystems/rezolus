@@ -19,7 +19,7 @@ import {
     COLORS,
 } from './base.js';
 import { FONTS } from './util/fonts.js';
-import { buildBoxplotSeries, buildEnvelopeLines } from './boxplot.js';
+import { buildBoxplotSeries, buildEnvelopeLines, buildDivergenceBand } from './boxplot.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -191,7 +191,12 @@ export function configureLineChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val, null, chart),
         },
-        series: echartsSeries,
+        // Compare mode: shade the gap between the two overlaid medians (the
+        // divergence band) BEHIND the lines, so agreement reads as a thin line
+        // and divergence as a widening ribbon. Prepended so its low z draws first.
+        series: chart.spec.divergenceBand
+            ? [...buildDivergenceBand(chart.spec.divergenceBand), ...echartsSeries]
+            : echartsSeries,
     };
 
     // Multi-series charts get the same legend treatment scatter uses

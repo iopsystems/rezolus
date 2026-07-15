@@ -178,7 +178,15 @@ const queryRangeFromMeta = (meta) => {
     const start = Number(minT);
     const end = Number(maxT);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-    return { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+    return {
+        start, end,
+        step: Math.max(1, Math.floor((end - start) / 500)),
+        // Native sampling step, so the compare-mode boxplot fetch can decimate
+        // the experiment onto the SAME grid as the baseline (see
+        // fetchExperimentResult). Distinct from `step`, which targets ~500
+        // points for the plain matrix fetch.
+        interval: Math.max(1, Number(data.interval) || 1),
+    };
 };
 
 const attachExperiment = async (file) => {
