@@ -1145,7 +1145,9 @@ mod archive_tests {
             &out,
             &[RecordingData {
                 dir: "rezolus".to_string(),
-                labels: [("source".to_string(), "rezolus".to_string())].into_iter().collect(),
+                labels: [("source".to_string(), "rezolus".to_string())]
+                    .into_iter()
+                    .collect(),
                 metadata: BTreeMap::new(),
                 tables: &tables,
             }],

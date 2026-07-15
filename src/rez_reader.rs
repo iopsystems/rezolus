@@ -113,7 +113,9 @@ impl MetricsSource for RezReader {
         end_s: f64,
         step_s: f64,
     ) -> Result<QueryResult, QueryError> {
-        self.route(expr)?.reader.query_range(expr, start_s, end_s, step_s)
+        self.route(expr)?
+            .reader
+            .query_range(expr, start_s, end_s, step_s)
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
         self.route(expr)?.reader.query(expr, time)
@@ -138,13 +140,22 @@ impl MetricsSource for RezReader {
         union_sorted(self.tables.iter().map(|t| t.reader.histogram_names()))
     }
     fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.tables.iter().flat_map(|t| t.reader.counter_labels(name)).collect()
+        self.tables
+            .iter()
+            .flat_map(|t| t.reader.counter_labels(name))
+            .collect()
     }
     fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.tables.iter().flat_map(|t| t.reader.gauge_labels(name)).collect()
+        self.tables
+            .iter()
+            .flat_map(|t| t.reader.gauge_labels(name))
+            .collect()
     }
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
-        self.tables.iter().flat_map(|t| t.reader.histogram_labels(name)).collect()
+        self.tables
+            .iter()
+            .flat_map(|t| t.reader.histogram_labels(name))
+            .collect()
     }
 
     // ── Time / interval: union extent, finest interval ──
@@ -188,7 +199,10 @@ impl MetricsSource for RezReader {
         self.metadata.get(key).cloned()
     }
     fn file_metadata(&self) -> HashMap<String, String> {
-        self.metadata.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 }
 
@@ -250,8 +264,12 @@ mod tests {
     /// Build a 2-sampler .rez fixture on disk; return (tempdir, path).
     pub(super) fn two_sampler_rez() -> (tempfile::TempDir, std::path::PathBuf) {
         let mut r = RezRecorder::new(
-            [("source".to_string(), "rezolus".to_string())].into_iter().collect(),
-            [("source".to_string(), "rezolus".to_string())].into_iter().collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
             "rezolus".to_string(),
         );
         for i in 0..3u64 {
@@ -310,7 +328,10 @@ mod tests {
         let cols = reader.columns("frequency").unwrap();
         assert!(cols.iter().any(|c| c.contains("frequency")));
         let r = reader.query_range("frequency", start, end + 1.0, 1.0);
-        assert!(r.is_ok(), "single-sampler gauge query should succeed: {r:?}");
+        assert!(
+            r.is_ok(),
+            "single-sampler gauge query should succeed: {r:?}"
+        );
     }
 
     #[test]
