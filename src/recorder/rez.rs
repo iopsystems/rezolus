@@ -12,14 +12,14 @@ pub const REZ_SCHEMA_VERSION: u32 = 1;
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
 
 /// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezManifest {
     pub version: u32,
     pub recordings: Vec<RezRecording>,
 }
 
 /// One recording = one endpoint on one host = a label set + its per-sampler tables.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezRecording {
     /// Filesystem-safe directory holding this recording's parquet tables in the tar.
     pub dir: String,
@@ -32,7 +32,7 @@ pub struct RezRecording {
 }
 
 /// One entry in the manifest's table index.
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezTableIndex {
     pub sampler: String,
     pub file: String,
@@ -416,6 +416,50 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
     append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
     for (name, bytes) in &files {
         append_tar_entry(&mut builder, name, bytes)?;
+    }
+    builder.into_inner()?.sync_all()?;
+    Ok(())
+}
+
+/// Write a multi-recording `.rez` from already-encoded per-table parquet bytes
+/// (no re-encode). `recordings` pairs each recording's manifest entry with its
+/// table bytes (parallel to `recording.tables`). Errors on a duplicate `dir`
+/// (the reader keys tables by `<dir>/<file>`, so a collision would clobber) or a
+/// table-count/bytes mismatch. The caller assigns unique dirs.
+pub fn write_archive_bytes(
+    path: &Path,
+    recordings: &[(RezRecording, Vec<Vec<u8>>)],
+) -> Result<(), RezError> {
+    let mut seen_dirs = std::collections::HashSet::new();
+    for (rec, _) in recordings {
+        if !seen_dirs.insert(rec.dir.clone()) {
+            return Err(format!("duplicate recording dir {:?}", rec.dir).into());
+        }
+    }
+    let manifest = RezManifest {
+        version: REZ_SCHEMA_VERSION,
+        recordings: recordings.iter().map(|(r, _)| r.clone()).collect(),
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+
+    let out = std::fs::File::create(path)?;
+    let mut builder = tar::Builder::new(out);
+    builder.mode(tar::HeaderMode::Deterministic);
+    append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
+    for (rec, table_bytes) in recordings {
+        if table_bytes.len() != rec.tables.len() {
+            return Err(format!(
+                "recording {} has {} table index entries but {} byte blobs",
+                rec.dir,
+                rec.tables.len(),
+                table_bytes.len()
+            )
+            .into());
+        }
+        for (idx, bytes) in rec.tables.iter().zip(table_bytes) {
+            let name = format!("{}/{}", rec.dir, idx.file);
+            append_tar_entry(&mut builder, &name, bytes)?;
+        }
     }
     builder.into_inner()?.sync_all()?;
     Ok(())
@@ -1163,6 +1207,55 @@ mod archive_tests {
         assert_eq!(sampler, "cpu_usage");
         assert_eq!(&bytes[..4], b"PAR1");
         assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
+    }
+
+    #[test]
+    fn write_archive_bytes_round_trips_multiple_recordings() {
+        let mk = |sampler: &str, arm: &str| -> (tempfile::TempDir, std::path::PathBuf) {
+            let t = RezTable {
+                sampler: sampler.to_string(),
+                timestamps: vec![1_000, 2_000],
+                columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
+            };
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("one.rez");
+            let tables = [t];
+            write_archive(
+                &p,
+                &[RecordingData {
+                    dir: "rezolus".to_string(),
+                    labels: [("arm".to_string(), arm.to_string())].into_iter().collect(),
+                    metadata: BTreeMap::new(),
+                    tables: &tables,
+                }],
+            )
+            .unwrap();
+            (d, p)
+        };
+        let (_da, a) = mk("cpu_usage", "redis");
+        let (_db, b) = mk("cpu_usage", "valkey");
+
+        let mut recs: Vec<(RezRecording, Vec<Vec<u8>>)> = Vec::new();
+        for (i, p) in [a, b].iter().enumerate() {
+            let (m, rb) = read_archive_bytes(p).unwrap();
+            let mut rec = m.recordings.into_iter().next().unwrap();
+            rec.dir = format!("rec{i}");
+            let bytes = rb.into_iter().next().unwrap().tables.into_iter().map(|(_, b)| b).collect();
+            recs.push((rec, bytes));
+        }
+
+        let outdir = tempfile::tempdir().unwrap();
+        let out = outdir.path().join("ab.rez");
+        write_archive_bytes(&out, &recs).unwrap();
+
+        let (m, rb) = read_archive_bytes(&out).unwrap();
+        assert_eq!(m.recordings.len(), 2);
+        assert_eq!(m.recordings[0].dir, "rec0");
+        assert_eq!(m.recordings[1].dir, "rec1");
+        assert_eq!(m.recordings[0].labels.get("arm").map(String::as_str), Some("redis"));
+        assert_eq!(m.recordings[1].labels.get("arm").map(String::as_str), Some("valkey"));
+        assert_eq!(rb.len(), 2);
+        assert_eq!(rb[0].tables[0].0, "cpu_usage");
     }
 
     #[test]
