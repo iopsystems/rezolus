@@ -9,7 +9,24 @@ mod describe_metrics;
 mod server;
 
 use chrono::{DateTime, Utc};
-use metriken_query::{MetricsSource, ParquetReader, QueryResult};
+use metriken_query::{MetricsSource, QueryResult};
+
+/// Open a recording as a `MetricsSource`, dispatching `.rez` archives to
+/// `RezReader` and everything else to `ParquetReader` (by content, not extension).
+pub(crate) fn open_source(
+    file: &std::path::Path,
+) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+    if crate::recorder::rez::is_rez_path(file).unwrap_or(false) {
+        let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+        Ok(std::sync::Arc::new(
+            crate::rez_reader::RezReader::open_with_pool(file, pool)?,
+        ))
+    } else {
+        Ok(std::sync::Arc::new(metriken_query::ParquetReader::open(
+            file,
+        )?))
+    }
+}
 
 /// Format recording information for display
 pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> String {
@@ -97,7 +114,7 @@ fn run_server(config: Config) {
 }
 
 fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -105,7 +122,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
         }
     };
 
-    match correlation::calculate_correlation(&reader, &query1, &query2) {
+    match correlation::calculate_correlation(reader.as_ref(), &query1, &query2) {
         Ok(result) => {
             println!("{}", correlation::format_correlation_result(&result));
         }
@@ -117,7 +134,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
 }
 
 fn run_describe_recording(file: PathBuf) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -125,12 +142,12 @@ fn run_describe_recording(file: PathBuf) {
         }
     };
 
-    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &reader);
+    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), reader.as_ref());
     println!("{output}");
 }
 
 fn run_describe_metrics(file: PathBuf) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -138,13 +155,13 @@ fn run_describe_metrics(file: PathBuf) {
         }
     };
 
-    let output = describe_metrics::format_metrics_description(&reader);
+    let output = describe_metrics::format_metrics_description(reader.as_ref());
     println!("{output}");
 }
 
 fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
-    let reader = match ParquetReader::open(&file) {
-        Ok(r) => Arc::new(r),
+    let reader = match open_source(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
@@ -170,7 +187,7 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
     run_exhaustive_detection(reader);
 }
 
-fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
+fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
     // Metrics to skip - these are raw building blocks or redundant metrics
     let skip_metrics = [
         // CPU building blocks - only meaningful when combined
@@ -361,7 +378,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
 }
 
 fn run_query(file: PathBuf, query: String) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -718,4 +735,82 @@ pub fn command() -> Command {
                         .index(2),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recorder::rez::RezRecorder;
+    use metriken::Window;
+    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
+        Counter {
+            name: name.to_string(),
+            value: v,
+            metadata: [
+                ("metric".to_string(), name.to_string()),
+                ("sampler".to_string(), sampler.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            window: w,
+        }
+    }
+
+    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters,
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    /// Populate a recorder with a few rows of a single-sampler counter.
+    fn build_recorder() -> RezRecorder {
+        let mut r = RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        );
+        for i in 0..3u64 {
+            let ts = 1_000_000_000 * (i + 1);
+            let w = Some(Window::new(ts - 50_000_000, ts));
+            r.ingest(&snap(ts, vec![counter("cpu_cycles", "cpu_usage", i, w)]), ts);
+        }
+        r
+    }
+
+    #[test]
+    fn open_source_reads_rez_and_parquet() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Build a .rez archive and open it via open_source.
+        let rez_path = dir.path().join("rec.rez");
+        build_recorder().finalize(&rez_path).unwrap();
+        let rez_source = open_source(&rez_path).unwrap();
+        assert!(
+            !rez_source.counter_names().is_empty(),
+            ".rez source should expose counter names"
+        );
+
+        // Build a bare parquet table and open it via open_source.
+        let parquet_path = dir.path().join("rec.parquet");
+        let tables = build_recorder().finalize_tables();
+        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
+        std::fs::write(&parquet_path, bytes).unwrap();
+        assert!(
+            open_source(&parquet_path).is_ok(),
+            "bare parquet should open as a MetricsSource"
+        );
+    }
 }
