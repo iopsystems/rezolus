@@ -69,24 +69,62 @@ impl RezReader {
             filename,
         })
     }
+
+    /// Sub-readers whose `columns(query)` is non-empty (own ≥1 referenced metric).
+    fn owners(&self, query: &str) -> Result<Vec<&SamplerReader>, QueryError> {
+        let mut out = Vec::new();
+        for t in &self.tables {
+            if !t.reader.columns(query)?.is_empty() {
+                out.push(t);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Resolve the single sub-reader that owns every metric a query references.
+    /// Errors clearly when a query spans two samplers (cross-timeline alignment
+    /// is a later phase) or references no known metric.
+    fn route(&self, query: &str) -> Result<&SamplerReader, QueryError> {
+        let owners = self.owners(query)?;
+        match owners.as_slice() {
+            [one] => Ok(one),
+            [] => Err(QueryError::ParseError(format!(
+                "query references no metric present in this .rez: {query}"
+            ))),
+            many => {
+                let mut samplers: Vec<&str> = many.iter().map(|t| t.sampler.as_str()).collect();
+                samplers.sort();
+                Err(QueryError::ParseError(format!(
+                    "cross-timeline query spans samplers {} — per-sampler alignment \
+                     (interpolate/decimate) is not yet supported; query one sampler at a time",
+                    samplers.join(", ")
+                )))
+            }
+        }
+    }
 }
 
 impl MetricsSource for RezReader {
-    // ── Query methods: implemented in Task 3. Until then, a clear error. ──
+    // ── Query methods: route to the sub-reader owning the referenced metrics. ──
     fn query_range(
         &self,
-        _expr: &str,
-        _start_s: f64,
-        _end_s: f64,
-        _step_s: f64,
+        expr: &str,
+        start_s: f64,
+        end_s: f64,
+        step_s: f64,
     ) -> Result<QueryResult, QueryError> {
-        Err(QueryError::ParseError("rez query routing not yet wired".into()))
+        self.route(expr)?.reader.query_range(expr, start_s, end_s, step_s)
     }
-    fn query(&self, _expr: &str, _time: Option<f64>) -> Result<QueryResult, QueryError> {
-        Err(QueryError::ParseError("rez query routing not yet wired".into()))
+    fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
+        self.route(expr)?.reader.query(expr, time)
     }
-    fn columns(&self, _query: &str) -> Result<HashSet<String>, QueryError> {
-        Err(QueryError::ParseError("rez query routing not yet wired".into()))
+    fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
+        // columns() is answerable as the union — it never crosses timelines.
+        let mut out = HashSet::new();
+        for t in &self.tables {
+            out.extend(t.reader.columns(query)?);
+        }
+        Ok(out)
     }
 
     // ── Union metadata / naming / labels ──
@@ -167,7 +205,7 @@ mod tests {
     use super::*;
     use crate::recorder::rez::RezRecorder;
     use metriken::Window;
-    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
     use std::time::SystemTime;
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
@@ -184,13 +222,27 @@ mod tests {
         }
     }
 
-    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+    fn gauge(name: &str, sampler: &str, v: i64, w: Option<Window>) -> Gauge {
+        Gauge {
+            name: name.to_string(),
+            value: v,
+            metadata: [
+                ("metric".to_string(), name.to_string()),
+                ("sampler".to_string(), sampler.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            window: w,
+        }
+    }
+
+    fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {
         Snapshot::V2(SnapshotV2 {
             systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
             duration: std::time::Duration::ZERO,
             metadata: HashMap::new(),
             counters,
-            gauges: Vec::new(),
+            gauges,
             histograms: Vec::new(),
         })
     }
@@ -203,16 +255,22 @@ mod tests {
             "rezolus".to_string(),
         );
         for i in 0..3u64 {
-            let end = 1_000 + i * 100;
+            // Seconds-scale timestamps (1s, 2s, 3s) so query-engine time handling
+            // is well-behaved; windows advance each poll → 3 rows per sampler.
+            let ts = 1_000_000_000 * (i + 1);
+            let w = Some(Window::new(ts - 50_000_000, ts));
             r.ingest(
                 &snap(
-                    1_000 + i,
+                    ts,
                     vec![
-                        counter("cpu_cycles", "cpu_usage", i, Some(Window::new(end - 50, end))),
-                        counter("reads", "blockio_requests", i, Some(Window::new(end - 50, end))),
+                        counter("cpu_cycles", "cpu_usage", i, w),
+                        counter("reads", "blockio_requests", i, w),
                     ],
+                    // A gauge in cpu_usage: bare gauge selectors are valid instant
+                    // vectors, so the delegation test can actually evaluate.
+                    vec![gauge("frequency", "cpu_usage", 2_000 + i as i64, w)],
                 ),
-                1_000 + i,
+                ts,
             );
         }
         let dir = tempfile::tempdir().unwrap();
@@ -238,5 +296,37 @@ mod tests {
         let pool = BufferPool::new(64 * 1024 * 1024);
         let reader = RezReader::open_with_pool(&path, pool).unwrap();
         assert_eq!(reader.source(), "rezolus");
+    }
+
+    #[test]
+    fn single_sampler_query_delegates() {
+        let (_d, path) = two_sampler_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+        let (start, end) = reader.time_range().unwrap();
+        // "frequency" is a gauge in the cpu_usage table only → routes there and
+        // resolves (bare gauge selectors are valid instant vectors; a bare
+        // counter would need rate()). columns() also finds it via that reader.
+        let cols = reader.columns("frequency").unwrap();
+        assert!(cols.iter().any(|c| c.contains("frequency")));
+        let r = reader.query_range("frequency", start, end + 1.0, 1.0);
+        assert!(r.is_ok(), "single-sampler gauge query should succeed: {r:?}");
+    }
+
+    #[test]
+    fn cross_sampler_query_errors_naming_both() {
+        let (_d, path) = two_sampler_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+        // cpu_cycles (cpu_usage) and reads (blockio_requests) live in different
+        // tables; a query spanning both must error, naming both samplers.
+        let err = reader
+            .query_range("cpu_cycles + reads", 0.0, 10.0, 1.0)
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("cpu_usage") && msg.contains("blockio_requests"),
+            "got: {msg}"
+        );
     }
 }
