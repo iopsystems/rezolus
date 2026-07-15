@@ -11,14 +11,20 @@
   that make acquisition windows *usable in analysis* (the arc's Phase 2 archive +
   the windows half of Phase 3, pulled forward). Readers (3) + query/rate-error-bars
   (4) follow.
-  - **Format revision pending (label-set model, Section 2).** The initial
-    build used a flat `<sampler>.parquet` layout with one file-level metadata map.
-    A shakedown surfaced that A/B — especially *multi-host* A/B (client+server
+  - **Format revision LANDED (label-set model, Section 2)** — commits
+    `f895c057` (rez core: nested recordings + label helpers) and `74afc5d8`
+    (`--label` + `build_rez_labels` + wiring). The initial build used a flat
+    `<sampler>.parquet` layout with one file-level metadata map. A shakedown
+    surfaced that A/B — especially *multi-host* A/B (client+server
     Valkey-vs-Redis) — has arbitrary, varying grouping dimensions no fixed
-    hierarchy holds. So `.rez` becomes a **bag of label-tagged recordings**
+    hierarchy holds. So `.rez` is now a **bag of label-tagged recordings**
     (`<recording-dir>/<sampler>.parquet` + a manifest of `recordings[]` with a
     label map + per-recording metadata). The per-sampler parquet tables (window
-    columns, dedup) are unchanged.
+    columns, dedup) are unchanged. Re-validated live (2026-07-15): a 5 s labeled
+    recording (`--label arm=baseline`) produced a `.rez` whose tar nests
+    `manifest.json` + `rezolus/<sampler>.parquet`, `recordings[0].labels =
+    {arm: baseline, host: delta (from systeminfo), source: rezolus}`, 25 tables,
+    and window-advance dedup still gives drivehealth 1 row vs fast samplers 7.
   - **Grounded review of the flat build → label-set delta** (verified against
     `src/recorder/rez.rs` and `src/recorder/mod.rs` on 2026-07-14). The per-metric
     parquet layer needs **no change**: `table_to_batch`/`write_table_parquet`/
