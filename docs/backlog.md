@@ -91,24 +91,22 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
   gap-shading **divergence band** between the two medians. Browser-verified in
   file compare mode across gauges, counters, and percentiles (2026-07-15); the
   validation pass fixed four overlay/color/grid-alignment bugs — see the journal.
-- **Cache headers on the viewer's JS assets** — Open. `lib/*.js` ships with no
-  `Cache-Control`/`ETag`, so a soft refresh after a rebuild loads a stale/mixed
-  ES-module set (surfaced as a spurious "no data" this session). Add `no-cache`/
-  ETags so dev refreshes are reliable.
-- **`reloadCurrentSection` client-only-route guard** — Open. It server-loads
-  `/data/<route>.json` even for client-only `source/` routes, 404-ing and logging
-  on every selection change. Skip the reload for client-only routes.
-- **Live mock-agent + synthetic-live** — Open. Live mode connects to an agent
-  msgpack endpoint, not a parquet; a mock server replaying synthetic snapshots is
-  needed to test the live display path. Pairs with a decision on the default live
-  window (bounded rolling vs full history) and in-memory TSDB retention.
+- **Cache headers on the viewer's JS assets** — Done. `routes.rs` `lib`/`index` now
+  send an ETag (byte hash) + `Cache-Control: no-cache` and honor `If-None-Match`
+  with a `304`, so refreshes revalidate and never load a stale/mixed module set.
+- **`reloadCurrentSection` client-only-route guard** — Done. Skips the server
+  section reload for client-only `source/` routes (`app.js`), killing the
+  per-selection 404 + console error.
+- **Live mock-agent + synthetic-live** — Open (manual eyeball of live mode done
+  2026-07-15). Automating it still needs a mock server replaying synthetic msgpack
+  snapshots. Pairs with a decision on the default live window (bounded rolling vs
+  full history) and in-memory TSDB retention.
 - **Automated browser testing** — Idea. Drive the viewer headless (Chrome CDP) and
   assert rendered chart options; the synthetic generator + scriptable viewer make
   it tractable. A WASM-runtime parity test (server vs WASM display bytes for a
   fixture) is the specific gap the `viewer-parity` skill calls for.
-- **`crates/viewer/build.sh` wasm-pack flag conflict** — Fix pending in **#1007**
-  (blocks local pkg builds until merged). Passed `--profile wasm-release` while
-  wasm-pack 0.13.1 also adds `--release`; the two are mutually exclusive.
+- **`crates/viewer/build.sh` wasm-pack flag conflict** — Done (PR #1007). Was
+  passing `--profile wasm-release` while wasm-pack 0.13.1 also adds `--release`.
 - **Reopen conditions for the 5 measured NO-GOs** (strided-median read, cumulative
   histogram quantiles, decode worker, aggregation worker, M4) live in the journal
   entry — don't re-litigate without the stated trigger.

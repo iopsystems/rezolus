@@ -341,6 +341,12 @@ const reloadCurrentSection = async () => {
     if (!currentRoute) return;
     const section = currentRoute.replace(/^\//, '');
     if (!section) return;
+    // Client-only routes (the simple-capture metric browser at /source/<name>)
+    // have no server-generated section payload — loadSection would fetch
+    // /data/source/<name>.json and 404 on every selection change, logging an
+    // error. The metric browser fetches its own catalog, so there's nothing to
+    // reload here.
+    if (section.startsWith('source/')) return;
 
     try {
         delete sectionResponseCache[section];
