@@ -1,13 +1,13 @@
 //! Synthetic display-mode test data with KNOWN properties, so backend tests can
 //! assert the decimation guarantees *exactly* rather than eyeballing real data:
 //!
-//!   - `synth_gauge`   — flat baseline + isolated 1-sample spikes at known
-//!                       seconds (tests min/max spike preservation).
-//!   - `synth_counter` — cumulative counter whose rate has periodic bursts
-//!                       (tests rate() + band over a bursty signal).
-//!   - `synth_latency` — H2 histogram, ~1 ms bulk + a heavy tail, with extra
-//!                       tail mass injected at known seconds (tests percentile
-//!                       scatter/bands, the bucket heatmap, and the spectrum).
+//!   - `synth_gauge`: flat baseline + isolated 1-sample spikes at known seconds
+//!     (tests min/max spike preservation).
+//!   - `synth_counter`: cumulative counter whose rate has periodic bursts (tests
+//!     rate() + band over a bursty signal).
+//!   - `synth_latency`: H2 histogram, ~1 ms bulk + a heavy tail, with extra tail
+//!     mass injected at known seconds (tests percentile scatter/bands, the
+//!     bucket heatmap, and the spectrum).
 //!
 //! Duration is 3600 s at 1 s interval, so any point budget < 3600 forces
 //! decimation and exercises the display/heatmap decimate-then-refetch path.
@@ -15,6 +15,16 @@
 //! One output → single-capture file. Two outputs → baseline + experiment, where
 //! the experiment carries a deliberate REGRESSION (higher gauge floor, ~2×
 //! latency) so compare-mode / diff paths have a detectable delta.
+//!
+//! For eyeballing A/B COMPARE-MODE rendering, the file also carries a set of
+//! `ab_*` gauge metrics, each engineered to exercise a distinct overlay
+//! situation (see `AB_SCENARIOS` below): a clear regression, an improvement
+//! (experiment BELOW baseline — checks the baseline-on-top z-order), a
+//! dead-on overlap (checks the two line-envelopes stay legible instead of
+//! muddying), same-median/different-spread, a spike present in only the
+//! experiment, and a crossover where neither capture is uniformly on top.
+//! Every `ab_*` gauge wiggles per-second so each decimation bucket has a real
+//! min/max range for the envelope to draw.
 //!
 //!   cargo run --example gen_display_testdata -- <baseline.parquet> [<experiment.parquet>]
 
@@ -44,6 +54,82 @@ const GAUGE_SPIKE_SECS: &[u64] = &[907, 1823, 2731];
 const LAT_SPIKE_SECS: &[u64] = &[1237, 2411];
 const MS: u64 = 1_000_000; // ns per millisecond
 
+// Off-grid seconds where the `ab_spike_exp` metric spikes in the EXPERIMENT
+// only (baseline stays flat), so compare mode must show a spike on exactly one
+// envelope.
+const AB_SPIKE_SECS: &[u64] = &[613, 1451, 2897];
+
+// A/B compare-mode eyeball scenarios. Each is a gauge metric `ab_<key>` whose
+// per-second value is `value(second, is_experiment)`. Loading the baseline +
+// experiment pair renders all of these as separate compare-mode charts, so one
+// A/B session exercises every overlay situation at once.
+//
+// Determinism: values are pure functions of the second (no RNG), so fixtures
+// are byte-reproducible and percentiles/envelopes don't drift between runs.
+struct AbScenario {
+    key: &'static str,
+    what: &'static str, // one-line: what the chart should show (printed as a checklist)
+    value: fn(u64, bool) -> i64,
+}
+
+// Deterministic per-second pseudo-noise in [-amp, amp]. A cheap integer hash
+// spreads adjacent seconds so each decimation bucket has a genuine min/max
+// range — without it a flat gauge has min==median==max and the envelope is a
+// single line with nothing to show.
+fn wiggle(s: u64, amp: i64) -> i64 {
+    if amp == 0 {
+        return 0;
+    }
+    let h = s
+        .wrapping_mul(2_654_435_761)
+        .rotate_left(13)
+        .wrapping_add(s.wrapping_mul(40_503));
+    (h % (2 * amp as u64 + 1)) as i64 - amp
+}
+
+const AB_SCENARIOS: &[AbScenario] = &[
+    AbScenario {
+        key: "regression",
+        what: "experiment (~160) clearly ABOVE baseline (~100); both wiggle ±15",
+        value: |s, exp| if exp { 160 } else { 100 } + wiggle(s, 15),
+    },
+    AbScenario {
+        key: "improvement",
+        what: "experiment (~100) BELOW baseline (~160) — checks baseline draws on top",
+        value: |s, exp| if exp { 100 } else { 160 } + wiggle(s, 15),
+    },
+    AbScenario {
+        key: "overlap",
+        what: "baseline and experiment IDENTICAL (~100) — both line-envelopes must stay legible, not muddy",
+        value: |s, _exp| 100 + wiggle(s, 15),
+    },
+    AbScenario {
+        key: "spread",
+        what: "same median (~100), baseline TIGHT (±5) vs experiment WIDE (±45) — min/max lines diverge, medians coincide",
+        value: |s, exp| 100 + wiggle(s, if exp { 45 } else { 5 }),
+    },
+    AbScenario {
+        key: "spike_exp",
+        what: "both flat ~100; experiment spikes to 600 at a few off-grid seconds — envelope catches a ONE-SIDED spike",
+        value: |s, exp| {
+            if exp && AB_SPIKE_SECS.contains(&s) {
+                600
+            } else {
+                100 + wiggle(s, 8)
+            }
+        },
+    },
+    AbScenario {
+        key: "crossover",
+        what: "baseline ramps 150->50, experiment 50->150 — they cross mid-window; neither is uniformly on top",
+        value: |s, exp| {
+            let ramp = (100 * s / DURATION_S) as i64; // 0..100 over the window
+            let base = if exp { 50 + ramp } else { 150 - ramp };
+            base + wiggle(s, 8)
+        },
+    },
+];
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.len() > 2 {
@@ -53,6 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     write_capture(&args[0], false)?;
     if let Some(exp) = args.get(1) {
         write_capture(exp, true)?;
+        eprintln!("\nA/B compare-mode eyeball checklist (open baseline + experiment):");
+        for sc in AB_SCENARIOS {
+            eprintln!("  ab_{:<11} {}", sc.key, sc.what);
+        }
     }
     Ok(())
 }
@@ -98,6 +188,12 @@ fn write_capture(path: &str, regression: bool) -> Result<(), Box<dyn std::error:
     }
     let hist_col = list_u64(&hist_rows);
 
+    // A/B eyeball scenarios: one gauge column per scenario.
+    let ab_cols: Vec<Vec<i64>> = AB_SCENARIOS
+        .iter()
+        .map(|sc| (0..DURATION_S).map(|s| (sc.value)(s, regression)).collect())
+        .collect();
+
     // ── schema ──────────────────────────────────────────────────────────────
     let gauge_meta = meta(&[("metric_type", "gauge")]);
     let counter_meta = meta(&[("metric_type", "counter")]);
@@ -107,24 +203,33 @@ fn write_capture(path: &str, regression: bool) -> Result<(), Box<dyn std::error:
         ("max_value_power", &MVP.to_string()),
     ]);
     let inner = Arc::new(Field::new("item", DataType::UInt64, true));
-    let schema = Arc::new(Schema::new(vec![
+    let mut fields = vec![
         Field::new("timestamp", DataType::UInt64, false),
         Field::new("duration", DataType::UInt64, false),
-        Field::new("synth_gauge", DataType::Int64, false).with_metadata(gauge_meta),
+        Field::new("synth_gauge", DataType::Int64, false).with_metadata(gauge_meta.clone()),
         Field::new("synth_counter", DataType::UInt64, false).with_metadata(counter_meta),
         Field::new("synth_latency", DataType::List(inner), true).with_metadata(hist_meta),
-    ]));
+    ];
+    for sc in AB_SCENARIOS {
+        fields.push(
+            Field::new(format!("ab_{}", sc.key), DataType::Int64, false)
+                .with_metadata(gauge_meta.clone()),
+        );
+    }
+    let schema = Arc::new(Schema::new(fields));
 
-    let batch = RecordBatch::try_new(
-        schema.clone(),
-        vec![
-            Arc::new(UInt64Array::from(timestamps)) as ArrayRef,
-            Arc::new(UInt64Array::from(durations)),
-            Arc::new(Int64Array::from(gauge)),
-            Arc::new(UInt64Array::from(counter)),
-            hist_col,
-        ],
-    )?;
+    let mut columns: Vec<ArrayRef> = vec![
+        Arc::new(UInt64Array::from(timestamps)) as ArrayRef,
+        Arc::new(UInt64Array::from(durations)),
+        Arc::new(Int64Array::from(gauge)),
+        Arc::new(UInt64Array::from(counter)),
+        hist_col,
+    ];
+    for col in ab_cols {
+        columns.push(Arc::new(Int64Array::from(col)));
+    }
+
+    let batch = RecordBatch::try_new(schema.clone(), columns)?;
 
     let source = if regression {
         "synth-experiment"
