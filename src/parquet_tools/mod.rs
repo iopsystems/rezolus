@@ -337,6 +337,14 @@ pub fn command() -> Command {
                         .help("Directory containing service extension template JSON files")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("samplers")
+                        .long("samplers")
+                        .value_name("A,B,...")
+                        .help("For .rez archives: comma-separated sampler names to KEEP; all other per-sampler tables are dropped (required for .rez, ignored for parquet)")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Set),
                 ),
         )
 }
