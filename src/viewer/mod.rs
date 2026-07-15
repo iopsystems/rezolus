@@ -506,37 +506,81 @@ fn init_file_mode_rez(
     pool: Arc<metriken_query::BufferPool>,
 ) -> AppState {
     use metriken_query::MetricsSource;
+    use std::collections::BTreeMap;
     info!("Loading data from .rez archive...");
 
-    let reader = std::sync::Arc::new(
-        crate::rez_reader::RezReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(|e| {
+    // One reader per recording (labels preserved). A 2-recording .rez maps onto
+    // the baseline/experiment A/B slots; >2 shows the first two and warns
+    // (simultaneous N-way faceting is a separate future effort). Manifest
+    // recording metadata stands in for the parquet footer.
+    let mut readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
+        .unwrap_or_else(|e| {
             eprintln!("failed to load .rez archive: {e}");
             std::process::exit(1);
-        }),
-    );
+        });
+    if readers.is_empty() {
+        eprintln!("empty .rez archive (no recordings)");
+        std::process::exit(1);
+    }
 
-    // Manifest recording metadata stands in for the parquet footer.
-    let systeminfo = reader.metadata_get("systeminfo");
-    let file_meta = {
+    fn file_meta_json(reader: &crate::rez_reader::RezReader) -> Option<String> {
+        use metriken_query::MetricsSource;
         let mut map = serde_json::Map::new();
         for (k, v) in reader.file_metadata() {
             let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
             map.insert(k, jv);
         }
         serde_json::to_string(&serde_json::Value::Object(map)).ok()
-    };
+    }
+    fn alias_of(labels: &BTreeMap<String, String>, fallback: &str) -> String {
+        labels
+            .get("arm")
+            .or_else(|| labels.get("host"))
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    let n = readers.len();
+
+    // Baseline = recording 0.
+    let (b_labels, b_reader) = readers.remove(0);
+    let b_systeminfo = b_reader.metadata_get("systeminfo");
+    let b_file_meta = file_meta_json(&b_reader);
+    let b_alias = config
+        .baseline_alias
+        .clone()
+        .unwrap_or_else(|| alias_of(&b_labels, "baseline"));
 
     let state = AppState::with_pool(
-        reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
+        std::sync::Arc::new(b_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
         registry.clone(),
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
-    state.captures.set_baseline_systeminfo(systeminfo);
-    state.captures.set_baseline_file_metadata(file_meta);
-    state
-        .captures
-        .set_baseline_alias(config.baseline_alias.clone());
+    state.captures.set_baseline_systeminfo(b_systeminfo);
+    state.captures.set_baseline_file_metadata(b_file_meta);
+    state.captures.set_baseline_alias(Some(b_alias));
+
+    // Experiment = recording 1, if present.
+    if n >= 2 {
+        let (e_labels, e_reader) = readers.remove(0);
+        let e_systeminfo = e_reader.metadata_get("systeminfo");
+        let e_file_meta = file_meta_json(&e_reader);
+        let e_alias = alias_of(&e_labels, "experiment");
+        state.captures.attach_experiment(
+            std::sync::Arc::new(e_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+            e_systeminfo,
+            e_file_meta,
+            Some(e_alias),
+        );
+        if n > 2 {
+            warn!(
+                "{n}-recording .rez: showing recordings 0 and 1 as baseline/experiment; \
+                 simultaneous N-way faceting is not yet supported (use `parquet metadata` \
+                 to inspect all recordings)"
+            );
+        }
+    }
 
     info!("Generating dashboards...");
     metadata::regenerate_dashboards(&state);
