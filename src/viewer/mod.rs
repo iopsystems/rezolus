@@ -413,7 +413,13 @@ fn init_file_mode(
 ) -> AppState {
     info!("Loading data from parquet file...");
 
-    // Combined-A/B tarball detection runs first — bare parquets fall
+    // `.rez` per-sampler archive detection runs first (it is also a tar, so it
+    // must be checked before the A/B-tarball sniffer).
+    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+        return init_file_mode_rez(config, path, registry, pool);
+    }
+
+    // Combined-A/B tarball detection runs next — bare parquets fall
     // through to the normal load path below.
     if ab_extract::looks_like_ab_tarball(path) {
         return init_file_mode_combined_ab(config, path, registry, pool);
@@ -481,6 +487,56 @@ fn init_file_mode(
             Arc::clone(&pool),
         );
     }
+
+    info!("Generating dashboards...");
+    metadata::regenerate_dashboards(&state);
+    state
+}
+
+/// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
+/// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
+/// recording metadata stands in for the parquet footer (systeminfo, file
+/// metadata). Service extensions and source classification degrade gracefully —
+/// a `.rez` has no parquet footer, so those path-based reads simply yield
+/// nothing, which is correct for a plain agent recording.
+fn init_file_mode_rez(
+    config: &Config,
+    path: &Path,
+    registry: &TemplateRegistry,
+    pool: Arc<metriken_query::BufferPool>,
+) -> AppState {
+    use metriken_query::MetricsSource;
+    info!("Loading data from .rez archive...");
+
+    let reader = std::sync::Arc::new(
+        crate::rez_reader::RezReader::open_with_pool(path, Arc::clone(&pool)).unwrap_or_else(|e| {
+            eprintln!("failed to load .rez archive: {e}");
+            std::process::exit(1);
+        }),
+    );
+
+    // Manifest recording metadata stands in for the parquet footer.
+    let systeminfo = reader.metadata_get("systeminfo");
+    let file_meta = {
+        let mut map = serde_json::Map::new();
+        for (k, v) in reader.file_metadata() {
+            let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
+            map.insert(k, jv);
+        }
+        serde_json::to_string(&serde_json::Value::Object(map)).ok()
+    };
+
+    let state = AppState::with_pool(
+        reader as std::sync::Arc<dyn metriken_query::MetricsSource>,
+        registry.clone(),
+        Arc::clone(&pool),
+    );
+    *state.parquet_path.write() = Some(path.to_path_buf());
+    state.captures.set_baseline_systeminfo(systeminfo);
+    state.captures.set_baseline_file_metadata(file_meta);
+    state
+        .captures
+        .set_baseline_alias(config.baseline_alias.clone());
 
     info!("Generating dashboards...");
     metadata::regenerate_dashboards(&state);
