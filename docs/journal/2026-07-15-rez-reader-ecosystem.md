@@ -143,6 +143,18 @@ Deliver the multi-host A/B payoff (record per host → combine → view faceted)
   **multi-recording** `.rez` (each input becomes a `recordings[]` entry; labels
   preserved / augmentable via flags, mirroring today's `--ab` naming). This is
   the label-set model's assembly path — the multi-host, multi-arm archive.
+  - **`dir` uniqueness is combine's responsibility.** `read_archive` keys each
+    table by `<dir>/<sampler>.parquet` and holds the extracted parquet bytes in a
+    map, so two recordings that slug to the **same `dir`** (e.g. two `rezolus`
+    sources, or `"a/b"` and `"a-b"` both → `"a-b"`) would collide: the tar writes
+    two identical paths and the reader silently overwrites the first, then fails
+    `missing table file`. `combine` must therefore assign a **collision-free
+    `dir`** per recording (disambiguate by the distinguishing labels, appending a
+    counter as a last resort) and error rather than emit a colliding archive. The
+    recorder never hits this (it writes exactly one recording); the writer/reader
+    already support N recordings and are covered by
+    `archive_round_trips_multiple_recordings` (`src/recorder/rez.rs`), which
+    round-trips two distinct-`dir` recordings sharing a sampler basename.
 - **`RezReader` reads multiple recordings**: it already carries a `Vec` of
   recordings-worth of sub-readers; Phase C exposes them for **label faceting**
   (compare `arm`, overlay `host=*`), reusing the viewer's existing A/B-compare
