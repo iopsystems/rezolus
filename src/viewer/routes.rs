@@ -17,7 +17,7 @@ use tower_livereload::LiveReloadLayer;
 use tracing::warn;
 
 #[cfg(not(feature = "developer-mode"))]
-use http::Uri;
+use http::{HeaderMap, Uri};
 #[cfg(not(feature = "developer-mode"))]
 use include_dir::{include_dir, Dir};
 
@@ -485,36 +485,78 @@ async fn metadata(
 // ── Static asset serving (release builds) ─────────────────────────────
 
 #[cfg(not(feature = "developer-mode"))]
-async fn index() -> impl IntoResponse {
-    if let Some(asset) = ASSETS.get_file("index.html") {
-        let body = asset.contents_utf8().unwrap();
-        (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            body.to_string(),
+/// A stable ETag for an embedded asset: a hash of its bytes (deterministic —
+/// `DefaultHasher::new()` has fixed keys), so it changes exactly when the
+/// content does.
+#[cfg(not(feature = "developer-mode"))]
+fn etag_for(bytes: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    format!("\"{:016x}\"", hasher.finish())
+}
+
+/// Serve an embedded asset with an ETag + `Cache-Control: no-cache`, honoring
+/// `If-None-Match` with a `304` so the browser revalidates on every load and
+/// never serves a stale/mixed ES-module set after a rebuild. The assets
+/// previously shipped with no validators, so a soft refresh could load old
+/// bytes for some modules and new for others.
+#[cfg(not(feature = "developer-mode"))]
+fn asset_response(bytes: &'static [u8], content_type: &'static str, req: &HeaderMap) -> Response {
+    let etag = etag_for(bytes);
+    let matched = req
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == etag)
+        .unwrap_or(false);
+    if matched {
+        return (
+            StatusCode::NOT_MODIFIED,
+            [
+                (header::ETAG, etag),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ],
         )
-    } else {
-        tracing::error!("index.html missing from build");
-        (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "text/plain")],
-            "404 Not Found".to_string(),
-        )
+            .into_response();
     }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, content_type.to_string()),
+            (header::ETAG, etag),
+            (header::CACHE_CONTROL, "no-cache".to_string()),
+        ],
+        bytes.to_vec(),
+    )
+        .into_response()
 }
 
 #[cfg(not(feature = "developer-mode"))]
-async fn lib(uri: Uri) -> impl IntoResponse {
+async fn index(headers: HeaderMap) -> Response {
+    let Some(asset) = ASSETS.get_file("index.html") else {
+        tracing::error!("index.html missing from build");
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "text/plain")],
+            "404 Not Found",
+        )
+            .into_response();
+    };
+    asset_response(asset.contents(), "text/html", &headers)
+}
+
+#[cfg(not(feature = "developer-mode"))]
+async fn lib(uri: Uri, headers: HeaderMap) -> Response {
     let path = uri.path();
     let Some(asset) = ASSETS.get_file(format!("lib{path}")) else {
         tracing::error!("path: {path} does not map to a static resource");
         return (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "text/plain")],
-            "404 Not Found".to_string(),
-        );
+            "404 Not Found",
+        )
+            .into_response();
     };
-    let body = asset.contents_utf8().unwrap();
     let content_type = match path.rsplit('.').next() {
         Some("js") => "text/javascript",
         Some("css") => "text/css",
@@ -522,9 +564,5 @@ async fn lib(uri: Uri) -> impl IntoResponse {
         Some("json") => "application/json",
         _ => "text/plain",
     };
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, content_type)],
-        body.to_string(),
-    )
+    asset_response(asset.contents(), content_type, &headers)
 }

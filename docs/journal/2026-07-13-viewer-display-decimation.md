@@ -107,8 +107,9 @@ feel instant. ~1.75× file-size cost, flagged for the maintainer; merged.
 - `tests/viewer_smoke.sh` green after the `display_wire` refactor.
 - **Browser verification (2026-07-15):** file-based compare mode verified across gauges (all
   six `ab_*` scenarios), counters, and percentiles — see the validation-pass section below.
-  Still not done: **live mode** (needs a mock agent) and a WASM-runtime parity test (needs the
-  pkg build; `crates/viewer/build.sh` wasm-pack flag conflict fixed separately in #1007).
+  **Live mode also eyeballed (2026-07-15) — fine.** Still not done: an *automated* live-path
+  test (needs a mock agent) and a WASM-runtime parity test. (`crates/viewer/build.sh` wasm-pack
+  flag conflict fixed and merged in #1007.)
 
 ## Landed after the initial writeup
 
@@ -169,10 +170,16 @@ viewer's JS assets are now a backlog item.
   chart options; the synthetic data + scriptable viewer make this tractable now. (A throwaway
   raw-socket CDP driver worked for `Runtime.evaluate` but the app holds a persistent connection
   that hangs `--dump-dom`/load-idle waits — a real harness needs to poll, not wait for idle.)
-- **`crates/viewer/build.sh` wasm-pack flag conflict** — blocks local pkg builds (fixed in #1007).
-- **Cache headers on the viewer's JS assets** — `lib/*.js` ships with no `Cache-Control`/`ETag`,
-  so a soft refresh after a rebuild loads a stale/mixed module set (cost a debugging detour this
-  session; surfaced as a spurious "no data"). Add `no-cache`/ETags.
-- **`reloadCurrentSection` client-only-route guard** — it server-loads `/data/<route>.json` even
-  for client-only `source/` routes (metric browser), 404-ing and logging on every selection
-  change. Skip the reload for client-only routes.
+- **Automated live-path test** — a mock agent replaying synthetic msgpack snapshots, to test
+  live mode without a real agent (manual eyeball done 2026-07-15; automation still open).
+
+**Follow-ups landed 2026-07-15** (both traced from this entry's deferred list):
+
+- **Cache headers on the viewer's JS assets** — the embedded-asset handlers (`src/viewer/
+  routes.rs` `lib`/`index`) now send an ETag (a hash of the bytes) + `Cache-Control: no-cache`
+  and honor `If-None-Match` with a `304`, so the browser revalidates every load and can't serve
+  the stale/mixed module set that cost a debugging detour this session (dev-mode `ServeDir`
+  already did this). Verified 200→304→200.
+- **`reloadCurrentSection` client-only-route guard** — it no longer server-loads
+  `/data/<route>.json` for client-only `source/` routes (`src/viewer/assets/lib/app.js`),
+  killing the per-selection 404 + console error; the metric browser fetches its own catalog.
