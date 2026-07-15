@@ -688,6 +688,7 @@ mod tests {
             result: vec![Sample {
                 metric,
                 value: (1704067200.0, 4.0),
+                interval: None,
             }],
         };
         let json = serde_json::to_string(&result).unwrap();
@@ -709,6 +710,7 @@ mod tests {
             result: vec![MatrixSample {
                 metric,
                 values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
+                intervals: None,
             }],
         };
         let json = serde_json::to_string(&result).unwrap();

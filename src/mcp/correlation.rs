@@ -420,6 +420,7 @@ fn extract_matrix_samples(
                 .map(|s| MatrixSample {
                     metric: s.metric.clone(),
                     values: vec![s.value],
+                    intervals: s.interval.map(|iv| vec![iv]),
                 })
                 .collect())
         }
@@ -428,6 +429,7 @@ fn extract_matrix_samples(
             Ok(vec![MatrixSample {
                 metric: HashMap::new(),
                 values: vec![*result],
+                intervals: None,
             }])
         }
         QueryResult::HistogramHeatmap { .. } => {

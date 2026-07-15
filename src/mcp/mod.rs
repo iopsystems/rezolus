@@ -409,11 +409,16 @@ fn format_query_result(result: &QueryResult) -> String {
             writeln!(&mut output, "Instant Vector Result:").unwrap();
             writeln!(&mut output, "======================").unwrap();
             for sample in result {
+                let bound = sample
+                    .interval
+                    .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                    .unwrap_or_default();
                 writeln!(
                     &mut output,
-                    "{} = {}",
+                    "{} = {}{}",
                     format_metric(&sample.metric),
-                    sample.value.1
+                    sample.value.1,
+                    bound
                 )
                 .unwrap();
             }
@@ -432,8 +437,33 @@ fn format_query_result(result: &QueryResult) -> String {
                 if !series.values.is_empty() {
                     let first = &series.values[0];
                     let last = &series.values[series.values.len() - 1];
-                    writeln!(&mut output, "  First: {} = {}", first.0, first.1).unwrap();
-                    writeln!(&mut output, "  Last:  {} = {}", last.0, last.1).unwrap();
+                    // Acquisition-window uncertainty bounds (rate()/irate() only).
+                    let ivl = series.intervals.as_ref();
+                    let bound = |i: usize| -> String {
+                        ivl.and_then(|v| v.get(i))
+                            .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                            .unwrap_or_default()
+                    };
+                    writeln!(
+                        &mut output,
+                        "  First: {} = {}{}",
+                        first.0,
+                        first.1,
+                        bound(0)
+                    )
+                    .unwrap();
+                    writeln!(
+                        &mut output,
+                        "  Last:  {} = {}{}",
+                        last.0,
+                        last.1,
+                        bound(series.values.len() - 1)
+                    )
+                    .unwrap();
+                    if ivl.is_some() {
+                        writeln!(&mut output, "  (bounds = acquisition-window uncertainty)")
+                            .unwrap();
+                    }
 
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
                     let min = values.iter().copied().fold(f64::INFINITY, f64::min);
@@ -746,6 +776,34 @@ mod tests {
     use std::collections::HashMap;
     use std::time::SystemTime;
 
+    #[test]
+    fn format_query_result_shows_rate_bounds() {
+        use metriken_query::{MatrixSample, QueryResult};
+        let mut metric = HashMap::new();
+        metric.insert("__name__".to_string(), "rate".to_string());
+        let with = QueryResult::Matrix {
+            result: vec![MatrixSample {
+                metric: metric.clone(),
+                values: vec![(1.0, 300.0), (2.0, 310.0)],
+                intervals: Some(vec![(291.26, 306.12), (300.0, 320.0)]),
+            }],
+        };
+        let s = format_query_result(&with);
+        assert!(s.contains("[291.26"), "expected bound in output: {s}");
+        assert!(s.contains("acquisition-window uncertainty"), "{s}");
+
+        // No intervals → no bound text.
+        let without = QueryResult::Matrix {
+            result: vec![MatrixSample {
+                metric,
+                values: vec![(1.0, 300.0)],
+                intervals: None,
+            }],
+        };
+        let s2 = format_query_result(&without);
+        assert!(!s2.contains('['), "no bounds expected: {s2}");
+    }
+
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
         Counter {
             name: name.to_string(),
@@ -785,7 +843,10 @@ mod tests {
         for i in 0..3u64 {
             let ts = 1_000_000_000 * (i + 1);
             let w = Some(Window::new(ts - 50_000_000, ts));
-            r.ingest(&snap(ts, vec![counter("cpu_cycles", "cpu_usage", i, w)]), ts);
+            r.ingest(
+                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", i, w)]),
+                ts,
+            );
         }
         r
     }
