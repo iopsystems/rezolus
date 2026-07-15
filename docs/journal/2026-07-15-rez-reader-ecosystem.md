@@ -14,6 +14,30 @@
     passes; 143 unit + 15 fixtures integration tests clean; rezolus builds against
     the patched metriken. The seam where windows enter the query engine — (4)
     changes "skip" to "read for rate error bars".
+  - **Phase B partially landed** (rezolus commits `6f368910`, `1b18754c`,
+    `c13ea34f`, `cab130f5`, `96113dd8`): the reader core + the two most-used
+    entry points work end-to-end.
+    - **`RezReader: MetricsSource`** (`src/rez_reader.rs`) — composes one
+      `ParquetReader` per per-sampler table (opened from tar bytes via
+      `open_bytes_with_pool`); union metadata/names/labels; `query`/`query_range`
+      route to the single owning sub-reader (non-empty `columns()`), erroring
+      clearly when a query spans ≥2 samplers; `columns()` unions. `.rez` byte
+      extraction + `is_rez` detection live in `src/recorder/rez.rs`.
+    - **Viewer file mode** — `rezolus view file.rez` detects `.rez` before the
+      A/B sniffer and builds the baseline dashboard from a `RezReader`. Live
+      smoke: 71 metrics served, **no `:window_*` phantoms**, systeminfo from the
+      manifest, single-metric queries route to the engine.
+    - **`parquet metadata`** — `-i file.rez` summarizes the manifest
+      (recordings, labels, per-sampler tables + cadence); `--json` emits it.
+    - Full bin suite green (272 passed). **Still pending in Phase B:**
+      (i) **MCP** `.rez` support — larger than planned: the MCP CLI commands and
+      server cache hold a concrete `Arc<ParquetReader>`, so it needs a
+      `MetricsSource`-polymorphic refactor (cache type + 5 call sites), not a
+      one-line swap. (ii) **Viewer upload mode** — deferred: its ingest path
+      (`ingest_baseline_from_path`) is coupled to parquet-footer reads
+      (`compute_file_checksum`, `classify_sources(Some(path))`,
+      `extract_service_extension_metadata`). (iii) The **Prometheus + `.rez`
+      early guard** (was bundled with the MCP task).
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) for the query-engine
