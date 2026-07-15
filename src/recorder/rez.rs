@@ -1133,6 +1133,86 @@ mod archive_tests {
         assert_eq!(cpu_idx.rows, 2);
         assert_eq!(cpu_idx.cadence_ns, Some(1_000));
     }
+
+    // Two recordings with distinct dirs must round-trip independently: the tar
+    // nests each under its own <dir>/, and read_archive returns tables parallel
+    // to manifest.recordings order. This is the multi-recording path Phase C
+    // (`parquet combine`) will exercise; the writer/reader already support it.
+    #[test]
+    fn archive_round_trips_multiple_recordings() {
+        let baseline = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
+        };
+        let experiment = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            columns: vec![counter_col("0", vec![Some(10), Some(20)], vec![None, None])],
+        };
+        let labels = |arm: &str| -> BTreeMap<String, String> {
+            [
+                ("source".to_string(), "rezolus".to_string()),
+                ("arm".to_string(), arm.to_string()),
+            ]
+            .into_iter()
+            .collect()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("ab.rez");
+        let base_tables = [baseline];
+        let exp_tables = [experiment];
+
+        write_archive(
+            &out,
+            &[
+                RecordingData {
+                    dir: "redis".to_string(),
+                    labels: labels("redis"),
+                    metadata: BTreeMap::new(),
+                    tables: &base_tables,
+                },
+                RecordingData {
+                    dir: "valkey".to_string(),
+                    labels: labels("valkey"),
+                    metadata: BTreeMap::new(),
+                    tables: &exp_tables,
+                },
+            ],
+        )
+        .unwrap();
+        let archive = read_archive(&out).unwrap();
+
+        // Two recordings, distinct dirs, tables parallel to recordings order.
+        assert_eq!(archive.manifest.recordings.len(), 2);
+        assert_eq!(archive.tables.len(), 2);
+        assert_eq!(archive.manifest.recordings[0].dir, "redis");
+        assert_eq!(archive.manifest.recordings[1].dir, "valkey");
+        assert_eq!(
+            archive.manifest.recordings[0]
+                .labels
+                .get("arm")
+                .map(String::as_str),
+            Some("redis")
+        );
+        assert_eq!(
+            archive.manifest.recordings[1]
+                .labels
+                .get("arm")
+                .map(String::as_str),
+            Some("valkey")
+        );
+        // Same sampler name in both recordings resolves to each recording's own
+        // values (no cross-recording clobber despite the shared file basename).
+        match &archive.tables[0][0].columns[0].values {
+            RezValues::Counter(v) => assert_eq!(v, &vec![Some(1), Some(2)]),
+            _ => panic!("expected counter"),
+        }
+        match &archive.tables[1][0].columns[0].values {
+            RezValues::Counter(v) => assert_eq!(v, &vec![Some(10), Some(20)]),
+            _ => panic!("expected counter"),
+        }
+    }
 }
 
 #[cfg(test)]

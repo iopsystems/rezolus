@@ -118,7 +118,7 @@ pub fn command() -> Command {
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. `source` and `host` are auto-populated. Used by .rez output.")
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Used by .rez output.")
                 .action(clap::ArgAction::Append),
         )
         .arg(
