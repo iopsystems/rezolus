@@ -1,9 +1,12 @@
 # Measurement uncertainty — `.rez` reader ecosystem (viewer / MCP / parquet-tools)
 
 - **Opened:** 2026-07-15
-- **Status:** In progress — **Phase A + Phase B core landed** (reader, viewer
-  file-mode, `parquet metadata`, MCP; upload-mode + a Prometheus guard deferred),
-  C pre-build. Sub-project (3) of
+- **Status:** In progress — **Phases A, B (core), and C (chosen scope) landed**.
+  Reader (`RezReader`), viewer file-mode + 2-arm A/B, MCP, `parquet
+  metadata`/`combine`/`filter`/`annotate` all read/write `.rez`. Deferred:
+  viewer upload-mode, a Prometheus guard (both minor), and — by explicit scope
+  choice — simultaneous **N-way** faceting (a dedicated future effort: capture-
+  model refactor + frontend). Sub-project (3) of
   the arc: make `.rez` archives *readable* everywhere a `.parquet` is today.
   Consumes the per-sampler `.rez` format (labels + per-sampler tables + per-metric
   windows) built in
@@ -46,6 +49,31 @@
       auto-detected at scrape time, so a clean early guard needs detection
       restructuring; today a Prometheus-only `.rez` run errors at finalize
       ("no snapshots captured"), which is functional if not ideal UX.
+  - **Phase C landed** (rezolus commits `b0d4703`, `a4704556`, `d3484b21`,
+    `b34481bd`, `b668477`) — multi-recording assembly + 2-arm A/B + transforms,
+    the scope chosen after a design pass found the viewer's compare model is
+    hardcoded 2-way (so simultaneous N-way faceting was deferred as its own
+    effort).
+    - **`parquet combine`** (`b0d4703`) assembles N single-recording `.rez` into
+      one multi-recording `.rez`, copying per-table parquet bytes verbatim via a
+      new byte-level writer `write_archive_bytes` (unique `dir`s from labels,
+      collision counter). `.rez` and `.parquet` inputs can't be mixed.
+    - **`RezReader::open_recordings`** (`a4704556`) — one reader per recording
+      (avoids same-sampler-name routing collisions across recordings).
+    - **Viewer 2-arm A/B** (`d3484b21`) — `rezolus view file.rez` maps a
+      2-recording `.rez` onto baseline/experiment (aliases from `arm`/`host`
+      labels), reusing the existing A/B compare UI; 1 recording → single view;
+      >2 → first two + a `warn!` that N-way is deferred. Smoke: a 2-recording
+      `.rez` served both capture slots (71 metrics each).
+    - **`parquet filter`** (`b34481bd`) — the KPI-column filter no-ops on
+      all-rezolus `.rez`, so `.rez` gets a **table-level** `--samplers a,b`
+      selector that drops whole per-sampler tables (smoke: kept 4 of 50).
+    - **`parquet annotate`** (`b668477`) — embeds a `--queries` ServiceExtension
+      into every recording's manifest `metadata[service_queries]`, validated per
+      recording via a `RezReader` (a `.rez` is `source=rezolus` with no service
+      template, hence `--queries` required).
+    - Full bin suite green (278 passed); clippy clean on touched files. End-to-end
+      smoke: record → combine → metadata → view A/B → filter → annotate.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) for the query-engine
