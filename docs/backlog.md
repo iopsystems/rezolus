@@ -82,6 +82,37 @@ Source: [Selection → Notebook → Report](journal/2026-05-10-selection-noteboo
   `experiment_checksum` to the v3 payload and show a banner on mismatch (warn,
   don't refuse to render).
 
+## Viewer — display-mode decimation
+
+Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.md) (PR #1006).
+
+- **A/B compare-mode line-envelopes + divergence band** — Done (PR #1006).
+  Per-capture min/max envelope (thin capture-colored lines) plus a neutral
+  gap-shading **divergence band** between the two medians. Browser-verified in
+  file compare mode across gauges, counters, and percentiles (2026-07-15); the
+  validation pass fixed four overlay/color/grid-alignment bugs — see the journal.
+- **Cache headers on the viewer's JS assets** — Open. `lib/*.js` ships with no
+  `Cache-Control`/`ETag`, so a soft refresh after a rebuild loads a stale/mixed
+  ES-module set (surfaced as a spurious "no data" this session). Add `no-cache`/
+  ETags so dev refreshes are reliable.
+- **`reloadCurrentSection` client-only-route guard** — Open. It server-loads
+  `/data/<route>.json` even for client-only `source/` routes, 404-ing and logging
+  on every selection change. Skip the reload for client-only routes.
+- **Live mock-agent + synthetic-live** — Open. Live mode connects to an agent
+  msgpack endpoint, not a parquet; a mock server replaying synthetic snapshots is
+  needed to test the live display path. Pairs with a decision on the default live
+  window (bounded rolling vs full history) and in-memory TSDB retention.
+- **Automated browser testing** — Idea. Drive the viewer headless (Chrome CDP) and
+  assert rendered chart options; the synthetic generator + scriptable viewer make
+  it tractable. A WASM-runtime parity test (server vs WASM display bytes for a
+  fixture) is the specific gap the `viewer-parity` skill calls for.
+- **`crates/viewer/build.sh` wasm-pack flag conflict** — Fix pending in **#1007**
+  (blocks local pkg builds until merged). Passed `--profile wasm-release` while
+  wasm-pack 0.13.1 also adds `--release`; the two are mutually exclusive.
+- **Reopen conditions for the 5 measured NO-GOs** (strided-median read, cumulative
+  histogram quantiles, decode worker, aggregation worker, M4) live in the journal
+  entry — don't re-litigate without the stated trigger.
+
 ## Viewer — performance / live mode
 
 Source: [viewer performance & JS restructure](journal/2026-04-18-viewer-perf-restructure.md).

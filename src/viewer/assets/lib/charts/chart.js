@@ -50,6 +50,13 @@ export class ChartsState {
     _compareCursorSubs = new Map();  // groupId → Set<fn>
     // Global color mapper - for consistent cgroup colors
     colorMapper = globalColorMapper;
+    // True only while a display-mode zoom drill-down is refetching the
+    // narrower window. It flips the reconfigure of structurally-stable charts
+    // (line/multi boxplots) from a notMerge rebuild — which tears the echart
+    // down and flashes between the coarse preview and the crisp data — to a
+    // merge update, so the line sharpens in place. See app.js applyDisplayWindow
+    // and base.js applyChartOption.
+    _zoomRefine = false;
 
     // Resets charts state. It's assumed that each individual chart
     // will be disposed of when it is removed from the DOM.
@@ -151,7 +158,7 @@ export class ChartsState {
      * @param {{ source?: 'global' | 'local' | null }} opts
      * @returns {boolean} true when the store was updated, false on no-op.
      */
-    setZoom(zoom, { source = this.zoomSource, originChart = null } = {}) {
+    setZoom(zoom, { source = this.zoomSource, originChart = null, silent = false } = {}) {
         const next = normalizeZoom(zoom);
         const zoomLevelChanged = !zoomEqual(this.zoomLevel, next);
         const sourceChanged = source !== this.zoomSource;
@@ -174,7 +181,15 @@ export class ChartsState {
         // pure source promotion, every chart is already at this zoom
         // and re-dispatching would be a wasted round-trip through
         // every echart + downsample handler.
-        if (zoomLevelChanged) {
+        //
+        // `silent` updates the stored zoom WITHOUT the visual fan-out. The
+        // display-mode drill-down uses it: it clears the zoom state before
+        // refetching the narrower window, but must NOT first snap every chart
+        // back out to full range (that flashes the old full-range data for the
+        // refetch's duration — a bouncy "intermediate state"). The charts keep
+        // showing the drag-selection until the refetch's reconfigure replaces
+        // the data and resets the dataZoom to the new window's full extent.
+        if (zoomLevelChanged && !silent) {
             this.charts.forEach(chart => {
                 if (chart === originChart) return;
                 if (chart._applyZoom) chart._applyZoom(this.zoomLevel);

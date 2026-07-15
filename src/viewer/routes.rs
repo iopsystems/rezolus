@@ -28,6 +28,7 @@ use tower_http::services::{ServeDir, ServeFile};
 
 use std::sync::atomic::Ordering;
 
+use dashboard::display_wire;
 use metriken_query::{QueryError, QueryResult};
 
 use super::actions;
@@ -322,6 +323,16 @@ struct RangeQueryParams {
     step: f64,
     #[serde(default)]
     capture: Option<String>,
+    /// `display` selects the decimated boxplot response (binary). Absent =
+    /// today's PromQL-compatible JSON matrix.
+    #[serde(default)]
+    format: Option<String>,
+    /// Point budget per series for display mode. Default 500.
+    #[serde(default)]
+    points: Option<usize>,
+    /// Inner-band quantiles as `"lo,hi"` (e.g. `"0.25,0.75"`). Default IQR.
+    #[serde(default)]
+    band: Option<String>,
 }
 
 /// Run `f` against the resolved capture's data source; on a missing
@@ -355,10 +366,47 @@ async fn instant_query(
 async fn range_query(
     Query(params): Query<RangeQueryParams>,
     State(state): State<Arc<AppState>>,
-) -> Json<ApiResponse<QueryResult>> {
+) -> Response {
+    if params.format.as_deref() == Some("display") {
+        return range_query_display(&state, &params);
+    }
     run_query(&state, params.capture.as_deref(), |data| {
         data.query_range(&params.query, params.start, params.end, params.step)
     })
+    .into_response()
+}
+
+/// Display-mode range query: decimate to per-bucket boxplots and return the
+/// binary columnar wire format. The query + encoding live in the shared
+/// `dashboard::display_wire` so the WASM viewer produces byte-identical bodies.
+/// Non-`Series` results (scalar/vector) fall back to JSON.
+fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response {
+    let capture = CaptureId::parse_opt(params.capture.as_deref());
+    let Some(data) = state.captures.get(capture) else {
+        return ApiResponse::<serde_json::Value>::err(
+            format!("capture '{capture:?}' not attached"),
+            "capture_not_found",
+        )
+        .into_response();
+    };
+    match display_wire::display_query(
+        data.as_ref(),
+        &params.query,
+        params.start,
+        params.end,
+        params.step,
+        params.points.unwrap_or(500),
+        display_wire::parse_band(params.band.as_deref()),
+    ) {
+        Ok(display_wire::DisplayWire::Binary(buf)) => {
+            ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()
+        }
+        Ok(display_wire::DisplayWire::Json(result)) => ApiResponse::ok(result).into_response(),
+        Err(e) => {
+            ApiResponse::<serde_json::Value>::err(e.to_string(), state::promql_error_type(&e))
+                .into_response()
+        }
+    }
 }
 
 async fn label_names(State(_state): State<Arc<AppState>>) -> Json<ApiResponse<Vec<String>>> {

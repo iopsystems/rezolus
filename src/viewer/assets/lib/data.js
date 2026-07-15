@@ -32,9 +32,17 @@ const getStepOverride = () => _stepOverride;
 // `_stepOverride` (the Granularity selector) still wins; it drives the
 // stride/rate rewrites via buildEffectiveQuery so a user-chosen coarse
 // step stays self-consistent.
+// Zoom drill-down: when set to { start, end } (seconds), range queries fetch
+// that window instead of the whole recording. Display mode keeps the same
+// point budget, so a narrower window comes back at higher resolution — and
+// once it fits the budget, at native 1s. Cleared (null) = full recording.
+let _rangeOverride = null;
+export const setRangeOverride = (range) => { _rangeOverride = range; };
+export const getRangeOverride = () => _rangeOverride;
+
 export const defaultRangeFor = (meta) => {
-    const start = meta.minTime;
-    const end = meta.maxTime;
+    const start = _rangeOverride ? _rangeOverride.start : meta.minTime;
+    const end = _rangeOverride ? _rangeOverride.end : meta.maxTime;
     const interval = (Number.isFinite(meta.interval) && meta.interval > 0) ? meta.interval : 1;
     const step = _stepOverride || Math.max(1, interval);
     return { start, end, step };
@@ -58,11 +66,278 @@ const rewriteCounterQuery = (query, stepSecs) => {
 // instantaneous value at each step point, which is correct for gauges.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step, captureId = 'baseline') =>
-    ViewerApi.queryRange(query, start, end, step, captureId);
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined) =>
+    ViewerApi.queryRange(query, start, end, step, captureId, signal);
 
 export const queryRangeForCapture = (captureId, query, start, end, step) =>
     defaultQueryRange(query, start, end, step, captureId);
+
+// Display-mode variant for a specific capture: returns the decoded boxplot
+// series array ({t,min,lo,median,hi,max}, …) or null on a non-series / empty
+// result. Used by compare mode to draw each capture's min/max envelope.
+export const queryRangeDisplayForCapture = async (captureId, query, start, end, step, points = 500) => {
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points, captureId });
+    if (!res || !res.buffer) return null;
+    return decodeDisplayBinary(res.buffer).series;
+};
+
+// Decode the display-mode binary response (see routes.rs
+// `encode_display_binary`):
+//
+//   [u32 LE headerLen][JSON header][pad to 8B][f64 LE column blobs]
+//
+// The JSON header carries per-series labels + provenance + point count `n`;
+// the blob is, per series in order, six columns t,min,lo,median,hi,max each
+// `n` little-endian f64. Columns are returned as zero-copy Float64Array views
+// over the buffer. Returns { resultType, budget, series: [{...meta, t, min,
+// lo, median, hi, max }] }.
+export const decodeDisplayBinary = (buf) => {
+    const dv = new DataView(buf);
+    const headerLen = dv.getUint32(0, true);
+    const header = JSON.parse(
+        new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)),
+    );
+    // The encoder pads so the first f64 lands on an 8-byte boundary; each
+    // column is n*8 bytes, so every subsequent column stays aligned too.
+    let off = Math.ceil((4 + headerLen) / 8) * 8;
+    const COLS = ['t', 'min', 'lo', 'median', 'hi', 'max'];
+    const series = header.series.map((s) => {
+        const out = { ...s };
+        for (const name of COLS) {
+            out[name] = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+        }
+        return out;
+    });
+    return { resultType: header.resultType, budget: header.budget, series };
+};
+
+// Decode the binary histogram-heatmap body (see routes.rs encode_heatmap_binary).
+// The win over the JSON path is skipping the multi-MB JSON string parse of the
+// triples: columns arrive as typed arrays (zero-copy views), and we reconstruct
+// the [timeIdx, bucketIdx, count] triples the render + compare mode already
+// consume — so the returned shape is identical to the JSON path (no downstream
+// changes) but there's no string parsing.
+export const decodeHeatmapBinary = (buf) => {
+    const dv = new DataView(buf);
+    const headerLen = dv.getUint32(0, true);
+    const header = JSON.parse(
+        new TextDecoder().decode(new Uint8Array(buf, 4, headerLen)),
+    );
+    if (header.resultType !== 'histogram_heatmap') {
+        throw new Error(`unexpected binary resultType ${header.resultType}`);
+    }
+    let off = Math.ceil((4 + headerLen) / 8) * 8;
+    const nTs = header.nTimestamps;
+    const nTr = header.nTriples;
+    const timestamps = new Float64Array(buf, off, nTs); off += nTs * 8;
+    const count = new Float64Array(buf, off, nTr); off += nTr * 8;
+    const timeIdx = new Uint32Array(buf, off, nTr); off += nTr * 4;
+    const bucketIdx = new Uint32Array(buf, off, nTr); off += nTr * 4;
+    const data = new Array(nTr);
+    for (let i = 0; i < nTr; i++) data[i] = [timeIdx[i], bucketIdx[i], count[i]];
+    return {
+        time_data: Array.from(timestamps),
+        bucket_bounds: header.bucketBounds,
+        data,
+        min_value: header.minValue,
+        max_value: header.maxValue,
+    };
+};
+
+// The JSON heatmap result already has the consumed shape — passthrough for the
+// fallback path so both transports return the same object.
+const heatmapFromJson = (hr) => ({
+    time_data: hr.timestamps,
+    bucket_bounds: hr.bucket_bounds,
+    data: hr.data,
+    min_value: hr.min_value,
+    max_value: hr.max_value,
+});
+
+// Display (boxplot decimation) mode. Off by default so unit tests keep the
+// JSON matrix path; app.js turns it on for the live viewer. When on,
+// line-ish plots fetch the decimated boxplot binary instead of the full
+// native-resolution JSON matrix.
+let _displayMode = false;
+export const setDisplayMode = (on) => { _displayMode = on; };
+export const getDisplayMode = () => _displayMode;
+
+// Point/column budget for decimation (display-mode series and histogram bucket
+// heatmaps): ~1 point per CSS pixel of a chart's PLOT AREA. Sending more points
+// than the chart is wide adds no visible line detail — it only turns the min/max
+// band into a noisy over-dense fill on high-variance signals (and bloats the
+// payload). Charts render two per row, so measure an actual chart cell when one
+// exists (exact on a zoom refetch — it handles full- vs half-width) and fall
+// back to half the viewport on first load. devicePixelRatio is intentionally NOT
+// applied: sub-CSS-pixel detail isn't distinguishable in the envelope, and
+// multiplying by it was over-fetching ~4× on half-width retina charts. The upper
+// clamp also caps the histogram bucket-heatmap columns (downsampled to 500 in
+// histogram_heatmap.js regardless).
+const BUDGET_MIN = 300;
+const BUDGET_MAX = 1200;
+const pixelBudget = () => {
+    if (typeof window === 'undefined') return 500;
+    let w = 0;
+    try { w = document.querySelector('.chart-cell')?.clientWidth || 0; } catch (_) { /* no DOM */ }
+    if (!w) w = (window.innerWidth || 1000) / 2;
+    return Math.max(BUDGET_MIN, Math.min(BUDGET_MAX, Math.round(w)));
+};
+
+// Budget for a display-series fetch over [start,end]. Starts from the pixel
+// budget, but ALSO caps it so each bucket aggregates at least
+// MIN_SAMPLES_PER_BUCKET native samples once the window is wide enough — so the
+// median+band engages and SMOOTHS jittery per-second signals (e.g. CPU%) at
+// moderate windows instead of drawing every raw sample as a dense zigzag. The
+// MIN_DISPLAY_BUCKETS floor keeps tight windows detailed: when the window has few
+// native samples the cap sits above the native count, so the server returns
+// native resolution (no aggregation) and you still get raw detail on a deep zoom.
+const MIN_SAMPLES_PER_BUCKET = 5;
+const MIN_DISPLAY_BUCKETS = 48;
+const displayBudget = (meta, start, end) => {
+    const px = pixelBudget();
+    const interval = (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
+    const native = Math.max(1, Math.round((end - start) / interval));
+    return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
+};
+
+// Which plots use display mode: line-ish charts (gauge / counter) and
+// histogram *percentile* scatterplots (histogram_quantiles returns a
+// per-percentile matrix the reducer decimates the same way). Histogram
+// heatmaps (buckets / quantile_heatmap) keep the JSON path — they have their
+// own server-side resolution handling.
+// A query that groups `by (id)` yields one series per entity (CPU/GPU/...),
+// which the native path renders as a per-entity HEATMAP (resolveStyle → 'heatmap'
+// when the result carries an `id` label). Display mode collapses each series to a
+// median + bands, which cannot represent a heatmap — so those stay on the native
+// render path. `\bid\b` avoids matching substrings like `grid`/`width`.
+const GROUPS_BY_ID = /\bby\s*\(\s*[^)]*\bid\b[^)]*\)/;
+
+const plotUsesDisplay = (plot) => {
+    if (!plot?.promql_query) return false;
+    if (plot.opts?.type !== 'histogram') return !GROUPS_BY_ID.test(plot.promql_query);
+    return plot.opts?.subtype === 'percentiles';
+};
+
+// A short series label from its distinguishing labels (first non-__name__).
+const displaySeriesName = (metric, i) => {
+    if (metric) {
+        for (const [k, v] of Object.entries(metric)) {
+            if (k !== '__name__') return v;
+        }
+    }
+    return `Series ${i + 1}`;
+};
+
+// Fetch + decode the display-mode boxplot response. Uses defaultRangeFor so
+// it honors the zoom range override (drill-down) with the same point budget.
+// ── LOD tile cache ──────────────────────────────────────────────────────────
+// Decoded display results keyed by query, each tagged with its [start,end]
+// extent (seconds). A drill-down is served from cache — no network — when a
+// cached tile COVERS the window with at least the requested resolution
+// (≈ budget points inside the window); the tile is clipped to the window via
+// zero-copy Float64Array views. This makes revisited ranges (section switches,
+// display/heatmap toggles, small pans, re-zooms) instant. Bounded LRU per query.
+// Cleared whenever the recording's metadata is invalidated (see below) so a live
+// viewer never serves stale tiles.
+const TILE_MAX_PER_QUERY = 8;
+const _displayTiles = new Map(); // query -> [{ start, end, decoded, seq }]
+let _tileSeq = 0;
+const clearDisplayTiles = () => { _displayTiles.clear(); };
+
+// Index window [lo, hi) of the ascending `t` array covering [ns, ne] (seconds).
+const windowIndices = (t, ns, ne) => {
+    let lo = 0;
+    while (lo < t.length && t[lo] < ns) lo++;
+    let hi = t.length;
+    while (hi > lo && t[hi - 1] > ne) hi--;
+    return [lo, hi];
+};
+
+const clipDecoded = (decoded, ns, ne) => {
+    const series = decoded.series.map((s) => {
+        const [lo, hi] = windowIndices(s.t, ns, ne);
+        const out = { ...s, n: hi - lo };
+        for (const c of ['t', 'min', 'lo', 'median', 'hi', 'max']) {
+            out[c] = s[c].subarray(lo, hi);
+        }
+        return out;
+    });
+    return { resultType: decoded.resultType, budget: decoded.budget, series };
+};
+
+const tileLookup = (query, ns, ne, budget) => {
+    const tiles = _displayTiles.get(query);
+    if (!tiles) return null;
+    let best = null;
+    for (const tile of tiles) {
+        // Must cover the window and, once clipped, still carry ~budget points.
+        if (tile.start > ns + 1e-6 || tile.end < ne - 1e-6) continue;
+        const s0 = tile.decoded.series[0];
+        if (!s0 || !s0.t || s0.t.length === 0) continue;
+        const [lo, hi] = windowIndices(s0.t, ns, ne);
+        if (hi - lo < budget * 0.9) continue;
+        if (!best || (tile.end - tile.start) < (best.end - best.start)) best = tile;
+    }
+    if (!best) return null;
+    best.seq = ++_tileSeq; // LRU touch
+    return clipDecoded(best.decoded, ns, ne);
+};
+
+const tileStore = (query, start, end, decoded) => {
+    let tiles = _displayTiles.get(query);
+    if (!tiles) { tiles = []; _displayTiles.set(query, tiles); }
+    tiles.push({ start, end, decoded, seq: ++_tileSeq });
+    if (tiles.length > TILE_MAX_PER_QUERY) {
+        tiles.sort((a, b) => a.seq - b.seq);
+        tiles.splice(0, tiles.length - TILE_MAX_PER_QUERY);
+    }
+};
+
+const fetchDisplaySeries = async (query, meta, signal) => {
+    const { start, end, step } = defaultRangeFor(meta);
+    const budget = displayBudget(meta, start, end);
+    const cached = tileLookup(query, start, end, budget);
+    if (cached) return cached; // covered at sufficient resolution — no network
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal });
+    if (!res.buffer) {
+        throw new Error(res.json?.error || 'display query returned a non-series result');
+    }
+    const decoded = decodeDisplayBinary(res.buffer);
+    tileStore(query, start, end, decoded);
+    return decoded;
+};
+
+// Store a decoded display response on the plot. `data` carries the median
+// line(s) so all existing chart machinery (axis extent, zoom, no-data
+// detection, change-detection) works unchanged; `boxplot` carries the
+// per-series columns { t,min,lo,median,hi,max } for the band render in line.js.
+const applyDisplayToPlot = (plot, decoded) => {
+    const series = (decoded && decoded.series) || [];
+    if (series.length === 0) {
+        plot.data = [];
+        plot.boxplot = null;
+        plot.series_names = [];
+        plot.series_metrics = [];
+        return;
+    }
+    const timestamps = Array.from(series[0].t);
+    plot.data = [timestamps, ...series.map((s) => Array.from(s.median))];
+    plot.boxplot = series;
+    // Whether the response is a downsample; drives band-vs-scatter in scatter.js
+    // and (eventually) whether the line render draws collapsed identity bands.
+    plot.boxplotDecimated = series.some((s) => s.decimated);
+    plot.series_metrics = series.map((s) => s.metric || {});
+    plot.series_names = series.length > 1
+        ? series.map((s, i) => displaySeriesName(s.metric, i))
+        : [];
+    // Resolve the render style the same way the JSON path does: percentile
+    // histograms → scatter, single line-ish → line, multi line-ish → multi.
+    plot._resolvedStyle = plot.opts?.style
+        || (plot.opts?.type === 'histogram'
+            ? resolveStyle(plot.opts.type, plot.opts.subtype)
+            : (series.length > 1 ? 'multi' : 'line'));
+};
 
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
@@ -247,6 +522,10 @@ export const promqlResultToSeriesMap = (results, labelFor) => {
 };
 
 const applyResultToPlot = (plot, result) => {
+    // JSON matrix path never carries boxplot columns; clear any left over from
+    // a prior display-mode render so line.js doesn't draw stale bands.
+    plot.boxplot = null;
+    plot.boxplotDecimated = false;
     if (
         result.status === 'success' &&
         result.data &&
@@ -359,14 +638,14 @@ const createDataApi = ({
         return metadataResponse.data;
     };
 
-    const executePromQLRangeQuery = async (query, metadata) => {
+    const executePromQLRangeQuery = async (query, metadata, signal) => {
         const meta = metadata || cachedMetadata || await fetchMetadata();
 
         // Whole recording at native step; echarts LTTB decimates for
         // display. See defaultRangeFor for why we don't decimate via step.
         const { start, end, step } = defaultRangeFor(meta);
 
-        return queryRange(query, start, end, step);
+        return queryRange(query, start, end, step, 'baseline', signal);
     };
 
     // Apply the same per-plot query transforms the baseline path applies.
@@ -447,8 +726,8 @@ const createDataApi = ({
     // query window's maxTime to track the live TSDB instead of freezing
     // at first-fetch). Live-mode auto-refresh sets this; file-mode and
     // initial loads leave it off so the cache still saves a round-trip.
-    const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false } = {}) => {
-        if (freshMetadata) cachedMetadata = null;
+    const processDashboardData = async (data, activeCgroupPattern, sectionRoute, { freshMetadata = false, isStale = null, signal = null } = {}) => {
+        if (freshMetadata) { cachedMetadata = null; clearDisplayTiles(); }
         const metadata = cachedMetadata || await fetchMetadata();
         cachedMetadata = metadata;
 
@@ -467,25 +746,50 @@ const createDataApi = ({
             }
         }
 
-        const results = await Promise.allSettled(
-            queryPlots.map(({ query }) =>
-                executePromQLRangeQuery(query, metadata),
-            ),
-        );
-
-        for (let i = 0; i < queryPlots.length; i++) {
-            const { plot } = queryPlots[i];
-            const outcome = results[i];
-            if (outcome.status === 'fulfilled') {
-                applyResultToPlot(plot, outcome.value);
-            } else {
-                console.error(
-                    `Failed to execute PromQL query "${plot.promql_query}":`,
-                    outcome.reason,
-                );
-                plot.data = [];
+        // Render each chart as soon as its own query lands, rather than
+        // waiting for the whole section — the page fills in progressively.
+        // (Guarded so the node test env, which has no mithril, is unaffected.)
+        const redraw = () => {
+            if (typeof m !== 'undefined' && m && typeof m.redraw === 'function') {
+                m.redraw();
             }
-        }
+        };
+        // A drill-down refetch is superseded when a newer zoom has started
+        // (isStale) or its request was aborted (signal). A superseded fetch must
+        // NOT apply its result or blank the chart — the newer refetch owns it.
+        const superseded = () => (signal && signal.aborted) || (isStale && isStale());
+        await Promise.allSettled(
+            queryPlots.map(async ({ plot, query }) => {
+                try {
+                    // Display mode: line-ish plots fetch the decimated boxplot
+                    // binary. On any failure (e.g. a non-Series result), fall
+                    // back to the JSON matrix so a hiccup never blanks a chart.
+                    if (_displayMode && plotUsesDisplay(plot)) {
+                        try {
+                            const decoded = await fetchDisplaySeries(query, metadata, signal);
+                            if (superseded()) return;
+                            applyDisplayToPlot(plot, decoded);
+                        } catch (_) {
+                            if (superseded()) return;
+                            const res = await executePromQLRangeQuery(query, metadata, signal);
+                            if (superseded()) return;
+                            applyResultToPlot(plot, res);
+                        }
+                    } else {
+                        const res = await executePromQLRangeQuery(query, metadata, signal);
+                        if (superseded()) return;
+                        applyResultToPlot(plot, res);
+                    }
+                } catch (e) {
+                    if (superseded()) return;
+                    console.error(`Failed to execute PromQL query "${plot.promql_query}":`, e);
+                    plot.data = [];
+                    plot.boxplot = null;
+                }
+                if (superseded()) return;
+                redraw();
+            }),
+        );
 
         // Surface no-data plots at the bottom (mirrors service KPI UX)
         // instead of leaving silent empty chart cards mid-section.
@@ -548,18 +852,33 @@ const createDataApi = ({
             return null;
         }
 
-        const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
-        const result = await executePromQLRangeQuery(`histogram_heatmap(${metricSelector}${strideSuffix})`);
+        // Stride the heatmap to ~pixelBudget() columns over the current range
+        // (full recording, or the zoom window via _rangeOverride). executePromQL-
+        // RangeQuery evaluates over that same range, so a drill-down refetches a
+        // finer stride for the narrower window and sharpens it. A manual step
+        // override still wins.
+        const meta = cachedMetadata || await fetchMetadata();
+        const { start, end } = defaultRangeFor(meta);
+        const span = Math.max(1, end - start);
+        const stride = (_stepOverride && _stepOverride > 1)
+            ? _stepOverride
+            : Math.max(1, Math.ceil(span / pixelBudget()));
+        const strideSuffix = stride > 1 ? `, ${stride}` : '';
+        const q = `histogram_heatmap(${metricSelector}${strideSuffix})`;
 
+        // Prefer the binary body (zero-copy typed arrays, no JSON parse of the
+        // triples). queryRangeDisplay returns { buffer } for the octet-stream
+        // response; { json } (older server / error) falls through to JSON.
+        try {
+            const res = await ViewerApi.queryRangeDisplay(q, start, end, defaultRangeFor(meta).step, {});
+            if (res.buffer) return decodeHeatmapBinary(res.buffer);
+            const r = res.json;
+            if (r?.data?.resultType === 'histogram_heatmap') return heatmapFromJson(r.data.result);
+        } catch (_) { /* fall through to the plain JSON query */ }
+
+        const result = await executePromQLRangeQuery(q);
         if (result.status === 'success' && result.data && result.data.resultType === 'histogram_heatmap') {
-            const hr = result.data.result;
-            return {
-                time_data: hr.timestamps,
-                bucket_bounds: hr.bucket_bounds,
-                data: hr.data,
-                min_value: hr.min_value,
-                max_value: hr.max_value,
-            };
+            return heatmapFromJson(result.data.result);
         }
         return null;
     };
@@ -618,7 +937,21 @@ const createDataApi = ({
         // heatmap rendering — it's only used to compute color_min so
         // the Full and Tail views share the same color scale (p0..p100).
         const queryQuantiles = quantiles.includes(0) ? quantiles : [0, ...quantiles];
-        const strideSuffix = (_stepOverride && _stepOverride > 1) ? `, ${_stepOverride}` : '';
+        // Budget-stride the spectrum to ~pixelBudget() time columns over the
+        // current range (full recording, or the zoom window via _rangeOverride /
+        // the passed `range`) — same decimate-then-refetch model as the bucket
+        // heatmap, so the full-range Full/Tail fetch is light and a drill-down
+        // sharpens the window. A manual step override still wins.
+        let eff = range;
+        if (!eff) {
+            const meta = cachedMetadata || await fetchMetadata();
+            eff = defaultRangeFor(meta);
+        }
+        const span = Math.max(1, eff.end - eff.start);
+        const stride = (_stepOverride && _stepOverride > 1)
+            ? _stepOverride
+            : Math.max(1, Math.ceil(span / pixelBudget()));
+        const strideSuffix = stride > 1 ? `, ${stride}` : '';
         const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;
         const result = await fetchSpectrumViaCapture(wrapped, captureId, range);
 
@@ -695,6 +1028,7 @@ const createDataApi = ({
 
     const clearMetadataCache = () => {
         cachedMetadata = null;
+        clearDisplayTiles(); // decoded tiles are keyed to the current recording
     };
 
     return {
@@ -743,4 +1077,10 @@ export {
     injectLabel,
     injectLabelRegex,
     buildEffectiveQuery,
+    plotUsesDisplay,
+    // LOD tile cache internals (exported for tests)
+    clipDecoded,
+    tileLookup,
+    tileStore,
+    clearDisplayTiles,
 };

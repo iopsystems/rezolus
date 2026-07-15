@@ -6,7 +6,7 @@ import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js'
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
 import {
-    queryRangeForCapture, buildEffectiveQuery,
+    queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot,
@@ -34,6 +34,8 @@ const extractBaselineCapture = (spec, options = {}) => {
             cap.timeData = [];
             cap.valueData = [];
         }
+        // Decimated boxplot columns (single series) for the compare envelope.
+        cap.boxplot = Array.isArray(spec.boxplot) ? (spec.boxplot[0] || null) : null;
         return cap;
     }
 
@@ -103,6 +105,9 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         const pair = promqlResultToLinePair(results);
         cap.timeData = pair.timeData;
         cap.valueData = pair.valueData;
+        // Decimated boxplot columns (fetched separately via display mode) for
+        // the compare envelope — null when the fetch failed or is pending.
+        cap.boxplot = Array.isArray(options.boxplot) ? (options.boxplot[0] || null) : null;
         return cap;
     }
 
@@ -120,15 +125,37 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
     }
 
     if (style === 'scatter') {
-        // Multi-dim-aware label so percentile metrics with extra dims
-        // (per-cgroup, per-host) match the baseline path key-for-key.
-        // `options.excludeValues` (the category bridge) drops capture-
-        // identity dims (e.g. source=vllm vs source=sglang in
-        // inference-library) so cross-capture matching still works.
-        // Falls back to legacy canonicalQuantileLabel for malformed
-        // metrics with no usable dims so we don't drop series silently.
-        cap.seriesMap = promqlResultToSeriesMap(results, (item) =>
-            composeScatterLabel(item.metric, options) || canonicalQuantileLabel(item));
+        // Label rule (shared with the raw-matrix path below): multi-dim-aware
+        // so percentile metrics with extra dims (per-cgroup, per-host) match
+        // the baseline path key-for-key. `options.excludeValues` (the category
+        // bridge) drops capture-identity dims (e.g. source=vllm vs source=sglang
+        // in inference-library) so cross-capture matching still works. Falls
+        // back to legacy canonicalQuantileLabel for malformed metrics with no
+        // usable dims so we don't drop series silently.
+        const scatterLabel = (item) =>
+            composeScatterLabel(item.metric, options) || canonicalQuantileLabel(item);
+
+        // Prefer the decimated display series (fetched on the baseline's grid),
+        // so the experiment's percentile points share x-coordinates with the
+        // baseline's decimated points. Without this the experiment falls back to
+        // the raw per-second matrix while the baseline is on the ~budget grid,
+        // and the two never line up (the axis tooltip then shows only one).
+        const disp = Array.isArray(options.boxplot) ? options.boxplot : null;
+        if (disp && disp.length > 0) {
+            const map = new Map();
+            for (const s of disp) {
+                const label = scatterLabel(s);
+                if (label == null) continue;
+                map.set(String(label), {
+                    timeData: Array.from(s.t),
+                    valueData: Array.from(s.median),
+                });
+            }
+            cap.seriesMap = map;
+            return cap;
+        }
+
+        cap.seriesMap = promqlResultToSeriesMap(results, scatterLabel);
         return cap;
     }
 
@@ -211,7 +238,11 @@ const fetchExperimentResult = (vnode) => {
                         const start = Number(minT);
                         const end = Number(maxT);
                         if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-                            range = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+                            range = {
+                                start, end,
+                                step: Math.max(1, Math.floor((end - start) / 500)),
+                                interval: Math.max(1, Number(data.interval) || 1),
+                            };
                         }
                     }
                 } catch (_) { /* best effort */ }
@@ -228,6 +259,34 @@ const fetchExperimentResult = (vnode) => {
             );
             vnode.state.experimentResult = res;
             vnode.state._lastFetchedStep = step;
+            // Line charts also fetch the experiment's decimated boxplot so
+            // compare mode can draw its min/max envelope (the matrix above has
+            // no min/max). Best-effort — null leaves a plain median line. Match
+            // the baseline's point count so both envelopes have similar density.
+            vnode.state.experimentBoxplot = null;
+            // Line AND scatter (percentile) charts fetch the experiment through
+            // the SAME display decimation the baseline used, so both captures
+            // land on identical x-grids. The baseline decimates from its NATIVE
+            // step (max(1, interval)) down to the budget grid; the coarse
+            // ~500-point query `step` above would instead leave the experiment
+            // on a different, sparser grid (native < budget ⇒ no decimation),
+            // so the overlaid series only coincide every few samples and the
+            // axis tooltip flickers between showing one series or both. Match
+            // the native step + baseline's point budget here so the experiment
+            // decimates onto identical buckets. Line uses the single reduced
+            // series (min/max envelope); scatter uses every per-quantile series
+            // (see extractExperimentCapture).
+            const displayStyle = resolvedStyle(spec);
+            if (displayStyle === 'line' || displayStyle === 'scatter') {
+                const pts = (Array.isArray(spec.boxplot) && spec.boxplot[0]?.t?.length)
+                    ? spec.boxplot[0].t.length : 500;
+                const nativeStep = Math.max(1, range.interval || 1);
+                try {
+                    vnode.state.experimentBoxplot = await queryRangeDisplayForCapture(
+                        CAPTURE_EXPERIMENT, query, range.start, range.end, nativeStep, pts,
+                    );
+                } catch (_) { /* leave null → raw-matrix fallback */ }
+            }
             // Invalidate the memoized capture so view() re-extracts
             // against the freshly fetched result.
             vnode.state._capExpResult = null;
@@ -372,7 +431,7 @@ export const CompareChartWrapper = {
         }
         if (vnode.state._capExpResult !== vnode.state.experimentResult) {
             vnode.state._capExpResult = vnode.state.experimentResult;
-            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, captureExtractOpts);
+            vnode.state._experimentCap = extractExperimentCapture(spec, vnode.state.experimentResult, { ...captureExtractOpts, boxplot: vnode.state.experimentBoxplot });
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;
