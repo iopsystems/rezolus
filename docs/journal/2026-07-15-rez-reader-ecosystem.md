@@ -1,11 +1,19 @@
 # Measurement uncertainty — `.rez` reader ecosystem (viewer / MCP / parquet-tools)
 
 - **Opened:** 2026-07-15
-- **Status:** Open — design landed, pre-build. Sub-project (3) of the arc: make
-  `.rez` archives *readable* everywhere a `.parquet` is today. Consumes the
-  per-sampler `.rez` format (labels + per-sampler tables + per-metric windows)
-  built in [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md).
-  Phased A → B → C; each phase ships working software.
+- **Status:** In progress — **Phase A landed**, B/C pre-build. Sub-project (3) of
+  the arc: make `.rez` archives *readable* everywhere a `.parquet` is today.
+  Consumes the per-sampler `.rez` format (labels + per-sampler tables + per-metric
+  windows) built in
+  [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md). Phased
+  A → B → C; each phase ships working software.
+  - **Phase A landed** (metriken `next` `2e98270`): `parse_schema` skips
+    `:window_begin`/`:window_width` sidecar columns so they no longer surface as
+    phantom counter/gauge metrics. TDD — the RED test confirmed the phantom
+    (`counter_names()` returned `["cpu_cycles", "cpu_cycles:window_width"]`), GREEN
+    passes; 143 unit + 15 fixtures integration tests clean; rezolus builds against
+    the patched metriken. The seam where windows enter the query engine — (4)
+    changes "skip" to "read for rate error bars".
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) for the query-engine
