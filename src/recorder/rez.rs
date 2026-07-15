@@ -11,12 +11,22 @@ pub const REZ_SCHEMA_VERSION: u32 = 1;
 /// Manifest filename inside the tar.
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
 
-/// Top-level `.rez` manifest (`manifest.json`).
+/// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct RezManifest {
     pub version: u32,
-    /// File-level metadata: the existing `parquet_metadata` keys
-    /// (`source`, `systeminfo`, `sampling_interval_ms`, `descriptions`, ...).
+    pub recordings: Vec<RezRecording>,
+}
+
+/// One recording = one endpoint on one host = a label set + its per-sampler tables.
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+pub struct RezRecording {
+    /// Filesystem-safe directory holding this recording's parquet tables in the tar.
+    pub dir: String,
+    /// Arbitrary label set: `source`, `host` (from systeminfo), user `--label k=v`.
+    pub labels: BTreeMap<String, String>,
+    /// Per-recording metadata: the existing `parquet_metadata` keys
+    /// (`systeminfo`, `descriptions`, `sampling_interval_ms`, ...).
     pub metadata: BTreeMap<String, String>,
     pub tables: Vec<RezTableIndex>,
 }
@@ -339,10 +349,19 @@ pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, R
 use std::io::Read;
 use std::path::Path;
 
+/// One recording's data to serialize (borrowed tables).
+pub struct RecordingData<'a> {
+    pub dir: String,
+    pub labels: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
+    pub tables: &'a [RezTable],
+}
+
 /// A decoded `.rez` archive (round-trip / test surface).
 pub struct RezArchive {
     pub manifest: RezManifest,
-    pub tables: Vec<RezTable>,
+    /// Decoded tables, one inner `Vec` per `manifest.recordings` entry (parallel order).
+    pub tables: Vec<Vec<RezTable>>,
 }
 
 fn append_tar_entry<W: std::io::Write>(
@@ -359,30 +378,35 @@ fn append_tar_entry<W: std::io::Write>(
     Ok(())
 }
 
-/// Write `tables` + `metadata` to an uncompressed `.rez` tar at `path`.
-pub fn write_archive(
-    path: &Path,
-    tables: &[RezTable],
-    metadata: BTreeMap<String, String>,
-) -> Result<(), RezError> {
-    let mut index = Vec::with_capacity(tables.len());
-    let mut table_files: Vec<(String, Vec<u8>)> = Vec::with_capacity(tables.len());
-    for table in tables {
-        let file = format!("{}.parquet", table.sampler);
-        let bytes = write_table_parquet(table)?;
-        index.push(RezTableIndex {
-            sampler: table.sampler.clone(),
-            file: file.clone(),
-            columns: table.columns.iter().map(|c| c.name.clone()).collect(),
-            rows: table.timestamps.len() as u64,
-            cadence_ns: cadence_hint(&table.timestamps),
+/// Write `recordings` to an uncompressed `.rez` tar at `path`. Each recording's
+/// tables are nested under `<dir>/<sampler>.parquet`.
+pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), RezError> {
+    let mut manifest_recordings = Vec::with_capacity(recordings.len());
+    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    for rec in recordings {
+        let mut index = Vec::with_capacity(rec.tables.len());
+        for table in rec.tables {
+            let file = format!("{}.parquet", table.sampler);
+            let bytes = write_table_parquet(table)?;
+            index.push(RezTableIndex {
+                sampler: table.sampler.clone(),
+                file: file.clone(),
+                columns: table.columns.iter().map(|c| c.name.clone()).collect(),
+                rows: table.timestamps.len() as u64,
+                cadence_ns: cadence_hint(&table.timestamps),
+            });
+            files.push((format!("{}/{}", rec.dir, file), bytes));
+        }
+        manifest_recordings.push(RezRecording {
+            dir: rec.dir.clone(),
+            labels: rec.labels.clone(),
+            metadata: rec.metadata.clone(),
+            tables: index,
         });
-        table_files.push((file, bytes));
     }
     let manifest = RezManifest {
         version: REZ_SCHEMA_VERSION,
-        metadata,
-        tables: index,
+        recordings: manifest_recordings,
     };
     let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
 
@@ -390,14 +414,14 @@ pub fn write_archive(
     let mut builder = tar::Builder::new(out);
     builder.mode(tar::HeaderMode::Deterministic);
     append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
-    for (name, bytes) in &table_files {
+    for (name, bytes) in &files {
         append_tar_entry(&mut builder, name, bytes)?;
     }
     builder.into_inner()?.sync_all()?;
     Ok(())
 }
 
-/// Read a `.rez` archive back into its manifest + decoded tables.
+/// Read a `.rez` archive back into its manifest + decoded tables (per recording).
 pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     let file = std::fs::File::open(path)?;
     let mut archive = tar::Archive::new(file);
@@ -417,14 +441,22 @@ pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     }
     let manifest = manifest.ok_or("missing manifest.json")?;
 
-    let mut tables = Vec::with_capacity(manifest.tables.len());
-    for idx in &manifest.tables {
-        let bytes = parquet_bytes
-            .remove(&idx.file)
-            .ok_or_else(|| format!("missing table file {}", idx.file))?;
-        tables.push(read_table_parquet(idx.sampler.clone(), bytes)?);
+    let mut all = Vec::with_capacity(manifest.recordings.len());
+    for rec in &manifest.recordings {
+        let mut tables = Vec::with_capacity(rec.tables.len());
+        for idx in &rec.tables {
+            let path_in_tar = format!("{}/{}", rec.dir, idx.file);
+            let bytes = parquet_bytes
+                .remove(&path_in_tar)
+                .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
+            tables.push(read_table_parquet(idx.sampler.clone(), bytes)?);
+        }
+        all.push(tables);
     }
-    Ok(RezArchive { manifest, tables })
+    Ok(RezArchive {
+        manifest,
+        tables: all,
+    })
 }
 
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
@@ -569,13 +601,21 @@ impl TableBuilder {
 pub struct RezRecorder {
     tables: BTreeMap<String, TableBuilder>,
     metadata: BTreeMap<String, String>,
+    labels: BTreeMap<String, String>,
+    dir: String,
 }
 
 impl RezRecorder {
-    pub fn new(metadata: BTreeMap<String, String>) -> Self {
+    pub fn new(
+        metadata: BTreeMap<String, String>,
+        labels: BTreeMap<String, String>,
+        dir: String,
+    ) -> Self {
         Self {
             tables: BTreeMap::new(),
             metadata,
+            labels,
+            dir,
         }
     }
 
@@ -643,22 +683,87 @@ impl RezRecorder {
 
     /// Consume into finalized per-sampler tables.
     pub fn finalize_tables(self) -> Vec<RezTable> {
-        self.tables.into_values().map(TableBuilder::finish).collect()
+        self.tables
+            .into_values()
+            .map(TableBuilder::finish)
+            .collect()
     }
 
-    /// Finalize and write the `.rez` archive at `path`.
+    /// Finalize and write the single-recording `.rez` archive at `path`.
     pub fn finalize(self, path: &Path) -> Result<(), RezError> {
+        let dir = self.dir.clone();
+        let labels = self.labels.clone();
         let metadata = self.metadata.clone();
         let tables = self.finalize_tables();
-        write_archive(path, &tables, metadata)
+        write_archive(
+            path,
+            &[RecordingData {
+                dir,
+                labels,
+                metadata,
+                tables: &tables,
+            }],
+        )
+    }
+}
+
+/// Extract the `hostname` string from a systeminfo JSON blob, if present.
+pub fn host_from_systeminfo(systeminfo_json: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(systeminfo_json)
+        .ok()?
+        .get("hostname")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// The recording's label set: `source`, `host` (from systeminfo hostname, when
+/// available), then user `--label k=v` applied last (last-wins, so a user
+/// `--label host=...` overrides the auto value).
+pub fn build_labels(
+    source: &str,
+    systeminfo_json: Option<&str>,
+    user_labels: &[(String, String)],
+) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    labels.insert("source".to_string(), source.to_string());
+    if let Some(host) = systeminfo_json.and_then(host_from_systeminfo) {
+        labels.insert("host".to_string(), host);
+    }
+    for (k, v) in user_labels {
+        labels.insert(k.clone(), v.clone());
+    }
+    labels
+}
+
+/// Filesystem-safe directory name for a single recording, derived from its
+/// `source` label (falls back to `"recording"`). The manifest — not the dir —
+/// is authoritative for labels; this is only a human-readable tar path.
+pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
+    let base = labels
+        .get("source")
+        .map(String::as_str)
+        .unwrap_or("recording");
+    let slug: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if slug.is_empty() {
+        "recording".to_string()
+    } else {
+        slug
     }
 }
 
 /// True when the recording should be written as a `.rez` archive: either the
 /// output path ends in `.rez` or `--format rez` was given.
 pub fn wants_rez(output: &Path, format: crate::Format) -> bool {
-    format == crate::Format::Rez
-        || output.extension().and_then(|e| e.to_str()) == Some("rez")
+    format == crate::Format::Rez || output.extension().and_then(|e| e.to_str()) == Some("rez")
 }
 
 #[cfg(test)]
@@ -705,7 +810,7 @@ mod recorder_tests {
 
     #[test]
     fn windowless_sampler_writes_one_row_per_poll() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(BTreeMap::new(), BTreeMap::new(), "test".to_string());
         for i in 0..3u64 {
             let ts = 1_000 + i;
             r.ingest(&snap(ts, vec![counter("0", "cpu_perf", i, None)]), ts);
@@ -716,7 +821,7 @@ mod recorder_tests {
 
     #[test]
     fn unchanged_window_dedups_to_one_row() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(BTreeMap::new(), BTreeMap::new(), "test".to_string());
         let w = Window::new(900, 1_000);
         for i in 0..3u64 {
             r.ingest(
@@ -729,13 +834,18 @@ mod recorder_tests {
 
     #[test]
     fn advancing_window_writes_one_row_per_advance() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(BTreeMap::new(), BTreeMap::new(), "test".to_string());
         for i in 0..3u64 {
             let end = 1_000 + i * 100;
             r.ingest(
                 &snap(
                     2_000 + i,
-                    vec![counter("0", "cpu_usage", i, Some(Window::new(end - 50, end)))],
+                    vec![counter(
+                        "0",
+                        "cpu_usage",
+                        i,
+                        Some(Window::new(end - 50, end)),
+                    )],
                 ),
                 2_000 + i,
             );
@@ -745,7 +855,7 @@ mod recorder_tests {
 
     #[test]
     fn mixed_sampler_advances_on_windowed_and_carries_packed_column() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(BTreeMap::new(), BTreeMap::new(), "test".to_string());
         // metric "0" windowed (advances), metric "1" packed/windowless, same sampler.
         for i in 0..2u64 {
             let end = 1_000 + i * 100;
@@ -775,7 +885,7 @@ mod recorder_tests {
 
     #[test]
     fn two_samplers_split_into_two_tables() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(BTreeMap::new(), BTreeMap::new(), "test".to_string());
         r.ingest(
             &snap(
                 1_000,
@@ -801,15 +911,24 @@ mod manifest_tests {
     fn manifest_json_round_trips() {
         let m = RezManifest {
             version: REZ_SCHEMA_VERSION,
-            metadata: [("source".to_string(), "rezolus".to_string())]
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: [
+                    ("source".to_string(), "rezolus".to_string()),
+                    ("host".to_string(), "node0".to_string()),
+                ]
                 .into_iter()
                 .collect(),
-            tables: vec![RezTableIndex {
-                sampler: "cpu_usage".to_string(),
-                file: "cpu_usage.parquet".to_string(),
-                columns: vec!["5".to_string()],
-                rows: 3,
-                cadence_ns: Some(1_000_000_000),
+                metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
+                    .into_iter()
+                    .collect(),
+                tables: vec![RezTableIndex {
+                    sampler: "cpu_usage".to_string(),
+                    file: "cpu_usage.parquet".to_string(),
+                    columns: vec!["5".to_string()],
+                    rows: 3,
+                    cadence_ns: Some(1_000_000_000),
+                }],
             }],
         };
         let bytes = serde_json::to_vec(&m).unwrap();
@@ -952,21 +1071,41 @@ mod archive_tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("rec.rez");
+        let labels: BTreeMap<String, String> = [
+            ("source".to_string(), "rezolus".to_string()),
+            ("host".to_string(), "node0".to_string()),
+        ]
+        .into_iter()
+        .collect();
         let metadata: BTreeMap<String, String> =
-            [("source".to_string(), "rezolus".to_string())]
+            [("sampling_interval_ms".to_string(), "1000".to_string())]
                 .into_iter()
                 .collect();
 
-        write_archive(&out, &[a.clone(), b.clone()], metadata.clone()).unwrap();
+        let tables = [a.clone(), b.clone()];
+        write_archive(
+            &out,
+            &[RecordingData {
+                dir: "rezolus".to_string(),
+                labels: labels.clone(),
+                metadata: metadata.clone(),
+                tables: &tables,
+            }],
+        )
+        .unwrap();
         let archive = read_archive(&out).unwrap();
 
         assert_eq!(archive.manifest.version, REZ_SCHEMA_VERSION);
-        assert_eq!(archive.manifest.metadata, metadata);
-        assert_eq!(archive.manifest.tables.len(), 2);
-        assert_eq!(archive.tables.len(), 2);
+        assert_eq!(archive.manifest.recordings.len(), 1);
+        let rec = &archive.manifest.recordings[0];
+        assert_eq!(rec.dir, "rezolus");
+        assert_eq!(rec.labels, labels);
+        assert_eq!(rec.metadata, metadata);
+        assert_eq!(rec.tables.len(), 2);
+        assert_eq!(archive.tables.len(), 1);
+        assert_eq!(archive.tables[0].len(), 2);
 
-        let cpu = archive
-            .tables
+        let cpu = archive.tables[0]
             .iter()
             .find(|t| t.sampler == "cpu_usage")
             .unwrap();
@@ -978,16 +1117,14 @@ mod archive_tests {
                 Some(Window::new(1_400, 2_000))
             ]
         );
-        let bio = archive
-            .tables
+        let bio = archive.tables[0]
             .iter()
             .find(|t| t.sampler == "blockio_latency")
             .unwrap();
         assert_eq!(bio.timestamps, vec![1_000]);
         assert_eq!(bio.columns[0].windows, vec![None]);
 
-        let cpu_idx = archive
-            .manifest
+        let cpu_idx = rec
             .tables
             .iter()
             .find(|t| t.sampler == "cpu_usage")
@@ -1013,6 +1150,10 @@ mod finalize_tests {
             [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
         );
         // drivehealth: same window over 3 polls → 1 row.
         let w = Window::new(900, 1_000);
@@ -1035,19 +1176,22 @@ mod finalize_tests {
         r.finalize(&out).unwrap();
 
         let archive = read_archive(&out).unwrap();
+        let rec = &archive.manifest.recordings[0];
         assert_eq!(
-            archive.manifest.metadata.get("source").map(String::as_str),
+            rec.labels.get("source").map(String::as_str),
             Some("rezolus")
         );
-        let dh = archive
-            .tables
+        assert_eq!(
+            rec.metadata.get("source").map(String::as_str),
+            Some("rezolus")
+        );
+        let dh = archive.tables[0]
             .iter()
             .find(|t| t.sampler == "drivehealth")
             .unwrap();
         assert_eq!(dh.timestamps.len(), 1);
         assert_eq!(dh.columns[0].windows, vec![Some(Window::new(900, 1_000))]);
-        let perf = archive
-            .tables
+        let perf = archive.tables[0]
             .iter()
             .find(|t| t.sampler == "cpu_perf")
             .unwrap();
@@ -1059,7 +1203,13 @@ mod finalize_tests {
     // (the recorder sets metric_type="gauge", which the parquet reader keys on).
     #[test]
     fn recorder_round_trips_a_gauge_column() {
-        let mut r = RezRecorder::new(BTreeMap::new());
+        let mut r = RezRecorder::new(
+            BTreeMap::new(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        );
         let w = Window::new(1_900, 2_000);
         let g = Gauge {
             name: "0".to_string(),
@@ -1086,8 +1236,7 @@ mod finalize_tests {
         let out = dir.path().join("g.rez");
         r.finalize(&out).unwrap();
         let archive = read_archive(&out).unwrap();
-        let t = archive
-            .tables
+        let t = archive.tables[0]
             .iter()
             .find(|t| t.sampler == "memory_meminfo")
             .unwrap();
@@ -1112,5 +1261,65 @@ mod selection_tests {
         assert!(wants_rez(Path::new("out.parquet"), Format::Rez));
         assert!(!wants_rez(Path::new("out.parquet"), Format::Parquet));
         assert!(!wants_rez(Path::new("out.raw"), Format::Raw));
+    }
+}
+
+#[cfg(test)]
+mod label_tests {
+    use super::*;
+
+    #[test]
+    fn host_from_systeminfo_extracts_hostname() {
+        let json = r#"{"hostname":"node7","cpus":64}"#;
+        assert_eq!(host_from_systeminfo(json), Some("node7".to_string()));
+    }
+
+    #[test]
+    fn host_from_systeminfo_missing_or_invalid_is_none() {
+        assert_eq!(host_from_systeminfo(r#"{"cpus":64}"#), None);
+        assert_eq!(host_from_systeminfo("not json"), None);
+        assert_eq!(host_from_systeminfo(r#"{"hostname":null}"#), None);
+    }
+
+    #[test]
+    fn build_labels_populates_source_and_host() {
+        let labels = build_labels("rezolus", Some(r#"{"hostname":"node7"}"#), &[]);
+        assert_eq!(labels.get("source").map(String::as_str), Some("rezolus"));
+        assert_eq!(labels.get("host").map(String::as_str), Some("node7"));
+    }
+
+    #[test]
+    fn build_labels_no_host_when_systeminfo_absent() {
+        let labels = build_labels("rezolus", None, &[]);
+        assert_eq!(labels.get("source").map(String::as_str), Some("rezolus"));
+        assert!(!labels.contains_key("host"));
+    }
+
+    #[test]
+    fn build_labels_user_labels_merge_and_override() {
+        let user = vec![
+            ("arm".to_string(), "redis".to_string()),
+            ("host".to_string(), "friendly".to_string()), // user overrides auto host
+        ];
+        let labels = build_labels("rezolus", Some(r#"{"hostname":"node7"}"#), &user);
+        assert_eq!(labels.get("arm").map(String::as_str), Some("redis"));
+        assert_eq!(labels.get("host").map(String::as_str), Some("friendly"));
+    }
+
+    #[test]
+    fn recording_dir_slug_sanitizes_source() {
+        let labels: BTreeMap<String, String> = [("source".to_string(), "llm-perf".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(recording_dir_slug(&labels), "llm-perf");
+    }
+
+    #[test]
+    fn recording_dir_slug_replaces_unsafe_chars_and_defaults() {
+        let labels: BTreeMap<String, String> = [("source".to_string(), "a/b c".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(recording_dir_slug(&labels), "a-b-c");
+        assert_eq!(recording_dir_slug(&BTreeMap::new()), "recording");
     }
 }
