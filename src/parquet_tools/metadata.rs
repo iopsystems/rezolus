@@ -11,6 +11,11 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let field_key = args.get_one::<String>("field");
     let json = args.get_flag("json");
 
+    // `.rez` archives have no single parquet footer — describe the manifest.
+    if crate::recorder::rez::is_rez_path(input).unwrap_or(false) {
+        return describe_rez(input, json);
+    }
+
     let (metadata, schema, _) = read_parquet_footer(input)?;
 
     // --field=KEY: print the raw value of a single file-level metadata key
@@ -304,5 +309,82 @@ fn format_bytes(bytes: i64) -> String {
         format!("{:.1} KiB", b / KIB)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+/// Describe a `.rez` archive from its manifest (the `metadata` command; `.rez`
+/// has no single parquet footer, so we summarize the recordings/tables index).
+fn describe_rez(path: &std::path::Path, json: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let (manifest, _tables) = crate::recorder::rez::read_archive_bytes(path)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&manifest)?);
+    } else {
+        print!("{}", describe_rez_string(&manifest));
+    }
+    Ok(())
+}
+
+/// Human-readable summary of a `.rez` manifest: recordings, their labels, and
+/// each per-sampler table's row count and observed cadence.
+fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        ".rez archive v{} — {} recording(s)",
+        manifest.version,
+        manifest.recordings.len()
+    );
+    for rec in &manifest.recordings {
+        let labels: Vec<String> = rec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let _ = writeln!(out, "  recording {} [{}]", rec.dir, labels.join(", "));
+        for t in &rec.tables {
+            let cadence = t
+                .cadence_ns
+                .map(|ns| format!("{:.3}s", ns as f64 / 1e9))
+                .unwrap_or_else(|| "—".to_string());
+            let _ = writeln!(
+                out,
+                "    {:<24} {:>5} rows  ~{}",
+                t.sampler, t.rows, cadence
+            );
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod rez_tests {
+    use super::*;
+    use crate::recorder::rez::{RezManifest, RezRecording, RezTableIndex};
+
+    #[test]
+    fn describe_rez_string_lists_recordings_and_tables() {
+        let m = RezManifest {
+            version: 1,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: [
+                    ("source".to_string(), "rezolus".to_string()),
+                    ("arm".to_string(), "baseline".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                metadata: Default::default(),
+                tables: vec![RezTableIndex {
+                    sampler: "cpu_usage".to_string(),
+                    file: "cpu_usage.parquet".to_string(),
+                    columns: vec!["0".to_string()],
+                    rows: 7,
+                    cadence_ns: Some(1_000_000_000),
+                }],
+            }],
+        };
+        let s = describe_rez_string(&m);
+        assert!(s.contains("recording rezolus"), "{s}");
+        assert!(s.contains("arm=baseline"), "{s}");
+        assert!(s.contains("cpu_usage"), "{s}");
+        assert!(s.contains("7 rows"), "{s}");
+        assert!(s.contains("~1.000s"), "{s}");
     }
 }
