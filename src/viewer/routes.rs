@@ -531,6 +531,7 @@ fn asset_response(bytes: &'static [u8], content_type: &'static str, req: &Header
         .into_response()
 }
 
+#[cfg(not(feature = "developer-mode"))]
 async fn index(headers: HeaderMap) -> Response {
     let Some(asset) = ASSETS.get_file("index.html") else {
         tracing::error!("index.html missing from build");
