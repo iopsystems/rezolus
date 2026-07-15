@@ -33,6 +33,8 @@ pub struct RecordingConfig {
     pub output: PathBuf,
     pub separate: bool,
     pub metadata: Vec<(String, String)>,
+    /// Recording labels for `.rez` output (`--label k=v`); `source`/`host` auto-added.
+    pub labels: Vec<(String, String)>,
     pub endpoints: Vec<EndpointConfig>,
     /// When set, record only while this command runs (perf-record style).
     pub command: Option<Vec<String>>,
@@ -87,6 +89,14 @@ impl RecordingConfig {
         let separate = args.get_flag("SEPARATE");
         let metadata: Vec<(String, String)> = args
             .get_many::<String>("METADATA")
+            .unwrap_or_default()
+            .filter_map(|s| {
+                s.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect();
+        let labels: Vec<(String, String)> = args
+            .get_many::<String>("LABEL")
             .unwrap_or_default()
             .filter_map(|s| {
                 s.split_once('=')
@@ -161,6 +171,7 @@ impl RecordingConfig {
                 output,
                 separate,
                 metadata,
+                labels,
                 endpoints: toml_cfg.endpoints,
                 command: command.clone(),
             });
@@ -184,6 +195,7 @@ impl RecordingConfig {
                 output: resolved_output.clone(),
                 separate,
                 metadata,
+                labels,
                 endpoints,
                 command: command.clone(),
             });
@@ -221,6 +233,7 @@ impl RecordingConfig {
             output: resolved_output,
             separate,
             metadata,
+            labels,
             endpoints: vec![endpoint],
             command,
         })
@@ -277,6 +290,29 @@ pub fn parse_endpoint_str(s: &str) -> Result<EndpointConfig, String> {
 mod tests {
     use super::*;
     use crate::recorder::endpoint::Protocol;
+
+    #[test]
+    fn label_flag_parses_into_config() {
+        let matches = crate::recorder::command()
+            .try_get_matches_from([
+                "record",
+                "--url",
+                "http://localhost:4241",
+                "--label",
+                "arm=redis",
+                "--label",
+                "role=server",
+            ])
+            .unwrap();
+        let cfg = RecordingConfig::from_args(&matches).unwrap();
+        assert_eq!(
+            cfg.labels,
+            vec![
+                ("arm".to_string(), "redis".to_string()),
+                ("role".to_string(), "server".to_string()),
+            ]
+        );
+    }
 
     #[test]
     fn resolve_url_defaults_to_localhost() {

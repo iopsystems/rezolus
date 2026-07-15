@@ -115,6 +115,13 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::Append),
         )
         .arg(
+            clap::Arg::new("LABEL")
+                .long("label")
+                .short('l')
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. `source` and `host` are auto-populated. Used by .rez output.")
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
             clap::Arg::new("NODE")
                 .long("node")
                 .help("Node name for rezolus agent data (written to parquet metadata)")
@@ -416,6 +423,20 @@ fn build_rez_metadata(
         m.insert("descriptions".to_string(), json.clone());
     }
     m
+}
+
+/// The recording's label set for a `.rez` manifest: `source`, `host` (from the
+/// agent's systeminfo hostname), plus any user `--label k=v` (last-wins). Thin
+/// adapter over `rez::build_labels`; the merge logic + tests live in `rez`.
+fn build_rez_labels(
+    config: &RecordingConfig,
+    ep: &EndpointState,
+) -> std::collections::BTreeMap<String, String> {
+    rez::build_labels(
+        ep.config.source_label(),
+        ep.systeminfo.as_deref(),
+        &config.labels,
+    )
 }
 
 /// Build the `per_source_metadata` JSON written by the recorder.
@@ -732,10 +753,14 @@ pub fn run(config: RecordingConfig) {
                                         );
                                         if rez_mode {
                                             let rec = rez_recorder.get_or_insert_with(|| {
-                                                rez::RezRecorder::new(build_rez_metadata(
-                                                    &config,
-                                                    &endpoints[idx],
-                                                ))
+                                                let labels =
+                                                    build_rez_labels(&config, &endpoints[idx]);
+                                                let dir = rez::recording_dir_slug(&labels);
+                                                rez::RezRecorder::new(
+                                                    build_rez_metadata(&config, &endpoints[idx]),
+                                                    labels,
+                                                    dir,
+                                                )
                                             });
                                             rec.ingest(&snapshot, now_ns);
                                         }
