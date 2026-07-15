@@ -2,8 +2,14 @@
 # Build the WASM viewer and place the output in site/viewer/pkg/ so it can be
 # loaded by the static site frontend (imports `../pkg/wasm_viewer.js`).
 #
-# Requires `wasm-pack` (>= 0.13 for --profile support) and (on macOS) Homebrew
-# LLVM for compiling zstd to wasm32.
+# Requires `wasm-pack` and (on macOS) Homebrew LLVM for compiling zstd to wasm32.
+#
+# We build with `--release` and size-optimize via the CARGO_PROFILE_RELEASE_*
+# env overrides below rather than a custom `--profile`: wasm-pack's build-mode
+# flag (`--release`) is mutually exclusive with cargo's `--profile`, so passing
+# `--profile wasm-release` made cargo reject the invocation
+# ("--release cannot be used with --profile"). The env overrides apply only to
+# this wasm build and leave the native `[profile.release]` untouched.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -43,9 +49,13 @@ if command -v brew >/dev/null 2>&1 && LLVM_PREFIX=$(brew --prefix llvm 2>/dev/nu
 fi
 
 cd "$SCRIPT_DIR"
+# opt-level "s" + no debug info == the old [profile.wasm-release]; applied via env
+# so it only affects this release build, not the native binary's release profile.
+export CARGO_PROFILE_RELEASE_OPT_LEVEL="s"
+export CARGO_PROFILE_RELEASE_DEBUG="false"
 wasm-pack build \
     --target web \
     --out-dir "$OUT_DIR" \
     --out-name wasm_viewer \
-    --profile wasm-release \
+    --release \
     "$@"

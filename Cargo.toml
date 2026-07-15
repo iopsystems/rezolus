@@ -159,12 +159,10 @@ debug = true
 lto = true
 codegen-units = 1
 
-# Profile used by crates/viewer/build.sh for the wasm build. Smaller and
-# debuginfo-free so the .wasm artifact stays compact when shipped to browsers.
-[profile.wasm-release]
-inherits = "release"
-opt-level = "s"
-debug = false
+# NOTE: the wasm viewer's size-optimized build (opt-level "s", no debuginfo) is
+# applied via CARGO_PROFILE_RELEASE_* env overrides in crates/viewer/build.sh,
+# not a custom [profile.wasm-release] — wasm-pack's --release mode conflicts with
+# cargo's --profile flag.
 
 [package.metadata.deb]
 maintainer = "IOP Systems <team@iop.systems>"
