@@ -459,6 +459,87 @@ pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     })
 }
 
+/// One recording's raw per-sampler parquet bytes (for building readers).
+pub struct RecordingBytes {
+    pub dir: String,
+    pub labels: BTreeMap<String, String>,
+    pub metadata: BTreeMap<String, String>,
+    /// `(sampler, parquet_bytes)` in manifest order.
+    pub tables: Vec<(String, Vec<u8>)>,
+}
+
+/// Read a `.rez` from any reader into its manifest + per-recording raw parquet
+/// bytes (unlike `read_archive`, which decodes tables into `RezTable`s).
+pub fn read_archive_reader<R: std::io::Read>(
+    reader: R,
+) -> Result<(RezManifest, Vec<RecordingBytes>), RezError> {
+    let mut archive = tar::Archive::new(reader);
+    let mut manifest: Option<RezManifest> = None;
+    let mut parquet_bytes: HashMap<String, Vec<u8>> = HashMap::new();
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?.to_string_lossy().into_owned();
+        let mut buf = Vec::new();
+        entry.read_to_end(&mut buf)?;
+        if name == REZ_MANIFEST_NAME {
+            manifest = Some(serde_json::from_slice(&buf)?);
+        } else if name.ends_with(".parquet") {
+            parquet_bytes.insert(name, buf);
+        }
+    }
+    let manifest = manifest.ok_or("missing manifest.json")?;
+    let mut recordings = Vec::with_capacity(manifest.recordings.len());
+    for rec in &manifest.recordings {
+        let mut tables = Vec::with_capacity(rec.tables.len());
+        for idx in &rec.tables {
+            let path_in_tar = format!("{}/{}", rec.dir, idx.file);
+            let bytes = parquet_bytes
+                .remove(&path_in_tar)
+                .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
+            tables.push((idx.sampler.clone(), bytes));
+        }
+        recordings.push(RecordingBytes {
+            dir: rec.dir.clone(),
+            labels: rec.labels.clone(),
+            metadata: rec.metadata.clone(),
+            tables,
+        });
+    }
+    Ok((manifest, recordings))
+}
+
+/// Read a `.rez` archive at `path` into manifest + per-recording raw bytes.
+pub fn read_archive_bytes(path: &Path) -> Result<(RezManifest, Vec<RecordingBytes>), RezError> {
+    read_archive_reader(std::fs::File::open(path)?)
+}
+
+/// True if `reader` yields a `.rez` archive: an uncompressed tar containing a
+/// top-level `manifest.json` member. Distinguishes `.rez` from the A/B tarball
+/// (which has `ab.json` + root-level parquets, no `manifest.json`) and from a
+/// bare parquet (not a tar). Consumes the reader.
+pub fn is_rez_reader<R: std::io::Read>(reader: R) -> Result<bool, RezError> {
+    let mut archive = tar::Archive::new(reader);
+    let entries = match archive.entries() {
+        Ok(e) => e,
+        Err(_) => return Ok(false),
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => return Ok(false),
+        };
+        if entry.path()?.to_string_lossy() == REZ_MANIFEST_NAME {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// True if the file at `path` is a `.rez` archive (by content, not extension).
+pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
+    is_rez_reader(std::fs::File::open(path)?)
+}
+
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 
 /// A borrowed snapshot entry, tagged by shape.
@@ -1048,6 +1129,65 @@ mod archive_tests {
             values: RezValues::Counter(vals),
             windows: wins,
         }
+    }
+
+    #[test]
+    fn read_archive_bytes_returns_manifest_and_per_table_bytes() {
+        let t = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("r.rez");
+        let tables = [t];
+        write_archive(
+            &out,
+            &[RecordingData {
+                dir: "rezolus".to_string(),
+                labels: [("source".to_string(), "rezolus".to_string())].into_iter().collect(),
+                metadata: BTreeMap::new(),
+                tables: &tables,
+            }],
+        )
+        .unwrap();
+
+        let (manifest, recordings) = read_archive_bytes(&out).unwrap();
+        assert_eq!(manifest.recordings.len(), 1);
+        assert_eq!(recordings.len(), 1);
+        assert_eq!(recordings[0].dir, "rezolus");
+        assert_eq!(recordings[0].tables.len(), 1);
+        let (sampler, bytes) = &recordings[0].tables[0];
+        assert_eq!(sampler, "cpu_usage");
+        assert_eq!(&bytes[..4], b"PAR1");
+        assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
+    }
+
+    #[test]
+    fn is_rez_distinguishes_rez_from_bare_parquet() {
+        let t = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000],
+            columns: vec![counter_col("0", vec![Some(1)], vec![None])],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("r.rez");
+        let tables = [t.clone()];
+        write_archive(
+            &out,
+            &[RecordingData {
+                dir: "rezolus".to_string(),
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                tables: &tables,
+            }],
+        )
+        .unwrap();
+        assert!(is_rez_path(&out).unwrap());
+
+        let bare = dir.path().join("plain.parquet");
+        std::fs::write(&bare, write_table_parquet(&t).unwrap()).unwrap();
+        assert!(!is_rez_path(&bare).unwrap());
     }
 
     #[test]
