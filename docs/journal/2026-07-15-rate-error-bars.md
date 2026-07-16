@@ -1,12 +1,31 @@
 # Measurement uncertainty — rate() error bars (query-engine leaf)
 
 - **Opened:** 2026-07-15
-- **Status:** Open — design landed, pre-build. Sub-project (4) of the arc: the
-  culmination — turn the per-observation acquisition windows into **honest
-  uncertainty on `rate()`/`increase()`** via interval arithmetic, at the query
-  engine. Consumes the `:window_*` sidecar columns whose skip-seam was left by
-  [`.rez` reader ecosystem Phase A](2026-07-15-rez-reader-ecosystem.md) (metriken
-  `next` `2e98270`).
+- **Status:** LANDED (leaf-only engine core + MCP surface). Sub-project (4) of
+  the arc — the culmination: per-observation acquisition windows become **honest
+  uncertainty on `rate()`/`irate()`** via interval arithmetic at the query engine.
+  Consumes the `:window_*` sidecar columns whose skip-seam was left by
+  [`.rez` reader ecosystem Phase A](2026-07-15-rez-reader-ecosystem.md).
+  - **Commits:** metriken `next` — `8622c8c` (windows→`Counter`/`Gauge`),
+    `a77124b` (`Point.bounds` + rate/irate interval math), `4bd86e7`
+    (`QueryResult` intervals), `90f04ae` (widen bounds to contain the nominal);
+    rezolus — `b6bb92f8` (MCP `query` display). 146 metriken + 279 rezolus tests
+    green; clippy clean.
+  - **Live payoff** (2026-07-15, on a windowed `.rez`):
+    `rate(blockio_bytes{op="write"}[1m]) = 587264  [587233.83, 587264.00]` — a
+    tight honest band from the BPF-µs acquisition windows; `rate(...) * 60` shows
+    no band (leaf-only drop, confirmed).
+  - **Nominal-vs-bounds fix:** the smoke revealed the nominal (row-timestamp
+    rate) can fall just outside the window-derived band (different time
+    references — the recorder's poll time sits after the µs window). Resolved by
+    **widening the band to contain the nominal** (`lo.min(v), hi.max(v)`): keeps
+    the standard PromQL value (consistent with a flat-parquet query) while the
+    band honestly accounts for window width *and* the ts/window discrepancy. This
+    supersedes the spec's "`lo ≤ nominal ≤ hi` by construction" claim, which held
+    only when row timestamps fell within their windows.
+  - **Deferred (next rounds):** Tier-1 interval propagation through operators,
+    aggregation interval semantics, viewer error-band rendering, correlation
+    ceiling.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) — the query engine
