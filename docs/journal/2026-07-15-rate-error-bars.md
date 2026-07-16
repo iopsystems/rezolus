@@ -1,7 +1,8 @@
 # Measurement uncertainty — rate() error bars (query-engine leaf)
 
 - **Opened:** 2026-07-15
-- **Status:** LANDED (leaf-only engine core + MCP surface). Sub-project (4) of
+- **Status:** LANDED (leaf + scalar-propagation engine core + MCP surface).
+  Sub-project (4) of
   the arc — the culmination: per-observation acquisition windows become **honest
   uncertainty on `rate()`/`irate()`** via interval arithmetic at the query engine.
   Consumes the `:window_*` sidecar columns whose skip-seam was left by
@@ -13,8 +14,9 @@
     green; clippy clean.
   - **Live payoff** (2026-07-15, on a windowed `.rez`):
     `rate(blockio_bytes{op="write"}[1m]) = 587264  [587233.83, 587264.00]` — a
-    tight honest band from the BPF-µs acquisition windows; `rate(...) * 60` shows
-    no band (leaf-only drop, confirmed).
+    tight honest band from the BPF-µs acquisition windows. (Since a later scalar-
+    propagation round, `rate(...) * 60` now scales the band rather than dropping
+    it; series-op-series still shows no band.)
   - **Nominal-vs-bounds fix:** the smoke revealed the nominal (row-timestamp
     rate) can fall just outside the window-derived band (different time
     references — the recorder's poll time sits after the µs window). Resolved by
@@ -63,22 +65,23 @@ brackets it. `irate` is the same over the last two samples. Windowless samples
 (level-4 packed metrics) → no bound (the interval is `None`, honest: their
 acquisition time is the snapshot, already a point).
 
-## Decision: leaf-only propagation
+## Decision: leaf + scalar propagation
 
-Intervals originate at `rate()`/`irate()` and are **not propagated** through
-downstream operators (scope choice, 2026-07-15). A bare `rate(x[5m])` carries a
-bound; `increase(x[5m])` (`= rate * seconds`), `rate(x)+rate(y)`, and any
-`sum()`/`avg()` **drop** the bound (return `None`). This is the minimal honest
-foundation: it lands the window→bound pipeline end-to-end without interval
-arithmetic in `BinOp`/aggregators. Tier-1 propagation (interval arithmetic
-through binary/scalar ops) and full aggregation semantics are a **later round**;
+Intervals originate at `rate()`/`irate()`. The initial round (2026-07-15) was
+**leaf-only** — no operator propagated the bound. A follow-up round then added
+**scalar propagation**: a scalar op scales the band (`rate(x[5m]) * k`, and by
+the same rule `increase(x[5m]) = rate * seconds`, carry a scaled bound).
+Series-op-series (`rate(x)+rate(y)`) and aggregation (`sum()`/`avg()`) still
+**drop** the bound (return `None`). Full interval arithmetic through
+series-op-series binary ops and aggregation semantics remains a **later round**;
 so are the **viewer error bands** and the **correlation ceiling**.
 
-Consequence made explicit: because leaf-only drops bounds under any operator,
-the immediately useful query is a bare `rate(metric[range])`. That is exactly
-what a validation surface (MCP `query`) and, later, per-metric viewer rate panels
-issue — so the foundation is useful on its own while the propagation/rendering
-rounds follow.
+Consequence made explicit: bounds survive `rate()` and scalar scaling but not
+series-op-series or aggregation, so the immediately useful queries are a bare
+`rate(metric[range])` or a scalar-scaled `rate(metric[range]) * k`. That is
+exactly what a validation surface (MCP `query`) and, later, per-metric viewer
+rate panels issue — so the foundation is useful on its own while the
+series-propagation/rendering rounds follow.
 
 ## Scope (sub-project 4 of the arc)
 
@@ -153,8 +156,10 @@ MCP `analyze-correlation`.
   `rate(x[range])` returns the nominal value **and** `bounds` equal to the
   hand-computed `[Δv/(e_last−b_first), Δv/(b_last−e_first)]`. A windowless fixture
   → `bounds: None`.
-- **Leaf-only:** `rate(x)*60` and `rate(x)+rate(y)` return `intervals: None`
-  (bound dropped under an operator) — locks the scope decision.
+- **Scope:** in the original leaf-only round `rate(x)*60` and `rate(x)+rate(y)`
+  both returned `intervals: None`. After the scalar-propagation follow-up,
+  `rate(x)*60` carries a *scaled* band while `rate(x)+rate(y)` (series-op-series)
+  still returns `None` — the tests lock both behaviors.
 - **Back-compat:** a query with no rate and old stored JSON round-trips unchanged
   (the new fields default to `None`/absent).
 - **Nominal unchanged:** the point value of `rate()` is byte-identical to before

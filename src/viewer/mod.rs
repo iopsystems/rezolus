@@ -90,8 +90,12 @@ pub fn command() -> Command {
              WHAT TO VIEW (pick one input form):\n    \
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
+             - a .rez archive:           rezolus view out.rez\n    \
              - a live agent:             rezolus view http://host:4241\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
+             A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
+             as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
+             arm/host labels); a .rez with more than two recordings shows the first two.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
              (A/B experiment) is only honored when the first is a parquet file — live and\n\
@@ -116,9 +120,10 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("INPUT")
                 .help(
-                    "First capture: parquet file, agent URL (http://…), or \
-                     alias=parquet (e.g. redis=./a.parquet). The alias is a \
-                     display label; internal identifiers stay baseline/experiment.",
+                    "First capture: parquet file, .rez archive, agent URL (http://…), \
+                     or alias=parquet (e.g. redis=./a.parquet). The alias is a \
+                     display label; internal identifiers stay baseline/experiment. \
+                     A 2-recording .rez loads as an A/B comparison on its own.",
                 )
                 .action(clap::ArgAction::Set)
                 .required(false)

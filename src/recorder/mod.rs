@@ -37,7 +37,15 @@ pub fn command() -> Command {
              # High-resolution capture: sample every 100ms for 30 seconds\n    \
              rezolus record --url http://localhost:4241 -o out.parquet --interval 100ms --duration 30s\n\n    \
              # Record several endpoints into separate per-endpoint files\n    \
-             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o combined.parquet",
+             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o combined.parquet\n\n    \
+             # Write a per-sampler .rez archive (each sampler at its own cadence, with\n    \
+             # per-metric acquisition windows), tagging the recording with labels\n    \
+             rezolus record --url http://localhost:4241 -o out.rez --label arm=redis --label host=node1\n\
+             \n\
+             The .rez format (chosen by a .rez output extension or --format rez) writes a tar\n\
+             of manifest.json plus one parquet table per sampler, each at its own cadence. It\n\
+             requires a rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable)\n\
+             tags the recording; source and host are auto-populated.",
         )
         .arg(
             clap::Arg::new("URL")
@@ -102,7 +110,7 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: parquet (columnar, queryable) or raw (concatenated msgpack snapshots)")
+                .help("Output format: parquet (columnar, queryable), raw (concatenated msgpack snapshots), or rez (per-sampler .rez archive; also selected by a .rez output extension, requires a rezolus/msgpack endpoint)")
                 .action(clap::ArgAction::Set)
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),

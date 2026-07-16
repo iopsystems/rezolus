@@ -749,7 +749,11 @@ pub fn command() -> Command {
                 .long_about(
                     "Execute a PromQL query against a recording and display results.\n\n\
                      For example queries and patterns, run 'describe-metrics' first to see\n\
-                     available metrics and common query examples."
+                     available metrics and common query examples.\n\n\
+                     rate()/irate() values print an acquisition-window uncertainty band\n\
+                     [lo, hi] next to the value (derived from per-observation acquisition\n\
+                     windows). A scalar op scales the band (e.g. rate(x)*k); series-op-series\n\
+                     and non-rate queries show no band."
                 )
                 .arg(
                     clap::Arg::new("FILE")
