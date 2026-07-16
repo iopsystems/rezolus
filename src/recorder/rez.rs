@@ -1240,7 +1240,14 @@ mod archive_tests {
             let (m, rb) = read_archive_bytes(p).unwrap();
             let mut rec = m.recordings.into_iter().next().unwrap();
             rec.dir = format!("rec{i}");
-            let bytes = rb.into_iter().next().unwrap().tables.into_iter().map(|(_, b)| b).collect();
+            let bytes = rb
+                .into_iter()
+                .next()
+                .unwrap()
+                .tables
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect();
             recs.push((rec, bytes));
         }
 
@@ -1252,8 +1259,14 @@ mod archive_tests {
         assert_eq!(m.recordings.len(), 2);
         assert_eq!(m.recordings[0].dir, "rec0");
         assert_eq!(m.recordings[1].dir, "rec1");
-        assert_eq!(m.recordings[0].labels.get("arm").map(String::as_str), Some("redis"));
-        assert_eq!(m.recordings[1].labels.get("arm").map(String::as_str), Some("valkey"));
+        assert_eq!(
+            m.recordings[0].labels.get("arm").map(String::as_str),
+            Some("redis")
+        );
+        assert_eq!(
+            m.recordings[1].labels.get("arm").map(String::as_str),
+            Some("valkey")
+        );
         assert_eq!(rb.len(), 2);
         assert_eq!(rb[0].tables[0].0, "cpu_usage");
     }
