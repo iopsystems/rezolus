@@ -26,12 +26,16 @@
     supersedes the spec's "`lo ≤ nominal ≤ hi` by construction" claim, which held
     only when row timestamps fell within their windows.
   - **Follow-on rounds landed:** scalar propagation (`rate(x)*k`; metriken
-    `963f7e6`), `sum`/`avg` aggregation propagation (metriken `ed3d47e`), and
-    **viewer error bands** (rezolus `35e5c983` — ECharts translucent bands from
-    `QueryResult.intervals`; the `sum(rate())` panels now show them).
-  - **Still deferred:** series-op-series interval arithmetic (`rate(x)+rate(y)`),
-    `min`/`max` aggregation (declined — nominal can fall outside the true
-    interval), and the **correlation ceiling** in MCP `analyze-correlation`.
+    `963f7e6`), `sum`/`avg` aggregation (`ed3d47e`), **series-op-series** binary
+    interval arithmetic (`3e1c56c` — ratios `sum(rate(a))/sum(rate(b))`,
+    utilizations, per-op sizes now carry a band), and **viewer error bands**
+    (rezolus `35e5c983`). Bounds now survive every operator the dashboards issue
+    over rates.
+  - **Still deferred:** `min`/`max` aggregation (declined — nominal can fall
+    outside the true band), **histogram value uncertainty** (from bucket
+    resolution / `grouping_power`/`max_value_power` — the recommended,
+    windowless model for `histogram_quantile`/latency panels; see the histogram
+    section below), and the **correlation ceiling**.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) — the query engine
@@ -69,28 +73,46 @@ brackets it. `irate` is the same over the last two samples. Windowless samples
 (level-4 packed metrics) → no bound (the interval is `None`, honest: their
 acquisition time is the snapshot, already a point).
 
-## Decision: leaf + scalar + sum/avg-aggregation propagation
+## Decision: propagate wherever it's well-defined and consistent
 
-Intervals originate at `rate()`/`irate()`. The propagation grew in rounds:
+Intervals originate at `rate()`/`irate()`. Propagation grew round by round, each
+gated on the same rule — **propagate only where the band is well-defined and the
+nominal provably stays inside it**:
 
 1. **Leaf-only** (2026-07-15) — no operator propagated the bound.
 2. **Scalar propagation** — a scalar op scales the band (`rate(x[5m]) * k`, and
-   by the same rule `increase = rate * seconds`, carry a scaled bound).
-3. **`sum`/`avg` aggregation** — `MergeReduce` carries the band by interval
-   arithmetic (`sum → [Σlo, Σhi]`, `avg → /n`); the nominal stays inside because
-   each child band contains its own nominal. This is what makes the common
-   **`sum(rate(...))`** dashboard query — and the viewer's rate panels — carry an
-   honest band.
+   by the same rule `increase = rate * seconds`).
+3. **`sum`/`avg` aggregation** (`MergeReduce`) — `sum → [Σlo, Σhi]`, `avg → /n`;
+   the nominal stays inside since each child band contains its own. Makes the
+   common **`sum(rate(...))`** dashboard query carry a band.
+4. **Series-op-series binary** (`ZipMergeBinary`/`RightLookupBinary`) — interval
+   arithmetic via 4-corner min/max; `/` declines when the denominator band spans
+   zero. Makes the dominant **ratio/utilization** dashboard shape —
+   `sum(rate(a)) / sum(rate(b))`, `rate(x) - rate(y)`, `a / ignoring(..) b`
+   (cache hit rates, CPU/GPU utilizations, per-op sizes) — carry an honest band.
 
-Deliberately **declined**: `min`/`max` aggregation drop the band, because *which
-series is the extremum* is uncertain, so the nominal can fall outside the true
-interval (e.g. nominal `min` = series A at 5 while series B's band reaches 1 — the
-true-min interval `[1,3]` excludes 5). `count` is exact (no band). And
-**series-op-series** binary ops (`rate(x)+rate(y)`) still drop the band — full
-two-sided interval arithmetic and the **correlation ceiling** remain later rounds.
+This covers every operator the real dashboards issue over rates.
 
-So bounds now survive `rate()`, scalar scaling, and `sum`/`avg` — the queries a
-validation surface (MCP `query`) and the viewer's dashboards actually issue.
+Deliberately **declined** (nominal would fall outside the true band): `min`/`max`
+aggregation — *which series is the extremum* is uncertain (nominal `min` = A at 5
+while B's band reaches 1 → true-min `[1,3]` excludes 5). `count` is exact. Raw
+gauge arithmetic (`(mem_total-mem_avail)/mem_total`, `avg(util)/100`) carries no
+band — correctly, a raw gauge has no rate uncertainty.
+
+## Histograms: value uncertainty from bucket resolution (future round)
+
+The largest untouched dashboard family is **histogram queries**
+(`histogram_quantile`, `histogram_sum`, latency percentiles). The valuable
+uncertainty here is **not temporal** (the acquisition window) but the
+**value quantization** inherent to the H2 histogram: a quantile/sum result lands
+*in a bucket*, and that bucket's `[lower, upper]` — computed directly from the
+histogram's `grouping_power`/`max_value_power` (already stored in the parquet, and
+required to reconstruct the histogram from its bucket columns) — is a hard,
+computable band on the *value*, needing no windows. E.g. `histogram_quantile(0.99,
+latency)` returns a bucket's representative point; the true p99 lies anywhere in
+that bucket's value range. This is a distinct, cleaner uncertainty model than the
+rate interval arithmetic above, and is the recommended direction for a histogram
+bounds round (deferred).
 
 ## Scope (sub-project 4 of the arc)
 
