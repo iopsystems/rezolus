@@ -1,8 +1,8 @@
 # Measurement uncertainty — rate() error bars (query-engine leaf)
 
 - **Opened:** 2026-07-15
-- **Status:** LANDED (leaf + scalar-propagation engine core + MCP surface).
-  Sub-project (4) of
+- **Status:** LANDED — engine (rate/irate + scalar + `sum`/`avg` propagation),
+  MCP `query` display, **and viewer error bands**. Sub-project (4) of
   the arc — the culmination: per-observation acquisition windows become **honest
   uncertainty on `rate()`/`irate()`** via interval arithmetic at the query engine.
   Consumes the `:window_*` sidecar columns whose skip-seam was left by
@@ -25,9 +25,13 @@
     band honestly accounts for window width *and* the ts/window discrepancy. This
     supersedes the spec's "`lo ≤ nominal ≤ hi` by construction" claim, which held
     only when row timestamps fell within their windows.
-  - **Deferred (next rounds):** Tier-1 interval propagation through operators,
-    aggregation interval semantics, viewer error-band rendering, correlation
-    ceiling.
+  - **Follow-on rounds landed:** scalar propagation (`rate(x)*k`; metriken
+    `963f7e6`), `sum`/`avg` aggregation propagation (metriken `ed3d47e`), and
+    **viewer error bands** (rezolus `35e5c983` — ECharts translucent bands from
+    `QueryResult.intervals`; the `sum(rate())` panels now show them).
+  - **Still deferred:** series-op-series interval arithmetic (`rate(x)+rate(y)`),
+    `min`/`max` aggregation (declined — nominal can fall outside the true
+    interval), and the **correlation ceiling** in MCP `analyze-correlation`.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) — the query engine
@@ -65,23 +69,28 @@ brackets it. `irate` is the same over the last two samples. Windowless samples
 (level-4 packed metrics) → no bound (the interval is `None`, honest: their
 acquisition time is the snapshot, already a point).
 
-## Decision: leaf + scalar propagation
+## Decision: leaf + scalar + sum/avg-aggregation propagation
 
-Intervals originate at `rate()`/`irate()`. The initial round (2026-07-15) was
-**leaf-only** — no operator propagated the bound. A follow-up round then added
-**scalar propagation**: a scalar op scales the band (`rate(x[5m]) * k`, and by
-the same rule `increase(x[5m]) = rate * seconds`, carry a scaled bound).
-Series-op-series (`rate(x)+rate(y)`) and aggregation (`sum()`/`avg()`) still
-**drop** the bound (return `None`). Full interval arithmetic through
-series-op-series binary ops and aggregation semantics remains a **later round**;
-so are the **viewer error bands** and the **correlation ceiling**.
+Intervals originate at `rate()`/`irate()`. The propagation grew in rounds:
 
-Consequence made explicit: bounds survive `rate()` and scalar scaling but not
-series-op-series or aggregation, so the immediately useful queries are a bare
-`rate(metric[range])` or a scalar-scaled `rate(metric[range]) * k`. That is
-exactly what a validation surface (MCP `query`) and, later, per-metric viewer
-rate panels issue — so the foundation is useful on its own while the
-series-propagation/rendering rounds follow.
+1. **Leaf-only** (2026-07-15) — no operator propagated the bound.
+2. **Scalar propagation** — a scalar op scales the band (`rate(x[5m]) * k`, and
+   by the same rule `increase = rate * seconds`, carry a scaled bound).
+3. **`sum`/`avg` aggregation** — `MergeReduce` carries the band by interval
+   arithmetic (`sum → [Σlo, Σhi]`, `avg → /n`); the nominal stays inside because
+   each child band contains its own nominal. This is what makes the common
+   **`sum(rate(...))`** dashboard query — and the viewer's rate panels — carry an
+   honest band.
+
+Deliberately **declined**: `min`/`max` aggregation drop the band, because *which
+series is the extremum* is uncertain, so the nominal can fall outside the true
+interval (e.g. nominal `min` = series A at 5 while series B's band reaches 1 — the
+true-min interval `[1,3]` excludes 5). `count` is exact (no band). And
+**series-op-series** binary ops (`rate(x)+rate(y)`) still drop the band — full
+two-sided interval arithmetic and the **correlation ceiling** remain later rounds.
+
+So bounds now survive `rate()`, scalar scaling, and `sum`/`avg` — the queries a
+validation surface (MCP `query`) and the viewer's dashboards actually issue.
 
 ## Scope (sub-project 4 of the arc)
 
