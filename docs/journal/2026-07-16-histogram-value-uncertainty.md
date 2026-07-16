@@ -1,11 +1,19 @@
 # Measurement uncertainty — histogram value uncertainty (bucket resolution)
 
 - **Opened:** 2026-07-16
-- **Status:** Open — design landed, pre-build. A follow-on round of sub-project
-  (4): give **`histogram_quantile`** results an honest **value** uncertainty band
-  from the histogram's bucket resolution (not a temporal/window band). Reuses the
-  `QueryResult.intervals` + MCP-display + viewer-band infrastructure from
-  [rate() error bars](2026-07-15-rate-error-bars.md).
+- **Status:** LANDED (metriken `next` `034cde2`). `histogram_quantile`/
+  `histogram_quantiles` results carry an honest **value** band = the containing
+  bucket `[start, end]` (from the histogram's `grouping_power`/`max_value_power` —
+  no windows), and `build_binary` gained a `(Materialized, Scalar)` arm so the
+  ns→s unit conversion (`histogram_quantiles(...)/1e9`) keeps a scaled band (also
+  closing the prior outright-`Unsupported` gap). Reuses the `QueryResult.intervals`
+  + MCP-display + viewer-band infrastructure from
+  [rate() error bars](2026-07-15-rate-error-bars.md). Live:
+  `histogram_quantile(0.99, scheduler_runqueue_latency)/1e9` returns a band with
+  real bucket-quantization width; linear-region buckets are exact (zero width).
+  A follow-on round of sub-project (4).
+  - **Deferred:** `histogram_sum`/`histogram_mean` (per-bucket band accumulation),
+    `histogram_count` (exact), and series-op-series against a histogram result.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) — the query engine
