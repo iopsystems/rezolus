@@ -217,6 +217,26 @@ export const promqlResultToHeatmapTriples = (results) => {
     };
 };
 
+// Parse a series' optional `intervals` field into a clean [[lo, hi], …]
+// array parallel to `values`, or `null` when absent/unusable. The field
+// is NEW and OPTIONAL — present only for rate()/irate() results, absent
+// for older responses and non-rate queries — so parse defensively: only
+// accept a well-formed array, coerce each pair to numbers, order lo≤hi,
+// and drop malformed pairs to null. Returns null when nothing is usable
+// so callers can treat "has a band" as a simple truthiness check.
+export const parseIntervals = (sample) => {
+    const iv = sample && sample.intervals;
+    if (!Array.isArray(iv) || iv.length === 0) return null;
+    const out = iv.map((pair) => {
+        if (!Array.isArray(pair) || pair.length < 2) return null;
+        const lo = parseNumeric(pair[0]);
+        const hi = parseNumeric(pair[1]);
+        if (lo === null || hi === null) return null;
+        return lo <= hi ? [lo, hi] : [hi, lo];
+    });
+    return out.some((p) => p !== null) ? out : null;
+};
+
 // Convert the first series in a PromQL range-query result into a pair
 // of parallel timeData / valueData arrays. Missing/NaN values are
 // preserved as null.
@@ -267,6 +287,11 @@ const applyResultToPlot = (plot, result) => {
             (style === 'multi' ||
                 style === 'scatter' ||
                 style === 'heatmap');
+
+        // Cleared here so a prior single-series band never ghosts onto a
+        // subsequent multi-series / heatmap render of the same plot; the
+        // single-series branch below repopulates it when present.
+        plot.intervals = null;
 
         if (hasMultipleSeries) {
             if (style === 'heatmap') {
@@ -329,6 +354,8 @@ const applyResultToPlot = (plot, result) => {
                 const timestamps = sample.values.map(([ts, _]) => ts);
                 const values = sample.values.map(([_, val]) => parseFloat(val));
                 plot.data = [timestamps, values];
+                // Optional rate() uncertainty band, parallel to values.
+                plot.intervals = parseIntervals(sample);
             } else {
                 plot.data = [];
             }
@@ -339,6 +366,7 @@ const applyResultToPlot = (plot, result) => {
     } else {
         plot.data = [];
         plot.series_names = [];
+        plot.intervals = null;
     }
 };
 
