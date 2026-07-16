@@ -540,6 +540,22 @@ pub fn run(config: RecordingConfig) {
         .map(|ep| EndpointState::new(ep.clone()))
         .collect();
 
+    // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus endpoint
+    // yields none, so reject it up front (before probing) rather than recording
+    // an empty archive. Auto-detected prometheus still errors at finalize.
+    if rez::wants_rez(&config.output, config.format) {
+        if let Some(ep) = endpoints
+            .iter()
+            .find(|e| matches!(e.config.protocol, Some(Protocol::Prometheus)))
+        {
+            eprintln!(
+                "error: .rez output requires a rezolus (msgpack) endpoint; {} is configured protocol=prometheus",
+                ep.config.url
+            );
+            return;
+        }
+    }
+
     // Probe all endpoints (best-effort startup)
     rt.block_on(async {
         for ep in &mut endpoints {
