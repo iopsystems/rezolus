@@ -1,0 +1,27 @@
+name: viewer-symlinks
+
+# The server viewer serves src/viewer/assets/lib/ directly; the static (WASM)
+# viewer loads the SAME modules through site/viewer/lib/ symlinks. A shared
+# module added to src/ without a resolving site/ entry makes the deployed
+# static viewer 404 on the import and fail to load. This job enforces that
+# every shared module resolves under site/viewer/lib/ — the check the local
+# Claude Code pre-commit hook runs, promoted to CI so it binds every PR.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'src/viewer/assets/lib/**'
+      - 'site/viewer/lib/**'
+      - 'scripts/check-viewer-symlinks.sh'
+      - '.github/workflows/viewer-symlinks.yml'
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    name: site/viewer symlinks resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check every shared viewer module resolves under site/viewer/lib
+        run: bash scripts/check-viewer-symlinks.sh

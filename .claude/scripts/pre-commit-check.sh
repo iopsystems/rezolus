@@ -63,35 +63,15 @@ check_clippy() {
 # ── 3. Check symlinks ───────────────────────────────────────────────
 
 check_symlinks() {
-    # Walk every .js and .css file under src/viewer/assets/lib/
-    while IFS= read -r src_file; do
-        rel="${src_file#$SRC/}"          # e.g. "charts/metric_types.js" or "theme.js"
-        base="$(basename "$rel")"
-        dir="$(dirname "$rel")"          # "." for top-level
-
-        # Skip top-level standalone files
-        if [ "$dir" = "." ]; then
-            skip=false
-            for s in $STANDALONE_TOP; do
-                [ "$base" = "$s" ] && skip=true && break
-            done
-            if $skip; then
-                # Special case: data.js -> data_base.js
-                if [ "$base" = "data.js" ]; then
-                    link="$SITE/data_base.js"
-                    if [ ! -L "$link" ]; then
-                        errors+=("missing symlink: site/viewer/lib/data_base.js -> $src_file")
-                    fi
-                fi
-                continue
-            fi
-        fi
-
-        link="$SITE/$rel"
-        if [ ! -L "$link" ]; then
-            errors+=("missing symlink: site/viewer/lib/$rel")
-        fi
-    done < <(find "$SRC" -type f \( -name '*.js' -o -name '*.css' \))
+    # Delegate to the canonical, CI-shared check so the local hook and the
+    # viewer-symlinks CI job can never diverge. That script is resolution-based
+    # ([ -e ], not [ -L ]) so it correctly treats a file covered by a parent
+    # directory symlink (e.g. site/viewer/lib/embed) as present. See the
+    # sync-viewer-symlinks skill.
+    local out
+    if ! out="$("$ROOT/scripts/check-viewer-symlinks.sh" 2>&1)"; then
+        errors+=("$out")
+    fi
 }
 
 # ── 3b. Check template symlinks ────────────────────────────────────
