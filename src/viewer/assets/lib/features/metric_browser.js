@@ -213,7 +213,14 @@ export function MetricBrowserView(sourceName) {
             const filtered = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
                 : st.metrics;
-            const rows = sortMetrics(filtered, st.sortKeys);
+            // The synthetic `timestamp` row is pinned to the top (it's not one of
+            // the source's real metrics), so it's excluded from the sort and
+            // prepended — still subject to the search filter above.
+            const special = filtered.filter((x) => x.metric_type === 'timestamp');
+            const rows = [
+                ...special,
+                ...sortMetrics(filtered.filter((x) => x.metric_type !== 'timestamp'), st.sortKeys),
+            ];
 
             const entries = [...st.selected.entries()];
             // The jitter (timestamp) entry gets its own chart-cell box (below,
