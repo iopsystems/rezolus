@@ -20,10 +20,12 @@ import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
 // table offers a way into the jitter chart (inter-sample delta) alongside
 // the source's actual metrics.
 //
-// jitterSpec (charts/jitter.js) sets promql_query: null, so viewer_core.js's
-// expandLink/selectButton correctly omit the Expand/Pin icon — intentional:
-// the synthetic 'source-timestamp-jitter' id has no catalog entry or expand
-// route to land on. Don't wire one up without adding that route first.
+// jitterSpec (charts/jitter.js) sets promql_query: null, so selectButton
+// (ui/chart_controls.js) omits the Pin icon — pinning assumes a re-runnable
+// query, which the jitter pseudo-metric doesn't have. expandLink special-cases
+// TIMESTAMP_JITTER_CHART_ID to show Expand anyway; the chart route
+// (features/source_routes.js) reconstructs the plot from raw timestamps
+// instead of a catalog lookup.
 export const withTimestampRow = (metrics) => ([
     {
         name: 'timestamp',

@@ -13,6 +13,7 @@
 // specForChartId re-derives the same spec the MetricBrowser rendered.
 
 import { specForChartId } from '../charts/source_metric.js';
+import { TIMESTAMP_JITTER_CHART_ID, jitterSpec } from '../charts/jitter.js';
 
 export function createSourceRoutes(deps) {
     const {
@@ -48,8 +49,17 @@ export function createSourceRoutes(deps) {
                 // fetch + query asynchronously, redraw when resolved. `ready`
                 // is exposed so tests can await the reconstruction.
                 const st = { plot: null, loading: true, error: null };
-                const ready = ViewerApi.getMetrics(sourceName)
-                    .then(async (resp) => {
+                // The jitter pseudo-metric isn't in the catalog (no promql_query
+                // to look up) — reconstruct it straight from raw timestamps
+                // instead of going through specForChartId. Expanded view is
+                // absolute-mode only, so nominalMs is unused.
+                const ready = (chartId === TIMESTAMP_JITTER_CHART_ID
+                    ? ViewerApi.getTimestamps(sourceName).then((resp) => {
+                        st.plot = jitterSpec(resp.timestamps || [], { mode: 'absolute', nominalMs: 0 });
+                        st.loading = false;
+                        m.redraw();
+                    })
+                    : ViewerApi.getMetrics(sourceName).then(async (resp) => {
                         const spec = specForChartId(chartId, (resp && resp.metrics) || []);
                         if (!spec) {
                             st.error = `Chart "${chartId}" not found`;
@@ -64,11 +74,11 @@ export function createSourceRoutes(deps) {
                         st.loading = false;
                         m.redraw();
                     })
-                    .catch((e) => {
-                        st.error = (e && e.message) || 'Failed to load metrics';
-                        st.loading = false;
-                        m.redraw();
-                    });
+                ).catch((e) => {
+                    st.error = (e && e.message) || 'Failed to load';
+                    st.loading = false;
+                    m.redraw();
+                });
 
                 return {
                     ready,
