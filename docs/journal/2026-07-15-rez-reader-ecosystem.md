@@ -1,12 +1,12 @@
 # Measurement uncertainty — `.rez` reader ecosystem (viewer / MCP / parquet-tools)
 
 - **Opened:** 2026-07-15
-- **Status:** In progress — **Phases A, B (core), and C (chosen scope) landed**.
-  Reader (`RezReader`), viewer file-mode + 2-arm A/B, MCP, `parquet
-  metadata`/`combine`/`filter`/`annotate` all read/write `.rez`. Deferred:
-  viewer upload-mode, a Prometheus guard (both minor), and — by explicit scope
-  choice — simultaneous **N-way** faceting (a dedicated future effort: capture-
-  model refactor + frontend). Sub-project (3) of
+- **Status:** In progress — **Phases A, B (core), and C (chosen scope) landed**,
+  plus viewer upload-mode + the Prometheus guard. Reader (`RezReader`), viewer
+  file-mode + upload + 2-arm A/B, MCP, `parquet
+  metadata`/`combine`/`filter`/`annotate` all read/write `.rez`. Deferred — by
+  explicit scope choice — simultaneous **N-way** faceting (a dedicated future
+  effort: capture-model refactor + frontend). Sub-project (3) of
   the arc: make `.rez` archives *readable* everywhere a `.parquet` is today.
   Consumes the per-sampler `.rez` format (labels + per-sampler tables + per-metric
   windows) built in
@@ -41,14 +41,16 @@
       the swap was mechanical. Smoke: `mcp describe-metrics file.rez` lists
       metrics, no `:window_*` phantoms.
     - Full bin suite green (273 passed); clippy clean on the touched files.
-    - **Deferred (minor, tracked):** (i) **Viewer upload mode** — its ingest
-      path (`ingest_baseline_from_path`) is coupled to parquet-footer reads
-      (`compute_file_checksum`, `classify_sources(Some(path))`,
-      `extract_service_extension_metadata`); a `.rez` upload variant is a small
-      follow-up. (ii) **Prometheus + `.rez` early guard** — endpoint protocol is
-      auto-detected at scrape time, so a clean early guard needs detection
-      restructuring; today a Prometheus-only `.rez` run errors at finalize
-      ("no snapshots captured"), which is functional if not ideal UX.
+    - **Viewer upload mode — LANDED** (`1def075d`): `upload_parquet` detects a
+      `.rez` (before the A/B sniffer) and routes to `ingest_rez_from_path` — one
+      `RezReader` per recording, a 2-recording `.rez` wired onto
+      baseline/experiment (aliases from `arm`/`host`; >2 shows the first two).
+      The landing file picker accepts `.parquet,.rez`. Sources metadata from the
+      manifest (the parquet-footer coupling is sidestepped, as in file mode).
+    - **Prometheus + `.rez` guard — LANDED** (`e9e4e2d2`): the explicit
+      `protocol=prometheus` case is rejected up front; auto-detected Prometheus
+      still errors at finalize (a full auto-detect guard would need probe
+      restructuring — left as-is, functional).
   - **Phase C landed** (rezolus commits `b0d4703`, `a4704556`, `d3484b21`,
     `b34481bd`, `b668477`) — multi-recording assembly + 2-arm A/B + transforms,
     the scope chosen after a design pass found the viewer's compare model is
