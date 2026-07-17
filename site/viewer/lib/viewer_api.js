@@ -111,6 +111,14 @@ const ViewerApi = {
         return JSON.parse(registry.info(captureId));
     },
 
+    // No `getMetrics` counterpart exists yet in this adapter (pre-existing
+    // gap, unrelated to jitter viz) — mirrors `getInfo`'s Result<String>
+    // passthrough, the closest match to `timestamps()`'s Rust signature.
+    async getTimestamps(source = null, captureId = 'baseline') {
+        ensureAttached(captureId);
+        return JSON.parse(registry.timestamps(captureId, source));
+    },
+
     initTemplates(templatesJson, captureId = 'baseline') {
         ensureAttached(captureId);
         registry.init_templates(captureId, templatesJson);
