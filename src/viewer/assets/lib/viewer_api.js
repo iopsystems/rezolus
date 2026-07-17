@@ -186,6 +186,19 @@ const ViewerApi = {
         });
     },
 
+    async getTimestamps(source = null, captureId = 'baseline') {
+        const params = new URLSearchParams();
+        if (source) params.set('source', source);
+        if (captureId && captureId !== 'baseline') {
+            params.set('capture', captureId);
+        }
+        const qs = params.toString();
+        return backendRequest({
+            method: 'GET',
+            url: `/api/v1/timestamps${qs ? `?${qs}` : ''}`,
+        });
+    },
+
     async attachExperiment(file) {
         if (file.size > MAX_UPLOAD_BYTES) {
             throw new Error(

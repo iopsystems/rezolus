@@ -769,6 +769,8 @@ const SectionContent = {
                     Group,
                     sectionRoute,
                     runQuery,
+                    Chart,
+                    chartsState,
                 }),
             ]);
         }

@@ -387,5 +387,10 @@ echo "$sections_json" | jq -e '[.data.sections[].route] | any(startswith("/sourc
 echo "$sections_json" | jq -e '[.data.sections[].route] | any(. == "/cpu") | not' >/dev/null \
     || fail "simple-capture sections has /cpu built-in (should be suppressed)" "$sections_json" "no /cpu route" "$LOGDIR/simple.log"
 
+echo "==> simple-capture: /api/v1/timestamps returns non-empty timestamps array"
+timestamps_json=$(curl -fsS "$BASE/api/v1/timestamps?source=127.0.0.1-18651")
+echo "$timestamps_json" | jq -e '.timestamps | length > 0' >/dev/null \
+    || fail "simple-capture timestamps empty" "$timestamps_json" "non-empty .timestamps" "$LOGDIR/simple.log"
+
 echo
 echo "ALL VIEWER SMOKE TESTS PASSED"
