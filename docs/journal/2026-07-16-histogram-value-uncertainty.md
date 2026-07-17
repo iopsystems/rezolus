@@ -12,8 +12,13 @@
   `histogram_quantile(0.99, scheduler_runqueue_latency)/1e9` returns a band with
   real bucket-quantization width; linear-region buckets are exact (zero width).
   A follow-on round of sub-project (4).
-  - **Deferred:** `histogram_sum`/`histogram_mean` (per-bucket band accumulation),
-    `histogram_count` (exact), and series-op-series against a histogram result.
+  - **Extended (metriken `next` `36b4ba5`):** `histogram_sum`/`histogram_mean` now
+    carry value bands too — each observation lies only within its bucket
+    `[start, end]`, so `sum ∈ [Σ count·start, Σ count·end]` and `mean = sum/N`; the
+    nominal (`total_count · midpoint-mean`) sits inside by construction.
+    `histogram_count` stays **exact** (integer tally, no band). See
+    [Section 4](#section-4--histogram_summean-bands-landed-36b4ba5) below.
+  - **Deferred:** series-op-series against a histogram result.
 - **Arc:** [measurement uncertainty](2026-07-08-measurement-uncertainty.md).
 - **Owner:** Brian Martin
 - **Repos:** metriken (`~/workspace/metriken`, `next`) — the query engine
@@ -120,6 +125,31 @@ band.
 - **No regression:** a non-histogram query is unaffected; a histogram query
   without the new binary arm (bare quantile) still works.
 
+## Section 4 — `histogram_sum`/`mean` bands (LANDED `36b4ba5`)
+
+The follow-on round, banding the remaining histogram reducers. Same *source*
+(bucket resolution), a *different formula* than the quantile:
+
+- **`histogram_sum`** — each of the `count` observations in a bucket is known only
+  to lie in `[start, end]`, so the summed value lies in
+  `[Σ count·start, Σ count·end]`. The nominal sum is `total_count · mean`, where
+  `mean` uses bucket **midpoints**; a midpoint is between `start` and `end`, so the
+  nominal is inside the band by construction.
+- **`histogram_mean`** — `mean = sum / N`; the band is the sum band divided by `N`.
+- **`histogram_count`** — an exact integer tally. No bucket-resolution uncertainty,
+  so **no band** (`intervals: None`).
+
+Implementation (`metriken-query/src/promql/streaming/histogram.rs`): `reduce()`'s
+reducer closure now returns `(nominal, Option<band>)` instead of a bare `f64`; a
+parallel `bands_per_group` rides alongside `values_per_group`, and
+`build_grouped_output` gained an optional bands parameter that emits `intervals`
+only when every point in a group has a band. `irate_impl` passes `None`. A new
+`bucket_weighted_sum()` iterates the read-only histogram's per-bucket buckets
+accumulating `(Σ count·start, Σ count·end)`. Integration test
+`histogram_sum_and_mean_carry_bucket_value_band` covers a linear-region
+(degenerate, exact) bucket and a log-region (positive-width) bucket, plus the
+`count`-is-exact assertion.
+
 ## Fit with the arc
 
 - A **distinct uncertainty model** from the rate rounds: value quantization
@@ -127,8 +157,8 @@ band.
   (`QueryResult.intervals`), different *source*.
 - Closes a real engine gap (`(Materialized, Scalar)` was outright unsupported in
   streaming), independent of the bands.
-- Leaves `histogram_sum`/`mean` (per-bucket accumulation) and the correlation
-  ceiling as later rounds.
+- `histogram_sum`/`mean` now banded too (Section 4, `36b4ba5`); the correlation
+  ceiling remains a later round.
 
 ## Open questions / spec-time details
 
