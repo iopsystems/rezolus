@@ -21,6 +21,11 @@ export const toDeviation = (dMs, nominalMs) => dMs.map((d) => d - nominalMs);
 // [x,y] pairs. `format.unit_system: 'time'` (crates/dashboard/src/plot.rs
 // FormatConfig) has nanoseconds as its base unit, so the ms values from
 // deltasMs/toDeviation are scaled back up for display.
+//
+// tsNs values exceed Number.MAX_SAFE_INTEGER, so JSON.parse quantizes them to
+// ~256ns at current epoch — a sub-256ns fidelity ceiling, negligible for
+// ms-scale jitter. If sub-µs fidelity is ever needed, recover it via
+// offset-encoding (base + small deltas) on both backends.
 export const jitterSpec = (tsNs, { mode = 'absolute', nominalMs = 0 } = {}) => {
     const xs = tsNs.slice(1).map((ns) => ns / NS_PER_S);
     const dMs = deltasMs(tsNs);

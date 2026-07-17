@@ -317,13 +317,14 @@ struct TimestampsResponse {
 async fn timestamps_handler(
     State(state): State<Arc<AppState>>,
     Query(p): Query<MetricsParam>,
-) -> Json<TimestampsResponse> {
+) -> Response {
     let capture_id = CaptureId::parse_opt(p.capture.as_deref());
-    let (source, timestamps) = match state.captures.get(capture_id) {
-        Some(data) => (data.source(), data.sample_timestamps()),
-        None => (String::new(), Vec::new()),
+    let Some(data) = state.captures.get(capture_id) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
-    Json(TimestampsResponse { source, timestamps })
+    let source = p.source.clone().unwrap_or_else(|| data.source());
+    let timestamps = data.sample_timestamps();
+    Json(TimestampsResponse { source, timestamps }).into_response()
 }
 
 // ── PromQL handlers ───────────────────────────────────────────────────
