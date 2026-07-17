@@ -269,9 +269,14 @@ export function MetricBrowserView(sourceName) {
                     ])),
                     m('tbody', rows.map((info) => {
                         const isSel = st.selected.has(info.name);
+                        // The synthetic `timestamp` row is a special pseudo-metric
+                        // (charts the jitter view, not a real series) — emphasize it
+                        // so it reads as distinct from the source's actual metrics.
+                        const isSpecial = info.metric_type === 'timestamp';
                         return m('tr', {
                             key: info.name,
-                            class: isSel ? 'selected' : '',
+                            class: [isSel && 'selected', isSpecial && 'special-metric']
+                                .filter(Boolean).join(' '),
                             onclick: () => st.toggle(info),
                         }, [
                             m('td', m('input[type=checkbox]', {

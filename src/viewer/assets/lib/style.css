@@ -2997,6 +2997,13 @@ main {
     background: var(--accent-subtle);
 }
 
+/* The synthetic `timestamp` row is a special pseudo-metric (jitter view),
+   not one of the source's real series — emphasize it as distinct. */
+.metric-table tbody tr.special-metric td {
+    font-style: italic;
+    color: var(--fg-muted);
+}
+
 .metric-charts {
     display: flex;
     flex-direction: column;
