@@ -30,6 +30,9 @@ const extractBaselineCapture = (spec, options = {}) => {
         if (Array.isArray(data) && data.length >= 2) {
             cap.timeData = data[0] || [];
             cap.valueData = data[1] || [];
+            // rate()/histogram value band (parallel to valueData), populated by
+            // applyResultToPlot's single-series path; null for non-rate queries.
+            cap.intervals = spec.intervals || null;
         } else {
             cap.timeData = [];
             cap.valueData = [];
@@ -103,6 +106,7 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         const pair = promqlResultToLinePair(results);
         cap.timeData = pair.timeData;
         cap.valueData = pair.valueData;
+        cap.intervals = pair.intervals || null;
         return cap;
     }
 

@@ -246,6 +246,9 @@ export const promqlResultToLinePair = (results) => {
     return {
         timeData: values.map((pair) => Number(pair[0])),
         valueData: values.map((pair) => parseNumeric(pair[1])),
+        // Optional rate()/histogram value band, parallel to valueData; null
+        // for non-rate queries. Lets compare/experiment captures carry a band.
+        intervals: parseIntervals(first),
     };
 };
 
@@ -309,6 +312,11 @@ const applyResultToPlot = (plot, result) => {
                 // with the experiment path (composeScatterLabel needs
                 // the full label set, not the lossy series_names string).
                 const seriesMetrics = [];
+                // Parallel to seriesNames: each series' optional value band
+                // (rate/histogram uncertainty), or null. multi.js renders these
+                // only for percentile charts (few lines); high-cardinality
+                // categorical multis carry them but leave them undrawn.
+                const seriesIntervals = [];
                 let timestamps = null;
 
                 result.data.result.forEach((item, idx) => {
@@ -326,6 +334,7 @@ const applyResultToPlot = (plot, result) => {
                         if (item.values.length > 0) {
                             seriesNames.push(seriesName);
                             seriesMetrics.push(item.metric || {});
+                            seriesIntervals.push(parseIntervals(item));
 
                             if (!timestamps) {
                                 timestamps = item.values.map(([ts, _]) => ts);
@@ -342,10 +351,12 @@ const applyResultToPlot = (plot, result) => {
                     plot.data = allData;
                     plot.series_names = seriesNames;
                     plot.series_metrics = seriesMetrics;
+                    plot.series_intervals = seriesIntervals;
                 } else {
                     plot.data = [];
                     plot.series_names = [];
                     plot.series_metrics = [];
+                    plot.series_intervals = [];
                 }
             }
         } else {
@@ -362,10 +373,12 @@ const applyResultToPlot = (plot, result) => {
             // Line-style plots have no series legend; clear any stale entries
             // from a prior multi-series render so legends don't "ghost".
             plot.series_names = [];
+            plot.series_intervals = [];
         }
     } else {
         plot.data = [];
         plot.series_names = [];
+        plot.series_intervals = [];
         plot.intervals = null;
     }
 };

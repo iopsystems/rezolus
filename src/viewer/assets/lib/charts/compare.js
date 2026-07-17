@@ -153,6 +153,9 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
             color: BASELINE_COLOR,
             timeData: rebase(baseline.timeData, baseSec),
             valueData: baseline.valueData || [],
+            // Value band rides parallel to valueData (time-independent), so it
+            // survives the time rebase untouched. Undefined for non-rate.
+            intervals: baseline.intervals,
             fill: false,
         });
     }
@@ -162,6 +165,7 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
             color: EXPERIMENT_COLOR,
             timeData: rebase(experiment.timeData, expSec),
             valueData: experiment.valueData || [],
+            intervals: experiment.intervals,
             fill: false,
         });
     }
