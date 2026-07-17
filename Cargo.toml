@@ -130,17 +130,6 @@ systeminfo = { path = "crates/systeminfo" }
 walkdir.workspace = true
 tar = { version = "0.4.45", default-features = false }
 
-# Dev bridge: metriken-query 0.13.0 (sample_timestamps()) is unpublished.
-# Pull the whole metriken family from the local sibling checkout so only one
-# copy of each crate resolves — mixing a patched metriken-query against a
-# crates-io metriken-exposition would give two incompatible Snapshot types.
-# Remove once metriken-query 0.13.0 is published on crates.io.
-[patch.crates-io]
-metriken-query = { path = "../metriken/metriken-query" }
-metriken-exposition = { path = "../metriken/metriken-exposition" }
-metriken = { path = "../metriken/metriken" }
-metriken-core = { path = "../metriken/metriken-core" }
-
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.26.2" }
 libbpf-sys = { version = "1.7.0" }
