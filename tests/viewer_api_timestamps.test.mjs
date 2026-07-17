@@ -10,3 +10,11 @@ test('ViewerApi exposes getTimestamps', () => {
 test('WASM ViewerApi exposes getTimestamps', () => {
     assert.equal(typeof WasmViewerApi.getTimestamps, 'function');
 });
+
+test('ViewerApi exposes getMetrics', () => {
+    assert.equal(typeof ViewerApi.getMetrics, 'function');
+});
+
+test('WASM ViewerApi exposes getMetrics', () => {
+    assert.equal(typeof WasmViewerApi.getMetrics, 'function');
+});
