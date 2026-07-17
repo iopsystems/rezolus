@@ -237,10 +237,104 @@ pub async fn upload_parquet(
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
+    // `.rez` is also a tar, so check it before the A/B-tarball sniffer.
+    if crate::recorder::rez::is_rez_path(&temp_path).unwrap_or(false) {
+        return ingest_rez_from_path(&state, temp_path, filename);
+    }
     if super::ab_extract::looks_like_ab_tarball(&temp_path) {
         return ingest_combined_ab_from_path(&state, temp_path, filename);
     }
     ingest_baseline_from_path(&state, temp_path, filename)
+}
+
+/// Runtime-upload version of `init_file_mode_rez` (mod.rs): load a `.rez` as one
+/// `RezReader` per recording, wiring a 2-recording archive onto the
+/// baseline/experiment slots (>2 shows the first two). Returns an HTTP envelope.
+fn ingest_rez_from_path(
+    state: &AppState,
+    rez_path: PathBuf,
+    display_filename: String,
+) -> Json<ApiResponse<serde_json::Value>> {
+    use metriken_query::MetricsSource;
+
+    let readers =
+        match crate::rez_reader::RezReader::open_recordings(&rez_path, Arc::clone(&state.pool)) {
+            Ok(r) if !r.is_empty() => r,
+            Ok(_) => {
+                let _ = std::fs::remove_file(&rez_path);
+                return ApiResponse::err("empty .rez archive (no recordings)", "invalid_parquet");
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&rez_path);
+                return ApiResponse::err(
+                    format!("failed to read .rez archive: {e}"),
+                    "invalid_parquet",
+                );
+            }
+        };
+
+    fn describe(reader: &crate::rez_reader::RezReader) -> (Option<String>, Option<String>) {
+        use metriken_query::MetricsSource;
+        let systeminfo = reader.metadata_get("systeminfo");
+        let file_meta = {
+            let mut map = serde_json::Map::new();
+            for (k, v) in reader.file_metadata() {
+                let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
+                map.insert(k, jv);
+            }
+            serde_json::to_string(&serde_json::Value::Object(map)).ok()
+        };
+        (systeminfo, file_meta)
+    }
+    fn alias_of(labels: &std::collections::BTreeMap<String, String>, fallback: &str) -> String {
+        labels
+            .get("arm")
+            .or_else(|| labels.get("host"))
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    let n = readers.len();
+    let mut readers = readers.into_iter();
+
+    // Baseline = recording 0.
+    let (b_labels, b_reader) = readers.next().expect("non-empty checked above");
+    let (b_systeminfo, b_file_meta) = describe(&b_reader);
+    let b_alias = alias_of(&b_labels, "baseline");
+    state.replace_baseline(Arc::new(b_reader) as Arc<dyn MetricsSource>);
+    *state.parquet_path.write() = Some(rez_path.clone());
+    *state.experiment_parquet_path.write() = None;
+    *state.cli_experiment_path.write() = None;
+    state.captures.set_baseline_systeminfo(b_systeminfo);
+    state.captures.set_baseline_file_metadata(b_file_meta);
+    *state.file_checksum.write() = compute_file_checksum(&rez_path);
+    state.captures.set_baseline_alias(Some(b_alias));
+
+    // Experiment = recording 1, if present.
+    if n >= 2 {
+        let (e_labels, e_reader) = readers.next().expect("n >= 2");
+        let (e_systeminfo, e_file_meta) = describe(&e_reader);
+        let e_alias = alias_of(&e_labels, "experiment");
+        state.captures.attach_experiment(
+            Arc::new(e_reader) as Arc<dyn MetricsSource>,
+            e_systeminfo,
+            e_file_meta,
+            Some(e_alias),
+        );
+        if n > 2 {
+            warn!(
+                "{n}-recording .rez uploaded: showing recordings 0 and 1 as \
+                 baseline/experiment; N-way faceting is not yet supported"
+            );
+        }
+    } else {
+        state.captures.detach_experiment();
+    }
+
+    regenerate_dashboards(state);
+    // Keep the uploaded .rez on disk (parquet_path references it), mirroring the
+    // parquet upload path.
+    ApiResponse::ok(serde_json::json!({ "filename": display_filename }))
 }
 
 /// Runtime-upload version of `init_file_mode_combined_ab` (mod.rs).
