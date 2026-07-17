@@ -37,8 +37,8 @@ export const jitterSpec = (tsNs, { mode = 'absolute', nominalMs = 0 } = {}) => {
         opts: {
             id: TIMESTAMP_JITTER_CHART_ID,
             title: mode === 'deviation'
-                ? 'Sampling jitter (deviation from nominal)'
-                : 'Sampling interval',
+                ? 'Sampling jitter — deviation from nominal (ms)'
+                : 'Inter-sample interval (ms)',
             description: 'Delta between consecutive sample timestamps.',
             type: 'gauge',
             style: 'line',

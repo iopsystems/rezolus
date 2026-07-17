@@ -15,6 +15,7 @@ import { specForSourceMetric } from '../charts/source_metric.js';
 import { jitterSpec } from '../charts/jitter.js';
 import { ViewerApi } from '../viewer_api.js';
 import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
+import { expandLink } from '../ui/chart_controls.js';
 
 // The catalog has no real "timestamp" metric — it's a synthetic row so the
 // table offers a way into the jitter chart (inter-sample delta) alongside
@@ -211,7 +212,7 @@ export function MetricBrowserView(sourceName) {
 
         view(vnode) {
             const st = vnode.state;
-            const { interval, Group, sectionRoute } = vnode.attrs;
+            const { interval, Group, sectionRoute, Chart, chartsState } = vnode.attrs;
             // Fresh vnode.attrs only arrive here, not in oninit's closures;
             // restash each render so resolveNominalMs tracks the live value.
             st.interval = interval;
@@ -222,10 +223,14 @@ export function MetricBrowserView(sourceName) {
             const rows = sortMetrics(filtered, st.sortKeys);
 
             const entries = [...st.selected.entries()];
-            const readyPlots = entries
-                .filter(([, e]) => e.status === 'ready')
+            // The jitter (timestamp) entry gets its own chart-cell box (below,
+            // mirroring renderChart) instead of routing through Group — it
+            // carries a mode toggle in its own header, unlike a normal metric.
+            const timestampEntry = st.selected.get('timestamp');
+            const isTimestampReady = !!timestampEntry && timestampEntry.status === 'ready';
+            const otherReadyPlots = entries
+                .filter(([name, e]) => name !== 'timestamp' && e.status === 'ready')
                 .map(([, e]) => e.plot);
-            const isTimestampSelected = st.selected.has('timestamp');
 
             // Ready charts render through the shared Group component so they
             // get titles + style switching + heatmap/spectrum controls. The
@@ -233,8 +238,9 @@ export function MetricBrowserView(sourceName) {
             // keys off sectionName (kept '' below) not the group name, so this
             // heading doesn't prefix the per-chart titles (see
             // createGroupComponent's titlePrefix logic). Group renders null for
-            // an all-empty group, but readyPlots are non-empty by construction.
-            const group = { name: 'Selected metrics', id: 'source-metrics', subgroups: [{ name: null, description: null, plots: readyPlots }] };
+            // an all-empty group, but otherReadyPlots are non-empty by
+            // construction where used below.
+            const group = { name: 'Selected metrics', id: 'source-metrics', subgroups: [{ name: null, description: null, plots: otherReadyPlots }] };
 
             return m('div.metric-browser', [
                 m('div.section-header-row', [
@@ -314,26 +320,41 @@ export function MetricBrowserView(sourceName) {
                         }
                         return [];
                     })),
-                    // Absolute/Deviation toggle, styled after the histogram
-                    // Full/Tail control (chart_controls.js's compareToggle).
-                    // Flips st.jitterMode and rebuilds the cached jitter plot
-                    // in place — no re-fetch of timestamps.
-                    isTimestampSelected && m('label.compare-toggle', {
-                        title: 'Show deviation from the nominal sampling interval instead of the raw interval',
-                    }, [
-                        m('input[type=checkbox]', {
-                            checked: st.jitterMode === 'deviation',
-                            onchange: () => {
-                                st.jitterMode = st.jitterMode === 'deviation' ? 'absolute' : 'deviation';
-                                st.rebuildJitter();
-                                m.redraw();
-                            },
-                        }),
-                        m('span', 'Deviation from nominal'),
+                    // Jitter chart, boxed like a normal chart-cell (mirrors
+                    // viewer_core.js's renderChart) so the mode toggle lives
+                    // in the chart's own header instead of floating above
+                    // the whole "Selected metrics" block. The toggle flips
+                    // st.jitterMode and rebuilds the cached jitter plot in
+                    // place — no re-fetch of timestamps — always REASSIGNING
+                    // entry.plot to a fresh object (see rebuildJitter) so
+                    // Chart never has an old spec mutated out from under it.
+                    isTimestampReady && Chart && m('div.chart-cell.full-width', [
+                        timestampEntry.plot.opts.description
+                            && m('p.chart-description', timestampEntry.plot.opts.description),
+                        m('div.chart-wrapper', [
+                            m('div.chart-header', m('div.chart-title-row', [
+                                m('span.chart-title', timestampEntry.plot.opts.title),
+                                m('label.compare-toggle', {
+                                    title: 'Show deviation from the nominal sampling interval (jitter) instead of the absolute interval',
+                                }, [
+                                    m('input[type=checkbox]', {
+                                        checked: st.jitterMode === 'deviation',
+                                        onchange: () => {
+                                            st.jitterMode = st.jitterMode === 'deviation' ? 'absolute' : 'deviation';
+                                            st.rebuildJitter();
+                                            m.redraw();
+                                        },
+                                    }),
+                                    m('span', 'jitter'),
+                                ]),
+                            ])),
+                            m(Chart, { spec: timestampEntry.plot, chartsState, interval }),
+                            expandLink(timestampEntry.plot, sectionRoute),
+                        ]),
                     ]),
 
-                    // Ready charts, rendered through the section pipeline.
-                    readyPlots.length > 0 && Group && m('div#groups',
+                    // Other ready charts, rendered through the section pipeline.
+                    otherReadyPlots.length > 0 && Group && m('div#groups',
                         m(Group, {
                             ...group,
                             sectionRoute,
