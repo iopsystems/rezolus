@@ -21,6 +21,13 @@ description: Use when adding or changing what the rezolus viewer exposes — an 
   registry), so it *must* differ — which means a change to the server's
   `viewer_api.js` does **not** propagate to the WASM shell. Editing either →
   mirror the other copy.
+  - **A new shared module under `src/viewer/assets/lib/` needs a resolving
+    entry under `site/viewer/lib/`** (a per-file symlink, or coverage by a
+    parent directory symlink like `site/viewer/lib/embed`) — or the deployed
+    static viewer 404s on the import and **fails to load entirely**. This is
+    now enforced in CI (`viewer-symlinks.yml` → `scripts/check-viewer-symlinks.sh`);
+    run it locally before pushing a viewer change. (A missing `charts/boxplot.js`
+    symlink shipped exactly this outage before the guard existed.)
 
 `crates/viewer` **cannot depend on the `rezolus` binary crate** (separate wasm32
 workspace), so any backend logic both need must live in the shared **`dashboard`**

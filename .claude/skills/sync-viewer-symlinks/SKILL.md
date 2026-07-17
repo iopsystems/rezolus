@@ -19,29 +19,46 @@ and fixes any missing symlinks.
 
 ## Standalone files (never symlinked)
 
-These files in `site/viewer/lib/` are site-specific and must NOT be replaced
-with symlinks:
+Only these two top-level files in `site/viewer/lib/` are site-specific real
+files (site keeps its own copy):
 
-- `data.js` — site-specific wrapper that imports shared logic from `data_base.js`
 - `script.js` — site-specific entry point
-- `dashboards.js` — site-specific dashboard definitions
-- `viewer_api.js` — site-specific API transport layer
+- `viewer_api.js` — site-specific API transport layer (calls the in-browser
+  WASM registry instead of the HTTP backend)
 
-## Special mapping
+Everything else — **including `data.js`** — is a same-name symlink into
+`src/viewer/assets/lib/`. (There is no `data_base.js`; that was an older
+architecture. `dashboards.js` no longer exists.)
 
-- `src/viewer/assets/lib/data.js` is symlinked as `site/viewer/lib/data_base.js`
-  (different name, because site has its own `data.js` wrapper)
+## Coverage can be per-file OR a directory symlink
+
+Most of `site/viewer/lib/` is per-file symlinks, but some subtrees are covered
+by a **directory symlink** — e.g. `site/viewer/lib/embed ->
+../../../src/viewer/assets/lib/embed` — which serves every file underneath it.
+So the invariant is **resolution, not per-file-symlink presence**: every shared
+module must *resolve* at the same relative path under `site/viewer/lib/`.
+
+A tool that looks only for a per-file symlink (or a `find` that doesn't descend
+through a directory symlink) will **false-flag** files under a directory
+symlink. Test with `[ -e "$link" ]` (follows all symlinks), never `[ -L ]`.
+CAUTION: because `site/viewer/lib/embed` is a directory symlink into `src/`,
+writing to `site/viewer/lib/embed/X` writes *through* it into `src/…/embed/X` —
+never `mkdir`/`ln` inside a directory-symlinked path.
+
+## Enforced in CI
+
+`scripts/check-viewer-symlinks.sh` implements this (resolution-based) check and
+runs on every PR via `.github/workflows/viewer-symlinks.yml`. Run it locally
+before pushing a viewer change: `bash scripts/check-viewer-symlinks.sh`.
 
 ## Steps
 
 1. **Scan** `src/viewer/assets/lib/` recursively for all `.js` and `.css` files
 
-2. **For each source file**, determine the expected symlink path in
-   `site/viewer/lib/` using these rules:
-   - Skip files that have standalone site-specific versions:
-     `script.js`, `viewer_api.js` (top-level only)
-   - Map `data.js` (top-level) → `data_base.js` symlink
-   - Everything else → same relative path
+2. **For each source file**, determine the expected path in `site/viewer/lib/`:
+   - Skip the standalone top-level files `script.js`, `viewer_api.js`
+   - Everything else → same relative path, which must **resolve** (`[ -e ]`)
+     via either a per-file symlink or a covering directory symlink
 
 3. **Check** whether the expected symlink exists and points to the correct
    target. Compute the relative path from the symlink location back to the
@@ -66,12 +83,15 @@ A Claude Code hook at `.claude/settings.json` runs
 `.claude/scripts/pre-commit-check.sh` before every `git commit`. It blocks
 the commit if:
 
-- Any expected symlinks are missing in `site/viewer/lib/`
+- Any shared viewer module fails to resolve under `site/viewer/lib/`
 - Dashboard JSON is out of date with Rust definitions (only when
   `src/viewer/dashboard/` or `src/viewer/plot.rs` files are staged)
 
-Both files are git-ignored (`.claude/*` excluding skills). To set up the
-hook on a fresh checkout, create `.claude/settings.json`:
+The hook **wiring** (`.claude/settings.json`) is per-checkout Claude Code
+config, so the hook only fires for local Claude Code users — that is exactly
+why the symlink check is *also* enforced in CI (`viewer-symlinks.yml` →
+`scripts/check-viewer-symlinks.sh`), which is the binding gate for every PR.
+To set up the local hook on a fresh checkout, create `.claude/settings.json`:
 
 ```json
 {
