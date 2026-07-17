@@ -55,7 +55,7 @@ export function createSourceRoutes(deps) {
                 // absolute-mode only, so nominalMs is unused.
                 const ready = (chartId === TIMESTAMP_JITTER_CHART_ID
                     ? ViewerApi.getTimestamps(sourceName).then((resp) => {
-                        st.plot = jitterSpec(resp.timestamps || [], { mode: 'absolute', nominalMs: 0 });
+                        st.plot = jitterSpec(resp.timestamps || [], { mode: 'absolute' });
                         st.loading = false;
                         m.redraw();
                     })

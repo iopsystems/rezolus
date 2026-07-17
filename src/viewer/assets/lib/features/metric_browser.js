@@ -68,21 +68,14 @@ export function MetricBrowserView(sourceName) {
 
             // Jitter-specific state, populated on first selection of the
             // synthetic timestamp row and reused (no re-fetch) across
-            // Absolute/Deviation toggling.
+            // Absolute/Deviation toggling. jitterNominalMs = the recording's
+            // declared sampling interval (ms), or null to derive from the data.
             st.jitterMode = 'absolute';
             st.jitterTimestamps = null;
-            st.jitterNominalMs = 0;
-            // Fallback nominal interval when vnode.attrs.interval isn't
-            // available (e.g. a pure foreign capture that never populated
-            // the section-interval cache — see source_routes.js). Fetched
-            // lazily, only if/when the timestamp row is actually selected.
-            st.fileMetadataMs = null;
-            // oninit only sees the vnode as of first creation; Mithril does
-            // not refresh it on later redraws. view(vnode) re-stashes this
-            // every render so resolveNominalMs (below) sees the live value
-            // instead of a permanently-undefined one on routes that derive
-            // `interval` asynchronously (source_routes.js).
-            st.interval = vnode.attrs.interval;
+            st.jitterNominalMs = null;
+            // Cache of the declared-sampling-interval lookup: undefined = not
+            // fetched yet, null = the recording doesn't declare one.
+            st.declaredMs = undefined;
 
             ViewerApi.getMetrics(sourceName)
                 .then((resp) => {
@@ -103,19 +96,22 @@ export function MetricBrowserView(sourceName) {
                     m.redraw();
                 });
 
-            // interval (seconds) is a best-effort borrow from another cached
-            // section (see source_routes.js) and can be absent; fall back to
-            // the file-level sampling_interval_ms metadata.
+            // Deviation baseline = the recording's DECLARED sampling_interval_ms
+            // (intended cadence) when present, else null so jitterSpec derives it
+            // from the data (median). Read the RAW file metadata — NOT
+            // vnode.attrs.interval, which the reader defaults to 1000ms when the
+            // recording omits an interval, silently mis-nominaling a sub-second
+            // foreign capture.
             st.resolveNominalMs = async () => {
-                if (st.interval) return st.interval * 1000;
-                if (st.fileMetadataMs != null) return st.fileMetadataMs;
+                if (st.declaredMs !== undefined) return st.declaredMs;
                 try {
                     const meta = await ViewerApi.getFileMetadata();
-                    st.fileMetadataMs = (meta && meta.sampling_interval_ms) || 0;
+                    const d = meta && Number(meta.sampling_interval_ms);
+                    st.declaredMs = (Number.isFinite(d) && d > 0) ? d : null;
                 } catch {
-                    st.fileMetadataMs = 0;
+                    st.declaredMs = null;
                 }
-                return st.fileMetadataMs;
+                return st.declaredMs;
             };
 
             // Rebuilds the jitter plot from the already-fetched timestamps —
@@ -213,9 +209,6 @@ export function MetricBrowserView(sourceName) {
         view(vnode) {
             const st = vnode.state;
             const { interval, Group, sectionRoute, Chart, chartsState } = vnode.attrs;
-            // Fresh vnode.attrs only arrive here, not in oninit's closures;
-            // restash each render so resolveNominalMs tracks the live value.
-            st.interval = interval;
             const f = st.filter.trim().toLowerCase();
             const filtered = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
