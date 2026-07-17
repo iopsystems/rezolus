@@ -96,9 +96,12 @@ export function MetricBrowserView(sourceName) {
                     m.redraw();
                 });
 
-            // Deviation baseline = the recording's DECLARED sampling_interval_ms
-            // (intended cadence) when present, else null so jitterSpec derives it
-            // from the data (median). Read the RAW file metadata — NOT
+            // Deviation baseline candidate = the recording's DECLARED
+            // sampling_interval_ms (intended cadence) when present, else null.
+            // jitterSpec/nominalMsFor makes the final call: it keeps a plausible
+            // declared value and rejects one implausibly slower than the observed
+            // cadence (e.g. a foreign producer hardcoding 1000ms on 100ms data),
+            // falling back to the average. Read the RAW file metadata — NOT
             // vnode.attrs.interval, which the reader defaults to 1000ms when the
             // recording omits an interval, silently mis-nominaling a sub-second
             // foreign capture.
