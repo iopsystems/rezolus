@@ -19,6 +19,11 @@ import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
 // The catalog has no real "timestamp" metric — it's a synthetic row so the
 // table offers a way into the jitter chart (inter-sample delta) alongside
 // the source's actual metrics.
+//
+// jitterSpec (charts/jitter.js) sets promql_query: null, so viewer_core.js's
+// expandLink/selectButton correctly omit the Expand/Pin icon — intentional:
+// the synthetic 'source-timestamp-jitter' id has no catalog entry or expand
+// route to land on. Don't wire one up without adding that route first.
 export const withTimestampRow = (metrics) => ([
     {
         name: 'timestamp',
@@ -69,6 +74,12 @@ export function MetricBrowserView(sourceName) {
             // the section-interval cache — see source_routes.js). Fetched
             // lazily, only if/when the timestamp row is actually selected.
             st.fileMetadataMs = null;
+            // oninit only sees the vnode as of first creation; Mithril does
+            // not refresh it on later redraws. view(vnode) re-stashes this
+            // every render so resolveNominalMs (below) sees the live value
+            // instead of a permanently-undefined one on routes that derive
+            // `interval` asynchronously (source_routes.js).
+            st.interval = vnode.attrs.interval;
 
             ViewerApi.getMetrics(sourceName)
                 .then((resp) => {
@@ -93,7 +104,7 @@ export function MetricBrowserView(sourceName) {
             // section (see source_routes.js) and can be absent; fall back to
             // the file-level sampling_interval_ms metadata.
             st.resolveNominalMs = async () => {
-                if (vnode.attrs.interval) return vnode.attrs.interval * 1000;
+                if (st.interval) return st.interval * 1000;
                 if (st.fileMetadataMs != null) return st.fileMetadataMs;
                 try {
                     const meta = await ViewerApi.getFileMetadata();
@@ -199,6 +210,9 @@ export function MetricBrowserView(sourceName) {
         view(vnode) {
             const st = vnode.state;
             const { interval, Group, sectionRoute } = vnode.attrs;
+            // Fresh vnode.attrs only arrive here, not in oninit's closures;
+            // restash each render so resolveNominalMs tracks the live value.
+            st.interval = interval;
             const f = st.filter.trim().toLowerCase();
             const filtered = f
                 ? st.metrics.filter((x) => x.name.toLowerCase().includes(f))
