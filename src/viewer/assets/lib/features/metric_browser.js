@@ -12,8 +12,23 @@
 // processDashboardData wrapper) which populates the plot spec in place.
 
 import { specForSourceMetric } from '../charts/source_metric.js';
+import { jitterSpec } from '../charts/jitter.js';
 import { ViewerApi } from '../viewer_api.js';
 import { DEFAULT_SORT, cycleSortKeys, sortMetrics } from './metric_sort.js';
+
+// The catalog has no real "timestamp" metric — it's a synthetic row so the
+// table offers a way into the jitter chart (inter-sample delta) alongside
+// the source's actual metrics.
+export const withTimestampRow = (metrics) => ([
+    {
+        name: 'timestamp',
+        metric_type: 'timestamp',
+        series_count: 1,
+        label_keys: [],
+        description: 'Per-sample collection time; charted as inter-sample delta (jitter).',
+    },
+    ...metrics,
+]);
 
 // Plot-spec construction lives in charts/source_metric.js so this inline render
 // and the /source/:sourceName/chart/:chartId single-chart route derive the SAME
@@ -43,15 +58,28 @@ export function MetricBrowserView(sourceName) {
             // name -> { plot, status: 'loading'|'ready'|'error', error? }
             st.selected = new Map();
 
+            // Jitter-specific state, populated on first selection of the
+            // synthetic timestamp row and reused (no re-fetch) across
+            // Absolute/Deviation toggling.
+            st.jitterMode = 'absolute';
+            st.jitterTimestamps = null;
+            st.jitterNominalMs = 0;
+            // Fallback nominal interval when vnode.attrs.interval isn't
+            // available (e.g. a pure foreign capture that never populated
+            // the section-interval cache — see source_routes.js). Fetched
+            // lazily, only if/when the timestamp row is actually selected.
+            st.fileMetadataMs = null;
+
             ViewerApi.getMetrics(sourceName)
                 .then((resp) => {
                     // The `source` label is universal within this section (it's
                     // what scopes the section), so drop it from every metric's
                     // displayed/sorted label list.
-                    st.metrics = ((resp && resp.metrics) || []).map((mi) => ({
+                    const mapped = ((resp && resp.metrics) || []).map((mi) => ({
                         ...mi,
                         label_keys: (mi.label_keys || []).filter((k) => k !== 'source'),
                     }));
+                    st.metrics = withTimestampRow(mapped);
                     st.loading = false;
                     m.redraw();
                 })
@@ -61,10 +89,74 @@ export function MetricBrowserView(sourceName) {
                     m.redraw();
                 });
 
+            // interval (seconds) is a best-effort borrow from another cached
+            // section (see source_routes.js) and can be absent; fall back to
+            // the file-level sampling_interval_ms metadata.
+            st.resolveNominalMs = async () => {
+                if (vnode.attrs.interval) return vnode.attrs.interval * 1000;
+                if (st.fileMetadataMs != null) return st.fileMetadataMs;
+                try {
+                    const meta = await ViewerApi.getFileMetadata();
+                    st.fileMetadataMs = (meta && meta.sampling_interval_ms) || 0;
+                } catch {
+                    st.fileMetadataMs = 0;
+                }
+                return st.fileMetadataMs;
+            };
+
+            // Rebuilds the jitter plot from the already-fetched timestamps —
+            // no network round-trip. jitterSpec always returns a brand-new
+            // object (fresh `data`/`opts`), so this never mutates a spec
+            // Chart may still be holding a reference to.
+            st.rebuildJitter = () => {
+                const entry = st.selected.get('timestamp');
+                if (!entry || !st.jitterTimestamps) return;
+                entry.plot = jitterSpec(st.jitterTimestamps, {
+                    mode: st.jitterMode,
+                    nominalMs: st.jitterNominalMs,
+                });
+            };
+
+            st.selectTimestampRow = async (info) => {
+                const entry = { plot: null, status: 'loading' };
+                st.selected.set(info.name, entry);
+                m.redraw();
+
+                try {
+                    const [nominalMs, resp] = await Promise.all([
+                        st.resolveNominalMs(),
+                        ViewerApi.getTimestamps(sourceName),
+                    ]);
+                    if (st.selected.get(info.name) !== entry) return;
+                    st.jitterNominalMs = nominalMs;
+                    st.jitterTimestamps = (resp && resp.timestamps) || [];
+                    if (st.jitterTimestamps.length > 1) {
+                        entry.plot = jitterSpec(st.jitterTimestamps, {
+                            mode: st.jitterMode,
+                            nominalMs: st.jitterNominalMs,
+                        });
+                        entry.status = 'ready';
+                    } else {
+                        entry.status = 'error';
+                        entry.error = 'Not enough samples to compute jitter';
+                    }
+                } catch (e) {
+                    if (st.selected.get(info.name) !== entry) return;
+                    entry.status = 'error';
+                    entry.error = e.message || 'Failed to load timestamps';
+                }
+                m.redraw();
+            };
+
             st.toggle = async (info) => {
                 if (st.selected.has(info.name)) {
                     st.selected.delete(info.name);
                     m.redraw();
+                    return;
+                }
+
+                if (info.metric_type === 'timestamp') {
+                    await st.selectTimestampRow(info);
                     return;
                 }
 
@@ -75,7 +167,12 @@ export function MetricBrowserView(sourceName) {
 
                 // runQuery is app.js's processDashboardData wrapper: it runs
                 // the plot's promql_query and mutates the plot in place with
-                // data/_resolvedStyle, exactly like a real section.
+                // data/_resolvedStyle, exactly like a real section. The jitter
+                // plot never goes through this path — its promql_query is
+                // null and jitterSpec already populates `data` directly, so
+                // calling runQuery on it would be a no-op at best (data.js
+                // skips plots with a null promql_query) and a layer of
+                // pointless indirection at worst.
                 const runQuery = vnode.attrs.runQuery;
                 try {
                     await runQuery(plot);
@@ -112,6 +209,7 @@ export function MetricBrowserView(sourceName) {
             const readyPlots = entries
                 .filter(([, e]) => e.status === 'ready')
                 .map(([, e]) => e.plot);
+            const isTimestampSelected = st.selected.has('timestamp');
 
             // Ready charts render through the shared Group component so they
             // get titles + style switching + heatmap/spectrum controls. The
@@ -200,6 +298,24 @@ export function MetricBrowserView(sourceName) {
                         }
                         return [];
                     })),
+                    // Absolute/Deviation toggle, styled after the histogram
+                    // Full/Tail control (chart_controls.js's compareToggle).
+                    // Flips st.jitterMode and rebuilds the cached jitter plot
+                    // in place — no re-fetch of timestamps.
+                    isTimestampSelected && m('label.compare-toggle', {
+                        title: 'Show deviation from the nominal sampling interval instead of the raw interval',
+                    }, [
+                        m('input[type=checkbox]', {
+                            checked: st.jitterMode === 'deviation',
+                            onchange: () => {
+                                st.jitterMode = st.jitterMode === 'deviation' ? 'absolute' : 'deviation';
+                                st.rebuildJitter();
+                                m.redraw();
+                            },
+                        }),
+                        m('span', 'Deviation from nominal'),
+                    ]),
+
                     // Ready charts, rendered through the section pipeline.
                     readyPlots.length > 0 && Group && m('div#groups',
                         m(Group, {
