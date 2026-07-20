@@ -119,18 +119,12 @@ fn create(
         let name = format!("{metric_id}");
 
         match value {
-            Some(Value::Counter(value)) => s.counters.push(Counter {
-                name,
-                value,
-                metadata,
-                window: stored_window,
-            }),
-            Some(Value::Gauge(value)) => s.gauges.push(Gauge {
-                name,
-                value,
-                metadata,
-                window: stored_window,
-            }),
+            Some(Value::Counter(value)) => s
+                .counters
+                .push(Counter::new(name, value, metadata).with_window(stored_window)),
+            Some(Value::Gauge(value)) => s
+                .gauges
+                .push(Gauge::new(name, value, metadata).with_window(stored_window)),
             Some(Value::CounterGroup(g)) => {
                 for counter_id in 0..g.entries() {
                     // Atomic pair read: value + window under one lock, so a
@@ -151,12 +145,10 @@ fn create(
                         }
                     }
 
-                    s.counters.push(Counter {
-                        name: format!("{metric_id}x{counter_id}"),
-                        value,
-                        metadata,
-                        window,
-                    })
+                    s.counters.push(
+                        Counter::new(format!("{metric_id}x{counter_id}"), value, metadata)
+                            .with_window(window),
+                    )
                 }
             }
             Some(Value::GaugeGroup(g)) => {
@@ -178,12 +170,10 @@ fn create(
                         }
                     }
 
-                    s.gauges.push(Gauge {
-                        name: format!("{metric_id}x{gauge_id}"),
-                        value,
-                        metadata,
-                        window,
-                    })
+                    s.gauges.push(
+                        Gauge::new(format!("{metric_id}x{gauge_id}"), value, metadata)
+                            .with_window(window),
+                    )
                 }
             }
             Some(Value::Histogram(h)) => {
@@ -197,12 +187,8 @@ fn create(
                         h.config().max_value_power().to_string(),
                     );
 
-                    s.histograms.push(Histogram {
-                        name,
-                        value,
-                        metadata,
-                        window: stored_window,
-                    })
+                    s.histograms
+                        .push(Histogram::new(name, value, metadata).with_window(stored_window))
                 }
             }
             _ => {}
@@ -228,20 +214,12 @@ fn create(
 
         match metric.value {
             ExternalMetricValue::Counter(value) => {
-                s.counters.push(Counter {
-                    name,
-                    value,
-                    metadata,
-                    window,
-                });
+                s.counters
+                    .push(Counter::new(name, value, metadata).with_window(window));
             }
             ExternalMetricValue::Gauge(value) => {
-                s.gauges.push(Gauge {
-                    name,
-                    value,
-                    metadata,
-                    window,
-                });
+                s.gauges
+                    .push(Gauge::new(name, value, metadata).with_window(window));
             }
             ExternalMetricValue::Histogram {
                 grouping_power,
@@ -254,12 +232,8 @@ fn create(
                     metadata.insert("grouping_power".to_string(), grouping_power.to_string());
                     metadata.insert("max_value_power".to_string(), max_value_power.to_string());
 
-                    s.histograms.push(Histogram {
-                        name,
-                        value,
-                        metadata,
-                        window,
-                    });
+                    s.histograms
+                        .push(Histogram::new(name, value, metadata).with_window(window));
                 }
             }
         }
@@ -283,13 +257,20 @@ mod tests {
     fn built_snapshot_metric_carries_a_sampler_label() {
         SAMPLER_LABEL_PROBE.increment();
         let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
-        let Snapshot::V2(s) = snap else { panic!("expected V2") };
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
         let c = s
             .counters
             .iter()
-            .find(|c| c.metadata.get("metric").map(String::as_str) == Some("snapshot_sampler_label_probe"))
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str) == Some("snapshot_sampler_label_probe")
+            })
             .expect("probe counter present");
-        assert_eq!(c.metadata.get("sampler").map(String::as_str), Some("unattributed"));
+        assert_eq!(
+            c.metadata.get("sampler").map(String::as_str),
+            Some("unattributed")
+        );
     }
 
     #[test]

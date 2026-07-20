@@ -685,11 +685,7 @@ mod tests {
         metric.insert("__name__".to_string(), "cpu_cores".to_string());
 
         let result = QueryResult::Vector {
-            result: vec![Sample {
-                metric,
-                value: (1704067200.0, 4.0),
-                interval: None,
-            }],
+            result: vec![Sample::new(metric, (1704067200.0, 4.0))],
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"vector\""));
@@ -707,11 +703,10 @@ mod tests {
         metric.insert("__name__".to_string(), "cpu_cycles".to_string());
 
         let result = QueryResult::Matrix {
-            result: vec![MatrixSample {
+            result: vec![MatrixSample::new(
                 metric,
-                values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
-                intervals: None,
-            }],
+                vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
+            )],
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"matrix\""));

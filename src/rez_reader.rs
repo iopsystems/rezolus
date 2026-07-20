@@ -241,31 +241,31 @@ mod tests {
     use std::time::SystemTime;
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
-        Counter {
-            name: name.to_string(),
-            value: v,
-            metadata: [
+        Counter::new(
+            name.to_string(),
+            v,
+            [
                 ("metric".to_string(), name.to_string()),
                 ("sampler".to_string(), sampler.to_string()),
             ]
             .into_iter()
             .collect(),
-            window: w,
-        }
+        )
+        .with_window(w)
     }
 
     fn gauge(name: &str, sampler: &str, v: i64, w: Option<Window>) -> Gauge {
-        Gauge {
-            name: name.to_string(),
-            value: v,
-            metadata: [
+        Gauge::new(
+            name.to_string(),
+            v,
+            [
                 ("metric".to_string(), name.to_string()),
                 ("sampler".to_string(), sampler.to_string()),
             ]
             .into_iter()
             .collect(),
-            window: w,
-        }
+        )
+        .with_window(w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {

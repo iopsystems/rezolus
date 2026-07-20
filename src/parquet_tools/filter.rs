@@ -160,7 +160,10 @@ fn filter_rez(
     }
     let dest = output.unwrap_or(path);
     rez::write_archive_bytes(dest, &out)?;
-    println!("Filtered {:?}: kept {} of {} sampler tables", dest, kept, total);
+    println!(
+        "Filtered {:?}: kept {} of {} sampler tables",
+        dest, kept, total
+    );
     Ok(())
 }
 
@@ -358,17 +361,17 @@ mod tests {
     use std::time::SystemTime;
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
-        Counter {
-            name: name.to_string(),
-            value: v,
-            metadata: [
+        Counter::new(
+            name.to_string(),
+            v,
+            [
                 ("metric".to_string(), name.to_string()),
                 ("sampler".to_string(), sampler.to_string()),
             ]
             .into_iter()
             .collect(),
-            window: w,
-        }
+        )
+        .with_window(w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {

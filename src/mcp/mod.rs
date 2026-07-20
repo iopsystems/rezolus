@@ -786,11 +786,10 @@ mod tests {
         let mut metric = HashMap::new();
         metric.insert("__name__".to_string(), "rate".to_string());
         let with = QueryResult::Matrix {
-            result: vec![MatrixSample {
-                metric: metric.clone(),
-                values: vec![(1.0, 300.0), (2.0, 310.0)],
-                intervals: Some(vec![(291.26, 306.12), (300.0, 320.0)]),
-            }],
+            result: vec![
+                MatrixSample::new(metric.clone(), vec![(1.0, 300.0), (2.0, 310.0)])
+                    .with_intervals(Some(vec![(291.26, 306.12), (300.0, 320.0)])),
+            ],
         };
         let s = format_query_result(&with);
         assert!(s.contains("[291.26"), "expected bound in output: {s}");
@@ -798,28 +797,24 @@ mod tests {
 
         // No intervals → no bound text.
         let without = QueryResult::Matrix {
-            result: vec![MatrixSample {
-                metric,
-                values: vec![(1.0, 300.0)],
-                intervals: None,
-            }],
+            result: vec![MatrixSample::new(metric, vec![(1.0, 300.0)])],
         };
         let s2 = format_query_result(&without);
         assert!(!s2.contains('['), "no bounds expected: {s2}");
     }
 
     fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
-        Counter {
-            name: name.to_string(),
-            value: v,
-            metadata: [
+        Counter::new(
+            name.to_string(),
+            v,
+            [
                 ("metric".to_string(), name.to_string()),
                 ("sampler".to_string(), sampler.to_string()),
             ]
             .into_iter()
             .collect(),
-            window: w,
-        }
+        )
+        .with_window(w)
     }
 
     fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {

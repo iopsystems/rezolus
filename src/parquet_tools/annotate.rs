@@ -776,17 +776,17 @@ mod tests {
         for i in 0..3u64 {
             let ts = 1_000_000_000 * (i + 1);
             let w = Some(Window::new(ts - 50_000_000, ts));
-            let c = Counter {
-                name: "cpu_cycles".to_string(),
-                value: i,
-                metadata: [
+            let c = Counter::new(
+                "cpu_cycles".to_string(),
+                i,
+                [
                     ("metric".to_string(), "cpu_cycles".to_string()),
                     ("sampler".to_string(), "cpu_usage".to_string()),
                 ]
                 .into_iter()
                 .collect(),
-                window: w,
-            };
+            )
+            .with_window(w);
             let snap = Snapshot::V2(SnapshotV2 {
                 systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
                 duration: std::time::Duration::ZERO,

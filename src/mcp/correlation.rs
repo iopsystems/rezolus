@@ -671,20 +671,15 @@ fn extract_matrix_samples(
             // Convert vector to single-sample matrix
             Ok(result
                 .iter()
-                .map(|s| MatrixSample {
-                    metric: s.metric.clone(),
-                    values: vec![s.value],
-                    intervals: s.interval.map(|iv| vec![iv]),
+                .map(|s| {
+                    MatrixSample::new(s.metric.clone(), vec![s.value])
+                        .with_intervals(s.interval.map(|iv| vec![iv]))
                 })
                 .collect())
         }
         QueryResult::Scalar { result } => {
             // Convert scalar to single-sample matrix
-            Ok(vec![MatrixSample {
-                metric: HashMap::new(),
-                values: vec![*result],
-                intervals: None,
-            }])
+            Ok(vec![MatrixSample::new(HashMap::new(), vec![*result])])
         }
         QueryResult::HistogramHeatmap { .. } => {
             // Histogram heatmap data cannot be converted to matrix samples
@@ -1001,11 +996,7 @@ mod tests {
             .map(|i| (i as f64, offset + i as f64 + (i % 3) as f64))
             .collect();
         let intervals = band_hw.map(|hw| values.iter().map(|(_, v)| (v - hw, v + hw)).collect());
-        MatrixSample {
-            metric: HashMap::new(),
-            values,
-            intervals,
-        }
+        MatrixSample::new(HashMap::new(), values).with_intervals(intervals)
     }
 
     #[test]

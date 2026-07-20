@@ -2008,9 +2008,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.9.2"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d34d88b3f3ec8c532945831eeea8170f9410a37f444feb1322b8e124f3a4a3b9"
+checksum = "c58f8a95be0baf0dde07d58b0eeb6865a20a0c370c24083d2fff7616bb1eb978"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2021,21 +2021,22 @@ dependencies = [
 
 [[package]]
 name = "metriken-core"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bab27bd3058a12219267acc9a86c68c9a55ab456825582758f5c0376a1267e31"
+checksum = "14416271c370d3e95949f07bac7033373ba6bf6818067eb521081b32fdc61525"
 dependencies = [
  "histogram",
  "linkme",
  "parking_lot",
  "phf",
+ "serde",
 ]
 
 [[package]]
 name = "metriken-derive"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3643374c9873e69a27e50404db6006ad09f0c1ee944e8ce928d586df077b71db"
+checksum = "ba9466276652f7134a720d6d7e004bb5277dfa85a349e63030bb80b9aacf3db5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2045,9 +2046,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.16.1"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01819b48e04904d3116bda74c380de43c3593d8c38fb870361b4d219ba61440d"
+checksum = "ac1324043e54ff37bc84f8742d9fafe5353e7a00d1c54a436fd09c6d7e0c835b"
 dependencies = [
  "arrow",
  "chrono",
@@ -2060,9 +2061,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.11.0"
+version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c1d36e7af9c54c46a96003238535462c95dcad93dfcf8855c9d30fc23bba2f7"
+checksum = "3ba60aa7c0abcbeb9212b43fddc40447b624bd3dfc6800ce676190eb9f8ad7c7"
 dependencies = [
  "arrow",
  "bytes",

@@ -105,24 +105,20 @@ impl PrometheusConverter {
                         continue;
                     }
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    counters.push(Counter {
-                        name: id,
-                        value: v as u64,
-                        metadata: self.build_metadata(&sample.metric, &labels),
-                        window,
-                    });
+                    counters.push(
+                        Counter::new(id, v as u64, self.build_metadata(&sample.metric, &labels))
+                            .with_window(window),
+                    );
                 }
                 prometheus_parse::Value::Gauge(v) => {
                     if !v.is_finite() {
                         continue;
                     }
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    gauges.push(Gauge {
-                        name: id,
-                        value: v as i64,
-                        metadata: self.build_metadata(&sample.metric, &labels),
-                        window,
-                    });
+                    gauges.push(
+                        Gauge::new(id, v as i64, self.build_metadata(&sample.metric, &labels))
+                            .with_window(window),
+                    );
                 }
                 prometheus_parse::Value::Untyped(v) => {
                     if !v.is_finite() {
@@ -139,19 +135,9 @@ impl PrometheusConverter {
                         || sample.metric.ends_with("_sum")
                         || sample.metric.ends_with("_count")
                     {
-                        counters.push(Counter {
-                            name: id,
-                            value: v as u64,
-                            metadata,
-                            window,
-                        });
+                        counters.push(Counter::new(id, v as u64, metadata).with_window(window));
                     } else {
-                        gauges.push(Gauge {
-                            name: id,
-                            value: v as i64,
-                            metadata,
-                            window,
-                        });
+                        gauges.push(Gauge::new(id, v as i64, metadata).with_window(window));
                     }
                 }
                 prometheus_parse::Value::Histogram(ref buckets) => {
@@ -163,12 +149,8 @@ impl PrometheusConverter {
                         self.endpoint.as_deref(),
                     ) {
                         let id = self.get_or_assign_id(&sample.metric, &labels);
-                        histograms.push(SnapshotHistogram {
-                            name: id,
-                            value: h,
-                            metadata,
-                            window,
-                        });
+                        histograms
+                            .push(SnapshotHistogram::new(id, h, metadata).with_window(window));
                     }
                 }
                 prometheus_parse::Value::Summary(ref quantiles) => {
@@ -181,12 +163,14 @@ impl PrometheusConverter {
                         q_labels.push(("quantile".to_string(), q));
                         q_labels.sort();
                         let id = self.get_or_assign_id(&sample.metric, &q_labels);
-                        gauges.push(Gauge {
-                            name: id,
-                            value: quantile.count as i64,
-                            metadata: self.build_metadata(&sample.metric, &q_labels),
-                            window,
-                        });
+                        gauges.push(
+                            Gauge::new(
+                                id,
+                                quantile.count as i64,
+                                self.build_metadata(&sample.metric, &q_labels),
+                            )
+                            .with_window(window),
+                        );
                     }
                 }
             }

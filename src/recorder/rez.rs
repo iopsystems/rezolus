@@ -925,12 +925,7 @@ mod recorder_tests {
     }
 
     pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
-        Counter {
-            name: name.to_string(),
-            value,
-            metadata: cmeta(name, sampler),
-            window,
-        }
+        Counter::new(name.to_string(), value, cmeta(name, sampler)).with_window(window)
     }
 
     #[test]
@@ -1539,17 +1534,17 @@ mod finalize_tests {
             "rezolus".to_string(),
         );
         let w = Window::new(1_900, 2_000);
-        let g = Gauge {
-            name: "0".to_string(),
-            value: -7,
-            metadata: [
+        let g = Gauge::new(
+            "0".to_string(),
+            -7,
+            [
                 ("metric".to_string(), "mem_free".to_string()),
                 ("sampler".to_string(), "memory_meminfo".to_string()),
             ]
             .into_iter()
             .collect::<HashMap<_, _>>(),
-            window: Some(w),
-        };
+        )
+        .with_window(Some(w));
         let s = Snapshot::V2(SnapshotV2 {
             systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(2_000),
             duration: std::time::Duration::ZERO,
