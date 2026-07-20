@@ -30,8 +30,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 #[distributed_slice(SAMPLERS)]
-static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, module: module_path!(), init };
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::samplers::SamplerEntry {
+    name: NAME,
+    module: module_path!(),
+    init,
+};
 
 struct Nvidia {
     inner: Mutex<NvidiaInner>,

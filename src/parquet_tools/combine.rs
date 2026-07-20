@@ -191,8 +191,14 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let pinned = args.get_one::<String>("pinned");
 
     // `.rez` inputs: assemble a multi-recording archive (label-set model).
-    if files.iter().any(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false)) {
-        if !files.iter().all(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false)) {
+    if files
+        .iter()
+        .any(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
+    {
+        if !files
+            .iter()
+            .all(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
+        {
             return Err("cannot mix .rez and .parquet inputs in combine".into());
         }
         return combine_rez(&files, output);
@@ -2613,9 +2619,7 @@ mod tests {
 
     #[test]
     fn combine_rez_merges_recordings_with_distinct_dirs() {
-        use crate::recorder::rez::{
-            self, RecordingData, RezColumn, RezTable, RezValues,
-        };
+        use crate::recorder::rez::{self, RecordingData, RezColumn, RezTable, RezValues};
 
         let mk = |arm: &str| -> (tempfile::TempDir, PathBuf) {
             let col = RezColumn {
@@ -2660,11 +2664,7 @@ mod tests {
         let (manifest, recordings) = rez::read_archive_bytes(&out).unwrap();
         assert_eq!(manifest.recordings.len(), 2);
         assert_eq!(recordings.len(), 2);
-        let dirs: Vec<&str> = manifest
-            .recordings
-            .iter()
-            .map(|r| r.dir.as_str())
-            .collect();
+        let dirs: Vec<&str> = manifest.recordings.iter().map(|r| r.dir.as_str()).collect();
         assert_ne!(dirs[0], dirs[1]);
     }
 }

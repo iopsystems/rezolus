@@ -33,7 +33,10 @@ pub fn sampler_modules() -> Vec<(&'static str, &'static str)> {
 
 /// True when `prefix` is `module` or a `::`-delimited ancestor module of it.
 fn is_module_prefix(prefix: &str, module: &str) -> bool {
-    module == prefix || module.strip_prefix(prefix).is_some_and(|rest| rest.starts_with("::"))
+    module == prefix
+        || module
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with("::"))
 }
 
 /// Attribute a metric (identified by its definition module path) to the
@@ -78,7 +81,10 @@ mod attribution_tests {
             ("rezolus::agent::samplers::cpu::linux::usage", "cpu_usage"),
         ];
         assert_eq!(
-            attribute_sampler("rezolus::agent::samplers::cpu::linux::usage::stats", &samplers),
+            attribute_sampler(
+                "rezolus::agent::samplers::cpu::linux::usage::stats",
+                &samplers
+            ),
             "cpu_usage",
         );
     }
@@ -95,12 +101,18 @@ mod attribution_tests {
     #[test]
     fn no_prefix_falls_back_to_unattributed() {
         let samplers = [("rezolus::agent::samplers::cpu::linux::usage", "cpu_usage")];
-        assert_eq!(attribute_sampler("rezolus::agent::external_metrics::store", &samplers), "unattributed");
+        assert_eq!(
+            attribute_sampler("rezolus::agent::external_metrics::store", &samplers),
+            "unattributed"
+        );
     }
 
     #[test]
     fn prefix_requires_component_boundary() {
-        assert!(!is_module_prefix("rezolus::a::cpu", "rezolus::a::cpurious::x"));
+        assert!(!is_module_prefix(
+            "rezolus::a::cpu",
+            "rezolus::a::cpurious::x"
+        ));
         assert!(is_module_prefix("rezolus::a::cpu", "rezolus::a::cpu::x"));
         assert!(is_module_prefix("rezolus::a::cpu", "rezolus::a::cpu"));
     }
