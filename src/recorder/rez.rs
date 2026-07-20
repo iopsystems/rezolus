@@ -201,13 +201,18 @@ pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
     Ok(buf)
 }
 
+#[cfg(test)]
 fn u64_col(a: &ArrayRef) -> &UInt64Array {
     a.as_any()
         .downcast_ref::<UInt64Array>()
         .expect("UInt64 column")
 }
 
-/// Deserialize one table from parquet bytes.
+/// Deserialize one table from parquet bytes. Test-only: the production read
+/// path decodes tables lazily via metriken-query's `ParquetReader`
+/// (`read_archive_bytes` → `RezReader`); this eager decoder exists to verify
+/// the write path independently.
+#[cfg(test)]
 pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, RezError> {
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))?.build()?;
 
@@ -358,6 +363,7 @@ pub struct RecordingData<'a> {
 }
 
 /// A decoded `.rez` archive (round-trip / test surface).
+#[cfg(test)]
 pub struct RezArchive {
     pub manifest: RezManifest,
     /// Decoded tables, one inner `Vec` per `manifest.recordings` entry (parallel order).
@@ -466,6 +472,8 @@ pub fn write_archive_bytes(
 }
 
 /// Read a `.rez` archive back into its manifest + decoded tables (per recording).
+/// Test-only eager reader; production uses `read_archive_bytes` → `RezReader`.
+#[cfg(test)]
 pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     let file = std::fs::File::open(path)?;
     let mut archive = tar::Archive::new(file);
