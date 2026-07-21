@@ -6,6 +6,7 @@ use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType};
 use ratatui::Frame;
 
 use crate::viewer::tui::query::{ChartData, Series};
+use crate::viewer::tui::units::format_value;
 
 /// Series palette, cycled by index. Explicit high-luminance RGB (not the
 /// mid-tone ANSI names) so lines pop against a dark terminal background, and
@@ -21,13 +22,14 @@ const PALETTE: [Color; 6] = [
 ];
 
 /// Render a single plot into `area`. Handles the Lines / Empty / Error /
-/// Unsupported states.
-pub fn draw_chart(f: &mut Frame, area: Rect, title: &str, data: &ChartData) {
+/// Unsupported states. `unit` is the plot's unit system (e.g. `"percentage"`,
+/// `"time"`, `"bytes"`) used to format the y-axis value labels.
+pub fn draw_chart(f: &mut Frame, area: Rect, title: &str, unit: Option<&str>, data: &ChartData) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(title.to_string());
     match data {
-        ChartData::Lines(series) => draw_lines(f, area, block, series),
+        ChartData::Lines(series) => draw_lines(f, area, block, unit, series),
         ChartData::Empty => {
             f.render_widget(block.title(format!("{title} — no data")), area);
         }
@@ -77,7 +79,7 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
     ([xmin, xmax], [ymin, ymax])
 }
 
-fn draw_lines(f: &mut Frame, area: Rect, block: Block, series: &[Series]) {
+fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, series: &[Series]) {
     let (xb, yb) = bounds(series);
     let datasets: Vec<Dataset> = series
         .iter()
@@ -96,8 +98,8 @@ fn draw_lines(f: &mut Frame, area: Rect, block: Block, series: &[Series]) {
         .block(block)
         .x_axis(Axis::default().bounds(xb))
         .y_axis(Axis::default().bounds(yb).labels(vec![
-            Span::raw(format!("{:.3}", yb[0])),
-            Span::raw(format!("{:.3}", yb[1])),
+            Span::raw(format_value(unit, yb[0])),
+            Span::raw(format_value(unit, yb[1])),
         ]));
     f.render_widget(chart, area);
 }
@@ -112,7 +114,7 @@ mod tests {
         let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| {
-            draw_chart(f, f.area(), "Test", data);
+            draw_chart(f, f.area(), "Test", Some("percentage"), data);
         })
         .unwrap();
     }
@@ -123,7 +125,7 @@ mod tests {
         let backend = TestBackend::new(w, h);
         let mut term = Terminal::new(backend).unwrap();
         term.draw(|f| {
-            draw_chart(f, f.area(), "Test", data);
+            draw_chart(f, f.area(), "Test", Some("percentage"), data);
         })
         .unwrap();
         term.backend()

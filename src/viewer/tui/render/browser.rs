@@ -11,9 +11,12 @@ use crate::viewer::tui::app::{App, BrowserFocus};
 use crate::viewer::tui::layout::{browser_split, too_small, BrowserSplit};
 use crate::viewer::tui::query::ChartData;
 
+/// A resolved plot to render: title, unit system, and loaded data.
+pub type LoadedPlot = (String, Option<String>, ChartData);
+
 /// Render the section browser. `plots` are the currently selected section's
-/// resolved plots (title + loaded data), already produced by the loop.
-pub fn draw_browser(f: &mut Frame, app: &App, plots: &[(String, ChartData)]) {
+/// resolved plots (title + unit + loaded data), already produced by the loop.
+pub fn draw_browser(f: &mut Frame, app: &App, plots: &[LoadedPlot]) {
     let area = f.area();
     if too_small(area.width, area.height) {
         f.render_widget(
@@ -60,7 +63,7 @@ fn draw_nav(f: &mut Frame, area: Rect, app: &App) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_charts(f: &mut Frame, area: Rect, app: &App, plots: &[(String, ChartData)]) {
+fn draw_charts(f: &mut Frame, area: Rect, app: &App, plots: &[LoadedPlot]) {
     // Inner area inside a titled border; the title also shows the active
     // time window so the effect of the [ / ] keys is visible.
     let section = app
@@ -85,8 +88,8 @@ fn draw_charts(f: &mut Frame, area: Rect, app: &App, plots: &[(String, ChartData
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(inner);
-    for (slot, (title, data)) in rows.iter().zip(plots.iter().skip(start)) {
-        draw_chart(f, *slot, title, data);
+    for (slot, (title, unit, data)) in rows.iter().zip(plots.iter().skip(start)) {
+        draw_chart(f, *slot, title, unit.as_deref(), data);
     }
 }
 
@@ -112,9 +115,10 @@ mod tests {
         app
     }
 
-    fn plots() -> Vec<(String, ChartData)> {
+    fn plots() -> Vec<LoadedPlot> {
         vec![(
             "Usage".into(),
+            Some("percentage".into()),
             ChartData::Lines(vec![Series {
                 label: "p50".into(),
                 points: vec![(0.0, 1.0), (1.0, 2.0)],

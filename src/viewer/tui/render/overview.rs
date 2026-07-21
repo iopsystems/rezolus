@@ -138,7 +138,7 @@ pub fn draw_overview(f: &mut Frame, tiles: &[Tile], data: &[ChartData]) {
 }
 
 fn draw_tile(f: &mut Frame, area: Rect, tile: &Tile, data: &ChartData) {
-    draw_chart(f, area, tile.title, data);
+    draw_chart(f, area, tile.title, tile.def.unit_system.as_deref(), data);
 }
 
 #[cfg(test)]

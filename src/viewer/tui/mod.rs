@@ -5,6 +5,7 @@ mod layout;
 mod model;
 mod query;
 mod render;
+mod units;
 mod window;
 
 use std::io::{self, Stdout};
@@ -114,8 +115,11 @@ fn ensure_section_loaded(state: &AppState, app: &mut App, idx: usize) {
     }
 }
 
+/// A resolved plot ready to render: title, unit system, and loaded data.
+type LoadedPlot = (String, Option<String>, ChartData);
+
 /// Load chart data for every plot in the selected section.
-fn load_section_charts(state: &AppState, app: &App) -> Vec<(String, ChartData)> {
+fn load_section_charts(state: &AppState, app: &App) -> Vec<LoadedPlot> {
     let data = state.baseline_data();
     let Some(section) = app.current_section() else {
         return Vec::new();
@@ -131,7 +135,11 @@ fn load_section_charts(state: &AppState, app: &App) -> Vec<(String, ChartData)> 
             } else {
                 p.title.clone()
             };
-            out.push((title, load_chart(data.as_ref(), p, app.window)));
+            out.push((
+                title,
+                p.unit_system.clone(),
+                load_chart(data.as_ref(), p, app.window),
+            ));
         }
     }
     out
