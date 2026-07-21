@@ -201,6 +201,20 @@ const displayBudget = (meta, start, end) => {
     return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
 };
 
+// Would a display-mode fetch over the current range aggregate (decimate) native
+// samples, or return them at native resolution? The display path collapses each
+// series to a median + min/max spread and drops the per-observation uncertainty
+// intervals; the JSON matrix path keeps them. So when the window is narrow enough
+// that no aggregation happens (native ≤ budget), we route to the matrix path
+// instead so the uncertainty bands render on a deep zoom. Mirrors displayBudget's
+// native-count computation exactly so the gate matches what the fetch would do.
+export const willDecimate = (meta) => {
+    const { start, end } = defaultRangeFor(meta);
+    const interval = (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
+    const native = Math.max(1, Math.round((end - start) / interval));
+    return native > displayBudget(meta, start, end);
+};
+
 // Which plots use display mode: line-ish charts (gauge / counter) and
 // histogram *percentile* scatterplots (histogram_quantiles returns a
 // per-percentile matrix the reducer decimates the same way). Histogram
@@ -803,9 +817,14 @@ const createDataApi = ({
             queryPlots.map(async ({ plot, query }) => {
                 try {
                     // Display mode: line-ish plots fetch the decimated boxplot
-                    // binary. On any failure (e.g. a non-Series result), fall
-                    // back to the JSON matrix so a hiccup never blanks a chart.
-                    if (_displayMode && plotUsesDisplay(plot)) {
+                    // binary — BUT only while the window is wide enough that the
+                    // fetch actually aggregates. Once zoomed in far enough that no
+                    // aggregation happens (willDecimate false), take the JSON matrix
+                    // path instead: it carries the per-observation uncertainty
+                    // intervals, so the measurement-uncertainty bands render at
+                    // native resolution. On any failure (e.g. a non-Series result),
+                    // fall back to the JSON matrix so a hiccup never blanks a chart.
+                    if (_displayMode && plotUsesDisplay(plot) && willDecimate(metadata)) {
                         try {
                             const decoded = await fetchDisplaySeries(query, metadata, signal);
                             if (superseded()) return;
