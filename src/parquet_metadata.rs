@@ -2,12 +2,19 @@
 
 // ── Parquet writer settings ─────────────────────────────────────────────
 
-/// Maximum number of rows per row group. Matches the value used by
-/// `metriken-exposition`'s `ParquetWriter` (`DEFAULT_MAX_BATCH_SIZE`).
-/// All rezolus tools that write parquet files should use this constant
-/// so that row group sizing is consistent across recordings and combined
-/// files.
-pub const MAX_ROW_GROUP_SIZE: usize = 50_000;
+/// Maximum number of rows per row group. All rezolus tools that write parquet
+/// files should apply this (via `ParquetOptions::max_batch_size`) so row group
+/// sizing is consistent across recordings and combined files.
+///
+/// Deliberately smaller than `metriken-exposition`'s 50k default: the viewer
+/// reads time-windowed slices when you zoom in, and a query only decodes the
+/// row groups that overlap the window. Finer groups make drill-down far
+/// cheaper — measured on a 24h @1s recording, a 5-minute-window histogram
+/// query dropped from ~474 ms (2 giant groups) to ~20 ms at 1800 rows/group,
+/// while full-range scans are unchanged (decode-bound). The cost is worse
+/// compression: ~1.75× file size on that recording (small groups compress
+/// less well). 1800 rows ≈ 30 min at the default 1 s sampling interval.
+pub const MAX_ROW_GROUP_SIZE: usize = 1800;
 
 // ── Top-level parquet footer keys ───────────────────────────────────────
 

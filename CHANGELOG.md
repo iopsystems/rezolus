@@ -1,5 +1,43 @@
 ## [Unreleased]
 
+## [5.17.0] - 2026-07-16
+
+### Added
+
+- Viewer: server-side display decimation with a min/max envelope and zoom
+  drill-down. Charts on long recordings render fast from a median + min/max
+  envelope so short-lived spikes survive decimation, and zooming refetches
+  the window at finer resolution. Applies to both the server and WASM
+  (browser) viewers. (#1006)
+
+### Changed
+
+- Recorder: parquet files are written with smaller row groups (1800 rows)
+  so the viewer can drill into zoomed windows faster. (#1003)
+
+### Fixed
+
+- Viewer: the WASM viewer package builds again — wasm-pack was invoked with
+  a conflicting `--profile` flag. The size optimizations are now applied via
+  environment overrides scoped to the WASM build. (#1007)
+- Viewer: embedded JS assets are now revalidated with ETags, so browsers no
+  longer serve a stale mix of modules after upgrading Rezolus. Client-only
+  routes also no longer trigger a spurious section reload and console error.
+  (#1010)
+
+## [5.16.2] - 2026-07-09
+
+### Fixed
+
+- Viewer: non-Rezolus "simple capture" parquets now render correctly in the
+  browser (WASM) viewer. The per-source `source:` section and its metric
+  browser appear instead of empty Rezolus built-in sections. Source
+  classification is now shared between the server and WASM backends, and also
+  applies to captures uploaded to the server. (#997)
+- Viewer: the chart Expand link now works in simple-capture (source) sections.
+  Expanding a metric chart reconstructs it from the metric catalog and opens it
+  in the single-chart view instead of landing on a blank route. (#998)
+
 ## [5.16.1] - 2026-07-08
 
 ### Fixed
@@ -920,7 +958,9 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.16.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.17.0...HEAD
+[5.17.0]: https://github.com/iopsystems/rezolus/compare/v5.16.2...v5.17.0
+[5.16.2]: https://github.com/iopsystems/rezolus/compare/v5.16.1...v5.16.2
 [5.16.1]: https://github.com/iopsystems/rezolus/compare/v5.16.0...v5.16.1
 [5.16.0]: https://github.com/iopsystems/rezolus/compare/v5.15.0...v5.16.0
 [5.15.0]: https://github.com/iopsystems/rezolus/compare/v5.14.0...v5.15.0

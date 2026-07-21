@@ -9,7 +9,11 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+
+// Opt line-ish charts into display (boxplot decimation) mode: they fetch the
+// decimated boxplot binary instead of the full native-resolution JSON matrix.
+setDisplayMode(true);
 import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
@@ -174,7 +178,15 @@ const queryRangeFromMeta = (meta) => {
     const start = Number(minT);
     const end = Number(maxT);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
-    return { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+    return {
+        start, end,
+        step: Math.max(1, Math.floor((end - start) / 500)),
+        // Native sampling step, so the compare-mode boxplot fetch can decimate
+        // the experiment onto the SAME grid as the baseline (see
+        // fetchExperimentResult). Distinct from `step`, which targets ~500
+        // points for the plain matrix fetch.
+        interval: Math.max(1, Number(data.interval) || 1),
+    };
 };
 
 const attachExperiment = async (file) => {
@@ -329,6 +341,12 @@ const reloadCurrentSection = async () => {
     if (!currentRoute) return;
     const section = currentRoute.replace(/^\//, '');
     if (!section) return;
+    // Client-only routes (the simple-capture metric browser at /source/<name>)
+    // have no server-generated section payload — loadSection would fetch
+    // /data/source/<name>.json and 404 on every selection change, logging an
+    // error. The metric browser fetches its own catalog, so there's nothing to
+    // reload here.
+    if (section.startsWith('source/')) return;
 
     try {
         delete sectionResponseCache[section];
@@ -342,6 +360,143 @@ const reloadCurrentSection = async () => {
         console.error('Failed to reload section after selection change:', e);
     }
 };
+
+// ── Refetch-on-zoom (display-mode drill-down) ─────────────────────────────
+// Server-side decimation means the browser only holds the decimated points,
+// so a zoom can't reveal per-second detail on its own — we refetch the
+// narrower window at the same point budget (higher resolution), down to
+// native 1s once the window fits the budget. Translate a zoom into an
+// absolute [start,end] seconds window, set the range override, reset the zoom
+// visual (so the refetched window shows fully), and reload the section.
+let _baselineRange = null;
+const baselineRange = async () => {
+    if (_baselineRange) return _baselineRange;
+    const meta = await ViewerApi.getMetadata().catch(() => null);
+    _baselineRange = queryRangeFromMeta(meta);
+    return _baselineRange;
+};
+
+let _programmaticZoom = false;
+let _zoomRefetchTimer = null;
+// Drill-down cancellation: the AbortController for the in-flight refetch and a
+// monotonic generation. A new drill-down aborts the previous and bumps the
+// generation so a superseded window's late response is discarded.
+let _drillController = null;
+let _drillGen = 0;
+
+// Re-run the current section's queries for the new window WITHOUT deleting the
+// section cache. reloadCurrentSection() deletes the cache, which drops the
+// view's data and flashes the loading page while the whole section (spec + all
+// queries) re-fetches. Here the charts stay on screen and each one updates in
+// place as its own query lands (progressive render), so a zoom feels live even
+// when the slower histogram queries take a moment.
+const refetchCurrentSectionInPlace = async ({ signal, isStale } = {}) => {
+    const currentRoute = m.route.get();
+    if (!currentRoute) return;
+    const section = currentRoute.replace(/^\//, '');
+    const data = section && sectionResponseCache[section];
+    // No cached section yet (shouldn't happen from a zoom) → fall back to the
+    // full reload path rather than silently doing nothing.
+    if (!data) { await reloadCurrentSection(); return; }
+    try {
+        // Refetch the line/scatter display data and — in heatmap mode — the
+        // bucket heatmaps for the same window, concurrently. Both fetch paths
+        // honor the range override, so each returns finer detail for the window.
+        // The heatmap refetch writes the cache WITHOUT flipping heatmapLoading,
+        // so the current (coarse) heatmap stays visible until the crisp window
+        // data lands rather than flashing the section's LOADING state.
+        const jobs = [processDashboardData(data, activeCgroupPattern, currentRoute, { isStale, signal })];
+        if (heatmapEnabled && Array.isArray(data.groups)) {
+            jobs.push(
+                fetchHeatmapsForGroups(data.groups)
+                    // Drop a superseded window's heatmaps: a newer zoom owns the cache.
+                    .then((hd) => { if (!(isStale && isStale())) heatmapDataCache.set(currentRoute, hd); })
+                    .catch((e) => console.error('Heatmap window refetch failed:', e)),
+            );
+        }
+        await Promise.all(jobs);
+        if (isStale && isStale()) return;
+        // Synchronous redraw so the chart reconfigures run NOW, while
+        // chartsState._zoomRefine is still true (applyDisplayWindow clears it
+        // right after this returns). An async m.redraw() could fire after the
+        // flag is reset, and the line/multi charts would rebuild (notMerge)
+        // instead of sharpening in place.
+        m.redraw.sync();
+    } catch (e) {
+        console.error('Failed to refetch section for zoom window:', e);
+    }
+};
+
+const applyDisplayWindow = async (win) => {
+    setRangeOverride(win); // { start, end } seconds, or null for full recording
+    _programmaticZoom = true;
+    // Clear the zoom state silently — do NOT snap every chart back out to full
+    // range before the refetch lands, or the old full-range data flashes for
+    // the refetch's duration (the bouncy "intermediate state"). The refetch's
+    // reconfigure resets each chart's dataZoom to the new window on its own.
+    chartsState.setZoom(null, { source: null, silent: true });
+    _programmaticZoom = false;
+
+    // Cancel any drill-down still in flight: abort its requests (true network
+    // cancellation on the display fetch path) and bump the generation so any
+    // response that still lands is discarded rather than clobbering this window.
+    if (_drillController) _drillController.abort();
+    _drillController = new AbortController();
+    const signal = _drillController.signal;
+    const gen = ++_drillGen;
+    const isStale = () => gen !== _drillGen;
+
+    // Sharpen line/multi charts in place (merge update) rather than a notMerge
+    // rebuild while the narrower window refetches — see ChartsState._zoomRefine.
+    chartsState._zoomRefine = true;
+    try {
+        await refetchCurrentSectionInPlace({ signal, isStale });
+    } finally {
+        // Only clear the refine flag if we're still the current drill-down; a
+        // newer one owns it otherwise.
+        if (!isStale()) chartsState._zoomRefine = false;
+    }
+};
+
+const onZoomRefetch = async (zoom) => {
+    const full = await baselineRange();
+    if (!full) return;
+    const cur = getRangeOverride() || full;
+
+    // Reset (double-click / default zoom) → back to the full recording.
+    if (!zoom || chartsState.isDefaultZoom()) {
+        if (getRangeOverride()) await applyDisplayWindow(null);
+        return;
+    }
+
+    const span = cur.end - cur.start;
+    let ns;
+    let ne;
+    if (zoom.startValue != null && zoom.endValue != null) {
+        // Absolute axis coords (ms) from a chart drag-zoom.
+        ns = zoom.startValue / 1000;
+        ne = zoom.endValue / 1000;
+    } else if (zoom.start != null && zoom.end != null) {
+        // Percentages relative to the currently-loaded window.
+        ns = cur.start + (zoom.start / 100) * span;
+        ne = cur.start + (zoom.end / 100) * span;
+    } else {
+        return;
+    }
+    // Ignore degenerate / non-zoom-in selections.
+    if (!(ne - ns > 1) || ne - ns >= span * 0.99) return;
+    await applyDisplayWindow({ start: ns, end: ne });
+};
+
+if (typeof chartsState.subscribeZoom === 'function') {
+    chartsState.subscribeZoom((zoom) => {
+        // Ignore our own programmatic zoom resets, and skip when display mode
+        // is off (the JSON path has native data — client-side zoom is enough).
+        if (_programmaticZoom || !getDisplayMode()) return;
+        clearTimeout(_zoomRefetchTimer);
+        _zoomRefetchTimer = setTimeout(() => { onZoomRefetch(zoom).catch(() => {}); }, 300);
+    });
+}
 
 const changeNode = async (nodeName) => {
     selectedNode = nodeName;

@@ -1,4 +1,5 @@
 pub mod dashboard;
+pub mod display_wire;
 pub mod events;
 pub mod metric_catalog;
 mod plot;

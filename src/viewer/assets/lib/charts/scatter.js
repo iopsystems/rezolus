@@ -20,10 +20,163 @@ import {
     FONTS,
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
+import { buildBoxplotSeries } from './boxplot.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
 import { configureQuantileHeatmap } from './quantile_heatmap.js';
 import { fetchQuantileSpectrumForPlot } from '../data.js';
 import { quantilesForKind } from './util/spectrum_quantiles.js';
+
+// ── OOB (out-of-bounds / clamped) handling ───────────────────────────────────
+// Percentile charts cap the y-axis at format.range.max and park values above it
+// in a distinct "OOB" band so a spike doesn't blow the scale. Shared by both the
+// scatter (dots) render and the decimated band render so neither drops clamped
+// values.
+
+// Geometry of the OOB band above range.max (where clamped values are parked).
+function computeOobBand(range, logScale) {
+    if (logScale) {
+        const logMax = Math.log10(range.max);
+        return { oobCenter: Math.pow(10, logMax + 0.15), oobMax: Math.pow(10, logMax + 0.3) };
+    }
+    const span = range.max - (range.min || 0);
+    const band = Math.max(span * 0.05, 1e-9);
+    return { oobCenter: range.max + band * 0.5, oobMax: range.max + band };
+}
+
+// yAxis config capped at the OOB band top, relabeling the range.max tick "OOB".
+function oobYAxis(baseYAxis, oobMax, rangeMax) {
+    const baseFormatter = baseYAxis.axisLabel.formatter;
+    return {
+        ...baseYAxis,
+        max: oobMax,
+        axisLabel: {
+            ...baseYAxis.axisLabel,
+            rich: { oob: { color: 'rgba(248, 81, 73, 0.65)' } },
+            formatter: function (value) {
+                if (rangeMax != null && Math.abs(value - rangeMax) / rangeMax < 0.01) return '{oob|OOB}';
+                return typeof baseFormatter === 'function' ? baseFormatter(value) : value;
+            },
+        },
+    };
+}
+
+// Dashed separator at range.max + shaded OOB band, to attach to a series.
+function oobSeparator(rangeMax, oobMax) {
+    return {
+        markLine: {
+            silent: true,
+            symbol: 'none',
+            data: [{ yAxis: rangeMax }],
+            lineStyle: { color: COLORS.fgMuted, type: 'dashed', width: 1 },
+            label: { show: false },
+        },
+        markArea: {
+            silent: true,
+            data: [[{ yAxis: rangeMax }, { yAxis: oobMax }]],
+            itemStyle: { color: 'rgba(248, 81, 73, 0.06)' },
+            label: { show: false },
+        },
+    };
+}
+
+// Render decimated percentile columns (chart.spec.boxplot) as one median line
+// + min/max band per percentile. Used when the percentile data is a downsample
+// (zoomed out); the min/max band carries the second-to-second spread the
+// scatter would otherwise show as noise, and `max` on the tail percentiles
+// preserves spikes.
+function renderPercentileBands(chart) {
+    const { opts } = chart.spec;
+    const format = opts.format || {};
+    const unitSystem = format.unit_system;
+    const logScale = format.log_scale;
+    const range = format.range;
+    const cols = chart.spec.boxplot;
+
+    const labels = (chart.spec.series_names && chart.spec.series_names.length > 0)
+        ? chart.spec.series_names.map((v) => `p${parseFloat(v) * 100}`)
+        : (opts.percentiles || DEFAULT_PERCENTILES).map((v) => `p${v * 100}`);
+
+    // OOB handling (mirrors the scatter dots render): park band values above
+    // range.max in the OOB band so a spike shows there instead of blowing the
+    // y-axis. Build clamped COPIES — the source columns may be shared tile-cache
+    // views and must not be mutated in place.
+    chart._oobAxisMax = null;
+    let renderCols = cols;
+    let oob = null;
+    if (range && range.max != null) {
+        const overMax = (arr) => {
+            for (let i = 0; i < arr.length; i++) if (arr[i] > range.max) return true;
+            return false;
+        };
+        const hasClamped = cols.some((s) =>
+            ['min', 'lo', 'median', 'hi', 'max'].some((c) => overMax(s[c])));
+        if (hasClamped) {
+            oob = computeOobBand(range, logScale);
+            const place = (v) => {
+                if (v == null || Number.isNaN(v)) return v;
+                if (v > range.max) return oob.oobCenter;
+                if (range.min != null && v < range.min) return range.min;
+                return v;
+            };
+            renderCols = cols.map((s) => {
+                const out = { ...s };
+                for (const c of ['min', 'lo', 'median', 'hi', 'max']) {
+                    const src = s[c];
+                    const dst = new Float64Array(src.length);
+                    for (let i = 0; i < src.length; i++) dst[i] = place(src[i]);
+                    out[c] = dst;
+                }
+                return out;
+            });
+            chart._oobAxisMax = oob.oobMax;
+        }
+    }
+
+    // Stack lower quantiles on top (matching the scatter-dots convention) so a
+    // low percentile stays visible where it meets a higher one: cols are
+    // ascending, so index 0 gets the highest zBase. Stride by 4 (a series spans
+    // zBase+1..+3).
+    const echartsSeries = renderCols.flatMap((s, i) => buildBoxplotSeries(s, {
+        name: labels[i] || `p${i + 1}`,
+        stackId: `pct${i}`,
+        lineColor: SCATTER_PALETTE[i % SCATTER_PALETTE.length],
+        outerOnly: true,
+        zBase: (renderCols.length - 1 - i) * 4,
+    }));
+
+    // OOB separator + shaded band, attached to the first band series.
+    if (oob && echartsSeries.length > 0) {
+        const marks = oobSeparator(range.max, oob.oobMax);
+        echartsSeries[0].markLine = marks.markLine;
+        echartsSeries[0].markArea = marks.markArea;
+    }
+
+    const widest = cols.reduce((a, s) => (s.t.length > a.length ? s.t : a), cols[0].t);
+    const baseOption = getBaseOption();
+    const option = {
+        ...baseOption,
+        dataZoom: getDataZoomConfig(calculateMinZoomSpan(widest)),
+        yAxis: oob
+            ? oobYAxis(getBaseYAxisOption(logScale, unitSystem), oob.oobMax, range.max)
+            : getBaseYAxisOption(logScale, unitSystem),
+        tooltip: {
+            ...baseOption.tooltip,
+            formatter: getTooltipFormatter(
+                unitSystem ? createAxisLabelFormatter(unitSystem) : (val) => val,
+                null,
+                chart,
+            ),
+        },
+        legend: buildOverlayLegendOption(labels),
+        grid: {
+            ...(baseOption.grid || {}),
+            top: String(CHART_GRID_TOP_WITH_LEGEND),
+            left: HISTOGRAM_CHART_GRID_LEFT,
+        },
+        series: echartsSeries,
+    };
+    applyChartOption(chart, option);
+}
 
 /**
  * Configures the Chart based on Chart.spec
@@ -77,6 +230,21 @@ export function configureScatterChart(chart) {
         }
         kickOffSpectrumFetch(chart, chart.spectrumKind);
         // fall through to normal scatter render while we wait
+    }
+
+    // Display mode: when the percentile data is decimated (zoomed out), render
+    // each percentile as a median line + min/max band instead of the noisy
+    // wall of scatter dots. At native resolution (drilled in, not decimated)
+    // fall through to the scatter render below, where second-to-second noise
+    // reads better as dots.
+    if (Array.isArray(chart.spec.boxplot) && chart.spec.boxplotDecimated) {
+        renderPercentileBands(chart);
+        // The Full/Tail spectrum controls belong on the decimated band view too,
+        // not just the drilled-in dots render — otherwise they only appear after
+        // zooming in far enough to leave display mode. (The spectrum fetch is
+        // budget-strided, so Full/Tail works from the zoomed-out view.)
+        ensureSpectrumCheckboxes(chart);
+        return;
     }
 
     const baseOption = getBaseOption();
@@ -175,18 +343,7 @@ export function configureScatterChart(chart) {
     // OOB band: move clamped dots above the main chart area
     chart._oobAxisMax = null;
     if (hasClamped && range && range.max != null) {
-        let oobCenter, oobMax;
-        if (logScale) {
-            const logMax = Math.log10(range.max);
-            oobCenter = Math.pow(10, logMax + 0.15);
-            oobMax = Math.pow(10, logMax + 0.3);
-        } else {
-            const span = range.max - (range.min || 0);
-            const band = Math.max(span * 0.05, 1e-9);
-            oobCenter = range.max + band * 0.5;
-            oobMax = range.max + band;
-        }
-
+        const { oobCenter, oobMax } = computeOobBand(range, logScale);
         // Reposition clamped dots to OOB center
         for (const s of series) {
             if (s.type !== 'scatter') continue;
@@ -214,28 +371,11 @@ export function configureScatterChart(chart) {
 
     const uniqueNamesForLayout = [...new Set(series.map(s => s.name))];
 
-    // Build yAxis config — when OOB is active, skip the last label at range.max
+    // Build yAxis config — when OOB is active, cap at the band top + relabel range.max "OOB"
     const baseYAxis = getBaseYAxisOption(logScale, unitSystem);
-    let yAxisConfig;
-    if (chart._oobAxisMax) {
-        const baseFormatter = baseYAxis.axisLabel.formatter;
-        const rangeMax = range.max;
-        yAxisConfig = {
-            ...baseYAxis,
-            max: chart._oobAxisMax,
-            axisLabel: {
-                ...baseYAxis.axisLabel,
-                rich: { oob: { color: 'rgba(248, 81, 73, 0.65)' } },
-                formatter: function (value) {
-                    // Replace the tick at range.max with "OOB" to label the band
-                    if (rangeMax != null && Math.abs(value - rangeMax) / rangeMax < 0.01) return '{oob|OOB}';
-                    return typeof baseFormatter === 'function' ? baseFormatter(value) : value;
-                },
-            },
-        };
-    } else {
-        yAxisConfig = baseYAxis;
-    }
+    const yAxisConfig = chart._oobAxisMax
+        ? oobYAxis(baseYAxis, chart._oobAxisMax, range.max)
+        : baseYAxis;
 
     const option = {
         ...baseOption,
@@ -266,22 +406,12 @@ export function configureScatterChart(chart) {
     };
 
     // Add OOB band visual separator and background
-    if (hasClamped && range && range.max != null) {
+    if (chart._oobAxisMax && range && range.max != null) {
         const firstScatter = option.series.find(s => s.type === 'scatter');
         if (firstScatter) {
-            firstScatter.markLine = {
-                silent: true,
-                symbol: 'none',
-                data: [{ yAxis: range.max }],
-                lineStyle: { color: COLORS.fgMuted, type: 'dashed', width: 1 },
-                label: { show: false },
-            };
-            firstScatter.markArea = {
-                silent: true,
-                data: [[{ yAxis: range.max }, { yAxis: chart._oobAxisMax }]],
-                itemStyle: { color: 'rgba(248, 81, 73, 0.06)' },
-                label: { show: false },
-            };
+            const marks = oobSeparator(range.max, chart._oobAxisMax);
+            firstScatter.markLine = marks.markLine;
+            firstScatter.markArea = marks.markArea;
         }
     }
 

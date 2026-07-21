@@ -19,6 +19,7 @@ import {
     COLORS,
 } from './base.js';
 import { FONTS } from './util/fonts.js';
+import { buildBoxplotSeries, buildEnvelopeLines, buildDivergenceBand } from './boxplot.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -76,7 +77,34 @@ export function configureLineChart(chart) {
         seriesList[0].timeData,
     );
 
-    const echartsSeries = seriesList.flatMap((s, idx) => {
+    // Display mode: when the plot carries decimated boxplot columns, render
+    // median line + inner/outer bands instead of a plain line. (Multi-series
+    // 'multi'-style plots route to multi.js and render median lines only for
+    // now; bands there are a follow-up.)
+    const boxplotCols = Array.isArray(chart.spec.boxplot) && chart.spec.boxplot.length
+        ? chart.spec.boxplot
+        : null;
+    const echartsSeries = boxplotCols
+        ? boxplotCols.flatMap((s, i) => buildBoxplotSeries(s, {
+            name: seriesList[i]?.name ?? (s.metric?.__name__ || `series ${i + 1}`),
+            stackId: `bp${i}`,
+            lineColor: seriesList[i]?.color || COLORS.accent,
+            zBase: (boxplotCols.length - 1 - i) * 4,
+        }))
+        : seriesList.flatMap((s, idx) => {
+        // Compare-mode entry carrying a decimated boxplot (median + min/max):
+        // render an envelope of LINES (median + faint min/max), per capture
+        // color, so two captures' spreads overlay without muddy filled bands.
+        // Stack the first entry (baseline) on top for a consistent order, the
+        // same index → z convention the percentile bands use.
+        if (s.boxplot) {
+            return buildEnvelopeLines(s.boxplot, {
+                name: s.name,
+                color: s.color,
+                zBase: (seriesList.length - 1 - idx) * 4,
+            });
+        }
+
         const zippedRaw = s.timeData.map((t, i) => {
             const [v, raw] = clampToRange(s.valueData[i], range);
             return [t * 1000, v, raw];
@@ -170,7 +198,12 @@ export function configureLineChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val, null, chart),
         },
-        series: echartsSeries,
+        // Compare mode: shade the gap between the two overlaid medians (the
+        // divergence band) BEHIND the lines, so agreement reads as a thin line
+        // and divergence as a widening ribbon. Prepended so its low z draws first.
+        series: chart.spec.divergenceBand
+            ? [...buildDivergenceBand(chart.spec.divergenceBand), ...echartsSeries]
+            : echartsSeries,
     };
 
     // Multi-series charts get the same legend treatment scatter uses

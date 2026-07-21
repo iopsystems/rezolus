@@ -6,10 +6,21 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB — must match server Defaul
 
 const formatMB = (bytes) => (bytes / (1024 * 1024)).toFixed(1);
 
-const backendRequest = (opts) => m.request({
-    withCredentials: true,
-    ...opts,
-});
+const backendRequest = (opts) => {
+    // `signal` (an AbortSignal) lets callers cancel an in-flight request — used
+    // by the zoom drill-down to abort a superseded window's queries. m.request
+    // has no native abort, so hook the XHR via its `config` callback.
+    const { signal, ...rest } = opts;
+    const req = { withCredentials: true, ...rest };
+    if (signal) {
+        req.config = (xhr) => {
+            if (signal.aborted) xhr.abort();
+            else signal.addEventListener('abort', () => xhr.abort(), { once: true });
+            return xhr;
+        };
+    }
+    return m.request(req);
+};
 
 const sectionUrl = (section) => `/data/${section}.json`;
 
@@ -116,7 +127,7 @@ const ViewerApi = {
         });
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline') {
+    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -130,7 +141,36 @@ const ViewerApi = {
             method: 'GET',
             url: `/api/v1/query_range?${params.toString()}`,
             background: true,
+            signal,
         });
+    },
+
+    // Display-mode range query: returns the decimated boxplot binary body
+    // (see routes.rs encode_display_binary) as an ArrayBuffer, or, when the
+    // engine returns an error or a non-Series result, the parsed JSON under
+    // `{ json }`. Uses raw fetch since m.request is JSON-oriented.
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined } = {}) {
+        const params = new URLSearchParams({
+            query,
+            start: String(start),
+            end: String(end),
+            step: String(step),
+            format: 'display',
+            points: String(points),
+        });
+        if (band) params.set('band', band);
+        if (captureId && captureId !== 'baseline') params.set('capture', captureId);
+        const resp = await fetch(`/api/v1/query_range?${params.toString()}`, {
+            credentials: 'include',
+            cache: 'no-store',
+            signal,
+        });
+        if (!resp.ok) throw new Error(`query_range HTTP ${resp.status}`);
+        const ct = resp.headers.get('content-type') || '';
+        if (!ct.includes('octet-stream')) {
+            return { json: await resp.json() };
+        }
+        return { buffer: await resp.arrayBuffer() };
     },
 
     async getMetrics(source = null, captureId = 'baseline') {

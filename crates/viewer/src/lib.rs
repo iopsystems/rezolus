@@ -372,6 +372,38 @@ impl Viewer {
         }
     }
 
+    /// Display-mode range query. Returns the compact binary body (byte-identical
+    /// to the server's — both go through `dashboard::display_wire`) so the shared
+    /// frontend decodes it the same way. A non-series result (scalar/vector) is
+    /// surfaced as an error so the frontend falls back to the JSON query path,
+    /// matching the server. `band` is `"lo,hi"` (empty → interquartile default).
+    pub fn query_range_display(
+        &self,
+        query: &str,
+        start: f64,
+        end: f64,
+        step: f64,
+        points: usize,
+        band: &str,
+    ) -> Result<Vec<u8>, JsValue> {
+        let band = dashboard::display_wire::parse_band(Some(band));
+        match dashboard::display_wire::display_query(
+            self.reader.as_ref(),
+            query,
+            start,
+            end,
+            step,
+            points,
+            band,
+        ) {
+            Ok(dashboard::display_wire::DisplayWire::Binary(buf)) => Ok(buf),
+            Ok(dashboard::display_wire::DisplayWire::Json(_)) => Err(JsValue::from_str(
+                "display query returned a non-series result",
+            )),
+            Err(e) => Err(JsValue::from_str(&e.to_string())),
+        }
+    }
+
     /// Execute a PromQL instant query.
     pub fn query(&self, query: &str, time: f64) -> String {
         match self.reader.query(query, Some(time)) {
@@ -606,6 +638,20 @@ impl WasmCaptureRegistry {
 
     pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
         self.require_slot(capture).map(|v| v.query(query, time))
+    }
+
+    pub fn query_range_display(
+        &self,
+        capture: &str,
+        query: &str,
+        start: f64,
+        end: f64,
+        step: f64,
+        points: usize,
+        band: &str,
+    ) -> Result<Vec<u8>, JsValue> {
+        self.require_slot(capture)
+            .and_then(|v| v.query_range_display(query, start, end, step, points, band))
     }
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
