@@ -45,14 +45,16 @@ pub struct RezTableIndex {
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow::array::{
-    Array, ArrayRef, Int64Array, ListArray, ListBuilder, UInt64Array, UInt64Builder,
-};
+use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, UInt64Array, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use metriken::Window;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+// Only the test-only eager reader (read_table_parquet) needs these.
+#[cfg(test)]
+use arrow::array::ListArray;
+#[cfg(test)]
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 /// Per-metric column values for a table (row-aligned with the table's timestamps).
 #[derive(Debug, Clone, PartialEq)]
@@ -637,7 +639,7 @@ impl Entry<'_> {
 
 /// A growing per-sampler table. Columns are sparse: shorter than the row count
 /// until padded (a metric absent in some rows gets `None` there).
-struct TableBuilder {
+pub(crate) struct TableBuilder {
     sampler: String,
     timestamps: Vec<u64>,
     order: Vec<String>,
@@ -810,7 +812,7 @@ impl RezRecorder {
 
     /// Test/inspection helper: the current (unpadded) table builder view.
     #[cfg(test)]
-    pub fn table(&self, sampler: &str) -> Option<&TableBuilder> {
+    pub(crate) fn table(&self, sampler: &str) -> Option<&TableBuilder> {
         self.tables.get(sampler)
     }
 

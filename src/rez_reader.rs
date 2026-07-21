@@ -25,6 +25,9 @@ pub struct RezReader {
     filename: Option<String>,
 }
 
+/// One `RezReader` per recording, paired with that recording's label set.
+type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
+
 impl RezReader {
     /// Open a `.rez` at `path`, opening each per-sampler table against `pool`.
     pub fn open_with_pool(
@@ -36,23 +39,13 @@ impl RezReader {
         Self::from_recordings(recordings, filename, pool)
     }
 
-    /// Open a `.rez` from in-memory bytes (upload mode).
-    pub fn open_bytes_with_pool(
-        bytes: Vec<u8>,
-        filename: Option<String>,
-        pool: Arc<BufferPool>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let (_manifest, recordings) = rez::read_archive_reader(std::io::Cursor::new(bytes))?;
-        Self::from_recordings(recordings, filename, pool)
-    }
-
     /// Open a `.rez` as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording `.rez` onto
     /// baseline/experiment without cross-recording sampler-name collisions.
     pub fn open_recordings(
         path: &Path,
         pool: Arc<BufferPool>,
-    ) -> Result<Vec<(BTreeMap<String, String>, RezReader)>, Box<dyn std::error::Error>> {
+    ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
         let (_manifest, recordings) = rez::read_archive_bytes(path)?;
         let mut out = Vec::with_capacity(recordings.len());
         for rec in recordings {

@@ -332,6 +332,22 @@ fn sanitize_metric_names(text: &str) -> String {
     result
 }
 
+fn sample_window(ts: chrono::DateTime<chrono::Utc>) -> Option<metriken::Window> {
+    let ns = ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
+    Some(metriken::Window::new(ns, ns))
+}
+
+fn empty_snapshot() -> Snapshot {
+    Snapshot::V2(SnapshotV2 {
+        systemtime: SystemTime::now(),
+        duration: Duration::ZERO,
+        metadata: HashMap::new(),
+        counters: Vec::new(),
+        gauges: Vec::new(),
+        histograms: Vec::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,20 +375,4 @@ mod tests {
         let w = s.counters[0].window.expect("window set");
         assert_eq!(w.begin_ns, fetch_ns, "no embedded ts -> fetch time");
     }
-}
-
-fn sample_window(ts: chrono::DateTime<chrono::Utc>) -> Option<metriken::Window> {
-    let ns = ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
-    Some(metriken::Window::new(ns, ns))
-}
-
-fn empty_snapshot() -> Snapshot {
-    Snapshot::V2(SnapshotV2 {
-        systemtime: SystemTime::now(),
-        duration: Duration::ZERO,
-        metadata: HashMap::new(),
-        counters: Vec::new(),
-        gauges: Vec::new(),
-        histograms: Vec::new(),
-    })
 }

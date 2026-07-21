@@ -148,7 +148,7 @@ fn filter_rez(
         total += rec.tables.len();
         let mut new_tables = Vec::new();
         let mut new_bytes = Vec::new();
-        for (idx, (_sampler, bytes)) in rec.tables.into_iter().zip(rb.tables.into_iter()) {
+        for (idx, (_sampler, bytes)) in rec.tables.into_iter().zip(rb.tables) {
             if keep.contains(&idx.sampler) {
                 new_tables.push(idx);
                 new_bytes.push(bytes);
