@@ -3,13 +3,23 @@
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState,
+};
 use ratatui::Frame;
 
 use super::chart::draw_chart;
 use crate::viewer::tui::app::{App, BrowserFocus};
 use crate::viewer::tui::layout::{browser_split, too_small, BrowserSplit};
 use crate::viewer::tui::query::ChartData;
+
+/// Fixed height (in cells) of each stacked chart in the browser's charts pane.
+pub const CHART_H: u16 = 10;
+
+/// How many charts fit in a charts pane of the given inner height.
+pub fn visible_charts(inner_height: u16) -> usize {
+    (inner_height / CHART_H).max(1) as usize
+}
 
 /// A resolved plot to render: title, unit system, and loaded data.
 pub type LoadedPlot = (String, Option<String>, ChartData);
@@ -79,17 +89,39 @@ fn draw_charts(f: &mut Frame, area: Rect, app: &App, plots: &[LoadedPlot]) {
         return;
     }
 
-    // Stack plots vertically at a fixed per-chart height; apply scroll.
-    const CHART_H: u16 = 10;
-    let visible = (inner.height / CHART_H).max(1) as usize;
-    let start = (app.chart_scroll as usize).min(plots.len().saturating_sub(1));
+    let visible = visible_charts(inner.height);
+    // Clamp so the last page fills the pane (and the scrollbar thumb reaches
+    // the bottom) instead of scrolling a single chart into an empty pane.
+    let max_start = plots.len().saturating_sub(visible);
+    let start = (app.chart_scroll as usize).min(max_start);
+    let overflow = plots.len() > visible;
+
+    // Reserve the rightmost column for a scrollbar when there's overflow, so
+    // it's obvious more charts exist above/below the visible ones.
+    let charts_area = if overflow {
+        Rect {
+            width: inner.width.saturating_sub(1),
+            ..inner
+        }
+    } else {
+        inner
+    };
+
     let constraints: Vec<Constraint> = vec![Constraint::Length(CHART_H); visible];
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
-        .split(inner);
+        .split(charts_area);
     for (slot, (title, unit, data)) in rows.iter().zip(plots.iter().skip(start)) {
         draw_chart(f, *slot, title, unit.as_deref(), data);
+    }
+
+    if overflow {
+        let mut sb_state = ScrollbarState::new(plots.len())
+            .viewport_content_length(visible)
+            .position(start);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+        f.render_stateful_widget(scrollbar, inner, &mut sb_state);
     }
 }
 
@@ -157,5 +189,58 @@ mod tests {
         let buf = term.backend().buffer().clone();
         let text: String = buf.content().iter().map(|c| c.symbol()).collect();
         assert!(text.contains("CPU"));
+    }
+
+    fn many_plots(n: usize) -> Vec<LoadedPlot> {
+        (0..n)
+            .map(|i| {
+                (
+                    format!("plot{i}"),
+                    None,
+                    ChartData::Lines(vec![Series {
+                        label: "x".into(),
+                        points: vec![(0.0, 1.0), (1.0, 2.0)],
+                    }]),
+                )
+            })
+            .collect()
+    }
+
+    fn buffer_text(w: u16, h: u16, plots: &[LoadedPlot], scroll: u16) -> String {
+        let mut app = app_with_section();
+        app.focus = BrowserFocus::Charts;
+        app.chart_scroll = scroll;
+        let backend = TestBackend::new(w, h);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| draw_browser(f, &app, plots)).unwrap();
+        term.backend()
+            .buffer()
+            .clone()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
+    #[test]
+    fn scrollbar_appears_only_when_charts_overflow() {
+        // At 60x24 the charts pane fits ~2 charts; 10 plots overflow.
+        let over = buffer_text(60, 24, &many_plots(10), 0);
+        assert!(
+            over.chars().any(|c| matches!(c, '█' | '▲' | '▼' | '│')),
+            "expected a scrollbar glyph when overflowing"
+        );
+        // A single plot fits, so no scrollbar chrome is drawn.
+        let fits = buffer_text(60, 24, &many_plots(1), 0);
+        assert!(!fits.chars().any(|c| matches!(c, '█' | '▲' | '▼')));
+    }
+
+    #[test]
+    fn scroll_is_clamped_so_last_page_fills() {
+        // Scroll far past the end; render must still fill the pane from the
+        // last page (start clamped), never panic or blank out.
+        let text = buffer_text(60, 24, &many_plots(10), 999);
+        // The last plots must be visible (not scrolled into the void).
+        assert!(text.contains("plot9"));
     }
 }

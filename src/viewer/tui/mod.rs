@@ -214,6 +214,16 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
             } else {
                 Vec::new()
             };
+            // Clamp the charts-pane scroll to a valid range for the current
+            // terminal size so scrolling back up from the bottom responds
+            // immediately (the charts pane spans the full height, minus its
+            // top/bottom border).
+            if app.screen == Screen::Browser {
+                let h = guard.term.size().map(|s| s.height).unwrap_or(24);
+                let visible = render::browser::visible_charts(h.saturating_sub(2));
+                let max_start = section_charts.len().saturating_sub(visible) as u16;
+                app.chart_scroll = app.chart_scroll.min(max_start);
+            }
             let overview_data: Vec<ChartData> = if app.screen == Screen::Overview {
                 let data = state.baseline_data();
                 overview_tiles
