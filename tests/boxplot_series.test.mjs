@@ -59,6 +59,72 @@ test('buildBoxplotSeries: median line renders above the bands', () => {
     assert.ok(median.z > bandZ, 'median z above band z');
 });
 
+const uncSample = {
+    metric: { __name__: 'cpu_usage' },
+    t: [100, 101, 102],
+    min: [3, 3, 3], lo: [3, 3, 3], median: [3, 3, 3], hi: [3, 3, 3], max: [3, 3, 3],
+    // narrow measurement-uncertainty band hugging the median (3)
+    uncLo: [2.8, 2.9, 2.85],
+    uncHi: [3.2, 3.1, 3.15],
+};
+
+test('buildBoxplotSeries: no uncertainty columns → unchanged 5 series', () => {
+    // Backward-compat: a series without uncLo/uncHi must not grow extra series.
+    const out = buildBoxplotSeries(sample);
+    assert.equal(out.length, 5);
+    assert.ok(out.every((s) => !(s.stack && s.stack.endsWith('unc'))), 'no unc stack');
+});
+
+test('buildBoxplotSeries: uncertainty band adds a ribbon spanning [uncLo, uncHi]', () => {
+    const out = buildBoxplotSeries(uncSample);
+    // 2 spread bands (4 series) + median (1) + uncertainty base+fill (2) = 7
+    assert.equal(out.length, 7);
+    const uncBase = out.find((s) => s.stack && s.stack.endsWith('unc') && !s.areaStyle);
+    const uncFill = out.find((s) => s.stack && s.stack.endsWith('unc') && s.areaStyle);
+    assert.ok(uncBase && uncFill, 'a base + fill pair for the uncertainty ribbon');
+    assert.equal(uncBase.stack, uncFill.stack, 'ribbon base+fill share a stack');
+    // base rides uncLo; fill carries (uncHi - uncLo) so the stacked top is uncHi
+    assert.deepEqual(uncBase.data.map((p) => p[1]), [2.8, 2.9, 2.85]);
+    const stackedTop = uncFill.data.map((p, i) => uncBase.data[i][1] + p[1]);
+    stackedTop.forEach((v, i) => assert.ok(Math.abs(v - uncSample.uncHi[i]) < 1e-9, `top=${v}`));
+    // seconds → ms like every other band
+    assert.deepEqual(uncBase.data.map((p) => p[0]), [100000, 101000, 102000]);
+});
+
+test('buildBoxplotSeries: uncertainty ribbon sits above spread bands, below median', () => {
+    const out = buildBoxplotSeries(uncSample);
+    const median = out.find((s) => s.name === 'cpu_usage');
+    const spreadZ = Math.max(...out.filter((s) => s.stack && !s.stack.endsWith('unc') && s.areaStyle).map((s) => s.z));
+    const uncZ = Math.max(...out.filter((s) => s.stack && s.stack.endsWith('unc')).map((s) => s.z));
+    assert.ok(uncZ > spreadZ, 'uncertainty ribbon above the value-spread fills');
+    assert.ok(median.z > uncZ, 'median line above the uncertainty ribbon');
+});
+
+test('buildBoxplotSeries: NaN uncertainty points become gaps, not zero-width', () => {
+    const s = {
+        metric: { __name__: 'x' },
+        t: [1, 2, 3],
+        min: [3, 3, 3], lo: [3, 3, 3], median: [3, 3, 3], hi: [3, 3, 3], max: [3, 3, 3],
+        uncLo: [2.8, NaN, 2.8],
+        uncHi: [3.2, NaN, 3.2],
+    };
+    const out = buildBoxplotSeries(s);
+    const uncBase = out.find((x) => x.stack && x.stack.endsWith('unc') && !x.areaStyle);
+    assert.ok(Number.isNaN(uncBase.data[1][1]), 'middle point is a NaN gap');
+    assert.equal(uncBase.data[0][1], 2.8);
+});
+
+test('buildBoxplotSeries: an all-NaN uncertainty band draws no ribbon', () => {
+    const s = {
+        metric: { __name__: 'x' },
+        t: [1, 2],
+        min: [3, 3], lo: [3, 3], median: [3, 3], hi: [3, 3], max: [3, 3],
+        uncLo: [NaN, NaN], uncHi: [NaN, NaN],
+    };
+    const out = buildBoxplotSeries(s);
+    assert.equal(out.length, 5, 'no ribbon when the band is entirely absent');
+});
+
 test('buildBoxplotSeries: outerOnly drops the inner band (3 series)', () => {
     const out = buildBoxplotSeries(sample, { outerOnly: true });
     assert.equal(out.length, 3, 'outer base + outer fill + median');

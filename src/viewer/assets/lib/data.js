@@ -107,6 +107,16 @@ export const decodeDisplayBinary = (buf) => {
             out[name] = new Float64Array(buf, off, s.n);
             off += s.n * 8;
         }
+        // Series that carry a measurement-uncertainty band append two more
+        // columns (uncLo, uncHi) after the six boxplot columns — the `unc`
+        // header flag guards reading them so band and no-band series stay
+        // byte-aligned in a mixed response.
+        if (s.unc) {
+            out.uncLo = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+            out.uncHi = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+        }
         return out;
     });
     return { resultType: header.resultType, budget: header.budget, series };
@@ -199,20 +209,6 @@ const displayBudget = (meta, start, end) => {
     const interval = (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
     const native = Math.max(1, Math.round((end - start) / interval));
     return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
-};
-
-// Would a display-mode fetch over the current range aggregate (decimate) native
-// samples, or return them at native resolution? The display path collapses each
-// series to a median + min/max spread and drops the per-observation uncertainty
-// intervals; the JSON matrix path keeps them. So when the window is narrow enough
-// that no aggregation happens (native ≤ budget), we route to the matrix path
-// instead so the uncertainty bands render on a deep zoom. Mirrors displayBudget's
-// native-count computation exactly so the gate matches what the fetch would do.
-export const willDecimate = (meta) => {
-    const { start, end } = defaultRangeFor(meta);
-    const interval = (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
-    const native = Math.max(1, Math.round((end - start) / interval));
-    return native > displayBudget(meta, start, end);
 };
 
 // Which plots use display mode: line-ish charts (gauge / counter) and
@@ -322,6 +318,28 @@ const fetchDisplaySeries = async (query, meta, signal) => {
     return decoded;
 };
 
+// Convert a decoded display series' aggregated measurement-uncertainty columns
+// (uncLo/uncHi, NaN = no band at that point) into the same `[[lo,hi]|null, …]`
+// shape the matrix path's parseIntervals produces, so buildBandSeries renders
+// them identically. Returns null when the series carries no band at all.
+export const displayIntervals = (s) => {
+    if (!s || !s.uncLo || !s.uncHi) return null;
+    const n = Math.min(s.uncLo.length, s.uncHi.length);
+    const out = new Array(n);
+    let any = false;
+    for (let i = 0; i < n; i++) {
+        const lo = s.uncLo[i];
+        const hi = s.uncHi[i];
+        if (Number.isFinite(lo) && Number.isFinite(hi)) {
+            out[i] = lo <= hi ? [lo, hi] : [hi, lo];
+            any = true;
+        } else {
+            out[i] = null;
+        }
+    }
+    return any ? out : null;
+};
+
 // Store a decoded display response on the plot. `data` carries the median
 // line(s) so all existing chart machinery (axis extent, zoom, no-data
 // detection, change-detection) works unchanged; `boxplot` carries the
@@ -333,6 +351,8 @@ const applyDisplayToPlot = (plot, decoded) => {
         plot.boxplot = null;
         plot.series_names = [];
         plot.series_metrics = [];
+        plot.intervals = null;
+        plot.series_intervals = [];
         return;
     }
     const timestamps = Array.from(series[0].t);
@@ -345,6 +365,18 @@ const applyDisplayToPlot = (plot, decoded) => {
     plot.series_names = series.length > 1
         ? series.map((s, i) => displaySeriesName(s.metric, i))
         : [];
+    // Measurement-uncertainty bands from the aggregated uncLo/uncHi columns —
+    // the median-of-interval-edges band computed server-side during decimation
+    // (exact per-sample interval at native resolution). Mirror applyResultToPlot's
+    // single vs multi split so line.js reads `intervals` and multi/scatter read
+    // `series_intervals`, clearing the other to avoid a stale band ghosting.
+    if (series.length > 1) {
+        plot.series_intervals = series.map(displayIntervals);
+        plot.intervals = null;
+    } else {
+        plot.intervals = displayIntervals(series[0]);
+        plot.series_intervals = [];
+    }
     // Resolve the render style the same way the JSON path does: percentile
     // histograms → scatter, single line-ish → line, multi line-ish → multi.
     plot._resolvedStyle = plot.opts?.style
@@ -817,14 +849,13 @@ const createDataApi = ({
             queryPlots.map(async ({ plot, query }) => {
                 try {
                     // Display mode: line-ish plots fetch the decimated boxplot
-                    // binary — BUT only while the window is wide enough that the
-                    // fetch actually aggregates. Once zoomed in far enough that no
-                    // aggregation happens (willDecimate false), take the JSON matrix
-                    // path instead: it carries the per-observation uncertainty
-                    // intervals, so the measurement-uncertainty bands render at
-                    // native resolution. On any failure (e.g. a non-Series result),
-                    // fall back to the JSON matrix so a hiccup never blanks a chart.
-                    if (_displayMode && plotUsesDisplay(plot) && willDecimate(metadata)) {
+                    // binary, which now carries the aggregated measurement-
+                    // uncertainty band (median of interval edges per bucket; the
+                    // exact per-sample interval at native resolution), so the
+                    // uncertainty bands render at every zoom level. On any failure
+                    // (e.g. a non-Series result), fall back to the JSON matrix so a
+                    // hiccup never blanks a chart.
+                    if (_displayMode && plotUsesDisplay(plot)) {
                         try {
                             const decoded = await fetchDisplaySeries(query, metadata, signal);
                             if (superseded()) return;

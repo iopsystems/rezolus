@@ -23,6 +23,18 @@ const zipDiffMs = (t, base, top) => {
     return out;
 };
 
+// Whether an uncertainty band carries at least one drawable point (both edges
+// finite). uncLo/uncHi use NaN to mark points with no band; an all-NaN band
+// should draw nothing rather than an empty, invisible series pair.
+const hasFiniteBand = (lo, hi) => {
+    if (!lo || !hi) return false;
+    const n = Math.min(lo.length, hi.length);
+    for (let i = 0; i < n; i++) {
+        if (Number.isFinite(lo[i]) && Number.isFinite(hi[i])) return true;
+    }
+    return false;
+};
+
 // Distinct colors per series. Band fills are the series color at low opacity
 // (applied by echarts via areaStyle.opacity, so any CSS color works).
 const PALETTE = ['#4e79a7', '#e15759', '#59a14f', '#f28e2b', '#76b7b2', '#af7aa1', '#edc948', '#ff9da7'];
@@ -95,6 +107,41 @@ export function buildBoxplotSeries(s, opts = {}) {
         out.push(
             base(zipMs(s.t, s.lo), `${stackId} inner`),
             fill(zipDiffMs(s.t, s.lo, s.hi), `${stackId} inner`, innerOpacity),
+        );
+    }
+    // Measurement-uncertainty ribbon [uncLo, uncHi] — the aggregated acquisition-
+    // window band (median of per-sample interval edges), i.e. how precisely the
+    // median VALUE is known, which is a different thing from the value SPREAD the
+    // bands above show. So it gets a distinct treatment: a light fill with thin
+    // visible borders at both edges, drawn above the spread fills but below the
+    // median line, hugging the line. At native resolution (spread bands collapse
+    // to the line) this ribbon is the only band left. NaN marks a point with no
+    // band; echarts renders it as a gap. Skipped entirely when no point has one.
+    if (Array.isArray(s.uncLo) === false && !(s.uncLo instanceof Float64Array)) {
+        // no uncertainty columns on this series
+    } else if (hasFiniteBand(s.uncLo, s.uncHi)) {
+        const uStack = `${stackId} unc`;
+        const border = { color: lineColor, width: 1, opacity: 0.65 };
+        const uCommon = {
+            type: 'line',
+            stack: uStack,
+            symbol: 'none',
+            silent: true,
+            tooltip: { show: false },
+            connectNulls: false,
+            z: zBase + 2,
+        };
+        out.push(
+            // baseline rides uncLo (thin visible lower border)
+            { ...uCommon, data: zipMs(s.t, s.uncLo), lineStyle: border },
+            // (uncHi - uncLo) stacked on the baseline → top edge lands on uncHi;
+            // its areaStyle fills the ribbon, its lineStyle draws the upper border.
+            {
+                ...uCommon,
+                data: zipDiffMs(s.t, s.uncLo, s.uncHi),
+                lineStyle: border,
+                areaStyle: { color: lineColor, opacity: 0.22 },
+            },
         );
     }
     // robust median line on top (skipped when the caller draws its own line)

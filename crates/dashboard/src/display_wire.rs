@@ -62,9 +62,16 @@ pub fn display_query(
 ///
 /// The JSON header carries per-series labels + provenance + point count `n`;
 /// the blob is, per series in order, the six columns `t,min,lo,median,hi,max`
-/// each `n` little-endian f64. Padding keeps the first f64 8-byte aligned so
-/// the client can view columns as `Float64Array`s with zero copies.
+/// each `n` little-endian f64. A series carrying a measurement-uncertainty band
+/// sets the header `unc` flag and appends two more columns (`uncLo,uncHi`,
+/// `NaN` for points without a band) after the six — so a mixed response stays
+/// self-describing. Padding keeps the first f64 8-byte aligned so the client can
+/// view columns as `Float64Array`s with zero copies.
 pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
+    // A series carries a band iff any of its points does (a decimated bucket with
+    // no intervals yields None). The flag lets the decoder know to read the two
+    // extra columns for this series.
+    let has_unc = |s: &DisplaySeries| s.points.iter().any(|p| p.unc_lo.is_some());
     let header = serde_json::json!({
         "resultType": "series",
         "budget": budget,
@@ -77,12 +84,16 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
                 "reducer": s.reducer,
                 "band": s.band,
                 "decimated": s.decimated,
+                "unc": has_unc(s),
                 "n": s.points.len(),
             }))
             .collect::<Vec<_>>(),
     });
     let header_bytes = serde_json::to_vec(&header).unwrap_or_default();
-    let total_floats: usize = series.iter().map(|s| s.points.len() * 6).sum();
+    let total_floats: usize = series
+        .iter()
+        .map(|s| s.points.len() * if has_unc(s) { 8 } else { 6 })
+        .sum();
 
     let mut buf = Vec::with_capacity(4 + header_bytes.len() + 8 + total_floats * 8);
     buf.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
@@ -108,6 +119,17 @@ pub fn encode_display_binary(series: &[DisplaySeries], budget: u32) -> Vec<u8> {
         }
         for p in &s.points {
             buf.extend_from_slice(&p.max.to_le_bytes());
+        }
+        // Uncertainty band columns, only for a series that carries one. `NaN`
+        // marks a point with no band; the client treats a non-finite edge as a
+        // gap, matching the matrix path's per-point `null`.
+        if has_unc(s) {
+            for p in &s.points {
+                buf.extend_from_slice(&p.unc_lo.unwrap_or(f64::NAN).to_le_bytes());
+            }
+            for p in &s.points {
+                buf.extend_from_slice(&p.unc_hi.unwrap_or(f64::NAN).to_le_bytes());
+            }
         }
     }
     buf
