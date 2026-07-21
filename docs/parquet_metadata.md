@@ -93,6 +93,20 @@ common grid. Mismatched intervals fail validation up front.
 
 **Set at record time** via the `--interval` flag on `rezolus record`.
 
+**Viewer assumption — the sampling-jitter chart.** In the simple-capture metric
+browser, selecting the synthetic `timestamp` row charts the inter-sample delta;
+its "deviation" (jitter) mode needs a nominal cadence to subtract. The viewer
+prefers this declared `sampling_interval_ms` — that's the *intended* interval, so
+a producer consistently running behind intent shows a steady non-zero offset. But
+foreign producers don't always declare it honestly: some hardcode a default (e.g.
+`1000`) while actually sampling far faster. The viewer therefore trusts the
+declared value **only when it's plausible** — at or below the observed average
+interval, since a real target can't be slower than the cadence you actually
+achieve. A declared value well above the average (more than 2×) is treated as a
+bogus default and the baseline falls back to the average of the real intervals.
+Same fallback when the field is absent. See `nominalMsFor` in
+`src/viewer/assets/lib/charts/jitter.js`.
+
 ### `systeminfo`
 
 JSON-serialised hardware summary fetched from the rezolus agent's

@@ -111,6 +111,16 @@ const ViewerApi = {
         return JSON.parse(registry.info(captureId));
     },
 
+    async getMetrics(source = null, captureId = 'baseline') {
+        ensureAttached(captureId);
+        return JSON.parse(registry.metrics(captureId, source));
+    },
+
+    async getTimestamps(source = null, captureId = 'baseline') {
+        ensureAttached(captureId);
+        return JSON.parse(registry.timestamps(captureId, source));
+    },
+
     initTemplates(templatesJson, captureId = 'baseline') {
         ensureAttached(captureId);
         registry.init_templates(captureId, templatesJson);

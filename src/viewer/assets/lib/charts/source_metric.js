@@ -37,7 +37,9 @@ export const specForSourceMetric = (info) => {
     } else {
         promql_query = buildDefaultQuery(info);
     }
-    return { promql_query, opts };
+    // Simple-capture charts render full-width (renderChart keys off spec.width),
+    // matching the jitter chart and giving the wide x-axis room to read.
+    return { promql_query, opts, width: 'full' };
 };
 
 /**
