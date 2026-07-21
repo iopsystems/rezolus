@@ -64,6 +64,8 @@ target/release/rezolus record --metadata source=llm-perf http://host:9090/metric
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
+target/release/rezolus view --tui output.parquet                    # terminal UI (parquet or live agent; not upload-only)
+target/release/rezolus view --tui http://localhost:4241             # terminal UI, live agent
 
 # Hindsight - rolling ring buffer for incident analysis
 target/release/rezolus hindsight config/hindsight.toml

@@ -42,6 +42,7 @@ mod metadata;
 mod report_save;
 mod routes;
 mod state;
+mod tui;
 
 use capture_registry::CaptureId;
 use state::AppState;
@@ -101,9 +102,22 @@ pub fn command() -> Command {
              The --templates/--category flags (service-extension dashboards) and the --proxy-*\n\
              flags (in-browser 'load from URL' fetching) are advanced; the input forms above\n\
              need none of them.\n\n\
+             TERMINAL UI:\n    \
+             Pass --tui to render in the terminal instead of a web browser: a live overview\n    \
+             plus a drill-down browser of the same dashboard sections (CPU, network,\n    \
+             scheduler, ...). It needs a parquet file or a live agent URL as input; upload-only\n    \
+             (no input) is not supported and errors. It shows a SINGLE capture — A/B compare\n    \
+             and the --category bridge view are browser-only, so a second positional file or\n    \
+             --category is ignored (with a warning). No browser window is opened, no HTTP is\n    \
+             served, and --listen/--proxy-* are ignored. Keys: Tab/o overview<->browser, j/k\n    \
+             move, Enter/l open, Esc/h back, [ / ] time window, r refresh, ? help, q quit.\n\n\
              EXAMPLES:\n    \
              # Open a single recording\n    \
              rezolus view rezolus.parquet\n\n    \
+             # Explore a recording in the terminal (no browser)\n    \
+             rezolus view --tui rezolus.parquet\n\n    \
+             # Stream a live agent in the terminal UI\n    \
+             rezolus view --tui http://localhost:4241\n\n    \
              # A/B compare two recordings with display labels\n    \
              rezolus view redis=baseline.parquet valkey=experiment.parquet\n\n    \
              # Stream live from a remote agent on a fixed address\n    \
@@ -199,6 +213,22 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            clap::Arg::new("TUI")
+                .long("tui")
+                .help(
+                    "Show a terminal UI instead of a web browser dashboard. Needs an input: \
+                     a parquet file or a live agent URL. Upload-only mode (no input) is \
+                     browser-only, so `rezolus view --tui` with no input is an error. Shows a \
+                     single capture: A/B compare and the --category bridge view are \
+                     browser-only, so a second positional file or --category is ignored (with \
+                     a warning). No browser window is opened and no HTTP is served, so \
+                     --listen and the --proxy-* flags are ignored. Keys: Tab/o \
+                     overview<->browser, j/k move, Enter/l open, Esc/h back, [ / ] time \
+                     window, r refresh, ? help, q quit.",
+                )
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             clap::Arg::new("CACHE_SIZE_MB")
                 .long("cache-size-mb")
                 .value_name("MB")
@@ -225,6 +255,8 @@ pub struct Config {
     proxy_allow: proxy_allow::Allowlist,
     /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
     cache_size_bytes: usize,
+    /// Render a terminal UI instead of the web dashboard.
+    tui: bool,
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -314,6 +346,7 @@ impl TryFrom<ArgMatches> for Config {
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
             proxy_allow,
             cache_size_bytes,
+            tui: args.get_flag("TUI"),
         })
     }
 }
@@ -329,7 +362,13 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
-    ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+    // The TUI installs its own SIGINT handler (one that restores the
+    // terminal first); a bare process::exit here would bypass that and
+    // leave the terminal in raw mode. In raw mode a keyboard Ctrl-C is
+    // delivered as a normal key event and handled as a graceful quit.
+    if !config.tui {
+        ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+    }
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
@@ -370,6 +409,25 @@ pub fn run(config: Config) {
         warn!(
             "--experiment ignored outside of file mode (v1 compare requires a baseline parquet file)"
         );
+    }
+
+    if config.tui {
+        if matches!(config.source, Source::Empty) {
+            eprintln!("--tui needs a data source: a live agent URL or a parquet file (upload-only is not supported)");
+            std::process::exit(1);
+        }
+        // The TUI shows a single capture. A/B compare and the category
+        // bridge view are browser-only, so a second capture / --category
+        // is ignored rather than silently changing what's displayed.
+        if config.experiment_path.is_some() {
+            warn!("second capture ignored in --tui mode (A/B compare is browser-only); showing the first input only");
+        }
+        if config.category_name.is_some() {
+            warn!("--category ignored in --tui mode (the category bridge view is browser-only)");
+        }
+        let live = matches!(config.source, Source::Live(_));
+        tui::run_tui(state, live, &rt);
+        return;
     }
 
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
