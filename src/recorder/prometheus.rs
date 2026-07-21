@@ -67,10 +67,11 @@ impl PrometheusConverter {
         metadata
     }
 
-    pub fn convert(&mut self, text: &str) -> Snapshot {
+    pub fn convert(&mut self, text: &str, fetch_ns: u64) -> Snapshot {
         let sanitized = sanitize_metric_names(text);
         let lines = sanitized.lines().map(|l| Ok(l.to_string()));
-        let scrape = match prometheus_parse::Scrape::parse(lines) {
+        let fetch_time = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(fetch_ns as i64);
+        let scrape = match prometheus_parse::Scrape::parse_at(lines, fetch_time) {
             Ok(s) => s,
             Err(e) => {
                 warn!("failed to parse prometheus metrics: {e}");
@@ -90,6 +91,7 @@ impl PrometheusConverter {
         let mut histograms = Vec::new();
 
         for sample in scrape.samples {
+            let window = sample_window(sample.timestamp);
             let mut labels: Vec<(String, String)> = sample
                 .labels
                 .iter()
@@ -103,22 +105,20 @@ impl PrometheusConverter {
                         continue;
                     }
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    counters.push(Counter {
-                        name: id,
-                        value: v as u64,
-                        metadata: self.build_metadata(&sample.metric, &labels),
-                    });
+                    counters.push(
+                        Counter::new(id, v as u64, self.build_metadata(&sample.metric, &labels))
+                            .with_window(window),
+                    );
                 }
                 prometheus_parse::Value::Gauge(v) => {
                     if !v.is_finite() {
                         continue;
                     }
                     let id = self.get_or_assign_id(&sample.metric, &labels);
-                    gauges.push(Gauge {
-                        name: id,
-                        value: v as i64,
-                        metadata: self.build_metadata(&sample.metric, &labels),
-                    });
+                    gauges.push(
+                        Gauge::new(id, v as i64, self.build_metadata(&sample.metric, &labels))
+                            .with_window(window),
+                    );
                 }
                 prometheus_parse::Value::Untyped(v) => {
                     if !v.is_finite() {
@@ -135,17 +135,9 @@ impl PrometheusConverter {
                         || sample.metric.ends_with("_sum")
                         || sample.metric.ends_with("_count")
                     {
-                        counters.push(Counter {
-                            name: id,
-                            value: v as u64,
-                            metadata,
-                        });
+                        counters.push(Counter::new(id, v as u64, metadata).with_window(window));
                     } else {
-                        gauges.push(Gauge {
-                            name: id,
-                            value: v as i64,
-                            metadata,
-                        });
+                        gauges.push(Gauge::new(id, v as i64, metadata).with_window(window));
                     }
                 }
                 prometheus_parse::Value::Histogram(ref buckets) => {
@@ -157,11 +149,8 @@ impl PrometheusConverter {
                         self.endpoint.as_deref(),
                     ) {
                         let id = self.get_or_assign_id(&sample.metric, &labels);
-                        histograms.push(SnapshotHistogram {
-                            name: id,
-                            value: h,
-                            metadata,
-                        });
+                        histograms
+                            .push(SnapshotHistogram::new(id, h, metadata).with_window(window));
                     }
                 }
                 prometheus_parse::Value::Summary(ref quantiles) => {
@@ -174,11 +163,14 @@ impl PrometheusConverter {
                         q_labels.push(("quantile".to_string(), q));
                         q_labels.sort();
                         let id = self.get_or_assign_id(&sample.metric, &q_labels);
-                        gauges.push(Gauge {
-                            name: id,
-                            value: quantile.count as i64,
-                            metadata: self.build_metadata(&sample.metric, &q_labels),
-                        });
+                        gauges.push(
+                            Gauge::new(
+                                id,
+                                quantile.count as i64,
+                                self.build_metadata(&sample.metric, &q_labels),
+                            )
+                            .with_window(window),
+                        );
                     }
                 }
             }
@@ -340,6 +332,11 @@ fn sanitize_metric_names(text: &str) -> String {
     result
 }
 
+fn sample_window(ts: chrono::DateTime<chrono::Utc>) -> Option<metriken::Window> {
+    let ns = ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
+    Some(metriken::Window::new(ns, ns))
+}
+
 fn empty_snapshot() -> Snapshot {
     Snapshot::V2(SnapshotV2 {
         systemtime: SystemTime::now(),
@@ -349,4 +346,33 @@ fn empty_snapshot() -> Snapshot {
         gauges: Vec::new(),
         histograms: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_timestamp_becomes_window() {
+        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let fetch_ns = 5_000_000_000u64;
+        let text = "m_total 3 1000\n";
+        let Snapshot::V2(s) = conv.convert(text, fetch_ns) else {
+            panic!()
+        };
+        let w = s.counters[0].window.expect("window set");
+        assert_eq!(w.begin_ns, 1_000_000_000, "embedded ts (1000 ms) in ns");
+    }
+
+    #[test]
+    fn absent_timestamp_falls_back_to_fetch_time() {
+        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let fetch_ns = 5_000_000_000u64;
+        let text = "m_total 3\n";
+        let Snapshot::V2(s) = conv.convert(text, fetch_ns) else {
+            panic!()
+        };
+        let w = s.counters[0].window.expect("window set");
+        assert_eq!(w.begin_ns, fetch_ns, "no embedded ts -> fetch time");
+    }
 }

@@ -6,14 +6,14 @@ use metriken::*;
     description = "The number of bytes transferred over TCP",
     metadata = { direction = "receive", unit = "bytes" }
 )]
-pub static TCP_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_RX_BYTES: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_packets",
     description = "The number of packets transferred over TCP",
     metadata = { direction = "receive", unit = "packets" }
 )]
-pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_RX_PACKETS: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_size",
@@ -27,14 +27,14 @@ pub static TCP_RX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPIN
     description = "The number of bytes transferred over TCP",
     metadata = { direction = "transmit", unit = "bytes" }
 )]
-pub static TCP_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_TX_BYTES: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_packets",
     description = "The number of packets transferred over TCP",
     metadata = { direction = "transmit", unit = "packets" }
 )]
-pub static TCP_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_TX_PACKETS: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_size",

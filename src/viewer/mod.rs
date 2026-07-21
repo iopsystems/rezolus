@@ -91,8 +91,12 @@ pub fn command() -> Command {
              WHAT TO VIEW (pick one input form):\n    \
              - a parquet recording:      rezolus view rezolus.parquet\n    \
              - two recordings (A/B):     rezolus view baseline.parquet experiment.parquet\n    \
+             - a .rez archive:           rezolus view out.rez\n    \
              - a live agent:             rezolus view http://host:4241\n    \
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
+             A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
+             as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
+             arm/host labels); a .rez with more than two recordings shows the first two.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
              (A/B experiment) is only honored when the first is a parquet file — live and\n\
@@ -130,9 +134,10 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("INPUT")
                 .help(
-                    "First capture: parquet file, agent URL (http://…), or \
-                     alias=parquet (e.g. redis=./a.parquet). The alias is a \
-                     display label; internal identifiers stay baseline/experiment.",
+                    "First capture: parquet file, .rez archive, agent URL (http://…), \
+                     or alias=parquet (e.g. redis=./a.parquet). The alias is a \
+                     display label; internal identifiers stay baseline/experiment. \
+                     A 2-recording .rez loads as an A/B comparison on its own.",
                 )
                 .action(clap::ArgAction::Set)
                 .required(false)
@@ -471,7 +476,13 @@ fn init_file_mode(
 ) -> AppState {
     info!("Loading data from parquet file...");
 
-    // Combined-A/B tarball detection runs first — bare parquets fall
+    // `.rez` per-sampler archive detection runs first (it is also a tar, so it
+    // must be checked before the A/B-tarball sniffer).
+    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+        return init_file_mode_rez(config, path, registry, pool);
+    }
+
+    // Combined-A/B tarball detection runs next — bare parquets fall
     // through to the normal load path below.
     if ab_extract::looks_like_ab_tarball(path) {
         return init_file_mode_combined_ab(config, path, registry, pool);
@@ -538,6 +549,100 @@ fn init_file_mode(
             config.experiment_alias.clone(),
             Arc::clone(&pool),
         );
+    }
+
+    info!("Generating dashboards...");
+    metadata::regenerate_dashboards(&state);
+    state
+}
+
+/// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
+/// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
+/// recording metadata stands in for the parquet footer (systeminfo, file
+/// metadata). Service extensions and source classification degrade gracefully —
+/// a `.rez` has no parquet footer, so those path-based reads simply yield
+/// nothing, which is correct for a plain agent recording.
+fn init_file_mode_rez(
+    config: &Config,
+    path: &Path,
+    registry: &TemplateRegistry,
+    pool: Arc<metriken_query::BufferPool>,
+) -> AppState {
+    use metriken_query::MetricsSource;
+    use std::collections::BTreeMap;
+    info!("Loading data from .rez archive...");
+
+    // One reader per recording (labels preserved). A 2-recording .rez maps onto
+    // the baseline/experiment A/B slots; >2 shows the first two and warns
+    // (simultaneous N-way faceting is a separate future effort). Manifest
+    // recording metadata stands in for the parquet footer.
+    let mut readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
+        .unwrap_or_else(|e| {
+            eprintln!("failed to load .rez archive: {e}");
+            std::process::exit(1);
+        });
+    if readers.is_empty() {
+        eprintln!("empty .rez archive (no recordings)");
+        std::process::exit(1);
+    }
+
+    fn file_meta_json(reader: &crate::rez_reader::RezReader) -> Option<String> {
+        use metriken_query::MetricsSource;
+        let mut map = serde_json::Map::new();
+        for (k, v) in reader.file_metadata() {
+            let jv = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v.clone()));
+            map.insert(k, jv);
+        }
+        serde_json::to_string(&serde_json::Value::Object(map)).ok()
+    }
+    fn alias_of(labels: &BTreeMap<String, String>, fallback: &str) -> String {
+        labels
+            .get("arm")
+            .or_else(|| labels.get("host"))
+            .cloned()
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    let n = readers.len();
+
+    // Baseline = recording 0.
+    let (b_labels, b_reader) = readers.remove(0);
+    let b_systeminfo = b_reader.metadata_get("systeminfo");
+    let b_file_meta = file_meta_json(&b_reader);
+    let b_alias = config
+        .baseline_alias
+        .clone()
+        .unwrap_or_else(|| alias_of(&b_labels, "baseline"));
+
+    let state = AppState::with_pool(
+        std::sync::Arc::new(b_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+        registry.clone(),
+        Arc::clone(&pool),
+    );
+    *state.parquet_path.write() = Some(path.to_path_buf());
+    state.captures.set_baseline_systeminfo(b_systeminfo);
+    state.captures.set_baseline_file_metadata(b_file_meta);
+    state.captures.set_baseline_alias(Some(b_alias));
+
+    // Experiment = recording 1, if present.
+    if n >= 2 {
+        let (e_labels, e_reader) = readers.remove(0);
+        let e_systeminfo = e_reader.metadata_get("systeminfo");
+        let e_file_meta = file_meta_json(&e_reader);
+        let e_alias = alias_of(&e_labels, "experiment");
+        state.captures.attach_experiment(
+            std::sync::Arc::new(e_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+            e_systeminfo,
+            e_file_meta,
+            Some(e_alias),
+        );
+        if n > 2 {
+            warn!(
+                "{n}-recording .rez: showing recordings 0 and 1 as baseline/experiment; \
+                 simultaneous N-way faceting is not yet supported (use `parquet metadata` \
+                 to inspect all recordings)"
+            );
+        }
     }
 
     info!("Generating dashboards...");

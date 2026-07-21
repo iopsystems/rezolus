@@ -24,6 +24,7 @@ const NAME: &str = "drivehealth";
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 use crate::agent::*;
+use metriken::WindowedCounterGroup;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -81,8 +82,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 #[distributed_slice(SAMPLERS)]
-static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, init };
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::samplers::SamplerEntry {
+    name: NAME,
+    module: module_path!(),
+    init,
+};
 
 struct DriveHealth {
     /// Drives found once at startup. `Arc` so a `spawn_blocking` read can borrow
@@ -171,19 +175,32 @@ impl Sampler for DriveHealth {
                 .filter(|r| r.temperature_c.is_some())
                 .count();
             for (idx, r) in readings.into_iter().enumerate() {
-                if let Some(celsius) = r.temperature_c {
-                    let _ = DRIVE_TEMPERATURE.set(idx, celsius);
+                // Bind the window before r.nvme is moved below. A valid reading always
+                // carries its acquisition window (device::read_one), so value + window are
+                // written together via the enforced wrapper — the tear surface is gone.
+                let win = r.window;
+                if let (Some(celsius), Some(w)) = (r.temperature_c, win) {
+                    DRIVE_TEMPERATURE.set_with_window(idx, celsius, w);
                 }
                 // NVMe thermal-throttle counters (from the same log-page read).
-                if let Some(h) = r.nvme {
-                    let _ = DRIVE_TEMPERATURE_WARNING_TIME.set(idx, h.warning_temp_time_s);
-                    let _ = DRIVE_TEMPERATURE_CRITICAL_TIME.set(idx, h.critical_temp_time_s);
-                    let _ = DRIVE_THERMAL_THROTTLE_TIME_1.set(idx, h.thermal_mgmt_time_s[0]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TIME_2.set(idx, h.thermal_mgmt_time_s[1]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_1
-                        .set(idx, h.thermal_mgmt_transitions[0]);
-                    let _ = DRIVE_THERMAL_THROTTLE_TRANSITIONS_2
-                        .set(idx, h.thermal_mgmt_transitions[1]);
+                if let (Some(h), Some(w)) = (r.nvme, win) {
+                    let counters: [(&WindowedCounterGroup, u64); 6] = [
+                        (&DRIVE_TEMPERATURE_WARNING_TIME, h.warning_temp_time_s),
+                        (&DRIVE_TEMPERATURE_CRITICAL_TIME, h.critical_temp_time_s),
+                        (&DRIVE_THERMAL_THROTTLE_TIME_1, h.thermal_mgmt_time_s[0]),
+                        (&DRIVE_THERMAL_THROTTLE_TIME_2, h.thermal_mgmt_time_s[1]),
+                        (
+                            &DRIVE_THERMAL_THROTTLE_TRANSITIONS_1,
+                            h.thermal_mgmt_transitions[0],
+                        ),
+                        (
+                            &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
+                            h.thermal_mgmt_transitions[1],
+                        ),
+                    ];
+                    for (group, value) in counters {
+                        group.set_with_window(idx, value, w);
+                    }
                 }
             }
             debug!("{NAME}: read {ok}/{} drive temperatures", drives.len());
@@ -215,7 +232,17 @@ mod tests {
 
         rt.block_on(async {
             sampler.refresh().await; // dispatches spawn_blocking
-            tokio::time::sleep(Duration::from_secs(2)).await; // let reads finish
+                                     // Reads run on the blocking pool; a full JBOD takes 0.2–2.3 s and the
+                                     // latency swings run to run, so poll (up to ~10 s) rather than a
+                                     // fragile fixed sleep.
+            for _ in 0..40 {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if (0..sampler.drives.len()).any(|i| DRIVE_TEMPERATURE.value(i).is_some()) {
+                    break;
+                }
+            }
+            // Let any straggler parallel reads land before we assert.
+            tokio::time::sleep(Duration::from_millis(500)).await;
         });
 
         let set: Vec<(usize, i64)> = (0..sampler.drives.len())
@@ -226,5 +253,67 @@ mod tests {
             println!("  idx {i} = {v} C");
         }
         assert!(!set.is_empty(), "no gauge values populated after refresh");
+
+        // Each populated drive must also carry a non-zero acquisition window.
+        for (i, _) in set.iter().take(5) {
+            let (_, w) = DRIVE_TEMPERATURE.load_with_window(*i);
+            let w = w.unwrap_or_else(|| panic!("no window recorded for drive {i}"));
+            println!(
+                "  idx {i} window = [{}, {}] ({} ns)",
+                w.begin_ns,
+                w.end_ns,
+                w.width_ns()
+            );
+            assert!(w.end_ns >= w.begin_ns);
+            assert!(
+                w.width_ns() > 0,
+                "read window should be non-zero for drive {i}"
+            );
+        }
+    }
+
+    /// The real async tear case in miniature: a background writer loops
+    /// `set_with_window` on a windowed gauge group (as drivehealth's
+    /// `spawn_blocking` read does) while a reader loops `load_with_window`. The
+    /// writer links value -> window (begin_ns == value, end_ns == value + 1), so
+    /// a torn read — a value from one write paired with a window from another —
+    /// is caught by the assertions. With the enforced wrapper's single-lock pair
+    /// read/write, this must never fire.
+    #[test]
+    fn concurrent_scrape_never_tears_value_and_window() {
+        use metriken::{Window, WindowedGaugeGroup};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // A single-entry windowed gauge group standing in for DRIVE_TEMPERATURE.
+        let group = WindowedGaugeGroup::new(1);
+        let stop = AtomicBool::new(false);
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut k: i64 = 1;
+                while !stop.load(Ordering::Relaxed) {
+                    let kk = k as u64;
+                    group.set_with_window(0, k, Window::new(kk, kk + 1));
+                    k += 1;
+                    if k == i64::MAX {
+                        k = 1;
+                    }
+                }
+            });
+
+            for _ in 0..2_000_000 {
+                let (value, window) = group.load_with_window(0);
+                if let (Some(v), Some(w)) = (value, window) {
+                    let vv = v as u64;
+                    assert_eq!(
+                        w.begin_ns, vv,
+                        "torn read: value {v} paired with stale window {w:?}"
+                    );
+                    assert_eq!(w.end_ns, vv + 1, "torn read: mismatched window end");
+                }
+            }
+
+            stop.store(true, Ordering::Relaxed);
+        });
     }
 }

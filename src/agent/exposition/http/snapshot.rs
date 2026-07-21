@@ -91,8 +91,10 @@ fn create(
         histograms: Vec::new(),
     };
 
+    let sampler_mods = crate::agent::samplers::sampler_modules();
+
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
-        let value = metric.value();
+        let (value, stored_window) = metric.value_with_window();
 
         if value.is_none() {
             continue;
@@ -111,66 +113,67 @@ fn create(
             metadata.insert(k.to_string(), v.to_string());
         }
 
+        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
+        metadata.insert("sampler".to_string(), sampler.to_string());
+
         let name = format!("{metric_id}");
 
         match value {
-            Some(Value::Counter(value)) => s.counters.push(Counter {
-                name,
-                value,
-                metadata,
-            }),
-            Some(Value::Gauge(value)) => s.gauges.push(Gauge {
-                name,
-                value,
-                metadata,
-            }),
+            Some(Value::Counter(value)) => s
+                .counters
+                .push(Counter::new(name, value, metadata).with_window(stored_window)),
+            Some(Value::Gauge(value)) => s
+                .gauges
+                .push(Gauge::new(name, value, metadata).with_window(stored_window)),
             Some(Value::CounterGroup(g)) => {
-                if let Some(values) = g.load_counters() {
-                    for (counter_id, value) in values.iter().enumerate() {
-                        if *value == 0 {
-                            continue;
-                        }
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), counter_id.to_string());
-
-                        if let Some(m) = g.load_metadata(counter_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.counters.push(Counter {
-                            name: format!("{metric_id}x{counter_id}"),
-                            value: *value,
-                            metadata,
-                        })
+                for counter_id in 0..g.entries() {
+                    // Atomic pair read: value + window under one lock, so a
+                    // concurrent writer can never pair a fresh value with a
+                    // stale window (drivehealth's async tear surface).
+                    let (value, window) = g.load_with_window(counter_id);
+                    let Some(value) = value else { continue };
+                    if value == 0 {
+                        continue;
                     }
+                    let mut metadata = metadata.clone();
+
+                    metadata.insert("id".to_string(), counter_id.to_string());
+
+                    if let Some(m) = g.load_metadata(counter_id) {
+                        for (k, v) in m {
+                            metadata.insert(k, v);
+                        }
+                    }
+
+                    s.counters.push(
+                        Counter::new(format!("{metric_id}x{counter_id}"), value, metadata)
+                            .with_window(window),
+                    )
                 }
             }
             Some(Value::GaugeGroup(g)) => {
-                if let Some(values) = g.load_gauges() {
-                    for (gauge_id, value) in values.iter().enumerate() {
-                        if *value == i64::MIN {
-                            continue;
-                        }
-
-                        let mut metadata = metadata.clone();
-
-                        metadata.insert("id".to_string(), gauge_id.to_string());
-
-                        if let Some(m) = g.load_metadata(gauge_id) {
-                            for (k, v) in m {
-                                metadata.insert(k, v);
-                            }
-                        }
-
-                        s.gauges.push(Gauge {
-                            name: format!("{metric_id}x{gauge_id}"),
-                            value: *value,
-                            metadata,
-                        })
+                for gauge_id in 0..g.entries() {
+                    // Atomic pair read (see CounterGroup arm above).
+                    let (value, window) = g.load_with_window(gauge_id);
+                    let Some(value) = value else { continue };
+                    if value == i64::MIN {
+                        continue;
                     }
+
+                    let mut metadata = metadata.clone();
+
+                    metadata.insert("id".to_string(), gauge_id.to_string());
+
+                    if let Some(m) = g.load_metadata(gauge_id) {
+                        for (k, v) in m {
+                            metadata.insert(k, v);
+                        }
+                    }
+
+                    s.gauges.push(
+                        Gauge::new(format!("{metric_id}x{gauge_id}"), value, metadata)
+                            .with_window(window),
+                    )
                 }
             }
             Some(Value::Histogram(h)) => {
@@ -184,11 +187,8 @@ fn create(
                         h.config().max_value_power().to_string(),
                     );
 
-                    s.histograms.push(Histogram {
-                        name,
-                        value,
-                        metadata,
-                    })
+                    s.histograms
+                        .push(Histogram::new(name, value, metadata).with_window(stored_window))
                 }
             }
             _ => {}
@@ -196,6 +196,10 @@ fn create(
     }
 
     for metric in external_metrics.into_iter() {
+        // Capture the window before metric fields are consumed by the moves below.
+        // Window is Copy so this is free; precedence level 2 (external source stamp).
+        let window = metric.window;
+
         let mut metadata: HashMap<String, String> = [
             ("metric".to_string(), metric.name.clone()),
             ("source".to_string(), "external".to_string()),
@@ -210,18 +214,12 @@ fn create(
 
         match metric.value {
             ExternalMetricValue::Counter(value) => {
-                s.counters.push(Counter {
-                    name,
-                    value,
-                    metadata,
-                });
+                s.counters
+                    .push(Counter::new(name, value, metadata).with_window(window));
             }
             ExternalMetricValue::Gauge(value) => {
-                s.gauges.push(Gauge {
-                    name,
-                    value,
-                    metadata,
-                });
+                s.gauges
+                    .push(Gauge::new(name, value, metadata).with_window(window));
             }
             ExternalMetricValue::Histogram {
                 grouping_power,
@@ -234,15 +232,78 @@ fn create(
                     metadata.insert("grouping_power".to_string(), grouping_power.to_string());
                     metadata.insert("max_value_power".to_string(), max_value_power.to_string());
 
-                    s.histograms.push(Histogram {
-                        name,
-                        value,
-                        metadata,
-                    });
+                    s.histograms
+                        .push(Histogram::new(name, value, metadata).with_window(window));
                 }
             }
         }
     }
 
     Snapshot::V2(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue};
+    use metriken::metric;
+    use metriken::Window;
+    use std::time::{Duration, SystemTime};
+
+    #[metric(name = "snapshot_sampler_label_probe")]
+    static SAMPLER_LABEL_PROBE: metriken::Counter = metriken::Counter::new();
+
+    #[test]
+    fn built_snapshot_metric_carries_a_sampler_label() {
+        SAMPLER_LABEL_PROBE.increment();
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str) == Some("snapshot_sampler_label_probe")
+            })
+            .expect("probe counter present");
+        assert_eq!(
+            c.metadata.get("sampler").map(String::as_str),
+            Some("unattributed")
+        );
+    }
+
+    #[test]
+    fn every_registered_sampler_module_self_attributes() {
+        let mods = crate::agent::samplers::sampler_modules();
+        for (module, name) in &mods {
+            assert_eq!(
+                crate::agent::samplers::attribute_sampler(module, &mods),
+                *name,
+                "sampler module {module} should attribute to {name}",
+            );
+        }
+    }
+
+    #[test]
+    fn external_metric_carries_its_own_window_not_fleet_time() {
+        let win = Window::new(1_000, 2_000);
+        let ext = ExternalMetric {
+            name: "ext_counter".into(),
+            labels: Default::default(),
+            value: ExternalMetricValue::Counter(7),
+            last_updated: std::time::Instant::now(),
+            window: Some(win),
+        };
+        let snap = create(SystemTime::now(), Duration::from_secs(5), vec![ext]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| c.metadata.get("metric").map(String::as_str) == Some("ext_counter"))
+            .expect("external counter present");
+        assert_eq!(c.window, Some(win), "external window preserved, not fleet");
+    }
 }

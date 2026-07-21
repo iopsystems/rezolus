@@ -3,7 +3,9 @@ use crate::agent::MAX_CPUS;
 
 use libbpf_rs::Map;
 use memmap2::{MmapMut, MmapOptions};
-use metriken::{CounterGroup, LazyCounter};
+use metriken::{CounterGroup, WindowedCounterGroup, WindowedLazyCounter};
+
+use crate::agent::timing::{timed, Acquisition};
 
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::sync::atomic::AtomicU64;
@@ -71,14 +73,14 @@ impl<'a> CounterMap<'a> {
 /// avoids contention and false sharing. Does not track per-CPU counts.
 pub struct Counters<'a> {
     counter_map: CounterMap<'a>,
-    counters: Vec<&'static LazyCounter>,
+    counters: Vec<&'static WindowedLazyCounter>,
     values: Vec<u64>,
 }
 
 impl<'a> Counters<'a> {
     /// Create a new set of counters from the provided BPF map and collection of
     /// counter metrics.
-    pub fn new(map: &'a Map, counters: Vec<&'static LazyCounter>) -> Self {
+    pub fn new(map: &'a Map, counters: Vec<&'static WindowedLazyCounter>) -> Self {
         // we need temporary buffer so we can total up the per-CPU values
         let values = vec![0; counters.len()];
 
@@ -101,16 +103,20 @@ impl<'a> Counters<'a> {
         // borrow the BPF counters map so we can read per-cpu values
         let counters = self.counter_map.values();
 
-        for cpu in 0..MAX_CPUS {
-            for idx in 0..self.counters.len() {
-                let value = counters[idx + cpu * bank_width];
+        // Bracket the mmap read + per-CPU summation as the acquisition window.
+        let values = &mut self.values;
+        let (_, window) = timed(|| {
+            for cpu in 0..MAX_CPUS {
+                for idx in 0..values.len() {
+                    let value = counters[idx + cpu * bank_width];
 
-                self.values[idx] = self.values[idx].wrapping_add(value);
+                    values[idx] = values[idx].wrapping_add(value);
+                }
             }
-        }
+        });
 
         for (value, counter) in self.values.iter().zip(self.counters.iter_mut()) {
-            counter.set(*value);
+            counter.set_with_window(*value, window);
         }
     }
 }
@@ -120,13 +126,13 @@ impl<'a> Counters<'a> {
 /// a `CounterGroup`.
 pub struct CpuCounters<'a> {
     counter_map: CounterMap<'a>,
-    counters: Vec<&'static CounterGroup>,
+    counters: Vec<&'static WindowedCounterGroup>,
 }
 
 impl<'a> CpuCounters<'a> {
     /// Create a new set of counters from the provided BPF map and collection of
     /// counter metrics.
-    pub fn new(map: &'a Map, counters: Vec<&'static CounterGroup>) -> Self {
+    pub fn new(map: &'a Map, counters: Vec<&'static WindowedCounterGroup>) -> Self {
         let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
 
         Self {
@@ -143,11 +149,16 @@ impl<'a> CpuCounters<'a> {
         // borrow the BPF counters map so we can read per-cpu values
         let counters = self.counter_map.values();
 
+        // One acquisition per refresh over the whole mmap read; each per-CPU entry
+        // is stamped with value + window as an atomic pair. `window()` closes at
+        // each set, so entries read later in the sweep carry a marginally wider
+        // window — honest (they were read later).
+        let acq = Acquisition::begin();
         for cpu in 0..MAX_CPUS {
             for idx in 0..self.counters.len() {
                 let value = counters[idx + cpu * bank_width];
 
-                let _ = self.counters[idx].set(cpu, value);
+                self.counters[idx].set_with_window(cpu, value, acq.window());
             }
         }
     }
@@ -204,6 +215,8 @@ impl<'a> PackedCounters<'a> {
     }
 
     /// No-op: values are read directly from the mmap by the exposition code.
-    /// Kept for API compatibility with the sampler refresh loop.
+    /// Kept for API compatibility with the sampler refresh loop. These metrics
+    /// fall through to the fleet window (level 4); read-section bracketing is
+    /// deferred to the mmap-direct follow-on (level 3).
     pub fn refresh(&mut self) {}
 }

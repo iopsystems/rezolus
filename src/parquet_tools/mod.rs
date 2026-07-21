@@ -36,6 +36,9 @@ pub fn command() -> Command {
                      source/node identity, embed a systeminfo blob, or record timeline events.\n\n\
                      By default KPIs come from the built-in template matching the file's source;\n\
                      override with --queries <file.json>. --undo strips a prior annotation.\n\n\
+                     A .rez archive is also accepted: --queries embeds a ServiceExtension (KPIs)\n\
+                     into each recording's manifest metadata. Since a .rez is source=rezolus with\n\
+                     no built-in template, --queries is required for a .rez.\n\n\
                      EXAMPLES:\n    \
                      # Attach KPIs from the built-in template for this file's source\n    \
                      rezolus parquet annotate rezolus.parquet\n\n    \
@@ -48,7 +51,9 @@ pub fn command() -> Command {
                      # Add a single timeline event\n    \
                      rezolus parquet annotate rezolus.parquet --event 'time=2026-05-12T15:23Z,kind=restart,description=\"deploy\"'\n\n    \
                      # Remove a previously added annotation\n    \
-                     rezolus parquet annotate rezolus.parquet --undo",
+                     rezolus parquet annotate rezolus.parquet --undo\n\n    \
+                     # Embed KPIs into each recording of a .rez archive (--queries required)\n    \
+                     rezolus parquet annotate out.rez --queries kpis.json",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -162,13 +167,18 @@ pub fn command() -> Command {
                      NAME (not its filename) — set with `annotate --source`, seen with\n\
                      `parquet metadata --field source`. In the example below a.parquet's source\n\
                      is `redis` and b.parquet's is `valkey`.\n\n\
+                     .rez inputs: given single-recording `.rez` archives and a `.rez` output,\n\
+                     combine assembles them into one multi-recording `.rez` (for multi-host or\n\
+                     A/B), preserving each recording's labels.\n\n\
                      EXAMPLES:\n    \
                      # Row-merge a rezolus agent file with a service file\n    \
                      rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
                      # Merge several rezolus nodes, pinning which one the viewer shows first\n    \
                      rezolus parquet combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
                      # Package two captures as an A/B tarball for compare mode\n    \
-                     rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar",
+                     rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar\n\n    \
+                     # Assemble two single-recording .rez into one multi-recording .rez\n    \
+                     rezolus parquet combine baseline.rez experiment.rez -o ab.rez",
                 )
                 .arg(
                     clap::Arg::new("FILES")
@@ -241,13 +251,18 @@ pub fn command() -> Command {
                      With no filter flag all sections are shown. Narrow with --file, --schema, or\n\
                      --geometry; pull a single file-level value with --field <KEY>; add --json for\n\
                      machine-readable output.\n\n\
+                     A .rez archive is also accepted: it describes the manifest instead (the\n\
+                     recordings, their labels, and each per-sampler table with its cadence);\n\
+                     --json emits the raw manifest.\n\n\
                      EXAMPLES:\n    \
                      # Everything about a recording\n    \
                      rezolus parquet metadata -i rezolus.parquet\n\n    \
                      # Only file-level metadata, as JSON\n    \
                      rezolus parquet metadata -i rezolus.parquet --file --json\n\n    \
                      # Just the value of one metadata key\n    \
-                     rezolus parquet metadata -i rezolus.parquet --field source",
+                     rezolus parquet metadata -i rezolus.parquet --field source\n\n    \
+                     # Describe a .rez archive's manifest\n    \
+                     rezolus parquet metadata -i out.rez",
                 )
                 .arg(
                     clap::Arg::new("input")
@@ -336,6 +351,14 @@ pub fn command() -> Command {
                         .value_name("DIR")
                         .help("Directory containing service extension template JSON files")
                         .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("samplers")
+                        .long("samplers")
+                        .value_name("A,B,...")
+                        .help("For .rez archives: comma-separated sampler names to KEEP; all other per-sampler tables are dropped (required for .rez, ignored for parquet)")
+                        .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 ),
         )

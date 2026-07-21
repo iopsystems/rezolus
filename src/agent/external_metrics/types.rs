@@ -9,6 +9,10 @@ pub struct ExternalMetric {
     pub labels: HashMap<String, String>,
     pub value: ExternalMetricValue,
     pub last_updated: Instant,
+    /// Source/ingestion acquisition window (level-2). For the line protocol this
+    /// is the zero-width ingestion instant; the format carries no embedded
+    /// timestamp.
+    pub window: Option<metriken::Window>,
 }
 
 /// Per-connection context for tracking session state and limits.

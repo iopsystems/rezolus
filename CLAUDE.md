@@ -57,11 +57,14 @@ sudo target/release/rezolus exporter config/exporter.toml
 # Recorder - capture metrics to parquet
 target/release/rezolus record http://localhost:4241 output.parquet
 target/release/rezolus record --metadata source=llm-perf http://host:9090/metrics output.parquet
-# Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw},
-# --metadata key=value (repeatable), --interval, --duration.
+target/release/rezolus record --url http://localhost:4241 -o out.rez --label arm=redis  # per-sampler .rez archive
+# Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw|rez},
+# --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez recording,
+# source/host auto-populated), --interval, --duration. .rez output requires a rezolus/msgpack endpoint.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
+target/release/rezolus view out.rez [--listen ADDR]                 # .rez archive (2-recording = A/B)
 target/release/rezolus view http://localhost:4241 [--listen ADDR]   # live agent connection
 target/release/rezolus view [--listen ADDR]                         # upload-only mode (no file)
 target/release/rezolus view --tui output.parquet                    # terminal UI (parquet or live agent; not upload-only)
@@ -79,6 +82,10 @@ target/release/rezolus parquet annotate file.parquet --queries ext.json
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
 target/release/rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
 target/release/rezolus parquet filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
+# .rez archives: metadata describes the manifest (recordings, labels, per-sampler tables + cadence);
+# combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);
+# filter file.rez --samplers cpu_usage,scheduler -o slim.rez drops whole per-sampler tables not listed;
+# annotate file.rez --queries kpis.json embeds KPIs into each recording's manifest (--queries required for .rez).
 
 # MCP - AI analysis server or CLI commands
 target/release/rezolus mcp                                                    # stdio server
@@ -87,6 +94,8 @@ target/release/rezolus mcp describe-metrics file.parquet                      # 
 target/release/rezolus mcp detect-anomalies file.parquet                      # exhaustive anomaly detection
 target/release/rezolus mcp detect-anomalies file.parquet "cpu_usage"          # targeted anomaly detection
 target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # PromQL query
+# query prints an acquisition-window uncertainty band [lo, hi] beside rate()/irate() values
+# (scalar ops scale the band, e.g. rate(x)*k; series-op-series and non-rate queries show none)
 target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
 ```
 
@@ -98,11 +107,11 @@ The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw}`.
+3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw|rez}`. The `.rez` format (`-o out.rez` or `--format rez`) writes a per-sampler archive (see "`.rez` archive format" below); `--label key=value` tags a `.rez` recording.
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
-5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
-6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect), `annotate` (add service extension KPIs), `combine` (merge multi-source files or build an A/B tarball), `filter` (drop columns not needed by KPIs).
+5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison, >2 shows the first two), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
+6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series and non-rate queries show none).
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops whole per-sampler tables). All four accept `.rez` inputs.
 
 ### Sampler Architecture
 
@@ -136,6 +145,10 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 - `systeminfo` - JSON hardware summary from agent.
 - `descriptions` - JSON map of metric name to help text. Present in single-source files; combined files nest this under `per_source_metadata.<source>.descriptions` instead.
 - `per_source_metadata` - Per-source map with `version`, `role` ("service"/"loadgen"), `service_queries` (ServiceExtension KPI definitions), and `descriptions` (metric name → help text, combined files only).
+
+### `.rez` Archive Format
+
+The `.rez` format (`src/recorder/rez.rs`, `src/rez_reader.rs`) is a tar archive rather than a single parquet file. It holds a top-level `manifest.json` plus one parquet table per sampler under each recording's directory (`<dir>/<sampler>.parquet`). Each sampler records at its own cadence, and every metric carries per-observation acquisition-window columns (`<m>:window_begin`/`<m>:window_width`) that the query engine consumes to compute `rate()`/`irate()` uncertainty bounds. A `.rez` is always `source=rezolus` and requires a rezolus/msgpack endpoint to produce (not Prometheus). The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`); a multi-recording `.rez` (built by `record` and `parquet combine`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels.
 
 ### Service Extensions
 

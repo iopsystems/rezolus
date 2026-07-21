@@ -2,7 +2,7 @@ const NAME: &str = "memory_vmstat";
 
 use crate::agent::*;
 
-use metriken::LazyCounter;
+use metriken::WindowedLazyCounter as LazyCounter;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
@@ -26,8 +26,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 #[distributed_slice(SAMPLERS)]
-static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, init };
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::samplers::SamplerEntry {
+    name: NAME,
+    module: module_path!(),
+    init,
+};
 
 struct Meminfo {
     inner: Mutex<MeminfoInner>,
@@ -73,11 +76,17 @@ impl MeminfoInner {
     }
 
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
+        use crate::agent::timing::Acquisition;
+
+        let acq = Acquisition::begin();
+
         self.file.rewind().await?;
 
         self.data.clear();
 
         self.file.read_to_string(&mut self.data).await?;
+
+        let window = acq.window();
 
         let lines = self.data.lines();
 
@@ -89,7 +98,7 @@ impl MeminfoInner {
 
             if let Some(counter) = self.counters.get_mut(*parts.first().unwrap()) {
                 if let Some(Ok(v)) = parts.get(1).map(|v| v.parse::<u64>()) {
-                    counter.set(v);
+                    counter.set_with_window(v, window);
                 }
             }
         }

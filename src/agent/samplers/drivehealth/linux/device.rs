@@ -4,6 +4,8 @@
 //! `/sys/block/sd*`. Each drive carries the `/dev` node its temperature is read
 //! from via a read-only pass-through ioctl ([`super::ata`] / [`super::nvme`]).
 
+use crate::agent::timing::timed;
+use metriken::Window;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,22 +113,29 @@ fn enumerate_in(sys_block: &Path, sys_nvme: &Path, dev: &Path) -> Vec<Drive> {
 pub struct DriveReading {
     pub temperature_c: Option<i64>,
     pub nvme: Option<super::nvme::NvmeHealth>,
+    /// Acquisition window of this device's read (wall begin, wall begin+elapsed).
+    pub window: Option<Window>,
 }
 
 /// Read one drive via the appropriate read-only pass-through ioctl.
 fn read_one(drive: &Drive) -> DriveReading {
     match drive.drive_type {
         DriveType::Nvme => {
-            let nvme = super::nvme::read_health(&drive.node);
+            let (nvme, window) = timed(|| super::nvme::read_health(&drive.node));
             DriveReading {
                 temperature_c: nvme.as_ref().and_then(|h| h.temperature_c),
                 nvme,
+                window: Some(window),
             }
         }
-        DriveType::Sata => DriveReading {
-            temperature_c: super::ata::read_temperature(&drive.node),
-            nvme: None,
-        },
+        DriveType::Sata => {
+            let (temperature_c, window) = timed(|| super::ata::read_temperature(&drive.node));
+            DriveReading {
+                temperature_c,
+                nvme: None,
+                window: Some(window),
+            }
+        }
     }
 }
 

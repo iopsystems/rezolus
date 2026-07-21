@@ -1,5 +1,5 @@
 #[cfg(target_os = "linux")]
-use metriken::{CounterGroup, GaugeGroup};
+use metriken::{CounterGroup, GaugeGroup, WindowedCounterGroup, WindowedGaugeGroup};
 
 /// Trait for group metrics that support per-entry metadata management.
 ///
@@ -32,5 +32,27 @@ impl GroupMetadata for GaugeGroup {
 
     fn clear_metadata(&self, idx: usize) {
         GaugeGroup::clear_metadata(self, idx);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GroupMetadata for WindowedCounterGroup {
+    fn insert_metadata(&self, idx: usize, key: String, value: String) {
+        WindowedCounterGroup::insert_metadata(self, idx, key, value);
+    }
+
+    fn clear_metadata(&self, idx: usize) {
+        WindowedCounterGroup::clear_metadata(self, idx);
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl GroupMetadata for WindowedGaugeGroup {
+    fn insert_metadata(&self, idx: usize, key: String, value: String) {
+        WindowedGaugeGroup::insert_metadata(self, idx, key, value);
+    }
+
+    fn clear_metadata(&self, idx: usize) {
+        WindowedGaugeGroup::clear_metadata(self, idx);
     }
 }

@@ -52,6 +52,9 @@ export function configureLineChart(chart) {
                 timeData: data[0],
                 valueData: data[1],
                 fill: true,
+                // Optional rate() uncertainty band, parallel to valueData.
+                // Absent (undefined) for non-rate queries → no band drawn.
+                intervals: chart.spec.intervals,
             }]
             : []);
 
@@ -88,7 +91,7 @@ export function configureLineChart(chart) {
             lineColor: seriesList[i]?.color || COLORS.accent,
             zBase: (boxplotCols.length - 1 - i) * 4,
         }))
-        : seriesList.flatMap((s, i) => {
+        : seriesList.flatMap((s, idx) => {
         // Compare-mode entry carrying a decimated boxplot (median + min/max):
         // render an envelope of LINES (median + faint min/max), per capture
         // color, so two captures' spreads overlay without muddy filled bands.
@@ -98,7 +101,7 @@ export function configureLineChart(chart) {
             return buildEnvelopeLines(s.boxplot, {
                 name: s.name,
                 color: s.color,
-                zBase: (seriesList.length - 1 - i) * 4,
+                zBase: (seriesList.length - 1 - idx) * 4,
             });
         }
 
@@ -166,7 +169,11 @@ export function configureLineChart(chart) {
                 },
             };
         }
-        return [base];
+        // Prepend a translucent uncertainty band behind the line when the
+        // series carries rate() acquisition-window bounds. Implemented as a
+        // two-series stack: an invisible `lo` baseline plus a `hi-lo` delta
+        // whose filled area spans lo→hi. z:1 keeps it under the line (z:2).
+        return [...buildBandSeries(s, idx, range, chart.interval), base];
     });
 
     // Compare-mode line overlays want relative-time labels (+Xs) on
@@ -228,6 +235,65 @@ export function configureLineChart(chart) {
     }
 
     ensureTotalToggle(chart);
+}
+
+// Build the echarts series pair that renders a series' uncertainty band,
+// or `[]` when the series has no usable `intervals`. `intervals` is an
+// array parallel to `timeData`, each entry `[lo, hi]` (or null for a gap).
+//
+// echarts has no first-class "band" mark, so we stack two zero-line
+// series sharing a per-series stack id: a transparent `lo` baseline and a
+// `hi-lo` delta whose translucent areaStyle fills the lo→hi gap. Both are
+// `silent` with hidden lines and suppressed tooltips so only the nominal
+// line is interactive; z:1 keeps them behind it. Bounds are clamped to the
+// same display range as the line so a band can't escape the axis.
+export function buildBandSeries(s, idx, range, interval) {
+    const intervals = s.intervals;
+    if (!Array.isArray(intervals) || intervals.length !== s.timeData.length) {
+        return [];
+    }
+    const loRaw = [];
+    const deltaRaw = [];
+    let anyBand = false;
+    for (let i = 0; i < s.timeData.length; i++) {
+        const t = s.timeData[i] * 1000;
+        const iv = intervals[i];
+        if (!Array.isArray(iv)) {
+            loRaw.push([t, null]);
+            deltaRaw.push([t, null]);
+            continue;
+        }
+        const [lo] = clampToRange(iv[0], range);
+        const [hi] = clampToRange(iv[1], range);
+        loRaw.push([t, lo]);
+        deltaRaw.push([t, hi - lo]);
+        if (hi > lo) anyBand = true;
+    }
+    // Every bound collapsed (hi===lo) or empty — nothing visible to draw.
+    if (!anyBand) return [];
+
+    const stack = 'band-' + idx;
+    const common = {
+        type: 'line',
+        name: s.name,
+        stack,
+        showSymbol: false,
+        symbol: 'none',
+        lineStyle: { opacity: 0 },
+        silent: true,
+        tooltip: { show: false },
+        connectNulls: false,
+        animationDuration: 0,
+        z: 1,
+    };
+    return [
+        { ...common, data: insertGapNulls(loRaw, interval), areaStyle: { opacity: 0 } },
+        {
+            ...common,
+            data: insertGapNulls(deltaRaw, interval),
+            areaStyle: { color: s.color, opacity: 0.18 },
+        },
+    ];
 }
 
 // Mean/Total toggle. State on the chart instance (no persistence);

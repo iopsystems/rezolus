@@ -16,6 +16,7 @@ import {
     FONTS,
 } from './base.js';
 import globalColorMapper from './util/colormap.js';
+import { buildBandSeries } from './line.js';
 import { buildBoxplotSeries } from './boxplot.js';
 
 /**
@@ -54,6 +55,12 @@ export function configureMultiSeriesChart(chart) {
     const range = format.range;
 
     const series = [];
+    // Uncertainty bands (rate/histogram value bounds) rendered behind the
+    // lines. Only drawn for percentile charts (few quantile lines) — a
+    // high-cardinality categorical multi (per-core/cgroup) would turn into a
+    // wash of overlapping translucent bands, so those carry the data but leave
+    // it undrawn. See the measurement-uncertainty arc, round 3.
+    const bandSeries = [];
 
     const cgroupColors = seriesNames.map(name => globalColorMapper.getColorByName(name));
 
@@ -61,6 +68,10 @@ export function configureMultiSeriesChart(chart) {
     // This ensures p50 is visible when its value equals p99.99.
     const isPercentileChart = chart.spec.promql_query &&
         chart.spec.promql_query.includes('histogram_quantiles');
+
+    // Per-series value bands, parallel to seriesNames (data.js multi path);
+    // absent for non-rate/non-histogram queries.
+    const seriesIntervals = chart.spec.series_intervals;
 
     for (let i = 1; i < data.length; i++) {
         const name = seriesNames[i - 1];
@@ -109,6 +120,24 @@ export function configureMultiSeriesChart(chart) {
             },
             animationDuration: 0
         });
+
+        // Percentile charts get a translucent band per quantile line, drawn
+        // behind the lines (buildBandSeries sets z:1). buildBandSeries reads
+        // seconds-scale timeData (it multiplies by 1000 internally), matching
+        // this chart's timeData.
+        if (isPercentileChart && Array.isArray(seriesIntervals)) {
+            const intervals = seriesIntervals[i - 1];
+            if (Array.isArray(intervals)) {
+                bandSeries.push(
+                    ...buildBandSeries(
+                        { name, intervals, timeData, color },
+                        i - 1,
+                        range,
+                        chart.interval,
+                    ),
+                );
+            }
+        }
     }
 
     // Ensure "Other" category is the last in the series array so it appears in the legend last.
@@ -182,7 +211,8 @@ export function configureMultiSeriesChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val, null, chart),
         },
-        series: series,
+        // Bands first so they sit behind the lines (z also enforces this).
+        series: [...bandSeries, ...series],
         color: cgroupColors,
     };
 

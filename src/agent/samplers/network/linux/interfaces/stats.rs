@@ -27,25 +27,25 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "Packets dropped anywhere in the network stack due to errors, resource exhaustion, or policy enforcement.",
     metadata = { unit = "packets" }
 )]
-pub static NETWORK_DROP: LazyCounter = LazyCounter::new(Counter::default);
+pub static NETWORK_DROP: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_busy",
     description = "Packets encountering retryable device busy status. High rates indicate transmit path backpressure.",
     metadata = { unit = "packets" }
 )]
-pub static NETWORK_TX_BUSY: LazyCounter = LazyCounter::new(Counter::default);
+pub static NETWORK_TX_BUSY: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_complete",
     description = "Packets successfully transmitted by the driver. Compare with network_transmit_packets to detect transmission issues.",
     metadata = { unit = "packets" }
 )]
-pub static NETWORK_TX_COMPLETE: LazyCounter = LazyCounter::new(Counter::default);
+pub static NETWORK_TX_COMPLETE: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_timeout",
     description = "Transmit timeout events indicating hardware lockup or severe transmission delays. These are serious issues requiring investigation.",
     metadata = { unit = "events" }
 )]
-pub static NETWORK_TX_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);
+pub static NETWORK_TX_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);

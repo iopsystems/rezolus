@@ -6,6 +6,8 @@ mod external_metrics;
 mod metrics;
 pub mod sampler_status;
 mod samplers;
+#[cfg(target_os = "linux")]
+mod timing;
 
 use config::Config;
 use external_metrics::{ExternalMetricsStore, Protocol, ServerState};

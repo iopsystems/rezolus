@@ -22,6 +22,7 @@ mod mcp;
 mod parquet_metadata;
 mod parquet_tools;
 mod recorder;
+mod rez_reader;
 mod status_cli;
 mod viewer;
 
@@ -49,6 +50,7 @@ static TERMINATING: usize = 2;
 enum Format {
     Parquet,
     Raw,
+    Rez,
 }
 
 fn main() {

@@ -68,7 +68,7 @@ const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
 /// MCP server state
 pub struct Server {
-    reader_cache: Arc<RwLock<HashMap<String, Arc<ParquetReader>>>>,
+    reader_cache: Arc<RwLock<HashMap<String, Arc<dyn metriken_query::MetricsSource>>>>,
     /// Shared LRU row-group cache for all readers opened by this server.
     pool: Arc<BufferPool>,
 }
@@ -489,7 +489,7 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let reader = Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?);
+        let reader = self.get_reader(parquet_file).await?;
         let output = super::format_recording_info(parquet_file, reader.as_ref());
         Ok(output)
     }
@@ -498,7 +498,7 @@ impl Server {
     async fn get_reader(
         &self,
         parquet_file: &str,
-    ) -> Result<Arc<ParquetReader>, Box<dyn std::error::Error>> {
+    ) -> Result<Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
         {
             let cache = self.reader_cache.read().unwrap();
             if let Some(reader) = cache.get(parquet_file) {
@@ -511,7 +511,15 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let reader = Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?);
+        let reader: Arc<dyn metriken_query::MetricsSource> =
+            if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+                Arc::new(crate::rez_reader::RezReader::open_with_pool(
+                    path,
+                    Arc::clone(&self.pool),
+                )?)
+            } else {
+                Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?)
+            };
 
         {
             let mut cache = self.reader_cache.write().unwrap();
@@ -677,10 +685,7 @@ mod tests {
         metric.insert("__name__".to_string(), "cpu_cores".to_string());
 
         let result = QueryResult::Vector {
-            result: vec![Sample {
-                metric,
-                value: (1704067200.0, 4.0),
-            }],
+            result: vec![Sample::new(metric, (1704067200.0, 4.0))],
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"vector\""));
@@ -698,10 +703,10 @@ mod tests {
         metric.insert("__name__".to_string(), "cpu_cycles".to_string());
 
         let result = QueryResult::Matrix {
-            result: vec![MatrixSample {
+            result: vec![MatrixSample::new(
                 metric,
-                values: vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
-            }],
+                vec![(1704067200.0, 2.5e9), (1704067201.0, 2.6e9)],
+            )],
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"resultType\":\"matrix\""));

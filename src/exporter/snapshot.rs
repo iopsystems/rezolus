@@ -29,11 +29,9 @@ pub fn snapshot(
             continue;
         };
 
-        snapshot.counters.push(Counter {
-            name,
-            value: curr.value,
-            metadata,
-        })
+        snapshot
+            .counters
+            .push(Counter::new(name, curr.value, metadata).with_window(curr.window))
     }
 
     for curr in current.gauges() {
@@ -46,11 +44,9 @@ pub fn snapshot(
             continue;
         };
 
-        snapshot.gauges.push(Gauge {
-            name,
-            value: curr.value,
-            metadata,
-        })
+        snapshot
+            .gauges
+            .push(Gauge::new(name, curr.value, metadata).with_window(curr.window))
     }
 
     'outer: for (prev, curr) in previous.histograms().iter().zip(current.histograms()) {
@@ -93,11 +89,12 @@ pub fn snapshot(
                         let mut metadata = metadata.clone();
                         metadata.insert("percentile".to_string(), percentile.to_string());
 
-                        snapshot.gauges.push(Gauge {
-                            name: name.clone(),
-                            value,
-                            metadata,
-                        })
+                        // Percentile summaries are computed from the delta between two
+                        // snapshots, not a direct metric read — no single acquisition
+                        // window applies.
+                        snapshot
+                            .gauges
+                            .push(Gauge::new(name.clone(), value, metadata))
                     }
                 }
             }
@@ -125,11 +122,9 @@ pub fn snapshot(
                     .unwrap()
             };
 
-            snapshot.histograms.push(Histogram {
-                name,
-                value,
-                metadata,
-            })
+            snapshot
+                .histograms
+                .push(Histogram::new(name, value, metadata).with_window(curr.window))
         }
     }
 

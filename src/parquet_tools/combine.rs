@@ -190,6 +190,20 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let bypass_time_check = args.get_flag("bypass-time-check");
     let pinned = args.get_one::<String>("pinned");
 
+    // `.rez` inputs: assemble a multi-recording archive (label-set model).
+    if files
+        .iter()
+        .any(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
+    {
+        if !files
+            .iter()
+            .all(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
+        {
+            return Err("cannot mix .rez and .parquet inputs in combine".into());
+        }
+        return combine_rez(&files, output);
+    }
+
     let mut inputs = load_inputs(&files)?;
 
     let ab_raw: Vec<String> = args
@@ -270,6 +284,40 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
+    Ok(())
+}
+
+/// Assemble multiple `.rez` files into one multi-recording `.rez`, copying each
+/// recording verbatim and assigning collision-free `dir`s from labels.
+fn combine_rez(
+    files: &[PathBuf],
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez;
+    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for file in files {
+        let (manifest, recordings) = rez::read_archive_bytes(file)?;
+        for (mut rec, rb) in manifest.recordings.into_iter().zip(recordings) {
+            let base = rez::recording_dir_slug(&rec.labels);
+            let mut dir = base.clone();
+            let mut n = 1;
+            while !used.insert(dir.clone()) {
+                dir = format!("{base}-{n}");
+                n += 1;
+            }
+            rec.dir = dir;
+            let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+            out.push((rec, bytes));
+        }
+    }
+    rez::write_archive_bytes(output, &out)?;
+    println!(
+        "wrote {} with {} recording(s) from {} input(s)",
+        output.display(),
+        out.len(),
+        files.len()
+    );
     Ok(())
 }
 
@@ -2567,5 +2615,56 @@ mod tests {
         let (b, e) = resolve_ab_input_indices(&inputs, &baseline, &experiment).unwrap();
         assert_eq!(b, 0);
         assert_eq!(e, 1);
+    }
+
+    #[test]
+    fn combine_rez_merges_recordings_with_distinct_dirs() {
+        use crate::recorder::rez::{self, RecordingData, RezColumn, RezTable, RezValues};
+
+        let mk = |arm: &str| -> (tempfile::TempDir, PathBuf) {
+            let col = RezColumn {
+                name: "0".to_string(),
+                metadata: HashMap::from([
+                    ("metric".to_string(), "0".to_string()),
+                    ("metric_type".to_string(), "counter".to_string()),
+                ]),
+                values: RezValues::Counter(vec![Some(1), Some(2)]),
+                windows: vec![None, None],
+            };
+            let table = RezTable {
+                sampler: "cpu_usage".to_string(),
+                timestamps: vec![1_000, 2_000],
+                columns: vec![col],
+            };
+            let d = tempfile::tempdir().unwrap();
+            let p = d.path().join("one.rez");
+            let tables = [table];
+            rez::write_archive(
+                &p,
+                &[RecordingData {
+                    dir: "rezolus".to_string(),
+                    labels: [("source".to_string(), arm.to_string())]
+                        .into_iter()
+                        .collect(),
+                    metadata: std::collections::BTreeMap::new(),
+                    tables: &tables,
+                }],
+            )
+            .unwrap();
+            (d, p)
+        };
+
+        let (_da, a) = mk("redis");
+        let (_db, b) = mk("valkey");
+
+        let outdir = tempfile::tempdir().unwrap();
+        let out = outdir.path().join("ab.rez");
+        combine_rez(&[a, b], &out).unwrap();
+
+        let (manifest, recordings) = rez::read_archive_bytes(&out).unwrap();
+        assert_eq!(manifest.recordings.len(), 2);
+        assert_eq!(recordings.len(), 2);
+        let dirs: Vec<&str> = manifest.recordings.iter().map(|r| r.dir.as_str()).collect();
+        assert_ne!(dirs[0], dirs[1]);
     }
 }

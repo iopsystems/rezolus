@@ -47,8 +47,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 #[distributed_slice(SAMPLERS)]
-static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, init };
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::samplers::SamplerEntry {
+    name: NAME,
+    module: module_path!(),
+    init,
+};
 
 struct Amd {
     inner: Mutex<AmdInner>,
@@ -87,13 +90,19 @@ impl AmdInner {
 
     fn refresh(&mut self) {
         for id in 0..self.devices {
+            let acq = crate::agent::timing::Acquisition::begin();
+
             /*
              * memory
              */
 
             if let (Ok(total), Ok(used)) = (self.rocm.memory_total(id), self.rocm.memory_used(id)) {
-                let _ = GPU_MEMORY_USED.set(id, used as i64);
-                let _ = GPU_MEMORY_FREE.set(id, total.saturating_sub(used) as i64);
+                GPU_MEMORY_USED.set_with_window(id, used as i64, acq.window());
+                GPU_MEMORY_FREE.set_with_window(
+                    id,
+                    total.saturating_sub(used) as i64,
+                    acq.window(),
+                );
             }
 
             /*
@@ -101,11 +110,11 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.busy_percent(id) {
-                let _ = GPU_UTILIZATION.set(id, v as i64);
+                GPU_UTILIZATION.set_with_window(id, v as i64, acq.window());
             }
 
             if let Ok(v) = self.rocm.memory_busy_percent(id) {
-                let _ = GPU_MEMORY_UTILIZATION.set(id, v as i64);
+                GPU_MEMORY_UTILIZATION.set_with_window(id, v as i64, acq.window());
             }
 
             /*
@@ -113,15 +122,15 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Edge) {
-                let _ = GPU_TEMPERATURE_EDGE.set(id, v);
+                GPU_TEMPERATURE_EDGE.set_with_window(id, v, acq.window());
             }
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Junction) {
-                let _ = GPU_TEMPERATURE_JUNCTION.set(id, v);
+                GPU_TEMPERATURE_JUNCTION.set_with_window(id, v, acq.window());
             }
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Memory) {
-                let _ = GPU_TEMPERATURE_MEMORY.set(id, v);
+                GPU_TEMPERATURE_MEMORY.set_with_window(id, v, acq.window());
             }
 
             /*
@@ -129,11 +138,11 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.power_milliwatts(id) {
-                let _ = GPU_POWER_USAGE.set(id, v as i64);
+                GPU_POWER_USAGE.set_with_window(id, v as i64, acq.window());
             }
 
             if let Ok(v) = self.rocm.energy_millijoules(id) {
-                let _ = GPU_ENERGY_CONSUMPTION.set(id, v);
+                GPU_ENERGY_CONSUMPTION.set_with_window(id, v, acq.window());
             }
 
             /*
@@ -145,12 +154,12 @@ impl AmdInner {
             // always read identically on these GPUs.
             if let Ok(hz) = self.rocm.clock_hz(id, ClockType::System) {
                 let hz = hz as i64;
-                let _ = GPU_CLOCK_GRAPHICS.set(id, hz);
-                let _ = GPU_CLOCK_COMPUTE.set(id, hz);
+                GPU_CLOCK_GRAPHICS.set_with_window(id, hz, acq.window());
+                GPU_CLOCK_COMPUTE.set_with_window(id, hz, acq.window());
             }
 
             if let Ok(hz) = self.rocm.clock_hz(id, ClockType::Memory) {
-                let _ = GPU_CLOCK_MEMORY.set(id, hz as i64);
+                GPU_CLOCK_MEMORY.set_with_window(id, hz as i64, acq.window());
             }
 
             /*
@@ -158,8 +167,8 @@ impl AmdInner {
              */
 
             if let Ok((sent, received)) = self.rocm.pcie_throughput(id) {
-                let _ = GPU_PCIE_THROUGHPUT_TX.set(id, sent as i64);
-                let _ = GPU_PCIE_THROUGHPUT_RX.set(id, received as i64);
+                GPU_PCIE_THROUGHPUT_TX.set_with_window(id, sent as i64, acq.window());
+                GPU_PCIE_THROUGHPUT_RX.set_with_window(id, received as i64, acq.window());
             }
         }
     }

@@ -188,6 +188,9 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
                 name, color,
                 timeData: rebase(cap.timeData, sec),
                 valueData: cap.valueData || [],
+                // Value band rides parallel to valueData (time-independent), so
+                // the time rebase leaves it untouched. Undefined for non-rate.
+                intervals: cap.intervals,
                 fill: false,
             };
         }

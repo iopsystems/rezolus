@@ -69,12 +69,12 @@ const Dropzone = {
                     m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                     m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 ]),
-            m('p', label || 'Drag & drop a .parquet file here'),
+            m('p', label || 'Drag & drop a .parquet or .rez file here'),
             !disabled && !checked && m('label.upload-btn', [
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.parquet',
+                    accept: '.parquet,.rez',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];
@@ -204,7 +204,7 @@ const FileUpload = {
                 m('path', { d: 'M12 16V4m0 0L8 8m4-4l4 4', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
                 m('path', { d: 'M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }),
             ]),
-            m('p', 'Drag & drop a .parquet file here'),
+            m('p', 'Drag & drop a .parquet or .rez file here'),
             m('p.upload-or', 'or'),
             m('label.upload-btn', [
                 'Choose File',

@@ -12,6 +12,27 @@ use super::annotate::extract_metric_selectors;
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
+
+    // `.rez` archives: drop whole per-sampler tables by --samplers (the
+    // KPI-column filter no-ops on all-rezolus .rez data).
+    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+        let list = args.get_one::<String>("samplers").unwrap_or_else(|| {
+            eprintln!("error: filtering a .rez requires --samplers <a,b,...> (samplers to keep)");
+            std::process::exit(1);
+        });
+        let keep: std::collections::BTreeSet<String> = list
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
+        if let Err(e) = filter_rez(path, &keep, output) {
+            eprintln!("error: failed to filter .rez: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let custom_file = args.get_one::<PathBuf>("queries");
     let output = args.get_one::<PathBuf>("output");
 
@@ -108,6 +129,41 @@ pub(super) fn filter_parquet_file(
         total_columns,
     );
 
+    Ok(())
+}
+
+/// Filter a `.rez` archive to keep only the named per-sampler tables, dropping
+/// the rest from every recording. Copies kept table bytes verbatim.
+fn filter_rez(
+    path: &Path,
+    keep: &std::collections::BTreeSet<String>,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez;
+    let (manifest, recordings) = rez::read_archive_bytes(path)?;
+    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut kept = 0usize;
+    let mut total = 0usize;
+    for (mut rec, rb) in manifest.recordings.into_iter().zip(recordings) {
+        total += rec.tables.len();
+        let mut new_tables = Vec::new();
+        let mut new_bytes = Vec::new();
+        for (idx, (_sampler, bytes)) in rec.tables.into_iter().zip(rb.tables) {
+            if keep.contains(&idx.sampler) {
+                new_tables.push(idx);
+                new_bytes.push(bytes);
+            }
+        }
+        kept += new_tables.len();
+        rec.tables = new_tables;
+        out.push((rec, new_bytes));
+    }
+    let dest = output.unwrap_or(path);
+    rez::write_archive_bytes(dest, &out)?;
+    println!(
+        "Filtered {:?}: kept {} of {} sampler tables",
+        dest, kept, total
+    );
     Ok(())
 }
 
@@ -295,5 +351,85 @@ mod tests {
         // "requests" appears twice in query but should be deduplicated
         assert!(names.contains("requests"));
         assert_eq!(names.len(), 1);
+    }
+
+    // ── .rez table-level filtering ──────────────────────────────────────────
+
+    use metriken::Window;
+    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
+        Counter::new(
+            name.to_string(),
+            v,
+            [
+                ("metric".to_string(), name.to_string()),
+                ("sampler".to_string(), sampler.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .with_window(w)
+    }
+
+    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters,
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    /// Build a 2-sampler .rez (cpu_usage + blockio_requests) at `path`.
+    fn two_sampler_rez() -> (tempfile::TempDir, PathBuf) {
+        use crate::recorder::rez::RezRecorder;
+        let mut r = RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        );
+        for i in 0..3u64 {
+            let ts = 1_000_000_000 * (i + 1);
+            let w = Some(Window::new(ts - 50_000_000, ts));
+            r.ingest(
+                &snap(
+                    ts,
+                    vec![
+                        counter("cpu_cycles", "cpu_usage", i, w),
+                        counter("reads", "blockio_requests", i, w),
+                    ],
+                ),
+                ts,
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("two.rez");
+        r.finalize(&out).unwrap();
+        (dir, out)
+    }
+
+    #[test]
+    fn filter_rez_keeps_only_named_samplers() {
+        let (_d, path) = two_sampler_rez();
+        let out = _d.path().join("slim.rez");
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        filter_rez(&path, &keep, Some(&out)).unwrap();
+        let (m, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let samplers: Vec<&str> = m.recordings[0]
+            .tables
+            .iter()
+            .map(|t| t.sampler.as_str())
+            .collect();
+        assert_eq!(samplers, vec!["cpu_usage"]);
     }
 }

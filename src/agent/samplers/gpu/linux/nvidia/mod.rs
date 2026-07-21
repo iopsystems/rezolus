@@ -30,8 +30,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
 }
 
 #[distributed_slice(SAMPLERS)]
-static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry =
-    crate::agent::samplers::SamplerEntry { name: NAME, init };
+static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::samplers::SamplerEntry {
+    name: NAME,
+    module: module_path!(),
+    init,
+};
 
 struct Nvidia {
     inner: Mutex<NvidiaInner>,
@@ -92,12 +95,14 @@ impl NvidiaInner {
     fn refresh_nvml(&mut self) {
         for id in 0..self.devices {
             if let Ok(device) = self.nvml.device_by_index(id as _) {
+                let acq = crate::agent::timing::Acquisition::begin();
+
                 /*
                  * energy
                  */
 
                 if let Ok(v) = device.total_energy_consumption() {
-                    let _ = GPU_ENERGY_CONSUMPTION.set(id, v as _);
+                    GPU_ENERGY_CONSUMPTION.set_with_window(id, v as _, acq.window());
                 }
 
                 /*
@@ -105,7 +110,7 @@ impl NvidiaInner {
                  */
 
                 if let Ok(v) = device.power_usage() {
-                    let _ = GPU_POWER_USAGE.set(id, v as _);
+                    GPU_POWER_USAGE.set_with_window(id, v as _, acq.window());
                 }
 
                 /*
@@ -113,7 +118,7 @@ impl NvidiaInner {
                  */
 
                 if let Ok(v) = device.temperature(TemperatureSensor::Gpu) {
-                    let _ = GPU_TEMPERATURE.set(id, v as _);
+                    GPU_TEMPERATURE.set_with_window(id, v as _, acq.window());
                 }
 
                 /*
@@ -124,14 +129,14 @@ impl NvidiaInner {
                     .pcie_throughput(PcieUtilCounter::Receive)
                     .map(|v| v as i64 * KB)
                 {
-                    let _ = GPU_PCIE_THROUGHPUT_RX.set(id, v);
+                    GPU_PCIE_THROUGHPUT_RX.set_with_window(id, v, acq.window());
                 }
 
                 if let Ok(v) = device
                     .pcie_throughput(PcieUtilCounter::Send)
                     .map(|v| v as i64 * KB)
                 {
-                    let _ = GPU_PCIE_THROUGHPUT_TX.set(id, v);
+                    GPU_PCIE_THROUGHPUT_TX.set_with_window(id, v, acq.window());
                 }
 
                 if let Ok(link_width) = device.current_pcie_link_width() {
@@ -149,7 +154,7 @@ impl NvidiaInner {
 
                         if v > 0 {
                             let v = v * link_width as i64;
-                            let _ = GPU_PCIE_BANDWIDTH.set(id, v as _);
+                            GPU_PCIE_BANDWIDTH.set_with_window(id, v as _, acq.window());
                         }
                     }
                 }
@@ -159,8 +164,8 @@ impl NvidiaInner {
                  */
 
                 if let Ok(memory_info) = device.memory_info() {
-                    let _ = GPU_MEMORY_FREE.set(id, memory_info.free as _);
-                    let _ = GPU_MEMORY_USED.set(id, memory_info.used as _);
+                    GPU_MEMORY_FREE.set_with_window(id, memory_info.free as _, acq.window());
+                    GPU_MEMORY_USED.set_with_window(id, memory_info.used as _, acq.window());
                 }
 
                 /*
@@ -168,19 +173,19 @@ impl NvidiaInner {
                  */
 
                 if let Ok(frequency) = device.clock_info(Clock::Graphics).map(|f| f as i64 * MHZ) {
-                    let _ = GPU_CLOCK_GRAPHICS.set(id, frequency);
+                    GPU_CLOCK_GRAPHICS.set_with_window(id, frequency, acq.window());
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::SM).map(|f| f as i64 * MHZ) {
-                    let _ = GPU_CLOCK_COMPUTE.set(id, frequency);
+                    GPU_CLOCK_COMPUTE.set_with_window(id, frequency, acq.window());
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::Memory).map(|f| f as i64 * MHZ) {
-                    let _ = GPU_CLOCK_MEMORY.set(id, frequency);
+                    GPU_CLOCK_MEMORY.set_with_window(id, frequency, acq.window());
                 }
 
                 if let Ok(frequency) = device.clock_info(Clock::Video).map(|f| f as i64 * MHZ) {
-                    let _ = GPU_CLOCK_VIDEO.set(id, frequency);
+                    GPU_CLOCK_VIDEO.set_with_window(id, frequency, acq.window());
                 }
 
                 /*
@@ -188,8 +193,12 @@ impl NvidiaInner {
                  */
 
                 if let Ok(utilization) = device.utilization_rates() {
-                    let _ = GPU_UTILIZATION.set(id, utilization.gpu as i64);
-                    let _ = GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);
+                    GPU_UTILIZATION.set_with_window(id, utilization.gpu as i64, acq.window());
+                    GPU_MEMORY_UTILIZATION.set_with_window(
+                        id,
+                        utilization.memory as i64,
+                        acq.window(),
+                    );
                 }
 
                 /*
@@ -226,30 +235,53 @@ impl NvidiaInner {
                                 for result in results.into_iter().flatten() {
                                     match result.metric_id {
                                         GpmMetricId::SmUtil => {
-                                            let _ = GPU_SM_UTILIZATION.set(id, result.value as i64);
+                                            GPU_SM_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::SmOccupancy => {
-                                            let _ = GPU_SM_OCCUPANCY.set(id, result.value as i64);
+                                            GPU_SM_OCCUPANCY.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::DramBwUtil => {
-                                            let _ = GPU_DRAM_BW_UTILIZATION
-                                                .set(id, result.value as i64);
+                                            GPU_DRAM_BW_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::AnyTensorUtil => {
-                                            let _ =
-                                                GPU_TENSOR_UTILIZATION.set(id, result.value as i64);
+                                            GPU_TENSOR_UTILIZATION.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::HmmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_HMMA
-                                                .set(id, result.value as i64);
+                                            GPU_TENSOR_UTILIZATION_HMMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::ImmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_IMMA
-                                                .set(id, result.value as i64);
+                                            GPU_TENSOR_UTILIZATION_IMMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         GpmMetricId::DfmaTensorUtil => {
-                                            let _ = GPU_TENSOR_UTILIZATION_DFMA
-                                                .set(id, result.value as i64);
+                                            GPU_TENSOR_UTILIZATION_DFMA.set_with_window(
+                                                id,
+                                                result.value as i64,
+                                                acq.window(),
+                                            );
                                         }
                                         _ => {}
                                     }

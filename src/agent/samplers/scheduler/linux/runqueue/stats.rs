@@ -52,14 +52,14 @@ pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GR
     description = "The number of involuntary context switches",
     metadata = { kind = "involuntary" }
 )]
-pub static SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_runqueue_wait",
     description = "Tracks time spent in the runqueue on a per-CPU basis",
     metadata = { unit = "nanoseconds" }
 )]
-pub static SCHEDULER_RUNQUEUE_WAIT: CounterGroup = CounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_RUNQUEUE_WAIT: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 /*
  * per-cgroup

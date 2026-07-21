@@ -193,10 +193,13 @@ spread), plot them together honestly, and put **error bars on rates**. Core land
 in metriken; rezolus is first consumer. Value-uncertainty is modeled but deferred
 (except the counter increment quantum, needed for rate error bars). Phased.
 
-- **Phase 1 — primitive + capture + wire** — Roadmap (next). Model
-  `(value, window[t_begin,t_end], kind, start_epoch, counter quantum)` in metriken;
-  drivehealth captures tight per-device windows; extend exposition (`SnapshotV3`)
-  so windows are visible on the snapshot; read HZ for the tick quantum.
+- **Phase 1 — observation acquisition windows** — Specced, pre-build. See
+  [Phase 1 spec](journal/2026-07-10-measurement-uncertainty-phase-1.md). Scoped to
+  the **window (+ derived kind)** in the metriken *format* (exposition), with an
+  optional additive per-index window store on groups; drivehealth captures
+  per-device windows, visible on `/metrics/json`. `start_epoch` / quantum / HZ are
+  deferred to Phase 3 (the shape is extensible for them); metriken-core read API
+  stays general.
 - **Phase 2 — archive + plot-together** — Roadmap. Common `.mtk`/`.rez` archive
   (tar of per-cohort parquet + manifest) + recorder + v2→v3 converter; viewer plots
   heterogeneous cohorts on one axis.

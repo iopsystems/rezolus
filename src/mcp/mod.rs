@@ -9,7 +9,24 @@ mod describe_metrics;
 mod server;
 
 use chrono::{DateTime, Utc};
-use metriken_query::{MetricsSource, ParquetReader, QueryResult};
+use metriken_query::{MetricsSource, QueryResult};
+
+/// Open a recording as a `MetricsSource`, dispatching `.rez` archives to
+/// `RezReader` and everything else to `ParquetReader` (by content, not extension).
+pub(crate) fn open_source(
+    file: &std::path::Path,
+) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+    if crate::recorder::rez::is_rez_path(file).unwrap_or(false) {
+        let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+        Ok(std::sync::Arc::new(
+            crate::rez_reader::RezReader::open_with_pool(file, pool)?,
+        ))
+    } else {
+        Ok(std::sync::Arc::new(metriken_query::ParquetReader::open(
+            file,
+        )?))
+    }
+}
 
 /// Format recording information for display
 pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> String {
@@ -97,7 +114,7 @@ fn run_server(config: Config) {
 }
 
 fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -105,7 +122,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
         }
     };
 
-    match correlation::calculate_correlation(&reader, &query1, &query2) {
+    match correlation::calculate_correlation(reader.as_ref(), &query1, &query2) {
         Ok(result) => {
             println!("{}", correlation::format_correlation_result(&result));
         }
@@ -117,7 +134,7 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
 }
 
 fn run_describe_recording(file: PathBuf) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -125,12 +142,12 @@ fn run_describe_recording(file: PathBuf) {
         }
     };
 
-    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), &reader);
+    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), reader.as_ref());
     println!("{output}");
 }
 
 fn run_describe_metrics(file: PathBuf) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -138,13 +155,13 @@ fn run_describe_metrics(file: PathBuf) {
         }
     };
 
-    let output = describe_metrics::format_metrics_description(&reader);
+    let output = describe_metrics::format_metrics_description(reader.as_ref());
     println!("{output}");
 }
 
 fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
-    let reader = match ParquetReader::open(&file) {
-        Ok(r) => Arc::new(r),
+    let reader = match open_source(&file) {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
             std::process::exit(1);
@@ -170,7 +187,7 @@ fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
     run_exhaustive_detection(reader);
 }
 
-fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
+fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
     // Metrics to skip - these are raw building blocks or redundant metrics
     let skip_metrics = [
         // CPU building blocks - only meaningful when combined
@@ -361,7 +378,7 @@ fn run_exhaustive_detection(reader: Arc<ParquetReader>) {
 }
 
 fn run_query(file: PathBuf, query: String) {
-    let reader = match ParquetReader::open(&file) {
+    let reader = match open_source(&file) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("Failed to load parquet file: {e}");
@@ -392,11 +409,16 @@ fn format_query_result(result: &QueryResult) -> String {
             writeln!(&mut output, "Instant Vector Result:").unwrap();
             writeln!(&mut output, "======================").unwrap();
             for sample in result {
+                let bound = sample
+                    .interval
+                    .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                    .unwrap_or_default();
                 writeln!(
                     &mut output,
-                    "{} = {}",
+                    "{} = {}{}",
                     format_metric(&sample.metric),
-                    sample.value.1
+                    sample.value.1,
+                    bound
                 )
                 .unwrap();
             }
@@ -415,8 +437,33 @@ fn format_query_result(result: &QueryResult) -> String {
                 if !series.values.is_empty() {
                     let first = &series.values[0];
                     let last = &series.values[series.values.len() - 1];
-                    writeln!(&mut output, "  First: {} = {}", first.0, first.1).unwrap();
-                    writeln!(&mut output, "  Last:  {} = {}", last.0, last.1).unwrap();
+                    // Acquisition-window uncertainty bounds (rate()/irate() only).
+                    let ivl = series.intervals.as_ref();
+                    let bound = |i: usize| -> String {
+                        ivl.and_then(|v| v.get(i))
+                            .map(|(lo, hi)| format!("  [{lo:.6}, {hi:.6}]"))
+                            .unwrap_or_default()
+                    };
+                    writeln!(
+                        &mut output,
+                        "  First: {} = {}{}",
+                        first.0,
+                        first.1,
+                        bound(0)
+                    )
+                    .unwrap();
+                    writeln!(
+                        &mut output,
+                        "  Last:  {} = {}{}",
+                        last.0,
+                        last.1,
+                        bound(series.values.len() - 1)
+                    )
+                    .unwrap();
+                    if ivl.is_some() {
+                        writeln!(&mut output, "  (bounds = acquisition-window uncertainty)")
+                            .unwrap();
+                    }
 
                     let values: Vec<f64> = series.values.iter().map(|(_, v)| *v).collect();
                     let min = values.iter().copied().fold(f64::INFINITY, f64::min);
@@ -702,7 +749,11 @@ pub fn command() -> Command {
                 .long_about(
                     "Execute a PromQL query against a recording and display results.\n\n\
                      For example queries and patterns, run 'describe-metrics' first to see\n\
-                     available metrics and common query examples."
+                     available metrics and common query examples.\n\n\
+                     rate()/irate() values print an acquisition-window uncertainty band\n\
+                     [lo, hi] next to the value (derived from per-observation acquisition\n\
+                     windows). A scalar op scales the band (e.g. rate(x)*k); series-op-series\n\
+                     and non-rate queries show no band."
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -718,4 +769,108 @@ pub fn command() -> Command {
                         .index(2),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recorder::rez::RezRecorder;
+    use metriken::Window;
+    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    #[test]
+    fn format_query_result_shows_rate_bounds() {
+        use metriken_query::{MatrixSample, QueryResult};
+        let mut metric = HashMap::new();
+        metric.insert("__name__".to_string(), "rate".to_string());
+        let with = QueryResult::Matrix {
+            result: vec![
+                MatrixSample::new(metric.clone(), vec![(1.0, 300.0), (2.0, 310.0)])
+                    .with_intervals(Some(vec![(291.26, 306.12), (300.0, 320.0)])),
+            ],
+        };
+        let s = format_query_result(&with);
+        assert!(s.contains("[291.26"), "expected bound in output: {s}");
+        assert!(s.contains("acquisition-window uncertainty"), "{s}");
+
+        // No intervals → no bound text.
+        let without = QueryResult::Matrix {
+            result: vec![MatrixSample::new(metric, vec![(1.0, 300.0)])],
+        };
+        let s2 = format_query_result(&without);
+        assert!(!s2.contains('['), "no bounds expected: {s2}");
+    }
+
+    fn counter(name: &str, sampler: &str, v: u64, w: Option<Window>) -> Counter {
+        Counter::new(
+            name.to_string(),
+            v,
+            [
+                ("metric".to_string(), name.to_string()),
+                ("sampler".to_string(), sampler.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .with_window(w)
+    }
+
+    fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters,
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    /// Populate a recorder with a few rows of a single-sampler counter.
+    fn build_recorder() -> RezRecorder {
+        let mut r = RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        );
+        for i in 0..3u64 {
+            let ts = 1_000_000_000 * (i + 1);
+            let w = Some(Window::new(ts - 50_000_000, ts));
+            r.ingest(
+                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", i, w)]),
+                ts,
+            );
+        }
+        r
+    }
+
+    #[test]
+    fn open_source_reads_rez_and_parquet() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Build a .rez archive and open it via open_source.
+        let rez_path = dir.path().join("rec.rez");
+        build_recorder().finalize(&rez_path).unwrap();
+        let rez_source = open_source(&rez_path).unwrap();
+        assert!(
+            !rez_source.counter_names().is_empty(),
+            ".rez source should expose counter names"
+        );
+
+        // Build a bare parquet table and open it via open_source.
+        let parquet_path = dir.path().join("rec.parquet");
+        let tables = build_recorder().finalize_tables();
+        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
+        std::fs::write(&parquet_path, bytes).unwrap();
+        assert!(
+            open_source(&parquet_path).is_ok(),
+            "bare parquet should open as a MetricsSource"
+        );
+    }
 }

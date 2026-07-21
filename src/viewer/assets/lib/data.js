@@ -107,6 +107,16 @@ export const decodeDisplayBinary = (buf) => {
             out[name] = new Float64Array(buf, off, s.n);
             off += s.n * 8;
         }
+        // Series that carry a measurement-uncertainty band append two more
+        // columns (uncLo, uncHi) after the six boxplot columns — the `unc`
+        // header flag guards reading them so band and no-band series stay
+        // byte-aligned in a mixed response.
+        if (s.unc) {
+            out.uncLo = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+            out.uncHi = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+        }
         return out;
     });
     return { resultType: header.resultType, budget: header.budget, series };
@@ -308,6 +318,28 @@ const fetchDisplaySeries = async (query, meta, signal) => {
     return decoded;
 };
 
+// Convert a decoded display series' aggregated measurement-uncertainty columns
+// (uncLo/uncHi, NaN = no band at that point) into the same `[[lo,hi]|null, …]`
+// shape the matrix path's parseIntervals produces, so buildBandSeries renders
+// them identically. Returns null when the series carries no band at all.
+export const displayIntervals = (s) => {
+    if (!s || !s.uncLo || !s.uncHi) return null;
+    const n = Math.min(s.uncLo.length, s.uncHi.length);
+    const out = new Array(n);
+    let any = false;
+    for (let i = 0; i < n; i++) {
+        const lo = s.uncLo[i];
+        const hi = s.uncHi[i];
+        if (Number.isFinite(lo) && Number.isFinite(hi)) {
+            out[i] = lo <= hi ? [lo, hi] : [hi, lo];
+            any = true;
+        } else {
+            out[i] = null;
+        }
+    }
+    return any ? out : null;
+};
+
 // Store a decoded display response on the plot. `data` carries the median
 // line(s) so all existing chart machinery (axis extent, zoom, no-data
 // detection, change-detection) works unchanged; `boxplot` carries the
@@ -319,6 +351,8 @@ const applyDisplayToPlot = (plot, decoded) => {
         plot.boxplot = null;
         plot.series_names = [];
         plot.series_metrics = [];
+        plot.intervals = null;
+        plot.series_intervals = [];
         return;
     }
     const timestamps = Array.from(series[0].t);
@@ -331,6 +365,18 @@ const applyDisplayToPlot = (plot, decoded) => {
     plot.series_names = series.length > 1
         ? series.map((s, i) => displaySeriesName(s.metric, i))
         : [];
+    // Measurement-uncertainty bands from the aggregated uncLo/uncHi columns —
+    // the median-of-interval-edges band computed server-side during decimation
+    // (exact per-sample interval at native resolution). Mirror applyResultToPlot's
+    // single vs multi split so line.js reads `intervals` and multi/scatter read
+    // `series_intervals`, clearing the other to avoid a stale band ghosting.
+    if (series.length > 1) {
+        plot.series_intervals = series.map(displayIntervals);
+        plot.intervals = null;
+    } else {
+        plot.intervals = displayIntervals(series[0]);
+        plot.series_intervals = [];
+    }
     // Resolve the render style the same way the JSON path does: percentile
     // histograms → scatter, single line-ish → line, multi line-ish → multi.
     plot._resolvedStyle = plot.opts?.style
@@ -492,6 +538,26 @@ export const promqlResultToHeatmapTriples = (results) => {
     };
 };
 
+// Parse a series' optional `intervals` field into a clean [[lo, hi], …]
+// array parallel to `values`, or `null` when absent/unusable. The field
+// is NEW and OPTIONAL — present only for rate()/irate() results, absent
+// for older responses and non-rate queries — so parse defensively: only
+// accept a well-formed array, coerce each pair to numbers, order lo≤hi,
+// and drop malformed pairs to null. Returns null when nothing is usable
+// so callers can treat "has a band" as a simple truthiness check.
+export const parseIntervals = (sample) => {
+    const iv = sample && sample.intervals;
+    if (!Array.isArray(iv) || iv.length === 0) return null;
+    const out = iv.map((pair) => {
+        if (!Array.isArray(pair) || pair.length < 2) return null;
+        const lo = parseNumeric(pair[0]);
+        const hi = parseNumeric(pair[1]);
+        if (lo === null || hi === null) return null;
+        return lo <= hi ? [lo, hi] : [hi, lo];
+    });
+    return out.some((p) => p !== null) ? out : null;
+};
+
 // Convert the first series in a PromQL range-query result into a pair
 // of parallel timeData / valueData arrays. Missing/NaN values are
 // preserved as null.
@@ -501,6 +567,9 @@ export const promqlResultToLinePair = (results) => {
     return {
         timeData: values.map((pair) => Number(pair[0])),
         valueData: values.map((pair) => parseNumeric(pair[1])),
+        // Optional rate()/histogram value band, parallel to valueData; null
+        // for non-rate queries. Lets compare/experiment captures carry a band.
+        intervals: parseIntervals(first),
     };
 };
 
@@ -547,6 +616,11 @@ const applyResultToPlot = (plot, result) => {
                 style === 'scatter' ||
                 style === 'heatmap');
 
+        // Cleared here so a prior single-series band never ghosts onto a
+        // subsequent multi-series / heatmap render of the same plot; the
+        // single-series branch below repopulates it when present.
+        plot.intervals = null;
+
         if (hasMultipleSeries) {
             if (style === 'heatmap') {
                 const { timestamps, triples, minValue, maxValue } =
@@ -563,6 +637,11 @@ const applyResultToPlot = (plot, result) => {
                 // with the experiment path (composeScatterLabel needs
                 // the full label set, not the lossy series_names string).
                 const seriesMetrics = [];
+                // Parallel to seriesNames: each series' optional value band
+                // (rate/histogram uncertainty), or null. multi.js renders these
+                // only for percentile charts (few lines); high-cardinality
+                // categorical multis carry them but leave them undrawn.
+                const seriesIntervals = [];
                 let timestamps = null;
 
                 result.data.result.forEach((item, idx) => {
@@ -580,6 +659,7 @@ const applyResultToPlot = (plot, result) => {
                         if (item.values.length > 0) {
                             seriesNames.push(seriesName);
                             seriesMetrics.push(item.metric || {});
+                            seriesIntervals.push(parseIntervals(item));
 
                             if (!timestamps) {
                                 timestamps = item.values.map(([ts, _]) => ts);
@@ -596,10 +676,12 @@ const applyResultToPlot = (plot, result) => {
                     plot.data = allData;
                     plot.series_names = seriesNames;
                     plot.series_metrics = seriesMetrics;
+                    plot.series_intervals = seriesIntervals;
                 } else {
                     plot.data = [];
                     plot.series_names = [];
                     plot.series_metrics = [];
+                    plot.series_intervals = [];
                 }
             }
         } else {
@@ -608,16 +690,21 @@ const applyResultToPlot = (plot, result) => {
                 const timestamps = sample.values.map(([ts, _]) => ts);
                 const values = sample.values.map(([_, val]) => parseFloat(val));
                 plot.data = [timestamps, values];
+                // Optional rate() uncertainty band, parallel to values.
+                plot.intervals = parseIntervals(sample);
             } else {
                 plot.data = [];
             }
             // Line-style plots have no series legend; clear any stale entries
             // from a prior multi-series render so legends don't "ghost".
             plot.series_names = [];
+            plot.series_intervals = [];
         }
     } else {
         plot.data = [];
         plot.series_names = [];
+        plot.series_intervals = [];
+        plot.intervals = null;
     }
 };
 
@@ -762,8 +849,12 @@ const createDataApi = ({
             queryPlots.map(async ({ plot, query }) => {
                 try {
                     // Display mode: line-ish plots fetch the decimated boxplot
-                    // binary. On any failure (e.g. a non-Series result), fall
-                    // back to the JSON matrix so a hiccup never blanks a chart.
+                    // binary, which now carries the aggregated measurement-
+                    // uncertainty band (median of interval edges per bucket; the
+                    // exact per-sample interval at native resolution), so the
+                    // uncertainty bands render at every zoom level. On any failure
+                    // (e.g. a non-Series result), fall back to the JSON matrix so a
+                    // hiccup never blanks a chart.
                     if (_displayMode && plotUsesDisplay(plot)) {
                         try {
                             const decoded = await fetchDisplaySeries(query, metadata, signal);

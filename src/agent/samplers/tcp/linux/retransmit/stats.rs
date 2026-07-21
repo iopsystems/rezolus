@@ -5,7 +5,7 @@ use metriken::*;
     description = "The number of TCP packets that were re-transmitted",
     metadata = { unit = "packets" }
 )]
-pub static TCP_RETRANSMIT: LazyCounter = LazyCounter::new(Counter::default);
+pub static TCP_RETRANSMIT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
 
 #[metric(
     name = "rezolus_bpf_run_count",

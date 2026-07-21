@@ -6,10 +6,32 @@ use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
 };
 use crate::viewer::{ServiceExtension, TemplateRegistry};
-use metriken_query::ParquetReader;
+use metriken_query::{MetricsSource, ParquetReader};
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
+
+    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+        let custom = args.get_one::<PathBuf>("queries").unwrap_or_else(|| {
+            eprintln!("error: annotating a .rez requires --queries <service-extension.json> (a .rez has no service template)");
+            std::process::exit(1);
+        });
+        let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
+            eprintln!("error: failed to read {custom:?}: {e}");
+            std::process::exit(1);
+        });
+        // parse-validate up front
+        let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
+            eprintln!("error: invalid service extension JSON: {e}");
+            std::process::exit(1);
+        });
+        annotate_rez(path, &content).unwrap_or_else(|e| {
+            eprintln!("error: failed to annotate .rez: {e}");
+            std::process::exit(1);
+        });
+        return;
+    }
+
     let node = args.get_one::<String>("node");
     let new_source = args.get_one::<String>("source");
     let sysinfo_path = args.get_one::<PathBuf>("systeminfo");
@@ -219,6 +241,57 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
         "Validated: {matched}/{} KPIs have matching data",
         ext.kpis.len()
     );
+}
+
+/// Embed a custom ServiceExtension into every recording of a `.rez`, validated
+/// against that recording's data. Rewrites the archive in place (copying table
+/// bytes verbatim).
+fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez;
+    let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
+    let (manifest, recordings_bytes) = rez::read_archive_bytes(path)?;
+    let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+    let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
+
+    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    for ((mut rec, rb), (_labels, reader)) in manifest
+        .recordings
+        .into_iter()
+        .zip(recordings_bytes)
+        .zip(readers)
+    {
+        let mut ext = base_ext.clone();
+        validate_kpis_source(&reader, &mut ext);
+        let annotated = serde_json::to_string(&ext)?;
+        rec.metadata.insert(
+            crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
+            annotated,
+        );
+        let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+        out.push((rec, bytes));
+    }
+    let n = out.len();
+    rez::write_archive_bytes(path, &out)?;
+    println!(
+        "Annotated {:?}: embedded {} KPIs into {} recording(s)",
+        path,
+        base_ext.kpis.len(),
+        n
+    );
+    Ok(())
+}
+
+/// Set each KPI's `available` flag by probing a `MetricsSource` (works for both
+/// ParquetReader and RezReader — mirrors `validate_kpis` without the path open).
+fn validate_kpis_source(reader: &dyn MetricsSource, ext: &mut ServiceExtension) {
+    let (start, end) = reader.time_range().unwrap_or((0.0, 0.0));
+    for kpi in &mut ext.kpis {
+        let query = kpi.effective_query();
+        kpi.available = match reader.query_range(&query, start, end, 1.0) {
+            Ok(result) => !query_result_is_empty(&result),
+            Err(_) => false,
+        };
+    }
 }
 
 /// Extract metric selectors (name + optional labels) from a PromQL query.
@@ -680,6 +753,76 @@ mod tests {
             .map(|(_, v)| v.as_str())
             .collect();
         assert_eq!(entries, vec![new_json], "exactly one systeminfo entry");
+    }
+
+    // ── annotate_rez tests ──
+
+    /// Build a single-recording `.rez` fixture on disk; return (tempdir, path).
+    fn build_one_recording_rez() -> (tempfile::TempDir, PathBuf) {
+        use crate::recorder::rez::RezRecorder;
+        use metriken::Window;
+        use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+        use std::time::SystemTime;
+
+        let mut r = RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        );
+        for i in 0..3u64 {
+            let ts = 1_000_000_000 * (i + 1);
+            let w = Some(Window::new(ts - 50_000_000, ts));
+            let c = Counter::new(
+                "cpu_cycles".to_string(),
+                i,
+                [
+                    ("metric".to_string(), "cpu_cycles".to_string()),
+                    ("sampler".to_string(), "cpu_usage".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .with_window(w);
+            let snap = Snapshot::V2(SnapshotV2 {
+                systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                duration: std::time::Duration::ZERO,
+                metadata: HashMap::new(),
+                counters: vec![c],
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            });
+            r.ingest(&snap, ts);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("one.rez");
+        r.finalize(&out).unwrap();
+        (dir, out)
+    }
+
+    #[test]
+    fn annotate_rez_embeds_service_queries_into_recordings() {
+        let (_d, path) = build_one_recording_rez();
+        let ext_json = r#"{"service_name":"test","kpis":[{"role":"overview","title":"Cycles","query":"cpu_cycles","type":"counter"}]}"#;
+
+        annotate_rez(&path, ext_json).unwrap();
+
+        let (manifest, _rb) = crate::recorder::rez::read_archive_bytes(&path).unwrap();
+        assert!(manifest
+            .recordings
+            .iter()
+            .all(|rec| rec.metadata.contains_key(KEY_SERVICE_QUERIES)));
+        // The embedded JSON round-trips to a ServiceExtension.
+        let embedded = manifest.recordings[0]
+            .metadata
+            .get(KEY_SERVICE_QUERIES)
+            .unwrap();
+        let ext: ServiceExtension = serde_json::from_str(embedded).unwrap();
+        assert_eq!(ext.service_name, "test");
+        assert_eq!(ext.kpis.len(), 1);
     }
 
     #[test]
