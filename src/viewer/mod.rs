@@ -232,7 +232,8 @@ pub struct Config {
     proxy_allow: proxy_allow::Allowlist,
     /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
     cache_size_bytes: usize,
-    pub tui: bool,
+    /// Render a terminal UI instead of the web dashboard.
+    tui: bool,
 }
 
 /// Split a positional input into an optional alias and the remaining
