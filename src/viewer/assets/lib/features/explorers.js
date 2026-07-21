@@ -434,7 +434,10 @@ export const SingleChartView = {
                 fieldRow('Title', st.title, (e) => { st.title = e.target.value; }, applyFields),
                 fieldRow('Description', st.description, (e) => { st.description = e.target.value; }, applyFields),
             ]),
-            m('div.single-chart-query', [
+            // Charts with no promql_query (e.g. the jitter pseudo-metric — data
+            // is precomputed client-side, nothing to re-run) get no query box:
+            // an empty, unexecutable editor is just confusing chrome.
+            plot.promql_query != null && m('div.single-chart-query', [
                 m('label', 'PromQL Query'),
                 m('div.query-input-wrapper', [
                     m('textarea.query-input', {

@@ -296,6 +296,19 @@ impl Viewer {
         serde_json::to_string(&response).unwrap()
     }
 
+    /// Returns JSON compatible with the server's /api/v1/timestamps: the raw,
+    /// un-gridded per-sample collection timestamps (ns since epoch) for the
+    /// jitter visualization. Mirrors `metrics()`'s source resolution.
+    pub fn sample_timestamps(&self, source: Option<String>) -> String {
+        let resolved_source = source.unwrap_or_else(|| self.reader.source());
+        let timestamps = self.reader.sample_timestamps();
+        serde_json::to_string(&serde_json::json!({
+            "source": resolved_source,
+            "timestamps": timestamps,
+        }))
+        .unwrap()
+    }
+
     /// Returns systeminfo JSON from parquet file metadata.
     ///
     /// For multi-node combined files (>1 node in per_source_metadata), returns
@@ -610,6 +623,12 @@ impl WasmCaptureRegistry {
 
     pub fn metrics(&self, capture: &str, source: Option<String>) -> Result<String, JsValue> {
         self.require_slot(capture).map(|v| v.metrics(source))
+    }
+
+    /// Passthrough for `Viewer::sample_timestamps` — mirrors `metrics()`.
+    pub fn timestamps(&self, capture: &str, source: Option<String>) -> Result<String, JsValue> {
+        self.require_slot(capture)
+            .map(|v| v.sample_timestamps(source))
     }
 
     pub fn systeminfo(&self, capture: &str) -> Option<String> {

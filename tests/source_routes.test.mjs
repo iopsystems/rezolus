@@ -57,6 +57,7 @@ const baseDeps = (over = {}) => ({
                 { name: 'queue_depth', metric_type: 'gauge' },
             ],
         }),
+        getTimestamps: async () => ({ timestamps: [1e9, 2.003e9, 2.998e9] }),
     },
     // Mimic processDashboardData: populate the plot in place and resolve.
     processDashboardData: async (payload) => {
@@ -97,6 +98,20 @@ test('source chart route reconstructs the chart from the catalog', async () => {
     } finally {
         restore();
     }
+});
+
+test('source chart route reconstructs the jitter chart', async () => {
+    const restore = setupGlobals();
+    try {
+        const routes = createSourceRoutes(baseDeps());
+        const comp = routes['/source/:sourceName/chart/:chartId'].onmatch({
+            sourceName: 'hub', chartId: 'source-timestamp-jitter',
+        });
+        await comp.ready;
+        const scv = findByTag(comp.view(), 'SingleChartView');
+        assert.ok(scv, 'expected jitter chart to reconstruct');
+        assert.equal(scv.attrs.data.groups[0].subgroups[0].plots[0].opts.id, 'source-timestamp-jitter');
+    } finally { restore(); }
 });
 
 test('source chart route reports not-found for an unknown chart id', async () => {

@@ -57,6 +57,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/sections", get(sections_handler))
         .route("/file_metadata", get(file_metadata_handler))
         .route("/metrics", get(metrics_handler))
+        .route("/timestamps", get(timestamps_handler))
         .route(
             "/upload",
             axum::routing::post(actions::upload_parquet)
@@ -303,6 +304,27 @@ async fn metrics_handler(
         serde_json::to_string(&body).unwrap(),
     )
         .into_response()
+}
+
+// ── Sample timestamps (jitter visualization) ───────────────────────────
+
+#[derive(serde::Serialize)]
+struct TimestampsResponse {
+    source: String,
+    timestamps: Vec<u64>,
+}
+
+async fn timestamps_handler(
+    State(state): State<Arc<AppState>>,
+    Query(p): Query<MetricsParam>,
+) -> Response {
+    let capture_id = CaptureId::parse_opt(p.capture.as_deref());
+    let Some(data) = state.captures.get(capture_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let source = p.source.clone().unwrap_or_else(|| data.source());
+    let timestamps = data.sample_timestamps();
+    Json(TimestampsResponse { source, timestamps }).into_response()
 }
 
 // ── PromQL handlers ───────────────────────────────────────────────────
