@@ -2,6 +2,7 @@
 
 use super::state::AppState;
 
+mod layout;
 mod model;
 mod query;
 mod window;
