@@ -7,14 +7,17 @@ use ratatui::Frame;
 
 use crate::viewer::tui::query::{ChartData, Series};
 
-/// Palette for series lines, cycled by index.
+/// Series palette, cycled by index. Explicit high-luminance RGB (not the
+/// mid-tone ANSI names) so lines pop against a dark terminal background, and
+/// ordered as a cool->hot ramp so percentile series (p50, p90, p99, p999,
+/// p9999 — added in that order) also read semantically: cool = low, hot = high.
 const PALETTE: [Color; 6] = [
-    Color::Cyan,
-    Color::Yellow,
-    Color::Green,
-    Color::Magenta,
-    Color::Red,
-    Color::Blue,
+    Color::Rgb(120, 220, 255), // cyan  (p50)
+    Color::Rgb(120, 240, 150), // green (p90)
+    Color::Rgb(255, 215, 90),  // amber (p99)
+    Color::Rgb(255, 140, 90),  // orange (p999)
+    Color::Rgb(255, 105, 150), // hot pink/red (p9999)
+    Color::Rgb(160, 175, 255), // periwinkle (extra series)
 ];
 
 /// Render a single plot into `area`. Handles the Lines / Empty / Error /
