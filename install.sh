@@ -114,6 +114,22 @@ echo "Detected distribution: $DISTRO"
 # Determine package manager and repo name
 if command -v apt &> /dev/null; then
     PACKAGE_MANAGER="apt"
+
+    # Determine the Debian architecture apt should pull. The Rezolus repo
+    # publishes amd64 and arm64 packages; pinning the wrong arch makes apt
+    # try to install e.g. rezolus:amd64 on an arm64 host, which then fails
+    # with unsatisfiable dependencies.
+    DEB_ARCH="$(dpkg --print-architecture)"
+    case "$DEB_ARCH" in
+        amd64|arm64)
+            ;;
+        *)
+            echo "Error: Unsupported architecture for APT packages: $DEB_ARCH" >&2
+            echo "Prebuilt packages are available for amd64 and arm64 only" >&2
+            exit 1
+            ;;
+    esac
+
     case "$DISTRO" in
         debian)
             case "$CODENAME" in
@@ -129,7 +145,16 @@ if command -v apt &> /dev/null; then
             ;;
         ubuntu)
             case "$CODENAME" in
-                focal|jammy|noble)
+                focal)
+                    # Ubuntu focal (20.04) is amd64-only in our build matrix.
+                    if [[ "$DEB_ARCH" != "amd64" ]]; then
+                        echo "Error: Ubuntu focal (20.04) packages are only available for amd64 (got $DEB_ARCH)" >&2
+                        echo "arm64 packages are available for jammy (22.04) and noble (24.04)" >&2
+                        exit 1
+                    fi
+                    REPO_NAME="ubuntu-${CODENAME}"
+                    ;;
+                jammy|noble)
                     REPO_NAME="ubuntu-${CODENAME}"
                     ;;
                 *)
@@ -258,7 +283,7 @@ case "$PACKAGE_MANAGER" in
         fi
 
         echo "Adding Rezolus APT repository..."
-        echo "deb [arch=amd64] https://us-apt.pkg.dev/projects/rezolus ${REPO_NAME} main" | tee /etc/apt/sources.list.d/rezolus.list > /dev/null
+        echo "deb [arch=${DEB_ARCH}] https://us-apt.pkg.dev/projects/rezolus ${REPO_NAME} main" | tee /etc/apt/sources.list.d/rezolus.list > /dev/null
 
         echo "Updating package list..."
         apt update

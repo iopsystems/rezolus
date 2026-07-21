@@ -45,8 +45,9 @@ specific instructions:
 source /etc/os-release
 DISTRO=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
 CODENAME="$VERSION_CODENAME"
+ARCH="$(dpkg --print-architecture)"   # amd64 or arm64
 curl -fsSL https://us-apt.pkg.dev/doc/repo-signing-key.gpg | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/rezolus-archive-keyring.gpg
-echo "deb [arch=amd64] https://us-apt.pkg.dev/projects/rezolus ${DISTRO}-${CODENAME} main" | sudo tee /etc/apt/sources.list.d/rezolus.list
+echo "deb [arch=${ARCH}] https://us-apt.pkg.dev/projects/rezolus ${DISTRO}-${CODENAME} main" | sudo tee /etc/apt/sources.list.d/rezolus.list
 sudo apt update && sudo apt install rezolus
 ```
 
