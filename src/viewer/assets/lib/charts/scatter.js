@@ -21,6 +21,7 @@ import {
 } from './base.js';
 import { SCATTER_PALETTE } from './util/colormap.js';
 import { buildBoxplotSeries } from './boxplot.js';
+import { buildBandSeries } from './line.js';
 import { DEFAULT_PERCENTILES } from './metric_types.js';
 import { configureQuantileHeatmap } from './quantile_heatmap.js';
 import { fetchQuantileSpectrumForPlot } from '../data.js';
@@ -176,6 +177,25 @@ function renderPercentileBands(chart) {
         series: echartsSeries,
     };
     applyChartOption(chart, option);
+}
+
+// Build a translucent measurement-uncertainty band per percentile from
+// `series_intervals` (each entry an `[lo, hi]` array parallel to that
+// percentile's values, from bucket resolution). Reuses line.js's
+// `buildBandSeries` (stacked lo baseline + hi-lo delta, z:1 so it sits behind
+// the percentile line/dots). Percentiles with no usable intervals are skipped.
+// Returns a flat list of echarts series to prepend to the scatter series.
+export function buildPercentileBandSeries(seriesIntervals, timeData, labels, colors, range, interval) {
+    if (!Array.isArray(seriesIntervals) || seriesIntervals.length === 0) return [];
+    const out = [];
+    for (let i = 0; i < seriesIntervals.length; i++) {
+        const intervals = seriesIntervals[i];
+        if (!Array.isArray(intervals)) continue;
+        const color = colors[i % colors.length];
+        const name = labels[i] || `p${i + 1}`;
+        out.push(...buildBandSeries({ intervals, timeData, name, color }, i, range, interval));
+    }
+    return out;
 }
 
 /**
@@ -377,6 +397,13 @@ export function configureScatterChart(chart) {
         ? oobYAxis(baseYAxis, chart._oobAxisMax, range.max)
         : baseYAxis;
 
+    // Measurement-uncertainty bands (bucket resolution), one per percentile,
+    // drawn behind the lines/dots (z:1). Native-resolution render only — the
+    // decimated path above shows the min/max spread band instead.
+    const bandSeries = buildPercentileBandSeries(
+        chart.spec.series_intervals, timeData, percentileLabels, scatterColors, range, chart.interval,
+    );
+
     const option = {
         ...baseOption,
         grid: {
@@ -401,7 +428,9 @@ export function configureScatterChart(chart) {
                 createAxisLabelFormatter(unitSystem) :
                 val => val, chart.pinnedSet, chart, 'scatter'),
         },
-        series: series,
+        // Bands appended (not prepended) so the pin logic's index-based series
+        // updates still line up with the line/dot series; z:1 keeps bands behind.
+        series: [...series, ...bandSeries],
         color: scatterColors,
     };
 
