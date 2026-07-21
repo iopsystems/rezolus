@@ -3,4 +3,5 @@
 
 pub mod browser;
 pub mod chart;
+pub mod help;
 pub mod overview;
