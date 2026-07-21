@@ -51,21 +51,23 @@ fn draw_nav(f: &mut Frame, area: Rect, app: &App) {
     let mut state = ListState::default();
     state.select(Some(app.selected_section));
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(if focused { "Sections*" } else { "Sections" }),
-        )
+        .block(Block::default().borders(Borders::ALL).title(if focused {
+            "Sections*"
+        } else {
+            "Sections"
+        }))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, area, &mut state);
 }
 
 fn draw_charts(f: &mut Frame, area: Rect, app: &App, plots: &[(String, ChartData)]) {
-    // Inner area inside a titled border.
-    let title = app
+    // Inner area inside a titled border; the title also shows the active
+    // time window so the effect of the [ / ] keys is visible.
+    let section = app
         .current_section()
         .map(|s| s.name.clone())
         .unwrap_or_default();
+    let title = format!("{section}  ({})", app.window.label());
     let block = Block::default().borders(Borders::ALL).title(title);
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -101,7 +103,10 @@ mod tests {
         let mut app = App::new(vec![NavSection {
             name: "CPU".into(),
             route: "/cpu".into(),
-            groups: Some(vec![NavGroup { name: "Usage".into(), plots: vec![] }]),
+            groups: Some(vec![NavGroup {
+                name: "Usage".into(),
+                plots: vec![],
+            }]),
         }]);
         app.on_key(Key::ToggleScreen);
         app

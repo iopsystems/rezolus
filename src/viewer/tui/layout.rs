@@ -21,14 +21,22 @@ pub struct GridPlan {
 /// area. Drops lowest-priority tiles that do not fit vertically.
 pub fn overview_grid(w: u16, h: u16, n: usize) -> GridPlan {
     if n == 0 {
-        return GridPlan { cols: 0, rows: 0, visible: 0 };
+        return GridPlan {
+            cols: 0,
+            rows: 0,
+            visible: 0,
+        };
     }
     let cols = (w / TILE_MIN_W).max(1);
     let max_rows = (h / TILE_MIN_H).max(1);
     let capacity = (cols as usize) * (max_rows as usize);
     let visible = n.min(capacity);
-    let rows = ((visible as u16) + cols - 1) / cols;
-    GridPlan { cols, rows, visible }
+    let rows = (visible as u16).div_ceil(cols);
+    GridPlan {
+        cols,
+        rows,
+        visible,
+    }
 }
 
 /// Whether the section browser can show both panes side-by-side, and the

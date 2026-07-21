@@ -56,11 +56,7 @@ pub fn percentile_label(q: f64) -> String {
 }
 
 /// Load a plot's chart data for the given window against `data`.
-pub fn load_chart(
-    data: &dyn MetricsSource,
-    def: &PlotDef,
-    window: TimeWindow,
-) -> ChartData {
+pub fn load_chart(data: &dyn MetricsSource, def: &PlotDef, window: TimeWindow) -> ChartData {
     if def.kind == PlotKind::HeatmapUnsupported {
         return ChartData::Unsupported;
     }
@@ -111,8 +107,8 @@ fn series_label(metric: &std::collections::HashMap<String, String>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::PlotKind;
+    use super::*;
 
     fn def(kind: PlotKind, pcts: Vec<f64>) -> PlotDef {
         PlotDef {

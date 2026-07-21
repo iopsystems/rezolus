@@ -25,14 +25,12 @@ pub enum Action {
     Redraw,
     /// The selected section changed; loop should ensure its body is loaded.
     LoadSection(usize),
-    ToggleHelp,
 }
 
 pub struct App {
     pub screen: Screen,
     pub sections: Vec<NavSection>,
     pub selected_section: usize,
-    pub selected_group: usize,
     pub focus: BrowserFocus,
     pub window: TimeWindow,
     pub show_help: bool,
@@ -46,7 +44,6 @@ impl App {
             screen: Screen::Overview,
             sections,
             selected_section: 0,
-            selected_group: 0,
             focus: BrowserFocus::Nav,
             window: TimeWindow::Last5m,
             show_help: false,
@@ -60,13 +57,6 @@ impl App {
 
     fn section_count(&self) -> usize {
         self.sections.len()
-    }
-
-    fn group_count(&self) -> usize {
-        self.current_section()
-            .and_then(|s| s.groups.as_ref())
-            .map(|g| g.len())
-            .unwrap_or(0)
     }
 
     /// Handle a single logical key. Returns the action for the loop.
@@ -115,7 +105,6 @@ impl App {
                 if self.section_count() > 0 {
                     self.selected_section =
                         (self.selected_section + 1).min(self.section_count() - 1);
-                    self.selected_group = 0;
                     self.chart_scroll = 0;
                     return Action::LoadSection(self.selected_section);
                 }
@@ -133,7 +122,6 @@ impl App {
         match self.screen {
             Screen::Browser if self.focus == BrowserFocus::Nav => {
                 self.selected_section = self.selected_section.saturating_sub(1);
-                self.selected_group = 0;
                 self.chart_scroll = 0;
                 Action::LoadSection(self.selected_section)
             }
@@ -225,13 +213,21 @@ pub enum Key {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::model::{NavGroup, NavSection};
+    use super::*;
 
     fn sections() -> Vec<NavSection> {
         vec![
-            NavSection { name: "CPU".into(), route: "/cpu".into(), groups: None },
-            NavSection { name: "Net".into(), route: "/network".into(), groups: None },
+            NavSection {
+                name: "CPU".into(),
+                route: "/cpu".into(),
+                groups: None,
+            },
+            NavSection {
+                name: "Net".into(),
+                route: "/network".into(),
+                groups: None,
+            },
         ]
     }
 
@@ -294,20 +290,40 @@ mod tests {
     #[test]
     fn set_section_groups_stores_body() {
         let mut app = App::new(sections());
-        app.set_section_groups(0, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        app.set_section_groups(
+            0,
+            vec![NavGroup {
+                name: "g".into(),
+                plots: vec![],
+            }],
+        );
         assert!(app.sections[0].groups.is_some());
     }
 
     #[test]
     fn reconcile_preserves_loaded_groups_and_selection_by_route() {
         let mut app = App::new(sections()); // [CPU /cpu, Net /network]
-        app.set_section_groups(1, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        app.set_section_groups(
+            1,
+            vec![NavGroup {
+                name: "g".into(),
+                plots: vec![],
+            }],
+        );
         app.selected_section = 1; // on /network
 
         // A new section appears before the others; /cpu disappears.
         let latest = vec![
-            NavSection { name: "GPU".into(), route: "/gpu".into(), groups: None },
-            NavSection { name: "Net".into(), route: "/network".into(), groups: None },
+            NavSection {
+                name: "GPU".into(),
+                route: "/gpu".into(),
+                groups: None,
+            },
+            NavSection {
+                name: "Net".into(),
+                route: "/network".into(),
+                groups: None,
+            },
         ];
         app.reconcile_sections(latest);
 
@@ -323,7 +339,13 @@ mod tests {
     #[test]
     fn reconcile_is_noop_when_routes_match() {
         let mut app = App::new(sections());
-        app.set_section_groups(0, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        app.set_section_groups(
+            0,
+            vec![NavGroup {
+                name: "g".into(),
+                plots: vec![],
+            }],
+        );
         // Same routes in the same order (bodies None) — must not wipe the
         // already-loaded group on /cpu.
         app.reconcile_sections(sections());

@@ -228,7 +228,7 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
                             Action::LoadSection(idx) => {
                                 ensure_section_loaded(&state, &mut app, idx);
                             }
-                            Action::None | Action::Redraw | Action::ToggleHelp => {}
+                            Action::None | Action::Redraw => {}
                         }
                     }
                 }

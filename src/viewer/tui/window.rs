@@ -77,7 +77,9 @@ mod tests {
     #[test]
     fn resolve_clamps_start_to_extent() {
         // extent only 30s wide, but window is 60s: start clamps to min.
-        let r = TimeWindow::Last1m.resolve(Some((100.0, 130.0)), 1.0).unwrap();
+        let r = TimeWindow::Last1m
+            .resolve(Some((100.0, 130.0)), 1.0)
+            .unwrap();
         assert_eq!(r, (100.0, 130.0, 1.0));
     }
 
@@ -89,7 +91,9 @@ mod tests {
 
     #[test]
     fn resolve_windowed_uses_span_from_end() {
-        let r = TimeWindow::Last5m.resolve(Some((0.0, 1000.0)), 1.0).unwrap();
+        let r = TimeWindow::Last5m
+            .resolve(Some((0.0, 1000.0)), 1.0)
+            .unwrap();
         assert_eq!(r, (700.0, 1000.0, 1.0));
     }
 

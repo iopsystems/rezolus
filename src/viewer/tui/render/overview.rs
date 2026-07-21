@@ -45,15 +45,27 @@ pub fn tiles() -> Vec<Tile> {
         // CPU busy fraction: ns of CPU consumed per second / cores / 1e9.
         Tile {
             title: "CPU Utilization",
-            def: line("sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000", Some("percentage")),
+            def: line(
+                "sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000",
+                Some("percentage"),
+            ),
         },
-        Tile { title: "Runqueue Latency", def: pct("scheduler_runqueue_latency") },
-        Tile { title: "Syscall Rate", def: line("sum(irate(syscall[5m]))", Some("rate")) },
+        Tile {
+            title: "Runqueue Latency",
+            def: pct("scheduler_runqueue_latency"),
+        },
+        Tile {
+            title: "Syscall Rate",
+            def: line("sum(irate(syscall[5m]))", Some("rate")),
+        },
         Tile {
             title: "Network Throughput",
             def: line("sum(irate(network_bytes[5m])) * 8", Some("bitrate")),
         },
-        Tile { title: "Block IO Latency", def: pct("blockio_latency") },
+        Tile {
+            title: "Block IO Latency",
+            def: pct("blockio_latency"),
+        },
         Tile {
             title: "Memory Used",
             def: line("memory_total - memory_available", Some("bytes")),
@@ -93,7 +105,10 @@ pub fn draw_overview(f: &mut Frame, tiles: &[Tile], data: &[ChartData]) {
 
     let row_areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(vec![Constraint::Ratio(1, plan.rows.max(1) as u32); plan.rows as usize])
+        .constraints(vec![
+            Constraint::Ratio(1, plan.rows.max(1) as u32);
+            plan.rows as usize
+        ])
         .split(area);
 
     for r in 0..plan.rows {
@@ -102,7 +117,10 @@ pub fn draw_overview(f: &mut Frame, tiles: &[Tile], data: &[ChartData]) {
         };
         let cells = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Ratio(1, plan.cols.max(1) as u32); plan.cols as usize])
+            .constraints(vec![
+                Constraint::Ratio(1, plan.cols.max(1) as u32);
+                plan.cols as usize
+            ])
             .split(*row_area);
         for c in 0..plan.cols {
             let idx = (r * plan.cols + c) as usize;

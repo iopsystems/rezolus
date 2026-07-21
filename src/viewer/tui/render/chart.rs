@@ -20,7 +20,9 @@ const PALETTE: [Color; 6] = [
 /// Render a single plot into `area`. Handles the Lines / Empty / Error /
 /// Unsupported states.
 pub fn draw_chart(f: &mut Frame, area: Rect, title: &str, data: &ChartData) {
-    let block = Block::default().borders(Borders::ALL).title(title.to_string());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title.to_string());
     match data {
         ChartData::Lines(series) => draw_lines(f, area, block, series),
         ChartData::Empty => {
@@ -90,12 +92,10 @@ fn draw_lines(f: &mut Frame, area: Rect, block: Block, series: &[Series]) {
     let chart = Chart::new(datasets)
         .block(block)
         .x_axis(Axis::default().bounds(xb))
-        .y_axis(
-            Axis::default().bounds(yb).labels(vec![
-                Span::raw(format!("{:.3}", yb[0])),
-                Span::raw(format!("{:.3}", yb[1])),
-            ]),
-        );
+        .y_axis(Axis::default().bounds(yb).labels(vec![
+            Span::raw(format!("{:.3}", yb[0])),
+            Span::raw(format!("{:.3}", yb[1])),
+        ]));
     f.render_widget(chart, area);
 }
 

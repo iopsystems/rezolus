@@ -55,9 +55,7 @@ pub fn parse_plot(plot: &serde_json::Value) -> Option<PlotDef> {
         .and_then(|o| o.get("type"))
         .and_then(|t| t.as_str())
         .unwrap_or("gauge");
-    let subtype = opts
-        .and_then(|o| o.get("subtype"))
-        .and_then(|s| s.as_str());
+    let subtype = opts.and_then(|o| o.get("subtype")).and_then(|s| s.as_str());
     let unit_system = opts
         .and_then(|o| o.get("format"))
         .and_then(|f| f.get("unit_system"))
