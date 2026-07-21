@@ -6,6 +6,7 @@ mod app;
 mod layout;
 mod model;
 mod query;
+mod render;
 mod window;
 
 /// Entry point for the TUI. Replaces the axum server when `--tui` is set.
