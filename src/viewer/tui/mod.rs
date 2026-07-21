@@ -138,6 +138,11 @@ fn load_section_charts(state: &AppState, app: &App) -> Vec<(String, ChartData)> 
 }
 
 /// Entry point for the TUI. Replaces the axum server when `--tui` is set.
+///
+/// `_rt` is the process tokio runtime. In live mode the ingest loop it drives
+/// was already spawned by `init_live_mode`; the TUI itself is synchronous and
+/// reads the shared TSDB. The handle is kept in the signature so the runtime
+/// outlives the ingest task and for future async-driven refresh.
 pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     // Populate the nav (file mode: from the loaded data; live mode: the
     // ingest loop is already running and has produced at least the initial
@@ -175,54 +180,67 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     // Redraw cadence: 1s, or coarser if the source samples slower.
     let tick = Duration::from_millis(1000);
 
+    // Whether the visible screen needs re-querying + redrawing this
+    // iteration. Live mode is always dirty (new samples arrive each tick);
+    // file mode is dirty only after input/resize (the data never changes),
+    // so an idle file-mode TUI does no work between keystrokes instead of
+    // re-running PromQL for every visible plot every second.
+    let mut dirty = true;
+
     loop {
         // In live mode, refresh the nav so newly-seen sections appear (and
         // vanished ones are pruned), preserving loaded bodies and selection.
         if live {
             metadata::regenerate_dashboards(&state);
             app.reconcile_sections(initial_sections(&state));
+            dirty = true;
         }
 
         let selected = app.selected_section;
         ensure_section_loaded(&state, &mut app, selected);
 
-        // Gather per-screen render inputs.
-        let section_charts = if app.screen == Screen::Browser {
-            load_section_charts(&state, &app)
-        } else {
-            Vec::new()
-        };
-        let overview_data: Vec<ChartData> = if app.screen == Screen::Overview {
-            let data = state.baseline_data();
-            overview_tiles
-                .iter()
-                .map(|t| load_chart(data.as_ref(), &t.def, app.window))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        if dirty {
+            // Gather per-screen render inputs.
+            let section_charts = if app.screen == Screen::Browser {
+                load_section_charts(&state, &app)
+            } else {
+                Vec::new()
+            };
+            let overview_data: Vec<ChartData> = if app.screen == Screen::Overview {
+                let data = state.baseline_data();
+                overview_tiles
+                    .iter()
+                    .map(|t| load_chart(data.as_ref(), &t.def, app.window))
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
-        let draw_res = guard.term.draw(|f| {
-            match app.screen {
-                Screen::Overview => {
-                    render::overview::draw_overview(f, &overview_tiles, &overview_data)
+            let draw_res = guard.term.draw(|f| {
+                match app.screen {
+                    Screen::Overview => {
+                        render::overview::draw_overview(f, &overview_tiles, &overview_data)
+                    }
+                    Screen::Browser => render::browser::draw_browser(f, &app, &section_charts),
                 }
-                Screen::Browser => render::browser::draw_browser(f, &app, &section_charts),
+                if app.show_help {
+                    render::help::draw_help(f);
+                }
+            });
+            if draw_res.is_err() {
+                break;
             }
-            if app.show_help {
-                render::help::draw_help(f);
-            }
-        });
-        if draw_res.is_err() {
-            break;
+            dirty = false;
         }
 
-        // Input with a timeout so live mode keeps ticking.
+        // Input with a timeout so live mode keeps ticking. Any key or resize
+        // marks the screen dirty so the next iteration re-queries and redraws.
         let poll = event::poll(tick).unwrap_or(false);
         if poll {
             match event::read() {
                 Ok(Event::Key(k)) if k.kind == event::KeyEventKind::Press => {
                     if let Some(key) = decode_key(k) {
+                        dirty = true;
                         match app.on_key(key) {
                             Action::Quit => break,
                             Action::LoadSection(idx) => {
@@ -232,12 +250,61 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
                         }
                     }
                 }
-                Ok(Event::Resize(_, _)) => { /* loop redraws */ }
+                Ok(Event::Resize(_, _)) => dirty = true,
                 _ => {}
             }
         }
-        // In file mode with no pending input, we still loop and redraw;
-        // that is cheap and keeps resize handling simple.
     }
     drop(guard);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn ctrl_c_maps_to_quit_before_bare_c() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(decode_key(ctrl_c), Some(Key::Quit));
+        // A bare 'c' is not a mapped key.
+        assert_eq!(decode_key(press(KeyCode::Char('c'))), None);
+    }
+
+    #[test]
+    fn keybindings_decode_as_documented() {
+        assert_eq!(decode_key(press(KeyCode::Char('q'))), Some(Key::Quit));
+        assert_eq!(decode_key(press(KeyCode::Char('?'))), Some(Key::Help));
+        assert_eq!(decode_key(press(KeyCode::Tab)), Some(Key::ToggleScreen));
+        assert_eq!(
+            decode_key(press(KeyCode::Char('o'))),
+            Some(Key::ToggleScreen)
+        );
+        assert_eq!(decode_key(press(KeyCode::Char(']'))), Some(Key::GrowWindow));
+        assert_eq!(
+            decode_key(press(KeyCode::Char('['))),
+            Some(Key::ShrinkWindow)
+        );
+        assert_eq!(decode_key(press(KeyCode::Down)), Some(Key::Down));
+        assert_eq!(decode_key(press(KeyCode::Char('j'))), Some(Key::Down));
+        assert_eq!(decode_key(press(KeyCode::Up)), Some(Key::Up));
+        assert_eq!(decode_key(press(KeyCode::Char('k'))), Some(Key::Up));
+        assert_eq!(decode_key(press(KeyCode::Enter)), Some(Key::Descend));
+        assert_eq!(decode_key(press(KeyCode::Right)), Some(Key::Descend));
+        assert_eq!(decode_key(press(KeyCode::Char('l'))), Some(Key::Descend));
+        assert_eq!(decode_key(press(KeyCode::Esc)), Some(Key::Ascend));
+        assert_eq!(decode_key(press(KeyCode::Left)), Some(Key::Ascend));
+        assert_eq!(decode_key(press(KeyCode::Char('h'))), Some(Key::Ascend));
+        assert_eq!(decode_key(press(KeyCode::Char('r'))), Some(Key::Refresh));
+    }
+
+    #[test]
+    fn unmapped_key_is_ignored() {
+        assert_eq!(decode_key(press(KeyCode::Char('z'))), None);
+        assert_eq!(decode_key(press(KeyCode::F(5))), None);
+    }
 }
