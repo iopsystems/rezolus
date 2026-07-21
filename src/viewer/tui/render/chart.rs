@@ -62,6 +62,13 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
     if (ymax - ymin).abs() < f64::EPSILON {
         ymax = ymin + 1.0;
     }
+    // A zero-width x range makes ratatui's Canvas drop every point (it
+    // divides by the x span), so a single-point series — or the first
+    // live poll where all points share one timestamp — would render
+    // blank. Widen it the same way we widen a flat y range.
+    if (xmax - xmin).abs() < f64::EPSILON {
+        xmax = xmin + 1.0;
+    }
     ([xmin, xmax], [ymin, ymax])
 }
 
@@ -107,6 +114,23 @@ mod tests {
         .unwrap();
     }
 
+    /// Render and return the flattened buffer text, so tests can assert
+    /// that something was actually painted (not just "did not panic").
+    fn render_text(data: &ChartData, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| {
+            draw_chart(f, f.area(), "Test", data);
+        })
+        .unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
+
     #[test]
     fn renders_lines_without_panic() {
         let data = ChartData::Lines(vec![Series {
@@ -130,5 +154,23 @@ mod tests {
             points: vec![(0.0, 0.0)],
         }]);
         render(&data, 12, 5);
+    }
+
+    #[test]
+    fn single_point_series_paints_a_glyph() {
+        // A degenerate x range (one point, or all points at one timestamp)
+        // must still draw the point — regression guard for the missing
+        // x-bounds widening in `bounds()`.
+        let data = ChartData::Lines(vec![Series {
+            label: "p50".into(),
+            points: vec![(5.0, 5.0)],
+        }]);
+        let text = render_text(&data, 40, 15);
+        // Braille plot glyphs live in the U+2800 block; at least one must
+        // be present in the rendered buffer.
+        assert!(
+            text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c)),
+            "expected a braille plot glyph, buffer was: {text:?}"
+        );
     }
 }
