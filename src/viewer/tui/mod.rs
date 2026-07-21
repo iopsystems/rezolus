@@ -2,6 +2,7 @@
 
 use super::state::AppState;
 
+mod model;
 mod window;
 
 /// Entry point for the TUI. Replaces the axum server when `--tui` is set.
