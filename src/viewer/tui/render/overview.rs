@@ -38,16 +38,26 @@ fn pct(query: &str) -> PlotDef {
 
 /// The v1 curated tile set, in priority order (lowest priority dropped
 /// first when the terminal is small). Queries mirror the web overview
-/// section; adjust once the prototype is tuned against real data
-/// (see Task 11 — these `base_query` strings are placeholders).
+/// section (`crates/dashboard/src/dashboard/overview.rs`) and the memory
+/// section so they resolve against the real metric catalog.
 pub fn tiles() -> Vec<Tile> {
     vec![
-        Tile { title: "CPU Utilization", def: line("cpu_usage_pct", Some("percentage")) },
+        // CPU busy fraction: ns of CPU consumed per second / cores / 1e9.
+        Tile {
+            title: "CPU Utilization",
+            def: line("sum(irate(cpu_usage[5m])) / cpu_cores / 1000000000", Some("percentage")),
+        },
         Tile { title: "Runqueue Latency", def: pct("scheduler_runqueue_latency") },
-        Tile { title: "Syscall Rate", def: line("syscall_rate", Some("rate")) },
-        Tile { title: "Network Throughput", def: line("network_throughput_bytes", Some("bitrate")) },
+        Tile { title: "Syscall Rate", def: line("sum(irate(syscall[5m]))", Some("rate")) },
+        Tile {
+            title: "Network Throughput",
+            def: line("sum(irate(network_bytes[5m])) * 8", Some("bitrate")),
+        },
         Tile { title: "Block IO Latency", def: pct("blockio_latency") },
-        Tile { title: "Memory Used", def: line("memory_used_bytes", Some("bytes")) },
+        Tile {
+            title: "Memory Used",
+            def: line("memory_total - memory_available", Some("bytes")),
+        },
     ]
 }
 
