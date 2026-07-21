@@ -167,6 +167,45 @@ impl App {
             s.groups = Some(groups);
         }
     }
+
+    /// Reconcile the nav list against a freshly-derived one (live mode).
+    /// Adds sections that newly appeared, drops ones that disappeared, and
+    /// preserves already-loaded group bodies and the current selection by
+    /// route (so live nav churn never loses loaded data or misplaces the
+    /// cursor). A no-op when the route sets already match.
+    pub fn reconcile_sections(&mut self, latest: Vec<NavSection>) {
+        let same = latest.len() == self.sections.len()
+            && latest
+                .iter()
+                .zip(self.sections.iter())
+                .all(|(a, b)| a.route == b.route);
+        if same {
+            return;
+        }
+        let selected_route = self
+            .sections
+            .get(self.selected_section)
+            .map(|s| s.route.clone());
+        let mut existing: std::collections::HashMap<String, Option<Vec<super::model::NavGroup>>> =
+            std::mem::take(&mut self.sections)
+                .into_iter()
+                .map(|s| (s.route, s.groups))
+                .collect();
+        self.sections = latest
+            .into_iter()
+            .map(|mut s| {
+                if let Some(groups) = existing.remove(&s.route) {
+                    s.groups = groups;
+                }
+                s
+            })
+            .collect();
+        // Keep the cursor on the same section if it still exists, else clamp.
+        self.selected_section = selected_route
+            .and_then(|r| self.sections.iter().position(|s| s.route == r))
+            .unwrap_or(0)
+            .min(self.sections.len().saturating_sub(1));
+    }
 }
 
 /// Logical key, decoded from crossterm events by the loop.
@@ -256,6 +295,38 @@ mod tests {
     fn set_section_groups_stores_body() {
         let mut app = App::new(sections());
         app.set_section_groups(0, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        assert!(app.sections[0].groups.is_some());
+    }
+
+    #[test]
+    fn reconcile_preserves_loaded_groups_and_selection_by_route() {
+        let mut app = App::new(sections()); // [CPU /cpu, Net /network]
+        app.set_section_groups(1, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        app.selected_section = 1; // on /network
+
+        // A new section appears before the others; /cpu disappears.
+        let latest = vec![
+            NavSection { name: "GPU".into(), route: "/gpu".into(), groups: None },
+            NavSection { name: "Net".into(), route: "/network".into(), groups: None },
+        ];
+        app.reconcile_sections(latest);
+
+        assert_eq!(app.sections.len(), 2);
+        assert_eq!(app.sections[0].route, "/gpu");
+        // Selection follows /network to its new index.
+        assert_eq!(app.selected_section, 1);
+        assert_eq!(app.sections[1].route, "/network");
+        // Its already-loaded body was carried over, not dropped.
+        assert!(app.sections[1].groups.is_some());
+    }
+
+    #[test]
+    fn reconcile_is_noop_when_routes_match() {
+        let mut app = App::new(sections());
+        app.set_section_groups(0, vec![NavGroup { name: "g".into(), plots: vec![] }]);
+        // Same routes in the same order (bodies None) — must not wipe the
+        // already-loaded group on /cpu.
+        app.reconcile_sections(sections());
         assert!(app.sections[0].groups.is_some());
     }
 }

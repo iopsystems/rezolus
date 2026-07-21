@@ -21,6 +21,18 @@ use app::{Action, App, Key, Screen};
 use model::{parse_section_groups, NavSection};
 use query::{load_chart, ChartData};
 
+/// Best-effort return of the terminal to a sane state: leave raw mode,
+/// leave the alternate screen, show the cursor. Idempotent, so the RAII
+/// guard's `Drop`, the panic hook, and the SIGINT handler can all call it.
+fn restore_terminal() {
+    let _ = terminal::disable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        terminal::LeaveAlternateScreen,
+        ratatui::crossterm::cursor::Show
+    );
+}
+
 /// RAII guard: enters the alternate screen + raw mode on construction and
 /// restores the terminal on drop (including on panic/unwind).
 struct TerminalGuard {
@@ -39,9 +51,7 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(self.term.backend_mut(), terminal::LeaveAlternateScreen);
-        let _ = self.term.show_cursor();
+        restore_terminal();
     }
 }
 
@@ -137,6 +147,23 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     let mut app = App::new(initial_sections(&state));
     let overview_tiles = render::overview::tiles();
 
+    // A panic inside the draw loop, or an external SIGINT (`kill -INT`, a
+    // supervisor) delivered while the terminal is in raw mode, would
+    // otherwise leave the terminal unusable — neither runs `TerminalGuard`'s
+    // `Drop`. Restore the terminal in both paths. (A keyboard Ctrl-C in raw
+    // mode arrives as a key event and quits gracefully via the guard; the
+    // process-wide exit-on-SIGINT handler is intentionally not installed for
+    // `--tui`, see `run()`.)
+    let default_panic = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        restore_terminal();
+        default_panic(info);
+    }));
+    let _ = ctrlc::set_handler(|| {
+        restore_terminal();
+        std::process::exit(130);
+    });
+
     let mut guard = match TerminalGuard::new() {
         Ok(g) => g,
         Err(e) => {
@@ -149,19 +176,11 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     let tick = Duration::from_millis(1000);
 
     loop {
-        // In live mode, refresh the nav so newly-seen sections appear.
+        // In live mode, refresh the nav so newly-seen sections appear (and
+        // vanished ones are pruned), preserving loaded bodies and selection.
         if live {
             metadata::regenerate_dashboards(&state);
-            // Reconcile: if new sections appeared, extend the nav list.
-            let latest = initial_sections(&state);
-            if latest.len() != app.sections.len() {
-                // Preserve loaded bodies by name where possible.
-                for s in latest {
-                    if !app.sections.iter().any(|e| e.route == s.route) {
-                        app.sections.push(s);
-                    }
-                }
-            }
+            app.reconcile_sections(initial_sections(&state));
         }
 
         let selected = app.selected_section;

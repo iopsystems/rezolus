@@ -339,7 +339,13 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
-    ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+    // The TUI installs its own SIGINT handler (one that restores the
+    // terminal first); a bare process::exit here would bypass that and
+    // leave the terminal in raw mode. In raw mode a keyboard Ctrl-C is
+    // delivered as a normal key event and handled as a graceful quit.
+    if !config.tui {
+        ctrlc::set_handler(move || std::process::exit(2)).expect("failed to set ctrl-c handler");
+    }
 
     let registry = load_template_registry(config.templates_dir.as_deref());
 
