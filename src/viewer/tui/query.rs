@@ -105,6 +105,59 @@ fn series_label(metric: &std::collections::HashMap<String, String>) -> String {
         .unwrap_or_default()
 }
 
+/// Downsample a time-ordered `(timestamp, value)` series to roughly `target`
+/// buckets, keeping each bucket's **min and max** so short-lived spikes
+/// survive — a post-eval min/max reducer (PromQL step decimation can't do
+/// this: histograms ignore step, and averaging hides spikes). Each bucket
+/// emits its extremes ordered by timestamp so a line renderer sweeps the
+/// bucket's full vertical range. Input is assumed ascending by timestamp
+/// (as `query_range` returns it); returned unchanged when already sparse
+/// enough (≤ ~2 points per target column).
+pub fn min_max_decimate(points: &[(f64, f64)], target: usize) -> Vec<(f64, f64)> {
+    let target = target.max(1);
+    if points.len() <= target.saturating_mul(2) {
+        return points.to_vec();
+    }
+    let x0 = points.first().map(|p| p.0).unwrap_or(0.0);
+    let x1 = points.last().map(|p| p.0).unwrap_or(x0);
+    let span = (x1 - x0).max(f64::EPSILON);
+
+    let mut out: Vec<(f64, f64)> = Vec::with_capacity(target * 2);
+    // Extremes of the bucket currently being accumulated: (bucket index,
+    // lowest-value point so far, highest-value point so far).
+    type Bucket = (usize, (f64, f64), (f64, f64));
+    let mut cur: Option<Bucket> = None;
+
+    let flush = |out: &mut Vec<(f64, f64)>, lo: (f64, f64), hi: (f64, f64)| {
+        // Emit in timestamp order so the swept segment reads naturally.
+        let (a, b) = if lo.0 <= hi.0 { (lo, hi) } else { (hi, lo) };
+        out.push(a);
+        if b != a {
+            out.push(b);
+        }
+    };
+
+    for &(x, y) in points {
+        let bucket = ((((x - x0) / span) * target as f64) as usize).min(target - 1);
+        match cur {
+            Some((b, lo, hi)) if b == bucket => {
+                let lo = if y < lo.1 { (x, y) } else { lo };
+                let hi = if y > hi.1 { (x, y) } else { hi };
+                cur = Some((b, lo, hi));
+            }
+            Some((_, lo, hi)) => {
+                flush(&mut out, lo, hi);
+                cur = Some((bucket, (x, y), (x, y)));
+            }
+            None => cur = Some((bucket, (x, y), (x, y))),
+        }
+    }
+    if let Some((_, lo, hi)) = cur {
+        flush(&mut out, lo, hi);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::model::PlotKind;
@@ -141,5 +194,45 @@ mod tests {
         assert_eq!(percentile_label(0.5), "p50");
         assert_eq!(percentile_label(0.99), "p99");
         assert_eq!(percentile_label(0.999), "p99.9");
+    }
+
+    #[test]
+    fn decimate_returns_input_when_already_sparse() {
+        let pts = vec![(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)];
+        assert_eq!(min_max_decimate(&pts, 10), pts);
+    }
+
+    #[test]
+    fn decimate_bounds_output_size() {
+        // 1000 points into ~10 buckets -> at most 2 points per bucket.
+        let pts: Vec<(f64, f64)> = (0..1000).map(|i| (i as f64, (i % 7) as f64)).collect();
+        let out = min_max_decimate(&pts, 10);
+        assert!(out.len() < pts.len());
+        assert!(out.len() <= 10 * 2, "len {}", out.len());
+    }
+
+    #[test]
+    fn decimate_preserves_a_spike() {
+        // A flat baseline with one tall spike buried in the middle. The
+        // spike's value must survive downsampling (this is the whole point).
+        let mut pts: Vec<(f64, f64)> = (0..1000).map(|i| (i as f64, 1.0)).collect();
+        pts[500].1 = 999.0;
+        let out = min_max_decimate(&pts, 8);
+        let max_y = out.iter().map(|p| p.1).fold(f64::MIN, f64::max);
+        assert_eq!(max_y, 999.0, "spike lost: {out:?}");
+        // The baseline min is also preserved.
+        let min_y = out.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+        assert_eq!(min_y, 1.0);
+    }
+
+    #[test]
+    fn decimate_output_is_time_ordered_across_buckets() {
+        let pts: Vec<(f64, f64)> = (0..1000).map(|i| (i as f64, (i as f64).sin())).collect();
+        let out = min_max_decimate(&pts, 20);
+        // Bucket boundaries are ascending, so consecutive bucket pairs never
+        // step backwards by more than one bucket's width (~50 here).
+        for w in out.windows(2) {
+            assert!(w[1].0 >= w[0].0 - 60.0, "big backstep: {:?}", w);
+        }
     }
 }

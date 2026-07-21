@@ -5,7 +5,7 @@ use ratatui::text::Span;
 use ratatui::widgets::{Axis, Block, Borders, Chart, Dataset, GraphType};
 use ratatui::Frame;
 
-use crate::viewer::tui::query::{ChartData, Series};
+use crate::viewer::tui::query::{min_max_decimate, ChartData, Series};
 use crate::viewer::tui::units::format_value;
 
 /// Series palette, cycled by index. Explicit high-luminance RGB (not the
@@ -81,6 +81,15 @@ fn bounds(series: &[Series]) -> ([f64; 2], [f64; 2]) {
 
 fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, series: &[Series]) {
     let (xb, yb) = bounds(series);
+    // Downsample each series to about one bucket per horizontal cell (braille
+    // gives ~2 sub-columns/cell), keeping per-bucket min/max so spikes survive
+    // and ratatui iterates O(width) points per frame instead of the full,
+    // possibly thousands-long, series. `reduced` outlives the `Chart` below.
+    let target = (area.width as usize).saturating_mul(2).max(1);
+    let reduced: Vec<Vec<(f64, f64)>> = series
+        .iter()
+        .map(|s| min_max_decimate(&s.points, target))
+        .collect();
     let datasets: Vec<Dataset> = series
         .iter()
         .enumerate()
@@ -90,7 +99,7 @@ fn draw_lines(f: &mut Frame, area: Rect, block: Block, unit: Option<&str>, serie
                 .marker(symbols::Marker::Braille)
                 .graph_type(GraphType::Line)
                 .style(Style::default().fg(PALETTE[i % PALETTE.len()]))
-                .data(&s.points)
+                .data(&reduced[i])
         })
         .collect();
 
@@ -177,5 +186,19 @@ mod tests {
             text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c)),
             "expected a braille plot glyph, buffer was: {text:?}"
         );
+    }
+
+    #[test]
+    fn long_series_renders_via_decimation_without_panic() {
+        // Exercise the min/max decimation path in draw_lines with far more
+        // points than horizontal cells, including a buried spike.
+        let mut points: Vec<(f64, f64)> = (0..5000).map(|i| (i as f64, 1.0)).collect();
+        points[2500].1 = 900.0;
+        let data = ChartData::Lines(vec![Series {
+            label: "p999".into(),
+            points,
+        }]);
+        let text = render_text(&data, 60, 18);
+        assert!(text.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c)));
     }
 }
