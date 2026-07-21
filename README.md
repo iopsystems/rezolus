@@ -217,7 +217,24 @@ rezolus view http://localhost:4241
 rezolus view
 ```
 
-The same dashboard is also available as a browser-only static site under
+Prefer the terminal? Pass `--tui` to render in the terminal instead of the
+browser — a curated live overview plus a drill-down browser of the same
+sections. It works with a parquet file or a live agent URL (not upload-only
+mode), and serves no HTTP, so `--listen` and the `--proxy-*` flags don't apply.
+A/B compare remains browser-only.
+
+```bash
+# explore a recording in the terminal
+rezolus view --tui rezolus.parquet
+# stream a live agent in the terminal UI
+rezolus view --tui http://localhost:4241
+```
+
+Keys: `Tab`/`o` toggle overview ↔ browser, `j`/`k` move/scroll, `Enter`/`l`
+open, `Esc`/`h` back, `[` / `]` change the time window, `r` refresh, `?` help,
+`q` quit.
+
+The same web dashboard is also available as a browser-only static site under
 [`site/viewer/`](site/viewer/), powered by the
 [`crates/viewer`](crates/viewer) WASM module. It runs the PromQL query engine
 client-side, so parquet files never leave the browser.
