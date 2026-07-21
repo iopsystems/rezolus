@@ -42,6 +42,7 @@ mod metadata;
 mod report_save;
 mod routes;
 mod state;
+mod tui;
 
 use capture_registry::CaptureId;
 use state::AppState;
@@ -199,6 +200,12 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            clap::Arg::new("TUI")
+                .long("tui")
+                .help("Render a terminal UI instead of the web dashboard (live agent or parquet file; not upload-only)")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             clap::Arg::new("CACHE_SIZE_MB")
                 .long("cache-size-mb")
                 .value_name("MB")
@@ -225,6 +232,7 @@ pub struct Config {
     proxy_allow: proxy_allow::Allowlist,
     /// Buffer pool budget in bytes. Defaults to `DEFAULT_CACHE_SIZE_BYTES`.
     cache_size_bytes: usize,
+    pub tui: bool,
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -314,6 +322,7 @@ impl TryFrom<ArgMatches> for Config {
             templates_dir: args.get_one::<PathBuf>("templates").cloned(),
             proxy_allow,
             cache_size_bytes,
+            tui: args.get_flag("TUI"),
         })
     }
 }
@@ -370,6 +379,16 @@ pub fn run(config: Config) {
         warn!(
             "--experiment ignored outside of file mode (v1 compare requires a baseline parquet file)"
         );
+    }
+
+    if config.tui {
+        if matches!(config.source, Source::Empty) {
+            eprintln!("--tui needs a data source: a live agent URL or a parquet file (upload-only is not supported)");
+            std::process::exit(1);
+        }
+        let live = matches!(config.source, Source::Live(_));
+        tui::run_tui(state, live, &rt);
+        return;
     }
 
     let listener = std::net::TcpListener::bind(config.listen).expect("failed to listen");
