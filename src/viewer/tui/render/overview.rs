@@ -103,12 +103,14 @@ pub fn draw_overview(f: &mut Frame, tiles: &[Tile], data: &[ChartData]) {
         return;
     }
 
+    // Fixed-height rows packed from the top; a trailing flexible spacer
+    // absorbs leftover height so tiles stay landscape instead of stretching.
+    let mut row_constraints: Vec<Constraint> =
+        vec![Constraint::Length(plan.row_height); plan.rows as usize];
+    row_constraints.push(Constraint::Min(0));
     let row_areas = Layout::default()
         .direction(Direction::Vertical)
-        .constraints(vec![
-            Constraint::Ratio(1, plan.rows.max(1) as u32);
-            plan.rows as usize
-        ])
+        .constraints(row_constraints)
         .split(area);
 
     for r in 0..plan.rows {

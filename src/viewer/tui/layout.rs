@@ -5,37 +5,61 @@
 pub const MIN_WIDTH: u16 = 30;
 pub const MIN_HEIGHT: u16 = 10;
 
-/// Per-tile minimum cell size on the overview grid.
-pub const TILE_MIN_W: u16 = 24;
-pub const TILE_MIN_H: u16 = 6;
+/// Per-tile minimum height on the overview grid, below which a tile is too
+/// cramped to read.
+pub const TILE_MIN_H: u16 = 7;
 
-/// Overview grid decision: how many columns, and how many tiles fit.
+/// Preferred tile width. We fit as many preferred-width tiles across as the
+/// terminal allows, rather than as *many* tiles as possible — otherwise a
+/// wide terminal packs the tiles into narrow full-height strips. This also
+/// keeps every tile comfortably above the readable minimum width.
+pub const TILE_PREF_W: u16 = 48;
+
+/// Cap on tile height. Charts read best wider-than-tall, so we never stretch
+/// a tile past this even on a tall terminal; rows pack from the top and the
+/// leftover height is left blank rather than inflating tiles into vertical
+/// strips.
+pub const TILE_MAX_H: u16 = 14;
+
+/// Overview grid decision: column/row counts, how many tiles are shown, and
+/// the fixed per-row (tile) height in cells.
 #[derive(Debug, PartialEq, Eq)]
 pub struct GridPlan {
     pub cols: u16,
     pub rows: u16,
     pub visible: usize,
+    /// Fixed height of each tile row, in cells (already capped for aspect).
+    pub row_height: u16,
 }
 
 /// Compute the overview grid for `n` priority-ordered tiles in a `w`x`h`
-/// area. Drops lowest-priority tiles that do not fit vertically.
+/// area. Chooses a column count that keeps tiles readably wide, caps tile
+/// height so they stay landscape, and drops lowest-priority tiles that do
+/// not fit vertically.
 pub fn overview_grid(w: u16, h: u16, n: usize) -> GridPlan {
     if n == 0 {
         return GridPlan {
             cols: 0,
             rows: 0,
             visible: 0,
+            row_height: 0,
         };
     }
-    let cols = (w / TILE_MIN_W).max(1);
-    let max_rows = (h / TILE_MIN_H).max(1);
-    let capacity = (cols as usize) * (max_rows as usize);
-    let visible = n.min(capacity);
-    let rows = (visible as u16).div_ceil(cols);
+    // Columns: as many preferred-width tiles as fit, clamped to [1, n].
+    let cols = (w / TILE_PREF_W).clamp(1, n as u16);
+    let rows_needed = (n as u16).div_ceil(cols);
+    // Fixed tile height, capped so tiles stay landscape rather than filling
+    // a tall terminal; never below the readable minimum.
+    let row_height = (h / rows_needed).clamp(TILE_MIN_H, TILE_MAX_H);
+    // How many of those rows actually fit in the available height.
+    let rows_fit = (h / row_height).max(1);
+    let rows = rows_needed.min(rows_fit);
+    let visible = n.min((cols as usize) * (rows as usize));
     GridPlan {
         cols,
         rows,
         visible,
+        row_height,
     }
 }
 
@@ -73,24 +97,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grid_drops_tiles_that_dont_fit() {
-        // 50 wide => 2 cols; 12 high => 2 rows => capacity 4. 6 tiles => 4 visible.
-        let p = overview_grid(50, 12, 6);
-        assert_eq!(p.cols, 2);
-        assert_eq!(p.visible, 4);
-        assert_eq!(p.rows, 2);
+    fn grid_columns_scale_with_width_not_maximized() {
+        // Preferred width 48: ~one column per 48 cells, so tiles stay wide
+        // instead of being packed into as many narrow strips as fit.
+        assert_eq!(overview_grid(60, 40, 6).cols, 1);
+        assert_eq!(overview_grid(120, 40, 6).cols, 2);
+        assert_eq!(overview_grid(200, 40, 6).cols, 4);
+        // Never more columns than tiles.
+        assert!(overview_grid(1000, 40, 6).cols <= 6);
+    }
+
+    #[test]
+    fn grid_row_height_is_capped_landscape() {
+        // A tall terminal must not stretch tiles into vertical strips.
+        let p = overview_grid(120, 100, 6);
+        assert!(p.row_height <= TILE_MAX_H, "row_height {}", p.row_height);
+        assert!(p.row_height >= TILE_MIN_H);
     }
 
     #[test]
     fn grid_fits_all_when_room() {
-        let p = overview_grid(120, 30, 6);
+        let p = overview_grid(200, 40, 6);
         assert_eq!(p.visible, 6);
-        assert!(p.cols >= 4);
+    }
+
+    #[test]
+    fn grid_drops_tiles_when_too_short() {
+        // 60 wide => 1 col; a short terminal can only show a couple of the
+        // stacked tiles, so the rest are dropped rather than crushed.
+        let p = overview_grid(60, 16, 6);
+        assert_eq!(p.cols, 1);
+        assert!(p.visible < 6);
+        assert_eq!(p.visible, (p.cols * p.rows) as usize);
     }
 
     #[test]
     fn grid_single_column_when_narrow() {
-        let p = overview_grid(24, 30, 6);
+        let p = overview_grid(40, 30, 6);
         assert_eq!(p.cols, 1);
     }
 
