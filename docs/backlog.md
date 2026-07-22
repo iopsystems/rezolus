@@ -118,6 +118,17 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
   sub-items regardless of outcome: a "(median)" qualifier on the tooltip value,
   and verifying notebook/compare stats recompute from raw queries rather than
   decimated medians.
+- **Band views + budget policy redesign** — Open (design landed, pre-build).
+  Source: [band views](journal/2026-07-21-viewer-band-views.md). Three decided
+  pieces: (1) split spread ("what happened") from measurement ("what we can
+  claim") into distinct chart views, never overlaid; (2) budget policy
+  `native ≤ px/5 → raw, else min(px, ⌈native/5⌉)` honest buckets — fixes the
+  48-floor-as-cap bug and the stale "<4 min → native" doc claim
+  (element-gating is the recorded fallback); (3) interval-hull worst-case
+  envelope `[min(lo_i), max(hi_i)]` in the measurement view (possibility, not
+  observation — needs its own visual voice). Open: view-toggle scope
+  (per-chart + sticky global default is the leaning). End-state: unsnapped
+  timestamps contract the measurement view into an exception surface.
 
 ## Viewer — performance / live mode
 
