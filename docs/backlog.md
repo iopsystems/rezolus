@@ -152,6 +152,14 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
   the distributions show *how much* and how often (tail behavior, bimodality
   from a stalled sampling loop). Must re-derive from the zoom selection, not
   the full recording.
+  Related caveat, deliberately parked: the jitter timeline bypasses display-mode
+  decimation (`promql_query: null`) and renders through echarts LTTB, which has
+  no min/max envelope guarantee — an isolated spike can vanish at wide zoom
+  (~47 samples/px on a 28k-point recording at 600px). Client-side boxplot
+  bucketing of the deltas would fix it, but distributions may make it moot
+  (tail mass shows the spike regardless of timeline rendering). *Decision
+  2026-07-21: build the distributions first; add timeline bucketing only if
+  interpretability is still lacking.*
 
 ## Parquet / recorder
 
