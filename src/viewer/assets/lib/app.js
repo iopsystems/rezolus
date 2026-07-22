@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -79,6 +79,7 @@ let heatmapLoading = false;
 const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
+let currentTimeMode = 'grid';
 const sectionCacheState = createSectionCacheState();
 // Cache limit: overview (pinned) + active route + one look-ahead. Keeps
 // memory bounded on the static-site WASM viewer where each section body
@@ -583,6 +584,27 @@ const changeGranularity = async (step) => {
     } catch (_) { /* keep existing view on error */ }
 };
 
+const changeTimeMode = async (mode) => {
+    currentTimeMode = mode === 'raw' ? 'raw' : 'grid';
+    setRateMode(currentTimeMode);
+
+    const currentRoute = m.route.get();
+    const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
+
+    // Every cached rate/irate series is stale against the new time mode.
+    clearSectionResponses(sectionCacheState);
+    heatmapDataCache.clear();
+    chartsState.setZoom(null, { source: null });
+    chartsState.globalZoom = null;
+
+    const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
+    try {
+        const data = await loadSection(target);
+        if (data?.sections) preloadSections(data.sections);
+        m.redraw();
+    } catch (_) { /* keep existing view on error */ }
+};
+
 const toggleGlobalHeatmap = async (sectionRoute, groups) => {
     heatmapEnabled = !heatmapEnabled;
     const cached = heatmapDataCache.get(sectionRoute);
@@ -615,6 +637,8 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onUploadParquet,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
+    timeMode: currentTimeMode,
+    onTimeModeChange: changeTimeMode,
     nodeList,
     selectedNode,
     nodeVersions,

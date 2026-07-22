@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use metriken_query::{BufferPool, MetricsSource, ParquetReader};
+use metriken_query::{BufferPool, MetricsSource, ParquetReader, QueryOptions};
 
 /// Buffer pool budget for the WASM viewer: 64 MB.
 ///
@@ -366,9 +366,16 @@ impl Viewer {
     }
 
     /// Execute a PromQL range query. Returns JSON compatible with
-    /// /api/v1/query_range response format.
-    pub fn query_range(&self, query: &str, start: f64, end: f64, step: f64) -> String {
-        match self.reader.query_range(query, start, end, step) {
+    /// /api/v1/query_range response format. `rate_mode` is `"raw"` or (default)
+    /// grid — see `dashboard::display_wire::parse_rate_mode`.
+    pub fn query_range(&self, query: &str, start: f64, end: f64, step: f64, rate_mode: &str) -> String {
+        let qopts = QueryOptions::with_rate_mode(dashboard::display_wire::parse_rate_mode(Some(
+            rate_mode,
+        )));
+        match self
+            .reader
+            .query_range_opts(query, start, end, step, &qopts)
+        {
             Ok(result) => {
                 let json = serde_json::to_string(&result).unwrap_or_else(|e| {
                     format!(
@@ -398,8 +405,10 @@ impl Viewer {
         step: f64,
         points: usize,
         band: &str,
+        rate_mode: &str,
     ) -> Result<Vec<u8>, JsValue> {
         let band = dashboard::display_wire::parse_band(Some(band));
+        let rate_mode = dashboard::display_wire::parse_rate_mode(Some(rate_mode));
         match dashboard::display_wire::display_query(
             self.reader.as_ref(),
             query,
@@ -408,6 +417,7 @@ impl Viewer {
             step,
             points,
             band,
+            rate_mode,
         ) {
             Ok(dashboard::display_wire::DisplayWire::Binary(buf)) => Ok(buf),
             Ok(dashboard::display_wire::DisplayWire::Json(_)) => Err(JsValue::from_str(
@@ -650,9 +660,10 @@ impl WasmCaptureRegistry {
         start: f64,
         end: f64,
         step: f64,
+        rate_mode: &str,
     ) -> Result<String, JsValue> {
         self.require_slot(capture)
-            .map(|v| v.query_range(query, start, end, step))
+            .map(|v| v.query_range(query, start, end, step, rate_mode))
     }
 
     pub fn query(&self, capture: &str, query: &str, time: f64) -> Result<String, JsValue> {
@@ -668,9 +679,10 @@ impl WasmCaptureRegistry {
         step: f64,
         points: usize,
         band: &str,
+        rate_mode: &str,
     ) -> Result<Vec<u8>, JsValue> {
         self.require_slot(capture)
-            .and_then(|v| v.query_range_display(query, start, end, step, points, band))
+            .and_then(|v| v.query_range_display(query, start, end, step, points, band, rate_mode))
     }
 
     /// Initialise ServiceExtension templates for the given capture.  Mirrors

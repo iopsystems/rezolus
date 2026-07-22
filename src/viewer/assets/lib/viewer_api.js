@@ -127,7 +127,7 @@ const ViewerApi = {
         });
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined) {
+    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -137,6 +137,7 @@ const ViewerApi = {
         if (captureId && captureId !== 'baseline') {
             params.set('capture', captureId);
         }
+        if (rateMode && rateMode !== 'grid') params.set('rate_mode', rateMode);
         return backendRequest({
             method: 'GET',
             url: `/api/v1/query_range?${params.toString()}`,
@@ -149,7 +150,7 @@ const ViewerApi = {
     // (see routes.rs encode_display_binary) as an ArrayBuffer, or, when the
     // engine returns an error or a non-Series result, the parsed JSON under
     // `{ json }`. Uses raw fetch since m.request is JSON-oriented.
-    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined } = {}) {
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', signal = undefined, rateMode = 'grid' } = {}) {
         const params = new URLSearchParams({
             query,
             start: String(start),
@@ -160,6 +161,7 @@ const ViewerApi = {
         });
         if (band) params.set('band', band);
         if (captureId && captureId !== 'baseline') params.set('capture', captureId);
+        if (rateMode && rateMode !== 'grid') params.set('rate_mode', rateMode);
         const resp = await fetch(`/api/v1/query_range?${params.toString()}`, {
             credentials: 'include',
             cache: 'no-store',

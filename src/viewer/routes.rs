@@ -355,6 +355,10 @@ struct RangeQueryParams {
     /// Inner-band quantiles as `"lo,hi"` (e.g. `"0.25,0.75"`). Default IQR.
     #[serde(default)]
     band: Option<String>,
+    /// Rate time-alignment mode: `"raw"` for real sample timestamps; absent or
+    /// anything else is the default grid-aligned mode.
+    #[serde(default)]
+    rate_mode: Option<String>,
 }
 
 /// Run `f` against the resolved capture's data source; on a missing
@@ -392,8 +396,11 @@ async fn range_query(
     if params.format.as_deref() == Some("display") {
         return range_query_display(&state, &params);
     }
+    let qopts = metriken_query::QueryOptions::with_rate_mode(display_wire::parse_rate_mode(
+        params.rate_mode.as_deref(),
+    ));
     run_query(&state, params.capture.as_deref(), |data| {
-        data.query_range(&params.query, params.start, params.end, params.step)
+        data.query_range_opts(&params.query, params.start, params.end, params.step, &qopts)
     })
     .into_response()
 }
@@ -419,6 +426,7 @@ fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response 
         params.step,
         params.points.unwrap_or(500),
         display_wire::parse_band(params.band.as_deref()),
+        display_wire::parse_rate_mode(params.rate_mode.as_deref()),
     ) {
         Ok(display_wire::DisplayWire::Binary(buf)) => {
             ([(header::CONTENT_TYPE, "application/octet-stream")], buf).into_response()

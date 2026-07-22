@@ -330,4 +330,40 @@ const GranularitySelector = {
     },
 };
 
-export { TimeRangeBar, GranularitySelector };
+// Time mode selector — how rate/irate points are placed in time.
+//   Aligned (grid, default): grid-aligned per-step rate with uncertainty bands,
+//                            comparable across recordings.
+//   Raw:                     points at the real sample timestamps (un-aligned) —
+//                            for jitter/cadence and single-recording analysis.
+const TIME_MODE_OPTIONS = [
+    { value: 'grid', label: 'Aligned' },
+    { value: 'raw', label: 'Raw' },
+];
+
+const TimeModeSelector = {
+    view(vnode) {
+        const value = vnode.attrs.value || 'grid';
+        const onChange = vnode.attrs.onChange;
+        const hidden = vnode.attrs.hidden;
+        // Compare mode forces 'grid' (Raw is un-alignable across recordings).
+        const disabled = !!vnode.attrs.disabled;
+
+        return m('div.granularity-selector', {
+            style: { visibility: hidden ? 'hidden' : '' },
+        }, [
+            m('label.granularity-label', 'Time'),
+            m('select.granularity-select', {
+                value: disabled ? 'grid' : value,
+                disabled,
+                title: disabled
+                    ? 'Compare uses aligned time (Raw is not comparable across recordings)'
+                    : 'Aligned: grid-aligned per-step rate with bands. Raw: real sample timestamps.',
+                onchange: (e) => onChange(e.target.value),
+            }, TIME_MODE_OPTIONS.map(opt =>
+                m('option', { value: opt.value }, opt.label),
+            )),
+        ]);
+    },
+};
+
+export { TimeRangeBar, GranularitySelector, TimeModeSelector };

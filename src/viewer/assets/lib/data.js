@@ -11,6 +11,14 @@ let _stepOverride = null;
 const setStepOverride = (step) => { _stepOverride = step; };
 const getStepOverride = () => _stepOverride;
 
+// Rate time-alignment mode (the "Time mode" control): 'grid' (default,
+// grid-aligned per-step rate with bounds, A/B-comparable) or 'raw' (points at
+// real sample timestamps, un-aligned — jitter/cadence). Compare mode forces
+// 'grid' since Raw is un-alignable across recordings.
+let _rateMode = 'grid';
+const setRateMode = (mode) => { _rateMode = mode === 'raw' ? 'raw' : 'grid'; };
+const getRateMode = () => _rateMode;
+
 // Default { start, end, step } for an overview range query: the WHOLE
 // recording at its NATIVE sampling interval. Decimation for display is
 // echarts' job (`sampling: 'lttb'` on line/scatter, the heatmap
@@ -48,35 +56,26 @@ export const defaultRangeFor = (meta) => {
     return { start, end, step };
 };
 
-// Query rewriting for non-default granularity (step override).
-// When the user picks a coarser step (e.g. 15s instead of auto ~1s), raw
-// queries must be adjusted so that values are properly smoothed over the
-// wider window rather than just down-sampled.
-//
-//   Counter:   irate(m[5m]) → rate(m[Ns])   (true average rate over window)
-//   Gauge:     no rewrite needed (engine samples at step points)
-//   Histogram: stride parameter passed to histogram_quantiles / histogram_heatmap
-
-const rewriteCounterQuery = (query, stepSecs) => {
-    const window = stepSecs + 's';
-    return query.replace(/\birate\s*\(([^)]*?)\[\d+[smhd]\]/g, `rate($1[${window}]`);
-};
-
-// Gauge queries don't need rewriting — the PromQL engine samples the
-// instantaneous value at each step point, which is correct for gauges.
+// Counter rate/irate no longer need query rewriting for coarse granularity: the
+// engine computes a per-step grid rate (rate ≡ irate; the [range] window is
+// inert) using the `step` we pass, so a coarser step yields a coarser, smoothed
+// interval for free. Histograms still take a stride parameter (see
+// buildHistogramQuery / histogram_heatmap); gauges are sampled at step points.
 
 const defaultGetMetadata = () => ViewerApi.getMetadata();
-const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined) =>
-    ViewerApi.queryRange(query, start, end, step, captureId, signal);
+const defaultQueryRange = (query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = getRateMode()) =>
+    ViewerApi.queryRange(query, start, end, step, captureId, signal, rateMode);
 
+// Per-capture queries drive A/B compare, which is only meaningful on a shared
+// grid — force 'grid' regardless of the current mode (Raw is un-alignable).
 export const queryRangeForCapture = (captureId, query, start, end, step) =>
-    defaultQueryRange(query, start, end, step, captureId);
+    defaultQueryRange(query, start, end, step, captureId, undefined, 'grid');
 
 // Display-mode variant for a specific capture: returns the decoded boxplot
 // series array ({t,min,lo,median,hi,max}, …) or null on a non-series / empty
 // result. Used by compare mode to draw each capture's min/max envelope.
 export const queryRangeDisplayForCapture = async (captureId, query, start, end, step, points = 500) => {
-    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points, captureId });
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points, captureId, rateMode: 'grid' });
     if (!res || !res.buffer) return null;
     return decodeDisplayBinary(res.buffer).series;
 };
@@ -309,7 +308,7 @@ const fetchDisplaySeries = async (query, meta, signal) => {
     const budget = displayBudget(meta, start, end);
     const cached = tileLookup(query, start, end, budget);
     if (cached) return cached; // covered at sufficient resolution — no network
-    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal });
+    const res = await ViewerApi.queryRangeDisplay(query, start, end, step, { points: budget, signal, rateMode: getRateMode() });
     if (!res.buffer) {
         throw new Error(res.json?.error || 'display query returned a non-series result');
     }
@@ -776,9 +775,8 @@ const createDataApi = ({
                 stepActive ? stepOverride : undefined,
             );
         }
-        if (stepActive && plot.opts.type === 'delta_counter') {
-            q = rewriteCounterQuery(q, stepOverride);
-        }
+        // Counter rate/irate need no rewrite — the engine's per-step grid rate
+        // uses the `step` we pass (a coarse step → a coarse, smoothed interval).
         if (q.includes('__SELECTED_CGROUPS__')) {
             if (activeCgroupPattern) {
                 q = substituteCgroupPattern(q, activeCgroupPattern);
@@ -1159,6 +1157,8 @@ export {
     createDataApi,
     setStepOverride,
     getStepOverride,
+    setRateMode,
+    getRateMode,
     setSelectedNode,
     getSelectedNode,
     setSelectedGpus,
