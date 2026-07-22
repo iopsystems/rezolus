@@ -110,6 +110,14 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
 - **Reopen conditions for the 5 measured NO-GOs** (strided-median read, cumulative
   histogram quantiles, decode worker, aggregation worker, M4) live in the journal
   entry — don't re-litigate without the stated trigger.
+- **Mean vs. median for the decimated line** — Open (discussion). Source:
+  [mean vs. median](journal/2026-07-21-decimation-mean-vs-median.md). Median
+  line is deliberate (robust typical level; envelope carries extremes) but
+  forfeits conservation (`mean × width = Σ samples`); leaning is to carry a
+  per-bucket mean in the display wire and surface it in the tooltip. Concrete
+  sub-items regardless of outcome: a "(median)" qualifier on the tooltip value,
+  and verifying notebook/compare stats recompute from raw queries rather than
+  decimated medians.
 
 ## Viewer — performance / live mode
 
@@ -136,6 +144,14 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
   *Reopen:* when combined simple-captures are needed.
 - **Minor cleanups** — Open (non-blocking). Redundant clone/read in the metrics
   handler; an `assemble_catalog` loop unroll.
+- **Jitter distribution side panels (CDF + PDF)** — Idea. Beside the timestamp
+  jitter chart (to its right; stacked below on very narrow screens), summarize
+  the *selected time range* with two small distribution plots: a CDF of the
+  inter-sample interval and a probability-density plot of the jitter (deviation
+  from nominal). Complements the timeline — it shows *when* cadence degraded;
+  the distributions show *how much* and how often (tail behavior, bimodality
+  from a stalled sampling loop). Must re-derive from the zoom selection, not
+  the full recording.
 
 ## Parquet / recorder
 

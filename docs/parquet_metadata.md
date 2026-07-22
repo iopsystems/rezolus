@@ -107,6 +107,18 @@ bogus default and the baseline falls back to the average of the real intervals.
 Same fallback when the field is absent. See `nominalMsFor` in
 `src/viewer/assets/lib/charts/jitter.js`.
 
+**Raw vs. grid-snapped timestamps.** Jitter is only observable on the raw
+`timestamp` column. The viewer's query pipeline (TSDB/PromQL) snaps sample
+timestamps to the `sampling_interval_ms` grid on ingest, so anything read
+through a query — including a hypothetical synthesized inter-sample-delta
+metric — is structurally flat and cannot express jitter. The jitter chart
+therefore bypasses the query path entirely and reads un-snapped timestamps via
+`MetricsSource::sample_timestamps()` (served as `/api/v1/timestamps`). Any
+future feature needing sub-interval timing fidelity must do the same. Note
+also that `parquet combine` quantizes timestamps to the common grid **on
+disk** — combining permanently discards the jitter signal, so sampling-jitter
+analysis must run against the original single-source file.
+
 ### `systeminfo`
 
 JSON-serialised hardware summary fetched from the rezolus agent's
