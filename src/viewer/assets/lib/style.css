@@ -1698,6 +1698,62 @@ main {
     box-shadow: inset 0 3px 0 0 var(--accent, #4a90e2);
 }
 
+/* Shade-meaning swatch row (charts/swatches.js). Sits in the strip that
+   line.js reserves below the tick labels (grid.bottom + SWATCH_ROW_HEIGHT).
+   Chips are NEUTRAL (fg at the fills' opacities) — this legend explains what
+   the shades MEAN, not which series is which color. */
+.band-swatches {
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 2px;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    font-size: 10px;
+    color: var(--fg-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    z-index: 5;
+    pointer-events: auto;
+}
+
+.band-swatches .swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: help;
+}
+
+.band-swatches .swatch-chip {
+    display: inline-block;
+    width: 14px;
+    height: 7px;
+    border-radius: 1px;
+    background: var(--fg-secondary);
+}
+
+.band-swatches .swatch-median {
+    height: 2px;
+    border-radius: 0;
+    opacity: 0.9;
+}
+
+.band-swatches .swatch-inner {
+    opacity: 0.45;
+}
+
+.band-swatches .swatch-outer {
+    opacity: 0.28;
+}
+
+.band-swatches .swatch-bounds {
+    opacity: 0.6;
+    background: color-mix(in srgb, var(--fg-secondary) 22%, transparent);
+    border-top: 1px solid var(--fg-secondary);
+    border-bottom: 1px solid var(--fg-secondary);
+}
+
 /* Placeholder card for entries whose data isn't in the loaded
    capture (metric absent, query errored, no series matched). */
 .chart-wrapper-unavailable {
