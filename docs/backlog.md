@@ -110,6 +110,25 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
 - **Reopen conditions for the 5 measured NO-GOs** (strided-median read, cumulative
   histogram quantiles, decode worker, aggregation worker, M4) live in the journal
   entry — don't re-litigate without the stated trigger.
+- **Mean vs. median for the decimated line** — Open (discussion). Source:
+  [mean vs. median](journal/2026-07-21-decimation-mean-vs-median.md). Median
+  line is deliberate (robust typical level; envelope carries extremes) but
+  forfeits conservation (`mean × width = Σ samples`); leaning is to carry a
+  per-bucket mean in the display wire and surface it in the tooltip. Concrete
+  sub-items regardless of outcome: a "(median)" qualifier on the tooltip value,
+  and verifying notebook/compare stats recompute from raw queries rather than
+  decimated medians.
+- **Band views + budget policy redesign** — Open (design landed, pre-build).
+  Source: [band views](journal/2026-07-21-viewer-band-views.md). Three decided
+  pieces: (1) split spread ("what happened") from measurement ("what we can
+  claim") into distinct chart views, never overlaid; (2) budget policy
+  `native ≤ px/5 → raw, else min(px, ⌈native/5⌉)` honest buckets — fixes the
+  48-floor-as-cap bug and the stale "<4 min → native" doc claim
+  (element-gating is the recorded fallback); (3) interval-hull worst-case
+  envelope `[min(lo_i), max(hi_i)]` in the measurement view (possibility, not
+  observation — needs its own visual voice). Open: view-toggle scope
+  (per-chart + sticky global default is the leaning). End-state: unsnapped
+  timestamps contract the measurement view into an exception surface.
 
 ## Viewer — performance / live mode
 
@@ -136,6 +155,22 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
   *Reopen:* when combined simple-captures are needed.
 - **Minor cleanups** — Open (non-blocking). Redundant clone/read in the metrics
   handler; an `assemble_catalog` loop unroll.
+- **Jitter distribution side panels (CDF + PDF)** — Idea. Beside the timestamp
+  jitter chart (to its right; stacked below on very narrow screens), summarize
+  the *selected time range* with two small distribution plots: a CDF of the
+  inter-sample interval and a probability-density plot of the jitter (deviation
+  from nominal). Complements the timeline — it shows *when* cadence degraded;
+  the distributions show *how much* and how often (tail behavior, bimodality
+  from a stalled sampling loop). Must re-derive from the zoom selection, not
+  the full recording.
+  Related caveat, deliberately parked: the jitter timeline bypasses display-mode
+  decimation (`promql_query: null`) and renders through echarts LTTB, which has
+  no min/max envelope guarantee — an isolated spike can vanish at wide zoom
+  (~47 samples/px on a 28k-point recording at 600px). Client-side boxplot
+  bucketing of the deltas would fix it, but distributions may make it moot
+  (tail mass shows the spike regardless of timeline rendering). *Decision
+  2026-07-21: build the distributions first; add timeline bucketing only if
+  interpretability is still lacking.*
 
 ## Parquet / recorder
 
