@@ -1,12 +1,19 @@
-# Parquet File-Level Metadata
+# Recording Metadata: Parquet Footer and `.rez` Manifest
 
-Rezolus parquet files carry key/value metadata in the parquet footer. The
-viewer, MCP, and downstream tools rely on these keys to interpret the data,
-distinguish recordings, build dashboards, and combine files. This document
-describes each key and how to update it.
+Rezolus recordings carry metadata in one of two places depending on format:
 
-The canonical list lives in [src/parquet_metadata.rs](../src/parquet_metadata.rs);
-this doc is the prose companion to that file.
+- **`.parquet`** — key/value metadata in the single file's parquet footer.
+  The canonical key list lives in
+  [src/parquet_metadata.rs](../src/parquet_metadata.rs); most of this doc
+  describes those keys.
+- **`.rez`** — a tar archive (one recording per directory, one parquet table
+  per sampler) whose metadata lives in a top-level `manifest.json`, not in
+  parquet footers. See [`.rez` archives](#rez-archives-metadata-lives-in-the-manifest)
+  below for the mapping; schema lives in
+  [src/recorder/rez.rs](../src/recorder/rez.rs).
+
+The viewer, MCP, and downstream tools rely on this metadata to interpret the
+data, distinguish recordings, build dashboards, and combine files.
 
 ## Inspecting metadata
 
@@ -20,7 +27,57 @@ target/release/rezolus parquet metadata -i file.parquet --json
 # Pull a single key (auto-pretty-prints if the value is JSON)
 target/release/rezolus parquet metadata -i file.parquet --field source
 target/release/rezolus parquet metadata -i file.parquet --field per_source_metadata
+
+# .rez: describes the MANIFEST (recordings, labels, per-sampler tables +
+# cadence). --file/--field don't apply — there is no single footer.
+target/release/rezolus parquet metadata -i file.rez
+target/release/rezolus parquet metadata -i file.rez --json   # full manifest JSON
 ```
+
+## `.rez` archives: metadata lives in the manifest
+
+The `.rez` format ([src/recorder/rez.rs](../src/recorder/rez.rs),
+[src/rez_reader.rs](../src/rez_reader.rs)) is the recorder's per-sampler
+archive: `manifest.json` plus `<dir>/<sampler>.parquet` tables per recording.
+A recording is one endpoint on one host; a multi-recording `.rez` is the
+viewer's A/B input. Producing one requires a rezolus/msgpack endpoint, so
+`source` is always `rezolus` today.
+
+Each manifest recording carries two maps:
+
+- **`labels`** — the recording's identity for grouping/aliasing:
+  `source` and `host` (auto-populated; `host` from the agent's systeminfo
+  hostname) plus any `record --label k=v` (last wins). The viewer's A/B
+  aliases baseline/experiment from `arm`/`host` labels. This replaces the
+  parquet-combine `node`/`instance`/`pinned_node` machinery — `.rez` has no
+  column renaming and no pinned node; label sets distinguish recordings.
+- **`metadata`** — mirrors the keys the parquet writer would put in a
+  footer: `sampling_interval_ms`, `source`, `systeminfo`, `descriptions`,
+  plus any `record --metadata k=v`.
+
+Structural differences from a single parquet file:
+
+- **Per-sampler cadence.** Each table records at its own rate and carries
+  `cadence_ns` in its manifest index — the recording-level
+  `sampling_interval_ms` is the agent snapshot interval, not a promise about
+  every table (e.g. a throttled expensive sampler runs slower).
+- **Acquisition-window sidecars.** Every metric column has
+  `<metric>:window_begin` / `<metric>:window_width` companions; the query
+  engine consumes them for `rate()`/`irate()` uncertainty bounds and readers
+  must not treat `:window_*` columns as metrics.
+- **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
+  assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
+  `.parquet` combine, nothing is quantized, so windows and sampling-jitter
+  fidelity are preserved. Mixing `.rez` and `.parquet` inputs is rejected.
+
+Tool surface on a `.rez` (all four subcommands accept it):
+
+| Command | `.rez` behavior |
+|---------|-----------------|
+| `parquet metadata` | Describes the manifest (`--json` for full JSON); `--file`/`--field` don't apply. |
+| `parquet annotate` | Requires `--queries <ext.json>` (no built-in template flow); embeds the validated `ServiceExtension` into **every** recording's manifest. The parquet-only flags (`--source`, `--node`, `--systeminfo`, events) don't apply. |
+| `parquet combine` | Assembles single-recording `.rez` inputs into one multi-recording `.rez` (verbatim; label-set model). |
+| `parquet filter` | Requires `--samplers a,b,...` — drops whole per-sampler tables not listed (the KPI-column filter no-ops on all-rezolus data). |
 
 ## Single-source vs combined files
 
@@ -31,6 +88,12 @@ hold multiple rezolus nodes and/or multiple service instances.
 Several keys live at the **top level** in single-source files but get nested
 under [`per_source_metadata.<source>.<sub_key>`](#per_source_metadata) in
 combined files. Where applicable this is called out below.
+
+This single/combined nesting — and the `node`/`instance`/`pinned_node`
+machinery it supports — is a **`.parquet`-only** concept. A `.rez` never
+nests: each recording keeps its own `labels`/`metadata` maps in the manifest,
+and combining appends recordings (see
+[`.rez` archives](#rez-archives-metadata-lives-in-the-manifest)).
 
 ## Top-level keys
 
@@ -67,6 +130,10 @@ Replacing a different value requires `--overwrite`. Used alone, `--source`
 To set the source and apply the matching template in one step, follow up
 with bare `parquet annotate file.parquet`, or pass `--queries`/`--filter`
 in the same invocation.
+
+**In a `.rez`** the source appears both as a recording label and in the
+recording's `metadata` map; it is always `rezolus` today (the format requires
+a rezolus/msgpack endpoint) and `annotate --source` does not apply.
 
 When `--overwrite` replaces the top-level `source`, any matching entry
 keyed by the *old* source name inside [`per_source_metadata`](#per_source_metadata)
@@ -115,9 +182,15 @@ metric — is structurally flat and cannot express jitter. The jitter chart
 therefore bypasses the query path entirely and reads un-snapped timestamps via
 `MetricsSource::sample_timestamps()` (served as `/api/v1/timestamps`). Any
 future feature needing sub-interval timing fidelity must do the same. Note
-also that `parquet combine` quantizes timestamps to the common grid **on
-disk** — combining permanently discards the jitter signal, so sampling-jitter
-analysis must run against the original single-source file.
+also that **`.parquet` combine** quantizes timestamps to the common grid **on
+disk** — combining parquet files permanently discards the jitter signal, so
+sampling-jitter analysis must run against the original single-source file.
+(`.rez` combine is exempt: it assembles recordings verbatim, so raw
+timestamps and acquisition windows survive.)
+
+**In a `.rez`** this key sits in each recording's manifest `metadata` map and
+describes the agent snapshot interval; individual sampler tables additionally
+carry their own `cadence_ns`, which can differ (throttled samplers).
 
 ### `systeminfo`
 
@@ -194,6 +267,10 @@ target/release/rezolus parquet annotate file.parquet --undo
 
 Annotation validates each KPI by running its PromQL query against the file's
 data and sets `available: true|false` on each KPI accordingly.
+
+**On a `.rez`**, `--queries` is required (there is no template flow) and the
+validated `ServiceExtension` is embedded into **every** recording's manifest
+`metadata`, not a parquet footer.
 
 ### `node`
 
@@ -335,6 +412,9 @@ target/release/rezolus parquet annotate file.parquet --clear-events --add-events
 
 `--add-events` / `--event` / `--clear-events` do not trigger the
 service-template flow.
+
+Events are a **`.parquet`-only** feature today: the `.rez` annotate path
+accepts only `--queries`, and the manifest has no events field.
 
 ## `per_source_metadata`
 
