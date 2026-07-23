@@ -571,7 +571,10 @@ const changeGranularity = async (step) => {
     // Route zoom clear through the observable setter so any charts
     // that are still alive at this point (explorers etc.) see the
     // reset via their subscription — setZoom accepts null as "no
-    // zoom" and notifies subscribers with it.
+    // zoom" and notifies subscribers with it. Clear the query-range
+    // override too, so the visual zoom and the fetched range stay in
+    // sync (a partial reset desyncs charts).
+    setRangeOverride(null);
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
@@ -601,6 +604,11 @@ const changeTimeMode = async (mode) => {
     clearDisplayTiles();
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
+    // Reset the zoom COMPLETELY: the visual dataZoom AND the query-range
+    // override. Resetting only the visual (setZoom) left `_rangeOverride`
+    // pinned, so charts could desync — some refetched the stale zoom window
+    // while others returned to full range. Both must clear together.
+    setRangeOverride(null);
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
