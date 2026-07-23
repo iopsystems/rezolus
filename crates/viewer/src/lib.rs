@@ -368,10 +368,16 @@ impl Viewer {
     /// Execute a PromQL range query. Returns JSON compatible with
     /// /api/v1/query_range response format. `rate_mode` is `"raw"` or (default)
     /// grid — see `dashboard::display_wire::parse_rate_mode`.
-    pub fn query_range(&self, query: &str, start: f64, end: f64, step: f64, rate_mode: &str) -> String {
-        let qopts = QueryOptions::with_rate_mode(dashboard::display_wire::parse_rate_mode(Some(
-            rate_mode,
-        )));
+    pub fn query_range(
+        &self,
+        query: &str,
+        start: f64,
+        end: f64,
+        step: f64,
+        rate_mode: &str,
+    ) -> String {
+        let qopts =
+            QueryOptions::with_rate_mode(dashboard::display_wire::parse_rate_mode(Some(rate_mode)));
         match self
             .reader
             .query_range_opts(query, start, end, step, &qopts)
