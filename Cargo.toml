@@ -17,7 +17,7 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.10.0"
 metriken-exposition = "0.17.0"
-metriken-query = { version = "0.15.0", default-features = false }
+metriken-query = { version = "0.16.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -26,17 +26,6 @@ report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
 walkdir = "2.5.0"
 wasm-bindgen = "0.2.120"
-
-# Local development against in-progress metriken-query (RateMode work).
-# Patches the whole metriken sibling set to one coherent local copy so cargo
-# doesn't end up with two versions of metriken-core (crates.io + path), which
-# would break trait identity. Remove once the new metriken-query is published.
-[patch.crates-io]
-metriken = { path = "../metriken/metriken" }
-metriken-core = { path = "../metriken/metriken-core" }
-metriken-derive = { path = "../metriken/metriken-derive" }
-metriken-exposition = { path = "../metriken/metriken-exposition" }
-metriken-query = { path = "../metriken/metriken-query" }
 
 [package]
 name = "rezolus"
