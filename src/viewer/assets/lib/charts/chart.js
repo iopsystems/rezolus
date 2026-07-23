@@ -716,19 +716,20 @@ export class Chart {
             if (!hasPct && !hasValues) return;
 
             // Drill-down fan-out guard. While a zoom refetch owns the charts
-            // (chartsState._zoomRefine), a chart reconfigured via notMerge —
-            // e.g. a histogram/percentile chart whose series SHAPE changes at a
-            // tight window, so applyChartOption can't merge it — wipes and
-            // rebuilds its dataZoom and re-fires a synthetic full-range {0,100}
-            // datazoom. _suppressZoomEvents only covers the SYNCHRONOUS setOption
-            // window; if the rebuild fires that event a tick later it escapes and
-            // fans out a 0..100% reset to every sibling — snapping the whole
-            // section back to full while the chart you dragged holds its zoom
-            // (the "others zoom then snap back" desync). A user never zooms to
-            // full range mid-drill-down, so treat full-range as spurious here.
-            const isFullRange = hasPct
-                && start <= 1e-6 && end >= 100 - 1e-6;
-            if (isFullRange && this.chartsState && this.chartsState._zoomRefine) {
+            // (chartsState._zoomRefine), the user's drag has ALREADY fired and
+            // triggered this refetch — so any 'datazoom' now is a reconfigure
+            // side-effect, not user intent. A chart reconfigured via notMerge
+            // (e.g. a histogram/percentile chart whose series SHAPE changes at a
+            // tight window, so applyChartOption can't merge it) wipes and
+            // rebuilds its dataZoom and re-fires a synthetic datazoom.
+            // _suppressZoomEvents only covers the SYNCHRONOUS setOption window;
+            // one that fires a tick later escapes and, via setZoom, fans a
+            // spurious window out to every sibling — snapping some charts to a
+            // different range than the one you dragged (the "doesn't link" /
+            // "snap back" desync, seen in both Grid and Raw). The event's range
+            // is whatever the rebuild happens to produce (full {0,100} OR a
+            // partial {0,60}), so ignore ALL of them while a drill-down is live.
+            if (this.chartsState && this.chartsState._zoomRefine) {
                 return;
             }
 
