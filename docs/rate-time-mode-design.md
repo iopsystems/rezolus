@@ -229,10 +229,19 @@ Key files (all paths relative to `metriken-query/`):
    `range_ns` — it iterates samples. Its output is already
    `Point::at(ts_cur, delta/dur)`, bounds derived from per-sample windows.
 
-6. **Gauges / histograms / scalars:** mode is a no-op except the snapped grid
-   phase. `GaugeStepGrid` and the `avg_over_time`/`idelta`/`deriv` producers
-   take `start_ns` — feeding them the snapped `start_ns` from step 2 gives them
-   the fixed phase for free under `Grid`. No per-producer mode logic needed.
+6. **Gauges under `Grid`:** snapped grid phase, for free. `GaugeStepGrid` and
+   the `avg_over_time`/`idelta`/`deriv` producers take `start_ns`; feeding them
+   the snapped `start_ns` from step 2 gives them the fixed phase under `Grid`.
+
+7. **Gauges under `Raw` (metriken PR #127):** NOT a no-op. Counter rate/irate
+   emit at real sample timestamps under `Raw`, so gauges must too — otherwise a
+   series-op-series between a Raw counter rate and a gauge (e.g.
+   `sum(irate(cpu_usage[5m])) / cpu_cores`) finds no matching timestamps and
+   returns empty (blank CPU-utilization charts). All four gauge producers walk
+   the actual sample timestamps under `Raw` (shared `next_eval_ts` helper);
+   counters and gauges share the row-timestamp column, so they align. The
+   counter 2nd-derivative `deriv` fallback (`StreamingDeriv`) still grids under
+   `Raw` — deferred. Histograms/scalars remain unaffected.
 
 ## Tests (metriken-query, `cargo test -p metriken-query`)
 
