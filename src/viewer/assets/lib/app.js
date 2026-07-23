@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -561,7 +561,11 @@ const changeGranularity = async (step) => {
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
-    // All cached section data is stale against the new step.
+    // All cached section data is stale against the new step. Counter/gauge query
+    // text no longer encodes the step (rewriteCounterQuery was removed once the
+    // engine took over per-step rate), so the query-keyed tile cache would keep
+    // serving the old step's decimated tiles — clear it explicitly.
+    clearDisplayTiles();
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     // Route zoom clear through the observable setter so any charts
@@ -591,7 +595,10 @@ const changeTimeMode = async (mode) => {
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
-    // Every cached rate/irate series is stale against the new time mode.
+    // Every cached rate/irate series is stale against the new time mode. The
+    // display tile cache is keyed by query text (not mode), so it MUST be
+    // cleared here or already-loaded charts keep serving the old mode's tiles.
+    clearDisplayTiles();
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     chartsState.setZoom(null, { source: null });
