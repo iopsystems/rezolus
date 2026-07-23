@@ -715,6 +715,23 @@ export class Chart {
             const hasValues = Number.isFinite(startValue) && Number.isFinite(endValue);
             if (!hasPct && !hasValues) return;
 
+            // Drill-down fan-out guard. While a zoom refetch owns the charts
+            // (chartsState._zoomRefine), a chart reconfigured via notMerge —
+            // e.g. a histogram/percentile chart whose series SHAPE changes at a
+            // tight window, so applyChartOption can't merge it — wipes and
+            // rebuilds its dataZoom and re-fires a synthetic full-range {0,100}
+            // datazoom. _suppressZoomEvents only covers the SYNCHRONOUS setOption
+            // window; if the rebuild fires that event a tick later it escapes and
+            // fans out a 0..100% reset to every sibling — snapping the whole
+            // section back to full while the chart you dragged holds its zoom
+            // (the "others zoom then snap back" desync). A user never zooms to
+            // full range mid-drill-down, so treat full-range as spurious here.
+            const isFullRange = hasPct
+                && start <= 1e-6 && end >= 100 - 1e-6;
+            if (isFullRange && this.chartsState && this.chartsState._zoomRefine) {
+                return;
+            }
+
             // Route the user-initiated zoom through the single
             // chartsState.setZoom writer. Mark `this` as the origin so
             // setZoom's fan-out doesn't dispatch back to us — our
