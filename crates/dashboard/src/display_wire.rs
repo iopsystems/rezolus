@@ -6,7 +6,7 @@
 
 use metriken_query::{
     DisplayOptions, DisplayResult, DisplaySeries, HistogramHeatmapResult, MetricsSource,
-    QueryError, Reducer,
+    QueryError, QueryOptions, RateMode, Reducer,
 };
 
 /// A display query's result, ready for a backend to ship: either the compact
@@ -25,8 +25,18 @@ pub fn parse_band(s: Option<&str>) -> [f64; 2] {
     .unwrap_or([0.25, 0.75])
 }
 
+/// Parse a rate time-alignment mode argument. `"raw"` selects [`RateMode::Raw`];
+/// anything else (including absent) is the default [`RateMode::Grid`]. Shared by
+/// both backends so the query param string maps the same way on each.
+pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
+    match s {
+        Some("raw") => RateMode::Raw,
+        _ => RateMode::Grid,
+    }
+}
+
 /// Run a display-mode range query and encode the result. `points` is the point
-/// budget; `band` the inner-band quantiles.
+/// budget; `band` the inner-band quantiles; `rate_mode` the rate alignment.
 pub fn display_query(
     source: &dyn MetricsSource,
     query: &str,
@@ -35,14 +45,16 @@ pub fn display_query(
     step: f64,
     points: usize,
     band: [f64; 2],
+    rate_mode: RateMode,
 ) -> Result<DisplayWire, QueryError> {
     let opts = DisplayOptions {
         budget: points,
         reducer: Reducer::Boxplot,
         band,
     };
+    let qopts = QueryOptions::with_rate_mode(rate_mode);
     Ok(
-        match source.query_range_display(query, start, end, step, &opts)? {
+        match source.query_range_display_opts(query, start, end, step, &opts, &qopts)? {
             DisplayResult::Series { result, budget } => {
                 DisplayWire::Binary(encode_display_binary(&result, budget))
             }

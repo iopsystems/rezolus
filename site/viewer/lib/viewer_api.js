@@ -87,9 +87,11 @@ const ViewerApi = {
         return json ? JSON.parse(json) : [];
     },
 
-    async queryRange(query, start, end, step, captureId = 'baseline') {
+    // `signal` is accepted (unused — in-process) to keep positional parity with
+    // the server adapter so data.js can call both the same way.
+    async queryRange(query, start, end, step, captureId = 'baseline', signal = undefined, rateMode = 'grid') {
         ensureAttached(captureId);
-        return JSON.parse(registry.query_range(captureId, query, start, end, step));
+        return JSON.parse(registry.query_range(captureId, query, start, end, step, rateMode || 'grid'));
     },
 
     // Display-mode range query. The WASM backend returns the SAME compact binary
@@ -98,9 +100,9 @@ const ViewerApi = {
     // abort — `signal`/`captureId` opts match the server adapter's shape but the
     // registry call is synchronous. A non-series result throws, so the caller
     // falls back to the JSON query path exactly like the server adapter.
-    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline' } = {}) {
+    async queryRangeDisplay(query, start, end, step, { points = 500, band = null, captureId = 'baseline', rateMode = 'grid' } = {}) {
         ensureAttached(captureId);
-        const bytes = registry.query_range_display(captureId, query, start, end, step, points, band || '');
+        const bytes = registry.query_range_display(captureId, query, start, end, step, points, band || '', rateMode || 'grid');
         // wasm-bindgen hands back a fresh Uint8Array; hand up a plain ArrayBuffer
         // so decodeDisplayBinary / decodeHeatmapBinary can view it zero-copy.
         return { buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };

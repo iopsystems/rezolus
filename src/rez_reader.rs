@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use metriken_query::{BufferPool, MetricsSource, ParquetReader, QueryError, QueryResult};
+use metriken_query::{
+    BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult,
+};
 
 use crate::recorder::rez::{self, RecordingBytes};
 
@@ -117,16 +119,17 @@ impl RezReader {
 
 impl MetricsSource for RezReader {
     // ── Query methods: route to the sub-reader owning the referenced metrics. ──
-    fn query_range(
+    fn query_range_opts(
         &self,
         expr: &str,
         start_s: f64,
         end_s: f64,
         step_s: f64,
+        opts: &QueryOptions,
     ) -> Result<QueryResult, QueryError> {
         self.route(expr)?
             .reader
-            .query_range(expr, start_s, end_s, step_s)
+            .query_range_opts(expr, start_s, end_s, step_s, opts)
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
         self.route(expr)?.reader.query(expr, time)

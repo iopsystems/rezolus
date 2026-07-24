@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, setStepOverride, getStepOverride, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -79,6 +79,7 @@ let heatmapLoading = false;
 const heatmapDataCache = new Map();
 const chartsState = new ChartsState();
 let currentGranularity = null;
+let currentTimeMode = 'grid';
 const sectionCacheState = createSectionCacheState();
 // Cache limit: overview (pinned) + active route + one look-ahead. Keeps
 // memory bounded on the static-site WASM viewer where each section body
@@ -560,13 +561,20 @@ const changeGranularity = async (step) => {
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
 
-    // All cached section data is stale against the new step.
+    // All cached section data is stale against the new step. Counter/gauge query
+    // text no longer encodes the step (rewriteCounterQuery was removed once the
+    // engine took over per-step rate), so the query-keyed tile cache would keep
+    // serving the old step's decimated tiles — clear it explicitly.
+    clearDisplayTiles();
     clearSectionResponses(sectionCacheState);
     heatmapDataCache.clear();
     // Route zoom clear through the observable setter so any charts
     // that are still alive at this point (explorers etc.) see the
     // reset via their subscription — setZoom accepts null as "no
-    // zoom" and notifies subscribers with it.
+    // zoom" and notifies subscribers with it. Clear the query-range
+    // override too, so the visual zoom and the fetched range stay in
+    // sync (a partial reset desyncs charts).
+    setRangeOverride(null);
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
@@ -576,6 +584,35 @@ const changeGranularity = async (step) => {
     // cache wipe — otherwise the whole nav collapses.
     const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
 
+    try {
+        const data = await loadSection(target);
+        if (data?.sections) preloadSections(data.sections);
+        m.redraw();
+    } catch (_) { /* keep existing view on error */ }
+};
+
+const changeTimeMode = async (mode) => {
+    currentTimeMode = mode === 'raw' ? 'raw' : 'grid';
+    setRateMode(currentTimeMode);
+
+    const currentRoute = m.route.get();
+    const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
+
+    // Every cached rate/irate series is stale against the new time mode. The
+    // display tile cache is keyed by query text (not mode), so it MUST be
+    // cleared here or already-loaded charts keep serving the old mode's tiles.
+    clearDisplayTiles();
+    clearSectionResponses(sectionCacheState);
+    heatmapDataCache.clear();
+    // Reset the zoom COMPLETELY: the visual dataZoom AND the query-range
+    // override. Resetting only the visual (setZoom) left `_rangeOverride`
+    // pinned, so charts could desync — some refetched the stale zoom window
+    // while others returned to full range. Both must clear together.
+    setRangeOverride(null);
+    chartsState.setZoom(null, { source: null });
+    chartsState.globalZoom = null;
+
+    const target = !section || CLIENT_ONLY_SECTIONS.has(section) ? 'overview' : section;
     try {
         const data = await loadSection(target);
         if (data?.sections) preloadSections(data.sections);
@@ -615,6 +652,8 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
     onUploadParquet,
     granularity: currentGranularity,
     onGranularityChange: changeGranularity,
+    timeMode: currentTimeMode,
+    onTimeModeChange: changeTimeMode,
     nodeList,
     selectedNode,
     nodeVersions,

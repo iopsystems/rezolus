@@ -715,6 +715,24 @@ export class Chart {
             const hasValues = Number.isFinite(startValue) && Number.isFinite(endValue);
             if (!hasPct && !hasValues) return;
 
+            // Drill-down fan-out guard. While a zoom refetch owns the charts
+            // (chartsState._zoomRefine), the user's drag has ALREADY fired and
+            // triggered this refetch — so any 'datazoom' now is a reconfigure
+            // side-effect, not user intent. A chart reconfigured via notMerge
+            // (e.g. a histogram/percentile chart whose series SHAPE changes at a
+            // tight window, so applyChartOption can't merge it) wipes and
+            // rebuilds its dataZoom and re-fires a synthetic datazoom.
+            // _suppressZoomEvents only covers the SYNCHRONOUS setOption window;
+            // one that fires a tick later escapes and, via setZoom, fans a
+            // spurious window out to every sibling — snapping some charts to a
+            // different range than the one you dragged (the "doesn't link" /
+            // "snap back" desync, seen in both Grid and Raw). The event's range
+            // is whatever the rebuild happens to produce (full {0,100} OR a
+            // partial {0,60}), so ignore ALL of them while a drill-down is live.
+            if (this.chartsState && this.chartsState._zoomRefine) {
+                return;
+            }
+
             // Route the user-initiated zoom through the single
             // chartsState.setZoom writer. Mark `this` as the origin so
             // setZoom's fan-out doesn't dispatch back to us — our
