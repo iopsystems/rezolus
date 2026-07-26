@@ -175,18 +175,21 @@ Same fallback when the field is absent. See `nominalMsFor` in
 `src/viewer/assets/lib/charts/jitter.js`.
 
 **Raw vs. grid-snapped timestamps.** Jitter is only observable on the raw
-`timestamp` column. The viewer's query pipeline (TSDB/PromQL) snaps sample
-timestamps to the `sampling_interval_ms` grid on ingest, so anything read
-through a query — including a hypothetical synthesized inter-sample-delta
-metric — is structurally flat and cannot express jitter. The jitter chart
-therefore bypasses the query path entirely and reads un-snapped timestamps via
-`MetricsSource::sample_timestamps()` (served as `/api/v1/timestamps`). Any
-future feature needing sub-interval timing fidelity must do the same. Note
-also that **`.parquet` combine** quantizes timestamps to the common grid **on
-disk** — combining parquet files permanently discards the jitter signal, so
-sampling-jitter analysis must run against the original single-source file.
-(`.rez` combine is exempt: it assembles recordings verbatim, so raw
-timestamps and acquisition windows survive.)
+`timestamp` column. In the viewer's default **Aligned (Grid)** time mode
+(#1023, `docs/rate-time-mode-design.md`), query results are evaluated on a
+step grid phase-fixed to step boundaries, so anything read through a query —
+including a hypothetical synthesized inter-sample-delta metric — is
+structurally flat and cannot express jitter. The **Raw** time mode returns
+points at the true un-snapped acquisition timestamps (honest cadence), but
+the jitter chart predates it and still bypasses the query path, reading raw
+timestamps directly via `MetricsSource::sample_timestamps()` (served as
+`/api/v1/timestamps`) — the direct path works in every mode and without a
+rate query. Note also that **`.parquet` combine** quantizes timestamps to the
+common grid **on disk** — combining parquet files permanently discards the
+jitter signal regardless of time mode, so sampling-jitter analysis must run
+against the original single-source file. (`.rez` combine is exempt: it
+assembles recordings verbatim, so raw timestamps and acquisition windows
+survive.)
 
 **In a `.rez`** this key sits in each recording's manifest `metadata` map and
 describes the agent snapshot interval; individual sampler tables additionally

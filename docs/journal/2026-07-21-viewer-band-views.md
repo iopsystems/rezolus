@@ -162,6 +162,28 @@ visually material (mechanical rule: band ≥ ~1 px), ideally self-announcing
 the user must know to reach for. Design the toggle now so it can become
 that later.
 
+**Update 2026-07-25 — the end-state partially landed.** PR #1023
+(`88f10479`, metriken-query 0.16.0, design in
+`docs/rate-time-mode-design.md`) shipped a global **Time mode** control:
+**Aligned (Grid)** — per-step grid rate, phase-fixed to step boundaries,
+interpolated-window bands, `rate ≡ irate` with `[range]` inert — and
+**Raw** — points at true un-snapped acquisition timestamps, pairwise deltas,
+per-sample window bounds (compare mode forces Aligned; `rewriteCounterQuery`
+removed). Consequences for this entry:
+
+- "Unsnapped timestamps" is no longer hypothetical: Raw mode exists today
+  for single-recording analysis. Grid mode's rate value is now interval-
+  attributable (interpolated edges), retiring this entry's "rate denominators
+  use the row-gap" characterization of the status quo.
+- New open question alongside toggle scope: the **measurement view's
+  relationship to the Time-mode control**. Raw already carries per-sample
+  bands and "honest cadence" framing — the measurement view may belong in
+  the same control family (e.g. a third position, or a modifier on either
+  mode) rather than as an independent per-chart toggle. Decide together.
+- Decisions 1–3 are otherwise unaffected: the view split, the budget policy
+  (Grid-mode display evaluation is still gridded and still decimates), and
+  the hull all stand.
+
 ## Related decisions recorded elsewhere
 
 - Jitter timeline renders via echarts LTTB (no envelope guarantee); parked

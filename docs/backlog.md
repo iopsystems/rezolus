@@ -128,7 +128,10 @@ Source: [display-mode decimation](journal/2026-07-13-viewer-display-decimation.m
   envelope `[min(lo_i), max(hi_i)]` in the measurement view (possibility, not
   observation — needs its own visual voice). Open: view-toggle scope
   (per-chart + sticky global default is the leaning). End-state: unsnapped
-  timestamps contract the measurement view into an exception surface.
+  timestamps contract the measurement view into an exception surface —
+  *partially landed* via #1023 (Aligned/Raw Time modes, metriken-query
+  0.16.0); new open question is the measurement view's relationship to that
+  Time-mode control (see the entry's 2026-07-25 update).
 
 ## Viewer — performance / live mode
 
