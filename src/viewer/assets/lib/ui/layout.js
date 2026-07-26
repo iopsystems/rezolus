@@ -1,4 +1,4 @@
-import { TimeRangeBar, GranularitySelector } from './controls.js';
+import { TimeRangeBar, GranularitySelector, TimeModeSelector } from './controls.js';
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
@@ -185,6 +185,13 @@ const TopNav = {
                 m(GranularitySelector, {
                     value: attrs.granularity,
                     onChange: attrs.onGranularityChange,
+                    hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
+                }),
+            (attrs.start_time != null && attrs.end_time != null) &&
+                m(TimeModeSelector, {
+                    value: attrs.timeMode,
+                    onChange: attrs.onTimeModeChange,
+                    disabled: attrs.compareMode,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),
             m('button.transport-btn.theme-toggle-btn', {

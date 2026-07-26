@@ -200,6 +200,11 @@ export function getBaseOption() {
                 color: COLORS.fgSecondary,
                 ...FONTS.axisLabel,
                 formatter: TIME_AXIS_FORMATTER,
+                // Drop colliding labels rather than overprinting them. During a
+                // zoom's intermediate merge echarts can briefly lay out every
+                // tick before it recomputes spacing; without this they overlap
+                // into an unreadable smear.
+                hideOverlap: true,
             },
             splitLine: {
                 show: true,
