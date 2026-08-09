@@ -20,6 +20,7 @@ import {
 } from './base.js';
 import { FONTS } from './util/fonts.js';
 import { buildBoxplotSeries, buildEnvelopeLines, buildDivergenceBand } from './boxplot.js';
+import { chartSwatches, renderSwatchRow, SWATCH_ROW_HEIGHT } from './swatches.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
 
 /**
@@ -223,7 +224,23 @@ export function configureLineChart(chart) {
         option.grid = { ...(baseOption.grid || {}), top: String(CHART_GRID_TOP_WITH_LEGEND) };
     }
 
+    // Shade-meaning swatch row: inputs mirror the two band render paths above
+    // exactly (boxplotCols XOR per-series intervals), so a swatch appears iff
+    // the corresponding fill was actually drawn. The row needs reserved space
+    // under the tick labels, hence the grid.bottom bump before setOption.
+    const swatches = chartSwatches(boxplotCols
+        ? { boxplot: boxplotCols }
+        : { intervals: seriesList.map((s) => s.intervals) });
+    if (swatches.length) {
+        const grid = option.grid || baseOption.grid || {};
+        option.grid = {
+            ...grid,
+            bottom: String(Number(grid.bottom ?? 24) + SWATCH_ROW_HEIGHT),
+        };
+    }
+
     applyChartOption(chart, option);
+    renderSwatchRow(chart.domNode, swatches);
 
     // Track future legend toggles so subsequent re-renders preserve them.
     if (seriesList.length > 1) {
