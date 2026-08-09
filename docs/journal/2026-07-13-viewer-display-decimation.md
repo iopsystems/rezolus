@@ -45,6 +45,11 @@ static site.
   min-samples cap makes the envelope *engage and smooth* jittery per-second signals at
   moderate windows (~5 samples/bucket at a 5-minute window) instead of drawing raw grass,
   while deep zooms (<~4 min) fall back to native.
+  *[Correction 2026-07-21: the "<~4 min → native" claim is wrong — true passthrough
+  only happens at ≤48 samples; between 48 and 240 samples the 48 floor acts as a
+  cap, yielding 48 under-filled buckets (1–5 samples each). Redesigned policy
+  (`native ≤ px/5 → raw`, else honest ≥5-sample buckets, no floor) in the
+  [band-views entry](2026-07-21-viewer-band-views.md).]*
 - **Histogram bucket heatmaps: budget-strided, not native.** `histogram_heatmap(metric,
   stride)` is strided to ~budget columns over the current range and refetched on drill-down —
   the same decimate-then-refetch model, so a 24 h heatmap loads ~500 cols instead of 86 400.
