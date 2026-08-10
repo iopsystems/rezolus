@@ -617,3 +617,17 @@ others:
 
 If you write parquet from another tool that you intend to feed into
 `parquet combine`, match these settings to keep behaviour predictable.
+
+## Histogram columns: required column metadata
+
+A histogram column (`<metric>:buckets`, Arrow type `List<UInt64>`) MUST carry
+`grouping_power` and `max_value_power` in its column-level metadata, both
+parseable as `u8`. If either is missing or unparseable, `metriken-query`'s
+parquet reader **silently drops the entire column** from the schema — no
+error, no warning; the histogram simply never appears to queries.
+
+The rezolus agent's exposition path stamps these automatically. Anything else
+that writes histogram snapshots (external producers, test fixtures built via
+`RezRecorder`/`metriken-exposition` builders) must stamp them itself — the
+snapshot builders do not add them for you. See `histogram_labels()` in
+`src/analysis/extract/golden.rs` for a working example.

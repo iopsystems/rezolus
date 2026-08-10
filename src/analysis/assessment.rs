@@ -9,6 +9,8 @@ pub const ASSESSMENT_SCHEMA_VERSION: u32 = 1;
 
 use serde::{Deserialize, Serialize};
 
+use crate::analysis::record::OverviewRecord;
+
 /// A reference from a `Finding` into an element of the `OverviewRecord` that
 /// supports (or, in `ruled_out`, dismisses) the claim. Exactly one of the index
 /// fields is normally set alongside `metric`; all optional so an evidence item
@@ -34,6 +36,52 @@ pub struct EvidenceRef {
     pub correlation_index: Option<usize>,
     /// One-line rationale tying this record element to the claim.
     pub rationale: String,
+}
+
+impl EvidenceRef {
+    /// True when this evidence points at something checkable in a record.
+    fn has_pointer(&self) -> bool {
+        self.metric.is_some() || self.correlation_index.is_some()
+    }
+
+    /// Resolve this reference against a record, or say precisely what failed.
+    fn resolve_in(&self, record: &OverviewRecord, role: &str) -> Result<(), String> {
+        if (self.anomaly_index.is_some() || self.regime_shift_index.is_some())
+            && self.metric.is_none()
+        {
+            return Err(format!("{role}: evidence has an index but no metric"));
+        }
+        if let Some(name) = &self.metric {
+            let Some(m) = record.metrics.iter().find(|m| &m.name == name) else {
+                return Err(format!("{role}: evidence cites unknown metric {name}"));
+            };
+            if let Some(i) = self.anomaly_index {
+                if i >= m.anomalies.len() {
+                    return Err(format!(
+                        "{role}: anomaly_index {i} out of range for {name} ({} anomalies)",
+                        m.anomalies.len()
+                    ));
+                }
+            }
+            if let Some(i) = self.regime_shift_index {
+                if i >= m.regime_shifts.len() {
+                    return Err(format!(
+                        "{role}: regime_shift_index {i} out of range for {name} ({} shifts)",
+                        m.regime_shifts.len()
+                    ));
+                }
+            }
+        }
+        if let Some(i) = self.correlation_index {
+            if i >= record.correlations.len() {
+                return Err(format!(
+                    "{role}: correlation_index {i} out of range ({} correlations)",
+                    record.correlations.len()
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Categorical confidence. Must track the uncertainty signals: a finding whose
@@ -147,6 +195,52 @@ impl Finding {
         if self.confidence == Confidence::High && self.evidence.is_empty() {
             return Err(format!("{role} is High confidence but cites no evidence"));
         }
+        // A High-confidence claim must cite at least one evidence item with a
+        // resolvable pointer — rationale-only evidence (all pointer fields
+        // None) cannot ground High.
+        if self.confidence == Confidence::High
+            && !self.evidence.iter().any(EvidenceRef::has_pointer)
+        {
+            return Err(format!(
+                "{role} is High confidence but no evidence item has a resolvable pointer"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Cross-record checks: every evidence ref resolves, and a High-confidence
+    /// claim may not rest on a metric whose movement sits inside its
+    /// acquisition-window band.
+    fn validate_against_record(&self, record: &OverviewRecord, role: &str) -> Result<(), String> {
+        for e in &self.evidence {
+            e.resolve_in(record, role)?;
+        }
+        if self.confidence >= Confidence::High {
+            for e in &self.evidence {
+                if let Some(name) = &e.metric {
+                    if let Some(m) = record.metrics.iter().find(|m| &m.name == name) {
+                        if m.uncertainty.as_ref().is_some_and(|u| u.within_band) {
+                            return Err(format!(
+                                "{role}: High confidence cites {name}, whose movement is within its measurement band"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TieredFinding {
+    /// Structural invariants specific to the itemized-finding shape.
+    fn validate_self(&self, role: &str) -> Result<(), String> {
+        self.finding.validate_self(role)?;
+        if let FindingKind::NeedsMetric { missing, .. } = &self.kind {
+            if missing.trim().is_empty() {
+                return Err(format!("{role} is NeedsMetric but `missing` is empty"));
+            }
+        }
         Ok(())
     }
 }
@@ -154,14 +248,31 @@ impl Finding {
 impl Assessment {
     /// Structural validation that needs no `OverviewRecord`. Cross-record checks
     /// (evidence indices resolving, uncertainty forcing confidence down) are
-    /// applied in Phase 3 once extraction exists.
+    /// applied by `validate_against`.
     pub fn validate(&self) -> Result<(), String> {
         self.overall.finding.validate_self("overall finding")?;
         for (i, f) in self.findings.iter().enumerate() {
-            f.finding.validate_self(&format!("findings[{i}]"))?;
+            f.validate_self(&format!("findings[{i}]"))?;
         }
         for (i, f) in self.ruled_out.iter().enumerate() {
             f.validate_self(&format!("ruled_out[{i}]"))?;
+        }
+        Ok(())
+    }
+
+    /// Full validation against the record this assessment claims to describe:
+    /// structural invariants plus evidence resolution and the uncertainty cap.
+    pub fn validate_against(&self, record: &OverviewRecord) -> Result<(), String> {
+        self.validate()?;
+        self.overall
+            .finding
+            .validate_against_record(record, "overall finding")?;
+        for (i, f) in self.findings.iter().enumerate() {
+            f.finding
+                .validate_against_record(record, &format!("findings[{i}]"))?;
+        }
+        for (i, f) in self.ruled_out.iter().enumerate() {
+            f.validate_against_record(record, &format!("ruled_out[{i}]"))?;
         }
         Ok(())
     }
@@ -412,5 +523,218 @@ mod tests {
     fn confidence_is_ordered() {
         assert!(Confidence::Low < Confidence::Medium);
         assert!(Confidence::Medium < Confidence::High);
+    }
+
+    use crate::analysis::record::{
+        AnalysisStatus, AnomalyFeature, Context, CorrelationFeature, Coverage, DetailTier,
+        MetricFeatures, NoiseSummary, OverviewRecord, Rankings, Selection, Stats,
+        UncertaintySummary, RECORD_SCHEMA_VERSION,
+    };
+
+    fn record_with(
+        metrics: Vec<MetricFeatures>,
+        correlations: Vec<CorrelationFeature>,
+    ) -> OverviewRecord {
+        OverviewRecord {
+            schema_version: RECORD_SCHEMA_VERSION,
+            context: Context {
+                source: "rezolus".to_string(),
+                agent_version: None,
+                duration_s: 60.0,
+                sampling_interval_s: 1.0,
+                systeminfo: None,
+                coverage: Coverage {
+                    subsystems_present: vec![],
+                    subsystems_absent: vec![],
+                },
+            },
+            metrics,
+            correlations,
+            rankings: Rankings {
+                cpu: vec![],
+                memory: vec![],
+                io: vec![],
+                network: vec![],
+            },
+            selection: Selection {
+                full_detail_count: 0,
+                summary_count: 0,
+                promotions: vec![],
+                correlation_candidate_set: String::new(),
+                total_pairs_tested: 0,
+            },
+        }
+    }
+
+    fn metric(name: &str, anomaly_count: usize, within_band: Option<bool>) -> MetricFeatures {
+        MetricFeatures {
+            name: name.to_string(),
+            metric_type: "counter".to_string(),
+            labels: std::collections::BTreeMap::new(),
+            tier: DetailTier::Full,
+            status: AnalysisStatus::Analyzed,
+            stats: Stats {
+                min: 0.0,
+                max: 1.0,
+                mean: 0.5,
+                last: 0.5,
+                p50: 0.5,
+                p99: 0.9,
+            },
+            noise: NoiseSummary {
+                noise_type: "WhitePhase".to_string(),
+                optimal_tau_s: None,
+            },
+            anomalies: (0..anomaly_count)
+                .map(|i| AnomalyFeature {
+                    timestamp: i as f64,
+                    index: i,
+                    anomaly_type: "PointOutlier".to_string(),
+                    severity: "High".to_string(),
+                    confidence: 0.9,
+                    magnitude: 3.0,
+                })
+                .collect(),
+            regime_shifts: vec![],
+            uncertainty: within_band.map(|w| UncertaintySummary {
+                band_to_signal_ratio: if w { 2.0 } else { 0.1 },
+                within_band: w,
+            }),
+        }
+    }
+
+    #[test]
+    fn valid_assessment_resolves_against_record() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(false))], vec![]);
+        let mut a = sample_assessment();
+        // point every evidence ref at the one real metric/anomaly
+        a.overall.finding.evidence = vec![EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: Some(0),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        }];
+        a.findings[0].finding.evidence = a.overall.finding.evidence.clone();
+        a.ruled_out[0].evidence = a.overall.finding.evidence.clone();
+        assert!(a.validate_against(&record).is_ok());
+    }
+
+    #[test]
+    fn unknown_metric_is_rejected() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(false))], vec![]);
+        let mut a = sample_assessment();
+        a.overall.finding.evidence[0].metric = Some("nonexistent".to_string());
+        let err = a.validate_against(&record).unwrap_err();
+        assert!(err.contains("nonexistent"), "{err}");
+    }
+
+    #[test]
+    fn out_of_range_anomaly_index_is_rejected() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(false))], vec![]);
+        let mut a = sample_assessment();
+        a.overall.finding.evidence = vec![EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: Some(5),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        }];
+        assert!(a.validate_against(&record).is_err());
+    }
+
+    #[test]
+    fn index_without_metric_is_rejected() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(false))], vec![]);
+        let mut a = sample_assessment();
+        a.overall.finding.evidence[0] = EvidenceRef {
+            metric: None,
+            anomaly_index: Some(0),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        };
+        assert!(a.validate_against(&record).is_err());
+    }
+
+    #[test]
+    fn correlation_index_resolves_against_record() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(false))], vec![]);
+        let mut a = sample_assessment();
+        let anchored = EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: Some(0),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        };
+        a.overall.finding.evidence = vec![anchored.clone()];
+        a.ruled_out[0].evidence = vec![anchored];
+        // findings[0] still cites correlation_index 0; the record has none
+        let err = a.validate_against(&record).unwrap_err();
+        assert!(err.contains("correlation_index"), "{err}");
+    }
+
+    #[test]
+    fn medium_confidence_may_cite_within_band_metric() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(true))], vec![]);
+        let mut a = sample_assessment();
+        let anchored = EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: Some(0),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        };
+        a.overall.finding.confidence = Confidence::Medium;
+        a.overall.finding.evidence = vec![anchored.clone()];
+        a.findings[0].finding.confidence = Confidence::Medium;
+        a.findings[0].finding.evidence = vec![anchored.clone()];
+        a.ruled_out[0].confidence = Confidence::Medium;
+        a.ruled_out[0].evidence = vec![anchored];
+        assert!(a.validate_against(&record).is_ok());
+    }
+
+    #[test]
+    fn within_band_metric_caps_confidence() {
+        let record = record_with(vec![metric("cpu_usage", 1, Some(true))], vec![]);
+        let mut a = sample_assessment();
+        a.overall.finding.evidence = vec![EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: Some(0),
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "r".to_string(),
+        }];
+        a.findings.clear();
+        a.ruled_out.clear();
+        // overall is High and cites a within-band metric -> rejected
+        let err = a.validate_against(&record).unwrap_err();
+        assert!(err.contains("within"), "{err}");
+    }
+
+    #[test]
+    fn high_confidence_requires_a_resolvable_pointer() {
+        let mut a = sample_assessment();
+        // rationale-only evidence (all pointers None) cannot ground High
+        a.overall.finding.evidence = vec![EvidenceRef {
+            metric: None,
+            anomaly_index: None,
+            regime_shift_index: None,
+            correlation_index: None,
+            rationale: "vibes".to_string(),
+        }];
+        let err = a.validate().unwrap_err();
+        assert!(err.contains("pointer"), "{err}");
+    }
+
+    #[test]
+    fn empty_needs_metric_is_rejected() {
+        let mut a = sample_assessment();
+        if let FindingKind::NeedsMetric { missing, .. } = &mut a.findings[1].kind {
+            *missing = String::new();
+        }
+        let err = a.validate().unwrap_err();
+        assert!(err.contains("missing"), "{err}");
     }
 }

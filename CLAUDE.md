@@ -97,6 +97,7 @@ target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # 
 # query prints an acquisition-window uncertainty band [lo, hi] beside rate()/irate() values
 # (scalar ops scale the band, e.g. rate(x)*k; series-op-series and non-rate queries show none)
 target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
+target/release/rezolus mcp extract-features file.parquet             # structured feature record (JSON)
 ```
 
 ## Architecture
@@ -110,7 +111,7 @@ The binary operates in seven modes via subcommands:
 3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw|rez}`. The `.rez` format (`-o out.rez` or `--format rez`) writes a per-sampler archive (see "`.rez` archive format" below); `--label key=value` tags a `.rez` recording.
 4. **Hindsight** (`src/hindsight/`) - Maintains rolling ring buffer on disk for post-incident snapshots.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison, >2 shows the first two), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
-6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series and non-rate queries show none).
+6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series and non-rate queries show none). `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
 7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops whole per-sampler tables). All four accept `.rez` inputs.
 
 ### Sampler Architecture

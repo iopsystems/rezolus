@@ -80,7 +80,8 @@ fn main() {
              hindsight  Keep an on-disk ring buffer for after-the-fact incident snapshots.\n    \
              record     Scrape an endpoint to a parquet file (optionally wrapping a command).\n    \
              view       Serve a web dashboard for a recording or a live agent.\n    \
-             mcp        AI analysis tools (PromQL, anomaly detection, correlation) over a file.\n    \
+             mcp        AI analysis tools (PromQL, anomaly detection, correlation, feature\n\
+             \x20              extraction) over a file.\n    \
              parquet    Inspect and transform parquet recordings (metadata/annotate/combine/filter).\n    \
              status     Print a running agent's status/sampler health: `rezolus status <endpoint>`.\n\n\
              The agent is the source everything else reads from; start there, then reach for a\n\

@@ -87,6 +87,7 @@ pub fn run(config: Config) {
         Mode::DescribeMetrics { file } => run_describe_metrics(file),
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query),
         Mode::Query { file, query } => run_query(file, query),
+        Mode::ExtractFeatures { file } => run_extract_features(file),
     }
 }
 
@@ -400,6 +401,30 @@ fn run_query(file: PathBuf, query: String) {
     }
 }
 
+fn run_extract_features(file: PathBuf) {
+    let reader = match open_source(&file) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Failed to open recording: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match crate::analysis::extract::extract(reader.as_ref()) {
+        Ok(record) => match serde_json::to_string_pretty(&record) {
+            Ok(json) => println!("{json}"),
+            Err(e) => {
+                eprintln!("Failed to serialize record: {e}");
+                std::process::exit(1);
+            }
+        },
+        Err(e) => {
+            eprintln!("Feature extraction failed: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn format_query_result(result: &QueryResult) -> String {
     use std::fmt::Write;
     let mut output = String::new();
@@ -542,6 +567,10 @@ pub enum Mode {
         file: PathBuf,
         query: String,
     },
+    /// Extract structured features from a recording as JSON
+    ExtractFeatures {
+        file: PathBuf,
+    },
 }
 
 /// MCP server configuration
@@ -610,6 +639,13 @@ impl TryFrom<ArgMatches> for Config {
                     .clone();
                 Mode::Query { file, query }
             }
+            Some(("extract-features", sub_args)) => {
+                let file = sub_args
+                    .get_one::<PathBuf>("FILE")
+                    .ok_or("File argument is required")?
+                    .clone();
+                Mode::ExtractFeatures { file }
+            }
             _ => Mode::Server,
         };
 
@@ -630,7 +666,8 @@ pub fn command() -> Command {
              describe-metrics     List every metric in a recording with its type and labels\n    \
              query                Run a PromQL query against a recording\n    \
              detect-anomalies     Flag anomalies for one metric, or exhaustively across all\n    \
-             analyze-correlation  Correlate two PromQL series over the recording\n\n\
+             analyze-correlation  Correlate two PromQL series over the recording\n    \
+             extract-features     Extract structured features from a recording as JSON\n\n\
              A good workflow is describe-metrics (see what's there) → query / detect-anomalies\n\
              (dig in). Run `rezolus mcp <subcommand> --help` for per-subcommand examples.\n\n\
              EXAMPLES:\n    \
@@ -767,6 +804,25 @@ pub fn command() -> Command {
                         .help("PromQL query (e.g., 'sum(rate(cpu_cycles[1m]))')")
                         .required(true)
                         .index(2),
+                ),
+        )
+        .subcommand(
+            Command::new("extract-features")
+                .about("Extract structured features from a recording as JSON")
+                .long_about(
+                    "Produce a deterministic, versioned overview record of a recording's \
+                     Rezolus-native features (per-metric stats, noise class, anomalies, \
+                     regime shifts, acquisition-window uncertainty, correlations, resource \
+                     rankings, subsystem coverage) as JSON on stdout. The record is the \
+                     input half of a recording assessment. Requires a recording of at \
+                     least 10 seconds.",
+                )
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Path to a parquet or .rez recording")
+                        .value_parser(clap::value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
                 ),
         )
 }
