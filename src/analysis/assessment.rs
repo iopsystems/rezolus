@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 /// supports (or, in `ruled_out`, dismisses) the claim. Exactly one of the index
 /// fields is normally set alongside `metric`; all optional so an evidence item
 /// can point at a metric, an anomaly, a regime shift, or a correlation.
+///
+/// OPEN QUESTION (must be settled before Phase 3's index-resolution check):
+/// `metric` is a bare name, but the record keys metric entries by
+/// (name, labels) — a name with multiple series is ambiguous. Resolution
+/// options: an index into the record's `metrics` vec, labels here, or an
+/// extraction guarantee that emitted names are unique.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceRef {
     /// Metric this evidence points at, if any.
@@ -132,6 +138,36 @@ pub struct Assessment {
     pub ruled_out: Vec<Finding>,
 }
 
+impl Finding {
+    /// Structural invariants a single finding must satisfy, regardless of role.
+    fn validate_self(&self, role: &str) -> Result<(), String> {
+        if self.summary.trim().is_empty() {
+            return Err(format!("{role} has an empty summary"));
+        }
+        // A High-confidence claim must be grounded in evidence.
+        if self.confidence == Confidence::High && self.evidence.is_empty() {
+            return Err(format!("{role} is High confidence but cites no evidence"));
+        }
+        Ok(())
+    }
+}
+
+impl Assessment {
+    /// Structural validation that needs no `OverviewRecord`. Cross-record checks
+    /// (evidence indices resolving, uncertainty forcing confidence down) are
+    /// applied in Phase 3 once extraction exists.
+    pub fn validate(&self) -> Result<(), String> {
+        self.overall.finding.validate_self("overall finding")?;
+        for (i, f) in self.findings.iter().enumerate() {
+            f.finding.validate_self(&format!("findings[{i}]"))?;
+        }
+        for (i, f) in self.ruled_out.iter().enumerate() {
+            f.validate_self(&format!("ruled_out[{i}]"))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,26 +195,41 @@ mod tests {
                     note: None,
                 },
             },
-            findings: vec![TieredFinding {
-                finding: Finding {
-                    summary: "Runqueue latency p99 elevated".to_string(),
-                    confidence: Confidence::High,
-                    evidence: vec![EvidenceRef {
-                        metric: None,
-                        anomaly_index: None,
-                        regime_shift_index: None,
-                        correlation_index: Some(0),
-                        rationale: "runqueue latency co-moves with cpu saturation".to_string(),
-                    }],
-                    recommended_action: Some("pin latency-sensitive threads".to_string()),
+            findings: vec![
+                TieredFinding {
+                    finding: Finding {
+                        summary: "Runqueue latency p99 elevated".to_string(),
+                        confidence: Confidence::High,
+                        evidence: vec![EvidenceRef {
+                            metric: None,
+                            anomaly_index: None,
+                            regime_shift_index: None,
+                            correlation_index: Some(0),
+                            rationale: "runqueue latency co-moves with cpu saturation".to_string(),
+                        }],
+                        recommended_action: Some("pin latency-sensitive threads".to_string()),
+                    },
+                    priority: Priority::High,
+                    kind: FindingKind::Bottleneck {
+                        subsystem: "scheduler".to_string(),
+                        mechanism: "runqueue_latency".to_string(),
+                        direction: "tasks waiting to run".to_string(),
+                    },
                 },
-                priority: Priority::High,
-                kind: FindingKind::Bottleneck {
-                    subsystem: "scheduler".to_string(),
-                    mechanism: "runqueue_latency".to_string(),
-                    direction: "tasks waiting to run".to_string(),
+                TieredFinding {
+                    finding: Finding {
+                        summary: "Cannot rule out storage stalls".to_string(),
+                        confidence: Confidence::Medium,
+                        evidence: vec![],
+                        recommended_action: Some("enable blockio latency sampler".to_string()),
+                    },
+                    priority: Priority::Medium,
+                    kind: FindingKind::NeedsMetric {
+                        missing: "blockio_latency".to_string(),
+                        would_resolve: "whether stalls are storage-bound".to_string(),
+                    },
                 },
-            }],
+            ],
             ruled_out: vec![Finding {
                 summary: "Thermal throttling".to_string(),
                 confidence: Confidence::High,
@@ -233,6 +284,18 @@ mod tests {
                         "subsystem": "scheduler",
                         "mechanism": "runqueue_latency",
                         "direction": "tasks waiting to run"
+                    }
+                },
+                {
+                    "summary": "Cannot rule out storage stalls",
+                    "confidence": "Medium",
+                    "evidence": [],
+                    "recommended_action": "enable blockio latency sampler",
+                    "priority": "Medium",
+                    "kind": {
+                        "type": "NeedsMetric",
+                        "missing": "blockio_latency",
+                        "would_resolve": "whether stalls are storage-bound"
                     }
                 }
             ],
@@ -299,5 +362,50 @@ mod tests {
         let ruled = &sample_assessment().ruled_out[0];
         let json = serde_json::to_string(ruled).unwrap();
         assert!(!json.contains("recommended_action"));
+    }
+
+    #[test]
+    fn valid_assessment_passes_validation() {
+        assert!(sample_assessment().validate().is_ok());
+    }
+
+    #[test]
+    fn high_confidence_without_evidence_is_rejected() {
+        let mut a = sample_assessment();
+        a.findings[0].finding.evidence.clear();
+        a.findings[0].finding.confidence = Confidence::High;
+        let err = a.validate().unwrap_err();
+        assert!(
+            err.contains("High"),
+            "error should mention the High-confidence rule: {err}"
+        );
+        assert!(
+            err.contains("findings[0]"),
+            "error should name the finding: {err}"
+        );
+    }
+
+    #[test]
+    fn ruled_out_high_without_evidence_is_rejected() {
+        let mut a = sample_assessment();
+        a.ruled_out[0].evidence.clear();
+        let err = a.validate().unwrap_err();
+        assert!(
+            err.contains("ruled_out[0]"),
+            "error should name the ruled_out item: {err}"
+        );
+    }
+
+    #[test]
+    fn whitespace_summary_is_rejected_before_evidence_rule() {
+        let mut a = sample_assessment();
+        // Violate both rules at once: summary check must win.
+        a.overall.finding.summary = "   ".to_string();
+        a.overall.finding.evidence.clear();
+        let err = a.validate().unwrap_err();
+        assert!(
+            err.contains("summary"),
+            "summary rule should fire first: {err}"
+        );
     }
 }
