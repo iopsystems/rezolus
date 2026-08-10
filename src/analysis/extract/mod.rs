@@ -8,6 +8,10 @@
 //! C(12,2) pairs, re-querying each candidate per pairing — a per-candidate
 //! series cache is a Phase 3 item.
 //!
+//! v2 schema adds `MetricFeatures.status` (distinguishing query failures from
+//! genuinely idle zeros) and per-entry `sampler` labels (subsystem attribution).
+//! Labels now carry the sampler; names remain the unique identity.
+//!
 //! Known v1 limitations: `.rez` recordings carry no `version` metadata
 //! (`agent_version: None`); a multi-recording `.rez` opened via the MCP
 //! pool path exposes only its first recording's metadata.
@@ -49,6 +53,7 @@ pub(crate) struct MetricAnalysis {
     pub metric_type: String,
     pub query: String,
     pub subsystem: String,
+    pub status: crate::analysis::record::AnalysisStatus,
     pub stats: crate::analysis::record::Stats,
     pub noise: crate::analysis::record::NoiseSummary,
     pub anomalies: Vec<crate::analysis::record::AnomalyFeature>,
@@ -102,8 +107,9 @@ pub(crate) fn assemble(
         metrics.push(MetricFeatures {
             name: a.name,
             metric_type: a.metric_type,
-            labels: BTreeMap::new(),
+            labels: BTreeMap::from([("sampler".to_string(), a.subsystem.clone())]),
             tier,
+            status: a.status,
             stats: a.stats,
             noise: a.noise,
             anomalies: if tier == DetailTier::Full {
@@ -236,6 +242,7 @@ fn analyze_entry(
         metric_type: metric_type.to_string(),
         query: query.clone(),
         subsystem,
+        status: crate::analysis::record::AnalysisStatus::NoData,
         stats: features::compute_stats(&[]),
         noise: crate::analysis::record::NoiseSummary {
             noise_type: "Unknown".to_string(),
@@ -248,10 +255,19 @@ fn analyze_entry(
     let Ok(result) = detect_anomalies(data, &query) else {
         return analysis;
     };
+    // The engine currently errors on empty results itself, so these two
+    // guards are belt-and-suspenders: an empty or all-non-finite series
+    // stays NoData rather than masquerading as a valid Constant entry.
+    if result.values.is_empty() || result.values.iter().all(|v| !v.is_finite()) {
+        return analysis;
+    }
     analysis.stats = features::compute_stats(&result.values);
     analysis.noise = features::noise_summary(&result.allan_analysis);
     let constant = analysis.stats.max == analysis.stats.min;
-    if !constant {
+    if constant {
+        analysis.status = crate::analysis::record::AnalysisStatus::Constant;
+    } else {
+        analysis.status = crate::analysis::record::AnalysisStatus::Analyzed;
         analysis.anomalies = result
             .anomalies
             .iter()
@@ -431,6 +447,7 @@ mod tests {
             metric_type: "counter".to_string(),
             query: format!("sum(rate({name}[1m]))"),
             subsystem: "cpu_usage".to_string(),
+            status: crate::analysis::record::AnalysisStatus::Analyzed,
             stats: Stats {
                 min: 0.0,
                 max: 1.0,
@@ -505,6 +522,14 @@ mod tests {
         assert_eq!(record.selection.promotions[0].metric, "aaa");
         assert_eq!(record.selection.promotions[0].reason, "anomalous");
         assert_eq!(record.schema_version, RECORD_SCHEMA_VERSION);
+        assert_eq!(
+            record.metrics[0].labels.get("sampler").map(String::as_str),
+            Some("cpu_usage")
+        );
+        assert_eq!(
+            record.metrics[0].status,
+            crate::analysis::record::AnalysisStatus::Analyzed
+        );
     }
 
     #[test]

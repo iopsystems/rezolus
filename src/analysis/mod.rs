@@ -21,9 +21,9 @@ pub use assessment::{
 
 #[allow(unused_imports)]
 pub use record::{
-    AnomalyFeature, Consumer, Context, CorrelationFeature, Coverage, DetailTier, MetricFeatures,
-    NoiseSummary, OverviewRecord, Promotion, Rankings, RegimeShiftFeature, Selection, Stats,
-    UncertaintySummary, RECORD_SCHEMA_VERSION,
+    AnalysisStatus, AnomalyFeature, Consumer, Context, CorrelationFeature, Coverage, DetailTier,
+    MetricFeatures, NoiseSummary, OverviewRecord, Promotion, Rankings, RegimeShiftFeature,
+    Selection, Stats, UncertaintySummary, RECORD_SCHEMA_VERSION,
 };
 
 // No runtime caller until Phase 3 wires the MCP/CLI front door.

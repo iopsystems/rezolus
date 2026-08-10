@@ -16,12 +16,18 @@
 //! - **Tier↔content coupling.** A `Summary`-tier metric must carry empty
 //!   `anomalies`/`regime_shifts` and no `uncertainty`; the extractor upholds this and
 //!   validation checks it.
-//! - **Readers are lenient.** Unknown fields are ignored on deserialize (serde
-//!   default) — a deliberate forward-compatibility choice across schema versions.
+//! - **Readers are lenient about unknown fields only.** Unknown fields are
+//!   ignored on deserialize (serde default) — a deliberate forward-compatibility
+//!   choice. The reverse direction is strict: a schema bump that adds required
+//!   fields intentionally breaks deserialization of older records; migration
+//!   (if ever needed) goes through `schema_version`, never through serde
+//!   defaults that would fabricate analysis outcomes.
 
 /// Schema version for `OverviewRecord`. Bump on any change to extraction logic
 /// or record shape so stored examples stay attributable to an extractor version.
-pub const RECORD_SCHEMA_VERSION: u32 = 1;
+/// v2: added `MetricFeatures.status` (analysis outcome) and the `sampler` label
+/// (subsystem attribution) stamped by extraction.
+pub const RECORD_SCHEMA_VERSION: u32 = 2;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -70,15 +76,31 @@ pub enum DetailTier {
     Full,
 }
 
+/// Outcome of a metric entry's analysis pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnalysisStatus {
+    /// The engine analyzed a varying series; findings (if any) are real.
+    Analyzed,
+    /// The series was exactly constant: stats are valid, but anomaly/regime
+    /// detection is suppressed (MAD/CUSUM misfire on zero variance).
+    Constant,
+    /// The query failed, returned no usable data, or an engine stage errored:
+    /// stats are all zero and carry no signal. Distinguishes "broken/absent"
+    /// from "genuinely idle at zero".
+    NoData,
+}
+
 /// Per-metric features. Exhaustive coverage, tiered detail.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricFeatures {
     pub name: String,
     /// "counter" | "gauge" | "histogram".
     pub metric_type: String,
-    /// Label set. `BTreeMap` for deterministic serialization order.
+    /// Label set. Extraction stamps {"sampler": <subsystem>} (v2); BTreeMap for deterministic serialization order.
     pub labels: BTreeMap<String, String>,
     pub tier: DetailTier,
+    /// Outcome of the analysis pass for this entry.
+    pub status: AnalysisStatus,
     pub stats: Stats,
     pub noise: NoiseSummary,
     /// Full tier only; empty (and omitted) for summary-tier metrics.
@@ -249,6 +271,7 @@ mod tests {
                     metric_type: "counter".to_string(),
                     labels: labels.clone(),
                     tier: DetailTier::Full,
+                    status: AnalysisStatus::Analyzed,
                     stats: Stats {
                         min: 0.0,
                         max: 1.0,
@@ -288,6 +311,7 @@ mod tests {
                     metric_type: "counter".to_string(),
                     labels: BTreeMap::new(),
                     tier: DetailTier::Summary,
+                    status: AnalysisStatus::Constant,
                     stats: Stats {
                         min: 0.0,
                         max: 10.0,
@@ -374,10 +398,16 @@ mod tests {
     }
 
     #[test]
+    fn analysis_status_serializes_as_bare_string() {
+        let json = serde_json::to_string(&AnalysisStatus::NoData).unwrap();
+        assert_eq!(json, "\"NoData\"");
+    }
+
+    #[test]
     fn record_wire_shape_is_pinned() {
         let v = serde_json::to_value(sample_record()).unwrap();
         let expected = serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "context": {
                 "source": "rezolus",
                 "agent_version": "1.2.3",
@@ -401,6 +431,7 @@ mod tests {
                         "state": "user"
                     },
                     "tier": "Full",
+                    "status": "Analyzed",
                     "stats": {
                         "min": 0.0,
                         "max": 1.0,
@@ -444,6 +475,7 @@ mod tests {
                     "metric_type": "counter",
                     "labels": {},
                     "tier": "Summary",
+                    "status": "Constant",
                     "stats": {
                         "min": 0.0,
                         "max": 10.0,
