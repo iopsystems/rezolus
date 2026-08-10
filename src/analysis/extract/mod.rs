@@ -10,4 +10,5 @@
 //! (`agent_version: None`); a multi-recording `.rez` opened via the MCP
 //! pool path exposes only its first recording's metadata.
 
+pub mod context;
 pub mod features;
