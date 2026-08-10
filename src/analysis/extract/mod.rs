@@ -21,6 +21,9 @@ pub mod correlations;
 pub mod features;
 pub mod rankings;
 
+#[cfg(test)]
+mod golden;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use metriken_query::{MetricsSource, QueryResult};

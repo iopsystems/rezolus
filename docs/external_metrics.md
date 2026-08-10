@@ -64,6 +64,11 @@ The number of buckets is determined by: `(max_value_power - grouping_power) * 2^
 Example: `grouping_power=3, max_value_power=20` creates a histogram that can
 store values up to ~1 million with 136 buckets.
 
+Both parameters must reach the recorded column metadata: a histogram column
+whose parquet metadata lacks a u8-parseable `grouping_power` or
+`max_value_power` is **silently dropped** by the query engine on read (see
+"Histogram columns" in `docs/parquet_metadata.md`).
+
 ## Session Labels
 
 Both protocols support **session labels** - connection-level labels that are
