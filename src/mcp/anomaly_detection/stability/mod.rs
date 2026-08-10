@@ -8,7 +8,11 @@ mod hadamard;
 mod modified_allan;
 
 pub use allan::AllanAnalysis;
+// consumed by src/analysis/extract (Phase 2)
+pub use allan::NoiseTransition;
 pub use common::NoiseType;
+// consumed by src/analysis/extract (Phase 2)
+pub use common::CycleMinima;
 pub use hadamard::HadamardAnalysis;
 pub use modified_allan::ModifiedAllanAnalysis;
 
