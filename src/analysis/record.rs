@@ -188,6 +188,10 @@ pub struct Rankings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Consumer {
     pub name: String,
+    /// Base metric this consumer was ranked from (e.g. "blockio_bytes").
+    pub metric: String,
+    /// Unit of avg_usage/max_usage (e.g. "cores", "bytes/s", "ops/s").
+    pub unit: String,
     pub labels: BTreeMap<String, String>,
     pub avg_usage: f64,
     pub max_usage: f64,
@@ -312,6 +316,8 @@ mod tests {
             rankings: Rankings {
                 cpu: vec![Consumer {
                     name: "cpu0".to_string(),
+                    metric: "cpu_usage".to_string(),
+                    unit: "cores".to_string(),
                     labels: labels.clone(),
                     avg_usage: 0.5,
                     max_usage: 1.0,
@@ -465,6 +471,8 @@ mod tests {
                 "cpu": [
                     {
                         "name": "cpu0",
+                        "metric": "cpu_usage",
+                        "unit": "cores",
                         "labels": {
                             "id": "0",
                             "state": "user"
