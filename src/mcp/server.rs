@@ -43,6 +43,7 @@ enum McpTool {
     DescribeMetrics,
     DetectAnomalies,
     Query,
+    ExtractFeatures,
     Unknown(String),
 }
 
@@ -54,6 +55,7 @@ impl From<&str> for McpTool {
             "describe_metrics" => McpTool::DescribeMetrics,
             "detect_anomalies" => McpTool::DetectAnomalies,
             "query" => McpTool::Query,
+            "extract_features" => McpTool::ExtractFeatures,
             other => McpTool::Unknown(other.to_string()),
         }
     }
@@ -81,7 +83,13 @@ impl Server {
         }
     }
 
-    /// Run the MCP server using stdio
+    /// Run the MCP server using stdio.
+    ///
+    /// Dispatch is strictly serial: one request is read, handled to
+    /// completion, and answered before the next is read. CPU-heavy tools
+    /// (extract_features, exhaustive detect_anomalies, analyze_correlation)
+    /// therefore block only the calling client's next request. If dispatch
+    /// ever becomes concurrent, those handlers must move to spawn_blocking.
     pub async fn run_stdio(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
@@ -248,6 +256,20 @@ impl Server {
                                         }
                                     },
                                     "required": ["parquet_file", "query"]
+                                }
+                            },
+                            {
+                                "name": "extract_features",
+                                "description": "Extract a deterministic, versioned overview record of a recording's Rezolus-native features (per-metric stats, noise classification, anomalies, regime shifts, acquisition-window uncertainty, top-N correlations, resource rankings, subsystem coverage) as JSON. The record is the structured input for bottleneck assessment. Requires a recording of at least 10 seconds.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "parquet_file": {
+                                            "type": "string",
+                                            "description": "Path to the recording (parquet or .rez)"
+                                        }
+                                    },
+                                    "required": ["parquet_file"]
                                 }
                             }
                         ]
@@ -463,6 +485,28 @@ impl Server {
                     }
                 }))),
             },
+            McpTool::ExtractFeatures => match self.execute_extract_features(arguments).await {
+                Ok(result) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": result
+                            }
+                        ]
+                    }
+                }))),
+                Err(e) => Ok(Some(json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": -32000,
+                        "message": format!("Feature extraction error: {}", e)
+                    }
+                }))),
+            },
             McpTool::Unknown(name) => Ok(Some(json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -617,6 +661,22 @@ impl Server {
 
         Ok(serde_json::to_string_pretty(&result)?)
     }
+
+    /// Extract structured features from a recording and return the overview
+    /// record as JSON
+    async fn execute_extract_features(
+        &self,
+        arguments: &Value,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let parquet_file = arguments
+            .get("parquet_file")
+            .and_then(|f| f.as_str())
+            .ok_or("Missing parquet_file")?;
+
+        let reader = self.get_reader(parquet_file).await?;
+        let record = crate::analysis::extract::extract(reader.as_ref())?;
+        Ok(serde_json::to_string_pretty(&record)?)
+    }
 }
 
 #[cfg(test)]
@@ -627,6 +687,14 @@ mod tests {
     #[test]
     fn test_mcp_tool_from_str_query() {
         assert!(matches!(McpTool::from("query"), McpTool::Query));
+    }
+
+    #[test]
+    fn test_mcp_tool_from_str_extract_features() {
+        assert!(matches!(
+            McpTool::from("extract_features"),
+            McpTool::ExtractFeatures
+        ));
     }
 
     #[test]
