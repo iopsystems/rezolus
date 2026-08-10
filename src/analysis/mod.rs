@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 pub mod assessment;
+pub mod extract;
 pub mod record;
 
 #[allow(unused_imports)]
