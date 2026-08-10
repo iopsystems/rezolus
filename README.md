@@ -273,6 +273,17 @@ rezolus mcp detect-anomalies rezolus.parquet                 # anomaly detection
 rezolus mcp query rezolus.parquet "sum(rate(cpu_cycles[1m]))"
 ```
 
+`extract-features` distills a whole recording into one deterministic, versioned
+JSON record — the structured input for an AI-assisted bottleneck assessment,
+rather than a series of ad-hoc queries. For every metric it reports summary
+stats, noise classification, anomalies, regime shifts, and acquisition-window
+uncertainty; alongside that it reports top cross-metric correlations, resource
+rankings, and subsystem coverage. Requires a recording of at least 10 seconds:
+
+```bash
+rezolus mcp extract-features rezolus.parquet   # parquet or .rez recordings
+```
+
 ---
 
 ## Use Cases
