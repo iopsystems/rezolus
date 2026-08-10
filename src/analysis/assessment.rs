@@ -14,11 +14,10 @@ use serde::{Deserialize, Serialize};
 /// fields is normally set alongside `metric`; all optional so an evidence item
 /// can point at a metric, an anomaly, a regime shift, or a correlation.
 ///
-/// OPEN QUESTION (must be settled before Phase 3's index-resolution check):
-/// `metric` is a bare name, but the record keys metric entries by
-/// (name, labels) — a name with multiple series is ambiguous. Resolution
-/// options: an index into the record's `metrics` vec, labels here, or an
-/// extraction guarantee that emitted names are unique.
+/// Metric identity (v1, resolved): extraction emits one aggregated entry
+/// per metric name (histogram quantiles suffixed `:p50`/`:p90`/`:p99`), so
+/// `metric` names are unique within a record. Revisit if per-series
+/// features ever land.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvidenceRef {
     /// Metric this evidence points at, if any.
@@ -39,7 +38,7 @@ pub struct EvidenceRef {
 
 /// Categorical confidence. Must track the uncertainty signals: a finding whose
 /// magnitude sits inside its acquisition-window band cannot be `High`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Confidence {
     Low,
     Medium,
@@ -407,5 +406,11 @@ mod tests {
             err.contains("summary"),
             "summary rule should fire first: {err}"
         );
+    }
+
+    #[test]
+    fn confidence_is_ordered() {
+        assert!(Confidence::Low < Confidence::Medium);
+        assert!(Confidence::Medium < Confidence::High);
     }
 }

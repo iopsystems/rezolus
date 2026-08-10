@@ -1,5 +1,6 @@
 //! Cross-metric correlation features. Candidates are *salient* metrics
-//! (anomalous or regime-shifted), capped by salience — a principled,
+//! (anomalous or regime-shifted) plus top-consumer base metrics admitted at
+//! salience 0 (quiet-but-busy drivers), capped by salience — a principled,
 //! documented subset (correlation is O(N^2); exhaustive is impossible).
 //! Absorbs the orphaned `src/mcp/discover_correlations.rs` prototype, whose
 //! hardcoded query cross-product predated the salience policy.

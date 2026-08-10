@@ -393,6 +393,11 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
     let (correlation_features, total_pairs_tested) = correlations::discover(data, &candidates);
 
     // --- context ---
+    // Deliberately the RAW interval, not guarded_step(): this is a
+    // provenance field describing the recording's metadata. A non-finite
+    // interval would trip the no-null backstop below — a loud failure is
+    // preferable to silently substituting 1s into a provenance field.
+    // (All current MetricsSource impls return finite intervals.)
     let context = context::build_context(
         data.source(),
         data.version(),

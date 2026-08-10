@@ -8,12 +8,13 @@ mod mad;
 mod stability;
 
 pub use cusum::CusumAnalysis;
-// consumed by src/analysis/extract (Phase 2)
+pub use cusum::WindowChangePoint;
+// Not yet consumed outside tests; kept for the analysis-extraction API surface.
 #[allow(unused_imports)]
-pub use cusum::{ChangeDirection, CliffPoint, SensitivityLevel, WindowChangePoint};
+pub use cusum::{ChangeDirection, CliffPoint, SensitivityLevel};
 pub use mad::MadAnalysis;
 pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
-// consumed by src/analysis/extract (Phase 2)
+// Not yet consumed outside tests; kept for the analysis-extraction API surface.
 #[allow(unused_imports)]
 pub use stability::{CycleMinima, NoiseTransition};
 
@@ -497,7 +498,7 @@ pub fn detect_anomalies(
             NoiseType::WhitePhase | NoiseType::FlickerPhase => 15.0 * step,
             NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 30.0 * step,
             NoiseType::RandomWalk | NoiseType::FlickerWalk => 60.0 * step,
-            NoiseType::Unknown => 30.0,
+            NoiseType::Unknown => 30.0 * step,
         }
     };
 
@@ -707,8 +708,8 @@ fn apply_allan_smoothing(
                 60.0 * sample_interval // Was 20.0
             }
             NoiseType::Unknown => {
-                // Default: 30 seconds for better smoothing
-                30.0
+                // Default: 30 seconds (scaled by sample interval) for better smoothing
+                30.0 * sample_interval
             }
         }
     };
