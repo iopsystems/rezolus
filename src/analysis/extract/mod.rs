@@ -11,5 +11,6 @@
 //! pool path exposes only its first recording's metadata.
 
 pub mod context;
+pub mod correlations;
 pub mod features;
 pub mod rankings;
