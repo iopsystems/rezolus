@@ -10,8 +10,9 @@ use crate::analysis::record::CorrelationFeature;
 use crate::mcp::correlation::calculate_correlation;
 
 /// Human description of the candidate space, recorded in `Selection`.
-pub(crate) const CANDIDATE_SET_DESCRIPTION: &str =
-    "all pairs among salient metrics (anomalous or regime-shifted), capped at 12 by salience";
+pub(crate) const CANDIDATE_SET_DESCRIPTION: &str = "all pairs among salient metrics (anomalous or \
+    regime-shifted) and top-consumer base metrics, excluding same-base-metric pairs, capped at 12 \
+    by salience";
 
 pub(crate) const CANDIDATE_CAP: usize = 12;
 const MIN_ABS_R: f64 = 0.7;
@@ -40,23 +41,42 @@ pub(crate) struct RawCorrelation {
     pub subsystem2: String,
 }
 
-/// Salience desc, then name asc; truncate to `cap`. Sorts in place and
-/// returns the retained prefix as a clone (small: <= cap entries).
-pub(crate) fn select_candidates(candidates: &mut [Candidate], cap: usize) -> Vec<Candidate> {
-    candidates.sort_by(|a, b| {
+/// Salience desc, then name asc; truncate to `cap`. Clones into a local
+/// `Vec` and sorts that — the caller's ordering is left untouched.
+pub(crate) fn select_candidates(candidates: &[Candidate], cap: usize) -> Vec<Candidate> {
+    let mut sorted: Vec<Candidate> = candidates.to_vec();
+    sorted.sort_by(|a, b| {
         b.salience
             .cmp(&a.salience)
             .then_with(|| a.name.cmp(&b.name))
     });
-    candidates.iter().take(cap).cloned().collect()
+    sorted.truncate(cap);
+    sorted
+}
+
+/// Strip a trailing `:p50`/`:p90`/`:p99` histogram-quantile suffix, if
+/// present, leaving the base metric name. Used to exclude same-base-metric
+/// pairs: quantile siblings of one histogram (e.g. `lat:p50`, `lat:p99`) are
+/// tautologically correlated and would otherwise crowd out real findings.
+fn base_name(name: &str) -> &str {
+    for suffix in [":p50", ":p90", ":p99"] {
+        if let Some(stripped) = name.strip_suffix(suffix) {
+            return stripped;
+        }
+    }
+    name
 }
 
 /// All unordered index pairs (i < j) over the candidate list, in list order —
-/// deterministic because the list is sorted.
+/// deterministic because the list is sorted — excluding pairs whose names
+/// share a base metric (histogram quantile siblings).
 pub(crate) fn candidate_pairs(picked: &[Candidate]) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
     for i in 0..picked.len() {
         for j in (i + 1)..picked.len() {
+            if base_name(&picked[i].name) == base_name(&picked[j].name) {
+                continue;
+            }
             pairs.push((i, j));
         }
     }
@@ -98,7 +118,7 @@ pub(crate) fn build_features(raw: Vec<RawCorrelation>, top_n: usize) -> Vec<Corr
 /// skipped (the pair still counts as tested).
 pub(crate) fn discover(
     data: &dyn MetricsSource,
-    candidates: &mut [Candidate],
+    candidates: &[Candidate],
 ) -> (Vec<CorrelationFeature>, usize) {
     let picked = select_candidates(candidates, CANDIDATE_CAP);
     let pairs = candidate_pairs(&picked);
@@ -137,13 +157,13 @@ mod tests {
 
     #[test]
     fn candidates_capped_by_salience_then_name() {
-        let mut input = vec![
+        let input = vec![
             cand("c", 1, "cpu_usage"),
             cand("a", 3, "cpu_usage"),
             cand("b", 3, "scheduler_runqueue"),
             cand("d", 2, "tcp_traffic"),
         ];
-        let picked = select_candidates(&mut input, 3);
+        let picked = select_candidates(&input, 3);
         let names: Vec<&str> = picked.iter().map(|c| c.name.as_str()).collect();
         // salience desc, name asc tiebreak, cap 3
         assert_eq!(names, vec!["a", "b", "d"]);
@@ -206,5 +226,63 @@ mod tests {
             10,
         );
         assert!(feats.is_empty());
+    }
+
+    #[test]
+    fn candidate_set_description_mentions_cap() {
+        assert!(CANDIDATE_SET_DESCRIPTION.contains(&CANDIDATE_CAP.to_string()));
+    }
+
+    #[test]
+    fn finite_r_with_non_finite_band_is_kept_with_band_stripped() {
+        let feats = build_features(
+            vec![RawCorrelation {
+                metric1: "a".into(),
+                metric2: "b".into(),
+                max_r: 0.9,
+                r_band: Some((f64::NAN, 0.95)),
+                optimal_lag_s: 0,
+                subsystem1: "x".into(),
+                subsystem2: "x".into(),
+            }],
+            10,
+        );
+        assert_eq!(feats.len(), 1);
+        assert_eq!(feats[0].r_band, None);
+    }
+
+    #[test]
+    fn exactly_min_abs_r_boundary_is_kept() {
+        let feats = build_features(
+            vec![RawCorrelation {
+                metric1: "a".into(),
+                metric2: "b".into(),
+                max_r: 0.7,
+                r_band: None,
+                optimal_lag_s: 0,
+                subsystem1: "x".into(),
+                subsystem2: "x".into(),
+            }],
+            10,
+        );
+        assert_eq!(feats.len(), 1);
+    }
+
+    #[test]
+    fn thirteen_candidates_cap_to_twelve_yields_66_pairs() {
+        let input: Vec<Candidate> = (0..13)
+            .map(|i| cand(&format!("m{i:02}"), 13 - i, "cpu_usage"))
+            .collect();
+        let picked = select_candidates(&input, CANDIDATE_CAP);
+        assert_eq!(picked.len(), 12);
+        let pairs = candidate_pairs(&picked);
+        assert_eq!(pairs.len(), 66); // C(12,2)
+    }
+
+    #[test]
+    fn quantile_siblings_generate_no_pair() {
+        let picked = vec![cand("lat:p50", 1, "x"), cand("lat:p99", 1, "x")];
+        let pairs = candidate_pairs(&picked);
+        assert!(pairs.is_empty());
     }
 }

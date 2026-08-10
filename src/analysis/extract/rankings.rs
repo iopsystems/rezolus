@@ -158,7 +158,7 @@ pub(crate) fn build_rankings(data: &dyn MetricsSource) -> (Rankings, BTreeSet<St
     let Some((start, end)) = data.time_range() else {
         return (rankings, BTreeSet::new());
     };
-    let step = data.interval();
+    let step = super::guarded_step(data);
     for (domain, base_metric, unit, query) in DOMAIN_QUERIES {
         let Ok(QueryResult::Matrix { result }) = data.query_range(query, start, end, step) else {
             continue;
