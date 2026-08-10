@@ -98,7 +98,9 @@ pub struct Stats {
     pub min: f64,
     pub max: f64,
     pub mean: f64,
+    /// Last FINITE value — a series ending in NaN reports the prior finite point.
     pub last: f64,
+    /// Nearest-rank percentile (lower median for even-length series); note the anomaly engine's MAD median averages the two middle values, so small series may disagree slightly.
     pub p50: f64,
     pub p99: f64,
 }
@@ -123,7 +125,7 @@ pub struct AnomalyFeature {
     /// `AnomalySeverity` rendered as a string.
     pub severity: String,
     pub confidence: f64,
-    /// Deviation magnitude of the point (computed; `Anomaly` carries the raw value, not a magnitude).
+    /// Deviation magnitude in robust sigmas (|value − median| / (MAD × 1.4826)); computed over the engine's analysis series, which may be Allan-smoothed.
     pub magnitude: f64,
 }
 
@@ -144,11 +146,17 @@ pub struct RegimeShiftFeature {
 }
 
 /// Acquisition-window uncertainty summary: is movement bigger than the error?
+///
+/// v1 heuristic: `band_to_signal_ratio` = MEAN acquisition-band width over
+/// the series divided by total movement (max − min of finite values); a flat
+/// signal is pinned to ratio 1.0. Mean width can average away a locally-wide
+/// band; per-point containment is a v2 feature.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UncertaintySummary {
     /// Ratio of acquisition-window band width to signal magnitude.
     pub band_to_signal_ratio: f64,
     /// True when observed movement sits within the measurement band.
+    /// Equivalent to band_to_signal_ratio >= 1.0 (no independent information).
     pub within_band: bool,
 }
 
@@ -180,6 +188,10 @@ pub struct Rankings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Consumer {
     pub name: String,
+    /// Base metric this consumer was ranked from (e.g. "blockio_bytes").
+    pub metric: String,
+    /// Unit of avg_usage/max_usage (e.g. "cores", "bytes/s", "ops/s").
+    pub unit: String,
     pub labels: BTreeMap<String, String>,
     pub avg_usage: f64,
     pub max_usage: f64,
@@ -304,6 +316,8 @@ mod tests {
             rankings: Rankings {
                 cpu: vec![Consumer {
                     name: "cpu0".to_string(),
+                    metric: "cpu_usage".to_string(),
+                    unit: "cores".to_string(),
                     labels: labels.clone(),
                     avg_usage: 0.5,
                     max_usage: 1.0,
@@ -457,6 +471,8 @@ mod tests {
                 "cpu": [
                     {
                         "name": "cpu0",
+                        "metric": "cpu_usage",
+                        "unit": "cores",
                         "labels": {
                             "id": "0",
                             "state": "user"

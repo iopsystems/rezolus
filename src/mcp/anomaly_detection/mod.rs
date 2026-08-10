@@ -8,8 +8,15 @@ mod mad;
 mod stability;
 
 pub use cusum::CusumAnalysis;
+pub use cusum::WindowChangePoint;
+// Not yet consumed outside tests; kept for the analysis-extraction API surface.
+#[allow(unused_imports)]
+pub use cusum::{ChangeDirection, CliffPoint, SensitivityLevel};
 pub use mad::MadAnalysis;
 pub use stability::{AllanAnalysis, HadamardAnalysis, ModifiedAllanAnalysis, NoiseType};
+// Not yet consumed outside tests; kept for the analysis-extraction API surface.
+#[allow(unused_imports)]
+pub use stability::{CycleMinima, NoiseTransition};
 
 /// Result of anomaly detection analysis
 #[derive(Debug, Serialize, Deserialize)]
@@ -112,13 +119,6 @@ fn validate_and_fix_query(query: &str) -> Result<String, Box<dyn std::error::Err
                     fixed_query.push_str(&query[..before_close]);
                     fixed_query.push_str(default_range);
                     fixed_query.push_str(&query[before_close..]);
-
-                    eprintln!(
-                        "WARNING: Query '{}' was missing range vector for {}. Auto-fixed to: {}",
-                        query,
-                        func.trim_end_matches('('),
-                        fixed_query
-                    );
 
                     return Ok(fixed_query);
                 }
@@ -276,22 +276,10 @@ fn auto_construct_query(
     };
 
     if data.has_counter(metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as COUNTER, using: sum(rate({}[1m]))",
-            metric_name, query
-        );
         Ok(format!("sum(rate({}[1m]))", query))
     } else if data.has_gauge(metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as GAUGE, using: sum({})",
-            metric_name, query
-        );
         Ok(format!("sum({})", query))
     } else if data.has_histogram(metric_name) {
-        eprintln!(
-            "Auto-detected '{}' as HISTOGRAM, using: histogram_quantile(0.99, {})",
-            metric_name, query
-        );
         Ok(format!("histogram_quantile(0.99, {})", query))
     } else {
         // Unknown metric: return as-is and let normal error handling report it
@@ -322,7 +310,13 @@ pub fn detect_anomalies(
         .into());
     }
 
-    let step = 1.0; // seconds
+    // Use the recording's native cadence; a 1s default guards degenerate metadata.
+    let interval = data.interval();
+    let step = if interval.is_finite() && interval > 0.0 {
+        interval
+    } else {
+        1.0
+    };
 
     let duration = end_time - start_time;
     if duration < 10.0 {
@@ -504,7 +498,7 @@ pub fn detect_anomalies(
             NoiseType::WhitePhase | NoiseType::FlickerPhase => 15.0 * step,
             NoiseType::WhiteFrequency | NoiseType::FlickerFrequency => 30.0 * step,
             NoiseType::RandomWalk | NoiseType::FlickerWalk => 60.0 * step,
-            NoiseType::Unknown => 30.0,
+            NoiseType::Unknown => 30.0 * step,
         }
     };
 
@@ -714,8 +708,8 @@ fn apply_allan_smoothing(
                 60.0 * sample_interval // Was 20.0
             }
             NoiseType::Unknown => {
-                // Default: 30 seconds for better smoothing
-                30.0
+                // Default: 30 seconds (scaled by sample interval) for better smoothing
+                30.0 * sample_interval
             }
         }
     };

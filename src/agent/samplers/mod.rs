@@ -116,4 +116,15 @@ mod attribution_tests {
         assert!(is_module_prefix("rezolus::a::cpu", "rezolus::a::cpu::x"));
         assert!(is_module_prefix("rezolus::a::cpu", "rezolus::a::cpu"));
     }
+
+    #[test]
+    fn registered_samplers_are_in_expected_universe() {
+        for e in super::SAMPLERS {
+            assert!(
+                crate::analysis::extract::context::EXPECTED_SUBSYSTEMS.contains(&e.name),
+                "sampler `{}` is not in EXPECTED_SUBSYSTEMS (src/analysis/extract/context.rs)",
+                e.name
+            );
+        }
+    }
 }

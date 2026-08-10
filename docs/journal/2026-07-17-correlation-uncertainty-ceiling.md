@@ -135,3 +135,6 @@ Live: 20 s `.rez` from a local agent (above).
   enough to change a conclusion.
 - **`discover_correlations`** reuses `calculate_correlation`, so it inherits the
   band for free; it does not yet rank or filter by band width.
+  *(Follow-up 2026-08-10: the orphaned `discover_correlations.rs` prototype was
+  absorbed into `analysis::extract::correlations`, which still inherits the band
+  and filters by |r| ≥ 0.7 — band-width ranking remains future work.)*
