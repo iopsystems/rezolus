@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 /// modules for each mode of operation
 mod agent;
+mod analysis;
 mod exporter;
 mod hindsight;
 mod mcp;
