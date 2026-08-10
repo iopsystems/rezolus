@@ -17,3 +17,10 @@ pub use assessment::{
     Assessment, Confidence, DataQuality, EvidenceRef, Finding, FindingKind, Overall, OverallStatus,
     Priority, TieredFinding, ASSESSMENT_SCHEMA_VERSION,
 };
+
+#[allow(unused_imports)]
+pub use record::{
+    AnomalyFeature, Consumer, Context, CorrelationFeature, Coverage, DetailTier, MetricFeatures,
+    NoiseSummary, OverviewRecord, Promotion, Rankings, RegimeShiftFeature, Selection, Stats,
+    UncertaintySummary, RECORD_SCHEMA_VERSION,
+};
