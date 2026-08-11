@@ -45,15 +45,21 @@ which makes incremental parquet writing tractable.
   independent of recording length. Target: well inside a 10 s docker grace
   window; expected sub-second to low seconds. Close-out must carry a measured
   finalize time for a long (multi-hour) recording.
-- Memory bounded by one open segment per sampler plus a small bounded seal
-  queue.
-- No missed or late scrape ticks attributable to sealing — parquet encode and
-  tar IO run off the scrape thread (see "Write pipeline threading").
+- Memory bounded by one open segment per sampler plus a seal queue of depth
+  1–2 (each slot holds a whole segment, so depth is itself a memory bound).
+- No missed or late scrape ticks attributable to sealing **while the disk
+  keeps up** — parquet encode and tar IO run off the scrape thread (see
+  "Write pipeline threading"). Under a disk bottleneck, backpressure blocks
+  the loop by design; the SIGTERM→exit bound is then: one in-flight send +
+  (queue depth + 1) segment writes + tail seals + syncs (+ 2 s child grace
+  in wrapped mode, `child::TERM_GRACE`). Queue depth 1–2 keeps that inside
+  the docker window; close-out must measure it.
 - The msgpack spool double-write in `.rez` mode is eliminated.
-- A recording killed without finalize (SIGKILL, crash) remains a readable
-  archive up to its last sealed segment; after power loss, up to the last
-  synced seal. Readers can distinguish a cleanly finalized recording from a
-  recovered one (`complete` marker).
+- A recording killed without finalize (SIGKILL, crash) leaves a
+  `<output>.partial` readable up to its last checkpoint; after power loss,
+  up to the last **synced** checkpoint (two-sync protocol below). Readers
+  can distinguish a cleanly finalized recording from a recovered one
+  (per-recording `complete` marker).
 - Existing v1 `.rez` archives remain readable; all current consumers (viewer
   server, MCP, `parquet metadata/annotate/combine/filter`) work unchanged on
   v2 output.
@@ -86,24 +92,75 @@ Two load-bearing observations from the code made this design small:
   `<dir>/<sampler>/<seq>.parquet`, then the builder resets. `last_key`
   survives the reset so dedup works across the seal boundary. Empty builders
   are never sealed.
-- **Seal thresholds are byte-first**: estimated segment bytes primary, with a
-  row cap and an age bound (compile-time constants to start; order of a few
-  MiB / a few thousand rows / ~5 min, finalized with measurement during
-  implementation). Rows alone are a poor size proxy — histogram cells are
-  KBs, so 512 rows of `syscall_latency` and 512 rows of a counter-only
-  sampler differ by orders of magnitude in memory and encode cost.
+- **Seal thresholds are byte-first, via incremental in-memory accounting.**
+  There is no cheap estimator of *serialized* parquet size — a dry-run
+  encode is exactly the cost this design moves off the scrape thread, and
+  static guesses are off by 10–100× for histograms. So the threshold is
+  accumulated in-memory bytes, maintained O(1) per entry in `push_row`
+  (`rez.rs:680`): ~16 B per scalar cell + window; `total_buckets() × 8` per
+  histogram cell (`h.value.clone()` at `rez.rs:708` clones the bucket
+  `Box<[u64]>`; gp=7/mvp=64 ≈ 58 KB per cell). That is exact for the two
+  things the cap must bound — memory footprint and encode input — and the
+  compile-time constant is calibrated to a target encoded size once the
+  in-memory→encoded ratio is measured. Row cap and age bound are secondary.
 - **The age bound exists for the kill-loss window, not finalize cost.** The
   byte/row caps alone bound finalize and memory (a slow sampler's open
   segment is naturally tiny — drivehealth accrues ~5 rows in 5 min). Age
   sealing only bounds how much data an unclean kill loses, and it drives
   segment count: ~5 min seals on a 25-sampler agent over 24 h is ~7,000 tar
   entries and a ~288-way read-time merge per slow table. The trade (loss
-  window vs segment count / merge cost) is deliberate; to keep checkpoint
-  overhead flat, all due builders are sealed together and followed by **one**
-  shared `manifest.json` checkpoint entry (a few KB), then `fdatasync`.
-  SIGKILL leaves page cache intact, but the docker story often ends in host
-  shutdown — the sync at seal cadence turns "readable after kill" into
-  "readable after power loss up to the last synced seal."
+  window vs segment count / merge cost) is deliberate. To keep checkpoint
+  overhead flat, all due builders are sealed together and followed by
+  **one** shared `manifest.json` checkpoint entry.
+- **Seal checks are tick-driven, not ingest-driven.** They run every loop
+  iteration whether or not a scrape succeeded, so an unreachable endpoint
+  still gets its pre-outage rows sealed and the kill-loss window stays
+  bounded in time. This makes tick cadence load-bearing for durability, so
+  scrapes and endpoint probes get a `tokio::time::timeout` (~one interval):
+  today `scrape_one` (`mod.rs:262-276`) and the probe path have no timeout
+  and a *hung* (not failing) endpoint parks the loop for TCP-timeout scales
+  — stalling both age seals and SIGTERM response.
+- **Checkpoint durability is a two-sync protocol**: `fdatasync` after the
+  seal batch, then append the checkpoint manifest, then `fdatasync` again.
+  A single post-manifest sync is not enough — write order is not persistence
+  order: power loss can persist the one-page manifest while an earlier
+  segment's data blocks are still unwritten, leaving the recovery manifest
+  pointing at garbage and failing the whole open instead of falling back.
+  With the two-sync order, any persisted manifest byte implies durable
+  segments (a partially-persisted manifest fails JSON parse and recovery
+  falls back to the previous checkpoint). Also: one fsync of the parent
+  directory after creating the output file (else the dirent itself can be
+  lost), and the tar `File` stays unbuffered — no `BufWriter` (the `tar`
+  crate writes straight through). SIGKILL leaves page cache intact, but the
+  docker story often ends in host shutdown — the synced checkpoint cadence
+  turns "readable after kill" into "readable after power loss up to the
+  last synced checkpoint."
+- **Checkpoint manifests omit the per-table `columns` list** (final manifest
+  only). `columns` is O(total column count) — cgroup-heavy tables reach
+  thousands of columns, making a full checkpoint plausibly 100 KB+ rather
+  than "a few KB" — and recovery doesn't need it to load segments. A
+  checkpoint's `rows`/`cadence_ns` describe **exactly the segments it
+  references** — sealed rows only, never open builders — so a recovered
+  archive's manifest never over-reports recoverable data.
+- **An empty checkpoint manifest is the first tar entry**, written at
+  recording start (version, the recording's labels/metadata, zero tables,
+  no `complete`). Without it, nothing identifies the file as `.rez` until
+  the first seal batch: `is_rez_reader` (`rez.rs:574`) would scan MBs of
+  segment data hunting for a manifest, and an early-killed or in-progress
+  file would sniff as not-`.rez` and be misrouted to the parquet path by
+  every dispatcher (viewer, MCP, all four parquet_tools). With it,
+  detection stays O(first entry) and "readable up to the last synced
+  checkpoint" holds from t=0.
+- **Output goes to `<output>.partial`, renamed on clean finalize.** Writing
+  the output path directly would `File::create`-truncate any pre-existing
+  file at t=0 (today nothing is written until finalize) and leave stubs on
+  failed starts. The `.partial` is created exclusively (a concurrent writer
+  is a clear error; a leftover `.partial` from a previous crash is renamed
+  aside with a warning — it may hold recoverable data — never clobbered);
+  rename on success preserves today's UX (the output appears only when
+  complete), and an unclean kill leaves a self-describingly incomplete
+  `.partial` as the recovery artifact. A recording that ends with no data
+  aborts the writer and unlinks the `.partial`.
 
 ### Write pipeline threading
 
@@ -116,44 +173,86 @@ skews the sampling cadence. So the write side is a **dedicated writer thread**
   recording start), the segment sequence numbers, the running per-table
   totals (`rows`, first/last timestamps for `cadence_ns`), and the manifest
   checkpoint state.
-- The scrape loop does only ingest + builder rotation (cheap), and hands
-  sealed builders over a **bounded channel** as seal jobs. Tar appends are
-  inherently serialized, so one thread doing encode+append is the simplest
-  correct shape; channel FIFO preserves per-sampler segment order.
+- The scrape loop does only ingest + builder rotation (cheap; rotation is
+  `mem::replace`, copying `last_key` and the byte accumulator baseline into
+  the fresh builder), and hands sealed builders over a **bounded channel of
+  depth 1–2** as seal jobs. Tar appends are inherently serialized, so one
+  thread doing encode+append is the simplest correct shape; channel FIFO
+  preserves per-sampler segment order.
 - A full channel blocks the loop — that is the intended backpressure signal
   (if the disk can't keep up, the recording is doomed anyway), and it bounds
-  memory to open segments + queue depth.
+  memory to open segments + queue depth. The cost is honest and recorded in
+  the GO criteria: while blocked, `STATE` is only re-checked at the loop top,
+  so a SIGTERM during backpressure waits out the in-flight writes — the
+  small queue depth is what keeps that bound inside the grace window.
 - Writer-thread failure (e.g. disk full) surfaces on the next hand-off: the
-  send fails, the loop reports the writer's error and aborts the recording,
-  instead of logging per-tick against a corrupt archive.
+  send fails (receiver dropped), the loop then **joins the thread** (which
+  returns immediately once the writer has exited) and reports the writer's
+  stored error, instead of logging per-tick against a corrupt archive.
+  Send-failure → join → report is the required order, and the writer always
+  exits its receive loop on the first error rather than continuing.
+- The writer is **panic-free by construction** — every fallible operation
+  returns `Err`. This is a hard requirement, not style: the global panic
+  hook (`main.rs:57-62`) prints and calls `process::exit(101)` *before*
+  unwinding, so a writer panic never reaches the send-error path, skips
+  finalize (the archive recovers at the last checkpoint), and in wrapped
+  mode orphans the child (its process group is never terminated). `Err` is
+  the only supported failure path; that is the accepted panic contract.
+- The writer thread is **joined on every path out of the async block** —
+  including the no-data early returns (`mod.rs:908-915`, which today
+  `return`/`exit` before rez finalization) and the wrapped-mode `Outcome`
+  path whose `std::process::exit` (`mod.rs:1106-1111`) skips destructors.
+  A tar left without its terminating zero-blocks by `exit(2)`/`exit(101)`
+  is expected, not corruption: the reader treats a missing footer as
+  end-of-archive.
 - Finalize is a handshake: the loop sends a finalize message (final partial
   builders + the `complete` marker), the writer seals tails, appends the
-  final manifest and tar footer, syncs, and the loop joins the thread.
+  final manifest and tar footer, syncs, and the loop joins the thread and
+  renames the `.partial` into place.
 
 ### Finalize
 
 Seal the current partial segments (small by construction), append the final
 `manifest.json` — the only one carrying `complete: true` — write the tar
-footer, sync. No re-encoding of sealed segments. Cost is bounded by the seal
-thresholds.
+footer, sync, rename `<output>.partial` to the output path. No re-encoding
+of sealed segments. Cost is bounded by the seal thresholds.
 
 ### Manifest (`REZ_SCHEMA_VERSION` 1 → 2)
 
 `RezTableIndex.file: String` (`rez.rs:36`) becomes `files: Vec<String>` in
 segment order; `rows` and `cadence_ns` become totals across segments. Serde
-keeps v1 readable: `file` becomes `Option<String>`, `files` gets
-`#[serde(default)]`, and readers treat a v1 `file` as a one-element segment
-list. `parquet combine`/`filter`/`annotate` continue to emit single-file
-tables, now under `files`.
+keeps v1 readable: `file` becomes `Option<String>` with
+`#[serde(skip_serializing_if = "Option::is_none")]` (never serialize
+`"file": null`), `files` gets `#[serde(default)]`, and readers treat a v1
+`file` as a one-element segment list.
 
-`RezManifest` gains **`complete: bool`** (`#[serde(default)]` — absent means
-false). Checkpoint manifests never set it; only finalize writes
-`complete: true`. Without it, a checkpoint and a final manifest are
-indistinguishable, and tools would silently present a killed recording as a
-complete one. Readers/tools surface "recording was not cleanly finalized;
-data after \<last row timestamp\> may be missing" when it's absent. v1
-archives (no field) predate unclean-kill recovery, so absent-on-v1 is not
-flagged.
+**`write_archive_bytes` owns index canonicalization**: it rewrites each
+entry it writes to `file: Some(name)`, `files: [name]`, naming the entries
+it actually emits. This is load-bearing, not cosmetic — `combine`
+(`combine.rs:301-311`), `filter` (`filter.rs:147-159`), and `annotate`
+(`annotate.rs:257-271`) all carry the input's `RezTableIndex` verbatim and
+pair it with the single merged blob from `read_archive_bytes`; on segmented
+input, an un-canonicalized index would reference segment paths that don't
+exist in their single-blob output, breaking every downstream reader. Doing
+it in one place also makes all tool output v1-shaped for free. (Note:
+`annotate` rewrites in place, so annotating a segmented archive compacts it
+and discards checkpoint history — accepted, now documented.)
+
+**`complete: bool` lives on `RezRecording`, not `RezManifest`**
+(`#[serde(default)]` — absent means false). A top-level bool cannot survive
+`combine`, which merges recordings from different archives (one recovered +
+one clean has no truthful top-level value); per-recording, the flag
+propagates verbatim through combine/filter/annotate with zero code, and the
+viewer can surface it per-arm in an A/B. Checkpoint manifests never set it;
+finalize sets it on its recording, and the atomic whole-archive writers
+(`write_archive`/`write_archive_bytes` callers producing complete data)
+set it on theirs. Readers/tools surface "recording was not cleanly
+finalized; data after \<last row timestamp\> may be missing" when absent.
+v1 archives predate unclean-kill recovery, so the flag is only interpreted
+when `version >= 2` — and v2 readers gain a **forward version gate** (error
+clearly on `version >` supported): v1 shipped without one, which happens to
+make compacted-output compat possible below, but gates cannot be
+retrofitted, so v2 adds it now.
 
 ### Forward compatibility (v1 binaries reading v2 archives)
 
@@ -171,25 +270,78 @@ An error beats silent partial data, so a v1 binary reading a fresh v2
 archive fails with its serde error (`missing field 'file'`). Recorded here
 so nobody "fixes" it into the silent-partial trap. The compatible path is
 the **offline compactor** (Deferred): compaction merges each table to a
-single file, so its output sets `file` alongside `files` and is fully
-v1-readable. `.rez` is weeks old (first landed 2026-07-13), so the
-v1-binary population is small.
+single file, so its output sets `file` alongside `files` — and it emits
+`version: 1`, because its output *is* v1-shaped (the extra
+`files`/`complete` fields are ignored by v1's serde — verified: no
+`deny_unknown_fields` on the derives, and no v1 reader checks
+`manifest.version`). Emitting `version: 1` makes the claim robust instead
+of resting on v1's *absence* of a version gate. One accepted edge: a v1
+binary reading compacted output of a *recovered* archive cannot see the
+per-recording `complete: false` and presents it as whole — the compactor
+preserves the flag for v2 readers and warns when compacting an incomplete
+archive. `.rez` is weeks old (first landed 2026-07-13), so the v1-binary
+population is small.
 
 ### Reader (single change point: `read_archive_reader`)
 
 All `.rez` consumers funnel through `read_archive_reader` and its
 `RecordingBytes` output (`rez.rs:517`), which stays unchanged downstream:
 
-- A multi-segment table is merged into one parquet byte blob at open: decode
-  each segment's record batches, union the schemas (columns absent in earlier
-  segments null-fill), concatenate, re-encode. Read-time cost is O(table) —
-  the same order as reading is today, and read time is not
-  teardown-constrained.
-- Tar iteration becomes **truncation-tolerant**: on a truncated final entry,
-  stop iterating and use the last complete manifest checkpoint. Sealed
-  segments referenced by that manifest always precede it in the tar, so the
-  prefix is self-consistent. A missing manifest or a manifest referencing an
-  absent table file is still an error.
+- A multi-segment table is merged into one parquet byte blob **lazily, per
+  table, on first touch** — not eagerly for the whole archive at open. The
+  original claim here ("cost O(table), the same order as reading today")
+  was wrong and is retracted: today's open is footer-only and lazy
+  (`ArrowReaderMetadata::load`; row groups decode per query against the
+  shared `BufferPool`), while an eager decode-all + re-encode of every
+  table would cost transient multi-GB RSS and tens of seconds of open time
+  for exactly the multi-hour recordings that motivate this design — at
+  every viewer open and every one-shot MCP CLI invocation. Lazy per-table
+  merge bounds the cost to tables actually queried. The right long-term
+  shape is a segment-aware `ParquetSource` upstream in metriken-query
+  (today's `MultiParquetSource` explicitly duplicates same-identity series
+  across files rather than splicing one timeline — parquet.rs:586-588), and
+  the offline compactor removes the cost entirely for archives read
+  repeatedly. Both backlogged.
+- **Column identity during merge is `name + metric_type` (+ histogram
+  `grouping_power`/`max_value_power`); conflicts split into distinct
+  columns — never a hard error, never silent coercion.** Column names are
+  the snapshot's numeric-id names (`rez.rs:70-71`), and an agent restart
+  mid-recording (the recorder reconnects via the Pending→Active path)
+  remaps ids arbitrarily. Naive schema union then: hard-fails the whole
+  archive on a counter→gauge flip (`UInt64` vs `Int64` field merge), or
+  *silently succeeds* on a counter→histogram flip (different physical
+  column names sharing one `:window_*` pair) or on drifted `metric_type`
+  metadata (the reader would decode a gauge as a counter — the value shape
+  keys on that metadata). On conflict, the later run becomes a distinct
+  column with disambiguated identity and its own windows, with a warning;
+  non-identity metadata drift is last-writer-wins. Related latent bug to
+  fix in the same change: `push_row`'s type-mismatch arm (`rez.rs:705-711`)
+  skips the value but still pushes the window, desyncing a column's
+  values/windows vectors.
+- **The merge must not assume segment timestamps are disjoint or sorted.**
+  `last_key` guarantees strictly increasing *keys*, not timestamps: rows
+  are stamped with recorder wall-clock `snapshot_ts` but deduped on
+  agent-side window ends (`rez.rs:792-810`) — two clocks, often two hosts —
+  so an NTP step can produce duplicate or decreasing timestamps within or
+  across segments (only windowless samplers have key == timestamp). The
+  merge concatenates in segment order and leaves timestamp semantics
+  exactly as a single-segment table would have them; it neither sorts nor
+  dedups.
+- Tar iteration becomes **truncation-tolerant**, with the rule stated
+  precisely because the `tar` crate does not error where it matters: on
+  mid-data truncation the final entry is yielded `Ok` and `read_to_end`
+  returns a *short buffer silently* (the error only surfaces skipping to
+  the next entry); truncation at a block boundary ends iteration cleanly,
+  indistinguishable from a missing footer. So: an entry counts only if
+  bytes read == header size; any tar error, short read, or unparseable
+  tail manifest ends iteration; recovery uses the last fully-read,
+  parseable manifest. Segments referenced by a checkpoint always precede
+  it in the tar and (two-sync protocol) are durable whenever the
+  checkpoint is. A missing footer is expected on unclean exit. Accepted
+  limitation: mid-archive corruption (bad checksum block) is
+  indistinguishable from truncation — the archive presents as unclean up
+  to the last good checkpoint, under-reporting but never fabricating data.
+  A manifest referencing an absent table file is still an error.
 
 ### Recorder loop (`src/recorder/mod.rs`)
 
@@ -221,13 +373,35 @@ All `.rez` consumers funnel through `read_archive_reader` and its
 - Window-advance dedup across a seal boundary (`last_key` persistence).
 - Late-appearing column: null-padded within a segment; unioned with null-fill
   across segments at read.
-- v1 archive back-compat read.
-- Truncated-archive recovery: chop a tar mid-entry; reader returns the sealed
-  prefix from the last checkpoint manifest.
+- v1 archive back-compat read; v2 forward gate errors clearly on
+  `version > 2`; compacted output opens under a v1-era reader shape
+  (`file` set, `version: 1`).
+- Truncated-archive recovery, one test per failure geometry: chop mid-data
+  (tar yields the short entry `Ok` — the length check must catch it),
+  mid-header (tar errors), at a block boundary (clean EOF, looks like a
+  missing footer), and mid-checkpoint-manifest (parse fails → previous
+  checkpoint used). Each recovers the sealed prefix.
+- Merge conflict policy: counter→gauge flip, counter→histogram flip, and
+  `grouping_power`/`max_value_power` drift across segments each open
+  successfully as split columns with a warning — never a hard error, never
+  a misdecoded series.
+- `write_archive_bytes` canonicalization: segmented v2 input through
+  combine/filter/annotate yields manifests whose entries name exactly the
+  files present (`file` set, `files` one-element); per-recording `complete`
+  propagates verbatim.
+- `push_row` values/windows desync (`rez.rs:705-711` mismatch arm) fixed
+  with a regression test.
+- Initial manifest entry: a just-started recording sniffs as `.rez`
+  (`is_rez_path`) and opens as a valid empty unclean recording; a
+  pre-first-seal kill recovers the same way.
+- No-data path: recording that captures nothing joins the writer and
+  unlinks the `.partial`; a pre-existing output file is untouched.
 - Round-trip: multi-segment recording queried through `RezReader` matches a
   single-segment equivalent.
-- `complete` marker: finalize sets it, checkpoints don't; tools flag an
-  archive recovered from a checkpoint as not cleanly finalized.
+- `complete` marker: finalize sets it (per recording), checkpoints don't;
+  tools flag an archive recovered from a checkpoint as not cleanly
+  finalized; combine of one clean + one recovered archive preserves each
+  recording's flag.
 - Writer-thread error surfacing: a failing tar append (e.g. ENOSPC) aborts
   the recording with the writer's error, not per-tick log spam.
 - Scrape cadence under sealing: no missed/late ticks attributable to a seal
@@ -238,8 +412,67 @@ All `.rez` consumers funnel through `read_archive_reader` and its
 - Existing `write_archive`/`write_archive_bytes` users (combine, filter,
   annotate) keep passing.
 
+## Adversarial design review (2026-08-11, pre-build)
+
+Three parallel adversarial subagents attacked the design against the actual
+code and vendored crates (tar-0.4.46, histogram-1.5.0, metriken-core-0.3.0,
+metriken-query), one per seam: tar container & crash recovery, threading &
+process lifecycle, reader merge & ecosystem compat. Every finding checked
+out; all were folded into the sections above. The load-bearing ones:
+
+- Two claims were **wrong** and are corrected above: merge cost is *not*
+  "the same order as reading today" (today's open is footer-only lazy →
+  lazy per-table merge), and segments do *not* have "disjoint increasing
+  timestamps" (`last_key` orders keys, not timestamps — two clocks).
+- Single-sync checkpoints had a real power-loss ordering hole → two-sync
+  protocol; plus parent-dir fsync and the no-`BufWriter` rule.
+- The `tar` crate silently yields short entries on mid-data truncation →
+  the precise length-checked tolerance rule.
+- No manifest existed before the first seal batch → initial empty manifest
+  as the first tar entry (found independently by two reviewers; also fixes
+  `is_rez_reader` detection cost).
+- Direct output writing truncated pre-existing files at t=0 →
+  `.partial` + rename.
+- Top-level `complete` could not survive `combine` → per-recording;
+  un-canonicalized indexes broke tool output on segmented input →
+  `write_archive_bytes` owns canonicalization.
+- Numeric-id column names remap on agent restart → the column-identity
+  merge policy; plus the latent `push_row` values/windows desync.
+- "Estimated segment bytes" was unimplementable as written → incremental
+  in-memory accounting in `push_row`.
+- Panic-hook `exit(101)` bypasses the send-error path → panic-free-by-
+  construction writer contract; no-data early returns skipped the join →
+  join-on-every-path rule.
+- Age seals had to be tick-driven, and hung endpoints (no scrape timeout)
+  could stall seals *and* SIGTERM response → tick-driven checks + scrape/
+  probe timeouts.
+
+Verified safe (recorded so it isn't re-litigated): duplicate tar names are
+mechanically last-wins in our reader, GNU/bsdtar, and Python `tarfile`;
+sealed-builder hand-off types are all plain owned data (`Send + 'static`);
+`filter --samplers` matches `idx.sampler`, not filenames; the read path is
+entry-order-agnostic; in-progress reads are sequential (no mmap/seek-back),
+so a racing appender can only look like a longer prefix or truncated tail.
+
+Accepted risks, explicit: backpressure under a disk bottleneck can still
+consume the grace window (bound recorded in GO criteria; queue depth 1–2);
+mid-archive corruption presents as truncation (under-reports, never
+fabricates); a v1 binary reading compacted output of a recovered archive
+cannot see `complete: false`.
+
 ## Deferred
 
+- **Segment-aware `ParquetSource` in metriken-query.** The lazy per-table
+  merge is a rezolus-side workaround; the right home for multi-segment
+  timelines is upstream (today's `MultiParquetSource` duplicates
+  same-identity series across files instead of splicing one timeline).
+  Would delete the merge code here. *Reopen:* when metriken-query next
+  takes format-level work.
+- **Full metric-identity column keys.** Column names are per-agent-process
+  numeric ids; the merge policy handles restarts by splitting columns, but
+  keying columns on metric name + labels at *write* time would make
+  restarts seamless. Write-format change. *Reopen:* if agent-restart-heavy
+  recordings (fleet rollouts) make split columns a real annoyance.
 - **Offline `.rez` compactor.** Segmented archives trade size and open-time
   merge cost for durability — accepted deliberately (per-segment dictionaries
   and footers cost some compression ratio; the number gets measured at
