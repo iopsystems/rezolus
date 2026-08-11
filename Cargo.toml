@@ -207,3 +207,18 @@ assets = [
         "644",
     ],
 ]
+
+# DEV ONLY — dropped before release (publish metriken-query first, then
+# bump the version req and delete this patch; see the 2026-07-13 journal
+# entry for the precedent).
+#
+# metriken and metriken-exposition are patched alongside metriken-query
+# (not just the crate we're actually changing) because metriken-query's
+# local checkout pulls them in via path dependencies within the metriken
+# workspace. Without patching all three, cargo ends up with two copies of
+# metriken-core (one from crates.io, one from the local path) that both
+# declare `links = "metriken-core"`, which cargo refuses to resolve.
+[patch.crates-io]
+metriken = { path = "../metriken/metriken" }
+metriken-exposition = { path = "../metriken/metriken-exposition" }
+metriken-query = { path = "../metriken/metriken-query" }
