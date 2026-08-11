@@ -62,35 +62,57 @@ pub struct Context {
 /// Which subsystems are present vs absent — what lets an assessment say
 /// `NeedsMetric` instead of hallucinating around a gap.
 ///
-/// Extraction attributes each metric to a subsystem in three tiers (see
-/// `extract::subsystem_of`): the `sampler` label when present (agents >=
-/// 5.17.1); failing that, an exact lookup in `extract::context::
-/// METRIC_SAMPLERS` — a static table, harvested from the sampler `stats.rs`
-/// declarations, of metric names whose sampler can't be recovered from the
-/// name alone (e.g. `cpu_cycles` -> `cpu_perf`, `tcp_bytes` ->
-/// `tcp_traffic`, `cgroup_cpu_usage` -> `cpu_usage`); failing that,
-/// name-prefix inference against `EXPECTED_SUBSYSTEMS`. A drift guard test
+/// Extraction attributes each metric to a subsystem via `extract::
+/// subsystem_of`. A `sampler` label (agents >= 5.17.1) is always
+/// authoritative. Absent a label, *name inference* only runs at all when
+/// the recording's `source` metadata is exactly `"rezolus"` (computed once
+/// per recording as `infer`): a metric named e.g. `cpu_usage` in a
+/// Prometheus-scraped or otherwise foreign recording proves nothing about
+/// which sampler produced it — the name is just a string some unrelated
+/// exporter happened to reuse — so a missing, empty, or non-`"rezolus"`
+/// source disables inference and every unlabeled metric is `unattributed`.
+/// rezolus-agent recordings (parquet and `.rez`, every agent version)
+/// always carry `source = "rezolus"`.
+///
+/// When inference is trusted, in order: a name in `extract::context::
+/// AMBIGUOUS_METRICS` (declared identically by more than one sampler, e.g.
+/// `gpu_memory` across `gpu_amd_smi`/`gpu_nvidia`, or
+/// `rezolus_bpf_run_count`/`_time` across every eBPF-backed sampler) is
+/// deliberately left `unattributed` rather than guessing one of its
+/// candidates; then an exact lookup in `extract::context::METRIC_SAMPLERS`
+/// — a static table, harvested from the sampler `stats.rs` declarations, of
+/// metric names whose sampler can't be recovered from the name alone (e.g.
+/// `cpu_cycles` -> `cpu_perf`, `tcp_bytes` -> `tcp_traffic`,
+/// `cgroup_cpu_usage` -> `cpu_usage`); then name-prefix inference against
+/// `EXPECTED_SUBSYSTEMS`. A drift guard test
 /// (`metric_samplers_match_agent_attribution` in
 /// `src/agent/samplers/mod.rs`) checks the table against the agent's own
-/// module-path attribution over the live metric registry, so the table
-/// tracks sampler additions/renames rather than silently going stale.
+/// module-path attribution over the live metric registry (with documented
+/// limits — see that test's doc comment), so the table tracks sampler
+/// additions/renames rather than silently going stale.
 ///
-/// Absence is asserted only for subsystems whose domain (first `_`-token of
-/// the sampler name, e.g. `blockio` for `blockio_latency`) had no metric
-/// left unattributed after all three tiers: any domain that still has an
-/// unattributed metric is excluded from `subsystems_absent` rather than
-/// asserted absent on unreliable information. This pruning is
-/// defense-in-depth now — it exists for genuinely unknowable cases (foreign
-/// sources, metrics newer than this build's METRIC_SAMPLERS table, or a
-/// handful of names declared identically by more than one sampler, e.g.
-/// `gpu_memory` across `gpu_amd_smi`/`gpu_nvidia` — see
-/// `AMBIGUOUS_METRIC_NAMES`) rather than the primary mechanism it was
-/// before the table existed. Recordings from agents older than 5.17.1 carry
-/// no `sampler` labels at all, so every metric falls to the table/prefix
-/// tiers; only the residual ambiguous or foreign names stay unattributed —
-/// such recordings may therefore still report a shorter `subsystems_absent`
-/// list than a labeled one covering the same subsystems, just a much
-/// shorter gap than under prefix inference alone.
+/// Absence is pruned at two granularities. An `AMBIGUOUS_METRICS` name seen
+/// unattributed prunes exactly its *candidate sampler set* — e.g. an
+/// unlabeled `cpu_cores` prunes only `{cpu_cores, cpu_usage}`, and an
+/// unlabeled `rezolus_bpf_run_count` prunes only the BPF-backed samplers,
+/// deliberately NOT the unrelated `rezolus_rusage` sampler even though both
+/// names share the `"rezolus"` first-token domain. Anything else left
+/// unattributed (inference untrusted, or a genuinely unknown name) prunes
+/// its whole domain (first `_`-token of the sampler name, e.g. `blockio`
+/// for `blockio_latency`) — coarser, but still never asserts a false
+/// absence. Both forms are defense-in-depth now — they exist for genuinely
+/// unknowable cases (foreign sources, metrics newer than this build's
+/// `METRIC_SAMPLERS` table, or ambiguous vocabulary) rather than the
+/// primary mechanism pruning was before the table existed. Recordings from
+/// agents older than 5.17.1 carry no `sampler` labels at all, so on a
+/// trusted (rezolus-sourced) recording every metric falls to the table/
+/// prefix tiers; only the residual ambiguous or foreign names stay
+/// unattributed — such recordings may therefore still report a shorter
+/// `subsystems_absent` list than a labeled one covering the same
+/// subsystems, just a much shorter gap than under prefix inference alone.
+/// A foreign (non-`"rezolus"`) source gets none of this: every unlabeled
+/// metric is `unattributed`, so `subsystems_absent` will typically be
+/// empty or near-empty rather than fabricated.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     pub subsystems_present: Vec<String>,

@@ -130,48 +130,57 @@ mod attribution_tests {
 
     /// Drift guard for `crate::analysis::extract::context::METRIC_SAMPLERS`:
     /// walks the live `metriken` registry and asserts the analysis-side
-    /// resolution (`subsystem_of` with no labels, i.e. its
-    /// METRIC_SAMPLERS-then-prefix tiers) agrees with the agent's own
-    /// module-path attribution (`attribute_sampler`) for every registered
-    /// metric it can unambiguously check.
+    /// resolution (`subsystem_of` called with `infer = true`, i.e. its
+    /// AMBIGUOUS_METRICS-then-METRIC_SAMPLERS-then-prefix tiers) agrees with
+    /// the agent's own module-path attribution (`attribute_sampler`) for
+    /// every registered metric it is *able* to check. `infer = true` here is
+    /// deliberate and always correct for this test regardless of the
+    /// `source`-gating rule extraction applies at runtime: this guard
+    /// verifies the inference tiers' correctness in isolation, not whether
+    /// a given recording should trust them.
     ///
-    /// Platform-gated by compilation: `metriken::metrics()` only contains
-    /// metrics compiled for the current target, so this test only exercises
-    /// whatever samplers that target registers. On macOS that's `cpu_usage`
-    /// and `rezolus_rusage` (`gpu_apple`'s own metrics live in a sibling
-    /// `stats` module under `gpu::macos`, not a descendant of the `apple`
-    /// sampler's module, so `attribute_sampler` itself calls them
-    /// `unattributed` today — a pre-existing quirk unrelated to this guard,
-    /// and covered by the "skip unattributed" rule below). Linux CI is what
-    /// actually exercises the Linux-only samplers (every BPF-backed one,
-    /// drivehealth, the GPU vendor samplers, etc) — this test passing on
-    /// one platform does not certify the table for the others.
+    /// This test does NOT validate the table in full — two real gaps, stated
+    /// plainly rather than glossed over:
     ///
-    /// Two kinds of metric are skipped rather than asserted on:
-    /// - Metrics the agent itself attributes `unattributed` (no ground
-    ///   truth to check against).
-    /// - Names in `AMBIGUOUS_METRIC_NAMES`: declared identically by more
-    ///   than one sampler, so no flat table entry could be correct for all
-    ///   of them (see that constant's doc in context.rs).
+    /// - It only checks metrics the CURRENT PLATFORM'S build registers.
+    ///   `metriken::metrics()` only contains metrics compiled for the
+    ///   current target, so a macOS run only exercises macOS samplers
+    ///   (`cpu_usage`, `rezolus_rusage`) and macOS's cpu_cores/ambiguous
+    ///   cases; a Linux CI run is what actually exercises the Linux-only
+    ///   samplers (every BPF-backed one, drivehealth, the GPU vendor
+    ///   samplers, etc). Passing on one platform does not certify the table
+    ///   rows that platform never registers.
+    /// - It cannot check metrics the agent's OWN `attribute_sampler` calls
+    ///   `unattributed` — there is no ground truth to compare against. On
+    ///   macOS today this silently excludes `gpu_apple`'s own metrics:
+    ///   `gpu/macos/stats.rs` is a sibling module of `gpu/macos/apple.rs`,
+    ///   not a descendant of the `apple` sampler's registered module, so
+    ///   `attribute_sampler`'s module-prefix rule misses it. That's a
+    ///   pre-existing quirk in `attribute_sampler` itself, unrelated to this
+    ///   guard or to `METRIC_SAMPLERS`/`AMBIGUOUS_METRICS` — not something
+    ///   this commit fixes.
     ///
-    /// On failure, the assertion message names the correct
+    /// What IS tight: every metric the registry has an opinion on (agent
+    /// attributes it to a real sampler, not `unattributed`) and whose name
+    /// isn't in `AMBIGUOUS_METRICS` is unconditionally asserted — no further
+    /// skipping. On failure, the assertion message names the correct
     /// `("metric", "sampler")` line to paste into `METRIC_SAMPLERS`.
     #[test]
     fn metric_samplers_match_agent_attribution() {
-        use crate::analysis::extract::context::AMBIGUOUS_METRIC_NAMES;
+        use crate::analysis::extract::context::AMBIGUOUS_METRICS;
         use crate::analysis::extract::subsystem_of;
 
         let mods = super::sampler_modules();
         for metric in metriken::metrics().iter() {
             let name = metric.name();
-            if AMBIGUOUS_METRIC_NAMES.contains(&name) {
+            if AMBIGUOUS_METRICS.iter().any(|(n, _)| *n == name) {
                 continue;
             }
             let truth = super::attribute_sampler(metric.module(), &mods);
             if truth == "unattributed" {
                 continue;
             }
-            let resolved = subsystem_of(name, &[]);
+            let resolved = subsystem_of(name, &[], true);
             assert_eq!(
                 resolved,
                 truth,

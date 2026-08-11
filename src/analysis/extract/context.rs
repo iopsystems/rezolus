@@ -1,21 +1,43 @@
 //! Recording-level context: source, version, duration, interval, systeminfo,
 //! and the coverage map (subsystems present vs absent).
 //!
-//! Subsystem attribution (see `extract::subsystem_of`) has three tiers,
-//! tried in order: a `sampler` label stamped by agents >= 5.17.1
-//! (preferred); failing that, an exact lookup in [`METRIC_SAMPLERS`] — a
-//! static table of metric names whose sampler can't be recovered from the
-//! name alone; failing that, the longest sampler name in
-//! [`EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the metric name.
-//! When none of the three disambiguates, the metric is `unattributed` and
-//! its *domain* ([`domain_of`]) becomes "uncertain": `build_coverage`
-//! excludes any sampler in an uncertain domain from `subsystems_absent`,
-//! since its true presence/absence can't be known from an unattributed
-//! name. It is also not added to `subsystems_present` — we refuse to claim
-//! absence we can't know, and we don't fabricate presence either. This
-//! pruning is defense-in-depth for foreign sources and future metrics, not
-//! the primary resolution mechanism now that [`METRIC_SAMPLERS`] covers the
-//! known non-prefixing cases.
+//! Subsystem attribution (see `extract::subsystem_of`) has one prerequisite
+//! and three tiers. The prerequisite: a `sampler` label is always trusted
+//! (agents >= 5.17.1 stamp it), but *inference from the metric name* is
+//! trusted only when the recording's `source` metadata is exactly
+//! `"rezolus"` (`extract()` computes this once as `infer` and threads it
+//! through). A name like `cpu_usage` or `memory_free` proves nothing about
+//! a Prometheus-scraped or otherwise foreign recording — the name is just a
+//! string some other exporter happened to also use — so a missing, empty,
+//! or non-`"rezolus"` source disables inference entirely and every
+//! unlabeled metric is `unattributed`. rezolus-agent recordings (parquet
+//! and `.rez`, every agent version) always carry `source = "rezolus"`.
+//!
+//! When inference is trusted, the three tiers, tried in order, are: the
+//! `sampler` label (still checked first, redundantly with the
+//! prerequisite, since it's authoritative regardless); an exact lookup in
+//! [`METRIC_SAMPLERS`] — a static table of metric names whose sampler can't
+//! be recovered from the name alone; and name-prefix inference — the
+//! longest sampler name in [`EXPECTED_SUBSYSTEMS`] that is a `_`-boundary
+//! prefix of the metric name. Before either of the latter two, a name in
+//! [`AMBIGUOUS_METRICS`] (declared by more than one sampler, so a flat
+//! mapping can't be correct) is forced to `unattributed` rather than
+//! guessing one of its candidates.
+//!
+//! When nothing disambiguates, the metric is `unattributed`, and
+//! `extract()` credits its uncertainty at the tightest granularity it can:
+//! a name in [`AMBIGUOUS_METRICS`] contributes its exact *candidate sampler
+//! set* to `uncertain_samplers`; anything else (inference untrusted, or a
+//! genuinely unknown name) contributes its *domain* ([`domain_of`]) to
+//! `uncertain_domains`. `build_coverage` excludes both — every sampler in
+//! an uncertain domain, and every sampler in `uncertain_samplers` — from
+//! `subsystems_absent`, since their true presence/absence can't be known.
+//! Nothing in either set is added to `subsystems_present` either — we
+//! refuse to claim absence we can't know, and we don't fabricate presence
+//! we can't confirm. This is all defense-in-depth for foreign sources,
+//! ambiguous vocabulary, and future metrics, not the primary resolution
+//! mechanism now that [`METRIC_SAMPLERS`] covers the known non-prefixing
+//! cases on trusted (rezolus-sourced) recordings.
 
 use std::collections::BTreeSet;
 
@@ -83,15 +105,19 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
 /// -> `cpu_branch`, `tcp_connect_latency` -> `tcp_connect_latency`) is left
 /// out to keep the table minimal. Sorted alphabetically.
 ///
-/// Deliberately excludes [`AMBIGUOUS_METRIC_NAMES`] — names declared
-/// identically by more than one sampler, where a flat mapping can't be
-/// correct for all of them.
+/// Deliberately excludes [`AMBIGUOUS_METRICS`] — names declared identically
+/// by more than one sampler, where a flat mapping can't be correct for all
+/// of them.
 ///
 /// `metric_samplers_match_agent_attribution` in `src/agent/samplers/mod.rs`
 /// is this table's drift guard: it walks the live `metriken` registry and
 /// asserts this table (plus prefix inference) agrees with the agent's own
-/// module-path attribution for every metric it can unambiguously check,
-/// printing the correct line to paste in here when it doesn't.
+/// module-path attribution, for every registered metric whose name isn't in
+/// [`AMBIGUOUS_METRICS`] and that the agent doesn't itself call
+/// `unattributed`, printing the correct line to paste in here when it
+/// doesn't. See that test's doc comment for what it can't check (metrics
+/// the agent's own `attribute_sampler` calls `unattributed`, and samplers
+/// not registered on whatever platform compiled the test).
 pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("blockio_bytes", "blockio_requests"),
     ("blockio_errors", "blockio_requests"),
@@ -193,47 +219,100 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("tcp_srtt", "tcp_receive"),
 ];
 
+/// The samplers that self-report `rezolus_bpf_run_count`/
+/// `rezolus_bpf_run_time`: every eBPF-backed sampler declares its own pair
+/// of these two metrics under its own module (self-timing instrumentation
+/// baked into each BPF-backed `stats.rs`), so the name alone can't tell you
+/// which one ran. Harvested by reading every `stats.rs` that declares
+/// `rezolus_bpf_run_count`; matches the "BPF-enabled samplers" list in
+/// `CLAUDE.md` (`blockio/{latency,requests}`,
+/// `cpu/{bandwidth,migrations,perf,tlb_flush,usage}`,
+/// `network/{interfaces,traffic}`, `scheduler/runqueue`,
+/// `syscall/{counts,latency}`,
+/// `tcp/{connect_latency,packet_latency,receive,retransmit,traffic}`) —
+/// cross-checked independently rather than assumed from that doc. Sorted
+/// alphabetically.
+const BPF_SAMPLERS: &[&str] = &[
+    "blockio_latency",
+    "blockio_requests",
+    "cpu_bandwidth",
+    "cpu_migrations",
+    "cpu_perf",
+    "cpu_tlb_flush",
+    "cpu_usage",
+    "network_interfaces",
+    "network_traffic",
+    "scheduler_runqueue",
+    "syscall_counts",
+    "syscall_latency",
+    "tcp_connect_latency",
+    "tcp_packet_latency",
+    "tcp_receive",
+    "tcp_retransmit",
+    "tcp_traffic",
+];
+
 /// Metric names declared identically by more than one sampler (verified by
-/// reading every sampler's `stats.rs`): a flat name -> sampler table can
-/// only be correct for one of them, so these are deliberately absent from
-/// [`METRIC_SAMPLERS`] and from `metric_samplers_match_agent_attribution`'s
-/// strict per-metric check. An unlabeled recording carrying one of these
-/// names falls through table lookup and name-prefix inference alike to
-/// `unattributed`, and its domain is pruned from `subsystems_absent` rather
-/// than asserted — the same defense-in-depth path that covers foreign or
-/// future metrics. Freshly recorded data (agents >= 5.17.1) is unaffected:
-/// the `sampler` label resolves these correctly without consulting either
-/// table.
+/// reading every sampler's `stats.rs`): a flat name -> sampler mapping
+/// can't be correct for all of them, but the name still proves *one of* its
+/// candidate samplers ran. `subsystem_of` resolves these to `unattributed`
+/// (deliberately absent from [`METRIC_SAMPLERS`] and from
+/// `metric_samplers_match_agent_attribution`'s strict per-metric check)
+/// rather than guessing a single one — but `extract()` credits the
+/// **candidate set**, not a whole name-token domain, to
+/// `uncertain_samplers`, so `build_coverage` prunes exactly those samplers
+/// from `subsystems_absent`. This is deliberately tighter than the
+/// `uncertain_domains` fallback: crediting `rezolus_bpf_run_count`'s whole
+/// `"rezolus"` domain, for example, would also prune the unrelated
+/// `rezolus_rusage` sampler on essentially every unlabeled BPF recording —
+/// a real precision loss the candidate-set form avoids.
+///
+/// Only consulted when inference is trusted (`infer`, see the module doc):
+/// on a non-`rezolus` source we don't trust that a name like `gpu_clock`
+/// came from *our* GPU samplers at all, so no candidate set is credited
+/// there either — the metric just falls into `uncertain_domains` like any
+/// other unlabeled name on an untrusted source.
+///
+/// Freshly recorded data (agents >= 5.17.1) is unaffected either way: the
+/// `sampler` label resolves these correctly without consulting this table.
 ///
 /// - `cpu_cores`: the Linux `cpu_cores` sampler's own metric, but also
 ///   emitted by the macOS `cpu_usage` sampler (macOS folds core-count
 ///   reporting into its usage sampler rather than having a standalone
 ///   `cpu_cores` one) — same name, different true sampler depending on
 ///   platform.
-/// - `gpu_clock`, `gpu_energy_consumption`, `gpu_memory`,
-///   `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_power_usage`,
-///   `gpu_temperature`, `gpu_utilization`: shared vocabulary across
-///   `gpu_amd_smi`, `gpu_nvidia`, and (where applicable) `gpu_apple` — each
-///   vendor sampler declares its own metric under the same generic name.
-/// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: every eBPF-backed
-///   sampler declares its own pair of these under its own module (self-timing
-///   instrumentation), so the name is common to all ~17 BPF samplers.
-// Consulted only by the (test-only, platform-gated)
-// `metric_samplers_match_agent_attribution` guard in
-// `src/agent/samplers/mod.rs`; a non-test build never references it.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const AMBIGUOUS_METRIC_NAMES: &[&str] = &[
-    "cpu_cores",
-    "gpu_clock",
-    "gpu_energy_consumption",
-    "gpu_memory",
-    "gpu_memory_utilization",
-    "gpu_pcie_throughput",
-    "gpu_power_usage",
-    "gpu_temperature",
-    "gpu_utilization",
-    "rezolus_bpf_run_count",
-    "rezolus_bpf_run_time",
+/// - `gpu_clock`, `gpu_energy_consumption`, `gpu_power_usage`,
+///   `gpu_utilization`: shared vocabulary across `gpu_amd_smi`,
+///   `gpu_apple`, and `gpu_nvidia`.
+/// - `gpu_memory`, `gpu_memory_utilization`, `gpu_pcie_throughput`,
+///   `gpu_temperature`: shared between `gpu_amd_smi` and `gpu_nvidia` only
+///   (no macOS/`gpu_apple` equivalent — `gpu/macos/stats.rs` declares no
+///   metric under these names).
+/// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: see [`BPF_SAMPLERS`].
+///
+/// Sorted alphabetically by name; each candidate list sorted alphabetically
+/// too.
+pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
+    ("cpu_cores", &["cpu_cores", "cpu_usage"]),
+    ("gpu_clock", &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"]),
+    (
+        "gpu_energy_consumption",
+        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+    ),
+    ("gpu_memory", &["gpu_amd_smi", "gpu_nvidia"]),
+    ("gpu_memory_utilization", &["gpu_amd_smi", "gpu_nvidia"]),
+    ("gpu_pcie_throughput", &["gpu_amd_smi", "gpu_nvidia"]),
+    (
+        "gpu_power_usage",
+        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+    ),
+    ("gpu_temperature", &["gpu_amd_smi", "gpu_nvidia"]),
+    (
+        "gpu_utilization",
+        &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
+    ),
+    ("rezolus_bpf_run_count", BPF_SAMPLERS),
+    ("rezolus_bpf_run_time", BPF_SAMPLERS),
 ];
 
 /// Metric-name domains that diverge from their owning sampler's leading
@@ -267,24 +346,41 @@ pub(crate) fn domain_of(name: &str) -> &str {
         .map_or(token, |(_, to)| *to)
 }
 
+/// The two "we don't know" sets `extract()` accumulates while attributing
+/// metric names to subsystems, bundled into one type so `build_context`
+/// doesn't need an unrelated arg-count workaround for what is conceptually
+/// a single uncertainty bundle (see the module doc for what each means).
+pub(crate) struct Uncertainty<'a> {
+    /// Domains ([`domain_of`]) with at least one still-`unattributed`
+    /// metric not covered by a tighter [`AMBIGUOUS_METRICS`] entry.
+    pub domains: &'a BTreeSet<String>,
+    /// Samplers named directly as an [`AMBIGUOUS_METRICS`] candidate for
+    /// some unattributed metric — pruned individually rather than by
+    /// domain.
+    pub samplers: &'a BTreeSet<String>,
+}
+
 /// present = the distinct `sampler` label values observed in the recording;
 /// callers insert the synthetic `unattributed` for metrics lacking the
 /// label (this function does not add it). absent = the static universe
-/// minus present, minus any sampler whose domain is in `uncertain_domains`
-/// (a domain with at least one still-`unattributed` metric after
-/// name-prefix inference — its true presence/absence can't be known, so we
-/// exclude it from `subsystems_absent` rather than assert a false absence;
-/// it is *not* added to present either, since we don't fabricate presence
-/// we can't confirm). Both output lists sorted (BTreeSet iteration order).
-pub(crate) fn build_coverage(
-    present: &BTreeSet<String>,
-    uncertain_domains: &BTreeSet<String>,
-) -> Coverage {
+/// minus present, minus any sampler whose domain is in
+/// `uncertainty.domains` (its true presence/absence can't be known, so we
+/// exclude it from `subsystems_absent` rather than assert a false absence),
+/// minus any sampler named directly in `uncertainty.samplers` (the exact
+/// candidate set of an [`AMBIGUOUS_METRICS`] name seen unlabeled — see that
+/// constant's doc for why this is tighter than domain pruning). Neither set
+/// is added to present either, since we don't fabricate presence we can't
+/// confirm. Both output lists sorted (BTreeSet iteration order).
+pub(crate) fn build_coverage(present: &BTreeSet<String>, uncertainty: &Uncertainty) -> Coverage {
     Coverage {
         subsystems_present: present.iter().cloned().collect(),
         subsystems_absent: EXPECTED_SUBSYSTEMS
             .iter()
-            .filter(|&&s| !present.contains(s) && !uncertain_domains.contains(domain_of(s)))
+            .filter(|&&s| {
+                !present.contains(s)
+                    && !uncertainty.domains.contains(domain_of(s))
+                    && !uncertainty.samplers.contains(s)
+            })
             .map(|s| s.to_string())
             .collect(),
     }
@@ -300,7 +396,7 @@ pub(crate) fn build_context(
     sampling_interval_s: f64,
     systeminfo_raw: Option<String>,
     present: &BTreeSet<String>,
-    uncertain_domains: &BTreeSet<String>,
+    uncertainty: &Uncertainty,
 ) -> Context {
     Context {
         source,
@@ -312,7 +408,7 @@ pub(crate) fn build_context(
         duration_s,
         sampling_interval_s,
         systeminfo: systeminfo_raw.and_then(|raw| serde_json::from_str(&raw).ok()),
-        coverage: build_coverage(present, uncertain_domains),
+        coverage: build_coverage(present, uncertainty),
     }
 }
 
@@ -351,8 +447,14 @@ mod tests {
         present.insert("cpu_usage".to_string());
         present.insert("scheduler_runqueue".to_string());
         present.insert("unattributed".to_string());
-        // empty uncertain_domains preserves old (pre-inference) behavior.
-        let c = build_coverage(&present, &BTreeSet::new());
+        // empty uncertainty sets preserve old (pre-inference) behavior.
+        let c = build_coverage(
+            &present,
+            &Uncertainty {
+                domains: &BTreeSet::new(),
+                samplers: &BTreeSet::new(),
+            },
+        );
         assert_eq!(
             c.subsystems_present,
             vec![
@@ -376,7 +478,13 @@ mod tests {
         let mut uncertain = BTreeSet::new();
         uncertain.insert("scheduler".to_string());
         uncertain.insert("blockio".to_string());
-        let c = build_coverage(&present, &uncertain);
+        let c = build_coverage(
+            &present,
+            &Uncertainty {
+                domains: &uncertain,
+                samplers: &BTreeSet::new(),
+            },
+        );
         // pruned domains' samplers are excluded from absent...
         assert!(!c
             .subsystems_absent
@@ -399,7 +507,13 @@ mod tests {
         let mut uncertain = BTreeSet::new();
         uncertain.insert(domain_of("drive_temperature").to_string());
         uncertain.insert(domain_of("gpmu_busy_cycles").to_string());
-        let c = build_coverage(&present, &uncertain);
+        let c = build_coverage(
+            &present,
+            &Uncertainty {
+                domains: &uncertain,
+                samplers: &BTreeSet::new(),
+            },
+        );
         assert!(!c.subsystems_absent.contains(&"drivehealth".to_string()));
         // every gpu_* sampler is pruned, not just the pmu one.
         assert!(!c.subsystems_absent.contains(&"gpu_amd_pmu".to_string()));
@@ -411,7 +525,64 @@ mod tests {
     }
 
     #[test]
+    fn coverage_prunes_exactly_the_candidate_set_for_an_ambiguous_metric() {
+        // As extraction would compute it for an unlabeled cpu_cores metric
+        // on a trusted (rezolus) source: exactly {cpu_cores, cpu_usage} is
+        // credited, not the whole "cpu" domain.
+        let present = BTreeSet::new();
+        let mut uncertain_samplers = BTreeSet::new();
+        uncertain_samplers.insert("cpu_cores".to_string());
+        uncertain_samplers.insert("cpu_usage".to_string());
+        let c = build_coverage(
+            &present,
+            &Uncertainty {
+                domains: &BTreeSet::new(),
+                samplers: &uncertain_samplers,
+            },
+        );
+        assert!(!c.subsystems_absent.contains(&"cpu_cores".to_string()));
+        assert!(!c.subsystems_absent.contains(&"cpu_usage".to_string()));
+        // every other "cpu" sampler still asserts absence -- the candidate
+        // set is exact, not the whole domain.
+        assert!(c.subsystems_absent.contains(&"cpu_perf".to_string()));
+        assert!(c.subsystems_absent.contains(&"cpu_bandwidth".to_string()));
+        assert!(c.subsystems_present.is_empty());
+    }
+
+    #[test]
+    fn coverage_prunes_bpf_set_without_touching_unrelated_rezolus_rusage() {
+        // rezolus_bpf_run_count's candidate set is BPF_SAMPLERS; it must
+        // NOT prune rezolus_rusage even though domain_of both names is
+        // "rezolus" -- this is exactly the precision loss the candidate-set
+        // form (vs. whole-domain pruning) is meant to avoid.
+        let present = BTreeSet::new();
+        let uncertain_samplers: BTreeSet<String> =
+            BPF_SAMPLERS.iter().map(|s| s.to_string()).collect();
+        let c = build_coverage(
+            &present,
+            &Uncertainty {
+                domains: &BTreeSet::new(),
+                samplers: &uncertain_samplers,
+            },
+        );
+        for sampler in BPF_SAMPLERS {
+            assert!(
+                !c.subsystems_absent.contains(&sampler.to_string()),
+                "{sampler} should be pruned (in the BPF candidate set)"
+            );
+        }
+        assert!(
+            c.subsystems_absent.contains(&"rezolus_rusage".to_string()),
+            "rezolus_rusage must still assert absence -- it is not a BPF sampler"
+        );
+    }
+
+    #[test]
     fn context_fields_normalized() {
+        let empty_uncertainty = Uncertainty {
+            domains: &BTreeSet::new(),
+            samplers: &BTreeSet::new(),
+        };
         let ctx = build_context(
             "rezolus".to_string(),
             String::new(), // .rez recordings have no version metadata
@@ -419,7 +590,7 @@ mod tests {
             1.0,
             Some(r#"{"os":"linux"}"#.to_string()),
             &BTreeSet::new(),
-            &BTreeSet::new(),
+            &empty_uncertainty,
         );
         assert_eq!(ctx.agent_version, None);
         assert_eq!(ctx.duration_s, 120.0);
@@ -431,7 +602,7 @@ mod tests {
             1.0,
             Some("not json".into()),
             &BTreeSet::new(),
-            &BTreeSet::new(),
+            &empty_uncertainty,
         );
         assert_eq!(bad.agent_version.as_deref(), Some("1.2.3"));
         assert_eq!(bad.systeminfo, None);
