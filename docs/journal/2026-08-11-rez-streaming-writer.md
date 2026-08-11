@@ -6,8 +6,9 @@
   [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md) and
   [`.rez` reader ecosystem](2026-07-15-rez-reader-ecosystem.md).
 - **Owner:** Brian Martin
-- **Repos:** rezolus only (`src/recorder/rez.rs`, `src/recorder/mod.rs`,
-  `src/rez_reader.rs`).
+- **Repos:** rezolus (`src/recorder/rez.rs`, `src/recorder/mod.rs`,
+  `src/rez_reader.rs`) and metriken (`~/workspace/metriken`,
+  metriken-query: the segment-aware source — in scope, see Reader).
 
 This entry is the design spec (absorbs the brainstorm).
 
@@ -60,6 +61,12 @@ which makes incremental parquet writing tractable.
   up to the last **synced** checkpoint (two-sync protocol below). Readers
   can distinguish a cleanly finalized recording from a recovered one
   (per-recording `complete` marker).
+- **No read-path regression.** The read path is heavily optimized
+  (footer-only open, lazy row-group decode against the `BufferPool`) and
+  stays that way: opening a segmented archive performs no row-group decode,
+  and a query decodes the same row groups a single-segment equivalent
+  would. Close-out carries measured open + query timings, segmented vs
+  compacted.
 - Existing v1 `.rez` archives remain readable; all current consumers (viewer
   server, MCP, `parquet metadata/annotate/combine/filter`) work unchanged on
   v2 output.
@@ -227,16 +234,18 @@ keeps v1 readable: `file` becomes `Option<String>` with
 `file` as a one-element segment list.
 
 **`write_archive_bytes` owns index canonicalization**: it rewrites each
-entry it writes to `file: Some(name)`, `files: [name]`, naming the entries
-it actually emits. This is load-bearing, not cosmetic — `combine`
-(`combine.rs:301-311`), `filter` (`filter.rs:147-159`), and `annotate`
-(`annotate.rs:257-271`) all carry the input's `RezTableIndex` verbatim and
-pair it with the single merged blob from `read_archive_bytes`; on segmented
-input, an un-canonicalized index would reference segment paths that don't
-exist in their single-blob output, breaking every downstream reader. Doing
-it in one place also makes all tool output v1-shaped for free. (Note:
-`annotate` rewrites in place, so annotating a segmented archive compacts it
-and discards checkpoint history — accepted, now documented.)
+table's index entry to name exactly the files it emits — `files` in
+emission order, `file: Some(..)` iff the table is single-file. This is
+load-bearing, not cosmetic — `combine` (`combine.rs:301-311`), `filter`
+(`filter.rs:147-159`), and `annotate` (`annotate.rs:257-271`) all carry the
+input's `RezTableIndex` verbatim; a stale index referencing files that
+don't exist in the output breaks every downstream reader. The tools
+themselves stay segment-oblivious: `read_archive_reader` hands per-segment
+bytes through untouched and the tools pass them along byte-identical
+(filter drops whole tables, annotate rewrites only manifest metadata,
+combine re-dirs recordings), so tool output preserves segmentation — only
+the compactor merges. (Tool output carries a single final manifest;
+checkpoint history is not copied through — accepted, now documented.)
 
 **`complete: bool` lives on `RezRecording`, not `RezManifest`**
 (`#[serde(default)]` — absent means false). A top-level bool cannot survive
@@ -287,22 +296,26 @@ population is small.
 All `.rez` consumers funnel through `read_archive_reader` and its
 `RecordingBytes` output (`rez.rs:517`), which stays unchanged downstream:
 
-- A multi-segment table is merged into one parquet byte blob **lazily, per
-  table, on first touch** — not eagerly for the whole archive at open. The
-  original claim here ("cost O(table), the same order as reading today")
-  was wrong and is retracted: today's open is footer-only and lazy
-  (`ArrowReaderMetadata::load`; row groups decode per query against the
-  shared `BufferPool`), while an eager decode-all + re-encode of every
-  table would cost transient multi-GB RSS and tens of seconds of open time
-  for exactly the multi-hour recordings that motivate this design — at
-  every viewer open and every one-shot MCP CLI invocation. Lazy per-table
-  merge bounds the cost to tables actually queried. The right long-term
-  shape is a segment-aware `ParquetSource` upstream in metriken-query
-  (today's `MultiParquetSource` explicitly duplicates same-identity series
-  across files rather than splicing one timeline — parquet.rs:586-588), and
-  the offline compactor removes the cost entirely for archives read
-  repeatedly. Both backlogged.
-- **Column identity during merge is `name + metric_type` (+ histogram
+- **Reading is segment-aware, in metriken-query — merge-at-read is rejected
+  outright, eager or lazy.** The read path is heavily optimized (footer-only
+  open via `ArrowReaderMetadata::load`; row groups decode per query against
+  the shared `BufferPool` budget) and a regression there is not acceptable.
+  The design's original claim ("merge cost O(table), same order as reading
+  today") was wrong and is retracted: any decode + re-encode merge costs
+  transient multi-GB RSS and tens of seconds for exactly the multi-hour
+  recordings that motivate this design, at every viewer open and every
+  one-shot MCP CLI invocation. Instead, a **segment-aware source lands in
+  metriken-query as part of this effort**: it opens each segment footer-only
+  (KBs per footer), unions schema and metadata across segments (applying the
+  column-identity policy below), and serves queries by decoding only the row
+  groups the query touches, in segment order, splicing one timeline per
+  series. Today's `MultiParquetSource` is explicitly not this — it
+  duplicates same-identity series across files rather than splicing
+  (parquet.rs:586-588); the new source subsumes that gap.
+  `read_archive_reader` hands per-segment bytes through untouched;
+  `RezReader` opens one segmented source per sampler table.
+- **Column identity in the segmented source's schema union is `name +
+  metric_type` (+ histogram
   `grouping_power`/`max_value_power`); conflicts split into distinct
   columns — never a hard error, never silent coercion.** Column names are
   the snapshot's numeric-id names (`rez.rs:70-71`), and an agent restart
@@ -318,13 +331,21 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   fix in the same change: `push_row`'s type-mismatch arm (`rez.rs:705-711`)
   skips the value but still pushes the window, desyncing a column's
   values/windows vectors.
-- **The merge must not assume segment timestamps are disjoint or sorted.**
-  `last_key` guarantees strictly increasing *keys*, not timestamps: rows
-  are stamped with recorder wall-clock `snapshot_ts` but deduped on
-  agent-side window ends (`rez.rs:792-810`) — two clocks, often two hosts —
-  so an NTP step can produce duplicate or decreasing timestamps within or
-  across segments (only windowless samplers have key == timestamp). The
-  merge concatenates in segment order and leaves timestamp semantics
+- **The source must not assume segment timestamps are disjoint or sorted.**
+  `last_key` guarantees strictly increasing *keys*, not timestamps. The
+  clocks, precisely: row timestamps are the **recorder's system clock**
+  (`SystemTime::now`, `mod.rs:728-731`); dedup keys are agent-side window
+  ends, which are **wall-anchored with monotonic width**
+  (`src/agent/timing.rs`: begin = `SystemTime`, width = `Instant` elapsed —
+  an NTP step *during* a read cannot corrupt a window, but successive
+  windows move with the agent's system clock). So both sides are system
+  clocks, on two hosts. An agent-side step-back regresses the key → rows
+  are silently dropped until windows pass the old key (pre-existing ingest
+  behavior, `rez.rs:803-807`); a recorder-side step-back produces
+  duplicate/decreasing timestamps with keys still increasing (only
+  windowless samplers have key == timestamp). The only monotonic clocks in
+  the pipeline are tick scheduling (`aligned_interval`) and window widths.
+  The source concatenates in segment order and leaves timestamp semantics
   exactly as a single-segment table would have them; it neither sorts nor
   dedups.
 - Tar iteration becomes **truncation-tolerant**, with the rule stated
@@ -381,14 +402,18 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   mid-header (tar errors), at a block boundary (clean EOF, looks like a
   missing footer), and mid-checkpoint-manifest (parse fails → previous
   checkpoint used). Each recovers the sealed prefix.
-- Merge conflict policy: counter→gauge flip, counter→histogram flip, and
-  `grouping_power`/`max_value_power` drift across segments each open
-  successfully as split columns with a warning — never a hard error, never
-  a misdecoded series.
+- Segmented-source conflict policy: counter→gauge flip, counter→histogram
+  flip, and `grouping_power`/`max_value_power` drift across segments each
+  open successfully as split series with a warning — never a hard error,
+  never a misdecoded series.
+- Read-path parity: opening a segmented archive performs no row-group
+  decode (footer-only per segment, asserted); a query decodes the same row
+  groups as the single-segment equivalent and returns identical results;
+  open + query timings measured segmented vs compacted at close-out.
 - `write_archive_bytes` canonicalization: segmented v2 input through
   combine/filter/annotate yields manifests whose entries name exactly the
-  files present (`file` set, `files` one-element); per-recording `complete`
-  propagates verbatim.
+  files present (segments pass through byte-identical; `file` set iff
+  single-file); per-recording `complete` propagates verbatim.
 - `push_row` values/windows desync (`rez.rs:705-711` mismatch arm) fixed
   with a regression test.
 - Initial manifest entry: a just-started recording sniffs as `.rez`
@@ -421,9 +446,11 @@ process lifecycle, reader merge & ecosystem compat. Every finding checked
 out; all were folded into the sections above. The load-bearing ones:
 
 - Two claims were **wrong** and are corrected above: merge cost is *not*
-  "the same order as reading today" (today's open is footer-only lazy →
-  lazy per-table merge), and segments do *not* have "disjoint increasing
-  timestamps" (`last_key` orders keys, not timestamps — two clocks).
+  "the same order as reading today" (today's open is footer-only lazy —
+  resolved by pulling a segment-aware metriken-query source **into scope**
+  and rejecting merge-at-read outright; a read-path regression is not
+  acceptable), and segments do *not* have "disjoint increasing timestamps"
+  (`last_key` orders keys, not timestamps — two hosts' system clocks).
 - Single-sync checkpoints had a real power-loss ordering hole → two-sync
   protocol; plus parent-dir fsync and the no-`BufWriter` rule.
 - The `tar` crate silently yields short entries on mid-data truncation →
@@ -462,25 +489,21 @@ cannot see `complete: false`.
 
 ## Deferred
 
-- **Segment-aware `ParquetSource` in metriken-query.** The lazy per-table
-  merge is a rezolus-side workaround; the right home for multi-segment
-  timelines is upstream (today's `MultiParquetSource` duplicates
-  same-identity series across files instead of splicing one timeline).
-  Would delete the merge code here. *Reopen:* when metriken-query next
-  takes format-level work.
 - **Full metric-identity column keys.** Column names are per-agent-process
   numeric ids; the merge policy handles restarts by splitting columns, but
   keying columns on metric name + labels at *write* time would make
   restarts seamless. Write-format change. *Reopen:* if agent-restart-heavy
   recordings (fleet rollouts) make split columns a real annoyance.
-- **Offline `.rez` compactor.** Segmented archives trade size and open-time
-  merge cost for durability — accepted deliberately (per-segment dictionaries
-  and footers cost some compression ratio; the number gets measured at
-  implementation). A compaction tool (likely under `rezolus parquet`) merges
-  each table's segments into a single file offline, recovering the size and
-  open-speed of a single-segment archive — and its output is **fully
-  v1-readable** (sets `file` alongside `files`), making it the compatibility
-  downgrade path too. Not needed for the streaming writer to ship.
+- **Offline `.rez` compactor.** Segmented archives trade some size for
+  durability — accepted deliberately (per-segment dictionaries and footers
+  cost compression ratio; the number gets measured at implementation). A
+  compaction tool (likely under `rezolus parquet`) merges each table's
+  segments into a single file offline, recovering the size and per-segment
+  footer overhead — and its output is **fully v1-readable** (sets `file`
+  alongside `files`, emits `version: 1`), making it the compatibility
+  downgrade path too. With the segment-aware read path in scope, compaction
+  is an optimization, not a read-speed requirement. Not needed for the
+  streaming writer to ship.
 - **Seal thresholds as compile-time constants.** Reopen if real workloads
   need tuning (a `--flag` or config knob).
 - **Fast finalize for the classic parquet path.** By design out of scope

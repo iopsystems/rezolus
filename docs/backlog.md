@@ -191,15 +191,11 @@ Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-wri
 
 - **Offline `.rez` compactor** — Roadmap. Merge a segmented archive's per-table
   segments into single files offline (likely under `rezolus parquet`): recovers
-  the compression ratio and open-time merge cost that streaming trades for
-  durability, and its output is fully v1-readable (`file` + `files`,
-  `version: 1`), making it the forward-compatibility downgrade path. Not needed
-  for the streaming writer to ship.
-- **Segment-aware `ParquetSource` upstream (metriken-query)** — Roadmap. The
-  reader-side lazy per-table segment merge is a rezolus workaround;
-  `MultiParquetSource` duplicates same-identity series across files instead of
-  splicing one timeline. Upstreaming segment awareness deletes the merge code.
-  *Reopen:* when metriken-query next takes format-level work.
+  the compression ratio and per-segment footer overhead that streaming trades
+  for durability, and its output is fully v1-readable (`file` + `files`,
+  `version: 1`), making it the forward-compatibility downgrade path. With the
+  segment-aware read path in scope, this is an optimization, not a read-speed
+  requirement. Not needed for the streaming writer to ship.
 - **Full metric-identity column keys in `.rez` tables** — Open. Column names
   are per-agent-process numeric ids, so an agent restart mid-recording remaps
   them; the merge policy splits conflicting columns. Keying on metric name +
