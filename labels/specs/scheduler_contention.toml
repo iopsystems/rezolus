@@ -1,0 +1,70 @@
+name = "labels-scheduler-contention"
+
+[metadata]
+class = "scheduler_contention"
+
+[[jobs]]
+name = "sut"
+tags = ["z1.baremetal"]
+
+# NOTE: the content below is a verbatim copy of labels/ground_truth/scheduler_contention.json.
+# There is no automated sync — if that file changes, update this write_file step by
+# hand to match (see labels/README.md's metric-name calibration caveat).
+[[jobs.steps]]
+type = "write_file"
+path = "/tmp/ground_truth.json"
+content = """
+{
+  "schema_version": 1,
+  "class": "scheduler_contention",
+  "subsystem": "scheduler",
+  "mechanism": "runqueue_latency",
+  "direction": "runnable tasks queuing behind oversubscribed cores",
+  "induced_window_s": [60.0, 180.0],
+  "expected_signals": [
+    { "metric": "scheduler_runqueue_latency:p99", "check": "ElevatedInWindow" },
+    { "metric": "cpu_usage", "check": "RegimeShiftIncreaseInWindow" },
+    { "metric": "scheduler_runqueue_latency:p99", "check": "SubsystemPresent" }
+  ],
+  "experiment": {
+    "spec_file": "labels/specs/scheduler_contention.toml",
+    "params": { "baseline_s": "60", "induce_s": "120", "cooldown_s": "60", "oversubscription": "4x nproc" },
+    "host_tag": "z1.baremetal"
+  }
+}
+"""
+
+[[jobs.steps]]
+type = "shell"
+command = """
+set -euo pipefail
+BASELINE=60
+INDUCE=120
+COOLDOWN=60
+# --- provision: rezolus release package + stress-ng (best-effort, fail-loud) ---
+if ! command -v rezolus >/dev/null; then
+  curl -fsSL https://rezolus.com/install.sh | bash
+fi
+command -v stress-ng >/dev/null || (apt-get update && apt-get install -y stress-ng)
+# --- agent: start in the background, wait for readiness ---
+nohup rezolus /etc/rezolus/agent.toml >/tmp/agent.log 2>&1 &
+for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4241/metrics/json && break; sleep 1; done
+# --- record (background), induce phase, wait for the recorder ---
+TOTAL=$((BASELINE + INDUCE + COOLDOWN + 10))
+rezolus record --url http://localhost:4241 -o /tmp/recording.rez --interval 1s --duration ${TOTAL}s --metadata class=scheduler_contention &
+RECORD_PID=$!
+sleep $BASELINE
+stress-ng --cpu $((4 * $(nproc))) --timeout ${INDUCE}s
+sleep $COOLDOWN
+wait $RECORD_PID
+"""
+
+[[jobs.steps]]
+type = "upload_artifact"
+path = "/tmp/recording.rez"
+name = "recording.rez"
+
+[[jobs.steps]]
+type = "upload_artifact"
+path = "/tmp/ground_truth.json"
+name = "ground_truth.json"
