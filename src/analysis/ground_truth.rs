@@ -489,4 +489,48 @@ mod tests {
         let errs = t.verify(&rec).unwrap_err();
         assert!(errs[0].contains("RegimeShiftIncreaseInWindow"), "{errs:?}");
     }
+
+    #[test]
+    fn committed_ground_truths_parse_and_declare_v1() {
+        for path in [
+            "labels/ground_truth/cpu_saturation.json",
+            "labels/ground_truth/scheduler_contention.json",
+        ] {
+            let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let t: GroundTruth =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path}: {e}"));
+            assert_eq!(t.schema_version, GROUND_TRUTH_SCHEMA_VERSION, "{path}");
+            assert!(!t.expected_signals.is_empty(), "{path}");
+            assert!(t.induced_window_s.0 < t.induced_window_s.1, "{path}");
+            // Structural preconditions verify() itself requires: a known
+            // class and a RegimeShiftIncreaseInWindow anchor among the
+            // signals. Assert them here so a malformed committed asset
+            // fails loudly at this test rather than only inside verify().
+            assert!(
+                KNOWN_CLASSES.contains(&t.class.as_str()),
+                "{path}: class {:?} not in {KNOWN_CLASSES:?}",
+                t.class
+            );
+            assert!(
+                t.expected_signals
+                    .iter()
+                    .any(|s| s.check == SignalCheck::RegimeShiftIncreaseInWindow),
+                "{path}: missing a RegimeShiftIncreaseInWindow anchor signal"
+            );
+        }
+    }
+
+    #[test]
+    fn committed_exemplars_parse_and_validate() {
+        use crate::analysis::assessment::Assessment;
+        for path in [
+            "labels/exemplars/cpu_saturation.assessment.json",
+            "labels/exemplars/scheduler_contention.assessment.json",
+        ] {
+            let raw = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+            let a: Assessment =
+                serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path}: {e}"));
+            a.validate().unwrap_or_else(|e| panic!("{path}: {e}"));
+        }
+    }
 }
