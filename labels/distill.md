@@ -117,16 +117,17 @@ optional everywhere and should be omitted (not null) on `ruled_out` items,
 which describe dismissed hypotheses, not actions. `ruled_out` items carry no
 `priority` or `kind` — they are plain claims.
 
-## Authoring rules (mechanically enforced — a violation is rejected, not just discouraged)
+## Authoring rules (rules 1-5 mechanically enforced — a violation is rejected; rules 6-8 agent-reviewed)
 
 1. **Every claim needs a non-empty `summary`.** Whitespace-only is rejected.
 2. **`High` confidence requires evidence with a resolvable pointer.** A
    `High`-confidence claim (in `overall`, any `findings[]` item, or any
    `ruled_out[]` item) must cite at least one `evidence[]` item that names a
    real `metric` from the record, or a real `correlation_index` into the
-   record's `correlations[]`. Evidence carrying only a `rationale`, or only
-   an `anomaly_index`/`regime_shift_index` with no `metric` alongside it,
-   does not count as a resolvable pointer and cannot ground `High`. Every
+   record's `correlations[]`. Evidence carrying only a `rationale` does not count as a resolvable
+   pointer and cannot ground `High`; an `anomaly_index`/`regime_shift_index`
+   with no `metric` alongside it is rejected outright at ANY confidence
+   level. Every
    evidence pointer you write must actually resolve: the `metric` name must
    appear in the record's `metrics[]`, and any `anomaly_index` /
    `regime_shift_index` must be a valid index into *that specific metric's*
@@ -138,9 +139,10 @@ which describe dismissed hypotheses, not actions. `ruled_out` items carry no
    record may carry an `uncertainty` block with `within_band: true/false`.
    If `within_band` is `true`, that metric's movement sits inside its
    measurement error band — it is not distinguishable from noise. A
-   `High`-confidence claim may not rest on a metric whose `within_band` is
-   `true`; if that is your only support, either find corroborating evidence
-   elsewhere in the record or drop the claim to `Medium`/`Low`.
+   `High`-confidence claim may not cite a metric whose `within_band` is
+   `true` — corroborating evidence alongside it does not help; the citation
+   itself is rejected. Either replace that citation with evidence from a
+   metric outside its band, or drop the claim to `Medium`/`Low`.
 4. **`findings[]` items are prioritized and typed.** `priority` is
    `High`/`Medium`/`Low`. `kind` is exactly one of:
    - `Bottleneck { subsystem, mechanism, direction }` — a resource or
@@ -261,7 +263,8 @@ labels/corpus/<class>/<experiment-id>/provenance.json    # how it was produced
   "generator": "<model or agent identity>",
   "attempts": <n>,
   "date": "YYYY-MM-DD",
-  "gate": "validators+claim-equality-v1"
+  "gate": "validators+claim-equality-v1",
+  "notes": "<optional free text: repair summary, review judgment>"
 }
 ```
 
@@ -333,3 +336,15 @@ who or what produced it, but that it passed the mechanical gate (validators
 uniformly regardless of generator identity. This same runbook — prompt
 template, repair loop, gate, storage layout — is designed to drive a future
 API-based generator with no changes beyond swapping who reads the prompt.
+
+## Backlog (surfaced by distillation runs)
+
+- **Extraction coverage/attribution bug (Phase-2 follow-up):** on the first
+  corpus recordings, `coverage.subsystems_absent` lists `scheduler_runqueue`
+  and `cpu_usage` as absent while their metrics are present under an
+  `unattributed` sampler label — the host's 5.17.0 agent predates sampler-label
+  stamping, so extraction's label-derived coverage misclassifies. Weakens
+  `SubsystemPresent` checks for those metrics. Fix direction: prefix-fallback
+  attribution in `subsystem_of`, or require agent >= 5.17.1 for corpus hosts.
+- **Direction vocabulary** (see findings above): constrain per-class or drop
+  from the equality gate.
