@@ -27,6 +27,7 @@ labels/
   corpus/                     # gitignored; fetched recordings + paired labels
     <class>/<experiment-id>/recording.rez
     <class>/<experiment-id>/ground_truth.json
+    <class>/<experiment-id>/record.json    # extracted OverviewRecord (step 1 below)
 ```
 
 `GroundTruth` (`src/analysis/ground_truth.rs`) is the machine-checkable
@@ -56,7 +57,8 @@ submission/fetch tooling in v1.
 1. Extract features from the recording:
 
    ```bash
-   target/release/rezolus mcp extract-features labels/corpus/<class>/<experiment-id>/recording.rez > record.json
+   target/release/rezolus mcp extract-features labels/corpus/<class>/<experiment-id>/recording.rez \
+     > labels/corpus/<class>/<experiment-id>/record.json
    ```
 
 2. Evaluate `GroundTruth::verify` against the extracted record. There is no
