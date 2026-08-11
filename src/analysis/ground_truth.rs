@@ -534,6 +534,41 @@ mod tests {
         }
     }
 
+    /// End-to-end exemplar check against a real verified corpus record: every
+    /// evidence pointer must resolve and the acquisition-window confidence cap
+    /// must hold. Not run by default — point it at a fetched record:
+    ///
+    /// ```text
+    /// EXEMPLAR=labels/exemplars/cpu_saturation.assessment.json \
+    /// CORPUS_RECORD=labels/corpus/cpu_saturation/<id>/record.json \
+    /// cargo test exemplar_validates_against_corpus_record -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn exemplar_validates_against_corpus_record() {
+        use crate::analysis::assessment::Assessment;
+        let usage = "set EXEMPLAR and CORPUS_RECORD, e.g.\n\
+             EXEMPLAR=labels/exemplars/cpu_saturation.assessment.json \\\n\
+             CORPUS_RECORD=labels/corpus/cpu_saturation/<experiment-id>/record.json \\\n\
+             cargo test exemplar_validates_against_corpus_record -- --ignored --nocapture";
+        let exemplar_path =
+            std::env::var("EXEMPLAR").unwrap_or_else(|_| panic!("EXEMPLAR unset; {usage}"));
+        let record_path = std::env::var("CORPUS_RECORD")
+            .unwrap_or_else(|_| panic!("CORPUS_RECORD unset; {usage}"));
+        let a: Assessment = serde_json::from_str(
+            &std::fs::read_to_string(&exemplar_path)
+                .unwrap_or_else(|e| panic!("{exemplar_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{exemplar_path}: {e}"));
+        let record: crate::analysis::record::OverviewRecord = serde_json::from_str(
+            &std::fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{record_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{record_path}: {e}"));
+        a.validate_against(&record)
+            .unwrap_or_else(|e| panic!("exemplar does not validate against record: {e}"));
+        println!("exemplar {exemplar_path} validates against {record_path}");
+    }
+
     /// Verify a fetched corpus pair (a real extracted record + its
     /// ground-truth document) end to end. Not run by default — point it at
     /// a `labels/corpus/<class>/<experiment-id>/` fetch via env vars:
