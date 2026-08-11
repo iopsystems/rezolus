@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "overall": {
+    "summary": "Workload is CPU-saturated: all cores pinned by compute-bound load",
+    "confidence": "High",
+    "evidence": [
+      {
+        "metric": "cpu_usage",
+        "regime_shift_index": 0,
+        "rationale": "cpu_usage shows a sustained step increase to near-ceiling utilization coincident with the induced compute-bound load, and stays elevated for the induced window"
+      }
+    ],
+    "recommended_action": "reduce compute-bound concurrency or add CPU capacity",
+    "status": "Actionable",
+    "data_quality": {
+      "coverage_gaps": [],
+      "uncertainty_limited": false
+    }
+  },
+  "findings": [
+    {
+      "summary": "All CPU cores are saturated by compute-bound work",
+      "confidence": "High",
+      "evidence": [
+        {
+          "metric": "cpu_usage",
+          "regime_shift_index": 0,
+          "rationale": "cpu_usage shows a sustained step increase to near-ceiling utilization coincident with the induced compute-bound load, and stays elevated for the induced window"
+        }
+      ],
+      "recommended_action": "reduce compute-bound concurrency or add CPU capacity",
+      "priority": "High",
+      "kind": {
+        "type": "Bottleneck",
+        "subsystem": "cpu",
+        "mechanism": "cpu_saturation",
+        "direction": "all cores saturated by compute-bound load"
+      }
+    }
+  ],
+  "ruled_out": [
+    {
+      "summary": "Scheduler-dominated latency",
+      "confidence": "Medium",
+      "evidence": [
+        {
+          "metric": "scheduler_runqueue_latency:p99",
+          "rationale": "runqueue latency tracks CPU saturation rather than exceeding it"
+        }
+      ]
+    }
+  ]
+}

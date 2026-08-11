@@ -11,6 +11,11 @@ pub mod assessment;
 pub mod extract;
 pub mod record;
 
+// Ground-truth types have no runtime consumer until the distillation
+// pipeline; verify() is exercised by tests and the labels/ runbook.
+#[allow(dead_code)]
+pub mod ground_truth;
+
 // External callers (src/mcp) reach these through the fully-qualified
 // `crate::analysis::assessment::*` path, not this top-level re-export, so
 // the alias itself is still unused outside this module.

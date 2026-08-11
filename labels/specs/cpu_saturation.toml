@@ -1,0 +1,79 @@
+name = "labels-cpu-saturation"
+
+[metadata]
+class = "cpu_saturation"
+
+[[jobs]]
+name = "sut"
+tags = ["z1.baremetal"]
+
+# NOTE: the content below is a verbatim copy of labels/ground_truth/cpu_saturation.json.
+# There is no automated sync — if that file changes, update this write_file step by
+# hand to match (see labels/README.md's metric-name calibration caveat).
+[[jobs.steps]]
+type = "write_file"
+path = "/tmp/ground_truth.json"
+content = """
+{
+  "schema_version": 1,
+  "class": "cpu_saturation",
+  "subsystem": "cpu",
+  "mechanism": "cpu_saturation",
+  "direction": "all cores saturated by compute-bound load",
+  "induced_window_s": [60.0, 180.0],
+  "expected_signals": [
+    { "metric": "cpu_usage", "check": "RegimeShiftIncreaseInWindow" },
+    { "metric": "cpu_usage", "check": "SubsystemPresent" }
+  ],
+  "experiment": {
+    "spec_file": "labels/specs/cpu_saturation.toml",
+    "params": { "baseline_s": "60", "induce_s": "120", "cooldown_s": "60", "stressors": "nproc" },
+    "host_tag": "z1.baremetal"
+  }
+}
+"""
+
+[[jobs.steps]]
+type = "shell"
+command = """
+set -euo pipefail
+BASELINE=60
+INDUCE=120
+COOLDOWN=60
+# --- recorder: pinned prerelease, EXTRACTED not installed (job shell is not root;
+#     record --url/.rez is client-side, so the extracted binary suffices) ---
+REZOLUS_TAG="v5.17.1-alpha.8"
+REZOLUS_VER="5.17.1-alpha.8"
+. /etc/os-release
+ARCH=$(dpkg --print-architecture)
+ARCH_LABEL=$([ "$ARCH" = "amd64" ] && echo x86 || echo arm64)
+ASSET="${ID}_${VERSION_CODENAME}_${ARCH_LABEL}_rezolus_${REZOLUS_VER}-0_${ARCH}.deb"
+curl -fsSL -o /tmp/rezolus.deb "https://github.com/iopsystems/rezolus/releases/download/${REZOLUS_TAG}/${ASSET}"
+rm -rf /tmp/rezolus-prerelease
+dpkg-deb -x /tmp/rezolus.deb /tmp/rezolus-prerelease
+RECORDER=/tmp/rezolus-prerelease/usr/bin/rezolus
+$RECORDER --version
+command -v stress-ng >/dev/null
+# --- agent: the host's system agent is the metrics source (any version serves;
+#     acquisition windows are stamped by the RECORDER, so uncertainty bands
+#     survive an older host agent — verified in the runbook calibration log) ---
+for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4241/metrics/json && break; sleep 1; done
+# --- record (background), induce phase, wait for the recorder ---
+TOTAL=$((BASELINE + INDUCE + COOLDOWN + 10))
+$RECORDER record --url http://localhost:4241 -o /tmp/recording.rez --interval 1s --duration ${TOTAL}s --metadata class=cpu_saturation &
+RECORD_PID=$!
+sleep $BASELINE
+stress-ng --cpu $(nproc) --timeout ${INDUCE}s
+sleep $COOLDOWN
+wait $RECORD_PID
+"""
+
+[[jobs.steps]]
+type = "upload_artifact"
+path = "/tmp/recording.rez"
+name = "recording.rez"
+
+[[jobs.steps]]
+type = "upload_artifact"
+path = "/tmp/ground_truth.json"
+name = "ground_truth.json"
