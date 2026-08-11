@@ -67,6 +67,9 @@ which makes incremental parquet writing tractable.
   and a query decodes the same row groups a single-segment equivalent
   would. Close-out carries measured open + query timings, segmented vs
   compacted.
+- Row timestamps are strictly monotonic within a recording (anchored
+  monotonic stamping — see "Recorder loop"), so a recorder-side NTP step
+  can never bake non-monotonic time into an immutable sealed segment.
 - Existing v1 `.rez` archives remain readable; all current consumers (viewer
   server, MCP, `parquet metadata/annotate/combine/filter`) work unchanged on
   v2 output.
@@ -148,7 +151,9 @@ Two load-bearing observations from the code made this design small:
   than "a few KB" — and recovery doesn't need it to load segments. A
   checkpoint's `rows`/`cadence_ns` describe **exactly the segments it
   references** — sealed rows only, never open builders — so a recovered
-  archive's manifest never over-reports recoverable data.
+  archive's manifest never over-reports recoverable data. Checkpoints also
+  carry `clock_offset_ns`, the observed wall-vs-anchor offset at checkpoint
+  time (see "Recorder loop": monotonic row stamps).
 - **An empty checkpoint manifest is the first tar entry**, written at
   recording start (version, the recording's labels/metadata, zero tables,
   no `complete`). Without it, nothing identifies the file as `.rez` until
@@ -331,23 +336,22 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   fix in the same change: `push_row`'s type-mismatch arm (`rez.rs:705-711`)
   skips the value but still pushes the window, desyncing a column's
   values/windows vectors.
-- **The source must not assume segment timestamps are disjoint or sorted.**
-  `last_key` guarantees strictly increasing *keys*, not timestamps. The
-  clocks, precisely: row timestamps are the **recorder's system clock**
-  (`SystemTime::now`, `mod.rs:728-731`); dedup keys are agent-side window
-  ends, which are **wall-anchored with monotonic width**
-  (`src/agent/timing.rs`: begin = `SystemTime`, width = `Instant` elapsed —
-  an NTP step *during* a read cannot corrupt a window, but successive
-  windows move with the agent's system clock). So both sides are system
-  clocks, on two hosts. An agent-side step-back regresses the key → rows
-  are silently dropped until windows pass the old key (pre-existing ingest
-  behavior, `rez.rs:803-807`); a recorder-side step-back produces
-  duplicate/decreasing timestamps with keys still increasing (only
-  windowless samplers have key == timestamp). The only monotonic clocks in
-  the pipeline are tick scheduling (`aligned_interval`) and window widths.
-  The source concatenates in segment order and leaves timestamp semantics
-  exactly as a single-segment table would have them; it neither sorts nor
-  dedups.
+- **The source still neither sorts nor dedups; v2 rows are monotonic by
+  construction, v1 rows are not.** `last_key` guarantees strictly
+  increasing *keys*, not timestamps. The clocks, precisely: v2 row
+  timestamps are the recorder's **monotonic-anchored hybrid** (wall anchor
+  at recording start + monotonic elapsed — see "Recorder loop"), so within
+  a v2 recording timestamps are strictly increasing; v1 archives stamped
+  raw `SystemTime::now()` per tick and carry no such guarantee. Dedup keys
+  are agent-side window ends — wall-anchored with monotonic width
+  (`src/agent/timing.rs`: an NTP step *during* a read cannot corrupt a
+  window, but successive window anchors move with the agent's system
+  clock). Keys and timestamps are therefore different hosts' clocks: an
+  agent-side step-back regresses the key → rows silently dropped until
+  windows pass the old key (pre-existing ingest behavior,
+  `rez.rs:803-807`) — a gap, not corrupt math. The source concatenates in
+  segment order and leaves timestamp semantics exactly as a single-segment
+  table would have them.
 - Tar iteration becomes **truncation-tolerant**, with the rule stated
   precisely because the `tar` crate does not error where it matters: on
   mid-data truncation the final entry is yielded `Ok` and `read_to_end`
@@ -368,6 +372,26 @@ All `.rez` consumers funnel through `read_archive_reader` and its
 
 - In `.rez` mode, don't create the `EndpointWriter` temp spool and don't
   re-serialize snapshots to msgpack — the double-write disappears.
+- **Row timestamps become monotonic by construction.** Today `snapshot_ts`
+  is `SystemTime::now()` per tick (`mod.rs:728-731`) — a recorder-side NTP
+  step-back produces duplicate/decreasing row timestamps, which feed
+  `rate()`'s dt ≤ 0, and which streaming makes *permanent* (sealed segments
+  are immutable; the old in-memory finalize could at least have sorted).
+  The recorder now anchors once at recording start (wall `t0` + monotonic
+  `t0`) and stamps rows `t0_wall + monotonic elapsed` — the same hybrid the
+  agent already uses for window widths (`src/agent/timing.rs`), and
+  consistent with tick *scheduling*, which is already monotonic
+  (`aligned_interval`): today we schedule monotonically but stamp wall,
+  which is the inconsistency. Rows are strictly increasing within a
+  recording, immune to recorder-side steps. Residuals, accepted and
+  recorded: absolute wall accuracy drifts with clock-rate error over long
+  recordings (order seconds/day worst case), so each checkpoint manifest
+  records the observed wall-vs-anchor offset (`clock_offset_ns` — one
+  field, updated per checkpoint) making drift and steps visible metadata
+  instead of silent data corruption; agent-side window anchors remain the
+  agent's system clock (cross-host skew lives in the window offset columns,
+  as today), and an agent-side step-back still regresses dedup keys (rows
+  dropped — a gap, not corrupt math; pre-existing ingest behavior).
 - `RezRecorder` construction moves out of the `get_or_insert_with` closure
   (`mod.rs:782`): it now opens the output tar and spawns the writer thread,
   both of which can fail and need real error handling (report and abort, not
@@ -416,6 +440,9 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   single-file); per-recording `complete` propagates verbatim.
 - `push_row` values/windows desync (`rez.rs:705-711` mismatch arm) fixed
   with a regression test.
+- Monotonic stamping: row timestamps derive from the recording anchor +
+  monotonic elapsed (derivation unit-tested; strictly increasing across
+  seal boundaries); checkpoint manifests carry `clock_offset_ns`.
 - Initial manifest entry: a just-started recording sniffs as `.rez`
   (`is_rez_path`) and opens as a valid empty unclean recording; a
   pre-first-seal kill recovers the same way.
