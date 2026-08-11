@@ -41,29 +41,26 @@ set -euo pipefail
 BASELINE=60
 INDUCE=120
 COOLDOWN=60
-# --- provision: PINNED rezolus prerelease (host stable predates record --url/.rez) ---
+# --- recorder: pinned prerelease, EXTRACTED not installed (job shell is not root;
+#     record --url/.rez is client-side, so the extracted binary suffices) ---
 REZOLUS_TAG="v5.17.1-alpha.8"
 REZOLUS_VER="5.17.1-alpha.8"
-if ! rezolus --version 2>/dev/null | grep -q "$REZOLUS_VER"; then
-  . /etc/os-release
-  ARCH=$(dpkg --print-architecture)
-  ARCH_LABEL=$([ "$ARCH" = "amd64" ] && echo x86 || echo arm64)
-  ASSET="${ID}_${VERSION_CODENAME}_${ARCH_LABEL}_rezolus_${REZOLUS_VER}-0_${ARCH}.deb"
-  curl -fsSL -o /tmp/rezolus.deb "https://github.com/iopsystems/rezolus/releases/download/${REZOLUS_TAG}/${ASSET}"
-  DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/rezolus.deb || apt-get install -yf
-fi
-command -v stress-ng >/dev/null || (apt-get update && apt-get install -y stress-ng)
-# --- agent: prefer the packaged service; fall back to a foreground spawn ---
-systemctl restart rezolus 2>/dev/null || true
-sleep 2
-if ! curl -fsS -o /dev/null http://localhost:4241/metrics/json; then
-  nohup rezolus /etc/rezolus/agent.toml >/tmp/agent.log 2>&1 &
-fi
+. /etc/os-release
+ARCH=$(dpkg --print-architecture)
+ARCH_LABEL=$([ "$ARCH" = "amd64" ] && echo x86 || echo arm64)
+ASSET="${ID}_${VERSION_CODENAME}_${ARCH_LABEL}_rezolus_${REZOLUS_VER}-0_${ARCH}.deb"
+curl -fsSL -o /tmp/rezolus.deb "https://github.com/iopsystems/rezolus/releases/download/${REZOLUS_TAG}/${ASSET}"
+rm -rf /tmp/rezolus-prerelease
+dpkg-deb -x /tmp/rezolus.deb /tmp/rezolus-prerelease
+RECORDER=/tmp/rezolus-prerelease/usr/bin/rezolus
+$RECORDER --version
+command -v stress-ng >/dev/null
+# --- agent: the host's system agent is the metrics source (any version serves;
+#     acquisition windows require agent >= 5.17.1-alpha — see runbook calibration) ---
 for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4241/metrics/json && break; sleep 1; done
-rezolus --version
 # --- record (background), induce phase, wait for the recorder ---
 TOTAL=$((BASELINE + INDUCE + COOLDOWN + 10))
-rezolus record --url http://localhost:4241 -o /tmp/recording.rez --interval 1s --duration ${TOTAL}s --metadata class=scheduler_contention &
+$RECORDER record --url http://localhost:4241 -o /tmp/recording.rez --interval 1s --duration ${TOTAL}s --metadata class=scheduler_contention &
 RECORD_PID=$!
 sleep $BASELINE
 stress-ng --cpu $((4 * $(nproc))) --timeout ${INDUCE}s
