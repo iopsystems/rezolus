@@ -34,7 +34,7 @@
         "type": "Bottleneck",
         "subsystem": "cpu",
         "mechanism": "cpu_saturation",
-        "direction": "all cores saturated"
+        "direction": "all cores saturated by compute-bound load"
       }
     }
   ],

@@ -533,4 +533,45 @@ mod tests {
             a.validate().unwrap_or_else(|e| panic!("{path}: {e}"));
         }
     }
+
+    /// Verify a fetched corpus pair (a real extracted record + its
+    /// ground-truth document) end to end. Not run by default — point it at
+    /// a `labels/corpus/<class>/<experiment-id>/` fetch via env vars:
+    ///
+    /// ```text
+    /// CORPUS_RECORD=labels/corpus/cpu_saturation/<id>/record.json \
+    /// CORPUS_TRUTH=labels/corpus/cpu_saturation/<id>/ground_truth.json \
+    /// cargo test verify_corpus_pair -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn verify_corpus_pair() {
+        let record_path = std::env::var("CORPUS_RECORD").unwrap_or_else(|_| {
+            panic!(
+                "verify_corpus_pair: set CORPUS_RECORD to the extracted record.json path, e.g.\n\
+                 CORPUS_RECORD=labels/corpus/<class>/<experiment-id>/record.json \\\n\
+                 CORPUS_TRUTH=labels/corpus/<class>/<experiment-id>/ground_truth.json \\\n\
+                 cargo test verify_corpus_pair -- --ignored --nocapture"
+            )
+        });
+        let truth_path = std::env::var("CORPUS_TRUTH").unwrap_or_else(|_| {
+            panic!(
+                "verify_corpus_pair: set CORPUS_TRUTH to the fetched ground_truth.json path, e.g.\n\
+                 CORPUS_RECORD=labels/corpus/<class>/<experiment-id>/record.json \\\n\
+                 CORPUS_TRUTH=labels/corpus/<class>/<experiment-id>/ground_truth.json \\\n\
+                 cargo test verify_corpus_pair -- --ignored --nocapture"
+            )
+        });
+        let record: crate::analysis::record::OverviewRecord = serde_json::from_str(
+            &std::fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{record_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{record_path}: {e}"));
+        let truth: GroundTruth = serde_json::from_str(
+            &std::fs::read_to_string(&truth_path).unwrap_or_else(|e| panic!("{truth_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{truth_path}: {e}"));
+        truth
+            .verify(&record)
+            .unwrap_or_else(|errs| panic!("verify() failed:\n{}", errs.join("\n")));
+    }
 }

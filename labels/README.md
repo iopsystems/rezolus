@@ -61,11 +61,21 @@ submission/fetch tooling in v1.
 
 2. Evaluate `GroundTruth::verify` against the extracted record. There is no
    `verify-ground-truth` front door in v1 (named Phase-5 item, not YAGNI'd
-   away, just not built yet) — do this by loading both JSON documents in a
-   small script, or a scratch test, that deserializes `GroundTruth` from
-   `ground_truth.json` and `OverviewRecord` from `record.json` and calls
-   `verify()`. As a library-level sanity check that the schema and the
-   committed ground-truth documents themselves are well-formed, run:
+   away, just not built yet) — instead, `src/analysis/ground_truth.rs` has
+   a committed `#[ignore]`d test, `verify_corpus_pair`, that does exactly
+   this: it deserializes `GroundTruth` and `OverviewRecord` from two
+   env-var-pointed paths and calls `verify()`, panicking with all
+   accumulated failures if it fails. Run it against a fetched pair:
+
+   ```bash
+   CORPUS_RECORD=labels/corpus/<class>/<experiment-id>/record.json \
+   CORPUS_TRUTH=labels/corpus/<class>/<experiment-id>/ground_truth.json \
+   cargo test verify_corpus_pair -- --ignored --nocapture
+   ```
+
+   As a library-level sanity check that the schema and the committed
+   ground-truth documents themselves are well-formed (this does not touch a
+   real recording), run:
 
    ```bash
    cargo test analysis::ground_truth
@@ -76,6 +86,12 @@ submission/fetch tooling in v1.
    (investigate/retry) or the ground-truth document needs calibration (see
    below) — do not keep an unverified pair in `corpus/`. Record the outcome
    in the calibration log.
+
+   A healthy run produces a ~250s recording (60s baseline + 120s induce +
+   60s cooldown + ~10s recorder lead-in); `verify()` rejects recordings
+   shorter than the induced window's end (180s) with a duration error, so a
+   truncated recording fails loudly rather than silently passing on
+   whatever data happened to land in range.
 
 ## Calibration log
 

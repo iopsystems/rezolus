@@ -40,12 +40,12 @@
   ],
   "ruled_out": [
     {
-      "summary": "Pure CPU-frequency throttling",
+      "summary": "Memory pressure",
       "confidence": "Medium",
       "evidence": [
         {
-          "metric": "cpu_frequency_ratio",
-          "rationale": "frequency ratio stays stable across the induced window, ruling out thermal/frequency throttling as the dominant cause"
+          "metric": "memory_free",
+          "rationale": "free memory stays stable through the induced window; queuing is not caused by reclaim or swap pressure"
         }
       ]
     }
