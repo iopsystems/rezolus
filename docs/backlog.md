@@ -187,6 +187,16 @@ Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md)
 - Per-source-not-per-node descriptions, and "descriptions only exist if the origin
   supplied them," are **by design** — not backlog.
 
+Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-writer.md).
+
+- **Seal thresholds as compile-time constants** — Open. The segment-seal
+  thresholds (~512 rows / ~5 min) ship as constants in `src/recorder/rez.rs`.
+  *Reopen:* if real workloads need tuning — promote to a `--flag` or config knob.
+- **Fast finalize for the classic parquet path** — By design. The single-file
+  parquet's wide schema is only knowable once recording ends, so its finalize
+  replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
+  with fast stop — likely shape: record to `.rez`, convert offline.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
