@@ -41,14 +41,26 @@ set -euo pipefail
 BASELINE=60
 INDUCE=120
 COOLDOWN=60
-# --- provision: rezolus release package + stress-ng (best-effort, fail-loud) ---
-if ! command -v rezolus >/dev/null; then
-  curl -fsSL https://rezolus.com/install.sh | bash
+# --- provision: PINNED rezolus prerelease (host stable predates record --url/.rez) ---
+REZOLUS_TAG="v5.17.1-alpha.8"
+REZOLUS_VER="5.17.1-alpha.8"
+if ! rezolus --version 2>/dev/null | grep -q "$REZOLUS_VER"; then
+  . /etc/os-release
+  ARCH=$(dpkg --print-architecture)
+  ARCH_LABEL=$([ "$ARCH" = "amd64" ] && echo x86 || echo arm64)
+  ASSET="${ID}_${VERSION_CODENAME}_${ARCH_LABEL}_rezolus_${REZOLUS_VER}-0_${ARCH}.deb"
+  curl -fsSL -o /tmp/rezolus.deb "https://github.com/iopsystems/rezolus/releases/download/${REZOLUS_TAG}/${ASSET}"
+  DEBIAN_FRONTEND=noninteractive dpkg -i /tmp/rezolus.deb || apt-get install -yf
 fi
 command -v stress-ng >/dev/null || (apt-get update && apt-get install -y stress-ng)
-# --- agent: start in the background, wait for readiness ---
-nohup rezolus /etc/rezolus/agent.toml >/tmp/agent.log 2>&1 &
+# --- agent: prefer the packaged service; fall back to a foreground spawn ---
+systemctl restart rezolus 2>/dev/null || true
+sleep 2
+if ! curl -fsS -o /dev/null http://localhost:4241/metrics/json; then
+  nohup rezolus /etc/rezolus/agent.toml >/tmp/agent.log 2>&1 &
+fi
 for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4241/metrics/json && break; sleep 1; done
+rezolus --version
 # --- record (background), induce phase, wait for the recorder ---
 TOTAL=$((BASELINE + INDUCE + COOLDOWN + 10))
 rezolus record --url http://localhost:4241 -o /tmp/recording.rez --interval 1s --duration ${TOTAL}s --metadata class=scheduler_contention &
