@@ -61,6 +61,19 @@ pub struct Context {
 
 /// Which subsystems are present vs absent — what lets an assessment say
 /// `NeedsMetric` instead of hallucinating around a gap.
+///
+/// Absence is asserted only for subsystems whose domain (first `_`-token of
+/// the sampler name, e.g. `blockio` for `blockio_latency`) had no
+/// unattributed metrics: extraction attributes each metric to a subsystem
+/// via its `sampler` label when present, or by name-prefix inference when
+/// not, and any domain that still has an unattributed metric after that
+/// inference is excluded from `subsystems_absent` rather than asserted
+/// absent on unreliable information. Recordings from agents older than
+/// 5.17.1 carry no `sampler` labels at all, so every metric falls to name
+/// inference; ambiguous names (e.g. `cpu_cycles`, `tcp_bytes`) stay
+/// unattributed and their domains are pruned — such recordings may
+/// therefore report a shorter `subsystems_absent` list than a labeled one
+/// covering the same subsystems.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     pub subsystems_present: Vec<String>,

@@ -41,8 +41,8 @@ pub enum SignalCheck {
     /// carry at least one `RegimeShiftIncreaseInWindow` signal, so this can
     /// never be the sole gate. Revisit when extraction grows windowed stats.
     ElevatedInWindow,
-    /// The metric exists in the record and its sampler label appears in
-    /// coverage.subsystems_present.
+    /// The metric exists in the record and its sampler (labeled or
+    /// name-inferred) appears in coverage.subsystems_present.
     SubsystemPresent,
 }
 

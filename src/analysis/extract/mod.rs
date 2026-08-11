@@ -197,19 +197,33 @@ pub(crate) fn validate_no_nulls(record: &OverviewRecord) -> Result<(), String> {
     }
 }
 
-/// Derive a metric's subsystem from its label sets (the agent stamps a
-/// `sampler` label on every metric); falls back to `unattributed` when
-/// absent. `extract()` inserts whatever this returns into
-/// `present_subsystems`, fulfilling `build_coverage`'s documented caller
-/// obligation that `unattributed` be added by the caller, not by
-/// `build_coverage` itself.
-fn subsystem_of(label_sets: &[BTreeMap<String, String>]) -> String {
+/// Derive a metric's subsystem, preferring the `sampler` label (stamped by
+/// agents >= 5.17.1) and falling back to name-prefix inference for older
+/// recordings that carry no such label: the longest sampler name in
+/// [`context::EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the
+/// metric name (an exact match, or `name.starts_with("{sampler}_")`).
+/// Longest match wins so e.g. a name starting with `blockio_latency_`
+/// prefers `blockio_latency` over a shorter unrelated match. Falls back to
+/// `unattributed` when neither source disambiguates (e.g. `cpu_cycles`
+/// could come from `cpu_perf` but no sampler name is a prefix of it).
+/// `extract()` inserts whatever this returns into `present_subsystems`,
+/// fulfilling `build_coverage`'s documented caller obligation that
+/// `unattributed` be added by the caller, not by `build_coverage` itself.
+fn subsystem_of(name: &str, label_sets: &[BTreeMap<String, String>]) -> String {
     for labels in label_sets {
         if let Some(s) = labels.get("sampler") {
             return s.clone();
         }
     }
-    "unattributed".to_string()
+    context::EXPECTED_SUBSYSTEMS
+        .iter()
+        .filter(|s| {
+            name.strip_prefix(**s)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('_'))
+        })
+        .max_by_key(|sampler| sampler.len())
+        .map(|sampler| sampler.to_string())
+        .unwrap_or_else(|| "unattributed".to_string())
 }
 
 /// Query templates matching the MCP exhaustive mode.
@@ -326,8 +340,15 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
     // --- enumerate entries (exhaustive: every metric appears) ---
     let mut entries: Vec<(String, &'static str, String, String, bool)> = Vec::new();
     let mut present_subsystems = BTreeSet::new();
+    // Domains that still have at least one unattributed metric after
+    // name-prefix inference: their true absence is unknowable, so
+    // build_coverage must exclude them from subsystems_absent.
+    let mut uncertain_domains = BTreeSet::new();
     for name in data.counter_names() {
-        let subsystem = subsystem_of(&data.counter_labels(&name));
+        let subsystem = subsystem_of(&name, &data.counter_labels(&name));
+        if subsystem == "unattributed" {
+            uncertain_domains.insert(context::domain_of(&name).to_string());
+        }
         present_subsystems.insert(subsystem.clone());
         entries.push((
             name.clone(),
@@ -338,12 +359,18 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
         ));
     }
     for name in data.gauge_names() {
-        let subsystem = subsystem_of(&data.gauge_labels(&name));
+        let subsystem = subsystem_of(&name, &data.gauge_labels(&name));
+        if subsystem == "unattributed" {
+            uncertain_domains.insert(context::domain_of(&name).to_string());
+        }
         present_subsystems.insert(subsystem.clone());
         entries.push((name.clone(), "gauge", gauge_query(&name), subsystem, false));
     }
     for name in data.histogram_names() {
-        let subsystem = subsystem_of(&data.histogram_labels(&name));
+        let subsystem = subsystem_of(&name, &data.histogram_labels(&name));
+        if subsystem == "unattributed" {
+            uncertain_domains.insert(context::domain_of(&name).to_string());
+        }
         present_subsystems.insert(subsystem.clone());
         // The `m:pNN` entries' stats describe the quantile-over-time series
         // (e.g. `p99` of `blockio_latency:p50` is the p99-across-time of the
@@ -424,6 +451,7 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
         data.interval(),
         data.metadata_get("systeminfo"),
         &present_subsystems,
+        &uncertain_domains,
     );
 
     let record = assemble(
@@ -443,6 +471,47 @@ mod tests {
     use super::*;
     use crate::analysis::record::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn subsystem_of_prefers_the_sampler_label() {
+        let labels = vec![BTreeMap::from([(
+            "sampler".to_string(),
+            "cpu_usage".to_string(),
+        )])];
+        // Name alone would infer nothing useful; the label wins regardless.
+        assert_eq!(subsystem_of("some_unrelated_name", &labels), "cpu_usage");
+    }
+
+    #[test]
+    fn subsystem_of_infers_from_name_prefix_when_unlabeled() {
+        assert_eq!(
+            subsystem_of("scheduler_runqueue_latency", &[]),
+            "scheduler_runqueue"
+        );
+        assert_eq!(subsystem_of("cpu_usage", &[]), "cpu_usage");
+        assert_eq!(
+            subsystem_of("tcp_connect_latency", &[]),
+            "tcp_connect_latency"
+        );
+    }
+
+    #[test]
+    fn subsystem_of_longest_prefix_wins() {
+        // blockio_latency is a real sampler name; a metric name extending it
+        // with a further `_`-boundary suffix must still resolve to it.
+        assert_eq!(subsystem_of("blockio_latency_p50", &[]), "blockio_latency");
+    }
+
+    #[test]
+    fn subsystem_of_stays_unattributed_when_name_cannot_disambiguate() {
+        // cpu_cycles comes from cpu_perf, but no sampler name is a
+        // `_`-boundary prefix of "cpu_cycles" itself.
+        assert_eq!(subsystem_of("cpu_cycles", &[]), "unattributed");
+        // tcp_bytes comes from tcp_traffic, same story.
+        assert_eq!(subsystem_of("tcp_bytes", &[]), "unattributed");
+        // memory_free could be meminfo or vmstat; ambiguous by name.
+        assert_eq!(subsystem_of("memory_free", &[]), "unattributed");
+    }
 
     fn quiet(name: &str) -> MetricAnalysis {
         MetricAnalysis {
