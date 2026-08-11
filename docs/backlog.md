@@ -189,9 +189,16 @@ Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md)
 
 Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-writer.md).
 
-- **Seal thresholds as compile-time constants** — Open. The segment-seal
-  thresholds (~512 rows / ~5 min) ship as constants in `src/recorder/rez.rs`.
-  *Reopen:* if real workloads need tuning — promote to a `--flag` or config knob.
+- **Offline `.rez` compactor** — Roadmap. Merge a segmented archive's per-table
+  segments into single files offline (likely under `rezolus parquet`): recovers
+  the compression ratio and open-time merge cost that streaming trades for
+  durability, and its output is fully v1-readable (`file` + `files`), making it
+  the forward-compatibility downgrade path. Not needed for the streaming writer
+  to ship.
+- **Seal thresholds as compile-time constants** — Open. Byte-first seal
+  thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
+  window) ship as constants in `src/recorder/rez.rs`. *Reopen:* if real
+  workloads need tuning — promote to a `--flag` or config knob.
 - **Fast finalize for the classic parquet path** — By design. The single-file
   parquet's wide schema is only knowable once recording ends, so its finalize
   replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
