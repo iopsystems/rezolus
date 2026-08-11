@@ -152,11 +152,11 @@ Two load-bearing observations from the code made this design small:
   checkpoint's `rows`/`cadence_ns` describe **exactly the segments it
   references** — sealed rows only, never open builders — so a recovered
   archive's manifest never over-reports recoverable data. Checkpoints also
-  carry `clock_offset_ns`, the observed wall-vs-anchor offset at checkpoint
-  time (see "Recorder loop": monotonic row stamps).
+  append to the recording's `clock_offsets` observation series (see
+  "Recorder loop": monotonic row stamps, one anchor + many observations).
 - **An empty checkpoint manifest is the first tar entry**, written at
-  recording start (version, the recording's labels/metadata, zero tables,
-  no `complete`). Without it, nothing identifies the file as `.rez` until
+  recording start (version, the recording's labels/metadata,
+  `clock_anchor_wall_ns`, zero tables, no `complete`). Without it, nothing identifies the file as `.rez` until
   the first seal batch: `is_rez_reader` (`rez.rs:574`) would scan MBs of
   segment data hunting for a manifest, and an early-killed or in-progress
   file would sniff as not-`.rez` and be misrouted to the parquet path by
@@ -383,15 +383,35 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   consistent with tick *scheduling*, which is already monotonic
   (`aligned_interval`): today we schedule monotonically but stamp wall,
   which is the inconsistency. Rows are strictly increasing within a
-  recording, immune to recorder-side steps. Residuals, accepted and
-  recorded: absolute wall accuracy drifts with clock-rate error over long
-  recordings (order seconds/day worst case), so each checkpoint manifest
-  records the observed wall-vs-anchor offset (`clock_offset_ns` — one
-  field, updated per checkpoint) making drift and steps visible metadata
-  instead of silent data corruption; agent-side window anchors remain the
-  agent's system clock (cross-host skew lives in the window offset columns,
-  as today), and an agent-side step-back still regresses dedup keys (rows
-  dropped — a gap, not corrupt math; pre-existing ingest behavior).
+  recording, immune to recorder-side steps.
+- **The anchor is recorded in the archive: one defining anchor, both clocks
+  captured per tick, never re-anchored.** The recording's manifest entry
+  carries `clock_anchor_wall_ns` (the `SystemTime` reading at recording
+  start — present from the initial manifest entry onward); all row
+  timestamps are `anchor + monotonic elapsed` by definition. Re-anchoring
+  mid-recording is explicitly rejected — it would reintroduce the steps
+  this exists to eliminate. Instead, **each tick captures both clocks**
+  (the loop already calls `SystemTime::now()` per tick today, so this is
+  free) and every row also stores the raw wall reading as a
+  **`:wall_offset` sidecar column** (i64: wall − anchored at that tick;
+  near-constant, delta-encodes to ~nothing). The monotonic-anchored
+  timestamp is the timeline; the wall observation is data *about* the
+  clock, per row — an NTP step locates to the exact tick, and post-hoc
+  correlation against external logs has row precision. The query engine
+  skips `:wall_offset` the same way it skips the `:window_*` sidecars
+  (metriken-query change, already in scope with the segmented source). As
+  an at-a-glance summary that needs no table decode, each checkpoint also
+  appends one `(anchored_ts, wall_minus_anchored_ns)` observation to a
+  per-recording `clock_offsets` series in the manifest (~16 B per
+  checkpoint — derivable from the columns, kept for `parquet metadata`
+  display). Residuals, accepted and recorded: absolute wall accuracy of
+  the *timeline* drifts with clock-rate error (order seconds/day worst
+  case) — but the per-row observations make drift and steps fully
+  reconstructible rather than silently corrupting; agent-side window
+  anchors remain the agent's system clock (cross-host skew lives in the
+  window offset columns, as today), and an agent-side step-back still
+  regresses dedup keys (rows dropped — a gap, not corrupt math;
+  pre-existing ingest behavior).
 - `RezRecorder` construction moves out of the `get_or_insert_with` closure
   (`mod.rs:782`): it now opens the output tar and spawns the writer thread,
   both of which can fail and need real error handling (report and abort, not
@@ -442,7 +462,11 @@ All `.rez` consumers funnel through `read_archive_reader` and its
   with a regression test.
 - Monotonic stamping: row timestamps derive from the recording anchor +
   monotonic elapsed (derivation unit-tested; strictly increasing across
-  seal boundaries); checkpoint manifests carry `clock_offset_ns`.
+  seal boundaries); every row carries a `:wall_offset` observation (the
+  query engine skips the sidecar; a simulated wall step shows up in the
+  offsets, not the timeline); `clock_anchor_wall_ns` present from the
+  initial manifest; the `clock_offsets` summary series grows per
+  checkpoint and survives into the final manifest.
 - Initial manifest entry: a just-started recording sniffs as `.rez`
   (`is_rez_path`) and opens as a valid empty unclean recording; a
   pre-first-seal kill recovers the same way.
