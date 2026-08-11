@@ -97,7 +97,24 @@ submission/fetch tooling in v1.
 
 | date | class | experiment id | verify outcome | notes |
 |------|-------|----------------|-----------------|-------|
-|      |       |                |                 |       |
+| 2026-08-11 | cpu_saturation | 019fef20-8fd1-7197-2900-c861fa1295d3 | PASS (first verified run) | cpu_usage Increase shifts at indices 45/75 (rate-window ramp-in splits the step in two), Decrease at 165/195 (ramp-out; 165 is in-window but only Increase counts). Uncertainty bands present (band/signal ≈ 0.005). Host: hv02 (trixie), recorder 5.17.1-alpha.8 extracted from the release deb, host agent 5.17.0. |
+| 2026-08-11 | scheduler_contention | 019fef20-c9e8-71ed-adc2-a4fd3408c50f | PASS (first verified run) | scheduler_runqueue_latency:p99 series p99/p50 ≈ 768× (vs ≈256× under pure cpu saturation — see caution below). cpu_usage Increase shifts at 45/75. Signal lists verified correct as authored; no ground-truth changes needed. |
+| 2026-08-11 | (both) | 019feef7-5fa5…/019feef7-9aa6… | FAIL (provisioning) | Host stable rezolus 5.17.0 predates `record --url`/.rez → tagged v5.17.1-alpha.8 prerelease. Second attempt (019fef17-9a92…/019fef17-d618…) failed on `dpkg -i` (job shell is not root) → specs now extract the deb (`dpkg-deb -x`) and run the recorder from /tmp. |
+
+Calibration findings worth keeping:
+- **Acquisition windows come from the recorder, not the agent** — recordings
+  made by the 5.17.1-alpha recorder against a 5.17.0 agent still carry
+  uncertainty bands (the earlier in-spec caveat saying otherwise was wrong
+  and has been superseded by this note).
+- **`ElevatedInWindow` on runqueue latency does not discriminate between the
+  two v1 classes** — pure CPU saturation also elevates the p99/p50 ratio far
+  past the 2× threshold. Class separation comes from the experiment's
+  construction, not from that check; distillation must not treat it as a
+  class discriminator.
+- **The rate()-window ramp splits a step change into two Increase shifts**
+  (~indices 45 and 75 for a step at t=60) and produces pre-step anomaly
+  flags; window offsets in ground truths should stay padded, never
+  boundary-exact.
 
 ## Metric-name calibration caveat
 

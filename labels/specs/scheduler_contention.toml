@@ -56,7 +56,8 @@ RECORDER=/tmp/rezolus-prerelease/usr/bin/rezolus
 $RECORDER --version
 command -v stress-ng >/dev/null
 # --- agent: the host's system agent is the metrics source (any version serves;
-#     acquisition windows require agent >= 5.17.1-alpha — see runbook calibration) ---
+#     acquisition windows are stamped by the RECORDER, so uncertainty bands
+#     survive an older host agent — verified in the runbook calibration log) ---
 for i in $(seq 1 30); do curl -fsS -o /dev/null http://localhost:4241/metrics/json && break; sleep 1; done
 # --- record (background), induce phase, wait for the recorder ---
 TOTAL=$((BASELINE + INDUCE + COOLDOWN + 10))
