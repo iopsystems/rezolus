@@ -139,6 +139,60 @@ impl GroundTruth {
             Err(errs)
         }
     }
+
+    /// Distillation claim-equality gate: the candidate assessment must carry
+    /// exactly one Bottleneck finding, at High priority, whose fields exactly
+    /// equal this ground truth's. Accumulates all failures. Ruled-out and
+    /// additional non-Bottleneck findings are deliberately unconstrained
+    /// (agent-reviewed, not machine-gated).
+    pub fn matches_assessment(
+        &self,
+        assessment: &crate::analysis::assessment::Assessment,
+    ) -> Result<(), Vec<String>> {
+        use crate::analysis::assessment::{FindingKind, Priority};
+        let bottlenecks: Vec<_> = assessment
+            .findings
+            .iter()
+            .filter(|f| matches!(f.kind, FindingKind::Bottleneck { .. }))
+            .collect();
+        if bottlenecks.len() != 1 {
+            return Err(vec![format!(
+                "candidate must carry exactly one Bottleneck finding (found {})",
+                bottlenecks.len()
+            )]);
+        }
+        let finding = bottlenecks[0];
+        let mut errs = Vec::new();
+        if finding.priority != Priority::High {
+            errs.push(format!(
+                "Bottleneck finding must be High priority (found {:?})",
+                finding.priority
+            ));
+        }
+        if let FindingKind::Bottleneck {
+            subsystem,
+            mechanism,
+            direction,
+        } = &finding.kind
+        {
+            for (field, got, want) in [
+                ("subsystem", subsystem, &self.subsystem),
+                ("mechanism", mechanism, &self.mechanism),
+                ("direction", direction, &self.direction),
+            ] {
+                if got != want {
+                    errs.push(format!(
+                        "{field} mismatch: candidate {got:?} != truth {want:?}"
+                    ));
+                }
+            }
+        }
+        if errs.is_empty() {
+            Ok(())
+        } else {
+            Err(errs)
+        }
+    }
 }
 
 fn in_window(index: usize, window: (usize, usize)) -> bool {
@@ -608,5 +662,136 @@ mod tests {
         truth
             .verify(&record)
             .unwrap_or_else(|errs| panic!("verify() failed:\n{}", errs.join("\n")));
+    }
+
+    use crate::analysis::assessment::{
+        Assessment, Confidence, DataQuality, EvidenceRef, Finding, FindingKind, Overall,
+        OverallStatus, Priority, TieredFinding,
+    };
+
+    fn bottleneck_assessment(subsystem: &str, mechanism: &str, direction: &str) -> Assessment {
+        let evidence = vec![EvidenceRef {
+            metric: Some("cpu_usage".to_string()),
+            anomaly_index: None,
+            regime_shift_index: Some(0),
+            correlation_index: None,
+            rationale: "sustained in-window step increase".to_string(),
+        }];
+        Assessment {
+            schema_version: crate::analysis::assessment::ASSESSMENT_SCHEMA_VERSION,
+            overall: Overall {
+                finding: Finding {
+                    summary: "Bottlenecked".to_string(),
+                    confidence: Confidence::High,
+                    evidence: evidence.clone(),
+                    recommended_action: Some("act".to_string()),
+                },
+                status: OverallStatus::Actionable,
+                data_quality: DataQuality {
+                    coverage_gaps: vec![],
+                    uncertainty_limited: false,
+                    note: None,
+                },
+            },
+            findings: vec![TieredFinding {
+                finding: Finding {
+                    summary: "The bottleneck".to_string(),
+                    confidence: Confidence::High,
+                    evidence,
+                    recommended_action: Some("act".to_string()),
+                },
+                priority: Priority::High,
+                kind: FindingKind::Bottleneck {
+                    subsystem: subsystem.to_string(),
+                    mechanism: mechanism.to_string(),
+                    direction: direction.to_string(),
+                },
+            }],
+            ruled_out: vec![],
+        }
+    }
+
+    #[test]
+    fn matching_bottleneck_claim_passes() {
+        let t = truth(vec![anchor_signal()]);
+        let a = bottleneck_assessment("cpu", "cpu_saturation", "cores saturated");
+        assert!(t.matches_assessment(&a).is_ok());
+    }
+
+    #[test]
+    fn field_mismatches_are_each_reported() {
+        let t = truth(vec![anchor_signal()]);
+        let a = bottleneck_assessment("scheduler", "runqueue_latency", "queuing");
+        let errs = t.matches_assessment(&a).unwrap_err();
+        assert_eq!(
+            errs.len(),
+            3,
+            "all three field mismatches accumulate: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn zero_or_multiple_bottlenecks_rejected() {
+        let t = truth(vec![anchor_signal()]);
+        let mut none = bottleneck_assessment("cpu", "cpu_saturation", "cores saturated");
+        none.findings.clear();
+        let errs = t.matches_assessment(&none).unwrap_err();
+        assert!(errs[0].contains("exactly one"), "{errs:?}");
+        let mut two = bottleneck_assessment("cpu", "cpu_saturation", "cores saturated");
+        let dup = two.findings[0].clone();
+        two.findings.push(dup);
+        assert!(t.matches_assessment(&two).is_err());
+    }
+
+    #[test]
+    fn non_high_priority_bottleneck_rejected() {
+        let t = truth(vec![anchor_signal()]);
+        let mut a = bottleneck_assessment("cpu", "cpu_saturation", "cores saturated");
+        a.findings[0].priority = Priority::Medium;
+        let errs = t.matches_assessment(&a).unwrap_err();
+        assert!(errs[0].contains("High"), "{errs:?}");
+    }
+
+    /// Full distillation acceptance gate: structural validate ->
+    /// cross-record validate_against -> ground-truth claim equality.
+    ///
+    /// ```text
+    /// CANDIDATE=... CORPUS_RECORD=... CORPUS_TRUTH=... \
+    /// cargo test gate_distillation_candidate -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn gate_distillation_candidate() {
+        use crate::analysis::assessment::Assessment;
+        let usage = "set CANDIDATE, CORPUS_RECORD, CORPUS_TRUTH (see labels/distill.md)";
+        let candidate_path =
+            std::env::var("CANDIDATE").unwrap_or_else(|_| panic!("CANDIDATE unset; {usage}"));
+        let record_path = std::env::var("CORPUS_RECORD")
+            .unwrap_or_else(|_| panic!("CORPUS_RECORD unset; {usage}"));
+        let truth_path =
+            std::env::var("CORPUS_TRUTH").unwrap_or_else(|_| panic!("CORPUS_TRUTH unset; {usage}"));
+        let candidate: Assessment = serde_json::from_str(
+            &std::fs::read_to_string(&candidate_path)
+                .unwrap_or_else(|e| panic!("{candidate_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{candidate_path}: {e}"));
+        let record: crate::analysis::record::OverviewRecord = serde_json::from_str(
+            &std::fs::read_to_string(&record_path).unwrap_or_else(|e| panic!("{record_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{record_path}: {e}"));
+        let truth: GroundTruth = serde_json::from_str(
+            &std::fs::read_to_string(&truth_path).unwrap_or_else(|e| panic!("{truth_path}: {e}")),
+        )
+        .unwrap_or_else(|e| panic!("{truth_path}: {e}"));
+        // Stage 1+2 (structural then cross-record; each short-circuits since
+        // later stages can't run on malformed input):
+        candidate
+            .validate_against(&record)
+            .unwrap_or_else(|e| panic!("GATE FAIL (validators): {e}"));
+        // Stage 3 (claim equality), accumulating:
+        truth
+            .matches_assessment(&candidate)
+            .unwrap_or_else(|errs| panic!("GATE FAIL (claim equality):\n  {}", errs.join("\n  ")));
+        println!("GATE PASS: {candidate_path}");
     }
 }

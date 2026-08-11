@@ -9,6 +9,7 @@ verified against ground truth rather than vibes-checked. Full design:
 This is sub-project #3 of the recording-assessment pipeline. Phases 1-3
 delivered the record format (`OverviewRecord` v2), the extraction library,
 and the `rezolus mcp extract-features` front door. This harness adds truth.
+Distillation of verified pairs into training labels: see `distill.md`.
 
 ## Layout
 
