@@ -6,8 +6,14 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// `.rez` manifest schema version.
-pub const REZ_SCHEMA_VERSION: u32 = 1;
+/// `.rez` manifest schema version written by this build.
+pub const REZ_SCHEMA_VERSION: u32 = 2;
+/// Highest manifest schema version this build can read. v1 shipped without a
+/// forward gate (which is what makes a downgraded/compacted v1-shaped manifest
+/// readable by old binaries); v2 adds one, because gates cannot be retrofitted.
+// The reader's gate lands with the truncation-tolerant reader.
+#[allow(dead_code)]
+pub const REZ_MAX_SUPPORTED_VERSION: u32 = 2;
 /// Manifest filename inside the tar.
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
 
@@ -28,18 +34,57 @@ pub struct RezRecording {
     /// Per-recording metadata: the existing `parquet_metadata` keys
     /// (`systeminfo`, `descriptions`, `sampling_interval_ms`, ...).
     pub metadata: BTreeMap<String, String>,
+    /// True iff this recording was cleanly finalized. Checkpoint manifests
+    /// never set it, so an archive recovered from one presents as incomplete.
+    /// It lives per-recording, not on the manifest: `parquet combine` merges
+    /// recordings from different archives, where one recovered + one clean
+    /// recording has no truthful top-level value. Absent (v1) means false.
+    #[serde(default)]
+    pub complete: bool,
+    /// Wall-clock reading (ns since epoch) at recording start. Row timestamps
+    /// are `anchor + monotonic elapsed`, so this pins the timeline to wall time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock_anchor_wall_ns: Option<u64>,
+    /// `(anchored_ts, wall_minus_anchored_ns)` observations, one per checkpoint:
+    /// an at-a-glance clock-drift summary that needs no table decode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clock_offsets: Vec<(u64, i64)>,
     pub tables: Vec<RezTableIndex>,
 }
 
-/// One entry in the manifest's table index.
+/// One entry in the manifest's table index. A table is one or more parquet
+/// segments; `rows`/`cadence_ns` are totals across them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezTableIndex {
     pub sampler: String,
-    pub file: String,
+    /// v1 single-file name. Set only when the table is a single segment (so v1
+    /// readers can still open compacted/atomically-written archives); never
+    /// serialized as `null`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Segment file names in segment order. Absent on v1 manifests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
+    /// Column names. Defaulted because checkpoint manifests omit it: it is
+    /// O(total columns) and reaches 100 KB+ on cgroup-heavy tables, and
+    /// recovery does not need it to load segments.
+    #[serde(default)]
     pub columns: Vec<String>,
     pub rows: u64,
     /// Observed mean row interval (ns); `None` when fewer than 2 rows.
     pub cadence_ns: Option<u64>,
+}
+
+impl RezTableIndex {
+    /// The table's segment files in order: `files` when present, else the v1
+    /// single `file`, else empty (a malformed index naming no data).
+    pub fn segment_files(&self) -> Vec<&str> {
+        if !self.files.is_empty() {
+            self.files.iter().map(String::as_str).collect()
+        } else {
+            self.file.as_deref().into_iter().collect()
+        }
+    }
 }
 
 use std::collections::HashMap;
@@ -398,7 +443,8 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
             let bytes = write_table_parquet(table)?;
             index.push(RezTableIndex {
                 sampler: table.sampler.clone(),
-                file: file.clone(),
+                file: Some(file.clone()),
+                files: vec![file.clone()],
                 columns: table.columns.iter().map(|c| c.name.clone()).collect(),
                 rows: table.timestamps.len() as u64,
                 cadence_ns: cadence_hint(&table.timestamps),
@@ -409,6 +455,11 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
             dir: rec.dir.clone(),
             labels: rec.labels.clone(),
             metadata: rec.metadata.clone(),
+            // This writer emits the whole archive at once, so its recordings
+            // are complete by construction.
+            complete: true,
+            clock_anchor_wall_ns: None,
+            clock_offsets: Vec::new(),
             tables: index,
         });
     }
@@ -465,7 +516,17 @@ pub fn write_archive_bytes(
             .into());
         }
         for (idx, bytes) in rec.tables.iter().zip(table_bytes) {
-            let name = format!("{}/{}", rec.dir, idx.file);
+            let segments = idx.segment_files();
+            let [file] = segments[..] else {
+                return Err(format!(
+                    "table {} in recording {} names {} segments but carries one blob",
+                    idx.sampler,
+                    rec.dir,
+                    segments.len()
+                )
+                .into());
+            };
+            let name = format!("{}/{}", rec.dir, file);
             append_tar_entry(&mut builder, &name, bytes)?;
         }
     }
@@ -499,7 +560,10 @@ pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
     for rec in &manifest.recordings {
         let mut tables = Vec::with_capacity(rec.tables.len());
         for idx in &rec.tables {
-            let path_in_tar = format!("{}/{}", rec.dir, idx.file);
+            let [file] = idx.segment_files()[..] else {
+                return Err(format!("table {} is not a single segment", idx.sampler).into());
+            };
+            let path_in_tar = format!("{}/{}", rec.dir, file);
             let bytes = parquet_bytes
                 .remove(&path_in_tar)
                 .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
@@ -546,7 +610,10 @@ pub fn read_archive_reader<R: std::io::Read>(
     for rec in &manifest.recordings {
         let mut tables = Vec::with_capacity(rec.tables.len());
         for idx in &rec.tables {
-            let path_in_tar = format!("{}/{}", rec.dir, idx.file);
+            let [file] = idx.segment_files()[..] else {
+                return Err(format!("table {} is not a single segment", idx.sampler).into());
+            };
+            let path_in_tar = format!("{}/{}", rec.dir, file);
             let bytes = parquet_bytes
                 .remove(&path_in_tar)
                 .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
@@ -1037,6 +1104,56 @@ mod recorder_tests {
 mod manifest_tests {
     use super::*;
 
+    // A v1 manifest (single `file` per table, no `complete`/clock fields) must
+    // still parse: v2 only adds fields, and `file` stays readable as a
+    // one-element segment list.
+    #[test]
+    fn v1_manifest_json_still_parses() {
+        let v1 = r#"{"version":1,"recordings":[{"dir":"rezolus","labels":{},
+        "metadata":{},"tables":[{"sampler":"cpu_usage","file":"cpu_usage.parquet",
+        "columns":["5"],"rows":3,"cadence_ns":1000000000}]}]}"#;
+        let m: RezManifest = serde_json::from_str(v1).unwrap();
+        let t = &m.recordings[0].tables[0];
+        assert_eq!(t.segment_files(), vec!["cpu_usage.parquet"]);
+        assert!(!m.recordings[0].complete); // absent -> false
+    }
+
+    #[test]
+    fn v2_roundtrip_files_complete_clock() {
+        let m = RezManifest {
+            version: REZ_SCHEMA_VERSION,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                complete: true,
+                clock_anchor_wall_ns: Some(1_700_000_000_000_000_000),
+                clock_offsets: vec![(1_700_000_001_000_000_000, -2_500_000)],
+                tables: vec![RezTableIndex {
+                    sampler: "cpu_usage".to_string(),
+                    file: None,
+                    files: vec![
+                        "cpu_usage/0.parquet".to_string(),
+                        "cpu_usage/1.parquet".to_string(),
+                    ],
+                    columns: vec!["5".to_string()],
+                    rows: 7,
+                    cadence_ns: Some(1_000_000_000),
+                }],
+            }],
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        // A multi-segment table never serializes a null `file` (a v1 reader
+        // would take `null` as a present-but-broken path rather than absent).
+        assert!(!json.contains("\"file\":null"), "{json}");
+        let back: RezManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(
+            back.recordings[0].tables[0].segment_files(),
+            vec!["cpu_usage/0.parquet", "cpu_usage/1.parquet"]
+        );
+    }
+
     #[test]
     fn manifest_json_round_trips() {
         let m = RezManifest {
@@ -1052,9 +1169,13 @@ mod manifest_tests {
                 metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
                     .into_iter()
                     .collect(),
+                complete: true,
+                clock_anchor_wall_ns: None,
+                clock_offsets: Vec::new(),
                 tables: vec![RezTableIndex {
                     sampler: "cpu_usage".to_string(),
-                    file: "cpu_usage.parquet".to_string(),
+                    file: Some("cpu_usage.parquet".to_string()),
+                    files: vec!["cpu_usage.parquet".to_string()],
                     columns: vec!["5".to_string()],
                     rows: 3,
                     cadence_ns: Some(1_000_000_000),
@@ -1382,7 +1503,7 @@ mod archive_tests {
             .iter()
             .find(|t| t.sampler == "cpu_usage")
             .unwrap();
-        assert_eq!(cpu_idx.file, "cpu_usage.parquet");
+        assert_eq!(cpu_idx.segment_files(), vec!["cpu_usage.parquet"]);
         assert_eq!(cpu_idx.rows, 2);
         assert_eq!(cpu_idx.cadence_ns, Some(1_000));
     }

@@ -371,9 +371,13 @@ mod rez_tests {
                 .into_iter()
                 .collect(),
                 metadata: Default::default(),
+                complete: true,
+                clock_anchor_wall_ns: None,
+                clock_offsets: Vec::new(),
                 tables: vec![RezTableIndex {
                     sampler: "cpu_usage".to_string(),
-                    file: "cpu_usage.parquet".to_string(),
+                    file: Some("cpu_usage.parquet".to_string()),
+                    files: vec!["cpu_usage.parquet".to_string()],
                     columns: vec!["0".to_string()],
                     rows: 7,
                     cadence_ns: Some(1_000_000_000),
