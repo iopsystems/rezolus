@@ -278,6 +278,19 @@ Every distillation attempt — accepted or rejected — gets a row:
 
 | date | class | experiment id | generator | attempts | outcome | notes |
 |------|-------|----------------|-----------|----------|---------|-------|
+| 2026-08-11 | cpu_saturation | 019fef20-8fd1… | claude-sonnet-5 (blind agent) | 2 | ACCEPTED | Blind attempt 1: correct subsystem+mechanism, all validators passed; only the free-text direction mismatched. Repair conformed direction and removed a contradicting NeedsMetric hedge; review judged the final claim evidence-supported (system-wide cpu_usage shifts; cpu_cycles~cpu_usage r=0.99999), not gate-gamed. |
+| 2026-08-11 | scheduler_contention | 019fef20-c9e8… | claude-sonnet-5 (blind agent) | 2 | ACCEPTED | Blind attempt 1: correct subsystem+mechanism; direction-only mismatch again. Single-field repair; narrative already described the mechanism. Calibration observation: the blind read shows queuing behind ~8/32 busy CPUs (cpu_usage far below machine ceiling) — the induced 4×nproc oversubscription likely ran inside a job-cgroup core subset; the truth's direction phrase is still accurate but the record tells a sharper story. |
+
+Findings from the first distillation run (2026-08-11):
+- **The `direction` field is the gate's friction point**: both blind
+  generations diagnosed subsystem+mechanism correctly and failed claim
+  equality ONLY on the open-vocabulary direction phrase. Named refinement
+  for the next iteration: a constrained per-class direction vocabulary, or
+  dropping `direction` from the equality gate (keeping it agent-reviewed).
+- **The disclosure→conform loop worked as designed but demands the
+  narrative review**: one repair legitimately removed a hedge to conform;
+  the reviewing agent must (and did) check the remaining claim stands on
+  the record's own evidence.
 
 `outcome` is `ACCEPTED`, `REJECTED (gate)` for a candidate that never passed
 within 3 attempts, or `REJECTED (narrative)` for a candidate that passed the
