@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "overall": {
+    "summary": "Scheduler-contended: runnable tasks queue behind oversubscribed cores",
+    "confidence": "High",
+    "evidence": [
+      {
+        "metric": "scheduler_runqueue_latency:p99",
+        "regime_shift_index": 0,
+        "rationale": "runqueue latency p99 shows a sustained step increase during the induced oversubscription window, well above its baseline"
+      }
+    ],
+    "recommended_action": "reduce runnable-task oversubscription or increase core count",
+    "status": "Actionable",
+    "data_quality": {
+      "coverage_gaps": [],
+      "uncertainty_limited": false
+    }
+  },
+  "findings": [
+    {
+      "summary": "Runnable tasks are queuing behind oversubscribed cores",
+      "confidence": "High",
+      "evidence": [
+        {
+          "metric": "scheduler_runqueue_latency:p99",
+          "regime_shift_index": 0,
+          "rationale": "runqueue latency p99 shows a sustained step increase during the induced oversubscription window, well above its baseline"
+        }
+      ],
+      "recommended_action": "reduce runnable-task oversubscription or increase core count",
+      "priority": "High",
+      "kind": {
+        "type": "Bottleneck",
+        "subsystem": "scheduler",
+        "mechanism": "runqueue_latency",
+        "direction": "runnable tasks queuing behind oversubscribed cores"
+      }
+    }
+  ],
+  "ruled_out": [
+    {
+      "summary": "Pure CPU-frequency throttling",
+      "confidence": "Medium",
+      "evidence": [
+        {
+          "metric": "cpu_frequency_ratio",
+          "rationale": "frequency ratio stays stable across the induced window, ruling out thermal/frequency throttling as the dominant cause"
+        }
+      ]
+    }
+  ]
+}

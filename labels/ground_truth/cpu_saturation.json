@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "class": "cpu_saturation",
+  "subsystem": "cpu",
+  "mechanism": "cpu_saturation",
+  "direction": "all cores saturated by compute-bound load",
+  "induced_window_s": [60.0, 180.0],
+  "expected_signals": [
+    { "metric": "cpu_usage", "check": "RegimeShiftIncreaseInWindow" },
+    { "metric": "cpu_usage", "check": "SubsystemPresent" }
+  ],
+  "experiment": {
+    "spec_file": "labels/specs/cpu_saturation.toml",
+    "params": { "baseline_s": "60", "induce_s": "120", "cooldown_s": "60", "stressors": "nproc" },
+    "host_tag": "z1.baremetal"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "class": "scheduler_contention",
+  "subsystem": "scheduler",
+  "mechanism": "runqueue_latency",
+  "direction": "runnable tasks queuing behind oversubscribed cores",
+  "induced_window_s": [60.0, 180.0],
+  "expected_signals": [
+    { "metric": "scheduler_runqueue_latency:p99", "check": "ElevatedInWindow" },
+    { "metric": "cpu_usage", "check": "RegimeShiftIncreaseInWindow" },
+    { "metric": "scheduler_runqueue_latency:p99", "check": "SubsystemPresent" }
+  ],
+  "experiment": {
+    "spec_file": "labels/specs/scheduler_contention.toml",
+    "params": { "baseline_s": "60", "induce_s": "120", "cooldown_s": "60", "oversubscription": "4x nproc" },
+    "host_tag": "z1.baremetal"
+  }
+}
