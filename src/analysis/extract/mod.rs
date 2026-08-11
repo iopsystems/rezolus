@@ -197,23 +197,40 @@ pub(crate) fn validate_no_nulls(record: &OverviewRecord) -> Result<(), String> {
     }
 }
 
-/// Derive a metric's subsystem, preferring the `sampler` label (stamped by
-/// agents >= 5.17.1) and falling back to name-prefix inference for older
-/// recordings that carry no such label: the longest sampler name in
-/// [`context::EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the
-/// metric name (an exact match, or `name.starts_with("{sampler}_")`).
-/// Longest match wins so e.g. a name starting with `blockio_latency_`
-/// prefers `blockio_latency` over a shorter unrelated match. Falls back to
-/// `unattributed` when neither source disambiguates (e.g. `cpu_cycles`
-/// could come from `cpu_perf` but no sampler name is a prefix of it).
-/// `extract()` inserts whatever this returns into `present_subsystems`,
-/// fulfilling `build_coverage`'s documented caller obligation that
-/// `unattributed` be added by the caller, not by `build_coverage` itself.
-fn subsystem_of(name: &str, label_sets: &[BTreeMap<String, String>]) -> String {
+/// Derive a metric's subsystem via three tiers, tried in order:
+///
+/// 1. The `sampler` label (stamped by agents >= 5.17.1) — authoritative
+///    when present.
+/// 2. An exact lookup in [`context::METRIC_SAMPLERS`] — a static table,
+///    harvested from the sampler `stats.rs` declarations, covering metric
+///    names whose sampler can't be recovered from the name alone (e.g.
+///    `cpu_cycles`, `tcp_bytes`, `cgroup_cpu_usage`).
+/// 3. Name-prefix inference: the longest sampler name in
+///    [`context::EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the
+///    metric name (an exact match, or `name.starts_with("{sampler}_")`).
+///    Longest match wins so e.g. a name starting with `blockio_latency_`
+///    prefers `blockio_latency` over a shorter unrelated match.
+///
+/// Falls back to `unattributed` when none of the three disambiguates —
+/// either a genuinely foreign/future metric, or one of
+/// [`context::AMBIGUOUS_METRIC_NAMES`] (a name declared identically by more
+/// than one sampler, so no flat table entry could be correct for all of
+/// them). `extract()` inserts whatever this returns into
+/// `present_subsystems`, fulfilling `build_coverage`'s documented caller
+/// obligation that `unattributed` be added by the caller, not by
+/// `build_coverage` itself.
+///
+/// `pub(crate)` so `metric_samplers_match_agent_attribution`
+/// (`src/agent/samplers/mod.rs`) can drive it directly with the real
+/// analysis-side resolution, rather than duplicating tiers 2/3's logic.
+pub(crate) fn subsystem_of(name: &str, label_sets: &[BTreeMap<String, String>]) -> String {
     for labels in label_sets {
         if let Some(s) = labels.get("sampler") {
             return s.clone();
         }
+    }
+    if let Some((_, sampler)) = context::METRIC_SAMPLERS.iter().find(|(n, _)| *n == name) {
+        return sampler.to_string();
     }
     context::EXPECTED_SUBSYSTEMS
         .iter()
@@ -503,14 +520,49 @@ mod tests {
     }
 
     #[test]
-    fn subsystem_of_stays_unattributed_when_name_cannot_disambiguate() {
+    fn subsystem_of_resolves_non_prefixing_names_via_metric_samplers_table() {
         // cpu_cycles comes from cpu_perf, but no sampler name is a
-        // `_`-boundary prefix of "cpu_cycles" itself.
-        assert_eq!(subsystem_of("cpu_cycles", &[]), "unattributed");
+        // `_`-boundary prefix of "cpu_cycles" itself — resolved via the
+        // METRIC_SAMPLERS table instead of falling to unattributed.
+        assert_eq!(subsystem_of("cpu_cycles", &[]), "cpu_perf");
         // tcp_bytes comes from tcp_traffic, same story.
-        assert_eq!(subsystem_of("tcp_bytes", &[]), "unattributed");
-        // memory_free could be meminfo or vmstat; ambiguous by name.
-        assert_eq!(subsystem_of("memory_free", &[]), "unattributed");
+        assert_eq!(subsystem_of("tcp_bytes", &[]), "tcp_traffic");
+        // memory_free is declared in memory/linux/meminfo/stats.rs.
+        assert_eq!(subsystem_of("memory_free", &[]), "memory_meminfo");
+        // a cgroup_* metric: declared inside its owning sampler's own
+        // module (there is no separate cgroup sampler).
+        assert_eq!(subsystem_of("cgroup_syscall", &[]), "syscall_counts");
+    }
+
+    #[test]
+    fn subsystem_of_stays_unattributed_for_genuinely_ambiguous_or_foreign_names() {
+        // gpu_memory is declared identically by both gpu_amd_smi and
+        // gpu_nvidia; a flat table can't pick one, so it's excluded from
+        // METRIC_SAMPLERS (see AMBIGUOUS_METRIC_NAMES) and stays
+        // unattributed absent a label.
+        assert_eq!(subsystem_of("gpu_memory", &[]), "unattributed");
+        // A metric name with no relationship to any known sampler at all
+        // (e.g. from a foreign/future source) stays unattributed too.
+        assert_eq!(subsystem_of("totally_unknown_metric", &[]), "unattributed");
+    }
+
+    #[test]
+    fn subsystem_of_precedence_label_beats_table_beats_prefix() {
+        // Table would resolve cpu_cycles -> cpu_perf, but an explicit label
+        // wins regardless of what the name implies.
+        let labeled = vec![BTreeMap::from([(
+            "sampler".to_string(),
+            "some_override".to_string(),
+        )])];
+        assert_eq!(subsystem_of("cpu_cycles", &labeled), "some_override");
+
+        // No label: table lookup wins over prefix inference. "tcp_bytes"
+        // would not prefix-match any EXPECTED_SUBSYSTEMS entry, so without
+        // the table it would fall to unattributed; the table resolves it.
+        assert_eq!(subsystem_of("tcp_bytes", &[]), "tcp_traffic");
+
+        // No label, no table entry: prefix inference is the last resort.
+        assert_eq!(subsystem_of("cpu_usage", &[]), "cpu_usage");
     }
 
     fn quiet(name: &str) -> MetricAnalysis {

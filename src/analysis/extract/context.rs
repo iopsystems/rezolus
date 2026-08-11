@@ -1,16 +1,21 @@
 //! Recording-level context: source, version, duration, interval, systeminfo,
 //! and the coverage map (subsystems present vs absent).
 //!
-//! Subsystem attribution (see `extract::subsystem_of`) has two sources: a
-//! `sampler` label stamped by agents >= 5.17.1 (preferred), or — for older
-//! recordings that carry no such label — the longest sampler name in
+//! Subsystem attribution (see `extract::subsystem_of`) has three tiers,
+//! tried in order: a `sampler` label stamped by agents >= 5.17.1
+//! (preferred); failing that, an exact lookup in [`METRIC_SAMPLERS`] — a
+//! static table of metric names whose sampler can't be recovered from the
+//! name alone; failing that, the longest sampler name in
 //! [`EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the metric name.
-//! When neither source disambiguates, the metric is `unattributed` and its
-//! *domain* ([`domain_of`]) becomes "uncertain": `build_coverage` excludes
-//! any sampler in an uncertain domain from `subsystems_absent`, since its
-//! true presence/absence can't be known from an unattributed name. It is
-//! also not added to `subsystems_present` — we refuse to claim absence we
-//! can't know, and we don't fabricate presence either.
+//! When none of the three disambiguates, the metric is `unattributed` and
+//! its *domain* ([`domain_of`]) becomes "uncertain": `build_coverage`
+//! excludes any sampler in an uncertain domain from `subsystems_absent`,
+//! since its true presence/absence can't be known from an unattributed
+//! name. It is also not added to `subsystems_present` — we refuse to claim
+//! absence we can't know, and we don't fabricate presence either. This
+//! pruning is defense-in-depth for foreign sources and future metrics, not
+//! the primary resolution mechanism now that [`METRIC_SAMPLERS`] covers the
+//! known non-prefixing cases.
 
 use std::collections::BTreeSet;
 
@@ -56,6 +61,179 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+];
+
+/// Explicit metric-name -> sampler mapping for metrics whose name cannot be
+/// resolved against [`EXPECTED_SUBSYSTEMS`] by exact match or `_`-boundary
+/// prefix (e.g. `cpu_cycles` has no `cpu_perf`-prefixed spelling, and
+/// `cgroup_cpu_usage` doesn't share `cpu_usage`'s prefix at all — it's
+/// declared inside the `cpu_usage` sampler's own module, there is no
+/// separate cgroup sampler).
+///
+/// Provenance: harvested by reading every sampler's `stats.rs`
+/// (`src/agent/samplers/*/*/*/stats.rs` and `src/agent/samplers/*/stats.rs`,
+/// all platforms) and mapping each `metric(name = "...")` declaration to
+/// the sampler whose `const NAME` governs that module tree, cross-checked
+/// against each sampler's `mod.rs` (`attribute_sampler` in
+/// `src/agent/samplers/mod.rs` attributes by module-path prefix, so e.g.
+/// everything under `samplers/cpu/linux/perf/` belongs to `cpu_perf`,
+/// `samplers/tcp/linux/traffic/` to `tcp_traffic`). Only entries that
+/// *need* it are included — a name that already resolves correctly via
+/// [`EXPECTED_SUBSYSTEMS`] prefix matching (e.g. `cpu_branch_instructions`
+/// -> `cpu_branch`, `tcp_connect_latency` -> `tcp_connect_latency`) is left
+/// out to keep the table minimal. Sorted alphabetically.
+///
+/// Deliberately excludes [`AMBIGUOUS_METRIC_NAMES`] — names declared
+/// identically by more than one sampler, where a flat mapping can't be
+/// correct for all of them.
+///
+/// `metric_samplers_match_agent_attribution` in `src/agent/samplers/mod.rs`
+/// is this table's drift guard: it walks the live `metriken` registry and
+/// asserts this table (plus prefix inference) agrees with the agent's own
+/// module-path attribution for every metric it can unambiguously check,
+/// printing the correct line to paste in here when it doesn't.
+pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
+    ("blockio_bytes", "blockio_requests"),
+    ("blockio_errors", "blockio_requests"),
+    ("blockio_operations", "blockio_requests"),
+    ("blockio_requeues", "blockio_requests"),
+    ("blockio_size", "blockio_requests"),
+    ("cgroup_cpu_bandwidth_period_duration", "cpu_bandwidth"),
+    ("cgroup_cpu_bandwidth_periods", "cpu_bandwidth"),
+    ("cgroup_cpu_bandwidth_quota", "cpu_bandwidth"),
+    ("cgroup_cpu_bandwidth_throttled_periods", "cpu_bandwidth"),
+    ("cgroup_cpu_bandwidth_throttled_time", "cpu_bandwidth"),
+    ("cgroup_cpu_cycles", "cpu_perf"),
+    ("cgroup_cpu_instructions", "cpu_perf"),
+    ("cgroup_cpu_migrations", "cpu_migrations"),
+    ("cgroup_cpu_throttled", "cpu_bandwidth"),
+    ("cgroup_cpu_throttled_time", "cpu_bandwidth"),
+    ("cgroup_cpu_tlb_flush", "cpu_tlb_flush"),
+    ("cgroup_cpu_usage", "cpu_usage"),
+    ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
+    ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
+    ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
+    ("cgroup_syscall", "syscall_counts"),
+    ("cpu_aperf", "cpu_frequency"),
+    ("cpu_cycles", "cpu_perf"),
+    ("cpu_instructions", "cpu_perf"),
+    ("cpu_mperf", "cpu_frequency"),
+    ("cpu_tsc", "cpu_frequency"),
+    ("drive_temperature", "drivehealth"),
+    ("drive_temperature_critical_time", "drivehealth"),
+    ("drive_temperature_warning_time", "drivehealth"),
+    ("drive_thermal_throttle_time", "drivehealth"),
+    ("drive_thermal_throttle_transitions", "drivehealth"),
+    ("gpmu_active_clock", "gpu_amd_pmu"),
+    ("gpmu_busy_cycles", "gpu_amd_pmu"),
+    ("gpmu_clock", "gpu_amd_pmu"),
+    ("gpmu_icache_hits", "gpu_amd_pmu"),
+    ("gpmu_icache_requests", "gpu_amd_pmu"),
+    ("gpmu_l2_hits", "gpu_amd_pmu"),
+    ("gpmu_l2_misses", "gpu_amd_pmu"),
+    ("gpmu_lds_instructions", "gpu_amd_pmu"),
+    ("gpmu_salu_instructions", "gpu_amd_pmu"),
+    ("gpmu_valu_instructions", "gpu_amd_pmu"),
+    ("gpmu_vram_read_requests", "gpu_amd_pmu"),
+    ("gpmu_vram_write_requests", "gpu_amd_pmu"),
+    ("gpmu_wave_cycles", "gpu_amd_pmu"),
+    ("gpmu_waves", "gpu_amd_pmu"),
+    ("gpu_dram_bandwidth_utilization", "gpu_nvidia"),
+    ("gpu_pcie_bandwidth", "gpu_nvidia"),
+    ("gpu_sm_occupancy", "gpu_nvidia"),
+    ("gpu_sm_utilization", "gpu_nvidia"),
+    ("gpu_tensor_utilization", "gpu_nvidia"),
+    ("memory_available", "memory_meminfo"),
+    ("memory_buffers", "memory_meminfo"),
+    ("memory_cached", "memory_meminfo"),
+    ("memory_free", "memory_meminfo"),
+    ("memory_numa_foreign", "memory_vmstat"),
+    ("memory_numa_hit", "memory_vmstat"),
+    ("memory_numa_interleave", "memory_vmstat"),
+    ("memory_numa_local", "memory_vmstat"),
+    ("memory_numa_miss", "memory_vmstat"),
+    ("memory_numa_other", "memory_vmstat"),
+    ("memory_total", "memory_meminfo"),
+    ("network_bytes", "network_traffic"),
+    ("network_drop", "network_interfaces"),
+    (
+        "network_ena_bandwidth_allowance_exceeded",
+        "network_ethtool",
+    ),
+    (
+        "network_ena_conntrack_allowance_exceeded",
+        "network_ethtool",
+    ),
+    (
+        "network_ena_linklocal_allowance_exceeded",
+        "network_ethtool",
+    ),
+    ("network_ena_pps_allowance_exceeded", "network_ethtool"),
+    ("network_packets", "network_traffic"),
+    ("network_transmit_busy", "network_interfaces"),
+    ("network_transmit_complete", "network_interfaces"),
+    ("network_transmit_timeout", "network_interfaces"),
+    ("rezolus_blockio_operations", "rezolus_rusage"),
+    ("rezolus_context_switch", "rezolus_rusage"),
+    ("rezolus_cpu_usage", "rezolus_rusage"),
+    ("rezolus_memory_page_faults", "rezolus_rusage"),
+    ("rezolus_memory_page_reclaims", "rezolus_rusage"),
+    ("rezolus_memory_usage_resident_set_size", "rezolus_rusage"),
+    ("scheduler_context_switch", "scheduler_runqueue"),
+    ("scheduler_offcpu", "scheduler_runqueue"),
+    ("scheduler_running", "scheduler_runqueue"),
+    ("softirq", "cpu_usage"),
+    ("softirq_time", "cpu_usage"),
+    ("syscall", "syscall_counts"),
+    ("task_cpu_usage", "cpu_usage"),
+    ("tcp_bytes", "tcp_traffic"),
+    ("tcp_jitter", "tcp_receive"),
+    ("tcp_packets", "tcp_traffic"),
+    ("tcp_size", "tcp_traffic"),
+    ("tcp_srtt", "tcp_receive"),
+];
+
+/// Metric names declared identically by more than one sampler (verified by
+/// reading every sampler's `stats.rs`): a flat name -> sampler table can
+/// only be correct for one of them, so these are deliberately absent from
+/// [`METRIC_SAMPLERS`] and from `metric_samplers_match_agent_attribution`'s
+/// strict per-metric check. An unlabeled recording carrying one of these
+/// names falls through table lookup and name-prefix inference alike to
+/// `unattributed`, and its domain is pruned from `subsystems_absent` rather
+/// than asserted — the same defense-in-depth path that covers foreign or
+/// future metrics. Freshly recorded data (agents >= 5.17.1) is unaffected:
+/// the `sampler` label resolves these correctly without consulting either
+/// table.
+///
+/// - `cpu_cores`: the Linux `cpu_cores` sampler's own metric, but also
+///   emitted by the macOS `cpu_usage` sampler (macOS folds core-count
+///   reporting into its usage sampler rather than having a standalone
+///   `cpu_cores` one) — same name, different true sampler depending on
+///   platform.
+/// - `gpu_clock`, `gpu_energy_consumption`, `gpu_memory`,
+///   `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_power_usage`,
+///   `gpu_temperature`, `gpu_utilization`: shared vocabulary across
+///   `gpu_amd_smi`, `gpu_nvidia`, and (where applicable) `gpu_apple` — each
+///   vendor sampler declares its own metric under the same generic name.
+/// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: every eBPF-backed
+///   sampler declares its own pair of these under its own module (self-timing
+///   instrumentation), so the name is common to all ~17 BPF samplers.
+// Consulted only by the (test-only, platform-gated)
+// `metric_samplers_match_agent_attribution` guard in
+// `src/agent/samplers/mod.rs`; a non-test build never references it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const AMBIGUOUS_METRIC_NAMES: &[&str] = &[
+    "cpu_cores",
+    "gpu_clock",
+    "gpu_energy_consumption",
+    "gpu_memory",
+    "gpu_memory_utilization",
+    "gpu_pcie_throughput",
+    "gpu_power_usage",
+    "gpu_temperature",
+    "gpu_utilization",
+    "rezolus_bpf_run_count",
+    "rezolus_bpf_run_time",
 ];
 
 /// Metric-name domains that diverge from their owning sampler's leading

@@ -62,18 +62,35 @@ pub struct Context {
 /// Which subsystems are present vs absent — what lets an assessment say
 /// `NeedsMetric` instead of hallucinating around a gap.
 ///
+/// Extraction attributes each metric to a subsystem in three tiers (see
+/// `extract::subsystem_of`): the `sampler` label when present (agents >=
+/// 5.17.1); failing that, an exact lookup in `extract::context::
+/// METRIC_SAMPLERS` — a static table, harvested from the sampler `stats.rs`
+/// declarations, of metric names whose sampler can't be recovered from the
+/// name alone (e.g. `cpu_cycles` -> `cpu_perf`, `tcp_bytes` ->
+/// `tcp_traffic`, `cgroup_cpu_usage` -> `cpu_usage`); failing that,
+/// name-prefix inference against `EXPECTED_SUBSYSTEMS`. A drift guard test
+/// (`metric_samplers_match_agent_attribution` in
+/// `src/agent/samplers/mod.rs`) checks the table against the agent's own
+/// module-path attribution over the live metric registry, so the table
+/// tracks sampler additions/renames rather than silently going stale.
+///
 /// Absence is asserted only for subsystems whose domain (first `_`-token of
-/// the sampler name, e.g. `blockio` for `blockio_latency`) had no
-/// unattributed metrics: extraction attributes each metric to a subsystem
-/// via its `sampler` label when present, or by name-prefix inference when
-/// not, and any domain that still has an unattributed metric after that
-/// inference is excluded from `subsystems_absent` rather than asserted
-/// absent on unreliable information. Recordings from agents older than
-/// 5.17.1 carry no `sampler` labels at all, so every metric falls to name
-/// inference; ambiguous names (e.g. `cpu_cycles`, `tcp_bytes`) stay
-/// unattributed and their domains are pruned — such recordings may
-/// therefore report a shorter `subsystems_absent` list than a labeled one
-/// covering the same subsystems.
+/// the sampler name, e.g. `blockio` for `blockio_latency`) had no metric
+/// left unattributed after all three tiers: any domain that still has an
+/// unattributed metric is excluded from `subsystems_absent` rather than
+/// asserted absent on unreliable information. This pruning is
+/// defense-in-depth now — it exists for genuinely unknowable cases (foreign
+/// sources, metrics newer than this build's METRIC_SAMPLERS table, or a
+/// handful of names declared identically by more than one sampler, e.g.
+/// `gpu_memory` across `gpu_amd_smi`/`gpu_nvidia` — see
+/// `AMBIGUOUS_METRIC_NAMES`) rather than the primary mechanism it was
+/// before the table existed. Recordings from agents older than 5.17.1 carry
+/// no `sampler` labels at all, so every metric falls to the table/prefix
+/// tiers; only the residual ambiguous or foreign names stay unattributed —
+/// such recordings may therefore still report a shorter `subsystems_absent`
+/// list than a labeled one covering the same subsystems, just a much
+/// shorter gap than under prefix inference alone.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Coverage {
     pub subsystems_present: Vec<String>,

@@ -127,4 +127,60 @@ mod attribution_tests {
             );
         }
     }
+
+    /// Drift guard for `crate::analysis::extract::context::METRIC_SAMPLERS`:
+    /// walks the live `metriken` registry and asserts the analysis-side
+    /// resolution (`subsystem_of` with no labels, i.e. its
+    /// METRIC_SAMPLERS-then-prefix tiers) agrees with the agent's own
+    /// module-path attribution (`attribute_sampler`) for every registered
+    /// metric it can unambiguously check.
+    ///
+    /// Platform-gated by compilation: `metriken::metrics()` only contains
+    /// metrics compiled for the current target, so this test only exercises
+    /// whatever samplers that target registers. On macOS that's `cpu_usage`
+    /// and `rezolus_rusage` (`gpu_apple`'s own metrics live in a sibling
+    /// `stats` module under `gpu::macos`, not a descendant of the `apple`
+    /// sampler's module, so `attribute_sampler` itself calls them
+    /// `unattributed` today — a pre-existing quirk unrelated to this guard,
+    /// and covered by the "skip unattributed" rule below). Linux CI is what
+    /// actually exercises the Linux-only samplers (every BPF-backed one,
+    /// drivehealth, the GPU vendor samplers, etc) — this test passing on
+    /// one platform does not certify the table for the others.
+    ///
+    /// Two kinds of metric are skipped rather than asserted on:
+    /// - Metrics the agent itself attributes `unattributed` (no ground
+    ///   truth to check against).
+    /// - Names in `AMBIGUOUS_METRIC_NAMES`: declared identically by more
+    ///   than one sampler, so no flat table entry could be correct for all
+    ///   of them (see that constant's doc in context.rs).
+    ///
+    /// On failure, the assertion message names the correct
+    /// `("metric", "sampler")` line to paste into `METRIC_SAMPLERS`.
+    #[test]
+    fn metric_samplers_match_agent_attribution() {
+        use crate::analysis::extract::context::AMBIGUOUS_METRIC_NAMES;
+        use crate::analysis::extract::subsystem_of;
+
+        let mods = super::sampler_modules();
+        for metric in metriken::metrics().iter() {
+            let name = metric.name();
+            if AMBIGUOUS_METRIC_NAMES.contains(&name) {
+                continue;
+            }
+            let truth = super::attribute_sampler(metric.module(), &mods);
+            if truth == "unattributed" {
+                continue;
+            }
+            let resolved = subsystem_of(name, &[]);
+            assert_eq!(
+                resolved,
+                truth,
+                "metric `{name}` (module `{}`) attributes to sampler `{truth}` via \
+                 attribute_sampler, but analysis-side subsystem_of resolves it to \
+                 `{resolved}`; add (\"{name}\", \"{truth}\") to METRIC_SAMPLERS in \
+                 src/analysis/extract/context.rs",
+                metric.module(),
+            );
+        }
+    }
 }
