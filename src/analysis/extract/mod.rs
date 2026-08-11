@@ -197,19 +197,72 @@ pub(crate) fn validate_no_nulls(record: &OverviewRecord) -> Result<(), String> {
     }
 }
 
-/// Derive a metric's subsystem from its label sets (the agent stamps a
-/// `sampler` label on every metric); falls back to `unattributed` when
-/// absent. `extract()` inserts whatever this returns into
+/// Derive a metric's subsystem. The `sampler` label (stamped by agents >=
+/// 5.17.1) is always authoritative when present. Absent a label, *name
+/// inference* — everything below — only runs when `infer` is true, which
+/// callers must compute from the recording's `source` metadata being
+/// exactly `"rezolus"` (see `extract()` and the module doc in
+/// `context.rs`): a metric named `cpu_usage` in a Prometheus-scraped or
+/// otherwise foreign recording proves nothing, since the name is just a
+/// string some unrelated exporter happened to also use. When `infer` is
+/// false and no label matched, the result is unconditionally
+/// `unattributed`.
+///
+/// When inference is trusted, in order:
+///
+/// 1. [`context::AMBIGUOUS_METRICS`]: a name declared identically by more
+///    than one sampler resolves to `unattributed` rather than guessing one
+///    of its candidates (the name still proves *one of* them ran — see
+///    `extract()`, which credits the candidate set to `uncertain_samplers`
+///    instead of a domain).
+/// 2. An exact lookup in [`context::METRIC_SAMPLERS`] — a static table,
+///    harvested from the sampler `stats.rs` declarations, covering metric
+///    names whose sampler can't be recovered from the name alone (e.g.
+///    `cpu_cycles`, `tcp_bytes`, `cgroup_cpu_usage`).
+/// 3. Name-prefix inference: the longest sampler name in
+///    [`context::EXPECTED_SUBSYSTEMS`] that is a `_`-boundary prefix of the
+///    metric name (an exact match, or `name.starts_with("{sampler}_")`).
+///    Longest match wins so e.g. a name starting with `blockio_latency_`
+///    prefers `blockio_latency` over a shorter unrelated match.
+///
+/// Falls back to `unattributed` when nothing disambiguates — a genuinely
+/// foreign/future metric name, an ambiguous one, or inference not trusted
+/// at all. `extract()` inserts whatever this returns into
 /// `present_subsystems`, fulfilling `build_coverage`'s documented caller
 /// obligation that `unattributed` be added by the caller, not by
 /// `build_coverage` itself.
-fn subsystem_of(label_sets: &[BTreeMap<String, String>]) -> String {
+///
+/// `pub(crate)` so `metric_samplers_match_agent_attribution`
+/// (`src/agent/samplers/mod.rs`) can drive it directly with the real
+/// analysis-side resolution, rather than duplicating tiers 1-3's logic.
+pub(crate) fn subsystem_of(
+    name: &str,
+    label_sets: &[BTreeMap<String, String>],
+    infer: bool,
+) -> String {
     for labels in label_sets {
         if let Some(s) = labels.get("sampler") {
             return s.clone();
         }
     }
-    "unattributed".to_string()
+    if !infer {
+        return "unattributed".to_string();
+    }
+    if context::AMBIGUOUS_METRICS.iter().any(|(n, _)| *n == name) {
+        return "unattributed".to_string();
+    }
+    if let Some((_, sampler)) = context::METRIC_SAMPLERS.iter().find(|(n, _)| *n == name) {
+        return sampler.to_string();
+    }
+    context::EXPECTED_SUBSYSTEMS
+        .iter()
+        .filter(|s| {
+            name.strip_prefix(**s)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('_'))
+        })
+        .max_by_key(|sampler| sampler.len())
+        .map(|sampler| sampler.to_string())
+        .unwrap_or_else(|| "unattributed".to_string())
 }
 
 /// Query templates matching the MCP exhaustive mode.
@@ -323,11 +376,48 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
         );
     }
 
+    // Name inference (METRIC_SAMPLERS/prefix/ambiguity tiers) is trusted
+    // only for genuine rezolus recordings (parquet and .rez, every agent
+    // version) -- a metric coincidentally named e.g. `cpu_usage` in a
+    // Prometheus-scraped or otherwise foreign recording proves nothing. A
+    // missing/empty source is treated as unknown, i.e. conservative (no
+    // inference). See the module doc in context.rs.
+    let source = data.source();
+    let infer = source == "rezolus";
+
     // --- enumerate entries (exhaustive: every metric appears) ---
     let mut entries: Vec<(String, &'static str, String, String, bool)> = Vec::new();
     let mut present_subsystems = BTreeSet::new();
+    // Domains that still have at least one unattributed metric that isn't
+    // covered by a tighter AMBIGUOUS_METRICS candidate set: their true
+    // absence is unknowable, so build_coverage must exclude them from
+    // subsystems_absent.
+    let mut uncertain_domains = BTreeSet::new();
+    // Samplers named directly as an AMBIGUOUS_METRICS candidate for some
+    // unattributed metric: pruned from subsystems_absent individually
+    // (tighter than uncertain_domains -- see AMBIGUOUS_METRICS's doc for
+    // why, e.g. rezolus_bpf_run_count must not also prune the unrelated
+    // rezolus_rusage sampler).
+    let mut uncertain_samplers = BTreeSet::new();
+    // Record that `name` resolved to "unattributed": credit its exact
+    // AMBIGUOUS_METRICS candidate set when inference is trusted and the
+    // name is one of them, else fall back to its whole domain.
+    let mut note_unattributed = |name: &str| {
+        if infer {
+            if let Some((_, candidates)) =
+                context::AMBIGUOUS_METRICS.iter().find(|(n, _)| *n == name)
+            {
+                uncertain_samplers.extend(candidates.iter().map(|s| s.to_string()));
+                return;
+            }
+        }
+        uncertain_domains.insert(context::domain_of(name).to_string());
+    };
     for name in data.counter_names() {
-        let subsystem = subsystem_of(&data.counter_labels(&name));
+        let subsystem = subsystem_of(&name, &data.counter_labels(&name), infer);
+        if subsystem == "unattributed" {
+            note_unattributed(&name);
+        }
         present_subsystems.insert(subsystem.clone());
         entries.push((
             name.clone(),
@@ -338,12 +428,18 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
         ));
     }
     for name in data.gauge_names() {
-        let subsystem = subsystem_of(&data.gauge_labels(&name));
+        let subsystem = subsystem_of(&name, &data.gauge_labels(&name), infer);
+        if subsystem == "unattributed" {
+            note_unattributed(&name);
+        }
         present_subsystems.insert(subsystem.clone());
         entries.push((name.clone(), "gauge", gauge_query(&name), subsystem, false));
     }
     for name in data.histogram_names() {
-        let subsystem = subsystem_of(&data.histogram_labels(&name));
+        let subsystem = subsystem_of(&name, &data.histogram_labels(&name), infer);
+        if subsystem == "unattributed" {
+            note_unattributed(&name);
+        }
         present_subsystems.insert(subsystem.clone());
         // The `m:pNN` entries' stats describe the quantile-over-time series
         // (e.g. `p99` of `blockio_latency:p50` is the p99-across-time of the
@@ -418,12 +514,16 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
     // preferable to silently substituting 1s into a provenance field.
     // (All current MetricsSource impls return finite intervals.)
     let context = context::build_context(
-        data.source(),
+        source,
         data.version(),
         duration_s,
         data.interval(),
         data.metadata_get("systeminfo"),
         &present_subsystems,
+        &context::Uncertainty {
+            domains: &uncertain_domains,
+            samplers: &uncertain_samplers,
+        },
     );
 
     let record = assemble(
@@ -443,6 +543,140 @@ mod tests {
     use super::*;
     use crate::analysis::record::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn subsystem_of_prefers_the_sampler_label() {
+        let labels = vec![BTreeMap::from([(
+            "sampler".to_string(),
+            "cpu_usage".to_string(),
+        )])];
+        // Name alone would infer nothing useful; the label wins regardless,
+        // and regardless of `infer` too (a label is always authoritative).
+        assert_eq!(
+            subsystem_of("some_unrelated_name", &labels, true),
+            "cpu_usage"
+        );
+        assert_eq!(
+            subsystem_of("some_unrelated_name", &labels, false),
+            "cpu_usage"
+        );
+    }
+
+    #[test]
+    fn subsystem_of_infers_from_name_prefix_when_unlabeled() {
+        assert_eq!(
+            subsystem_of("scheduler_runqueue_latency", &[], true),
+            "scheduler_runqueue"
+        );
+        assert_eq!(subsystem_of("cpu_usage", &[], true), "cpu_usage");
+        assert_eq!(
+            subsystem_of("tcp_connect_latency", &[], true),
+            "tcp_connect_latency"
+        );
+    }
+
+    #[test]
+    fn subsystem_of_longest_prefix_wins() {
+        // blockio_latency is a real sampler name; a metric name extending it
+        // with a further `_`-boundary suffix must still resolve to it.
+        assert_eq!(
+            subsystem_of("blockio_latency_p50", &[], true),
+            "blockio_latency"
+        );
+    }
+
+    #[test]
+    fn subsystem_of_resolves_non_prefixing_names_via_metric_samplers_table() {
+        // cpu_cycles comes from cpu_perf, but no sampler name is a
+        // `_`-boundary prefix of "cpu_cycles" itself — resolved via the
+        // METRIC_SAMPLERS table instead of falling to unattributed.
+        assert_eq!(subsystem_of("cpu_cycles", &[], true), "cpu_perf");
+        // tcp_bytes comes from tcp_traffic, same story.
+        assert_eq!(subsystem_of("tcp_bytes", &[], true), "tcp_traffic");
+        // memory_free is declared in memory/linux/meminfo/stats.rs.
+        assert_eq!(subsystem_of("memory_free", &[], true), "memory_meminfo");
+        // a cgroup_* metric: declared inside its owning sampler's own
+        // module (there is no separate cgroup sampler).
+        assert_eq!(subsystem_of("cgroup_syscall", &[], true), "syscall_counts");
+    }
+
+    #[test]
+    fn subsystem_of_stays_unattributed_for_genuinely_ambiguous_or_foreign_names() {
+        // gpu_memory is declared identically by both gpu_amd_smi and
+        // gpu_nvidia; a flat table can't pick one, so it's excluded from
+        // METRIC_SAMPLERS (see AMBIGUOUS_METRICS) and stays unattributed
+        // absent a label, even with inference trusted.
+        assert_eq!(subsystem_of("gpu_memory", &[], true), "unattributed");
+        // A metric name with no relationship to any known sampler at all
+        // (e.g. from a foreign/future source) stays unattributed too.
+        assert_eq!(
+            subsystem_of("totally_unknown_metric", &[], true),
+            "unattributed"
+        );
+    }
+
+    #[test]
+    fn subsystem_of_cpu_cores_is_ambiguous_not_a_linux_exact_match() {
+        // CRITICAL regression: "cpu_cores" exactly matches the Linux
+        // cpu_cores sampler's own name via tier-3 prefix inference, but the
+        // same name is also emitted by macOS's cpu_usage sampler. Before
+        // AMBIGUOUS_METRICS covered it, an unlabeled macOS recording would
+        // fabricate presence of the Linux-only cpu_cores sampler. It must
+        // resolve to unattributed instead (and extract() credits exactly
+        // {cpu_cores, cpu_usage} to uncertain_samplers -- see context.rs
+        // tests).
+        assert_eq!(subsystem_of("cpu_cores", &[], true), "unattributed");
+    }
+
+    #[test]
+    fn subsystem_of_precedence_label_beats_table_beats_prefix() {
+        // Table would resolve cpu_cycles -> cpu_perf, but an explicit label
+        // wins regardless of what the name implies.
+        let labeled = vec![BTreeMap::from([(
+            "sampler".to_string(),
+            "some_override".to_string(),
+        )])];
+        assert_eq!(subsystem_of("cpu_cycles", &labeled, true), "some_override");
+
+        // No label: table lookup wins over prefix inference. "tcp_bytes"
+        // would not prefix-match any EXPECTED_SUBSYSTEMS entry, so without
+        // the table it would fall to unattributed; the table resolves it.
+        assert_eq!(subsystem_of("tcp_bytes", &[], true), "tcp_traffic");
+
+        // No label, no table entry: prefix inference is the last resort.
+        assert_eq!(subsystem_of("cpu_usage", &[], true), "cpu_usage");
+    }
+
+    #[test]
+    fn subsystem_of_infer_false_blocks_table_and_prefix_tiers() {
+        // CRITICAL regression: without a `sampler` label, and with
+        // inference untrusted (a non-rezolus source), a metric coincidentally
+        // named `cpu_usage`/`memory_free`/`tcp_bytes` must NOT fabricate
+        // subsystem presence -- neither the METRIC_SAMPLERS table nor
+        // name-prefix inference may run.
+        assert_eq!(subsystem_of("cpu_usage", &[], false), "unattributed");
+        assert_eq!(subsystem_of("memory_free", &[], false), "unattributed");
+        assert_eq!(subsystem_of("tcp_bytes", &[], false), "unattributed");
+        assert_eq!(subsystem_of("cpu_cycles", &[], false), "unattributed");
+
+        // Same names resolve normally when inference IS trusted -- proves
+        // the difference is solely the `infer` flag, not the names.
+        assert_eq!(subsystem_of("cpu_usage", &[], true), "cpu_usage");
+        assert_eq!(subsystem_of("memory_free", &[], true), "memory_meminfo");
+        assert_eq!(subsystem_of("tcp_bytes", &[], true), "tcp_traffic");
+        assert_eq!(subsystem_of("cpu_cycles", &[], true), "cpu_perf");
+    }
+
+    #[test]
+    fn subsystem_of_label_wins_even_when_infer_is_false() {
+        // A `sampler` label is agent-stamped ground truth, independent of
+        // whether the *recording's* source is trusted for name inference.
+        let labels = vec![BTreeMap::from([(
+            "sampler".to_string(),
+            "cpu_usage".to_string(),
+        )])];
+        assert_eq!(subsystem_of("cpu_usage", &labels, false), "cpu_usage");
+    }
 
     fn quiet(name: &str) -> MetricAnalysis {
         MetricAnalysis {
