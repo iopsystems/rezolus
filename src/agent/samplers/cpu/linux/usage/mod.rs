@@ -37,7 +37,11 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 unsafe impl plain::Plain for bpf::types::task_info {}
 unsafe impl plain::Plain for bpf::types::task_exit {}
 
-static CGROUP_METRICS: &[&dyn GroupMetadata] = &[&CGROUP_CPU_USAGE_USER, &CGROUP_CPU_USAGE_SYSTEM];
+static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
+    &CGROUP_CPU_USAGE_USER,
+    &CGROUP_CPU_USAGE_SYSTEM,
+    &CGROUP_CPU_USAGE_EXITED,
+];
 static TASK_METRICS: &[&dyn GroupMetadata] = &[&TASK_CPU_USAGE];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
@@ -118,7 +122,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let cpu_usage = vec![&CPU_USAGE_USER, &CPU_USAGE_SYSTEM];
+    // order must match the offsets in mod.bpf.c
+    let cpu_usage = vec![&CPU_USAGE_USER, &CPU_USAGE_SYSTEM, &CPU_USAGE_EXITED];
 
     let softirq = vec![
         &SOFTIRQ_HI,
@@ -160,6 +165,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .cpu_counters("softirq_time", softirq_time)
     .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
     .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
+    .packed_counters("cgroup_exited", &CGROUP_CPU_USAGE_EXITED)
     .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("task_info", handle_task_info)
@@ -191,6 +197,7 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_info" => &self.maps.cgroup_info,
             "cgroup_user" => &self.maps.cgroup_user,
             "cgroup_system" => &self.maps.cgroup_system,
+            "cgroup_exited" => &self.maps.cgroup_exited,
             "cpu_usage" => &self.maps.cpu_usage,
             "softirq" => &self.maps.softirq,
             "softirq_time" => &self.maps.softirq_time,
