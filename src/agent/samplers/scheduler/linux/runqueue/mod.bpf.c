@@ -26,6 +26,7 @@
 // counter positions
 #define IVCSW 0
 #define RUNQ_WAIT 1
+#define DISCARDED 2
 
 // counters (see constants defined at top)
 struct {
@@ -175,7 +176,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
     struct task_struct* prev = (struct task_struct*)ctx[1];
     struct task_struct* next = (struct task_struct*)ctx[2];
 
-    u32 pid, idx;
+    u32 idx;
     // prev and next can belong to different cgroups; track each separately so
     // runqueue wait and off-cpu time are never charged to prev's cgroup.
     // MAX_CGROUPS is the "no attribution" sentinel.
@@ -185,6 +186,19 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
     u32 processor_id = bpf_get_smp_processor_id();
     u64 ts = bpf_ktime_get_ns();
+
+    // The idle task (pid 0) is not a runqueue participant: it never waits to be
+    // scheduled, and unlike a real task its slot in the per-pid arrays below is
+    // shared by every CPU. Tracking it fabricates runqueue wait for the root
+    // cgroup, and because `ts` is sampled here but consumed further down, it
+    // lets a remote CPU publish a newer timestamp into slot 0 mid-handler --
+    // making `ts - *tsp` underflow into the top histogram bucket. Measured on a
+    // 32-core host: 65% of the writes below were the idle task, and the top
+    // bucket accrued 59-189 samples/s while the machine was otherwise idle.
+    // `trace_enqueue()` already skips pid 0 on the wakeup path; skipping it here
+    // keeps the switch path consistent with it.
+    u32 prev_pid = BPF_CORE_READ(prev, pid);
+    u32 next_pid = BPF_CORE_READ(next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
     void* prev_task_group = BPF_CORE_READ(prev, sched_task_group);
@@ -221,29 +235,34 @@ static __always_inline int account__sched_switch(u64* ctx) {
             array_incr(&cgroup_ivcsw, prev_cgroup_id);
         }
 
-        pid = BPF_CORE_READ(prev, pid);
+        if (prev_pid) {
+            bpf_map_update_elem(&enqueued_at, &prev_pid, &ts, 0);
 
-        bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
+            tsp = bpf_map_lookup_elem(&running_at, &prev_pid);
+            if (tsp && *tsp) {
+                // A timestamp pair can arrive out of order across CPUs; an
+                // unguarded subtraction would wrap to ~2^64 and land in the top
+                // bucket. Discard instead, and count it so the condition stays
+                // observable rather than silently vanishing.
+                if (ts >= *tsp) {
+                    histogram_incr(&running, HISTOGRAM_POWER, ts - *tsp);
+                } else {
+                    array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+                }
 
-        tsp = bpf_map_lookup_elem(&running_at, &pid);
-        if (tsp && *tsp) {
-            delta_ns = ts - *tsp;
-
-            histogram_incr(&running, HISTOGRAM_POWER, delta_ns);
-
-            *tsp = 0;
+                *tsp = 0;
+            }
         }
     }
 
     // for all tasks: track when it went off-cpu
-    pid = BPF_CORE_READ(prev, pid);
-
-    bpf_map_update_elem(&offcpu_at, &pid, &ts, 0);
+    if (prev_pid) {
+        bpf_map_update_elem(&offcpu_at, &prev_pid, &ts, 0);
+    }
 
     // next task has moved into running
     // - update next->pid running_at with now
     // - calculate how long next task was enqueued, update hist
-    pid = BPF_CORE_READ(next, pid);
 
     // read the next task cgroup details and push to ringbuf if new cgroup
     void* next_task_group = BPF_CORE_READ(next, sched_task_group);
@@ -265,40 +284,52 @@ static __always_inline int account__sched_switch(u64* ctx) {
         }
     }
 
-    bpf_map_update_elem(&running_at, &pid, &ts, 0);
+    if (next_pid) {
+        bpf_map_update_elem(&running_at, &next_pid, &ts, 0);
 
-    tsp = bpf_map_lookup_elem(&enqueued_at, &pid);
-    if (tsp && *tsp) {
-        delta_ns = ts - *tsp;
-
-        histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
-
-        idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
-        array_add(&counters, idx, delta_ns);
-
-        if (next_cgroup_id < MAX_CGROUPS) {
-            array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
-        }
-
-        *tsp = 0;
-
-        // calculate how long it was off-cpu, not including runqueue wait,
-        // and increment stats
-        tsp = bpf_map_lookup_elem(&offcpu_at, &pid);
+        tsp = bpf_map_lookup_elem(&enqueued_at, &next_pid);
         if (tsp && *tsp) {
-            offcpu_ns = ts - *tsp;
+            if (ts >= *tsp) {
+                delta_ns = ts - *tsp;
 
-            if (offcpu_ns > delta_ns) {
-                offcpu_ns = offcpu_ns - delta_ns;
+                histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
 
-                histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
+                idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
+                array_add(&counters, idx, delta_ns);
 
                 if (next_cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                    array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
                 }
-            }
 
-            *tsp = 0;
+                *tsp = 0;
+
+                // calculate how long it was off-cpu, not including runqueue wait,
+                // and increment stats
+                tsp = bpf_map_lookup_elem(&offcpu_at, &next_pid);
+                if (tsp && *tsp) {
+                    if (ts >= *tsp) {
+                        offcpu_ns = ts - *tsp;
+
+                        if (offcpu_ns > delta_ns) {
+                            offcpu_ns = offcpu_ns - delta_ns;
+
+                            histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
+
+                            if (next_cgroup_id < MAX_CGROUPS) {
+                                array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                            }
+                        }
+                    } else {
+                        array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+                    }
+
+                    *tsp = 0;
+                }
+            } else {
+                array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+
+                *tsp = 0;
+            }
         }
     }
 
