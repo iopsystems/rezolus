@@ -141,6 +141,31 @@ fn filter_rez(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
     let (manifest, recordings) = rez::read_archive_bytes(path)?;
+
+    // A typo'd sampler name must not be read as "keep nothing". `dest` defaults
+    // to the INPUT, so an unvalidated `--samplers cpu_usge` overwrote a
+    // long-lived streamed capture in place with an empty manifest that
+    // `RezReader` then opened quite happily, reporting no metrics.
+    let present: BTreeSet<&str> = manifest
+        .recordings
+        .iter()
+        .flat_map(|r| r.tables.iter().map(|t| t.sampler.as_str()))
+        .collect();
+    let unmatched: Vec<&str> = keep
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !present.contains(s))
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "no sampler table named {} in {}; it holds: {}",
+            unmatched.join(", "),
+            path.display(),
+            present.iter().copied().collect::<Vec<_>>().join(", "),
+        )
+        .into());
+    }
+
     // Whole tables are dropped or kept; a kept table's segments pass through
     // byte-identical.
     let mut out: Vec<rez::RecordingSegments> = Vec::new();
@@ -433,6 +458,31 @@ mod tests {
             .map(|t| t.sampler.as_str())
             .collect();
         assert_eq!(samplers, vec!["cpu_usage"]);
+    }
+
+    // `dest` defaults to the input, so an unmatched `--samplers` name used to
+    // overwrite a (possibly multi-day) capture in place with an empty archive
+    // and still exit Ok.
+    #[test]
+    fn filter_rez_rejects_a_sampler_that_is_not_present() {
+        let (_d, path) = two_sampler_rez();
+        let before = std::fs::read(&path).unwrap();
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usge".to_string()].into_iter().collect();
+
+        let err = filter_rez(&path, &keep, None)
+            .expect_err("an unmatched sampler name must be an error, not an empty archive");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cpu_usge"),
+            "names the unmatched sampler: {msg}"
+        );
+        assert!(msg.contains("cpu_usage"), "names what is present: {msg}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "the input must be left untouched"
+        );
     }
 
     /// Every `<dir>/<file>` data entry in the tar, in write order.
