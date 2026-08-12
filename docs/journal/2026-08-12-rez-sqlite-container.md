@@ -283,6 +283,106 @@ bytes against writer-maintained counters, for 92 s: **0 torn reads, 0
 `SQLITE_BUSY`, 0 errors**. Writer impact **+0.7 ms** (p50 4.494 vs 3.780 ms).
 The tear-free-dump premise holds.
 
+### `page_size` selection — **measured, and 4096 kept**
+
+`PRAGMA page_size` only takes effect on a database that does not yet exist;
+changing it later means `journal_mode=delete` + full `VACUUM` + back to WAL, on
+every file already written. So it is swept before any code writes a v3 file.
+Sweep on `10.1.0.1`, **databases on NVMe** (`/dev/nvme0n1p2`, ext4, under
+`$HOME`; only the throwaway harness lived on the tmpfs `/tmp`), SQLite 3.53.2,
+`journal_mode=WAL` + `synchronous=FULL` + `auto_vacuum=INCREMENTAL` fixed
+throughout. Budget is the fleet-measured **~46 ms tick**.
+
+**Two of the effects that look like `page_size` are other knobs**, and finding
+them changed the answer:
+
+1. **WAL checkpoint volume.** `wal_autocheckpoint` defaults to *1000 pages*, so
+   at 64 KiB it fires after 64 MB instead of 4 MB. Held at 1000 pages, larger
+   pages looked faster at p50 (1.4 MiB insert 8.0 → 4.5 ms) and much worse at
+   p99 (19.2 → 72.0 ms) — both artifacts of checkpoint spacing. Held at a
+   **constant 4 MiB of WAL** (`wal_autocheckpoint = 4 MiB / page_size`), the
+   steady-state p99 is flat at 15.6–18.2 ms for *every* page size. Everything
+   below is measured at the constant-byte cap.
+2. **The 2 MiB default page cache.** Most of the small-page read penalty is
+   `cache_size`, not chain length: at 4096, warm sequential BLOB reads go
+   **229.6 → 409.6 MB/s** with `cache_size=-262144`, and 460.2 MB/s adding
+   `mmap_size`. The 4096-vs-65536 read gap shrinks from 2.3× to **1.35×**.
+
+Segment insert, autocommit (one fsync each), 300/300/200 iterations, p50 / p99
+ms:
+
+| `page_size` | 0.5 MiB | 1.4 MiB (fleet avg) | 4 MiB |
+|---|---|---|---|
+| **4096** | 3.85 / 14.7 | **8.03 / 19.2** | 29.0 / 35.2 |
+| 8192 | 3.61 / 13.7 | 7.48 / 17.5 | 24.1 / 30.5 |
+| 16384 | 3.49 / 12.9 | 7.11 / 15.9 | 22.2 / 26.3 |
+| 32768 | 3.40 / 12.2 | 7.07 / 16.6 | 21.8 / 28.2 |
+| 65536 | 3.41 / 11.2 | 6.92 / 15.9 | 21.7 / 27.2 |
+
+Per-tick commit (26 rows × 1,925 B, one txn), WAL bytes written per tick,
+realistic mixed workload (2,500 ticks, 26 samplers, staggered seals, deferred
+prune, 8 segments/sampler retained = 292.5 MB live), and `-wal` high-water:
+
+| `page_size` | tick p50 / p99 / max | WAL B/tick | ×payload | mix db/live (late range) | freelist | `-wal` hw: default / 4 MiB cap | warm read: default / 256 MiB cache |
+|---|---|---|---|---|---|---|---|
+| **4096** | **2.70 / 11.1 / 15.1** | **156,920** | **3.14×** | **1.0117** (1.0084–1.0132) | 0.87% | **4.4 / 4.4 MB** | 230 / 410 MB/s |
+| 8192 | 2.71 / 7.9 / 14.9 | 200,142 | 4.00× | 1.0108 (1.0076–1.0123) | 0.86% | 8.8 / 4.4 MB | 347 / 556 MB/s |
+| 16384 | 2.77 / 8.5 / 35.0 | 236,726 | 4.73× | 1.0112 (1.0080–1.0127) | 0.88% | 17.8 / 4.6 MB | 464 / 564 MB/s |
+| 32768 | 2.89 / 9.0 / 37.0 | 308,245 | 6.16× | 1.0171 (1.0139–1.0187) | 0.86% | 34.2 / 5.0 MB | 537 / 599 MB/s |
+| 65536 | 3.26 / 9.7 / 43.2 | 410,570 | 8.20× | 1.0180 (1.0148–1.0196) | 0.86% | 67.3 / 5.6 MB | 534 / 624 MB/s |
+
+**Eviction stays bounded at every page size** — the mix plateaus at 1.011–1.018×
+live and does not drift, and the free list holds a near-constant **2.55–2.59 MB
+regardless of page size** (631 pages at 4096, 39 at 65536). The
+free-list-granularity worry did not materialize; what does show up is that
+32768/65536 park 5.5 MB more on a 292 MB file (1.0180 vs 1.0117) because the
+reuse unit is coarser.
+
+**The overflow-chain hypothesis was right about the mechanism and small about
+the magnitude.** The 1.4 → 4 MiB throughput dip is chains: the 4 MiB/1.4 MiB
+throughput ratio goes 0.83 at 4096 to **0.96 at 65536** — the dip nearly
+disappears. But flattening it is worth 145 → 193 MiB/s at 4 MiB, i.e. **7.3 ms
+on a 4 MiB segment**, against a 46 ms tick. (This harness's 4096 baseline runs
+~1.4× slower than measurement 2 above — `auto_vacuum` on, a `wal` table
+present, shared host — so read the sweep as relative within itself.)
+
+**Decision: keep `page_size=4096`. Measured and kept, not defaulted into.**
+
+- What larger pages actually buy, after the two confounds are removed: **−11% on
+  the average segment insert** (8.03 → 7.11 ms at 16384, 0.9 ms of a 46 ms
+  tick), −23% at 4 MiB, and **+26% on warm reads** (460 → 578 MB/s) once
+  `cache_size` and `mmap_size` are raised — down from +102% before them.
+  `VACUUM INTO` — the hindsight dump — goes 470 → 667 →
+  712 MB/s. Real, but none of it is binding: §"the binding constraint is co-seal
+  lockstep" already showed segment insert is not what overruns the tick, and
+  staggering fixes that at zero cost.
+- What 4096 buys, and it is not tunable away: **the lowest per-tick WAL
+  amplification, 3.14× vs 4.73× at 16384 and 8.20× at 65536.** That is
+  156,920 B/tick vs 236,726 / 410,570 — **3.4 vs 5.1 / 8.9 MB/s written
+  continuously, on every fleet host, forever**, to persist 50,050 B/tick of
+  rows. It is the one operation that runs every tick, and it is the only place
+  the page size shows up as an unavoidable cost rather than a preference.
+- Per-tick commit *latency* does not discriminate (2.70 → 3.26 ms p50), but the
+  per-tick **tail** does, in the wrong direction: mix tick max 15.1 ms at 4096
+  vs 35.0–43.2 ms at ≥16384, from larger checkpoint units.
+- 4096 also gives the smallest `-wal` sidecar under any checkpoint policy and
+  the finest free-list granularity for hindsight's reuse.
+- The asymmetry decides it. `cache_size` and `wal_autocheckpoint` are runtime
+  pragmas, changeable on any file at any time; `page_size` is welded in at
+  creation. **73–80% of the apparent large-page win came from those two
+  reversible knobs** (80% of the 1.4 MiB insert gain, 73% of the read gain).
+  Spending the irreversible decision to buy back the remainder — while paying
+  1.5–2.6× the WAL write volume on every tick — is the wrong trade.
+
+**Two runtime pragmas fall out of this and should ship with v3** (both
+reversible, both worth more than the page size was): set
+**`wal_autocheckpoint` in bytes, not pages** — at 4096 that is the ~1000-page
+default already, so nothing changes today, but it stops the sidecar and the p99
+from tracking any future page-size change; and **raise `cache_size` on reader
+connections** (256 MiB measured `-262144`) — **+78% on segment reads at 4096**,
+229.6 → 409.6 MB/s, the single largest read-side win found in this sweep and
+entirely free.
+
 ## Design amendments from the measurements
 
 1. **The WAL prune moves OUT of the seal transaction** — this reverses open
@@ -388,12 +488,15 @@ both ends: `syscall_latency` drops to ~48 segments, `cpu_usage` to ~3 MiB each.
 
 ### Still un-tuned (measured, but not optimized)
 
-- **`page_size` left at the 4096 default and untested.** Larger pages would
-  shorten overflow chains for multi-MB BLOBs. Treat as un-optimized, not chosen.
+- ~~**`page_size` left at the 4096 default and untested.**~~ **Swept
+  {4096…65536} and 4096 kept** — see "`page_size` selection" above. Larger pages
+  do shorten the chains, but the win is ≤26% on non-binding operations while
+  per-tick WAL amplification rises 3.14× → 8.20×.
 - **The `-wal` sidecar** reaches 24–79 MB depending on `wal_autocheckpoint` and
   persists at its high-water size; it must be counted in hindsight's footprint,
-  or capped with `journal_size_limit` plus a checkpoint at finalize. The default
-  autocheckpoint (1000 pages) measured best for tail latency.
+  or capped with `journal_size_limit` plus a checkpoint at finalize. The
+  autocheckpoint is best expressed **in bytes** (`4 MiB / page_size` pages): at
+  4096 that is the ~1000-page default, and the high-water then holds at 4.4 MB.
 
 ## Open questions to settle during implementation
 
