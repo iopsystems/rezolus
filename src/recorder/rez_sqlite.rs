@@ -70,6 +70,16 @@ impl RezDb {
     /// is no `.partial` staging file standing between a new recording and a
     /// previous one.
     pub(crate) fn create(path: &Path) -> Result<Self, String> {
+        Self::create_with_page_size(path, PAGE_SIZE)
+    }
+
+    /// `create`, with the page size as a parameter. The parameter exists so a
+    /// test can create at a NON-default page size: SQLite's own default happens
+    /// to equal `PAGE_SIZE`, so asserting 4096 on a normally-created file passes
+    /// even if the `page_size` pragma is never issued or is issued too late.
+    /// Only `create` (and that test) should call this — the page size is not a
+    /// caller's choice.
+    fn create_with_page_size(path: &Path, page_size: u32) -> Result<Self, String> {
         // Claim the path atomically rather than testing `exists()` — this is
         // also what stops SQLite from silently adopting a file that appeared
         // between the check and the open. A zero-length file is a valid empty
@@ -99,7 +109,7 @@ impl RezDb {
         //  3. `synchronous` and the cache/checkpoint knobs are PER-CONNECTION
         //     and not persistent, so they are applied on every connection,
         //     including this one. See `apply_connection_pragmas`.
-        db.set_pragma("page_size", PAGE_SIZE)?;
+        db.set_pragma("page_size", page_size)?;
         // INCREMENTAL, not NONE: eviction reuses freed pages, but the bound is
         // the high-water mark, so a burst would permanently inflate a hindsight
         // file. Free in steady state (8.230 vs 8.807 ms per cycle) and it
@@ -143,7 +153,12 @@ impl RezDb {
         // threatens the tick budget — the tail is checkpoint and prune work,
         // not fsync.
         self.set_pragma("synchronous", "FULL")?;
-        self.set_pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_BYTES / PAGE_SIZE)?;
+        // Derived from the file's OWN page size rather than the constant, which
+        // is what "denominated in bytes" has to mean: the cap then holds at
+        // 4 MiB for any file this ever opens, not just ones written at
+        // `PAGE_SIZE`.
+        let pages = WAL_AUTOCHECKPOINT_BYTES / self.pragma_u32("page_size")?.max(1);
+        self.set_pragma("wal_autocheckpoint", pages)?;
         // Applied to writers too: `cache_size` is an upper bound on the page
         // cache, not an allocation, and readers are the ones that benefit.
         self.set_pragma("cache_size", CACHE_SIZE_KIB)?;
@@ -229,11 +244,15 @@ impl RezDb {
     }
 
     pub(crate) fn pragma_u32(&self, name: &str) -> Result<u32, String> {
-        let value: i64 = self
-            .conn
-            .pragma_query_value(None, name, |row| row.get(0))
-            .map_err(|e| format!("failed to read pragma {name}: {e}"))?;
+        let value = self.pragma_i64(name)?;
         u32::try_from(value).map_err(|_| format!("pragma {name} is {value}, not a u32"))
+    }
+
+    /// Signed, because `cache_size` is negative when denominated in kibibytes.
+    pub(crate) fn pragma_i64(&self, name: &str) -> Result<i64, String> {
+        self.conn
+            .pragma_query_value(None, name, |row| row.get(0))
+            .map_err(|e| format!("failed to read pragma {name}: {e}"))
     }
 
     pub(crate) fn pragma_string(&self, name: &str) -> Result<String, String> {
@@ -305,6 +324,26 @@ mod tests {
     }
 
     #[test]
+    fn create_honors_the_page_size_it_is_given() {
+        // The assertion above is coincidental: SQLite's compiled default is
+        // already 4096, so it stays green even if the pragma is never issued —
+        // or is issued AFTER journal_mode=WAL or a CREATE TABLE, at which point
+        // SQLite silently ignores it. Creating at a non-default size is what
+        // makes that reordering fail loudly here instead of invisibly in the
+        // fleet.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        let db = RezDb::create_with_page_size(&path, 8192).unwrap();
+        assert_eq!(db.pragma_u32("page_size").unwrap(), 8192);
+        // And it survives the connection, i.e. it really is welded into the file.
+        drop(db);
+        assert_eq!(
+            RezDb::open(&path).unwrap().pragma_u32("page_size").unwrap(),
+            8192
+        );
+    }
+
+    #[test]
     fn open_reapplies_the_per_connection_pragmas() {
         // synchronous is per-connection and NOT persistent: an open() that
         // forgets it silently downgrades durability on every subsequent write.
@@ -313,6 +352,21 @@ mod tests {
         drop(RezDb::create(&path).unwrap());
         let db = RezDb::open(&path).unwrap();
         assert_eq!(db.pragma_u32("synchronous").unwrap(), 2);
+        // These two carry the test. `synchronous` above documents intent but
+        // cannot detect a missing apply: SQLite's own default is already
+        // FULL(2). These defaults differ from ours — 1000 pages and -2000 KiB —
+        // so they read back wrong the moment the per-connection pragmas are
+        // skipped.
+        assert_eq!(
+            db.pragma_u32("wal_autocheckpoint").unwrap(),
+            WAL_AUTOCHECKPOINT_BYTES / PAGE_SIZE,
+            "byte-denominated cap, not SQLite's 1000-page default"
+        );
+        assert_eq!(
+            db.pragma_i64("cache_size").unwrap(),
+            CACHE_SIZE_KIB as i64,
+            "256 MiB reader cache, not SQLite's -2000 default"
+        );
         assert_eq!(db.pragma_u32("page_size").unwrap(), PAGE_SIZE, "persisted");
     }
 
@@ -347,6 +401,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.rez");
         drop(RezDb::create(&path).unwrap());
-        assert!(RezDb::create(&path).is_err());
+        let err = match RezDb::create(&path) {
+            Ok(_) => panic!("create clobbered an existing .rez"),
+            Err(e) => e,
+        };
+
+        // Pin the MECHANISM, not just the outcome: the refusal must come from
+        // the atomic O_EXCL create, so that swapping in an `exists()` check —
+        // which would reintroduce the TOCTOU window — fails here. Compared
+        // against a live AlreadyExists rather than a hardcoded string, since the
+        // OS wording differs per platform.
+        let already_exists = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap_err();
+        assert_eq!(already_exists.kind(), std::io::ErrorKind::AlreadyExists);
+        assert!(
+            err.contains(&already_exists.to_string()),
+            "{err:?} should carry the AlreadyExists error from create_new"
+        );
     }
 }
