@@ -1,15 +1,18 @@
 //! Process-level regression tests for `rezolus record`'s stop path.
 //!
-//! The exit code a supervisor sees is only observable from outside the
-//! process, so these drive the real binary against a stand-in agent rather
-//! than calling into `recorder::run` (which owns `std::process::exit`).
+//! Both properties here are only observable from outside the process — the
+//! exit code a supervisor sees, and the wall time between SIGTERM and exit —
+//! so they are tested by driving the real binary against a stand-in agent
+//! rather than by calling into `recorder::run` (which owns `std::process::exit`).
+//!
+//! Unix only: the SIGTERM case has no meaning elsewhere.
 
 #![cfg(unix)]
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime};
 
 use metriken_exposition::{Counter, Snapshot, SnapshotV2};
@@ -122,5 +125,133 @@ fn failed_rez_finalize_exits_nonzero() {
     assert!(
         dir.path().join("out.rez.partial").exists(),
         "the .partial should survive a failed finalize as the recovery artifact"
+    );
+}
+
+/// SIGTERM → exit must not be bounded by `--interval`.
+///
+/// Regression: `STATE` was only re-read at the top of the recording loop and
+/// `interval.tick()` was an uninterruptible await, so a clean stop cost up to
+/// one full interval (measured: 27.2s at `--interval 30s`). Docker's default
+/// stop grace is 10s, so `docker stop` SIGKILLed the recorder before it ever
+/// noticed, dropping every unsealed `.rez` segment.
+#[test]
+fn sigterm_exits_promptly_at_a_long_interval() {
+    let port = spawn_fake_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(dir.path().join("out.rez"))
+        // Long enough that the first tick cannot land during the test: any
+        // prompt exit is the shutdown path, not a coincidental tick.
+        .arg("--interval")
+        .arg("30s")
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run rezolus record");
+
+    // Gate on the recorder's own "entering the loop" log rather than a sleep:
+    // signalling before `ctrlc::set_handler` runs would kill the process by the
+    // default SIGTERM disposition and pass this test for the wrong reason.
+    let mut log = BufReader::new(child.stderr.take().expect("stderr was piped"));
+    let startup_deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let mut line = String::new();
+        assert!(
+            log.read_line(&mut line).unwrap_or(0) > 0,
+            "rezolus record exited during startup"
+        );
+        if line.contains("recording metrics") {
+            break;
+        }
+        assert!(
+            Instant::now() < startup_deadline,
+            "timed out waiting for rezolus record to start recording"
+        );
+    }
+    // Drain the rest so the child can never block on a full stderr pipe.
+    std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        let _ = log.read_to_end(&mut sink);
+    });
+    // Settle into the tick wait, which is the await this test is about.
+    std::thread::sleep(Duration::from_millis(250));
+
+    let sent = Instant::now();
+    // SAFETY: `kill` on a pid this process owns and has not yet reaped.
+    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+
+    // Poll rather than `wait()` so a regression fails the assertion instead of
+    // hanging the suite for a full interval.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        match child.try_wait().expect("failed to poll rezolus record") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("rezolus record did not exit within 20s of SIGTERM");
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let elapsed = sent.elapsed();
+
+    // A signalled death is the default disposition, i.e. the handler never ran
+    // — that is a fast exit, but not the clean stop this test asserts.
+    assert!(
+        status.code().is_some(),
+        "rezolus record was killed by a signal ({status:?}); the clean-stop path did not run"
+    );
+    // Comfortably inside docker's 10s default grace, and far below the 30s
+    // interval that used to bound this.
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "SIGTERM -> exit took {elapsed:?}; it must not be bounded by --interval"
+    );
+}
+
+/// A `--duration` window still takes every sample it used to.
+///
+/// Guards the branch order in the tick `select!`: the stop deadline was added
+/// as a second wake-up source, and if it outranked the tick then a window that
+/// is a whole number of intervals — the common case — would lose its final
+/// sample and could even finish with nothing recorded.
+#[test]
+fn a_whole_number_of_intervals_still_records_and_stops_on_time() {
+    let port = spawn_fake_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.rez");
+
+    let started = Instant::now();
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("200ms")
+        .arg("--duration")
+        .arg("2s")
+        .output()
+        .expect("failed to run rezolus record");
+    let elapsed = started.elapsed();
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a clean --duration recording must exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(output.exists(), "the .rez archive should have been written");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "--duration 2s took {elapsed:?}"
     );
 }

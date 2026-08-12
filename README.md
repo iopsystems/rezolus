@@ -212,9 +212,11 @@ rezolus record --url http://localhost:4241 -o out.rez --label arm=redis
 
 `.rez` recordings are written to disk in segments as they run, so stopping
 costs the same whether the recording ran for a minute or a day. Ctrl-c and
-SIGTERM (a `docker stop`, say) are clean stops: finalizing takes about one
-sampling interval plus the write of the still-open segments — seconds, not
-minutes, and never proportional to the recording's length.
+SIGTERM (a `docker stop`, say) are clean stops: the signal interrupts the wait
+between samples straight away, so finalizing costs only the write of the
+still-open segments. That holds at any `--interval` — a `--interval 1m` soak
+recording stops just as promptly as a millisecond one, comfortably inside a
+container's stop grace, and never proportional to the recording's length.
 
 While recording, the archive lives at `<output>.partial` and is renamed into
 place only on a clean stop, so an existing output file is untouched until the

@@ -50,9 +50,10 @@ pub fn command() -> Command {
              tags the recording; source and host are auto-populated.\n\n\
              .rez recordings are written to disk in segments as they run, so stopping\n\
              costs the same whether the recording ran for a minute or a day. Ctrl-c and\n\
-             SIGTERM (e.g. a docker stop) are clean stops: finalizing takes about one\n\
-             sampling interval plus the write of the still-open segments — seconds, not\n\
-             minutes, and never proportional to the recording's length.\n\n\
+             SIGTERM (e.g. a docker stop) are clean stops: the signal interrupts the wait\n\
+             between samples straight away, so finalizing costs only the write of the\n\
+             still-open segments — at any --interval, comfortably inside a container's\n\
+             stop grace, and never proportional to the recording's length.\n\n\
              While recording, the archive lives at <output>.partial and is renamed into\n\
              place only on a clean stop, so an existing output file is untouched until the\n\
              new recording is complete. Each sampler's open segment is checkpointed when it\n\
@@ -271,6 +272,15 @@ async fn fetch_agent_metadata(
     };
 
     (systeminfo, descriptions, sampler_status)
+}
+
+/// `sleep_until(deadline)` when there is one, otherwise a future that never
+/// resolves — the `tokio::select!` arm shape for an optional deadline.
+async fn sleep_until_opt(deadline: Option<Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d.into()).await,
+        None => std::future::pending().await,
+    }
 }
 
 async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
@@ -576,12 +586,22 @@ pub fn run(config: RecordingConfig) {
         .build()
         .expect("failed to launch async runtime");
 
+    // Raised by the ctrl-c / SIGTERM handler alongside `STATE`. The recording
+    // loop only re-reads `STATE` at the loop top, so without a way to cut the
+    // tick wait short a clean stop costs up to a full `--interval`.
+    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+    let handler_shutdown = shutdown.clone();
+
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
         println!();
         if state == RUNNING {
             info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);
+            // Store-then-notify: `notify_one` leaves a permit if the loop is
+            // not parked yet, so a signal that lands between the loop-top
+            // `STATE` read and the tick wait is never lost.
+            handler_shutdown.notify_one();
         } else {
             info!("terminating immediately");
             std::process::exit(2);
@@ -817,6 +837,18 @@ pub fn run(config: RecordingConfig) {
         // recording. Seeded with the anchor itself (offset 0 by definition).
         let mut last_clock: (u64, i64) = (clock_anchor_wall_ns, 0);
 
+        // The same stop deadline the loop top already enforces, hoisted so the
+        // tick wait can be cut short by it rather than overshooting it by up to
+        // one interval. Wrapped mode uses the child's cap (measured from spawn),
+        // everything else the recording window (measured from `start`); the
+        // decision itself stays at the loop top, this only wakes it on time.
+        let loop_deadline: Option<Instant> = if wrapped {
+            cap_deadline
+        } else {
+            config.duration.map(|d| start + Duration::from(d))
+        };
+        let mut deadline_fired = false;
+
         while STATE.load(Ordering::Relaxed) == RUNNING {
             if wrapped {
                 // Poll the wrapped command: exit ends recording, cap kills it.
@@ -851,7 +883,31 @@ pub fn run(config: RecordingConfig) {
                 }
             }
 
-            interval.tick().await;
+            // The tick is this loop's only await point and `STATE` is only read
+            // at the loop top, so an uninterruptible `tick()` bounds
+            // ctrl-c/SIGTERM → exit by a full `--interval`: at `--interval 30s`
+            // a `docker stop` (10s default grace) is SIGKILLed long before the
+            // loop notices, losing every still-unsealed `.rez` segment — which
+            // is exactly the tear-down this feature exists for. Wake early on
+            // the shutdown signal and on the stop deadline; both then take the
+            // decision at the loop top, unchanged.
+            //
+            // Branch order is load-bearing (`biased`): the tick outranks the
+            // deadline so that a `--duration` landing exactly on a tick — the
+            // common case, a whole number of intervals — still takes that final
+            // sample, exactly as the loop-top check did before. The deadline
+            // only ever cuts a PARTIAL interval short.
+            tokio::select! {
+                biased;
+                _ = shutdown.notified() => continue,
+                _ = interval.tick() => {}
+                _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
+                    // Latched so a deadline already in the past cannot spin the
+                    // loop if the top declines to stop for some reason.
+                    deadline_fired = true;
+                    continue;
+                }
+            }
             // Both clocks, every tick. `wall_ns` is the raw reading every
             // non-`.rez` consumer has always used (endpoint success stamps, the
             // prometheus converter, the msgpack spool); `.rez` rows are stamped
