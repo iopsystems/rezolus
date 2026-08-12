@@ -2635,6 +2635,7 @@ mod tests {
             let table = RezTable {
                 sampler: "cpu_usage".to_string(),
                 timestamps: vec![1_000, 2_000],
+                wall_offsets: Vec::new(),
                 columns: vec![col],
             };
             let d = tempfile::tempdir().unwrap();

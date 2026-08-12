@@ -20,6 +20,9 @@ pub const REZ_SCHEMA_VERSION: u32 = 2;
 pub const REZ_MAX_SUPPORTED_VERSION: u32 = 2;
 /// Manifest filename inside the tar.
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
+/// Table-level wall-clock sidecar column. Reserved: the query engine skips a
+/// column with exactly this name rather than surfacing it as a metric.
+pub const WALL_OFFSET_COLUMN: &str = ":wall_offset";
 
 /// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -129,6 +132,13 @@ pub struct RezColumn {
 pub struct RezTable {
     pub sampler: String,
     pub timestamps: Vec<u64>,
+    /// Per-row wall-clock observation: the raw `SystemTime` reading minus the
+    /// row's (monotonically anchored) timestamp, in nanoseconds. Row-aligned
+    /// with `timestamps`, or empty when the table carries no observations (a
+    /// table decoded from an archive written before the sidecar existed).
+    /// Serialized as the table-level `:wall_offset` column, which the query
+    /// engine skips the same way it skips the `:window_*` sidecars.
+    pub wall_offsets: Vec<i64>,
     pub columns: Vec<RezColumn>,
 }
 
@@ -191,6 +201,16 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
         ])),
     );
     arrays.push(Arc::new(UInt64Array::from(table.timestamps.clone())));
+
+    // Table-level (not per-metric) sidecar: one wall-clock observation per row.
+    // Null where the table carries no observation for that row; a length
+    // mismatch against `timestamps` surfaces as a `RecordBatch` error.
+    fields.push(Field::new(WALL_OFFSET_COLUMN, DataType::Int64, true));
+    arrays.push(Arc::new(if table.wall_offsets.is_empty() {
+        Int64Array::from(vec![None; table.timestamps.len()])
+    } else {
+        Int64Array::from(table.wall_offsets.clone())
+    }));
 
     for col in &table.columns {
         match &col.values {
@@ -268,6 +288,7 @@ pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, R
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))?.build()?;
 
     let mut timestamps: Vec<u64> = Vec::new();
+    let mut wall_offsets: Vec<i64> = Vec::new();
     let mut order: Vec<String> = Vec::new();
     let mut values: HashMap<String, RezValues> = HashMap::new();
     let mut metas: HashMap<String, HashMap<String, String>> = HashMap::new();
@@ -284,6 +305,17 @@ pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, R
             if name == "timestamp" {
                 let a = u64_col(col);
                 timestamps.extend((0..a.len()).map(|r| a.value(r)));
+            } else if name == WALL_OFFSET_COLUMN {
+                let a = col
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("i64 wall_offset");
+                // An all-null column means the table carried no observations;
+                // leave `wall_offsets` empty so a write→read→write round trip
+                // does not fabricate zeros.
+                if a.null_count() < a.len() {
+                    wall_offsets.extend((0..a.len()).map(|r| a.value(r)));
+                }
             } else if let Some(base) = name.strip_suffix(":window_begin") {
                 let a = col
                     .as_any()
@@ -398,6 +430,7 @@ pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, R
     Ok(RezTable {
         sampler,
         timestamps,
+        wall_offsets,
         columns,
     })
 }
@@ -845,14 +878,25 @@ impl Entry<'_> {
     }
 }
 
+/// Approximate in-memory cost of one scalar cell plus its window slot, in
+/// bytes. Deliberately a round constant rather than `size_of` arithmetic: it
+/// calibrates a seal threshold, and a table's footprint is dominated by
+/// histogram buckets (below), not by the exact width of an `Option<u64>`.
+const SCALAR_CELL_BYTES: usize = 16;
+/// Bytes per histogram bucket: `push_row` clones the histogram's bucket
+/// `Box<[u64]>` into the column.
+const HISTOGRAM_BUCKET_BYTES: usize = 8;
+
 /// A growing per-sampler table. Columns are sparse: shorter than the row count
 /// until padded (a metric absent in some rows gets `None` there).
 pub(crate) struct TableBuilder {
     sampler: String,
     timestamps: Vec<u64>,
+    wall_offsets: Vec<i64>,
     order: Vec<String>,
     columns: HashMap<String, RezColumn>,
     last_key: Option<u64>,
+    approx_bytes: usize,
 }
 
 impl TableBuilder {
@@ -860,10 +904,31 @@ impl TableBuilder {
         Self {
             sampler,
             timestamps: Vec::new(),
+            wall_offsets: Vec::new(),
             order: Vec::new(),
             columns: HashMap::new(),
             last_key: None,
+            approx_bytes: 0,
         }
+    }
+
+    /// Approximate in-memory bytes accumulated by the cells pushed so far.
+    ///
+    /// This is what the streaming writer's seal threshold is measured in.
+    /// Serialized parquet size cannot be estimated cheaply — a dry-run encode
+    /// is exactly the cost that gets moved off the scrape thread, and static
+    /// per-row guesses are off by orders of magnitude for histogram tables — so
+    /// the cap bounds the two things it can measure exactly and in O(1) per
+    /// entry: the builder's memory footprint and the encoder's input size.
+    /// Counts only pushed cells — null back-padding of a late-appearing column
+    /// is not accounted, so the number slightly under-reports a sparse table.
+    /// Resets with the builder: a fresh builder (a post-rotation segment)
+    /// starts at zero.
+    // Read by tests today; the seal-threshold check lands with the streaming
+    // writer.
+    #[allow(dead_code)]
+    pub(crate) fn approx_bytes(&self) -> usize {
+        self.approx_bytes
     }
 
     fn col_len(col: &RezColumn) -> usize {
@@ -885,9 +950,15 @@ impl TableBuilder {
         }
     }
 
-    fn push_row(&mut self, snapshot_ts: u64, entries: &[Entry<'_>]) {
+    /// Append one row: `snapshot_ts` is the row's timestamp and
+    /// `wall_offset_ns` the wall-clock observation for that tick (raw
+    /// `SystemTime` reading minus `snapshot_ts`), stored once per row in the
+    /// table-level `:wall_offset` sidecar.
+    fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
         let row = self.timestamps.len();
         self.timestamps.push(snapshot_ts);
+        self.wall_offsets.push(wall_offset_ns);
+        let mut added_bytes = 0usize;
         for e in entries {
             let name = e.name().to_string();
             let order = &mut self.order;
@@ -910,14 +981,37 @@ impl TableBuilder {
                 }
             });
             Self::pad(col, row);
-            match (e, &mut col.values) {
-                (Entry::Counter(c), RezValues::Counter(v)) => v.push(Some(c.value)),
-                (Entry::Gauge(g), RezValues::Gauge(v)) => v.push(Some(g.value)),
-                (Entry::Histogram(h), RezValues::Histogram(v)) => v.push(Some(h.value.clone())),
-                _ => {}
+            // The window is pushed only where the value was: an entry whose
+            // shape does not match the column's established type is skipped
+            // entirely (an agent restart can remap a numeric id and flip a
+            // column from counter to gauge mid-recording). Pushing the window
+            // regardless would leave `windows` one longer than `values` and
+            // shift every later row's window onto the wrong value.
+            let cell_bytes = match (e, &mut col.values) {
+                (Entry::Counter(c), RezValues::Counter(v)) => {
+                    v.push(Some(c.value));
+                    Some(SCALAR_CELL_BYTES)
+                }
+                (Entry::Gauge(g), RezValues::Gauge(v)) => {
+                    v.push(Some(g.value));
+                    Some(SCALAR_CELL_BYTES)
+                }
+                (Entry::Histogram(h), RezValues::Histogram(v)) => {
+                    // The clone below copies the whole bucket `Box<[u64]>`
+                    // (7,424 buckets ≈ 58 KB at gp=7/mvp=64), which is why the
+                    // cap counts bytes rather than rows.
+                    let buckets = h.value.as_slice().len();
+                    v.push(Some(h.value.clone()));
+                    Some(SCALAR_CELL_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
+                }
+                _ => None,
+            };
+            if let Some(bytes) = cell_bytes {
+                col.windows.push(e.window());
+                added_bytes += bytes;
             }
-            col.windows.push(e.window());
         }
+        self.approx_bytes += added_bytes;
     }
 
     fn finish(mut self) -> RezTable {
@@ -934,6 +1028,7 @@ impl TableBuilder {
         RezTable {
             sampler: self.sampler,
             timestamps: self.timestamps,
+            wall_offsets: self.wall_offsets,
             columns,
         }
     }
@@ -1014,7 +1109,11 @@ impl RezRecorder {
                 }
             }
             table.last_key = Some(key);
-            table.push_row(snapshot_ts, &entries);
+            // `snapshot_ts` is today's raw `SystemTime` reading, so the wall
+            // observation is exactly zero. It becomes meaningful when the
+            // recorder loop switches to monotonic-anchored row stamps and
+            // passes its own per-tick wall reading through.
+            table.push_row(snapshot_ts, 0, &entries);
         }
     }
 
@@ -1107,6 +1206,121 @@ pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
 /// output path ends in `.rez` or `--format rez` was given.
 pub fn wants_rez(output: &Path, format: crate::Format) -> bool {
     format == crate::Format::Rez || output.extension().and_then(|e| e.to_str()) == Some("rez")
+}
+
+#[cfg(test)]
+mod builder_tests {
+    use super::*;
+    use metriken_exposition::{Counter, Gauge, Histogram};
+    use std::collections::HashMap;
+
+    fn cmeta(sampler: &str) -> HashMap<String, String> {
+        [("sampler".to_string(), sampler.to_string())]
+            .into_iter()
+            .collect()
+    }
+
+    fn hist(gp: u8, mvp: u8) -> histogram::Histogram {
+        let mut h = histogram::Histogram::new(gp, mvp).unwrap();
+        h.increment(1_000).unwrap();
+        h
+    }
+
+    // The seal threshold is byte-first, so `push_row` must maintain the byte
+    // count itself: a row's cost is dominated by histogram buckets, which row
+    // counts do not see at all (one gp=7/mvp=64 cell is ~58 KB).
+    #[test]
+    fn push_row_accumulates_approx_bytes() {
+        let mut b = TableBuilder::new("s".to_string());
+        assert_eq!(b.approx_bytes(), 0, "a fresh builder accounts nothing");
+
+        let c = Counter::new("0".to_string(), 1, cmeta("s"));
+        b.push_row(1_000, 0, &[Entry::Counter(&c)]);
+        let after_scalar = b.approx_bytes();
+        assert!(
+            after_scalar >= 16,
+            "one scalar cell + window should account >= 16 B, got {after_scalar}"
+        );
+
+        let h = Histogram::new("1".to_string(), hist(7, 64), cmeta("s"));
+        let buckets = h.value.as_slice().len();
+        assert_eq!(buckets, h.value.config().total_buckets());
+        b.push_row(2_000, 0, &[Entry::Histogram(&h)]);
+        assert!(
+            b.approx_bytes() - after_scalar >= buckets * 8,
+            "one histogram cell should account >= {} B, got {}",
+            buckets * 8,
+            b.approx_bytes() - after_scalar
+        );
+    }
+
+    // Regression: the type-mismatch arm used to skip the value but still push
+    // the window, desyncing every later row's window from its value. An agent
+    // restart can remap a numeric id and flip a column's shape mid-recording,
+    // and segmentation would bake the skew into immutable data.
+    #[test]
+    fn mismatch_arm_does_not_desync_values_and_windows() {
+        let mut b = TableBuilder::new("s".to_string());
+        let w = |n: u64| Some(Window::new(n, n + 100));
+
+        let c0 = Counter::new("0".to_string(), 1, cmeta("s")).with_window(w(900));
+        b.push_row(1_000, 0, &[Entry::Counter(&c0)]);
+        // Same column name, now a gauge: shape mismatch against the established
+        // counter column.
+        let g = Gauge::new("0".to_string(), -5, cmeta("s")).with_window(w(1_900));
+        b.push_row(2_000, 0, &[Entry::Gauge(&g)]);
+        let c1 = Counter::new("0".to_string(), 3, cmeta("s")).with_window(w(2_900));
+        b.push_row(3_000, 0, &[Entry::Counter(&c1)]);
+
+        let table = b.finish();
+        assert_eq!(table.timestamps.len(), 3);
+        for col in &table.columns {
+            assert_eq!(
+                col.windows.len(),
+                TableBuilder::col_len(col),
+                "column {} desynced: {} windows vs {} values",
+                col.name,
+                col.windows.len(),
+                TableBuilder::col_len(col)
+            );
+        }
+        // The mismatched row is a null, and the rows around it keep their own
+        // windows (row 2's window is not shifted onto row 3).
+        match &table.columns[0].values {
+            RezValues::Counter(v) => assert_eq!(v, &vec![Some(1), None, Some(3)]),
+            other => panic!("expected counter column, got {other:?}"),
+        }
+        assert_eq!(
+            table.columns[0].windows,
+            vec![
+                Some(Window::new(900, 1_000)),
+                None,
+                Some(Window::new(2_900, 3_000))
+            ]
+        );
+    }
+
+    // The raw wall-clock reading rides along as a table-level sidecar column so
+    // an NTP step locates to the exact tick; the query engine skips it.
+    #[test]
+    fn wall_offsets_roundtrip_through_parquet() {
+        let mut b = TableBuilder::new("cpu_usage".to_string());
+        let c = Counter::new("0".to_string(), 7, cmeta("cpu_usage"));
+        b.push_row(1_000, -123_456, &[Entry::Counter(&c)]);
+        let table = b.finish();
+        assert_eq!(table.wall_offsets, vec![-123_456]);
+
+        let (schema, _) = table_to_batch(&table).unwrap();
+        let field = schema
+            .field_with_name(":wall_offset")
+            .expect(":wall_offset field present");
+        assert_eq!(field.data_type(), &DataType::Int64);
+
+        let bytes = write_table_parquet(&table).unwrap();
+        let back = read_table_parquet("cpu_usage".to_string(), bytes).unwrap();
+        assert_eq!(back.wall_offsets, vec![-123_456]);
+        assert_eq!(back.timestamps, vec![1_000]);
+    }
 }
 
 #[cfg(test)]
@@ -1352,6 +1566,7 @@ mod table_tests {
         let table = RezTable {
             sampler: "s".to_string(),
             timestamps: ts.clone(),
+            wall_offsets: Vec::new(),
             columns: vec![
                 RezColumn {
                     name: "0".to_string(),
@@ -1447,6 +1662,7 @@ mod archive_tests {
         let t = RezTable {
             sampler: "cpu_usage".to_string(),
             timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
         };
         let dir = tempfile::tempdir().unwrap();
@@ -1486,6 +1702,7 @@ mod archive_tests {
             let t = RezTable {
                 sampler: sampler.to_string(),
                 timestamps: vec![1_000, 2_000],
+                wall_offsets: Vec::new(),
                 columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
             };
             let d = tempfile::tempdir().unwrap();
@@ -1612,6 +1829,7 @@ mod archive_tests {
         let t = RezTable {
             sampler: "cpu_usage".to_string(),
             timestamps: vec![1_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col("0", vec![Some(1)], vec![None])],
         };
         let dir = tempfile::tempdir().unwrap();
@@ -1639,6 +1857,7 @@ mod archive_tests {
         let a = RezTable {
             sampler: "cpu_usage".to_string(),
             timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col(
                 "0",
                 vec![Some(1), Some(2)],
@@ -1651,6 +1870,7 @@ mod archive_tests {
         let b = RezTable {
             sampler: "blockio_latency".to_string(),
             timestamps: vec![1_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col("9", vec![Some(7)], vec![None])],
         };
         let dir = tempfile::tempdir().unwrap();
@@ -1727,11 +1947,13 @@ mod archive_tests {
         let baseline = RezTable {
             sampler: "cpu_usage".to_string(),
             timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
         };
         let experiment = RezTable {
             sampler: "cpu_usage".to_string(),
             timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
             columns: vec![counter_col("0", vec![Some(10), Some(20)], vec![None, None])],
         };
         let labels = |arm: &str| -> BTreeMap<String, String> {
