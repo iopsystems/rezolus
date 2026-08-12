@@ -897,11 +897,24 @@ impl Entry<'_> {
     }
 }
 
-/// Approximate in-memory cost of one scalar cell plus its window slot, in
-/// bytes. Deliberately a round constant rather than `size_of` arithmetic: it
-/// calibrates a seal threshold, and a table's footprint is dominated by
-/// histogram buckets (below), not by the exact width of an `Option<u64>`.
-const SCALAR_CELL_BYTES: usize = 16;
+/// In-memory cost of a cell's value slot: `Option<u64>` / `Option<i64>` /
+/// `Option<Box<[u64]>>` are all 16 B (the histogram's buckets are counted
+/// separately below).
+const VALUE_SLOT_BYTES: usize = 16;
+/// In-memory cost of the `Option<Window>` that `push_row` pushes alongside
+/// every counted cell. Measured, not assumed: 24 B. `Window` is two `u64`s
+/// with no niche, so the option tag costs a whole word of padding.
+const WINDOW_SLOT_BYTES: usize = 24;
+/// Per-cell overhead: value slot + window slot.
+///
+/// This is a *memory bound*, and until now it was 2.5x optimistic: the window
+/// slot was documented as included but never counted, so a scalar cell was
+/// charged 16 B against a true 40 B and an 8 MiB-capped scalar table really
+/// held 20.0 MiB of builder RSS. Counting it means the effective cap is now
+/// reached ~2.5x sooner for scalar-heavy tables (worst measured segment drops
+/// 6.23 MiB -> 2.49 MiB encoded). That is intended: the cap is what bounds
+/// resident memory, so it has to be honest about what a cell costs.
+const CELL_OVERHEAD_BYTES: usize = VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES;
 /// Bytes per histogram bucket: `push_row` clones the histogram's bucket
 /// `Box<[u64]>` into the column.
 const HISTOGRAM_BUCKET_BYTES: usize = 8;
@@ -1020,11 +1033,11 @@ impl TableBuilder {
             let cell_bytes = match (e, &mut col.values) {
                 (Entry::Counter(c), RezValues::Counter(v)) => {
                     v.push(Some(c.value));
-                    Some(SCALAR_CELL_BYTES)
+                    Some(CELL_OVERHEAD_BYTES)
                 }
                 (Entry::Gauge(g), RezValues::Gauge(v)) => {
                     v.push(Some(g.value));
-                    Some(SCALAR_CELL_BYTES)
+                    Some(CELL_OVERHEAD_BYTES)
                 }
                 (Entry::Histogram(h), RezValues::Histogram(v)) => {
                     // The clone below copies the whole bucket `Box<[u64]>`
@@ -1032,7 +1045,7 @@ impl TableBuilder {
                     // cap counts bytes rather than rows.
                     let buckets = h.value.as_slice().len();
                     v.push(Some(h.value.clone()));
-                    Some(SCALAR_CELL_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
+                    Some(CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
                 }
                 _ => None,
             };
@@ -1291,20 +1304,58 @@ mod builder_tests {
         let c = Counter::new("0".to_string(), 1, cmeta("s"));
         b.push_row(1_000, 0, &[Entry::Counter(&c)]);
         let after_scalar = b.approx_bytes();
-        assert!(
-            after_scalar >= 16,
-            "one scalar cell + window should account >= 16 B, got {after_scalar}"
+        assert_eq!(
+            after_scalar, CELL_OVERHEAD_BYTES,
+            "one scalar cell is its value slot plus its window slot"
         );
 
         let h = Histogram::new("1".to_string(), hist(7, 64), cmeta("s"));
         let buckets = h.value.as_slice().len();
         assert_eq!(buckets, h.value.config().total_buckets());
         b.push_row(2_000, 0, &[Entry::Histogram(&h)]);
+        assert_eq!(
+            b.approx_bytes() - after_scalar,
+            CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES,
+            "one histogram cell is the per-cell overhead plus its buckets"
+        );
+    }
+
+    // Regression: `approx_bytes` bounds resident memory, and it used to charge
+    // a scalar cell only its value slot (16 B) while `push_row` also pushed an
+    // `Option<Window>` (24 B) — a 2.5x optimistic bound. This pins the window
+    // slot as counted, and fails if the per-cell charge is reverted to 16 B.
+    #[test]
+    fn approx_bytes_counts_the_window_slot() {
+        use std::mem::size_of;
+        // The constants are claims about layout; check them against the layout.
+        assert_eq!(size_of::<Option<u64>>(), VALUE_SLOT_BYTES);
+        assert_eq!(size_of::<Option<i64>>(), VALUE_SLOT_BYTES);
+        assert_eq!(size_of::<Option<Box<[u64]>>>(), VALUE_SLOT_BYTES);
+        // `Window` is two `u64`s with no niche, so the option tag costs a word.
+        assert_eq!(size_of::<Option<Window>>(), WINDOW_SLOT_BYTES);
+
+        let mut b = TableBuilder::new("s".to_string());
+        let c =
+            Counter::new("0".to_string(), 1, cmeta("s")).with_window(Some(Window::new(900, 1_000)));
+        b.push_row(1_000, 0, &[Entry::Counter(&c)]);
+
+        // One value slot and one window slot were pushed, so both must be paid
+        // for. The strict inequality is the part that catches a revert.
+        let charged = b.approx_bytes();
+        assert_eq!(
+            charged,
+            VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES,
+            "a scalar cell costs 40 B, not 16 B"
+        );
         assert!(
-            b.approx_bytes() - after_scalar >= buckets * 8,
-            "one histogram cell should account >= {} B, got {}",
-            buckets * 8,
-            b.approx_bytes() - after_scalar
+            charged > VALUE_SLOT_BYTES,
+            "the window slot must be accounted, not just the value slot"
+        );
+        let table = b.finish();
+        assert_eq!(
+            table.columns[0].windows.len(),
+            1,
+            "push_row pushed the window slot that was charged for"
         );
     }
 

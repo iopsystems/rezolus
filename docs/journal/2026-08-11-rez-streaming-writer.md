@@ -622,6 +622,50 @@ segments in 900 s, well past the ~25 the macOS sweep called expensive, though
 these are 8 MiB byte-capped segments rather than the small-segment pathology
 that sweep explored.
 
+## Post-landing findings (2026-08-12)
+
+Two defects in the merged writer (`5de241d9`), both surfaced by the per-sampler
+compression measurement done for the v3 container work. The evidence — segment
+tables, ratios and the co-seal breakdown — lives in
+[`2026-08-12-rez-sqlite-container.md`](2026-08-12-rez-sqlite-container.md),
+"Per-sampler compression ratios"; it is not duplicated here. Both are fixed in
+the PR that adds this section.
+
+1. **`approx_bytes` undercounted scalar cells 2.5×.** `push_row` charged 16 B
+   per scalar cell but also pushes an `Option<Window>` into `col.windows` that
+   was never counted. Measured on the fleet host: `Option<u64>` is 16 B and
+   `Option<Window>` is 24 B, so a scalar cell really costs **40 B — 2.50× the
+   accounted 16 B**. Histogram cells were off by the same 24 B against ~58 KB
+   of buckets (1.01×, immaterial). The consequence is that the byte cap is a
+   *memory bound that was 2.5× wrong in the optimistic direction*: an 8 MiB
+   capped scalar table held **~20 MiB** of builder RSS. Counting the window
+   slot means the effective cap is now reached ~2.5× sooner for scalar-heavy
+   tables, dropping the worst measured segment from **6.23 MiB to 2.49 MiB**
+   encoded. That is the intended effect, and it is the precisely-targeted
+   version of "lower the cap" — it shrinks only the poorly-compressing scalar
+   tables and leaves the 13–62:1 histogram tables alone.
+
+2. **Co-seal lockstep was the real tail-latency driver.** `maybe_seal` seals
+   every due table as one batch, and every row-capped table advances exactly
+   one row per tick from row 0 — so they reach `max_rows` in *permanent*
+   lockstep. Measured: **12 tables sealing together every ~197 s as a single
+   16.16 MiB batch at 85.9 ms p99** (≈1.9 ticks). **All 7 of 467 over-budget
+   batches were co-seals**; not one was a large individual segment, and the
+   worst single segment (`cpu_usage`, 6.23 MiB → 39.2 ms) fits with 15%
+   headroom. Fixed by staggering only each sampler's *first* seal by a
+   deterministic FNV-1a-of-the-sampler-name fraction (up to 50% of `max_rows`
+   and `max_age`), then restoring the full policy. A phase offset, not a period
+   change: the tables desync for the life of the recording at a cost of one
+   short segment per sampler at startup, with steady-state segment size and
+   count unchanged.
+
+**`max_bytes` stays at 8 MiB.** Lowering it is expensive and aims at the wrong
+target: halving to 4 MiB would take total segments from 582 to ~1,100 — and
+`syscall_latency` from 190 to 380, deep into the superlinear region — merely to
+shrink segments that are *already* 0.68 MB. It would also do nothing about the
+lockstep, because every table involved in a co-seal is row-capped, not
+byte-capped.
+
 ## Adversarial design review (2026-08-11, pre-build)
 
 Three parallel adversarial subagents attacked the design against the actual

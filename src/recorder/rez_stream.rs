@@ -536,10 +536,85 @@ impl Default for SealPolicy {
     }
 }
 
+/// Granularity of the first-seal stagger. A sampler's first segment closes at
+/// `max_rows - (max_rows / (2 * STAGGER_BUCKETS)) * bucket` for a `bucket` in
+/// `[0, STAGGER_BUCKETS)`, i.e. somewhere in `[max_rows / 2, max_rows]`. 64
+/// buckets is ample spread for a dozen tables, and capping the reduction at
+/// 50% bounds the startup cost to one short segment per sampler.
+const STAGGER_BUCKETS: u64 = 64;
+
+/// FNV-1a over the sampler name, reduced to a stagger bucket.
+///
+/// Hand-written rather than `DefaultHasher` on purpose: the offset must be
+/// identical across runs, builds and Rust versions, and `DefaultHasher` is
+/// SipHash with an explicitly unstable algorithm and no seed guarantee.
+/// Randomizing the initial deadline would desync just as well, but a stable
+/// offset keeps a recording's segment boundaries reproducible.
+fn stagger_bucket(sampler: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64-bit offset basis
+    for b in sampler.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a 64-bit prime
+    }
+    h % STAGGER_BUCKETS
+}
+
+/// A sampler's open segment: the builder, when it was opened, and the targets
+/// the **current** segment seals at.
+///
+/// The row and age targets are fields rather than reads of `policy` because the
+/// first segment of each sampler deliberately closes early; see `open_first`.
+struct BuilderState {
+    builder: TableBuilder,
+    /// Instant the current segment was opened (the age bound's origin).
+    opened_at: Instant,
+    max_rows: usize,
+    max_age: Duration,
+}
+
+impl BuilderState {
+    /// Open a sampler's **first** segment, with row and age targets reduced by
+    /// a deterministic per-sampler fraction of up to 50%.
+    ///
+    /// This is a *phase offset*, not a period change. Every row-capped table
+    /// otherwise advances exactly one row per tick starting from row 0, so they
+    /// all reach `max_rows` in permanent lockstep: 12 tables measured sealing
+    /// as a single 16.16 MiB batch every ~197 s, and every one of the 7 (of
+    /// 467) over-budget batches at fleet scale was such a co-seal rather than a
+    /// large individual segment. Shortening only the first segment desyncs the
+    /// tables for the life of the recording while leaving steady-state segment
+    /// size and count untouched — `seal_completed` restores the full policy.
+    fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
+        let bucket = stagger_bucket(sampler);
+        // Divide before multiplying: `max_rows` is `usize::MAX` in several
+        // callers, and `max_rows * bucket` would overflow.
+        let row_offset = (policy.max_rows / (2 * STAGGER_BUCKETS as usize)) * bucket as usize;
+        let age_offset = (policy.max_age / (2 * STAGGER_BUCKETS as u32)) * bucket as u32;
+        Self {
+            builder: TableBuilder::new(sampler.to_string()),
+            opened_at: Instant::now(),
+            // `max(1)` so a small policy can never yield a zero row target,
+            // which would seal a one-row segment every tick forever.
+            max_rows: policy.max_rows.saturating_sub(row_offset).max(1),
+            max_age: policy.max_age.saturating_sub(age_offset),
+        }
+    }
+
+    /// Rotate onto a fresh segment after a seal, dropping the startup stagger:
+    /// every segment after the first uses the full policy.
+    fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
+        let sealed = std::mem::replace(&mut self.builder, TableBuilder::new(sampler.to_string()));
+        self.opened_at = now;
+        self.max_rows = policy.max_rows;
+        self.max_age = policy.max_age;
+        sealed
+    }
+}
+
 /// The scrape-side half: per-sampler open segments plus the seal decision.
 pub(crate) struct StreamRecorder {
-    /// Open builder per sampler, with the instant it was opened (the age bound).
-    builders: BTreeMap<String, (TableBuilder, Instant)>,
+    /// Open segment per sampler: builder, open instant, and current targets.
+    builders: BTreeMap<String, BuilderState>,
     /// Window-advance dedup keys. Held here, not on the builder, so dedup
     /// survives a builder rotation: the key of a row in an already-sealed
     /// segment must still suppress a re-observation.
@@ -574,11 +649,14 @@ impl StreamRecorder {
                 }
             }
             self.last_keys.insert(sampler.to_string(), key);
-            let (builder, _) = self
+            let policy = &self.policy;
+            let state = self
                 .builders
                 .entry(sampler.to_string())
-                .or_insert_with(|| (TableBuilder::new(sampler.to_string()), Instant::now()));
-            builder.push_row(anchored_ts, wall_offset_ns, &entries);
+                .or_insert_with(|| BuilderState::open_first(sampler, policy));
+            state
+                .builder
+                .push_row(anchored_ts, wall_offset_ns, &entries);
         }
     }
 
@@ -591,22 +669,24 @@ impl StreamRecorder {
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
         let now = Instant::now();
         let mut batch = Vec::new();
-        for (sampler, (builder, opened_at)) in self.builders.iter_mut() {
-            let rows = builder.rows();
+        for (sampler, state) in self.builders.iter_mut() {
+            let rows = state.builder.rows();
             if rows == 0 {
                 continue;
             }
-            let due = builder.approx_bytes() >= self.policy.max_bytes
-                || rows >= self.policy.max_rows
-                || now.duration_since(*opened_at) >= self.policy.max_age;
+            // Row and age targets come from the state, not the policy: the
+            // first segment of each sampler is staggered short. The byte cap is
+            // a memory bound and is never staggered.
+            let due = state.builder.approx_bytes() >= self.policy.max_bytes
+                || rows >= state.max_rows
+                || now.duration_since(state.opened_at) >= state.max_age;
             if !due {
                 continue;
             }
             // Rotation is a `mem::replace`: the dedup key lives in `last_keys`
             // and carries over untouched, while the byte counter correctly
             // restarts at zero with the fresh segment.
-            let sealed = std::mem::replace(builder, TableBuilder::new(sampler.clone()));
-            *opened_at = now;
+            let sealed = state.seal_completed(sampler, &self.policy, now);
             batch.push(SealJob {
                 sampler: sampler.clone(),
                 table: sealed.finish(),
@@ -620,10 +700,10 @@ impl StreamRecorder {
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
-            .filter(|(_, (builder, _))| builder.rows() > 0)
-            .map(|(sampler, (builder, _))| SealJob {
+            .filter(|(_, state)| state.builder.rows() > 0)
+            .map(|(sampler, state)| SealJob {
                 sampler,
-                table: builder.finish(),
+                table: state.builder.finish(),
             })
             .collect();
         self.handle.finalize(tails, clock_offset)
@@ -645,8 +725,16 @@ impl StreamRecorder {
     fn open_rows(&self, sampler: &str) -> usize {
         self.builders
             .get(sampler)
-            .map(|(builder, _)| builder.rows())
+            .map(|state| state.builder.rows())
             .unwrap_or(0)
+    }
+
+    /// The row and age targets the sampler's *current* open segment seals at.
+    #[cfg(test)]
+    fn open_targets(&self, sampler: &str) -> Option<(usize, Duration)> {
+        self.builders
+            .get(sampler)
+            .map(|state| (state.max_rows, state.max_age))
     }
 }
 
@@ -1300,6 +1388,175 @@ mod tests {
         let idx = &manifest.recordings[0].tables[0];
         assert_eq!(idx.files.len(), 2);
         assert_eq!(idx.rows, 2);
+    }
+
+    /// One row per sampler per tick, with a window that advances every `i` so
+    /// nothing dedups and every table grows at exactly the same rate — the
+    /// condition that used to put the row-capped tables in lockstep.
+    fn multi_snap(samplers: &[&str], i: u64) -> (metriken_exposition::Snapshot, u64) {
+        let ts = 10_000 + i * 1_000;
+        let end = 9_500 + i * 1_000;
+        let counters = samplers
+            .iter()
+            .map(|s| counter(&format!("{s}_ops"), s, i, Some(Window::new(end - 500, end))))
+            .collect();
+        (snap(ts, counters), ts)
+    }
+
+    fn stagger_policy(max_rows: usize) -> SealPolicy {
+        SealPolicy {
+            max_bytes: usize::MAX,
+            max_rows,
+            max_age: Duration::from_secs(3600),
+        }
+    }
+
+    /// Drive `rec` one tick at a time, returning the row count at which each
+    /// sampler sealed its **first** segment.
+    fn first_seal_rows(rec: &mut StreamRecorder, samplers: &[&str], ticks: u64) -> Vec<usize> {
+        let mut out = vec![0usize; samplers.len()];
+        for i in 0..ticks {
+            let (s, ts) = multi_snap(samplers, i);
+            rec.ingest(&s, ts, 0);
+            let before: Vec<usize> = samplers.iter().map(|n| rec.open_rows(n)).collect();
+            rec.maybe_seal().unwrap();
+            for (k, name) in samplers.iter().enumerate() {
+                if out[k] == 0 && before[k] > 0 && rec.open_rows(name) == 0 {
+                    out[k] = before[k];
+                }
+            }
+        }
+        out
+    }
+
+    // The co-seal fix: two tables ingesting at exactly the same rate must not
+    // reach their row cap on the same tick. Before the stagger both sealed at
+    // `max_rows` forever, which is what put 12 fleet tables in permanent
+    // lockstep behind a single 16.16 MiB batch.
+    #[test]
+    fn first_seal_is_staggered_across_samplers() {
+        const MAX_ROWS: usize = 256;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
+
+        let samplers = ["cpu_usage", "scheduler"];
+        let sealed = first_seal_rows(&mut rec, &samplers, MAX_ROWS as u64);
+
+        assert_ne!(
+            sealed[0], sealed[1],
+            "same ingest rate must still give different first-seal row counts"
+        );
+        for (k, name) in samplers.iter().enumerate() {
+            assert!(
+                sealed[k] >= MAX_ROWS / 2 && sealed[k] <= MAX_ROWS,
+                "{name} first-sealed at {} rows, outside [{}, {MAX_ROWS}]",
+                sealed[k],
+                MAX_ROWS / 2
+            );
+        }
+        rec.abort();
+    }
+
+    // The stagger is a phase offset, not a period change: steady-state segment
+    // size must be exactly the policy, so segment counts do not grow.
+    #[test]
+    fn steady_state_target_is_the_full_policy() {
+        const MAX_ROWS: usize = 256;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
+
+        let (s, ts) = multi_snap(&["cpu_usage"], 0);
+        rec.ingest(&s, ts, 0);
+        let (first_rows, first_age) = rec.open_targets("cpu_usage").unwrap();
+        assert!(
+            first_rows < MAX_ROWS,
+            "cpu_usage's first segment should be short, got {first_rows}"
+        );
+        assert!(
+            first_age < Duration::from_secs(3600),
+            "the age target is staggered too, got {first_age:?}"
+        );
+
+        let sealed = first_seal_rows(&mut rec, &["cpu_usage"], MAX_ROWS as u64);
+        assert_eq!(sealed[0], first_rows, "it sealed at its staggered target");
+        assert_eq!(
+            rec.open_targets("cpu_usage"),
+            Some((MAX_ROWS, Duration::from_secs(3600))),
+            "every segment after the first uses the full policy"
+        );
+        rec.abort();
+    }
+
+    // The offset must be reproducible across runs and builds, which is why it
+    // is a hand-written FNV-1a and not `DefaultHasher`. The literal pins the
+    // constants: if the hash changes, segment boundaries move.
+    #[test]
+    fn stagger_is_deterministic() {
+        assert_eq!(stagger_bucket("cpu_usage"), 29);
+        assert_eq!(stagger_bucket("scheduler"), 58);
+        assert!((0..STAGGER_BUCKETS).contains(&stagger_bucket("anything_at_all")));
+
+        const MAX_ROWS: usize = 256;
+        let dir = tempfile::tempdir().unwrap();
+        let mut targets = Vec::new();
+        for run in 0..2 {
+            let out = dir.path().join(format!("out{run}.rez"));
+            let handle = RezWriterHandle::create(&out, seed()).unwrap();
+            let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
+            let (s, ts) = multi_snap(&["cpu_usage"], 0);
+            rec.ingest(&s, ts, 0);
+            targets.push(rec.open_targets("cpu_usage").unwrap());
+            rec.abort();
+        }
+        assert_eq!(
+            targets[0], targets[1],
+            "a fresh recorder must stagger the same sampler identically"
+        );
+    }
+
+    // A name that hashes to bucket 0 gets no reduction at all. It must still be
+    // a valid target (never 0, no off-by-one) and must still seal.
+    #[test]
+    fn zero_bucket_sampler_still_seals() {
+        const MAX_ROWS: usize = 256;
+        assert_eq!(stagger_bucket("gpu_stall"), 0, "chosen for its zero bucket");
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
+
+        let (s, ts) = multi_snap(&["gpu_stall"], 0);
+        rec.ingest(&s, ts, 0);
+        assert_eq!(
+            rec.open_targets("gpu_stall"),
+            Some((MAX_ROWS, Duration::from_secs(3600))),
+            "bucket 0 means no reduction, i.e. the full policy"
+        );
+        let sealed = first_seal_rows(&mut rec, &["gpu_stall"], MAX_ROWS as u64);
+        assert_eq!(sealed[0], MAX_ROWS, "it seals at the full target");
+        rec.abort();
+    }
+
+    // The `max(1)` guard: a policy too small for the offset to be meaningful
+    // must never produce a zero row target, which would seal every tick.
+    #[test]
+    fn tiny_policy_never_yields_a_zero_target() {
+        for max_rows in [1usize, 2, 8, 127] {
+            let state = BuilderState::open_first("scheduler", &stagger_policy(max_rows));
+            assert!(
+                state.max_rows >= 1 && state.max_rows <= max_rows,
+                "max_rows={max_rows} gave a target of {}",
+                state.max_rows
+            );
+        }
+        // `usize::MAX` must not overflow the offset arithmetic.
+        let state = BuilderState::open_first("scheduler", &stagger_policy(usize::MAX));
+        assert!(state.max_rows >= usize::MAX / 2);
     }
 
     #[test]
