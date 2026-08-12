@@ -85,6 +85,26 @@ pub(crate) struct WalRow {
     pub row: Vec<u8>,
 }
 
+/// How many rows a table holds and what time span they cover, answered from
+/// catalog columns alone — no segment or WAL payload is read. `first_ts` and
+/// `last_ts` are `None` when `rows` is 0.
+pub(crate) struct Span {
+    pub rows: u64,
+    pub first_ts: Option<u64>,
+    pub last_ts: Option<u64>,
+}
+
+/// The recovery rule, as a `WHERE` clause: a WAL row is live iff its `ts` is
+/// past the watermark of the sealed segments **for its own sampler in its own
+/// recording**. Written once and shared by `live_wal` and `live_wal_span` so a
+/// reported WAL depth can never disagree with the rows the reader will replay.
+/// See [`RezDb::live_wal`] for why the rule is what it is.
+const LIVE_WAL_PREDICATE: &str = "recording_id = ?1 AND sampler = ?2 \
+     AND ts > COALESCE( \
+           (SELECT MAX(last_ts) FROM segments \
+            WHERE recording_id = ?1 AND sampler = ?2), \
+           0)";
+
 /// An open handle on a `.rez` v3 file.
 pub(crate) struct RezDb {
     conn: Connection,
@@ -522,17 +542,68 @@ impl RezDb {
     pub(crate) fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
         let mut stmt = self
             .conn
-            .prepare(
+            .prepare(&format!(
                 "SELECT sampler, ts, wall_offset, row FROM wal \
-                 WHERE recording_id = ?1 AND sampler = ?2 \
-                   AND ts > COALESCE( \
-                         (SELECT MAX(last_ts) FROM segments \
-                          WHERE recording_id = ?1 AND sampler = ?2), \
-                         0) \
-                 ORDER BY ts",
-            )
+                 WHERE {LIVE_WAL_PREDICATE} ORDER BY ts"
+            ))
             .map_err(|e| format!("failed to query live WAL for {sampler}: {e}"))?;
         Self::collect_wal_rows(&mut stmt, recording_id, sampler)
+    }
+
+    /// How many rows a sampler's live WAL holds, and the span they cover —
+    /// **without materializing them**. Same watermark as [`live_wal`] (they
+    /// share `LIVE_WAL_PREDICATE`, so the depth cannot drift from the rows the
+    /// reader replays); this is the aggregate form, for callers that want the
+    /// number rather than the payload.
+    pub(crate) fn live_wal_span(&self, recording_id: i64, sampler: &str) -> Result<Span, String> {
+        self.query_span(
+            &format!("SELECT COUNT(*), MIN(ts), MAX(ts) FROM wal WHERE {LIVE_WAL_PREDICATE}"),
+            recording_id,
+            sampler,
+        )
+        .map_err(|e| format!("failed to measure the live WAL for {sampler}: {e}"))
+    }
+
+    /// A sampler's sealed segments as the CATALOG sees them: how many segments,
+    /// how many rows across them, and the span they cover. **No BLOB is read** —
+    /// `parquet metadata` describes a 197 MB archive from this, and pulling
+    /// `bytes` back only to discard it is exactly the cost the catalog exists to
+    /// avoid.
+    pub(crate) fn segment_span(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+    ) -> Result<(u64, Span), String> {
+        let segments: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM segments WHERE recording_id = ?1 AND sampler = ?2",
+                rusqlite::params![recording_id, sampler],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to count segments for {sampler}: {e}"))?;
+        let span = self
+            .query_span(
+                "SELECT COALESCE(SUM(rows), 0), MIN(first_ts), MAX(last_ts) FROM segments \
+                 WHERE recording_id = ?1 AND sampler = ?2",
+                recording_id,
+                sampler,
+            )
+            .map_err(|e| format!("failed to measure the segments of {sampler}: {e}"))?;
+        Ok((segments as u64, span))
+    }
+
+    /// Shared shape of the two aggregate queries above: `(rows, MIN(ts),
+    /// MAX(ts))`, bound to `(recording_id, sampler)`.
+    fn query_span(&self, sql: &str, recording_id: i64, sampler: &str) -> rusqlite::Result<Span> {
+        self.conn
+            .query_row(sql, rusqlite::params![recording_id, sampler], |row| {
+                Ok(Span {
+                    rows: row.get::<_, i64>(0)? as u64,
+                    first_ts: row.get::<_, Option<i64>>(1)?.map(|v| v as u64),
+                    last_ts: row.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                })
+            })
     }
 
     /// Shared row-materialization for `read_wal` and `live_wal` — they differ
@@ -1304,6 +1375,116 @@ mod tests {
         let r1_cpu_usage = db.live_wal(r1, "cpu_usage").unwrap();
         assert_eq!(r1_cpu_usage.len(), 1);
         assert_eq!(r1_cpu_usage[0].ts, 40);
+    }
+
+    #[test]
+    fn segment_span_summarizes_the_catalog_without_reading_a_blob() {
+        // `parquet metadata` describes a fleet archive (197 MB, 149 segments)
+        // from these numbers, so they must come from the catalog columns and
+        // nothing else. The bytes here are deliberately NOT parquet: an
+        // implementation that reached into a segment to count its rows — or
+        // that pulled `bytes` back merely to discard it — fails or wastes the
+        // whole archive's worth of I/O, and this fixture is what makes the
+        // first of those visible.
+        let (_dir, db, rid) = wal_test_db();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 3,
+                first_ts: 10,
+                last_ts: 29,
+            },
+            b"not-parquet",
+        )
+        .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            1,
+            &SegmentMeta {
+                rows: 2,
+                first_ts: 30,
+                last_ts: 49,
+            },
+            b"not-parquet-either",
+        )
+        .unwrap();
+        // Another sampler's segments must not be counted into this one's.
+        db.insert_segment(
+            rid,
+            "blockio",
+            0,
+            &SegmentMeta {
+                rows: 99,
+                first_ts: 0,
+                last_ts: 99,
+            },
+            b"nor-this",
+        )
+        .unwrap();
+
+        let (segments, span) = db.segment_span(rid, "cpu_usage").unwrap();
+        assert_eq!(segments, 2);
+        assert_eq!(span.rows, 5, "the SUM of the catalog's row counts");
+        assert_eq!((span.first_ts, span.last_ts), (Some(10), Some(49)));
+
+        // A sampler with no segments at all is a span of nothing, not an error:
+        // that is the quiet-table case the WAL exists for.
+        let (segments, span) = db.segment_span(rid, "drivehealth").unwrap();
+        assert_eq!(segments, 0);
+        assert_eq!(span.rows, 0);
+        assert_eq!((span.first_ts, span.last_ts), (None, None));
+    }
+
+    #[test]
+    fn live_wal_span_counts_the_same_rows_live_wal_returns() {
+        // The depth `parquet metadata` reports is "how many unsealed rows are
+        // recoverable", which is exactly what the reader will materialize —
+        // so it must apply the SAME watermark `live_wal` does, not count the
+        // raw table. Sealed-but-not-yet-pruned rows (the straddle the deferred
+        // prune deliberately allows) are the case that tells the two apart.
+        let (_dir, mut db, rid) = wal_test_db();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 3,
+                first_ts: 10,
+                last_ts: 30,
+            },
+            b"not-parquet",
+        )
+        .unwrap();
+        db.insert_wal_rows(
+            rid,
+            &[
+                wal_row("cpu_usage", 10),
+                wal_row("cpu_usage", 20),
+                wal_row("cpu_usage", 30),
+                wal_row("cpu_usage", 40),
+                wal_row("cpu_usage", 50),
+            ],
+        )
+        .unwrap();
+
+        let span = db.live_wal_span(rid, "cpu_usage").unwrap();
+        assert_eq!(
+            span.rows,
+            db.live_wal(rid, "cpu_usage").unwrap().len() as u64,
+            "the depth must agree with the rows the reader will replay"
+        );
+        assert_eq!(span.rows, 2, "ts=40 and ts=50 are past the watermark");
+        assert_eq!((span.first_ts, span.last_ts), (Some(40), Some(50)));
+
+        // A never-sealed sampler keeps its whole history live.
+        db.insert_wal_rows(rid, &[wal_row("drivehealth", 5)])
+            .unwrap();
+        let span = db.live_wal_span(rid, "drivehealth").unwrap();
+        assert_eq!(span.rows, 1);
+        assert_eq!((span.first_ts, span.last_ts), (Some(5), Some(5)));
     }
 
     #[test]
