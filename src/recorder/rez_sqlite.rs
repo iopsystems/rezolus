@@ -393,6 +393,156 @@ impl RezDb {
         Ok(out)
     }
 
+    /// Insert every WAL row for one tick — one sampler each, typically — in a
+    /// single transaction. This is the per-tick commit the journal's insert
+    /// gating measured at p50 3.6 ms / p99 12.1 ms (26 rows, fleet sizes),
+    /// and it is what makes a tick atomic: either every sampler's row for
+    /// this tick lands, or none does.
+    pub(crate) fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
+        // `unchecked_transaction`, not `conn.transaction()`: the latter needs
+        // `&mut Connection`, and every other accessor in this file — this one
+        // included, to match the module's `&self` convention — takes `&self`.
+        // Nesting is the hazard `transaction()` guards against at compile
+        // time; this module never opens a transaction across an await point
+        // or re-enters here, so that hazard does not apply.
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| format!("failed to begin WAL transaction: {e}"))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO wal(recording_id, sampler, ts, wall_offset, row) \
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                )
+                .map_err(|e| format!("failed to prepare WAL insert: {e}"))?;
+            for r in rows {
+                stmt.execute(rusqlite::params![
+                    recording_id,
+                    r.sampler,
+                    r.ts as i64,
+                    r.wall_offset,
+                    r.row,
+                ])
+                .map_err(|e| format!("failed to insert WAL row for {}: {e}", r.sampler))?;
+            }
+        }
+        tx.commit()
+            .map_err(|e| format!("failed to commit WAL transaction: {e}"))?;
+        Ok(())
+    }
+
+    /// Every WAL row for `(recording_id, sampler)`, sealed or not, oldest
+    /// first. Recovery should use `live_wal` instead — this is the raw table,
+    /// kept for inspection and for the WAL tests to compare against.
+    pub(crate) fn read_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT sampler, ts, wall_offset, row FROM wal \
+                 WHERE recording_id = ?1 AND sampler = ?2 ORDER BY ts",
+            )
+            .map_err(|e| format!("failed to query WAL for {sampler}: {e}"))?;
+        Self::collect_wal_rows(&mut stmt, recording_id, sampler)
+    }
+
+    /// Rows not covered by any sealed segment — this filter IS the recovery
+    /// rule, not just a helper for it: **`ts > COALESCE(MAX(last_ts) of that
+    /// sampler's segments, 0)`.**
+    ///
+    /// The prune (`prune_wal`) deliberately runs OUTSIDE the seal
+    /// transaction: doing it inside measured p90 78 ms / max 245 ms (a quiet
+    /// sampler accumulates ~6,500 rows before sealing, deleting ~71 MB in one
+    /// commit — see the journal § "Insert cost"). That means a crash between
+    /// "segment committed" and "prune ran" can leave WAL rows whose `ts` is
+    /// already covered by a sealed segment. Rather than prevent that
+    /// straddle, recovery tolerates it: a row is live iff its `ts` is past
+    /// the watermark of the sealed segments for its own sampler, full stop —
+    /// one idempotent rule that needs no ordering guarantee between sealing
+    /// and pruning.
+    ///
+    /// `COALESCE(..., 0)` is what makes the rule correct for a sampler with
+    /// no segments at all, not just a straddling one: the subquery's `MAX`
+    /// over zero rows is SQL `NULL`, which `COALESCE` turns into `0`, so
+    /// `ts > 0` — every row with a real timestamp — is live. That is exactly
+    /// the quiet-table case: a sampler that has never sealed keeps its WHOLE
+    /// history live, which is the fix for the v2 finding (16 of 26 fleet
+    /// tables recovered nothing at `kill -9` 120 s in, because kill-safety
+    /// was per-segment and those tables had not sealed one yet).
+    ///
+    /// This turns the prune into a pure background optimisation with no
+    /// correctness role — worth p90 212.7 → 44.4 ms on seal ticks.
+    pub(crate) fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT sampler, ts, wall_offset, row FROM wal \
+                 WHERE recording_id = ?1 AND sampler = ?2 \
+                   AND ts > COALESCE( \
+                         (SELECT MAX(last_ts) FROM segments \
+                          WHERE recording_id = ?1 AND sampler = ?2), \
+                         0) \
+                 ORDER BY ts",
+            )
+            .map_err(|e| format!("failed to query live WAL for {sampler}: {e}"))?;
+        Self::collect_wal_rows(&mut stmt, recording_id, sampler)
+    }
+
+    /// Shared row-materialization for `read_wal` and `live_wal` — they differ
+    /// only in the `WHERE` clause of the prepared statement.
+    fn collect_wal_rows(
+        stmt: &mut rusqlite::Statement<'_>,
+        recording_id: i64,
+        sampler: &str,
+    ) -> Result<Vec<WalRow>, String> {
+        let rows = stmt
+            .query_map(rusqlite::params![recording_id, sampler], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })
+            .map_err(|e| format!("failed to query WAL rows for {sampler}: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (sampler, ts, wall_offset, data) =
+                row.map_err(|e| format!("failed to read WAL row for {sampler}: {e}"))?;
+            out.push(WalRow {
+                sampler,
+                ts: ts as u64,
+                wall_offset,
+                row: data,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Delete WAL rows at or below `upto_ts` for `(recording_id, sampler)`.
+    /// Runs OUTSIDE the seal transaction — see `live_wal` for why that is
+    /// safe and has no correctness role. Returns the number of rows deleted,
+    /// so callers/tests can assert idempotency (a second prune of the same
+    /// watermark deletes 0).
+    ///
+    /// Bounded to one sampler by construction (the `sampler = ?2` filter):
+    /// that is why WAL rows are per-sampler rather than whole snapshots — a
+    /// slow-sealing table's prune must not touch, or be blocked by, any other
+    /// sampler's tail.
+    pub(crate) fn prune_wal(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+        upto_ts: u64,
+    ) -> Result<usize, String> {
+        self.conn
+            .execute(
+                "DELETE FROM wal WHERE recording_id = ?1 AND sampler = ?2 AND ts <= ?3",
+                rusqlite::params![recording_id, sampler, upto_ts as i64],
+            )
+            .map_err(|e| format!("failed to prune WAL for {sampler}: {e}"))
+    }
+
     pub(crate) fn pragma_u32(&self, name: &str) -> Result<u32, String> {
         let value = self.pragma_i64(name)?;
         u32::try_from(value).map_err(|_| format!("pragma {name} is {value}, not a u32"))
@@ -766,5 +916,171 @@ mod tests {
             err.contains(&already_exists.to_string()),
             "{err:?} should carry the AlreadyExists error from create_new"
         );
+    }
+
+    /// Shared setup for the WAL tests: a fresh `.rez` with one recording.
+    fn wal_test_db() -> (tempfile::TempDir, RezDb, i64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        (dir, db, rid)
+    }
+
+    fn wal_row(sampler: &str, ts: u64) -> WalRow {
+        WalRow {
+            sampler: sampler.to_string(),
+            ts,
+            wall_offset: ts as i64,
+            row: format!("row@{ts}").into_bytes(),
+        }
+    }
+
+    #[test]
+    fn live_wal_excludes_rows_already_covered_by_a_sealed_segment() {
+        // THE recovery rule. Seal a segment covering ts<=30, then insert WAL
+        // rows at 10/20/30/40 WITHOUT pruning — simulating a crash between
+        // "segment committed" and "prune ran". live_wal must return only the
+        // row past the watermark (ts=40); read_wal must still return all
+        // four, because the raw table is untouched.
+        let (_dir, db, rid) = wal_test_db();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 3,
+                first_ts: 10,
+                last_ts: 30,
+            },
+            b"sealed-bytes",
+        )
+        .unwrap();
+        db.insert_wal_rows(
+            rid,
+            &[
+                wal_row("cpu_usage", 10),
+                wal_row("cpu_usage", 20),
+                wal_row("cpu_usage", 30),
+                wal_row("cpu_usage", 40),
+            ],
+        )
+        .unwrap();
+
+        let live = db.live_wal(rid, "cpu_usage").unwrap();
+        assert_eq!(live.len(), 1, "only ts=40 is past the sealed watermark");
+        assert_eq!(live[0].ts, 40);
+
+        let all = db.read_wal(rid, "cpu_usage").unwrap();
+        assert_eq!(all.len(), 4, "the raw WAL table is untouched by sealing");
+    }
+
+    #[test]
+    fn live_wal_returns_everything_when_nothing_has_sealed() {
+        // A quiet sampler that has never sealed a segment: every WAL row is
+        // live. This is the case that recovered NOTHING under v2 (16 of 26
+        // fleet tables at kill -9 120s in).
+        let (_dir, db, rid) = wal_test_db();
+        db.insert_wal_rows(
+            rid,
+            &[wal_row("drivehealth", 5), wal_row("drivehealth", 15)],
+        )
+        .unwrap();
+
+        let live = db.live_wal(rid, "drivehealth").unwrap();
+        assert_eq!(
+            live.len(),
+            2,
+            "no segments sealed yet, so every row is live"
+        );
+        assert_eq!(live[0].ts, 5);
+        assert_eq!(live[1].ts, 15);
+    }
+
+    #[test]
+    fn prune_is_idempotent_and_bounded_to_one_sampler() {
+        let (_dir, db, rid) = wal_test_db();
+        db.insert_wal_rows(
+            rid,
+            &[
+                wal_row("cpu_usage", 10),
+                wal_row("cpu_usage", 20),
+                wal_row("blockio", 10),
+                wal_row("blockio", 20),
+            ],
+        )
+        .unwrap();
+
+        let deleted = db.prune_wal(rid, "cpu_usage", 10).unwrap();
+        assert_eq!(deleted, 1, "only cpu_usage's ts<=10 row");
+
+        // Idempotent: pruning the same watermark again deletes nothing.
+        let deleted_again = db.prune_wal(rid, "cpu_usage", 10).unwrap();
+        assert_eq!(deleted_again, 0);
+
+        // Bounded to one sampler: blockio's rows, including one at the same
+        // ts that was just pruned for cpu_usage, are untouched. This is why
+        // WAL rows are per-sampler rather than whole snapshots — one slow
+        // table's prune must not pin, or touch, every other sampler's tail.
+        let blockio = db.read_wal(rid, "blockio").unwrap();
+        assert_eq!(blockio.len(), 2, "blockio untouched by cpu_usage's prune");
+
+        let cpu_usage = db.read_wal(rid, "cpu_usage").unwrap();
+        assert_eq!(cpu_usage.len(), 1, "cpu_usage's ts=10 row is gone");
+        assert_eq!(cpu_usage[0].ts, 20);
+    }
+
+    #[test]
+    fn insert_wal_rows_is_one_transaction_for_the_whole_tick() {
+        let (_dir, db, rid) = wal_test_db();
+        let samplers: Vec<WalRow> = (0..26)
+            .map(|i| wal_row(&format!("sampler_{i}"), 100))
+            .collect();
+        db.insert_wal_rows(rid, &samplers).unwrap();
+
+        for i in 0..26 {
+            let sampler = format!("sampler_{i}");
+            let rows = db.read_wal(rid, &sampler).unwrap();
+            assert_eq!(rows.len(), 1, "{sampler} should have its tick's row");
+        }
+    }
+
+    #[test]
+    fn wal_rows_are_scoped_per_recording() {
+        // Same as segments: a .rez can hold several recordings, and reading
+        // one must not see another's WAL rows for a same-named sampler.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let meta = |host: &str| RecordingMeta {
+            labels: [("host".to_string(), host.to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: 0,
+        };
+        let r1 = db.insert_recording(&meta("h1")).unwrap();
+        let r2 = db.insert_recording(&meta("h2")).unwrap();
+
+        db.insert_wal_rows(r1, &[wal_row("cpu_usage", 10)]).unwrap();
+        db.insert_wal_rows(r2, &[wal_row("cpu_usage", 20)]).unwrap();
+
+        let got1 = db.read_wal(r1, "cpu_usage").unwrap();
+        assert_eq!(got1.len(), 1);
+        assert_eq!(got1[0].ts, 10);
+
+        let got2 = db.read_wal(r2, "cpu_usage").unwrap();
+        assert_eq!(got2.len(), 1);
+        assert_eq!(got2[0].ts, 20);
+
+        // live_wal must also stay scoped: neither recording has sealed
+        // anything, so each sees only its own row.
+        let live1 = db.live_wal(r1, "cpu_usage").unwrap();
+        assert_eq!(live1.len(), 1);
+        assert_eq!(live1[0].ts, 10);
     }
 }
