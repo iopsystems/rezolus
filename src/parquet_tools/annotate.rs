@@ -826,6 +826,53 @@ mod tests {
         assert_eq!(ext.kpis.len(), 1);
     }
 
+    // `annotate` rewrites the archive in place, so it re-reads and re-writes
+    // every segment; and it validates KPIs through `RezReader`, which on a
+    // segmented archive is the splicing path. Both have to hold: the metadata
+    // lands, and not one byte of table data moves.
+    #[test]
+    fn annotate_rez_leaves_segments_untouched() {
+        use crate::recorder::rez;
+        use crate::recorder::rez_stream::write_segmented_rez;
+
+        let d = tempfile::tempdir().unwrap();
+        let path = write_segmented_rez(
+            &d.path().join("seg.rez"),
+            "rezolus",
+            Default::default(),
+            &["cpu_usage"],
+            6,
+            2,
+            true,
+        );
+        let before = rez::read_archive_bytes(&path).unwrap().1.remove(0).tables;
+        assert_eq!(before[0].1.len(), 3, "the input must actually be segmented");
+
+        // The KPI queries a metric the fixture really has, so `available`
+        // resolves through the segmented reader rather than short-circuiting.
+        let ext_json = r#"{"service_name":"seg","kpis":[{"role":"overview","title":"Ops","query":"rate(cpu_usage_ops[2s])","type":"counter"}]}"#;
+        annotate_rez(&path, ext_json).unwrap();
+
+        let (manifest, mut recordings) = rez::read_archive_bytes(&path).unwrap();
+        assert_eq!(
+            recordings.remove(0).tables,
+            before,
+            "segment bytes pass through byte-identical"
+        );
+
+        let embedded = manifest.recordings[0]
+            .metadata
+            .get(KEY_SERVICE_QUERIES)
+            .expect("the KPI metadata landed in the manifest");
+        let ext: ServiceExtension = serde_json::from_str(embedded).unwrap();
+        assert_eq!(ext.service_name, "seg");
+        assert_eq!(ext.kpis.len(), 1);
+        assert!(
+            ext.kpis[0].available,
+            "the KPI validated against the spliced segments"
+        );
+    }
+
     #[test]
     fn systeminfo_annotation_preserves_other_metadata() {
         let tmp = make_minimal_parquet(vec![("source", "rezolus"), ("node", "web01")]);

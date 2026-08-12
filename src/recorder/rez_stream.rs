@@ -635,6 +635,69 @@ impl StreamRecorder {
     }
 }
 
+/// Test support for the `.rez` consumers (reader, `parquet` tools): write a
+/// genuinely **segmented** archive, which only the streaming writer produces.
+///
+/// Each of `samplers` gets `rows` one-second rows of a counter named
+/// `<sampler>_ops`, sealed every `max_rows` rows → `ceil(rows / max_rows)`
+/// segments per table. `finalize` chooses the outcome: `true` writes `out` (a
+/// cleanly finalized, `complete` recording), `false` drops the writer and
+/// leaves the recoverable `<out>.partial` (an incomplete recording). Returns
+/// the path that now exists.
+#[cfg(test)]
+pub(crate) fn write_segmented_rez(
+    out: &Path,
+    dir: &str,
+    labels: BTreeMap<String, String>,
+    samplers: &[&str],
+    rows: u64,
+    max_rows: usize,
+    finalize: bool,
+) -> PathBuf {
+    use crate::recorder::rez::recorder_tests_support::{counter, snap};
+    use metriken::Window;
+
+    let seed = ManifestSeed {
+        dir: dir.to_string(),
+        labels,
+        metadata: [("source".to_string(), "rezolus".to_string())]
+            .into_iter()
+            .collect(),
+        clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+    };
+    let handle = RezWriterHandle::create(out, seed).unwrap();
+    let partial = handle.partial_path().to_path_buf();
+    let mut rec = StreamRecorder::with_policy(
+        handle,
+        SealPolicy {
+            max_bytes: usize::MAX,
+            max_rows,
+            max_age: Duration::from_secs(3600),
+        },
+    );
+    let mut last_ts = 0;
+    for i in 0..rows {
+        // Seconds-scale stamps with a window that advances every poll, so no
+        // row is deduped and every sampler grows at the same rate.
+        let ts = 1_000_000_000 * (i + 1);
+        let w = Some(Window::new(ts - 50_000_000, ts));
+        let counters = samplers
+            .iter()
+            .map(|s| counter(&format!("{s}_ops"), s, i * 1_000, w))
+            .collect();
+        rec.ingest(&snap(ts, counters), ts, 0);
+        rec.maybe_seal().unwrap();
+        last_ts = ts;
+    }
+    if finalize {
+        rec.finalize((last_ts, 0)).unwrap();
+        out.to_path_buf()
+    } else {
+        drop(rec);
+        partial
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
