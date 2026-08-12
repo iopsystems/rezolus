@@ -324,8 +324,38 @@ fn describe_rez(path: &std::path::Path, json: bool) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Human-readable summary of a `.rez` manifest: recordings, their labels, and
-/// each per-sampler table's row count and observed cadence.
+/// The recording's clock line: the wall-clock anchor its row timestamps are
+/// offset from, plus the newest drift observation. `None` for a v1 recording,
+/// which carries neither field.
+///
+/// The observation reported is the newest by *timestamp*, not the last element:
+/// the series is a per-batch maximum, so an age-sealed slow sampler can append
+/// a timestamp older than one a fast-sampler batch already contributed.
+fn clock_line(rec: &crate::recorder::rez::RezRecording) -> Option<String> {
+    let anchor = rec.clock_anchor_wall_ns?;
+    let when = i64::try_from(anchor)
+        .map(|ns| {
+            chrono::DateTime::from_timestamp_nanos(ns)
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+        .unwrap_or_else(|_| format!("{anchor}ns"));
+    let mut line = format!("clock anchor {when}");
+    if let Some(&(_, offset)) = rec.clock_offsets.iter().max_by_key(|&&(ts, _)| ts) {
+        let _ = std::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                ", latest offset {:+.3}ms ({} observations)",
+                offset as f64 / 1e6,
+                rec.clock_offsets.len()
+            ),
+        );
+    }
+    Some(line)
+}
+
+/// Human-readable summary of a `.rez` manifest: recordings, their labels, clock
+/// anchor/drift, and each per-sampler table's row count, observed cadence and
+/// segment count.
 fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
     use std::fmt::Write;
     let mut out = String::new();
@@ -348,15 +378,24 @@ fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
                  data after that may be missing"
             );
         }
+        if let Some(line) = clock_line(rec) {
+            let _ = writeln!(out, "    {line}");
+        }
         for t in &rec.tables {
             let cadence = t
                 .cadence_ns
                 .map(|ns| format!("{:.3}s", ns as f64 / 1e9))
                 .unwrap_or_else(|| "—".to_string());
+            // Only worth saying when the table was sealed more than once: a
+            // single segment is the unremarkable case and every v1 table is one.
+            let segments = match t.segment_files().len() {
+                n if n > 1 => format!("  ({n} segments)"),
+                _ => String::new(),
+            };
             let _ = writeln!(
                 out,
-                "    {:<24} {:>5} rows  ~{}",
-                t.sampler, t.rows, cadence
+                "    {:<24} {:>5} rows  ~{}{}",
+                t.sampler, t.rows, cadence, segments
             );
         }
     }
@@ -435,5 +474,84 @@ mod rez_tests {
         m.version = 1;
         m.recordings[0].complete = false;
         assert!(!describe_rez_string(&m).contains("not cleanly finalized"));
+    }
+
+    fn table(sampler: &str, segments: usize) -> RezTableIndex {
+        let files: Vec<String> = (0..segments)
+            .map(|i| format!("{sampler}/{i:04}.parquet"))
+            .collect();
+        RezTableIndex {
+            sampler: sampler.to_string(),
+            file: match files.as_slice() {
+                [one] => Some(one.clone()),
+                _ => None,
+            },
+            files,
+            columns: Vec::new(),
+            rows: 9,
+            cadence_ns: Some(1_000_000_000),
+        }
+    }
+
+    // A streamed recording's segment count is the reader's whole story: it says
+    // whether the archive exercises the splice path at all, and (with the
+    // completeness flag) how much a recovered one is likely missing.
+    #[test]
+    fn describe_rez_string_reports_segment_counts_for_a_recovered_archive() {
+        let m = RezManifest {
+            version: 2,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: Default::default(),
+                metadata: Default::default(),
+                complete: false,
+                clock_anchor_wall_ns: None,
+                clock_offsets: Vec::new(),
+                // The real shape: a fast sampler sealed twice, a slow one once.
+                tables: vec![table("cpu_usage", 2), table("blockio_latency", 1)],
+            }],
+        };
+        let s = describe_rez_string(&m);
+        assert!(s.contains("not cleanly finalized"), "{s}");
+        assert!(s.contains("2 segments"), "{s}");
+        assert!(
+            !s.contains("1 segment"),
+            "a single-segment table says nothing about segments: {s}"
+        );
+    }
+
+    #[test]
+    fn describe_rez_string_reports_clock_anchor_and_last_offset() {
+        let mut m = RezManifest {
+            version: 2,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: Default::default(),
+                metadata: Default::default(),
+                complete: true,
+                clock_anchor_wall_ns: Some(1_700_000_000_000_000_000),
+                // Deliberately out of order: the series is a per-batch maximum,
+                // so an age-sealed slow sampler can append an older timestamp.
+                // The reported offset is the newest observation, not the last
+                // element.
+                clock_offsets: vec![(3_000, 1_500_000), (5_000, -2_250_000), (4_000, 9)],
+                tables: Vec::new(),
+            }],
+        };
+        let s = describe_rez_string(&m);
+        assert!(s.contains("clock anchor"), "{s}");
+        assert!(s.contains("2023-11-14T22:13:20"), "{s}");
+        assert!(s.contains("-2.250ms"), "the newest observation, in ms: {s}");
+        assert!(s.contains("3 observations"), "{s}");
+
+        // An anchor with no observations still reports the anchor.
+        m.recordings[0].clock_offsets.clear();
+        let s = describe_rez_string(&m);
+        assert!(s.contains("clock anchor"), "{s}");
+        assert!(!s.contains("offset"), "{s}");
+
+        // v1 archives carry neither field, so nothing is printed.
+        m.recordings[0].clock_anchor_wall_ns = None;
+        assert!(!describe_rez_string(&m).contains("clock anchor"));
     }
 }
