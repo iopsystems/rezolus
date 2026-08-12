@@ -854,6 +854,49 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
     is_rez_reader(std::fs::File::open(path)?)
 }
 
+/// Which container a `.rez` path holds. v1/v2 are tar archives; v3 is SQLite.
+///
+/// Not yet consumed by any caller — `is_rez_path` still gates every existing
+/// `.rez` consumer unchanged. Tasks C1/C2 migrate callers over to this.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RezFormat {
+    V3Sqlite,
+    V2Tar,
+    NotRez,
+}
+
+/// SQLite's file header: bytes 0..16 of every database it creates.
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// Detect a `.rez` container by content, not extension.
+///
+/// The SQLite check goes first because it is a 16-byte read, while the tar
+/// sniff walks entries looking for `manifest.json`. A file shorter than the
+/// magic simply falls through. This sits in front of `is_rez_path` without
+/// changing it: existing callers keep calling `is_rez_path`/`is_rez_reader`
+/// exactly as before, and only see v2 tar archives. A v3 SQLite file is not a
+/// tar, so `is_rez_path` correctly (and unchanged) reports `false` for it;
+/// callers must move to `detect_rez_format` to recognize v3.
+#[allow(dead_code)]
+pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0u8; 16];
+    let is_sqlite = match file.read_exact(&mut header) {
+        Ok(()) => &header == SQLITE_MAGIC,
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
+        Err(e) => return Err(e.into()),
+    };
+    if is_sqlite {
+        return Ok(RezFormat::V3Sqlite);
+    }
+    if is_rez_path(path)? {
+        Ok(RezFormat::V2Tar)
+    } else {
+        Ok(RezFormat::NotRez)
+    }
+}
+
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 
 /// A borrowed snapshot entry, tagged by shape.
@@ -2123,6 +2166,71 @@ mod archive_tests {
             RezValues::Counter(v) => assert_eq!(v, &vec![Some(10), Some(20)]),
             _ => panic!("expected counter"),
         }
+    }
+
+    fn write_minimal_v2_archive(path: &Path) {
+        let t = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
+            columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
+        };
+        let tables = [t];
+        write_archive(
+            path,
+            &[RecordingData {
+                dir: "rezolus".to_string(),
+                labels: [("source".to_string(), "rezolus".to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: BTreeMap::new(),
+                tables: &tables,
+            }],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn detects_v3_sqlite_v2_tar_and_neither() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // v3: a SQLite database created by the v3 container module.
+        let v3 = dir.path().join("v3.rez");
+        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        assert_eq!(detect_rez_format(&v3).unwrap(), RezFormat::V3Sqlite);
+
+        // v2: an actual tar archive, built the way the other tests here do.
+        let v2 = dir.path().join("v2.rez");
+        write_minimal_v2_archive(&v2);
+        assert_eq!(detect_rez_format(&v2).unwrap(), RezFormat::V2Tar);
+
+        // Neither: a bare parquet file.
+        let pq = dir.path().join("x.parquet");
+        std::fs::write(&pq, b"PAR1").unwrap();
+        assert_eq!(detect_rez_format(&pq).unwrap(), RezFormat::NotRez);
+
+        // Neither: a file too short to hold the SQLite magic. This must not panic
+        // or error — it falls through to the tar sniff and comes back NotRez.
+        let tiny = dir.path().join("tiny");
+        std::fs::write(&tiny, b"hi").unwrap();
+        assert_eq!(detect_rez_format(&tiny).unwrap(), RezFormat::NotRez);
+    }
+
+    #[test]
+    fn detection_does_not_change_is_rez_path() {
+        // Every existing consumer still calls is_rez_path; adding the v3 detector
+        // must not alter what it reports for a v2 archive or a non-archive.
+        let dir = tempfile::tempdir().unwrap();
+        let v2 = dir.path().join("v2.rez");
+        write_minimal_v2_archive(&v2);
+        assert!(is_rez_path(&v2).unwrap());
+
+        let v3 = dir.path().join("v3.rez");
+        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        // A v3 file is NOT a tar, so the legacy sniff correctly says false.
+        // This is why callers must migrate to detect_rez_format rather than
+        // having is_rez_path silently start returning true for SQLite files.
+        assert!(!is_rez_path(&v3).unwrap());
     }
 }
 
