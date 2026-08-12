@@ -294,7 +294,7 @@ fn combine_rez(
     output: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in files {
         let (manifest, recordings) = rez::read_archive_bytes(file)?;
@@ -307,7 +307,8 @@ fn combine_rez(
                 n += 1;
             }
             rec.dir = dir;
-            let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+            // Segments pass through byte-identical; only the `dir` changes.
+            let bytes: Vec<Vec<Vec<u8>>> = rb.tables.into_iter().map(|(_, b)| b).collect();
             out.push((rec, bytes));
         }
     }

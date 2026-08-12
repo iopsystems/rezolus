@@ -1,6 +1,12 @@
 //! The `.rez` per-sampler archive: an uncompressed tar of `manifest.json` plus
-//! one `<sampler>.parquet` table per sampler. See the Stage-3 plan header for
-//! the format decisions.
+//! one parquet table per sampler. See the Stage-3 plan header for the format
+//! decisions.
+//!
+//! A table is one or more parquet *segments* (schema v2), so an archive is
+//! either written whole (`manifest.json` first, then `<dir>/<sampler>.parquet`)
+//! or streamed (segments interleaved with checkpoint manifests, the last of
+//! which may be missing entirely on an unclean kill). Reading tolerates a
+//! truncated tail; see `read_archive_reader`.
 
 use std::collections::BTreeMap;
 
@@ -11,8 +17,6 @@ pub const REZ_SCHEMA_VERSION: u32 = 2;
 /// Highest manifest schema version this build can read. v1 shipped without a
 /// forward gate (which is what makes a downgraded/compacted v1-shaped manifest
 /// readable by old binaries); v2 adds one, because gates cannot be retrofitted.
-// The reader's gate lands with the truncation-tolerant reader.
-#[allow(dead_code)]
 pub const REZ_MAX_SUPPORTED_VERSION: u32 = 2;
 /// Manifest filename inside the tar.
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
@@ -480,15 +484,17 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
     Ok(())
 }
 
+/// One recording's manifest entry paired with its table bytes: the outer `Vec`
+/// is parallel to `RezRecording::tables`, the inner one holds that table's
+/// segments in order.
+pub type RecordingSegments = (RezRecording, Vec<Vec<Vec<u8>>>);
+
 /// Write a multi-recording `.rez` from already-encoded per-table parquet bytes
 /// (no re-encode). `recordings` pairs each recording's manifest entry with its
 /// table bytes (parallel to `recording.tables`). Errors on a duplicate `dir`
 /// (the reader keys tables by `<dir>/<file>`, so a collision would clobber) or a
 /// table-count/bytes mismatch. The caller assigns unique dirs.
-pub fn write_archive_bytes(
-    path: &Path,
-    recordings: &[(RezRecording, Vec<Vec<u8>>)],
-) -> Result<(), RezError> {
+pub fn write_archive_bytes(path: &Path, recordings: &[RecordingSegments]) -> Result<(), RezError> {
     let mut seen_dirs = std::collections::HashSet::new();
     for (rec, _) in recordings {
         if !seen_dirs.insert(rec.dir.clone()) {
@@ -515,19 +521,21 @@ pub fn write_archive_bytes(
             )
             .into());
         }
-        for (idx, bytes) in rec.tables.iter().zip(table_bytes) {
-            let segments = idx.segment_files();
-            let [file] = segments[..] else {
+        for (idx, segments) in rec.tables.iter().zip(table_bytes) {
+            let names = idx.segment_files();
+            if names.len() != segments.len() {
                 return Err(format!(
-                    "table {} in recording {} names {} segments but carries one blob",
+                    "table {} in recording {} names {} segment(s) but carries {} blob(s)",
                     idx.sampler,
                     rec.dir,
+                    names.len(),
                     segments.len()
                 )
                 .into());
-            };
-            let name = format!("{}/{}", rec.dir, file);
-            append_tar_entry(&mut builder, &name, bytes)?;
+            }
+            for (name, bytes) in names.iter().zip(segments) {
+                append_tar_entry(&mut builder, &format!("{}/{}", rec.dir, name), bytes)?;
+            }
         }
     }
     builder.into_inner()?.sync_all()?;
@@ -538,36 +546,25 @@ pub fn write_archive_bytes(
 /// Test-only eager reader; production uses `read_archive_bytes` → `RezReader`.
 #[cfg(test)]
 pub fn read_archive(path: &Path) -> Result<RezArchive, RezError> {
-    let file = std::fs::File::open(path)?;
-    let mut archive = tar::Archive::new(file);
-
-    let mut manifest: Option<RezManifest> = None;
-    let mut parquet_bytes: HashMap<String, Vec<u8>> = HashMap::new();
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let name = entry.path()?.to_string_lossy().into_owned();
-        let mut buf = Vec::new();
-        entry.read_to_end(&mut buf)?;
-        if name == REZ_MANIFEST_NAME {
-            manifest = Some(serde_json::from_slice(&buf)?);
-        } else if name.ends_with(".parquet") {
-            parquet_bytes.insert(name, buf);
-        }
-    }
-    let manifest = manifest.ok_or("missing manifest.json")?;
-
-    let mut all = Vec::with_capacity(manifest.recordings.len());
-    for rec in &manifest.recordings {
+    let (manifest, recordings) = read_archive_bytes(path)?;
+    let mut all = Vec::with_capacity(recordings.len());
+    for rec in recordings {
         let mut tables = Vec::with_capacity(rec.tables.len());
-        for idx in &rec.tables {
-            let [file] = idx.segment_files()[..] else {
-                return Err(format!("table {} is not a single segment", idx.sampler).into());
+        for (sampler, segments) in rec.tables {
+            // The eager decoder produces one `RezTable` per blob; segmented
+            // tables are the segment-aware source's job, not this test surface.
+            let bytes = match <[Vec<u8>; 1]>::try_from(segments) {
+                Ok([bytes]) => bytes,
+                Err(segs) => {
+                    return Err(format!(
+                        "table {sampler} has {} segments; read_archive decodes \
+                         single-segment tables only",
+                        segs.len()
+                    )
+                    .into());
+                }
             };
-            let path_in_tar = format!("{}/{}", rec.dir, file);
-            let bytes = parquet_bytes
-                .remove(&path_in_tar)
-                .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
-            tables.push(read_table_parquet(idx.sampler.clone(), bytes)?);
+            tables.push(read_table_parquet(sampler, bytes)?);
         }
         all.push(tables);
     }
@@ -582,51 +579,142 @@ pub struct RecordingBytes {
     pub dir: String,
     pub labels: BTreeMap<String, String>,
     pub metadata: BTreeMap<String, String>,
-    /// `(sampler, parquet_bytes)` in manifest order.
-    pub tables: Vec<(String, Vec<u8>)>,
+    /// False when the recording was recovered from a checkpoint rather than
+    /// cleanly finalized — data after its last row may be missing. Always true
+    /// for v1 archives, which predate unclean-kill recovery.
+    pub complete: bool,
+    /// `(sampler, segment_bytes)` in manifest order; segments in segment order.
+    pub tables: Vec<(String, Vec<Vec<u8>>)>,
 }
 
-/// Read a `.rez` from any reader into its manifest + per-recording raw parquet
-/// bytes (unlike `read_archive`, which decodes tables into `RezTable`s).
-pub fn read_archive_reader<R: std::io::Read>(
-    reader: R,
-) -> Result<(RezManifest, Vec<RecordingBytes>), RezError> {
-    let mut archive = tar::Archive::new(reader);
-    let mut manifest: Option<RezManifest> = None;
-    let mut parquet_bytes: HashMap<String, Vec<u8>> = HashMap::new();
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let name = entry.path()?.to_string_lossy().into_owned();
-        let mut buf = Vec::new();
-        entry.read_to_end(&mut buf)?;
-        if name == REZ_MANIFEST_NAME {
-            manifest = Some(serde_json::from_slice(&buf)?);
-        } else if name.ends_with(".parquet") {
-            parquet_bytes.insert(name, buf);
+/// Take the parquet blobs `manifest` references out of `blobs`.
+///
+/// Two phases on purpose. The presence check runs first and mutates nothing,
+/// so a manifest that does not resolve leaves `blobs` intact for the next
+/// (older) manifest to try. Only then are the bytes *moved* out rather than
+/// cloned — a `.rez` is read whole into memory, so copying would double peak
+/// RSS on a large archive.
+fn resolve(
+    manifest: &RezManifest,
+    blobs: &mut HashMap<String, Vec<u8>>,
+) -> Result<Vec<RecordingBytes>, RezError> {
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for rec in &manifest.recordings {
+        for idx in &rec.tables {
+            for seg in idx.segment_files() {
+                let path = format!("{}/{}", rec.dir, seg);
+                if !blobs.contains_key(&path) {
+                    return Err(format!("missing table file {path}").into());
+                }
+                // Two index entries naming one file would make the move below
+                // ill-defined; reject before touching anything.
+                if !seen.insert(path.clone()) {
+                    return Err(format!("table file {path} is referenced twice").into());
+                }
+            }
         }
     }
-    let manifest = manifest.ok_or("missing manifest.json")?;
+
+    // v1 predates unclean-kill recovery: every v1 writer emitted the whole
+    // archive at once, so a v1 recording is complete and the flag is not read.
+    let interpret_complete = manifest.version >= 2;
     let mut recordings = Vec::with_capacity(manifest.recordings.len());
     for rec in &manifest.recordings {
         let mut tables = Vec::with_capacity(rec.tables.len());
         for idx in &rec.tables {
-            let [file] = idx.segment_files()[..] else {
-                return Err(format!("table {} is not a single segment", idx.sampler).into());
-            };
-            let path_in_tar = format!("{}/{}", rec.dir, file);
-            let bytes = parquet_bytes
-                .remove(&path_in_tar)
-                .ok_or_else(|| format!("missing table file {path_in_tar}"))?;
-            tables.push((idx.sampler.clone(), bytes));
+            let mut segments = Vec::new();
+            for seg in idx.segment_files() {
+                let path = format!("{}/{}", rec.dir, seg);
+                segments.push(
+                    blobs
+                        .remove(&path)
+                        .ok_or_else(|| format!("missing table file {path}"))?,
+                );
+            }
+            tables.push((idx.sampler.clone(), segments));
         }
         recordings.push(RecordingBytes {
             dir: rec.dir.clone(),
             labels: rec.labels.clone(),
             metadata: rec.metadata.clone(),
+            complete: !interpret_complete || rec.complete,
             tables,
         });
     }
-    Ok((manifest, recordings))
+    Ok(recordings)
+}
+
+/// Read a `.rez` from any reader into its manifest + per-recording raw parquet
+/// bytes (unlike `read_archive`, which decodes tables into `RezTable`s).
+///
+/// Tar iteration is truncation-tolerant, because an unclean kill (SIGKILL,
+/// power loss) is a supported way for a streaming recording to end. The rules,
+/// stated precisely because the `tar` crate does not error where one would
+/// expect: an entry counts only if the bytes read equal the header's declared
+/// size; any tar error, short read, or unparseable manifest ends iteration.
+/// Recovery then uses the newest manifest whose files are all present — the
+/// newest one written may reference segments the truncated tail ate, since a
+/// checkpoint manifest is always followed by more segments.
+pub fn read_archive_reader<R: std::io::Read>(
+    reader: R,
+) -> Result<(RezManifest, Vec<RecordingBytes>), RezError> {
+    let mut archive = tar::Archive::new(reader);
+    // Every manifest in the archive, oldest first: the streaming writer appends
+    // a checkpoint manifest after each seal batch (duplicate tar names are
+    // legal and this reader is order-agnostic).
+    let mut manifests: Vec<RezManifest> = Vec::new();
+    let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
+
+    for entry in archive.entries()? {
+        // A truncated header errors here; everything before it is still good.
+        let Ok(mut entry) = entry else { break };
+        let size = entry.size();
+        let name = match entry.path() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(_) => break,
+        };
+        let mut buf = Vec::new();
+        // A mid-data truncation yields the entry `Ok` and reads a *silently*
+        // short buffer (the body is a `Take` over a reader already at EOF), so
+        // the length check — not the `Result` — is what catches it.
+        match entry.read_to_end(&mut buf) {
+            Ok(read) if read as u64 == size => {}
+            _ => break,
+        }
+        if name == REZ_MANIFEST_NAME {
+            match serde_json::from_slice::<RezManifest>(&buf) {
+                Ok(m) => {
+                    if m.version > REZ_MAX_SUPPORTED_VERSION {
+                        return Err(format!(
+                            "unsupported .rez manifest version {} (this build reads up to \
+                             version {}); upgrade rezolus to read this archive",
+                            m.version, REZ_MAX_SUPPORTED_VERSION
+                        )
+                        .into());
+                    }
+                    manifests.push(m);
+                }
+                // A half-persisted checkpoint manifest ends iteration; recovery
+                // falls back to the previous one.
+                Err(_) => break,
+            }
+        } else if name.ends_with(".parquet") {
+            blobs.insert(name, buf);
+        }
+    }
+
+    if manifests.is_empty() {
+        return Err("missing manifest.json".into());
+    }
+    // Newest resolvable manifest wins; report the newest failure if none does.
+    let mut newest_err: Option<RezError> = None;
+    while let Some(manifest) = manifests.pop() {
+        match resolve(&manifest, &mut blobs) {
+            Ok(recordings) => return Ok((manifest, recordings)),
+            Err(e) => newest_err = newest_err.or(Some(e)),
+        }
+    }
+    Err(newest_err.unwrap_or_else(|| "missing manifest.json".into()))
 }
 
 /// Read a `.rez` archive at `path` into manifest + per-recording raw bytes.
@@ -1329,10 +1417,14 @@ mod archive_tests {
         assert_eq!(recordings.len(), 1);
         assert_eq!(recordings[0].dir, "rezolus");
         assert_eq!(recordings[0].tables.len(), 1);
-        let (sampler, bytes) = &recordings[0].tables[0];
+        let (sampler, segments) = &recordings[0].tables[0];
         assert_eq!(sampler, "cpu_usage");
+        assert_eq!(segments.len(), 1);
+        let bytes = &segments[0];
         assert_eq!(&bytes[..4], b"PAR1");
         assert_eq!(&bytes[bytes.len() - 4..], b"PAR1");
+        // Written whole, so the recording is complete by construction.
+        assert!(recordings[0].complete);
     }
 
     #[test]
@@ -1361,7 +1453,7 @@ mod archive_tests {
         let (_da, a) = mk("cpu_usage", "redis");
         let (_db, b) = mk("cpu_usage", "valkey");
 
-        let mut recs: Vec<(RezRecording, Vec<Vec<u8>>)> = Vec::new();
+        let mut recs: Vec<RecordingSegments> = Vec::new();
         for (i, p) in [a, b].iter().enumerate() {
             let (m, rb) = read_archive_bytes(p).unwrap();
             let mut rec = m.recordings.into_iter().next().unwrap();
@@ -1586,6 +1678,228 @@ mod archive_tests {
             RezValues::Counter(v) => assert_eq!(v, &vec![Some(10), Some(20)]),
             _ => panic!("expected counter"),
         }
+    }
+}
+
+/// Truncation tolerance and manifest recovery. These build tars by hand
+/// because the geometry of the cut is the thing under test: the `tar` crate
+/// reports each failure mode differently (mid-data → a silently short entry,
+/// mid-header → an error, block boundary → clean EOF).
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use std::io::Cursor;
+
+    const SEG_A: &[u8] = b"segment-a-parquet-bytes";
+    const SEG_B: &[u8] = b"segment-b-parquet-bytes-which-are-longer";
+
+    fn tar_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut b = tar::Builder::new(Vec::new());
+        for (name, bytes) in entries {
+            let mut h = tar::Header::new_gnu();
+            h.set_path(name).unwrap();
+            h.set_size(bytes.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append(&h, *bytes).unwrap();
+        }
+        b.into_inner().unwrap()
+    }
+
+    /// Offset just past `entries`, i.e. where the next entry's header starts
+    /// (the tar minus its 1024-byte footer).
+    fn tar_prefix_len(entries: &[(&str, &[u8])]) -> usize {
+        tar_bytes(entries).len() - 1024
+    }
+
+    /// A manifest naming `files` (relative to the recording dir) as segments of
+    /// the one `cpu_usage` table. `complete` marks a finalize manifest.
+    fn manifest(files: &[&str], complete: bool) -> Vec<u8> {
+        let tables = if files.is_empty() {
+            Vec::new()
+        } else {
+            vec![RezTableIndex {
+                sampler: "cpu_usage".to_string(),
+                file: None,
+                files: files.iter().map(|f| f.to_string()).collect(),
+                columns: Vec::new(),
+                rows: files.len() as u64,
+                cadence_ns: None,
+            }]
+        };
+        serde_json::to_vec(&RezManifest {
+            version: REZ_SCHEMA_VERSION,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                complete,
+                clock_anchor_wall_ns: Some(1_700_000_000_000_000_000),
+                clock_offsets: Vec::new(),
+                tables,
+            }],
+        })
+        .unwrap()
+    }
+
+    /// The shape a streaming writer produces: an initial empty manifest, then
+    /// alternating segments and checkpoint manifests, then the final one.
+    fn checkpointed_entries() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        (
+            manifest(&[], false),
+            manifest(&["cpu_usage/0.parquet"], false),
+            manifest(&["cpu_usage/0.parquet", "cpu_usage/1.parquet"], true),
+        )
+    }
+
+    fn read(bytes: &[u8]) -> Result<(RezManifest, Vec<RecordingBytes>), RezError> {
+        read_archive_reader(Cursor::new(bytes.to_vec()))
+    }
+
+    /// `read` expecting failure (`RecordingBytes` holds blobs, so it is
+    /// deliberately not `Debug`/`unwrap_err`-able).
+    fn read_err(bytes: &[u8]) -> String {
+        match read(bytes) {
+            Ok(_) => panic!("expected the archive to fail to open"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// Asserts the archive recovered to the checkpoint that knows only segment A.
+    fn assert_recovered_to_first_segment(bytes: &[u8]) {
+        let (manifest, recs) = read(bytes).expect("truncated archive recovers");
+        assert!(
+            !manifest.recordings[0].complete,
+            "a checkpoint manifest is never complete"
+        );
+        assert_eq!(recs.len(), 1);
+        assert!(!recs[0].complete);
+        assert_eq!(recs[0].tables.len(), 1);
+        assert_eq!(recs[0].tables[0].0, "cpu_usage");
+        assert_eq!(recs[0].tables[0].1, vec![SEG_A.to_vec()]);
+    }
+
+    #[test]
+    fn multi_segment_tables_resolve_in_order() {
+        let (m0, m1, m2) = checkpointed_entries();
+        let tar = tar_bytes(&[
+            (REZ_MANIFEST_NAME, &m0),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m1),
+            ("rezolus/cpu_usage/1.parquet", SEG_B),
+            (REZ_MANIFEST_NAME, &m2),
+        ]);
+        let (manifest, recs) = read(&tar).unwrap();
+        assert!(manifest.recordings[0].complete);
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].complete);
+        assert_eq!(recs[0].tables.len(), 1);
+        assert_eq!(recs[0].tables[0].0, "cpu_usage");
+        // Segment order is manifest order, not tar order.
+        assert_eq!(
+            recs[0].tables[0].1,
+            vec![SEG_A.to_vec(), SEG_B.to_vec()],
+            "segments resolve in manifest order"
+        );
+    }
+
+    #[test]
+    fn version_gate_rejects_newer() {
+        let tar = tar_bytes(&[(REZ_MANIFEST_NAME, br#"{"version":3,"recordings":[]}"#)]);
+        let err = read_err(&tar);
+        assert!(err.contains('3') && err.contains('2'), "{err}");
+    }
+
+    // The subtle one, and the only geometry where the read-length check is what
+    // decides the outcome: a manifest that *precedes* the data it names (how
+    // `write_archive`/`write_archive_bytes` lay an archive out) can reference a
+    // segment the truncation ate. `tar` yields that entry `Ok` with a silently
+    // short buffer, so without the length check M2 would "resolve" against a
+    // corrupt stub instead of falling back to M1.
+    #[test]
+    fn truncated_mid_data_falls_back_to_previous_manifest() {
+        let m1 = manifest(&["cpu_usage/0.parquet"], false);
+        let m2 = manifest(&["cpu_usage/0.parquet", "cpu_usage/1.parquet"], true);
+        let entries: Vec<(&str, &[u8])> = vec![
+            (REZ_MANIFEST_NAME, &m1),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m2),
+            ("rezolus/cpu_usage/1.parquet", SEG_B),
+        ];
+        let full = tar_bytes(&entries);
+        let seg_b_data = tar_prefix_len(&entries[..3]) + 512;
+        assert_recovered_to_first_segment(&full[..seg_b_data + SEG_B.len() - 2]);
+    }
+
+    #[test]
+    fn truncated_mid_header_recovers() {
+        let (m0, m1, m2) = checkpointed_entries();
+        let entries: Vec<(&str, &[u8])> = vec![
+            (REZ_MANIFEST_NAME, &m0),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m1),
+            ("rezolus/cpu_usage/1.parquet", SEG_B),
+            (REZ_MANIFEST_NAME, &m2),
+        ];
+        let full = tar_bytes(&entries);
+        assert_recovered_to_first_segment(&full[..tar_prefix_len(&entries[..3]) + 100]);
+    }
+
+    #[test]
+    fn truncated_mid_manifest_falls_back() {
+        let (m0, m1, m2) = checkpointed_entries();
+        let entries: Vec<(&str, &[u8])> = vec![
+            (REZ_MANIFEST_NAME, &m0),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m1),
+            ("rezolus/cpu_usage/1.parquet", SEG_B),
+            (REZ_MANIFEST_NAME, &m2),
+        ];
+        let full = tar_bytes(&entries);
+        let m2_data = tar_prefix_len(&entries[..4]) + 512;
+        // Segment B is fully present here, but the manifest that references it
+        // is not readable — the previous checkpoint's view is what we can trust.
+        assert_recovered_to_first_segment(&full[..m2_data + m2.len() - 3]);
+    }
+
+    // A full-length manifest entry whose JSON is garbage (the parse-failure
+    // branch, as opposed to the short-read branch above).
+    #[test]
+    fn unparseable_tail_manifest_falls_back() {
+        let (m0, m1, _) = checkpointed_entries();
+        let tar = tar_bytes(&[
+            (REZ_MANIFEST_NAME, &m0),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m1),
+            (REZ_MANIFEST_NAME, b"{\"version\":2,\"recor"),
+        ]);
+        assert_recovered_to_first_segment(&tar);
+    }
+
+    #[test]
+    fn block_boundary_truncation_is_clean_eof() {
+        let (m0, m1, m2) = checkpointed_entries();
+        let entries: Vec<(&str, &[u8])> = vec![
+            (REZ_MANIFEST_NAME, &m0),
+            ("rezolus/cpu_usage/0.parquet", SEG_A),
+            (REZ_MANIFEST_NAME, &m1),
+            ("rezolus/cpu_usage/1.parquet", SEG_B),
+            (REZ_MANIFEST_NAME, &m2),
+        ];
+        let full = tar_bytes(&entries);
+        // Cut exactly after a complete entry, with no footer: iteration ends
+        // with no error at all, and the last complete manifest wins.
+        assert_recovered_to_first_segment(&full[..tar_prefix_len(&entries[..3])]);
+    }
+
+    // Tolerance is for truncation, not for a manifest that lies: with no older
+    // manifest to fall back to, an absent table file is still an error.
+    #[test]
+    fn single_manifest_missing_file_errors() {
+        let m = manifest(&["cpu_usage/0.parquet"], true);
+        let tar = tar_bytes(&[(REZ_MANIFEST_NAME, &m)]);
+        let err = read_err(&tar);
+        assert!(err.contains("rezolus/cpu_usage/0.parquet"), "{err}");
     }
 }
 

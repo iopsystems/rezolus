@@ -70,7 +70,28 @@ impl RezReader {
             .unwrap_or_default();
         let mut tables = Vec::new();
         for rec in recordings {
-            for (sampler, bytes) in rec.tables {
+            if !rec.complete {
+                tracing::warn!(
+                    "recording {} was not cleanly finalized; it was recovered up to its \
+                     last checkpoint and data after that may be missing",
+                    rec.dir
+                );
+            }
+            for (sampler, segments) in rec.tables {
+                // Multi-segment tables need the segment-aware source (which
+                // splices one timeline per series without a merge); until that
+                // is wired up, say so rather than reading a single segment.
+                let bytes = match <[Vec<u8>; 1]>::try_from(segments) {
+                    Ok([bytes]) => bytes,
+                    Err(segs) => {
+                        return Err(format!(
+                            "table {sampler} has {} parquet segments; segmented .rez \
+                             reading is not wired up yet",
+                            segs.len()
+                        )
+                        .into());
+                    }
+                };
                 let reader = ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
                     .map_err(|e| format!("opening table {sampler}: {e}"))?;
                 tables.push(SamplerReader { sampler, reader });
@@ -355,7 +376,7 @@ mod tests {
         let (_d, p) = two_sampler_rez();
         let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
         let rec0 = m.recordings.into_iter().next().unwrap();
-        let bytes0: Vec<Vec<u8>> = rb
+        let bytes0: Vec<Vec<Vec<u8>>> = rb
             .into_iter()
             .next()
             .unwrap()

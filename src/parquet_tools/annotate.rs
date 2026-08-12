@@ -253,7 +253,7 @@ fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::E
     let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
     let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
 
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     for ((mut rec, rb), (_labels, reader)) in manifest
         .recordings
         .into_iter()
@@ -267,7 +267,8 @@ fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::E
             crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
             annotated,
         );
-        let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+        // Segments pass through byte-identical; only manifest metadata changes.
+        let bytes: Vec<Vec<Vec<u8>>> = rb.tables.into_iter().map(|(_, b)| b).collect();
         out.push((rec, bytes));
     }
     let n = out.len();

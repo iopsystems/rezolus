@@ -141,7 +141,9 @@ fn filter_rez(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
     let (manifest, recordings) = rez::read_archive_bytes(path)?;
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    // Whole tables are dropped or kept; a kept table's segments pass through
+    // byte-identical.
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     let mut kept = 0usize;
     let mut total = 0usize;
     for (mut rec, rb) in manifest.recordings.into_iter().zip(recordings) {
