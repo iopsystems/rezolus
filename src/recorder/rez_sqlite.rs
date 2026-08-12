@@ -307,12 +307,15 @@ impl RezDb {
     ///
     /// The `ORDER BY seq` is load-bearing, not cosmetic: the reader splices
     /// segment bytes together assuming they arrive in sequence order, and SQL
-    /// makes no ordering guarantee without it. (On this SQLite, dropping the
-    /// clause still happens to come out sorted, because the equality WHERE on
-    /// `(recording_id, sampler)` is satisfied by a scan of the covering
-    /// `PRIMARY KEY (recording_id, sampler, seq)` index — confirmed with
-    /// `EXPLAIN QUERY PLAN` during review. That is a query-plan accident, not
-    /// a contract, so the explicit `ORDER BY` stays.)
+    /// makes no ordering guarantee without it. Confirmed with
+    /// `EXPLAIN QUERY PLAN`: dropping the clause does NOT fall back to
+    /// insertion order or to the primary key — the planner instead picks the
+    /// `segments_by_time` index for the `(recording_id, sampler)` equality
+    /// filter, which is ordered by `last_ts`, not `seq`, and is not even
+    /// covering (it still fetches `bytes` per row from the table). `last_ts`
+    /// happens to track `seq` in the common case (segments seal in order),
+    /// which is exactly the kind of coincidence that makes a missing
+    /// `ORDER BY` dangerous rather than obviously wrong.
     pub(crate) fn read_segments(
         &self,
         recording_id: i64,
@@ -584,7 +587,10 @@ CREATE TABLE segments(
 );
 -- The catalog half of the design: it makes hindsight retention
 -- (`WHERE last_ts < cutoff`) and range reads indexed lookups rather than
--- scans. Nothing queries it yet; that is not a reason to drop it.
+-- scans. `live_wal`'s subquery (`SELECT MAX(last_ts) FROM segments WHERE
+-- recording_id = ? AND sampler = ?`) already uses it — confirmed by
+-- `EXPLAIN QUERY PLAN` during review — so this is not a speculative index
+-- sitting unused; keep it maintained.
 CREATE INDEX segments_by_time ON segments(recording_id, sampler, last_ts);
 CREATE TABLE wal(
   recording_id INTEGER NOT NULL,
@@ -738,11 +744,18 @@ mod tests {
 
     #[test]
     fn segments_read_back_in_seq_order_not_insertion_order() {
-        // Insert seq 1 BEFORE seq 0. A missing `ORDER BY seq` would still pass
-        // if segments happened to be inserted in order, so this test inserts
-        // out of order on purpose — it is the only way to make the absence of
-        // the ORDER BY fail loudly instead of silently agreeing with rowid
-        // order.
+        // Insert seq 1 BEFORE seq 0, AND give seq 1 the smaller `last_ts`.
+        // That makes the three plausible orderings mutually distinct, so only
+        // a genuinely seq-ordered result can pass:
+        //   - insertion order:        (1, 0)
+        //   - `segments_by_time` order (by last_ts, the index the planner
+        //     falls back to without an explicit ORDER BY — see the doc
+        //     comment on `read_segments`): (1, 0), since 99 < 200
+        //   - primary-key / seq order:  (0, 1)  <- the only correct one
+        // A same-direction fixture (seq tracking last_ts, as in an earlier
+        // version of this test) leaves `segments_by_time` order coinciding
+        // with the correct order, so dropping `ORDER BY seq` would silently
+        // pass. This fixture doesn't have that escape hatch.
         let dir = tempfile::tempdir().unwrap();
         let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
         let rid = db
@@ -758,8 +771,8 @@ mod tests {
             1,
             &SegmentMeta {
                 rows: 10,
-                first_ts: 100,
-                last_ts: 200,
+                first_ts: 90,
+                last_ts: 99,
             },
             b"seq-one-bytes",
         )
@@ -770,8 +783,8 @@ mod tests {
             0,
             &SegmentMeta {
                 rows: 5,
-                first_ts: 0,
-                last_ts: 99,
+                first_ts: 100,
+                last_ts: 200,
             },
             b"seq-zero-bytes",
         )
@@ -1003,6 +1016,81 @@ mod tests {
     }
 
     #[test]
+    fn live_wal_watermark_is_scoped_to_its_own_sampler_and_recording() {
+        // The keystone query has TWO filters inside the watermark subquery
+        // (`sampler = ?2` and `recording_id = ?1`), and either one being
+        // dropped is invisible to the tests above: both are single-sampler,
+        // single-recording, and the multi-sampler / multi-recording tests
+        // elsewhere have no segments at all, so the subquery returns NULL
+        // everywhere it could otherwise discriminate.
+        //
+        // Two recordings x two samplers, seal a segment for (r1, cpu_usage)
+        // ONLY. If the subquery's `sampler` filter is missing, cpu_usage's
+        // watermark leaks into blockio's live_wal within r1. If the
+        // `recording_id` filter is missing, it leaks into r2's cpu_usage
+        // too. Either leak would silently truncate a quiet sampler's — or a
+        // second recording's — live WAL using a watermark that has nothing
+        // to do with it: exactly the failure mode this design exists to
+        // rule out.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let meta = |host: &str| RecordingMeta {
+            labels: [("host".to_string(), host.to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: 0,
+        };
+        let r1 = db.insert_recording(&meta("h1")).unwrap();
+        let r2 = db.insert_recording(&meta("h2")).unwrap();
+
+        // Seal (r1, cpu_usage) up to ts=30 — a high watermark, so a leaked
+        // filter would visibly truncate whichever WAL it leaked into.
+        db.insert_segment(
+            r1,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 3,
+                first_ts: 10,
+                last_ts: 30,
+            },
+            b"r1-cpu_usage-sealed",
+        )
+        .unwrap();
+
+        db.insert_wal_rows(r1, &[wal_row("cpu_usage", 40), wal_row("blockio", 5)])
+            .unwrap();
+        db.insert_wal_rows(r2, &[wal_row("cpu_usage", 5)]).unwrap();
+
+        // (r1, blockio) has never sealed — its watermark must be its own
+        // (nothing), not cpu_usage's 30.
+        let r1_blockio = db.live_wal(r1, "blockio").unwrap();
+        assert_eq!(
+            r1_blockio.len(),
+            1,
+            "blockio in r1 must not inherit cpu_usage's sealed watermark"
+        );
+        assert_eq!(r1_blockio[0].ts, 5);
+
+        // (r2, cpu_usage) has never sealed either — its watermark must not
+        // be r1's cpu_usage watermark, even though the sampler name matches.
+        let r2_cpu_usage = db.live_wal(r2, "cpu_usage").unwrap();
+        assert_eq!(
+            r2_cpu_usage.len(),
+            1,
+            "cpu_usage in r2 must not inherit r1's sealed watermark"
+        );
+        assert_eq!(r2_cpu_usage[0].ts, 5);
+
+        // Sanity: (r1, cpu_usage) itself is correctly filtered by its own
+        // watermark.
+        let r1_cpu_usage = db.live_wal(r1, "cpu_usage").unwrap();
+        assert_eq!(r1_cpu_usage.len(), 1);
+        assert_eq!(r1_cpu_usage[0].ts, 40);
+    }
+
+    #[test]
     fn prune_is_idempotent_and_bounded_to_one_sampler() {
         let (_dir, db, rid) = wal_test_db();
         db.insert_wal_rows(
@@ -1036,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_wal_rows_is_one_transaction_for_the_whole_tick() {
+    fn insert_wal_rows_inserts_every_row_in_the_batch() {
         let (_dir, db, rid) = wal_test_db();
         let samplers: Vec<WalRow> = (0..26)
             .map(|i| wal_row(&format!("sampler_{i}"), 100))
@@ -1048,6 +1136,51 @@ mod tests {
             let rows = db.read_wal(rid, &sampler).unwrap();
             assert_eq!(rows.len(), 1, "{sampler} should have its tick's row");
         }
+    }
+
+    #[test]
+    fn insert_wal_rows_is_one_transaction_for_the_whole_tick() {
+        // Asserting "all N rows present" after a call that succeeds (as
+        // `insert_wal_rows_inserts_every_row_in_the_batch` does) cannot tell
+        // one transaction apart from N independent autocommits — both leave
+        // every row present when nothing fails. The only way to observe
+        // "one transaction" is to make ONE row in the batch fail and check
+        // that the OTHERS, which would have committed fine on their own,
+        // are gone too.
+        //
+        // Two different samplers share ts=10 with a THIRD row that collides
+        // with the first on the primary key `(recording_id, sampler, ts)` —
+        // that collision is what fails the batch.
+        let (_dir, db, rid) = wal_test_db();
+        let err = db
+            .insert_wal_rows(
+                rid,
+                &[
+                    wal_row("cpu_usage", 10),
+                    wal_row("blockio", 10),
+                    wal_row("cpu_usage", 10), // duplicate PK: (rid, cpu_usage, 10)
+                ],
+            )
+            .expect_err("a PRIMARY KEY collision must fail the whole call");
+        assert!(
+            err.to_lowercase().contains("unique") || err.to_lowercase().contains("constraint"),
+            "{err:?} should name the PK collision, not some other failure"
+        );
+
+        // If this were N autocommits instead of one transaction, the first
+        // cpu_usage row and the blockio row (both collision-free) would have
+        // landed before the third row failed. One transaction means the
+        // whole tick is gone.
+        assert_eq!(
+            db.read_wal(rid, "cpu_usage").unwrap().len(),
+            0,
+            "a failed tick must leave NO rows, not the one that would have committed alone"
+        );
+        assert_eq!(
+            db.read_wal(rid, "blockio").unwrap().len(),
+            0,
+            "blockio's collision-free row must also be rolled back"
+        );
     }
 
     #[test]
