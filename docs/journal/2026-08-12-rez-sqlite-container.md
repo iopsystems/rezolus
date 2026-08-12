@@ -1,7 +1,9 @@
 # `.rez` v3 — SQLite container with a real WAL
 
 - **Opened:** 2026-08-12
-- **Status:** OPEN — design landed pre-build.
+- **Status:** OPEN — design landed pre-build; **gating measurements passed
+  2026-08-12 (both GO)**, and they amended three design decisions including a
+  reversal of open question 4. See "Gating measurements" below.
 - **Arc:** container replacement for the `.rez` work in
   [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md),
   [`.rez` reader ecosystem](2026-07-15-rez-reader-ecosystem.md) and
@@ -145,24 +147,140 @@ process death. This must be **measured**, not assumed; `synchronous=NORMAL` is
 the fallback if per-commit fsync perturbs the loop, at the cost of power-loss
 durability.
 
+## Gating measurements (2026-08-12, `10.1.0.1`, NVMe/ext4, SQLite 3.53.2)
+
+Standalone `rusqlite` harness, schema as sketched above, `journal_mode=WAL`,
+`page_size=4096`. **All durability-sensitive timings on NVMe** — `/tmp` on that
+host is tmpfs, where fsync is meaningless and would have made
+`synchronous=FULL` look 3.4× cheaper than it is. Budget throughout is the
+fleet-measured **~46 ms tick**.
+
+### 1. Eviction without `VACUUM` — **GO**
+
+Freed pages are reused. Steady state plateaus and *stays* there through 6–12×
+turnover of the entire working set:
+
+| BLOB | live | db / live | drift after plateau |
+|---|---|---|---|
+| 0.5 MiB | 226 MB | **1.0037** | none (5,000 cycles) |
+| 1.4 MB | 634 MB | **1.0041** | none (5,000 cycles) |
+| 4 MiB | 839 MB | **1.0062** | none (2,400 cycles) |
+| 8 MiB | 839 MB | **1.0111** | none (1,200 cycles) |
+
+The realistic mix (segments + 26 WAL rows/tick + prune) drifted **20 KB over
+4,800 cycles**. With segment sizes drawn randomly 0.5–8 MiB, `page_count` was
+flat across the last 2,600 cycles — 6× turnover — at 1.02× the high-water live
+size. Overflow-page chains cost ~1% at the largest BLOB, not a blowup.
+
+**Caveat, and it shapes the design:** the bound is the **high-water mark**, not
+current size. Shrinking the working set 16× left the file at **16.0× live**
+(1.5 GB parked on the free list, reusable but never returned to the OS). Bursty
+fleet data — a syscall storm making one table seal far more often — would
+permanently inflate a hindsight file to the worst minute it ever saw.
+
+**Therefore: create the DB with `auto_vacuum=INCREMENTAL` from day one.** It is
+free in steady state (per-cycle txn p50 **8.230 ms** vs **8.807 ms** for
+`NONE`) and costs +0.12% space for pointer maps — and it **cannot be enabled
+later without a full `VACUUM`**, so it is a build-time decision, not a tuning
+knob. Reclaim then trickles: `incremental_vacuum(100)` is p50 **3.8 ms** /
+p90 11.4 ms, inside the tick. Full reclaim of 1.5 GB takes 12.1 s if ever
+wanted; `VACUUM INTO` runs at ~530 MB/s and *is already the hindsight dump
+operation*, so hindsight gets compaction free at dump time.
+
+### 2. Insert cost — **GO, after two changes**
+
+Isolated costs fit with room. Segment insert (`synchronous=FULL`, NVMe):
+
+| encoded BLOB | p50 / p99 |
+|---|---|
+| 0.5 MiB | 3.8 / 12.6 ms |
+| **1.4 MiB (fleet average)** | **5.5 / 17.4 ms** |
+| 4 MiB | 22.9 / 28.7 ms |
+| 8 MiB | 41.6 / 47.5 ms |
+
+Per-tick WAL commit (26 rows, one txn) is p50 **3.6 ms** / p99 12.1 ms at
+measured row sizes, and still only p50 16.2 ms in the pathological case where
+every sampler is as large as `cpu_usage`. Plain `INSERT` beats incremental
+BLOB I/O — `blob_open` is **15–18% slower** at 4–8 MiB, so it is not needed.
+
+**But the design as written stalls, and not where expected.** The combined
+workload (46 ms paced ticks, fleet-derived seal periods, 120 s retention) gave
+seal ticks of p90 **212.7 ms** / max 517.7 ms, 30 overruns per 4,000 ticks. The
+culprit is the **in-transaction WAL prune** (p90 78 ms, max 245 ms, deleting up
+to 12,855 rows), not the segment insert (p50 5.4 ms). A quiet sampler sealing
+every 300 s has ~6,500 WAL rows to delete in one commit.
+
+| variant | seal-tick p50 / p90 / max | overruns / 4000 |
+|---|---|---|
+| as written (full rows, prune in-txn) | 40.4 / 212.7 / 517.7 | 30 |
+| value-only rows | 35.6 / 149.0 / 405.5 | 21 |
+| prune bounded to 200 rows/txn | 34.8 / 84.8 / 199.4 | 15 |
+| prune deferred outside txn | 25.4 / 44.4 / 100.9 | 5 |
+| **value-only + deferred prune (adopted)** | **22.6 / 41.5 / 94.8** | **5 (0.125%)** |
+
+**Keep `synchronous=FULL`.** Against `NORMAL` on the combined workload it is 5×
+more expensive at p50 (3.78 vs 0.75 ms) and **no better at any percentile that
+threatens the budget** (p99 33.5 vs 37.1; overruns 23 vs 27) — the tail is
+checkpoint and prune work, not fsync. Above 4 MiB the two are indistinguishable
+outright. Power-loss durability costs nothing where it matters.
+
+### 3. Concurrent reader — clean pass
+
+A second WAL-mode connection reading every segment BLOB and checksumming real
+bytes against writer-maintained counters, for 92 s: **0 torn reads, 0
+`SQLITE_BUSY`, 0 errors**. Writer impact **+0.7 ms** (p50 4.494 vs 3.780 ms).
+The tear-free-dump premise holds.
+
+## Design amendments from the measurements
+
+1. **The WAL prune moves OUT of the seal transaction** — this reverses open
+   question 4 below, which proposed the opposite. Putting the prune in the seal
+   txn does make a straddle impossible, but costs p90 78 ms. The cheaper answer
+   makes recovery tolerate the straddle instead: **on replay, drop WAL rows at
+   or below each sampler's maximum sealed `last_ts`.** One idempotent rule,
+   pruning becomes a background job with no correctness role, worth p90
+   212.7 → 44.4 ms on seal ticks.
+2. **WAL rows are values-only, not full msgpack** — settles open question 3.
+   Measured on a real 283,673-byte fleet snapshot decoded into its 26 sampler
+   groups: **1,925 B vs 10,908 B per sampler per tick**. That is 1.1 vs
+   6.2 MB/s of WAL churn at fleet cadence, and a 74.8 MiB vs 424.1 MiB `wal`
+   table at 120 s retention.
+3. **`auto_vacuum=INCREMENTAL` at creation** — see the high-water caveat above.
+   Must be decided before the first table exists.
+
+## Still open after the measurements
+
+- **Segment byte cap.** The cap is on *in-memory* bytes and encoded segments are
+  much smaller (the fleet's 8 MiB cap yielded ~585 KB encoded for
+  histogram-heavy `syscall_latency`, against a 1.4 MB all-segment average), so
+  the fleet never approached the 41.6 ms insert. But the compression ratio
+  varies by sampler and **has never been measured per-sampler**, so the worst
+  case is unknown. Options: trim the cap (more segments — overhead grows
+  superlinearly past ~25/table, and `syscall_latency` already hits 144 in
+  900 s), or size the writer's bounded channel to absorb the worst observed
+  burst (94.8 ms ≈ 2.1 ticks, so ≥3 ticks of depth). **Measure the per-sampler
+  encoded/in-memory ratio before choosing** — it is one short fleet recording.
+- **`page_size` left at the 4096 default and untested.** Larger pages would
+  shorten overflow chains for multi-MB BLOBs. Treat as un-optimized, not chosen.
+- **The `-wal` sidecar** reaches 24–79 MB depending on `wal_autocheckpoint` and
+  persists at its high-water size; it must be counted in hindsight's footprint,
+  or capped with `journal_size_limit` plus a checkpoint at finalize. The default
+  autocheckpoint (1000 pages) measured best for tail latency.
+
 ## Open questions to settle during implementation
 
-1. **Does eviction actually keep the file bounded without `VACUUM`?** SQLite
-   reuses freed pages via its free list, so a steady-state hindsight buffer
-   should plateau. If it does not, options are `auto_vacuum=INCREMENTAL` or
-   periodic `VACUUM INTO` — both with real costs. **Measure first, on
-   `10.1.0.1`, before building the rest.**
-2. **BLOB insert throughput at fleet scale.** Segments are up to 8 MiB and the
-   fleet run produced 22–605 MB archives; a segment insert must not stall the
-   scrape loop. Incremental BLOB I/O exists if a single large insert is too
-   coarse.
-3. **WAL row encoding.** Msgpack per row is the obvious choice (reuses
-   exposition types), but a row is a whole sampler's metrics at one timestamp —
-   worth checking the size against the alternative of one WAL row per metric.
-4. **Recovery ordering.** WAL rows for a sampler may straddle a segment that
-   sealed but whose WAL prune did not commit (crash between). Pruning in the
-   same transaction as the segment insert makes this impossible; confirm that
-   is what the writer does.
+1. ~~**Does eviction keep the file bounded without `VACUUM`?**~~ **Measured:
+   yes** (1.004–1.011× steady state). But the bound is the high-water mark, so
+   `auto_vacuum=INCREMENTAL` is adopted at creation — see amendments.
+2. ~~**BLOB insert throughput at fleet scale.**~~ **Measured:** 5.5 ms p50 at
+   the fleet's 1.4 MB average; plain `INSERT` beats `blob_open` by 15–18%. The
+   stall was the WAL prune, not the insert — see amendments.
+3. ~~**WAL row encoding.**~~ **Settled by measurement: values-only** (1,925 B
+   vs 10,908 B per sampler per tick, from a real fleet snapshot).
+4. ~~**Recovery ordering.**~~ **REVERSED by measurement.** In-transaction
+   pruning costs p90 78 ms / max 245 ms. The prune is now deferred outside the
+   seal transaction, and recovery tolerates the straddle: drop WAL rows at or
+   below each sampler's max sealed `last_ts`.
 5. **Multi-recording archives.** v2 supports several recordings in one `.rez`
    (multi-host / A-B, built by `parquet combine`). `combine` becomes an
    `INSERT ... SELECT` across files — likely simpler, but the ergonomics need
