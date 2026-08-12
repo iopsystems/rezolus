@@ -49,7 +49,7 @@ pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GR
 
 #[metric(
     name = "scheduler_context_switch",
-    description = "The number of involuntary context switches",
+    description = "The number of involuntary context switches, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
     metadata = { kind = "involuntary" }
 )]
 pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
@@ -94,7 +94,7 @@ pub static CGROUP_SCHEDULER_OFFCPU: CounterGroup = CounterGroup::new(MAX_CGROUPS
 
 #[metric(
     name = "cgroup_scheduler_context_switch",
-    description = "The number of involuntary context switches on a per-cgroup basis",
+    description = "The number of involuntary context switches on a per-cgroup basis, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
     metadata = { kind = "involuntary" }
 )]
 pub static CGROUP_SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
