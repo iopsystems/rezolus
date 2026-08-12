@@ -196,24 +196,6 @@ recording length, 55 ms under backpressure).
   read path, but not size: the +1.28 % overhead figure is still macOS-only,
   from a bespoke replay harness. *Reopen:* before quoting a fleet size
   overhead. Related: `syscall_latency` reached 144 segments in 900 s.
-## `.rez` v3 — SQLite container
-
-Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-sqlite-container.md)
-(design landed pre-build 2026-08-12).
-
-- **Measure SQLite eviction boundedness first** — Open, and gating. Confirm a
-  hindsight-style `DELETE` workload keeps the file size plateaued via free-page
-  reuse, without `VACUUM`. If not, the unification needs a different eviction
-  story. Measure on 10.1.0.1 before building the rest.
-- **Measure BLOB insert throughput at fleet scale** — Open, and gating.
-  Segments run to 8 MiB and fleet archives to 605 MB; a segment insert must not
-  stall the scrape loop.
-- **Hindsight migration to segments** — Roadmap. Retires the 4 KB slot ring
-  (`src/hindsight/state.rs`) and the separate dump-to-parquet path
-  (`src/hindsight/mod.rs:316`); dump becomes a consistent read.
-- **v2 tar → v3 conversion tool** — Open (on demand). Reading v2 stays
-  supported; a converter is only needed to bring old recordings forward.
-
 - **Per-table kill-loss for low-volume tables** — Open. At fleet scale a quiet
   table seals every 180–300 s, so an unclean kill can lose its whole recording
   while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
