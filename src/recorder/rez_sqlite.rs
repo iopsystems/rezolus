@@ -271,12 +271,42 @@ impl RezDb {
         Ok(out)
     }
 
-    /// Insert one sealed segment's bytes and catalog facts.
+    /// Run `f` inside ONE transaction: it commits when `f` returns `Ok` and
+    /// rolls back — leaving the database exactly as it was — when `f` returns
+    /// `Err` or the commit itself fails.
     ///
-    /// A plain `INSERT` with a `&[u8]` parameter, NOT incremental BLOB I/O
-    /// (`blob_open`): the gating run measured `blob_open` **15–18% slower**
-    /// at 4–8 MiB, so the simpler API is also the faster one here. See the
-    /// journal § "Insert cost".
+    /// This exists because the fleet seals **12 tables in lockstep** (see the
+    /// journal § "The binding constraint is co-seal lockstep"). Without a way
+    /// to group them, one co-seal is 12 implicit commits, i.e. 12 fsyncs at
+    /// `synchronous=FULL`, against a ~46 ms tick budget — and a single
+    /// 1.4 MB segment insert already measures 5.5 ms p50.
+    ///
+    /// `f` receives a `RezTx`, not the connection: SQL stays inside this
+    /// module, and `RezTx` deliberately exposes only the *writes that belong
+    /// in a seal batch*. `prune_wal` is NOT among them, which is how "the
+    /// prune runs outside the seal transaction" (p90 78 ms in-transaction) is
+    /// made unrepresentable rather than merely documented.
+    pub(crate) fn transaction<T>(
+        &mut self,
+        f: impl FnOnce(&RezTx<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let tx = RezTx {
+            tx: self
+                .conn
+                .transaction()
+                .map_err(|e| format!("failed to begin transaction: {e}"))?,
+        };
+        // `?` drops `tx` on the error path, and `Transaction`'s drop behavior
+        // is rollback — so a failure partway through leaves nothing behind.
+        let out = f(&tx)?;
+        tx.tx
+            .commit()
+            .map_err(|e| format!("failed to commit transaction: {e}"))?;
+        Ok(out)
+    }
+
+    /// Insert one sealed segment's bytes and catalog facts, committing on its
+    /// own. Batch writers should use `transaction` instead.
     pub(crate) fn insert_segment(
         &self,
         recording_id: i64,
@@ -285,22 +315,7 @@ impl RezDb {
         meta: &SegmentMeta,
         bytes: &[u8],
     ) -> Result<(), String> {
-        self.conn
-            .execute(
-                "INSERT INTO segments(recording_id, sampler, seq, rows, first_ts, last_ts, bytes) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    recording_id,
-                    sampler,
-                    seq as i64,
-                    meta.rows as i64,
-                    meta.first_ts as i64,
-                    meta.last_ts as i64,
-                    bytes,
-                ],
-            )
-            .map_err(|e| format!("failed to insert segment {sampler}#{seq}: {e}"))?;
-        Ok(())
+        insert_segment_sql(&self.conn, recording_id, sampler, seq, meta, bytes)
     }
 
     /// Every segment for `(recording_id, sampler)`, in `seq` order.
@@ -437,42 +452,19 @@ impl RezDb {
     /// transaction()` requires `&mut Connection`. An earlier version used
     /// `unchecked_transaction()` to keep `&self`, on the reasoning that this
     /// module never nests transactions — but the hazard `&mut` guards
-    /// against is on the CALLER's side, not this function's: B3's writer
+    /// against is on the CALLER's side, not this function's: the v3 writer
     /// thread owns this `RezDb` outright (the journal makes "no concurrent
-    /// writers to one file" an explicit non-goal) and will plausibly want a
-    /// transaction around a whole co-seal batch. `&mut self` makes "don't
-    /// open a nested transaction while one is outstanding" a compile error
-    /// for that caller instead of a runtime one. Reads stay on `&self`.
+    /// writers to one file" an explicit non-goal) and does want a transaction
+    /// around a whole co-seal batch — `transaction`, which this now goes
+    /// through. `&mut self` makes "don't open a nested transaction while one
+    /// is outstanding" a compile error for that caller instead of a runtime
+    /// one. Reads stay on `&self`.
     pub(crate) fn insert_wal_rows(
         &mut self,
         recording_id: i64,
         rows: &[WalRow],
     ) -> Result<(), String> {
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| format!("failed to begin WAL transaction: {e}"))?;
-        {
-            let mut stmt = tx
-                .prepare(
-                    "INSERT INTO wal(recording_id, sampler, ts, wall_offset, row) \
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                )
-                .map_err(|e| format!("failed to prepare WAL insert: {e}"))?;
-            for r in rows {
-                stmt.execute(rusqlite::params![
-                    recording_id,
-                    r.sampler,
-                    r.ts as i64,
-                    r.wall_offset,
-                    r.row,
-                ])
-                .map_err(|e| format!("failed to insert WAL row for {}: {e}", r.sampler))?;
-            }
-        }
-        tx.commit()
-            .map_err(|e| format!("failed to commit WAL transaction: {e}"))?;
-        Ok(())
+        self.transaction(|tx| tx.insert_wal_rows(recording_id, rows))
     }
 
     /// Every WAL row for `(recording_id, sampler)`, sealed or not, oldest
@@ -598,11 +590,139 @@ impl RezDb {
             .map_err(|e| format!("failed to read pragma {name}: {e}"))
     }
 
+    /// The recording's `(ts, offset_ns)` clock observations, oldest first.
+    pub(crate) fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ts, offset_ns FROM clock_offsets WHERE recording_id = ?1 ORDER BY ts")
+            .map_err(|e| format!("failed to query clock offsets: {e}"))?;
+        let rows = stmt
+            .query_map([recording_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| format!("failed to query clock offsets: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (ts, offset) = row.map_err(|e| format!("failed to read clock offset: {e}"))?;
+            out.push((ts as u64, offset));
+        }
+        Ok(out)
+    }
+
     pub(crate) fn pragma_string(&self, name: &str) -> Result<String, String> {
         self.conn
             .pragma_query_value(None, name, |row| row.get(0))
             .map_err(|e| format!("failed to read pragma {name}: {e}"))
     }
+}
+
+/// The writes that may share one transaction, handed to `RezDb::transaction`'s
+/// closure. Everything here lands or nothing does.
+///
+/// What is absent is as deliberate as what is present: there is no `prune_wal`
+/// and no read accessor. The prune belongs OUTSIDE the seal transaction
+/// (measured p90 78 ms / max 245 ms inside it), and `live_wal`'s watermark
+/// filter is what makes a crash between the two harmless — see `live_wal`.
+pub(crate) struct RezTx<'a> {
+    tx: rusqlite::Transaction<'a>,
+}
+
+impl RezTx<'_> {
+    /// Insert one sealed segment's bytes and catalog facts.
+    ///
+    /// A plain `INSERT` with a `&[u8]` parameter, NOT incremental BLOB I/O
+    /// (`blob_open`): the gating run measured `blob_open` **15–18% slower**
+    /// at 4–8 MiB, so the simpler API is also the faster one here. See the
+    /// journal § "Insert cost".
+    pub(crate) fn insert_segment(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+        seq: u64,
+        meta: &SegmentMeta,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        insert_segment_sql(&self.tx, recording_id, sampler, seq, meta, bytes)
+    }
+
+    /// Insert every WAL row for one tick — one sampler each, typically.
+    pub(crate) fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
+        let mut stmt = self
+            .tx
+            .prepare(
+                "INSERT INTO wal(recording_id, sampler, ts, wall_offset, row) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .map_err(|e| format!("failed to prepare WAL insert: {e}"))?;
+        for r in rows {
+            stmt.execute(rusqlite::params![
+                recording_id,
+                r.sampler,
+                r.ts as i64,
+                r.wall_offset,
+                r.row,
+            ])
+            .map_err(|e| format!("failed to insert WAL row for {}: {e}", r.sampler))?;
+        }
+        Ok(())
+    }
+
+    /// Append one `(ts, offset_ns)` clock observation for the recording.
+    pub(crate) fn insert_clock_offset(
+        &self,
+        recording_id: i64,
+        ts: u64,
+        offset_ns: i64,
+    ) -> Result<(), String> {
+        self.tx
+            .execute(
+                "INSERT INTO clock_offsets(recording_id, ts, offset_ns) VALUES (?1, ?2, ?3)",
+                rusqlite::params![recording_id, ts as i64, offset_ns],
+            )
+            .map_err(|e| format!("failed to insert clock offset: {e}"))?;
+        Ok(())
+    }
+
+    /// Mark the recording cleanly finalized. This is what replaced the
+    /// `.partial` filename convention: the file is valid from creation, so
+    /// "was it finished" is a queryable property instead of a name.
+    pub(crate) fn mark_complete(&self, recording_id: i64) -> Result<(), String> {
+        self.tx
+            .execute(
+                "UPDATE recordings SET complete = 1 WHERE id = ?1",
+                [recording_id],
+            )
+            .map_err(|e| format!("failed to mark recording {recording_id} complete: {e}"))?;
+        Ok(())
+    }
+}
+
+/// Shared by `RezDb::insert_segment` (its own commit) and
+/// `RezTx::insert_segment` (part of a batch): `Transaction` derefs to
+/// `Connection`, so both reach the same statement.
+fn insert_segment_sql(
+    conn: &Connection,
+    recording_id: i64,
+    sampler: &str,
+    seq: u64,
+    meta: &SegmentMeta,
+    bytes: &[u8],
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO segments(recording_id, sampler, seq, rows, first_ts, last_ts, bytes) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            recording_id,
+            sampler,
+            seq as i64,
+            meta.rows as i64,
+            meta.first_ts as i64,
+            meta.last_ts as i64,
+            bytes,
+        ],
+    )
+    .map_err(|e| format!("failed to insert segment {sampler}#{seq}: {e}"))?;
+    Ok(())
 }
 
 /// The catalog. Segment and WAL payloads are opaque BLOBs; everything the
@@ -1264,6 +1384,58 @@ mod tests {
             db.read_wal(rid, "blockio").unwrap().len(),
             0,
             "blockio's collision-free row must also be rolled back"
+        );
+    }
+
+    #[test]
+    fn a_transaction_commits_the_whole_batch_or_none_of_it() {
+        // The reason `transaction` exists: the fleet seals 12 tables in
+        // lockstep, and 12 implicit commits at `synchronous=FULL` is 12 fsyncs
+        // against a ~46 ms tick. One commit is the point, and "one commit" is
+        // only observable by making ONE statement in the batch fail and
+        // checking that the others — which would have committed fine on their
+        // own — are gone too.
+        let (_dir, mut db, rid) = wal_test_db();
+        let meta = |first_ts, last_ts| SegmentMeta {
+            rows: 1,
+            first_ts,
+            last_ts,
+        };
+
+        // A batch that succeeds commits every statement in it.
+        db.transaction(|tx| {
+            tx.insert_segment(rid, "cpu_usage", 0, &meta(10, 19), b"cpu-0")?;
+            tx.insert_segment(rid, "blockio", 0, &meta(10, 19), b"blk-0")?;
+            tx.insert_wal_rows(rid, &[wal_row("cpu_usage", 20)])
+        })
+        .unwrap();
+        assert_eq!(db.read_segments(rid, "cpu_usage").unwrap().len(), 1);
+        assert_eq!(db.read_segments(rid, "blockio").unwrap().len(), 1);
+        assert_eq!(db.read_wal(rid, "cpu_usage").unwrap().len(), 1);
+
+        // A batch that fails partway leaves the database untouched — not even
+        // the segment that was inserted before the failing one.
+        let err = db
+            .transaction(|tx| {
+                tx.insert_segment(rid, "cpu_usage", 1, &meta(20, 29), b"cpu-1")?;
+                tx.insert_segment(rid, "blockio", 1, &meta(20, 29), b"blk-1")?;
+                // Duplicate primary key (recording, sampler, seq): fails.
+                tx.insert_segment(rid, "cpu_usage", 1, &meta(20, 29), b"dup")
+            })
+            .expect_err("a PRIMARY KEY collision must fail the whole batch");
+        assert!(
+            err.to_lowercase().contains("unique") || err.to_lowercase().contains("constraint"),
+            "{err:?} should name the PK collision, not some other failure"
+        );
+        assert_eq!(
+            db.read_segments(rid, "cpu_usage").unwrap().len(),
+            1,
+            "seq 1 must be rolled back, leaving only the committed seq 0"
+        );
+        assert_eq!(
+            db.read_segments(rid, "blockio").unwrap().len(),
+            1,
+            "blockio's collision-free insert must be rolled back too"
         );
     }
 
