@@ -196,6 +196,21 @@ impl RezWriterHandle {
     /// channel is full: that is the intended backpressure signal.
     pub(crate) fn seal(&mut self, batch: Vec<SealJob>) -> Result<(), String> {
         if batch.is_empty() {
+            // An empty batch is the common case — nothing is due most ticks —
+            // but returning `Ok` unconditionally means writer health is only
+            // ever polled when something IS due. After the writer stored an
+            // error and exited, the recording loop would go on reporting
+            // success for up to `max_age` (5 min) of samples it can no longer
+            // durably write. Cheap enough to check every tick.
+            if self
+                .thread
+                .as_ref()
+                .is_some_and(std::thread::JoinHandle::is_finished)
+            {
+                return Err(self.join().err().unwrap_or_else(|| {
+                    "the .rez writer thread exited before the recording finished".to_string()
+                }));
+            }
             return Ok(());
         }
         self.send(WriterMsg::Seal(batch))
@@ -951,6 +966,38 @@ mod tests {
         assert!(
             manifest.recordings[0].tables.is_empty(),
             "the writer stopped at the first error"
+        );
+        assert!(!out.exists());
+    }
+
+    // A dead writer must also be noticed while nothing is due to seal. Seals
+    // are age/size driven, so between them the loop hands over empty batches
+    // for up to `max_age` (5 min) — that whole window used to report success
+    // against a writer that had already stored an error and exited.
+    #[test]
+    fn writer_error_surfaces_on_an_empty_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+
+        let mut handle = RezWriterHandle::create(&out, seed()).unwrap();
+        handle.seal(vec![unencodable_job("cpu_usage")]).unwrap();
+
+        // Only empty batches from here — exactly what a tick with nothing due
+        // hands over. Bounded retry because the writer fails asynchronously.
+        let mut surfaced = None;
+        for _ in 0..500 {
+            match handle.seal(Vec::new()) {
+                Ok(()) => std::thread::sleep(Duration::from_millis(1)),
+                Err(e) => {
+                    surfaced = Some(e);
+                    break;
+                }
+            }
+        }
+        let err = surfaced.expect("a dead writer must surface on an empty batch too");
+        assert!(
+            err.contains("failed to encode a cpu_usage segment"),
+            "the writer's stored error, not a generic one: {err}"
         );
         assert!(!out.exists());
     }
