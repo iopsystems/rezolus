@@ -29,6 +29,7 @@
 // the offsets to use in the `counters` group
 #define USER_OFFSET 0
 #define SYSTEM_OFFSET 1
+#define EXITED_OFFSET 2
 
 // the offsets to use in the `softirqs` group
 #define HI 0
@@ -191,6 +192,15 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_system SEC(".maps");
 
+// per-cgroup CPU time belonging to tasks that have since exited
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
+} cgroup_exited SEC(".maps");
+
 /**
  * handle_new_task - Check if task is new/reused and send info to userspace
  * @task: The task_struct to check
@@ -326,6 +336,7 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
         u64 zero = 0;
         bpf_map_update_elem(&cgroup_user, &cgroup_id, &zero, BPF_ANY);
         bpf_map_update_elem(&cgroup_system, &cgroup_id, &zero, BPF_ANY);
+        bpf_map_update_elem(&cgroup_exited, &cgroup_id, &zero, BPF_ANY);
     }
 
     if (delta_utime > 0) {
@@ -346,6 +357,31 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
     u32 pid = BPF_CORE_READ(task, pid);
     if (pid == 0 || pid >= MAX_PID)
         return 0;
+
+    // Fold this task's total into the exited-task aggregates before dropping it.
+    // The per-task counter and its metadata are released together below, so
+    // without this the time is simply gone: the cgroup and host totals still
+    // include it, but no per-task series accounts for it, and a consumer cannot
+    // tell how much of the task view is missing. These aggregates let the books
+    // be reconciled -- sum(live tasks) + exited ~= cgroup total -- at O(1) cost
+    // and with no additional cardinality.
+    u64* usage = bpf_map_lookup_elem(&task_cpu_usage, &pid);
+    if (usage && *usage) {
+        u32 cpu = bpf_get_smp_processor_id();
+
+        if (cpu < MAX_CPUS) {
+            array_add(&cpu_usage, CPU_USAGE_GROUP_WIDTH * cpu + EXITED_OFFSET, *usage);
+        }
+
+        struct task_group* tg = BPF_CORE_READ(task, sched_task_group);
+        if (tg) {
+            int cgroup_id = BPF_CORE_READ(tg, css.id);
+
+            if (cgroup_id > 0 && cgroup_id < MAX_CGROUPS) {
+                array_add(&cgroup_exited, cgroup_id, *usage);
+            }
+        }
+    }
 
     // Zero the exported counter FIRST to prevent exporting values without metadata
     u64 zero = 0;

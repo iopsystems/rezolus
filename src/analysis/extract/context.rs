@@ -136,6 +136,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_cpu_throttled_time", "cpu_bandwidth"),
     ("cgroup_cpu_tlb_flush", "cpu_tlb_flush"),
     ("cgroup_cpu_usage", "cpu_usage"),
+    ("cgroup_cpu_usage_exited_tasks", "cpu_usage"),
     ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
     ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
     ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
