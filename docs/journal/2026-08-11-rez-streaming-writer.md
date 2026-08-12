@@ -1,20 +1,19 @@
 # Streaming segmented `.rez` writer — bounded-time finalization
 
 - **Opened:** 2026-08-11
-- **Status:** **IMPLEMENTED & MEASURED** (2026-08-12). Finalize is bounded and
-  independent of recording length: **9 runs across a 30× length range (30 s /
-  300 s / 900 s) all finalize in 19.6–37.1 ms, median 29.2 ms, with fully
-  overlapping distributions and no trend** — a 900 s / 89,962-row /
-  22-segment-per-table / 7.02 MB archive finalized in **22.6 ms** (design
-  target was "well inside a 10 s docker grace window"; measured is two orders
-  better). Kill-safe: SIGKILL left a `.partial` that opens, self-reports "not
-  cleanly finalized", and answers PromQL. Under genuine backpressure
-  (~100 MB/s of writes, 14.8 % of ticks blocked) SIGTERM→exit was still
-  **55 ms**. Zero skipped scrape ticks in 89,961 intervals at production seal
-  settings. **Caveat: all absolutes are from a 3-sampler macOS agent with
-  ~1 KB snapshots; the length-independence result is structural and transfers,
-  the ~30 ms figure does not** — a Linux fleet re-measurement (25 samplers,
-  histogram-heavy) is the honest follow-up before quoting a fleet number.
+- **Status:** **IMPLEMENTED & MEASURED**, macOS 2026-08-12 and **Linux fleet
+  2026-08-12**. Finalize is bounded by the **open segments, not recording
+  length**: on a 26-table Linux BPF agent (Debian 13, kernel 6.12, 278 KB
+  snapshots) a **30× longer recording — 28× more bytes, 13× more segments —
+  costs 1.25× more finalize**, at **258.7–404.3 ms, median 303.7 ms**. That is
+  ~10.4× the 3-sampler macOS figure (19.6–37.1 ms, median 29.2 ms) and still
+  ~33× inside a 10 s container grace window. Kill-safe: SIGKILL leaves a
+  `.partial` that opens, self-reports "not cleanly finalized", and answers
+  PromQL. Sealing does not perturb the scrape loop (seal-boundary vs interior
+  delta medians differ by 0.15 %; 0 skipped ticks at an attainable interval).
+  Under genuine backpressure SIGTERM→exit was 55 ms; at `--interval 30s` it is
+  ~3 ms on Linux. The Linux release build (eBPF via libbpf-cargo + clang 19)
+  succeeds — previously untested outside CI.
 - **Arc:** continuation of the `.rez` container work in
   [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md) and
   [`.rez` reader ecosystem](2026-07-15-rez-reader-ecosystem.md).
@@ -567,10 +566,61 @@ after that fatal failure, so a supervisor or docker healthcheck could not tell
 a failed recording from a good one. Fixed in `1c21bb79`; the failure flag
 outranks a wrapped command's own status.
 
-**Unmeasured / deferred:** a Linux fleet-scale run (25 samplers,
-histogram-heavy tables) — the figures above are a lower bound on finalize
-cost, which scales with the *open segment* (bounded by `max_bytes`/`max_rows`),
-not with duration.
+## Outcome — Linux fleet scale (2026-08-12)
+
+Re-measured on `hv01` (Debian 13, kernel 6.12, 64 cores) against a live
+26-table BPF agent with 278 KB snapshots — the case the macOS figures could
+not exercise. Binary built on the host from the branch (release build with
+eBPF compilation succeeds; this was the first Linux build outside CI).
+
+| recorded | finalize (3 runs, ms) | archive | segments (total / max table) |
+|---|---|---|---|
+| ~30 s | 289.8, 303.7, 309.7 | 22 MB | 33 / 5 |
+| ~300 s | 270.7, 261.4, 258.7 | 203 MB | 157 / 49 |
+| ~900 s | 367.6, 404.3, 378.3 | 605 MB | 432 / 144 |
+
+All 9: **258.7 / 303.7 / 404.3 ms** (min/median/max) — a 1.56× spread across a
+30× length range, and **non-monotonic** (the 300 s runs are the fastest). What
+finalize flushes is the tails: 16.2 MB at 30 s, ~20.6 MB at 300 s, 25.6–27.7 MB
+at 900 s, against a structural cap of 26 tables × 8 MiB = 208 MB. The only
+strictly O(length) term is the manifest, which grows 74.5 → 112.9 KB over 30×.
+
+**Three things differ materially from macOS and are worth stating plainly:**
+
+1. **`--interval 10ms` is unattainable at fleet scale.** One scrape of this
+   agent costs ~39 ms for 278 KB, so the loop runs scrape-bound at ~46–48 ms.
+   Every macOS figure quoted "at 10 ms" is really "at 46 ms" here; cadence had
+   to be re-tested at 100 ms to isolate sealing.
+2. **Per-length finalize clusters do not overlap** (macOS's did). They are not
+   monotonic in length, so the no-trend conclusion holds, but the honest claim
+   is *bounded by the open segments, sub-linear in length* — not strictly
+   independent of it.
+3. **Kill recovery is per-table.** At `kill -9` 120 s into a run, only 10 of 26
+   tables recovered anything; the other 16 had **zero sealed segments** because
+   their seal period is 180 s (byte-capped, low volume) — longer than the run.
+   Correct by policy and invisible on a 3-sampler agent, but it means the loss
+   window for a quiet table can be the entire recording. **This is the
+   strongest argument for the WAL follow-on:** a WAL covering the unsealed tail
+   would have recovered all 26.
+
+Surviving tables lost 4.03–27.32 s against a 195 s structural bound
+(`max_rows` 4096 × 47.6 ms). Cadence at 900 s on the heaviest-sealing table
+(144 segments): strictly monotonic, boundary/interior median ratio **1.0015**,
+boundary max (83.5 ms) *below* interior max (92.4 ms). At an attainable 100 ms
+interval: **0 skipped ticks in 1,201 intervals**. Read path on a 197 MB /
+149-segment archive: `parquet metadata` 0.21 s, `mcp query` 0.71 s.
+
+Heterogeneous cadence — the reason `.rez` exists — is visibly working: seal
+periods within one archive range from **6.2 s** (`syscall_latency`, 144
+segments) to 180 s (15 light tables) to 300 s (`drivehealth`, which samples at
+56.5 s), a 29× spread driven entirely by the byte cap.
+
+**Still unmeasured:** the size cost of segmentation at fleet scale. The macOS
+figure (+1.28 % at the default policy) came from a bespoke replay harness and
+**should not be quoted as the fleet number** — `syscall_latency` reached 144
+segments in 900 s, well past the ~25 the macOS sweep called expensive, though
+these are 8 MiB byte-capped segments rather than the small-segment pathology
+that sweep explored.
 
 ## Adversarial design review (2026-08-11, pre-build)
 
@@ -624,8 +674,16 @@ cannot see `complete: false`.
 
 ## Deferred (surfaced during implementation)
 
-- **Linux fleet re-measurement.** Every number in the Outcome section is from a
-  3-sampler macOS agent. *Reopen:* before quoting a fleet finalize figure.
+- ~~**Linux fleet re-measurement.**~~ **Done 2026-08-12** — see the fleet
+  Outcome section above (~300 ms median, 26-table BPF agent).
+- **Fleet-scale size cost of segmentation** — the only figure still macOS-only
+  (+1.28 % at the default policy, from a bespoke replay harness). *Reopen:*
+  before quoting a fleet size overhead, or if segment counts per table (144 in
+  900 s for `syscall_latency`) start looking expensive.
+- **Per-table kill-loss for low-volume tables.** A quiet table's seal period is
+  180–300 s, so an unclean kill can lose its entire recording while busy tables
+  lose seconds. Superseded by the WAL work if that lands; until then it is a
+  documented property, not a bug.
 - **WASM viewer has no `.rez` support at all** (`crates/viewer/` is
   parquet-only). Pre-existing, not a regression — but the static-site viewer
   silently cannot open any streamed recording. Exactly the divergence the

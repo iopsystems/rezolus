@@ -191,10 +191,16 @@ Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-wri
 (implemented + measured 2026-08-12; finalize 19.6–37.1 ms independent of
 recording length, 55 ms under backpressure).
 
-- **Linux fleet re-measurement of finalize cost** — Open. All measured figures
-  come from a 3-sampler macOS agent (~1 KB snapshots); a 25-sampler
-  histogram-heavy Linux agent will finalize slower by a constant tied to
-  segment size, not duration. *Reopen:* before quoting a fleet number.
+- **Fleet-scale size cost of segmentation** — Open. The Linux fleet
+  re-measurement (2026-08-12) covered finalize, kill recovery, cadence and the
+  read path, but not size: the +1.28 % overhead figure is still macOS-only,
+  from a bespoke replay harness. *Reopen:* before quoting a fleet size
+  overhead. Related: `syscall_latency` reached 144 segments in 900 s.
+- **Per-table kill-loss for low-volume tables** — Open. At fleet scale a quiet
+  table seals every 180–300 s, so an unclean kill can lose its whole recording
+  while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
+  from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
+  close it.
 - **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
   parquet-only, so the static-site viewer silently fails on every streamed
   recording. Pre-existing gap, newly load-bearing now that `.rez` is the
