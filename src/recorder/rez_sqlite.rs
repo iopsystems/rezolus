@@ -190,6 +190,18 @@ impl RezDb {
         // Applied to writers too: `cache_size` is an upper bound on the page
         // cache, not an allocation, and readers are the ones that benefit.
         self.set_pragma("cache_size", CACHE_SIZE_KIB)?;
+        // NOT set here, and worth knowing about: `busy_timeout` is 5000 ms —
+        // rusqlite's default, not SQLite's own (which is 0, i.e. fail at
+        // once) and not ours. It never fires for the writer, which owns its
+        // file (the journal makes concurrent writers to one file an explicit
+        // non-goal), and it never fires for a reader either, because WAL mode
+        // lets readers proceed while a write is in flight. The one caller it
+        // can bite is a SECOND connection that writes: it will stall up to 5 s
+        // before `SQLITE_BUSY`, which against a ~46 ms tick reads as a hang.
+        // Left at the default deliberately rather than tuned — no measurement
+        // supports any particular number, and every candidate is a guess about
+        // a caller that does not exist yet. A future one should set its own,
+        // with a value it can justify.
         Ok(())
     }
 

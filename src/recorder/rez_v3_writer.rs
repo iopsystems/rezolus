@@ -3,7 +3,10 @@
 //! Same shape as the v2 writer (`rez_stream.rs`): a dedicated thread behind a
 //! bounded channel, so encoding a large segment cannot skew the scrape cadence
 //! and a disk that cannot keep up backpressures the loop instead of growing
-//! memory. Everything the tar container needed to fake transactions is gone —
+//! memory — with one bounded exception, unlike v2: a seal batch is encoded
+//! whole before its transaction opens, so its segments' bytes are all resident
+//! at once (see `seal_batch`). Everything the tar container needed to fake
+//! transactions is gone —
 //! no `.partial`, no rename, no rename-aside, no checkpoint manifests, no
 //! two-sync ordering protocol. **A seal batch is one transaction**, and the
 //! file at `path` is a valid, openable `.rez` from the moment `create` returns.
@@ -28,6 +31,17 @@ use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
 /// per-recording tar directory — a recording IS a row in `recordings` — so the
 /// v2 writer's `ManifestSeed` is exactly `RecordingMeta` here, minus `dir`.
 /// The name is kept so the two writers read alike at their call sites.
+///
+/// **`dir` was also a display name, and v3 owes its consumers a substitute.**
+/// Besides naming the tar directory it was the user-visible recording name in
+/// two places: `parquet metadata`'s `recording {dir} [labels]` line
+/// (`src/parquet_tools/metadata.rs`) and the viewer's per-capture display
+/// filename (`src/rez_reader.rs` → `capture_registry.rs`). Both should derive
+/// one from what v3 stores instead — `rez::recording_dir_slug(&labels)`, which
+/// is what produced `dir` in the first place, or `recording {id}` — rather
+/// than reintroduce the field. A/B aliasing is NOT affected: both viewer paths
+/// alias baseline/experiment on `arm`/`host` labels only, and `labels` survives
+/// verbatim in the `recordings` row.
 pub(crate) type ManifestSeed = RecordingMeta;
 
 /// One sealed segment handed to the writer thread. The table already carries
@@ -241,6 +255,13 @@ fn seal_batch(
     // Encoding happens BEFORE the transaction opens: it is CPU work
     // proportional to segment size (the fleet's worst single segment is
     // 6.23 MiB) and would hold the write lock for its whole duration.
+    //
+    // The cost, and it is a real divergence from v2, which encoded and
+    // appended one segment at a time: the WHOLE batch is resident before
+    // anything is inserted — ~75 MiB for a 12-table co-seal of worst-case
+    // segments. That is bounded (by the batch, which the seal policy bounds)
+    // and it is the price of "insert all of them in one transaction"; the
+    // alternative is holding the write lock across every encode.
     let mut encoded = Vec::with_capacity(batch.len());
     // The batch's clock observation: the NEWEST sealed row's
     // `(timestamp, wall_offset)`, paired with that same table's offset — never
