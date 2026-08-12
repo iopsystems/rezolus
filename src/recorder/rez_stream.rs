@@ -1,11 +1,11 @@
 //! Streaming `.rez` writer thread. See docs/journal/2026-08-11-rez-streaming-writer.md.
 //!
-//! `RezWriterHandle` owns a dedicated writer thread that encodes sealed
-//! segments to parquet and appends them to the output tar. Sealing runs off the
-//! scrape loop so a large parquet encode cannot skew the sampling cadence; the
-//! channel is bounded, so a disk that cannot keep up backpressures the loop
-//! instead of growing memory. The scrape-side half (`StreamRecorder`, which
-//! decides when a segment is due) lands next.
+//! Two halves: `RezWriterHandle` owns a dedicated writer thread that encodes
+//! sealed segments to parquet and appends them to the output tar, and
+//! `StreamRecorder` owns the scrape-side per-sampler builders and decides when
+//! a segment is due. Sealing runs off the scrape loop so a large parquet encode
+//! cannot skew the sampling cadence; the channel is bounded, so a disk that
+//! cannot keep up backpressures the loop instead of growing memory.
 //!
 //! Contract: PANIC-FREE — every fallible op returns `Err`. The global panic
 //! hook (`src/main.rs:57-62`) prints and calls `process::exit(101)` BEFORE
@@ -21,12 +21,14 @@ use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
+use metriken_exposition::Snapshot;
 use tracing::warn;
 
 use super::rez::{
-    append_tar_entry, write_table_parquet, RezManifest, RezRecording, RezTable, RezTableIndex,
-    REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
+    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, RezManifest, RezRecording,
+    RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
@@ -461,10 +463,142 @@ fn writer_thread(
     }
 }
 
+/// When an open segment is due to be sealed. Byte-first: the byte cap is the
+/// one that bounds both the builder's memory footprint and the encoder's input,
+/// and it is maintained O(1) per entry by `TableBuilder::push_row`.
+///
+/// **The age bound exists for the kill-loss window, not finalize cost.** The
+/// byte and row caps alone bound finalize time and memory — a slow sampler's
+/// open segment is naturally tiny — so age sealing only bounds how much data an
+/// unclean kill loses. It is also what drives segment count, so the trade (loss
+/// window vs segments and read-time merge width) is deliberate.
+pub(crate) struct SealPolicy {
+    pub max_bytes: usize,
+    pub max_rows: usize,
+    pub max_age: Duration,
+}
+
+impl Default for SealPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: 8 * 1024 * 1024,
+            max_rows: 4096,
+            max_age: Duration::from_secs(300),
+        }
+    }
+}
+
+/// The scrape-side half: per-sampler open segments plus the seal decision.
+pub(crate) struct StreamRecorder {
+    /// Open builder per sampler, with the instant it was opened (the age bound).
+    builders: BTreeMap<String, (TableBuilder, Instant)>,
+    /// Window-advance dedup keys. Held here, not on the builder, so dedup
+    /// survives a builder rotation: the key of a row in an already-sealed
+    /// segment must still suppress a re-observation.
+    last_keys: BTreeMap<String, u64>,
+    handle: RezWriterHandle,
+    policy: SealPolicy,
+}
+
+impl StreamRecorder {
+    pub(crate) fn new(handle: RezWriterHandle) -> Self {
+        Self::with_policy(handle, SealPolicy::default())
+    }
+
+    pub(crate) fn with_policy(handle: RezWriterHandle, policy: SealPolicy) -> Self {
+        Self {
+            builders: BTreeMap::new(),
+            last_keys: BTreeMap::new(),
+            handle,
+            policy,
+        }
+    }
+
+    /// Append one scraped snapshot: partition by sampler and, for each sampler
+    /// whose representative acquisition window advanced, push a row stamped
+    /// `anchored_ts` with this tick's `wall_offset_ns` observation.
+    pub(crate) fn ingest(&mut self, snapshot: &Snapshot, anchored_ts: u64, wall_offset_ns: i64) {
+        for (sampler, entries) in group_by_sampler(snapshot) {
+            let key = dedup_key(&entries, anchored_ts);
+            if let Some(&last) = self.last_keys.get(sampler) {
+                if key <= last {
+                    continue; // window unchanged → same observation → skip
+                }
+            }
+            self.last_keys.insert(sampler.to_string(), key);
+            let (builder, _) = self
+                .builders
+                .entry(sampler.to_string())
+                .or_insert_with(|| (TableBuilder::new(sampler.to_string()), Instant::now()));
+            builder.push_row(anchored_ts, wall_offset_ns, &entries);
+        }
+    }
+
+    /// Seal every open segment past any threshold, as ONE batch → one
+    /// checkpoint. Empty builders never seal.
+    ///
+    /// Call this every loop iteration, scrape or not: an unreachable endpoint
+    /// must still get its pre-outage rows sealed, or the kill-loss window is no
+    /// longer bounded in time.
+    pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
+        let now = Instant::now();
+        let mut batch = Vec::new();
+        for (sampler, (builder, opened_at)) in self.builders.iter_mut() {
+            let rows = builder.rows();
+            if rows == 0 {
+                continue;
+            }
+            let due = builder.approx_bytes() >= self.policy.max_bytes
+                || rows >= self.policy.max_rows
+                || now.duration_since(*opened_at) >= self.policy.max_age;
+            if !due {
+                continue;
+            }
+            // Rotation is a `mem::replace`: the dedup key lives in `last_keys`
+            // and carries over untouched, while the byte counter correctly
+            // restarts at zero with the fresh segment.
+            let sealed = std::mem::replace(builder, TableBuilder::new(sampler.clone()));
+            *opened_at = now;
+            batch.push(SealJob {
+                sampler: sampler.clone(),
+                table: sealed.finish(),
+            });
+        }
+        self.handle.seal(batch)
+    }
+
+    /// Seal the remaining partial segments (small by construction) and finalize
+    /// the archive.
+    pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
+        let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
+            .into_iter()
+            .filter(|(_, (builder, _))| builder.rows() > 0)
+            .map(|(sampler, (builder, _))| SealJob {
+                sampler,
+                table: builder.finish(),
+            })
+            .collect();
+        self.handle.finalize(tails, clock_offset)
+    }
+
+    /// Give up on the recording: stop the writer and unlink the `.partial`.
+    pub(crate) fn abort(self) {
+        self.handle.abort();
+    }
+
+    /// Rows in a sampler's open (unsealed) segment.
+    fn open_rows(&self, sampler: &str) -> usize {
+        self.builders
+            .get(sampler)
+            .map(|(builder, _)| builder.rows())
+            .unwrap_or(0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::rez::recorder_tests_support::counter;
+    use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use crate::recorder::rez::{Entry, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
     use metriken::Window;
     use std::io::Read;
@@ -697,5 +831,150 @@ mod tests {
         assert!(dir.path().join("out.rez.partial.recovered-0").exists());
         second.abort();
         first.abort();
+    }
+
+    fn windowed_snap(i: u64) -> (metriken_exposition::Snapshot, u64) {
+        let ts = 10_000 + i * 1_000;
+        let end = 9_500 + i * 1_000;
+        (
+            snap(
+                ts,
+                vec![counter(
+                    "0",
+                    "cpu_usage",
+                    i,
+                    Some(Window::new(end - 500, end)),
+                )],
+            ),
+            ts,
+        )
+    }
+
+    #[test]
+    fn thresholds_roll_segments_and_dedup_survives_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows: 2,
+                max_age: Duration::from_secs(3600),
+            },
+        );
+
+        for i in 0..4u64 {
+            let (s, ts) = windowed_snap(i);
+            rec.ingest(&s, ts, 0);
+            rec.maybe_seal().unwrap();
+        }
+        // Two full segments sealed; the open builder is empty.
+        assert_eq!(rec.open_rows("cpu_usage"), 0);
+
+        // The window of row 3 lives in an already-sealed segment: re-observing
+        // it must still dedup, which only holds if `last_key` survived rotation.
+        let (dup, dup_ts) = windowed_snap(3);
+        rec.ingest(&dup, dup_ts + 1, 0);
+        assert_eq!(rec.open_rows("cpu_usage"), 0, "dedup survived the seal");
+
+        let (s, ts) = windowed_snap(4);
+        rec.ingest(&s, ts, 0);
+        rec.maybe_seal().unwrap();
+        rec.finalize((ts, 0)).unwrap();
+
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let idx = &manifest.recordings[0].tables[0];
+        assert_eq!(idx.rows, 5, "5 distinct observations, the 6th deduped");
+        assert_eq!(idx.files.len(), 3, "ceil(5 / 2) segments");
+        assert_eq!(
+            idx.files,
+            vec![
+                "cpu_usage/0000.parquet",
+                "cpu_usage/0001.parquet",
+                "cpu_usage/0002.parquet"
+            ]
+        );
+    }
+
+    // The age bound exists for the kill-loss window: it must seal a builder that
+    // no longer receives rows.
+    #[test]
+    fn age_threshold_seals_without_new_ingest() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows: usize::MAX,
+                max_age: Duration::from_millis(5),
+            },
+        );
+
+        let (s, ts) = windowed_snap(0);
+        rec.ingest(&s, ts, 0);
+        std::thread::sleep(Duration::from_millis(20));
+        rec.maybe_seal().unwrap();
+        assert_eq!(rec.open_rows("cpu_usage"), 0, "age sealed the open builder");
+
+        // A second row lands in a fresh segment, so two 1-row segments prove the
+        // age seal happened (a missed seal would give one 2-row segment).
+        let (s, ts) = windowed_snap(1);
+        rec.ingest(&s, ts, 0);
+        rec.finalize((ts, 0)).unwrap();
+
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let idx = &manifest.recordings[0].tables[0];
+        assert_eq!(idx.files.len(), 2);
+        assert_eq!(idx.rows, 2);
+    }
+
+    #[test]
+    fn empty_builders_never_seal() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows: 1,
+                // Every builder is trivially past its age bound.
+                max_age: Duration::ZERO,
+            },
+        );
+
+        // Nothing ingested yet: no builders, nothing to seal.
+        rec.maybe_seal().unwrap();
+
+        let (s, ts) = windowed_snap(0);
+        rec.ingest(&s, ts, 0);
+        rec.maybe_seal().unwrap();
+        // The builder is now empty but still present, and past its age bound.
+        for _ in 0..3 {
+            rec.maybe_seal().unwrap();
+        }
+        rec.finalize((ts, 0)).unwrap();
+
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let idx = &manifest.recordings[0].tables[0];
+        assert_eq!(idx.files.len(), 1, "empty builders never seal");
+        assert_eq!(idx.rows, 1);
+    }
+
+    #[test]
+    fn no_data_recording_finalizes_as_an_empty_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let handle = RezWriterHandle::create(&out, seed()).unwrap();
+        let rec = StreamRecorder::new(handle);
+        rec.finalize((1, 0)).unwrap();
+
+        let (manifest, recordings) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        assert!(manifest.recordings[0].tables.is_empty());
+        assert!(manifest.recordings[0].complete);
+        assert!(recordings[0].tables.is_empty());
     }
 }
