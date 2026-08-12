@@ -385,6 +385,9 @@ guidance, and 10× smaller than they need to be) while letting `cpu_usage` emit
 6.23 MiB ones. Now that the per-table ratio is measured and stable within ±5%,
 a cap of *target encoded size × an EWMA of the table's observed ratio* fixes
 both ends: `syscall_latency` drops to ~48 segments, `cpu_usage` to ~3 MiB each.
+
+### Still un-tuned (measured, but not optimized)
+
 - **`page_size` left at the 4096 default and untested.** Larger pages would
   shorten overflow chains for multi-MB BLOBs. Treat as un-optimized, not chosen.
 - **The `-wal` sidecar** reaches 24–79 MB depending on `wal_autocheckpoint` and
