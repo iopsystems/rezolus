@@ -53,7 +53,14 @@ pub struct RezRecording {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock_anchor_wall_ns: Option<u64>,
     /// `(anchored_ts, wall_minus_anchored_ns)` observations, one per checkpoint:
-    /// an at-a-glance clock-drift summary that needs no table decode.
+    /// an at-a-glance clock-drift summary that needs no table decode. Each is a
+    /// projection of some row's `:wall_offset` — the newest row in that
+    /// checkpoint's seal batch — so the series never contradicts the tables.
+    ///
+    /// Not guaranteed sorted: the observation is a per-batch maximum, so an
+    /// age-sealed slow sampler can append a timestamp older than one a
+    /// fast-sampler batch already contributed. Consumers that need order should
+    /// sort; consumers that need per-row precision should read the column.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clock_offsets: Vec<(u64, i64)>,
     pub tables: Vec<RezTableIndex>,

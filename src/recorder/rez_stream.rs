@@ -81,9 +81,13 @@ impl TableState {
     fn index(&self, sampler: &str, with_columns: bool) -> RezTableIndex {
         RezTableIndex {
             sampler: sampler.to_string(),
-            // v1-shaped iff the table is a single segment; the streaming writer
-            // always names segments `<sampler>/<seq>.parquet`, so this is only a
-            // truthful alias, never a pointer at partial data.
+            // Set iff the table is a single segment, matching
+            // `write_archive_bytes`' file-iff-single rule so a one-segment
+            // streaming table is still openable by a v1 reader. Only that rule
+            // is shared: the names differ (the atomic writer's single segment is
+            // `<sampler>.parquet`, a streamed one is `<sampler>/0000.parquet`,
+            // because segment count is not knowable at seal time). Either way
+            // this is a truthful alias, never a pointer at partial data.
             file: match self.files.as_slice() {
                 [one] => Some(one.clone()),
                 _ => None,
@@ -135,9 +139,26 @@ impl RezWriterHandle {
             .create_new(true)
             .open(&partial)
             .map_err(|e| format!("failed to create {}: {e}", partial.display()))?;
+
+        // Past the create, a failure must not leave the `.partial` behind: it
+        // holds no recoverable data, but the next run cannot know that and
+        // would rename it aside as `.recovered-<n>`, accumulating garbage.
+        Self::start(file, &partial, output, seed).inspect_err(|_| {
+            let _ = std::fs::remove_file(&partial);
+        })
+    }
+
+    /// Everything between "the `.partial` exists" and "the writer thread owns
+    /// it". Split out so `create` can unlink the file if any of it fails.
+    fn start(
+        file: File,
+        partial: &Path,
+        output: &Path,
+        seed: ManifestSeed,
+    ) -> Result<Self, String> {
         // Without this the dirent itself can be lost to a power cut, taking the
         // whole recovery artifact with it.
-        sync_parent_dir(&partial)?;
+        sync_parent_dir(partial)?;
 
         // The tar `File` stays UNBUFFERED on purpose: the `tar` crate writes
         // straight through, and a `BufWriter` would leave entry bytes in
@@ -156,7 +177,7 @@ impl RezWriterHandle {
 
         let (tx, rx) = sync_channel(1);
         let output = output.to_path_buf();
-        let thread_partial = partial.clone();
+        let thread_partial = partial.to_path_buf();
         let thread = std::thread::Builder::new()
             .name("rez-writer".to_string())
             .spawn(move || writer_thread(rx, builder, seed, thread_partial, output))
@@ -165,7 +186,7 @@ impl RezWriterHandle {
         Ok(Self {
             tx: Some(tx),
             thread: Some(thread),
-            partial,
+            partial: partial.to_path_buf(),
         })
     }
 
@@ -431,8 +452,24 @@ fn writer_thread(
                 tails,
                 clock_offset,
             }) => {
-                seal_segments(&mut builder, &seed.dir, &mut tables, tails)?;
-                clock_offsets.push(clock_offset);
+                // The tail batch contributes its observation exactly like any
+                // other batch, so every entry in the series has one derivation:
+                // the newest sealed row's `:wall_offset`.
+                if let Some(observation) =
+                    seal_segments(&mut builder, &seed.dir, &mut tables, tails)?
+                {
+                    clock_offsets.push(observation);
+                }
+                // The loop's final tick observation joins the series only when
+                // it adds a timestamp no sealed row already covers — otherwise
+                // the series would carry two conflicting offsets at one
+                // timestamp and consumers could not read it uniformly. The
+                // row-derived value wins because it is a projection of the
+                // `:wall_offset` column; the tick value is kept when it is the
+                // only sample covering the span after the last sealed row.
+                if !clock_offsets.iter().any(|&(ts, _)| ts == clock_offset.0) {
+                    clock_offsets.push(clock_offset);
+                }
                 // Same two-sync order, with the final manifest playing the role
                 // of the checkpoint: segments durable, then the manifest that
                 // names them, then the footer.
@@ -587,6 +624,7 @@ impl StreamRecorder {
     }
 
     /// Rows in a sampler's open (unsealed) segment.
+    #[cfg(test)]
     fn open_rows(&self, sampler: &str) -> usize {
         self.builders
             .get(sampler)
@@ -618,16 +656,37 @@ mod tests {
         }
     }
 
-    /// A sealable job with `ts.len()` rows for `sampler`.
-    fn job(sampler: &str, ts: &[u64]) -> SealJob {
+    /// A sealable job with `ts.len()` rows for `sampler`, every row carrying
+    /// `wall_offset` in the `:wall_offset` sidecar.
+    fn job_with_offset(sampler: &str, ts: &[u64], wall_offset: i64) -> SealJob {
         let mut b = TableBuilder::new(sampler.to_string());
         for (i, &t) in ts.iter().enumerate() {
             let c = counter("0", sampler, i as u64, Some(Window::new(t - 100, t)));
-            b.push_row(t, 7, &[Entry::Counter(&c)]);
+            b.push_row(t, wall_offset, &[Entry::Counter(&c)]);
         }
         SealJob {
             sampler: sampler.to_string(),
             table: b.finish(),
+        }
+    }
+
+    fn job(sampler: &str, ts: &[u64]) -> SealJob {
+        job_with_offset(sampler, ts, 7)
+    }
+
+    /// A job the writer cannot encode: `wall_offsets` shorter than `timestamps`
+    /// fails `RecordBatch`'s equal-length check inside `write_table_parquet`,
+    /// which is the same shape of mid-recording writer failure as an ENOSPC tar
+    /// append — it happens on the writer thread, after the hand-off returned.
+    fn unencodable_job(sampler: &str) -> SealJob {
+        SealJob {
+            sampler: sampler.to_string(),
+            table: RezTable {
+                sampler: sampler.to_string(),
+                timestamps: vec![1_000, 2_000],
+                wall_offsets: vec![0],
+                columns: Vec::new(),
+            },
         }
     }
 
@@ -744,11 +803,11 @@ mod tests {
         assert_eq!(idx.rows, 5);
         assert_eq!(idx.columns, vec!["0".to_string()]);
         assert_eq!(idx.cadence_ns, Some(1_000));
-        assert!(
-            !rec.clock_offsets.is_empty(),
-            "checkpoints append clock observations"
-        );
-        assert_eq!(rec.clock_offsets.last(), Some(&(5_000, 11)));
+        // One entry per seal batch, each derived from that batch's newest
+        // sealed row. The finalize-supplied (5_000, 11) is dropped: ts 5_000 is
+        // already covered by a row-derived observation, and two conflicting
+        // offsets at one timestamp would make the series unreadable.
+        assert_eq!(rec.clock_offsets, vec![(3_000, 7), (5_000, 7)]);
 
         // The bytes are readable by the truncation-tolerant reader.
         assert_eq!(recordings[0].tables.len(), 1);
@@ -756,8 +815,208 @@ mod tests {
         assert!(recordings[0].complete);
     }
 
+    // The checkpoint clock observation is the newest sealed row in the batch
+    // paired with *that same table's* offset — not the last job's, not the
+    // oldest row's, and never a cross-table mix of timestamp and offset.
     #[test]
-    fn kill_before_finalize_leaves_recoverable_partial() {
+    fn checkpoint_clock_offset_is_the_newest_sealed_rows_observation() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+
+        let mut handle = RezWriterHandle::create(&out, seed()).unwrap();
+        handle
+            .seal(vec![
+                // The newest row is in the FIRST job, and the older sampler
+                // carries a wildly different offset.
+                job_with_offset("cpu_usage", &[3_000], 7),
+                job_with_offset("scheduler", &[1_000, 2_000], 99),
+            ])
+            .unwrap();
+        handle.finalize(Vec::new(), (9_000, -5)).unwrap();
+
+        let manifests = all_manifests(&out);
+        assert_eq!(
+            manifests[1].recordings[0].clock_offsets,
+            vec![(3_000, 7)],
+            "max timestamp across the batch, paired with its own table's offset"
+        );
+        // The finalize tick observation covers a span no sealed row does, so it
+        // joins the series.
+        assert_eq!(
+            manifests[2].recordings[0].clock_offsets,
+            vec![(3_000, 7), (9_000, -5)]
+        );
+    }
+
+    // A writer-thread failure must surface on a hand-off as the writer's own
+    // error — this is what decides whether a corrupt archive gets noticed
+    // instead of producing per-tick log spam.
+    #[test]
+    fn writer_error_surfaces_on_the_next_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let partial = partial_of(&out);
+
+        let mut handle = RezWriterHandle::create(&out, seed()).unwrap();
+        // The hand-off itself succeeds: the failure happens on the writer.
+        handle.seal(vec![unencodable_job("cpu_usage")]).unwrap();
+
+        // The next send that finds the receiver gone joins and reports. A
+        // bounded retry because the channel buffers one message, so the first
+        // send after the failure may still be accepted.
+        let mut surfaced = None;
+        for _ in 0..500 {
+            match handle.seal(vec![job("scheduler", &[1_000])]) {
+                Ok(()) => std::thread::sleep(Duration::from_millis(1)),
+                Err(e) => {
+                    surfaced = Some(e);
+                    break;
+                }
+            }
+        }
+        let err = surfaced.expect("the writer's error must surface on a hand-off");
+        assert!(
+            err.contains("failed to encode a cpu_usage segment"),
+            "the writer's stored error, not a generic send failure: {err}"
+        );
+
+        // Exit-on-first-error: nothing the writer accepted after the failure
+        // reached the archive, and the output was never produced.
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        assert!(
+            manifest.recordings[0].tables.is_empty(),
+            "the writer stopped at the first error"
+        );
+        assert!(!out.exists());
+    }
+
+    #[test]
+    fn writer_error_surfaces_through_finalize() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+
+        let mut handle = RezWriterHandle::create(&out, seed()).unwrap();
+        handle.seal(vec![unencodable_job("cpu_usage")]).unwrap();
+        // Whether the send lands or fails, finalize joins and reports the
+        // writer's stored error rather than claiming success.
+        let err = handle
+            .finalize(Vec::new(), (1_000, 0))
+            .expect_err("finalize must report the writer's error");
+        assert!(
+            err.contains("failed to encode a cpu_usage segment"),
+            "got: {err}"
+        );
+        assert!(
+            !out.exists(),
+            "a failed recording is never renamed into place"
+        );
+    }
+
+    // Real SIGKILL/power-loss geometry: truncate bytes this writer actually
+    // produced (the hand-built tars in `rez.rs::recovery_tests` cover the reader
+    // rules, not the writer's own output).
+    #[test]
+    fn truncated_writer_bytes_recover_the_sealed_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.rez");
+        let partial = partial_of(&out);
+
+        let mut handle = RezWriterHandle::create(&out, seed()).unwrap();
+        handle
+            .seal(vec![job("cpu_usage", &[1_000, 2_000])])
+            .unwrap();
+        handle.seal(vec![job("cpu_usage", &[3_000])]).unwrap();
+        handle
+            .seal(vec![job("cpu_usage", &[4_000]), job("scheduler", &[4_000])])
+            .unwrap();
+        drop(handle);
+        let bytes = std::fs::read(&partial).unwrap();
+
+        // A coarse sweep plus every interesting geometry: each entry's header
+        // start (chop mid-header / at a block boundary) and the middle of each
+        // entry's data (chop mid-segment-data and mid-manifest). Cutting at the
+        // last manifest's header start is the "killed between a segment append
+        // and its checkpoint" case.
+        let mut cuts: Vec<usize> = (0..bytes.len()).step_by(64).collect();
+        let mut archive = tar::Archive::new(std::io::Cursor::new(bytes.clone()));
+        for entry in archive.entries().unwrap() {
+            let entry = entry.unwrap();
+            let head = entry.raw_header_position() as usize;
+            cuts.push(head);
+            cuts.push(head + 512);
+            cuts.push(head + 512 + entry.size() as usize / 2);
+        }
+        cuts.push(bytes.len());
+        cuts.retain(|&c| c <= bytes.len());
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        let cut_path = dir.path().join("cut.rez");
+        let mut first_ok: Option<usize> = None;
+        let mut recovered_counts: Vec<usize> = Vec::new();
+        for cut in cuts {
+            std::fs::write(&cut_path, &bytes[..cut]).unwrap();
+            match crate::recorder::rez::read_archive_bytes(&cut_path) {
+                Ok((manifest, recordings)) => {
+                    first_ok.get_or_insert(cut);
+                    let rec = &manifest.recordings[0];
+                    assert!(
+                        !rec.complete,
+                        "a truncated archive is never complete (cut {cut})"
+                    );
+                    let named: usize = rec.tables.iter().map(|t| t.files.len()).sum();
+                    let recovered: usize = recordings[0].tables.iter().map(|(_, s)| s.len()).sum();
+                    assert_eq!(
+                        named, recovered,
+                        "the resolved manifest names exactly the segments recovered (cut {cut})"
+                    );
+                    assert!(
+                        !recordings[0].complete,
+                        "a recovered recording is not complete (cut {cut})"
+                    );
+                    recovered_counts.push(recovered);
+                }
+                Err(e) => assert!(
+                    first_ok.is_none(),
+                    "cut {cut} failed after the archive first opened at {first_ok:?}: {e}"
+                ),
+            }
+        }
+        let first_ok = first_ok.expect("some prefix must open");
+        assert!(
+            first_ok <= 2048,
+            "the initial manifest makes the archive readable almost immediately, got {first_ok}"
+        );
+        // The sweep must actually exercise partial recovery: an early prefix
+        // recovers nothing, a late one recovers everything, and cuts in between
+        // recover a prefix of the segments (each landing on the newest
+        // checkpoint whose segments all survived).
+        recovered_counts.sort_unstable();
+        recovered_counts.dedup();
+        assert_eq!(
+            recovered_counts,
+            // One rung per checkpoint: the initial (empty) manifest, then 1, 2
+            // and 4 segments — the third batch sealed two samplers at once.
+            vec![0, 1, 2, 4],
+            "expected the full recovery ladder across the truncation sweep"
+        );
+
+        // The untruncated `.partial` still carries every sealed segment.
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        let named: usize = manifest.recordings[0]
+            .tables
+            .iter()
+            .map(|t| t.files.len())
+            .sum();
+        assert_eq!(named, 4);
+    }
+
+    // Not a SIGKILL: `tar::Builder::drop` writes the footer and `Drop::join`
+    // drains the queue, so this is graceful shutdown — the property that
+    // matters for the recorder loop's early-return paths, which skip finalize.
+    // The truncation sweep above covers the unclean-kill geometry.
+    #[test]
+    fn drop_without_finalize_leaves_recoverable_partial() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.rez");
         let partial = partial_of(&out);
