@@ -489,29 +489,46 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
 /// segments in order.
 pub type RecordingSegments = (RezRecording, Vec<Vec<Vec<u8>>>);
 
+/// The names a table's `segments` get inside its recording directory. A single
+/// segment keeps the v1 `<sampler>.parquet` shape so v1 binaries can still open
+/// tool output; multiple segments live under `<sampler>/`, zero-padded in
+/// segment order.
+fn canonical_segment_names(sampler: &str, segments: usize) -> Vec<String> {
+    if segments == 1 {
+        vec![format!("{sampler}.parquet")]
+    } else {
+        (0..segments)
+            .map(|i| format!("{sampler}/{i:04}.parquet"))
+            .collect()
+    }
+}
+
 /// Write a multi-recording `.rez` from already-encoded per-table parquet bytes
 /// (no re-encode). `recordings` pairs each recording's manifest entry with its
-/// table bytes (parallel to `recording.tables`). Errors on a duplicate `dir`
-/// (the reader keys tables by `<dir>/<file>`, so a collision would clobber) or a
-/// table-count/bytes mismatch. The caller assigns unique dirs.
+/// table bytes (parallel to `recording.tables`), each table's segments in order.
+///
+/// The writer **owns the file naming**: every table's index entry is rewritten
+/// to name exactly the files emitted for it (`canonical_segment_names`), and the
+/// incoming `file`/`files` are discarded. This is load-bearing, not cosmetic —
+/// `combine`/`filter`/`annotate` carry the input's `RezTableIndex` verbatim, so
+/// on segmented input a stale entry would name segments the output never writes
+/// and break every downstream reader. Everything else on the entry (`columns`,
+/// `rows`, `cadence_ns`) and on the recording (`complete`, clock fields) copies
+/// through untouched, and segment bytes pass through byte-identical — only the
+/// compactor ever merges segments.
+///
+/// Errors on a duplicate `dir` or duplicate sampler within a recording (the
+/// reader keys tables by `<dir>/<file>`, so either collision would clobber) and
+/// on a table-count/bytes mismatch. All validation runs before the output file
+/// is created. The caller assigns unique dirs.
 pub fn write_archive_bytes(path: &Path, recordings: &[RecordingSegments]) -> Result<(), RezError> {
     let mut seen_dirs = std::collections::HashSet::new();
-    for (rec, _) in recordings {
+    // The manifest entries as they will be written, with canonical file names.
+    let mut canonical: Vec<RezRecording> = Vec::with_capacity(recordings.len());
+    for (rec, table_bytes) in recordings {
         if !seen_dirs.insert(rec.dir.clone()) {
             return Err(format!("duplicate recording dir {:?}", rec.dir).into());
         }
-    }
-    let manifest = RezManifest {
-        version: REZ_SCHEMA_VERSION,
-        recordings: recordings.iter().map(|(r, _)| r.clone()).collect(),
-    };
-    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
-
-    let out = std::fs::File::create(path)?;
-    let mut builder = tar::Builder::new(out);
-    builder.mode(tar::HeaderMode::Deterministic);
-    append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
-    for (rec, table_bytes) in recordings {
         if table_bytes.len() != rec.tables.len() {
             return Err(format!(
                 "recording {} has {} table index entries but {} byte blobs",
@@ -521,19 +538,41 @@ pub fn write_archive_bytes(path: &Path, recordings: &[RecordingSegments]) -> Res
             )
             .into());
         }
-        for (idx, segments) in rec.tables.iter().zip(table_bytes) {
-            let names = idx.segment_files();
-            if names.len() != segments.len() {
+        let mut seen_samplers = std::collections::HashSet::new();
+        let mut rec = rec.clone();
+        for (idx, segments) in rec.tables.iter_mut().zip(table_bytes) {
+            if !seen_samplers.insert(idx.sampler.clone()) {
                 return Err(format!(
-                    "table {} in recording {} names {} segment(s) but carries {} blob(s)",
-                    idx.sampler,
-                    rec.dir,
-                    names.len(),
-                    segments.len()
+                    "recording {} has two tables named {:?}",
+                    rec.dir, idx.sampler
                 )
                 .into());
             }
-            for (name, bytes) in names.iter().zip(segments) {
+            let names = canonical_segment_names(&idx.sampler, segments.len());
+            // v1-shaped iff single-segment; `files` is always the full list.
+            idx.file = match names.as_slice() {
+                [one] => Some(one.clone()),
+                _ => None,
+            };
+            idx.files = names;
+        }
+        canonical.push(rec);
+    }
+    let manifest = RezManifest {
+        version: REZ_SCHEMA_VERSION,
+        recordings: canonical,
+    };
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+
+    let out = std::fs::File::create(path)?;
+    let mut builder = tar::Builder::new(out);
+    builder.mode(tar::HeaderMode::Deterministic);
+    append_tar_entry(&mut builder, REZ_MANIFEST_NAME, &manifest_bytes)?;
+    // Names come from the manifest just built, so entries and index agree by
+    // construction — no per-table parity check is possible here.
+    for (rec, (_, table_bytes)) in manifest.recordings.iter().zip(recordings) {
+        for (idx, segments) in rec.tables.iter().zip(table_bytes) {
+            for (name, bytes) in idx.files.iter().zip(segments) {
                 append_tar_entry(&mut builder, &format!("{}/{}", rec.dir, name), bytes)?;
             }
         }
@@ -1487,6 +1526,71 @@ mod archive_tests {
         );
         assert_eq!(rb.len(), 2);
         assert_eq!(rb[0].tables[0].0, "cpu_usage");
+    }
+
+    /// The tools carry the input's `RezTableIndex` verbatim, so on segmented
+    /// input a stale index would name files the output never emits. The writer
+    /// owns the naming: it rewrites each entry from the blobs it is handed —
+    /// without parsing them (the blobs here are not parquet at all).
+    #[test]
+    fn write_archive_bytes_canonicalizes_index() {
+        let lying_index = |sampler: &str| RezTableIndex {
+            sampler: sampler.to_string(),
+            file: Some("old.parquet".to_string()),
+            files: vec!["stale/0.parquet".to_string()],
+            columns: vec!["0".to_string()],
+            rows: 2,
+            cadence_ns: Some(1_000),
+        };
+        let rec = RezRecording {
+            dir: "rec0".to_string(),
+            labels: [("arm".to_string(), "redis".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            complete: true,
+            clock_anchor_wall_ns: Some(1_700_000_000_000_000_000),
+            clock_offsets: vec![(1_000, -7)],
+            tables: vec![lying_index("cpu_usage"), lying_index("scheduler")],
+        };
+        let seg = |s: &str| s.as_bytes().to_vec();
+        let blobs = vec![
+            vec![seg("cpu-segment-0"), seg("cpu-segment-1")],
+            vec![seg("scheduler-only-segment")],
+        ];
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("canon.rez");
+        write_archive_bytes(&out, &[(rec, blobs)]).unwrap();
+
+        let (m, rb) = read_archive_bytes(&out).unwrap();
+        let tables = &m.recordings[0].tables;
+        // Multi-segment: no v1 `file`, segment list in emission order.
+        assert_eq!(tables[0].file, None);
+        assert_eq!(
+            tables[0].files,
+            vec!["cpu_usage/0000.parquet", "cpu_usage/0001.parquet"]
+        );
+        // Single-segment: v1-shaped, so v1 binaries can still open it.
+        assert_eq!(tables[1].file.as_deref(), Some("scheduler.parquet"));
+        assert_eq!(tables[1].files, vec!["scheduler.parquet"]);
+        // Everything else on the entry and the recording copies through.
+        assert_eq!(tables[0].columns, vec!["0".to_string()]);
+        assert_eq!(tables[0].rows, 2);
+        assert!(m.recordings[0].complete);
+        assert_eq!(
+            m.recordings[0].clock_anchor_wall_ns,
+            Some(1_700_000_000_000_000_000)
+        );
+        assert_eq!(m.recordings[0].clock_offsets, vec![(1_000, -7)]);
+        // Segments pass through byte-identical, in order.
+        assert_eq!(rb[0].tables[0].0, "cpu_usage");
+        assert_eq!(
+            rb[0].tables[0].1,
+            vec![seg("cpu-segment-0"), seg("cpu-segment-1")]
+        );
+        assert_eq!(rb[0].tables[1].0, "scheduler");
+        assert_eq!(rb[0].tables[1].1, vec![seg("scheduler-only-segment")]);
     }
 
     #[test]
