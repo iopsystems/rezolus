@@ -61,6 +61,58 @@ and **tear-free concurrent reads** (WAL-mode readers see a consistent snapshot
 and never block the writer), which is exactly hindsight's dump problem solved
 by the container instead of by us being careful.
 
+## Why parquet blobs inside a database — the sandwich, defended
+
+The obvious objection: SQLite is a storage engine, parquet is a storage engine,
+and this design stacks one inside the other. The accurate description is that
+**SQLite is used as a transactional allocator with a queryable catalog, not as
+a query engine.** The two halves earn it very differently, and it is worth
+being explicit about which is which.
+
+**The WAL is where SQLite clearly pays for itself.** Per-tick durability with
+crash consistency and torn-write detection is what it is built for, and it is
+precisely where the tar design got things wrong: the adversarial review found a
+persistence-ordering defect (write order is not persistence order), a
+silently-short-read defect, and four distinct truncation geometries each
+needing its own reasoning. All of that collapses into `COMMIT`. Hand-rolling a
+durable WAL means rediscovering those bugs, probably not all of them.
+
+**The segments are the weaker case, and the single-file constraint is what
+carries it.** Storing opaque blobs in a B-tree costs page and overflow-chain
+machinery for bytes SQLite cannot see into — measured at ~1% — and forfeits
+predicate pushdown: there is no `SELECT WHERE metric = ... AND ts > ...`.
+
+**Rejected: metrics as real rows** (`sampler, metric, labels, ts, value,
+window_*`). It would give SQLite something to actually index, and it fails on
+two counts. It discards the query engine published as metriken-query 0.17.0 —
+`SegmentedParquetReader` plus the whole PromQL implementation, `rate()`
+windowing, histogram quantiles, and the uncertainty-band machinery — and
+replacing that is a second engine, not a refactor. And columnar compression is
+load-bearing here: a histogram cell is a 7,424-bucket array that parquet packs
+~14:1 when sparse; as rows it would be a blob anyway, minus dictionary encoding
+on repeated labels and RLE on flat counters.
+
+**Rejected: DuckDB.** It is columnar, reads parquet natively, and has a
+single-file format, so it could plausibly replace both halves and make the
+sandwich disappear. Rejected on storage-format stability across versions,
+dependency weight for a fleet agent, and because continuous small appends are
+not what it is tuned for. Recorded as a deliberate no rather than an oversight.
+
+**Rejected: a bespoke indexed container.** Leaner and dependency-free, at the
+price of owning the crash-consistency story that SQLite has now demonstrated it
+handles — 0 torn reads, 0 `SQLITE_BUSY`, +0.7 ms writer impact across 92 s of
+concurrent hammering.
+
+The resulting shape is the conventional one: Iceberg and Delta keep metadata in
+a catalog and data in parquet; Prometheus keeps an index plus opaque chunk
+files. Here the manifest, segment index, and clock offsets are **real rows**
+that SQLite indexes — "give me this sampler's segments overlapping this time
+range" is an indexed lookup, not a scan — and only the bulk column data is
+opaque.
+
+*Reopen:* if the single-file constraint ever relaxes, a directory layout is
+strictly better and most of this reasoning evaporates.
+
 ## Goal / GO criteria
 
 - **Kill-loss ≤ one tick, for every table** — including quiet ones. This is the
