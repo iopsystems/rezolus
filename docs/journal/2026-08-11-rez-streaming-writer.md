@@ -1,7 +1,20 @@
 # Streaming segmented `.rez` writer — bounded-time finalization
 
 - **Opened:** 2026-08-11
-- **Status:** OPEN — design landed pre-build.
+- **Status:** **IMPLEMENTED & MEASURED** (2026-08-12). Finalize is bounded and
+  independent of recording length: **9 runs across a 30× length range (30 s /
+  300 s / 900 s) all finalize in 19.6–37.1 ms, median 29.2 ms, with fully
+  overlapping distributions and no trend** — a 900 s / 89,962-row /
+  22-segment-per-table / 7.02 MB archive finalized in **22.6 ms** (design
+  target was "well inside a 10 s docker grace window"; measured is two orders
+  better). Kill-safe: SIGKILL left a `.partial` that opens, self-reports "not
+  cleanly finalized", and answers PromQL. Under genuine backpressure
+  (~100 MB/s of writes, 14.8 % of ticks blocked) SIGTERM→exit was still
+  **55 ms**. Zero skipped scrape ticks in 89,961 intervals at production seal
+  settings. **Caveat: all absolutes are from a 3-sampler macOS agent with
+  ~1 KB snapshots; the length-independence result is structural and transfers,
+  the ~30 ms figure does not** — a Linux fleet re-measurement (25 samplers,
+  histogram-heavy) is the honest follow-up before quoting a fleet number.
 - **Arc:** continuation of the `.rez` container work in
   [per-sampler `.rez` archive](2026-07-13-per-sampler-rez-archive.md) and
   [`.rez` reader ecosystem](2026-07-15-rez-reader-ecosystem.md).
@@ -488,6 +501,77 @@ All `.rez` consumers funnel through `read_archive_reader` and its
 - Existing `write_archive`/`write_archive_bytes` users (combine, filter,
   annotate) keep passing.
 
+## Outcome — measured (2026-08-12)
+
+Live-agent measurements, release build, macOS 3-sampler agent, `--interval
+10ms`. Raw logs/scripts were kept out of tree; every figure below is from a
+recorded run, none estimated.
+
+**Finalize is independent of recording length** (the central claim). Two
+clocks per run — external signal→exit, and the recorder's own
+`finalizing recording…` → `wrote .rez archive` pair:
+
+| recorded | in-process finalize (3 runs, ms) | median |
+|---|---|---|
+| ~30 s | 25.59, 27.81, 34.77 | 27.81 |
+| ~300 s | 29.18, 33.74, 19.60 | 29.18 |
+| ~900 s | 22.61, 32.12, 37.13 | 32.12 |
+
+All 9: min 19.60 / max 37.13 / median 29.18 ms. The shortest finalize in the
+set is a 300 s recording and the longest a 900 s one — no trend. The 900 s
+archive held 22 sealed segments per table and 23 manifest checkpoints,
+confirming finalize re-encodes nothing. (An earlier D-phase run measured
+148 ms at `--interval 1s`; that is the same claim at a different interval —
+signal→exit = the wait for the next loop-top `STATE` check, ≤ one interval,
+plus the finalize work.)
+
+**Kill-loss window.** `kill -9` at t=200 s: 16,384 rows durable across 4
+segments, 35.34 s of data lost against the 40.96 s the seal policy
+structurally implies at that rate. Note the practical rule: at high row rates
+the loss window is set by `max_rows` (41 s at 10 ms), not by `max_age`.
+
+**In-progress readability** holds from t=0: at 5 s (before the first seal) the
+`.partial` opens, sniffs as `.rez`, reports "not cleanly finalized", and shows
+the clock anchor with zero tables — the initial-empty-manifest guarantee. At
+100 s it reported 8,192 rows / 2 segments; a mid-recording `.partial` also
+answered `mcp query` with 123 points.
+
+**Cadence is untouched by sealing.** Over 89,961 intervals with 21
+mid-recording seals: **0 skipped ticks**, mean delta exactly 10.000 ms,
+strictly monotonic, and the deltas spanning seal boundaries (max 12.179 ms)
+are indistinguishable from the overall distribution (max 12.653 ms).
+Degradation is graceful and only under pathological policies: at 10 seals/s,
+0.37 % of ticks slip; at 100 seals/s (18 GB in 180 s), 14.8 %.
+
+**Size cost of segmentation: +1.28 %** at the production default (6
+segments/table), measured by replaying one captured 24,576-snapshot live
+stream through two policies (identical input bytes). The cost is superlinear
+in segment count — 24 segments +17.7 %, 96 segments +116 % — which quantifies
+the loss-window trade: shrinking it is cheap to ~10 segments and expensive
+beyond ~25.
+
+**No read-path regression** (the other GO criterion): open is flat in segment
+count (6.1 → 5.7 → 6.1 → 8.9 ms for 1/6/24/96 segments — footer-only, as
+designed) and at production segmentation a `rate()` query costs +0.4 ms
+(+5 %). Pathological segmentation does grow query cost (23.5 ms at 96).
+
+**Backpressure, previously never exercised.** Driven into real backpressure
+(~100 MB/s, ~200 fsyncs/s, 14.8 % of ticks blocked on the depth-1 channel),
+SIGTERM→exit measured **55 ms** — ~180× inside the docker grace window. The
+GO criteria required this bound to be measured rather than argued; it now is.
+
+**ENOSPC** (20 MB disk image, pre-filled) produced exactly the designed
+behavior: one error naming the sampler and the OS error, no per-tick spam, and
+a readable `.partial`. It also exposed a real gap — `rezolus record` exited **0**
+after that fatal failure, so a supervisor or docker healthcheck could not tell
+a failed recording from a good one. Fixed in `1c21bb79`; the failure flag
+outranks a wrapped command's own status.
+
+**Unmeasured / deferred:** a Linux fleet-scale run (25 samplers,
+histogram-heavy tables) — the figures above are a lower bound on finalize
+cost, which scales with the *open segment* (bounded by `max_bytes`/`max_rows`),
+not with duration.
+
 ## Adversarial design review (2026-08-11, pre-build)
 
 Three parallel adversarial subagents attacked the design against the actual
@@ -538,7 +622,29 @@ mid-archive corruption presents as truncation (under-reports, never
 fabricates); a v1 binary reading compacted output of a recovered archive
 cannot see `complete: false`.
 
-## Deferred
+## Deferred (surfaced during implementation)
+
+- **Linux fleet re-measurement.** Every number in the Outcome section is from a
+  3-sampler macOS agent. *Reopen:* before quoting a fleet finalize figure.
+- **WASM viewer has no `.rez` support at all** (`crates/viewer/` is
+  parquet-only). Pre-existing, not a regression — but the static-site viewer
+  silently cannot open any streamed recording. Exactly the divergence the
+  `viewer-parity` skill exists to catch.
+- **Recovered-archive state isn't surfaced to consumers.** `RezReader` warns and
+  `parquet metadata` says "not cleanly finalized", but nothing carries that
+  through the viewer API or MCP output, so a consumer can silently analyze a
+  truncated recording.
+- **Unbounded startup probe.** `probe_endpoint`/`fetch_agent_metadata` have no
+  timeout (D2 bounded only the per-tick scrape/probe). A SIGSTOPed agent hangs
+  `rezolus record` at startup and the first ctrl-c does not break out.
+- **Manifest resolution is O(archive bytes), not O(footer)** — the authoritative
+  manifest is the last tar entry, so `parquet metadata` on a pathological
+  18 GB / 15k-segment archive took 19.3 s (sub-10 ms at production settings).
+- **Cross-sampler queries still unsupported** (`route` errors when a query spans
+  two samplers) — unchanged by this work, but now the next thing a real `.rez`
+  user hits.
+
+## Deferred (from the design)
 
 - **Full metric-identity column keys.** Column names are per-agent-process
   numeric ids; the merge policy handles restarts by splitting columns, but

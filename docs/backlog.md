@@ -187,7 +187,31 @@ Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md)
 - Per-source-not-per-node descriptions, and "descriptions only exist if the origin
   supplied them," are **by design** — not backlog.
 
-Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-writer.md).
+Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-writer.md)
+(implemented + measured 2026-08-12; finalize 19.6–37.1 ms independent of
+recording length, 55 ms under backpressure).
+
+- **Linux fleet re-measurement of finalize cost** — Open. All measured figures
+  come from a 3-sampler macOS agent (~1 KB snapshots); a 25-sampler
+  histogram-heavy Linux agent will finalize slower by a constant tied to
+  segment size, not duration. *Reopen:* before quoting a fleet number.
+- **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
+  parquet-only, so the static-site viewer silently fails on every streamed
+  recording. Pre-existing gap, newly load-bearing now that `.rez` is the
+  streaming format. See the `viewer-parity` skill.
+- **Recovered-archive state not surfaced to consumers** — Open. `RezReader`
+  warns and `parquet metadata` reports "not cleanly finalized", but the viewer
+  API and MCP output don't, so a truncated recording can be analyzed silently.
+- **Unbounded startup probe** — Open. `probe_endpoint`/`fetch_agent_metadata`
+  have no timeout; a hung (SIGSTOPed) agent hangs `rezolus record` at startup
+  and the first ctrl-c doesn't break out. D2 bounded only the per-tick path.
+  The trade differs at startup (too tight aborts the recording rather than
+  skipping a sample).
+- **Manifest resolution is O(archive bytes)** — By design, worth knowing. The
+  authoritative manifest is the last tar entry, so resolution scans the archive:
+  sub-10 ms at production settings, 19.3 s on a pathological 18 GB /
+  15k-segment archive. *Reopen:* if segment counts get pathological in practice
+  (the compactor below is the real answer).
 
 - **Offline `.rez` compactor** — Roadmap. Merge a segmented archive's per-table
   segments into single files offline (likely under `rezolus parquet`): recovers
