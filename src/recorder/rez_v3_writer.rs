@@ -358,17 +358,44 @@ pub(crate) struct WalCell {
     /// would not be, because cgroup metrics appear and vanish mid-recording and
     /// a positional decode would silently reattribute every later column.
     pub name: String,
-    /// The column's metadata (labels, `metric_type`, and a histogram's
-    /// `grouping_power`/`max_value_power`), carried ONLY on the first WAL row
-    /// in which this metric appears for its sampler.
+    /// The snapshot **entry's** metadata, verbatim — NOT the parquet column's.
+    ///
+    /// The difference matters to a reader. `metric_type` is **not** in here:
+    /// `TableBuilder::push_row` injects it (`rez.rs`, the `or_insert_with` that
+    /// builds a `RezColumn`) and `metriken-exposition` never carries it. A
+    /// recovery path that built `RezColumn { metadata: cell.metadata, .. }`
+    /// directly would produce a column a natively sealed segment does not
+    /// match, and `read_table_parquet` would then read every gauge back as a
+    /// counter. Derive `metric_type` from the [`WalValue`] tag — or, simplest
+    /// and what makes the two paths identical by construction, rebuild owned
+    /// `Counter`/`Gauge`/`Histogram` entries and replay them through
+    /// `TableBuilder::push_row`, which injects it exactly as the writer did.
+    /// (A histogram's `grouping_power`/`max_value_power` DO appear here, put
+    /// there by the agent's exposition; [`WalValue::Histogram`] carries them
+    /// too, so a cell decodes without consulting metadata at all.)
+    ///
+    /// Carried ONLY on the first WAL row in which this metric appears **in the
+    /// current segment** — `maybe_seal` clears the tracking for a sampler when
+    /// it seals, so each segment's WAL span re-anchors its own metadata.
     ///
     /// Repeating it every tick is precisely the full-msgpack cost the
-    /// measurement rejected, and it never changes: `TableBuilder` keeps the
-    /// first sighting's metadata for the life of the column. Amortizing it is
-    /// safe under the prune rule, not just cheap — a WAL row is pruned only
-    /// once a segment covers its timestamp, and that segment carries the same
-    /// metadata as a parquet column. So for every live WAL row and every metric
-    /// in it, the metadata is either in a live WAL row or in a sealed segment.
+    /// measurement rejected; re-anchoring costs one payload per metric per
+    /// segment, ~1 tick in `max_rows` (~0.02% at the 4096-row default). What
+    /// that buys is an invariant contained entirely in the live WAL: **the
+    /// first live WAL row mentioning a metric carries its metadata.** No
+    /// segment lookup, so no decoding an arbitrarily old segment footer to
+    /// learn a tail's labels — the cost the WAL exists to avoid — and nothing
+    /// breaks when hindsight retention deletes old segments
+    /// (`DELETE FROM segments WHERE last_ts < cutoff`).
+    ///
+    /// It also makes the WAL's metadata semantics *identical* to a segment
+    /// column's, which an anchor held for the recording's lifetime did not:
+    /// `seal_completed` installs a fresh `TableBuilder` at every rotation, so a
+    /// column re-latches its labels each segment. A metric whose labels drift
+    /// mid-recording (a unit correction, an agent restart remapping an id) is
+    /// therefore captured in the WAL exactly where it is captured in segments.
+    /// And the tracking set no longer grows without bound as cgroup metric
+    /// names churn.
     pub metadata: Option<BTreeMap<String, String>>,
     pub value: WalValue,
     /// The acquisition window, as `(begin_ns, end_ns)`.
@@ -433,19 +460,12 @@ pub(crate) struct StreamRecorderV3 {
     /// survives a builder rotation: the key of a row in an already-sealed
     /// segment must still suppress a re-observation.
     last_keys: BTreeMap<String, u64>,
-    /// Per sampler, the metrics whose metadata has already gone into the WAL.
-    /// See `WalCell::metadata` for why once is enough.
+    /// Per sampler, the metrics whose metadata is already in the CURRENT
+    /// segment's WAL span. Cleared for a sampler when it seals, so each segment
+    /// re-anchors its own metadata — see `WalCell::metadata`.
     described: BTreeMap<String, HashSet<String>>,
     handle: RezV3Writer,
     policy: SealPolicy,
-    /// A WAL hand-off failure, held for the next fallible call.
-    ///
-    /// `ingest` returns `()`, matching v2 and the scrape loop's shape, but
-    /// unlike v2 it now writes. Reporting nothing would let a recording go on
-    /// against a dead writer; reporting it later through `maybe_seal` (called
-    /// every loop iteration) surfaces the writer's OWN error rather than the
-    /// "already joined" message a later `seal` would produce.
-    pending: Option<String>,
 }
 
 impl StreamRecorderV3 {
@@ -460,7 +480,6 @@ impl StreamRecorderV3 {
             described: BTreeMap::new(),
             handle,
             policy,
-            pending: None,
         }
     }
 
@@ -478,10 +497,43 @@ impl StreamRecorderV3 {
     /// behind the same dedup gate. A tick the segment path skipped must not
     /// reappear as a recovered row, or replaying the WAL would put back a
     /// duplicate observation the dedup rule exists to remove.
-    pub(crate) fn ingest(&mut self, snapshot: &Snapshot, anchored_ts: u64, wall_offset_ns: i64) {
+    ///
+    /// **Fallible, unlike v2's `ingest`**, because unlike v2's it writes. The
+    /// alternative — stash the error and report it from the next `maybe_seal` —
+    /// can swallow it outright: `RezV3Writer::send` joins the thread on a send
+    /// failure, so the subsequent `Drop` finds nothing to join, logs nothing,
+    /// and a caller that never calls `maybe_seal` or `finalize` again loses the
+    /// failure entirely. The caller already handles `maybe_seal`'s error; this
+    /// is the same shape at the same cadence.
+    ///
+    /// Note that a writer failure is still *asynchronous* — the hand-off can
+    /// return `Ok` for the tick that ultimately kills the writer, and the error
+    /// surfaces on a later hand-off. That is inherent to the writer thread and
+    /// is why `maybe_seal` polls health even with nothing to seal.
+    pub(crate) fn ingest(
+        &mut self,
+        snapshot: &Snapshot,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<(), String> {
         // One `Vec` for the whole tick: `RezV3Writer::wal` commits it as a
         // single transaction, so a tick is atomic across samplers.
+        //
+        // `wal`'s primary key is `(recording_id, sampler, ts)`, so re-using an
+        // `anchored_ts` for one sampler is a UNIQUE violation that kills the
+        // recording — stricter than the segment path, which would merely write
+        // two rows at one timestamp. Unreachable from the recorder loop, whose
+        // stamps are a monotonic clock in nanoseconds, and left strict on
+        // purpose: a repeated stamp means the caller's clock is broken, and
+        // `ON CONFLICT DO NOTHING` would silently drop the tick instead.
+        //
+        // Two passes, and the split is deliberate: everything fallible happens
+        // in the first, which touches no builder. `encode_wal_row` returning
+        // `Err` mid-tick would otherwise leave the samplers already visited
+        // holding a builder row whose WAL row was never committed — the one
+        // state this design must not produce.
         let mut wal_rows = Vec::new();
+        let mut accepted = Vec::new();
         for (sampler, entries) in group_by_sampler(snapshot) {
             let key = dedup_key(&entries, anchored_ts);
             if let Some(&last) = self.last_keys.get(sampler) {
@@ -489,15 +541,15 @@ impl StreamRecorderV3 {
                     continue; // window unchanged → same observation → skip
                 }
             }
-            self.last_keys.insert(sampler.to_string(), key);
 
             let described = self.described.entry(sampler.to_string()).or_default();
             let cells: Vec<WalCell> = entries
                 .iter()
                 .map(|e| {
                     let name = e.name().to_string();
-                    // `insert` returns true the first time only, which is
-                    // exactly the "carry the metadata once" rule.
+                    // `insert` returns true the first time only — and
+                    // `maybe_seal` empties this set when the sampler seals, so
+                    // "the first time" means "the first time in this segment".
                     let metadata = described.insert(name.clone()).then(|| {
                         e.metadata()
                             .iter()
@@ -512,18 +564,18 @@ impl StreamRecorderV3 {
                     }
                 })
                 .collect();
-            match encode_wal_row(&cells) {
-                Ok(row) => wal_rows.push(WalRow {
-                    sampler: sampler.to_string(),
-                    ts: anchored_ts,
-                    wall_offset: wall_offset_ns,
-                    row,
-                }),
-                Err(e) => {
-                    self.pending.get_or_insert(e);
-                }
-            }
+            wal_rows.push(WalRow {
+                sampler: sampler.to_string(),
+                ts: anchored_ts,
+                wall_offset: wall_offset_ns,
+                row: encode_wal_row(&cells)?,
+            });
+            accepted.push((sampler, key, entries));
+        }
 
+        // Pass 2: infallible. The builders and the dedup keys advance together.
+        for (sampler, key, entries) in accepted {
+            self.last_keys.insert(sampler.to_string(), key);
             let policy = &self.policy;
             let state = self
                 .builders
@@ -533,21 +585,16 @@ impl StreamRecorderV3 {
                 .builder
                 .push_row(anchored_ts, wall_offset_ns, &entries);
         }
-        if let Err(e) = self.handle.wal(wal_rows) {
-            self.pending.get_or_insert(e);
-        }
+        self.handle.wal(wal_rows)
     }
 
     /// Seal every open segment past any threshold, as ONE batch → one
     /// transaction. Empty builders never seal.
     ///
     /// Call this every loop iteration, scrape or not: an unreachable endpoint
-    /// must still get its pre-outage rows sealed, and it is also the tick where
-    /// a writer that died on an `ingest` hand-off gets reported.
+    /// must still get its pre-outage rows sealed, and it is also where a writer
+    /// that died asynchronously gets noticed.
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
-        if let Some(e) = self.pending.take() {
-            return Err(e);
-        }
         let now = Instant::now();
         let mut batch = Vec::new();
         for (sampler, state) in self.builders.iter_mut() {
@@ -568,6 +615,13 @@ impl StreamRecorderV3 {
             // and carries over untouched, while the byte counter correctly
             // restarts at zero with the fresh segment.
             let sealed = state.seal_completed(sampler, &self.policy, now);
+            // The metadata anchor is per SEGMENT, so it rotates with the
+            // builder: the next WAL row for this sampler re-carries every
+            // metric's metadata. That is what keeps the live WAL self-contained
+            // once the prune below the new segment's `last_ts` lands, and what
+            // makes the WAL capture label drift exactly where a re-latched
+            // `TableBuilder` captures it.
+            self.described.remove(sampler);
             batch.push(SealJob {
                 sampler: sampler.clone(),
                 table: sealed.finish(),
@@ -584,9 +638,6 @@ impl StreamRecorderV3 {
     /// segments and nothing else, so the WAL is left empty and no consumer pays
     /// for a replay it does not need.
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
-        if let Some(e) = self.pending.take() {
-            return Err(e);
-        }
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
             .filter(|(_, state)| state.builder.rows() > 0)
@@ -1078,7 +1129,7 @@ mod tests {
         let mut out = vec![0usize; samplers.len()];
         for i in 0..ticks {
             let (s, ts) = multi_snap(samplers, i);
-            rec.ingest(&s, ts, 0);
+            rec.ingest(&s, ts, 0).unwrap();
             let before: Vec<usize> = samplers.iter().map(|n| rec.open_rows(n)).collect();
             rec.maybe_seal().unwrap();
             for (k, name) in samplers.iter().enumerate() {
@@ -1107,7 +1158,7 @@ mod tests {
         let mut want = Vec::new();
         for i in 0..5u64 {
             let (s, ts) = multi_snap(&["cpu_usage"], i);
-            rec.ingest(&s, ts, i as i64);
+            rec.ingest(&s, ts, i as i64).unwrap();
             rec.maybe_seal().unwrap();
             want.push(ts);
         }
@@ -1170,7 +1221,7 @@ mod tests {
                     counter("drivehealth_ops", "drivehealth", i, Some(quiet)),
                 ],
             );
-            rec.ingest(&s, ts, 0);
+            rec.ingest(&s, ts, 0).unwrap();
             rec.maybe_seal().unwrap();
         }
         drop(rec);
@@ -1218,7 +1269,7 @@ mod tests {
         let (mut rec, rid) = recorder(&path, policy(2));
         for i in 0..4u64 {
             let (s, ts) = multi_snap(&["cpu_usage"], i);
-            rec.ingest(&s, ts, 0);
+            rec.ingest(&s, ts, 0).unwrap();
             rec.maybe_seal().unwrap();
         }
         assert_eq!(rec.open_rows("cpu_usage"), 0, "two full segments sealed");
@@ -1226,7 +1277,7 @@ mod tests {
         // Tick 3's window lives in an already-sealed segment. Re-observing it
         // must still dedup, which only holds if `last_key` survived rotation.
         let (dup, dup_ts) = multi_snap(&["cpu_usage"], 3);
-        rec.ingest(&dup, dup_ts + 1, 0);
+        rec.ingest(&dup, dup_ts + 1, 0).unwrap();
         assert_eq!(rec.open_rows("cpu_usage"), 0, "dedup survived the seal");
         drop(rec);
 
@@ -1271,14 +1322,28 @@ mod tests {
         // NOTHING because kill-safety was per-segment and they had not sealed
         // one yet. Here a table that never seals and never finalizes still
         // holds every row it ever ingested.
+        //
+        // "Fully" is the load-bearing word, so this checks every property a
+        // recovered table needs rather than just the row count: all three
+        // metric shapes, each tick's own `wall_offset` (the clock observation
+        // the `:wall_offset` column is built from), the acquisition windows the
+        // uncertainty bands are computed from, and the labels — without which
+        // the rows would recover as values with no identity.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
         let (mut rec, rid) = recorder(&path, never_seals());
 
         const TICKS: u64 = 200;
         for i in 0..TICKS {
-            let (s, ts) = multi_snap(&["drivehealth"], i);
-            rec.ingest(&s, ts, 0);
+            let ts = 10_000 + i * 1_000;
+            // A drifting, signed, non-zero offset: a fixed 0 would pass against
+            // a writer that dropped the observation entirely.
+            rec.ingest(
+                &shapes_snap("drivehealth", ts, "nanoseconds", i),
+                ts,
+                i as i64 - 100,
+            )
+            .unwrap();
             rec.maybe_seal().unwrap();
         }
         // Killed: no finalize, no seal, nothing flushed on the way out.
@@ -1290,33 +1355,59 @@ mod tests {
             vec!["drivehealth"],
             "a sampler with no segment at all is still discoverable"
         );
+        assert!(
+            db.read_segments(rid, "drivehealth").unwrap().is_empty(),
+            "nothing sealed, so the WAL is the ONLY record"
+        );
         let live = db.live_wal(rid, "drivehealth").unwrap();
         assert_eq!(live.len() as u64, TICKS, "every ingested tick is live");
         for (i, row) in live.iter().enumerate() {
-            assert_eq!(row.ts, 10_000 + i as u64 * 1_000);
-            let c = cells(row);
-            assert_eq!(c[0].name, "drivehealth_ops");
-            assert_eq!(c[0].value, WalValue::Counter(i as u64));
+            let i = i as u64;
+            let ts = 10_000 + i * 1_000;
+            assert_eq!(row.ts, ts);
             assert_eq!(
-                c[0].window,
-                Some((9_000 + i as u64 * 1_000, 9_500 + i as u64 * 1_000))
+                row.wall_offset,
+                i as i64 - 100,
+                "each tick's own clock observation, not a shared one"
             );
+            let c = cells(row);
+            assert_eq!(
+                c.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+                vec!["0", "1", "2"],
+                "all three shapes recovered"
+            );
+            assert_eq!(c[0].value, WalValue::Counter(i));
+            assert_eq!(c[1].value, WalValue::Gauge(-(i as i64)));
+            let WalValue::Histogram(gp, mvp, ref buckets) = c[2].value else {
+                panic!("the third metric is a histogram: {:?}", c[2].value);
+            };
+            assert_eq!((gp, mvp), (3, 8), "the H2 config rebuilds the histogram");
+            assert_eq!(buckets.iter().sum::<u64>(), 1);
+            assert_eq!(c[0].window, Some((ts - 500, ts)), "windows recovered");
+        }
+        // The labels are in the live WAL itself, so the recovered columns carry
+        // the same identity a sealed segment's would.
+        for c in cells(&live[0]) {
+            let m = c.metadata.as_ref().expect("the first live row describes");
+            assert_eq!(m.get("sampler").map(String::as_str), Some("drivehealth"));
+            assert_eq!(m.get("unit").map(String::as_str), Some("nanoseconds"));
         }
         assert!(!db.read_recordings().unwrap()[0].complete);
     }
 
-    fn mixed_meta(metric: &str, sampler: &str) -> HashMap<String, String> {
+    fn shape_meta(metric: &str, sampler: &str, unit: &str) -> HashMap<String, String> {
         [
             ("metric".to_string(), metric.to_string()),
             ("sampler".to_string(), sampler.to_string()),
-            ("unit".to_string(), "nanoseconds".to_string()),
+            ("unit".to_string(), unit.to_string()),
         ]
         .into_iter()
         .collect()
     }
 
-    /// One tick of `cpu_usage` carrying all three metric shapes.
-    fn mixed_snap(ts: u64) -> Snapshot {
+    /// One tick of `sampler` carrying all three metric shapes, with `unit` in
+    /// every metric's metadata so a label change is observable.
+    fn shapes_snap(sampler: &str, ts: u64, unit: &str, i: u64) -> Snapshot {
         let w = Some(Window::new(ts - 500, ts));
         let mut h = histogram::Histogram::new(3, 8).unwrap();
         h.increment(37).unwrap();
@@ -1325,15 +1416,109 @@ mod tests {
             duration: Duration::ZERO,
             metadata: HashMap::new(),
             counters: vec![
-                Counter::new("0".to_string(), 42, mixed_meta("0", "cpu_usage")).with_window(w),
+                Counter::new("0".to_string(), i, shape_meta("0", sampler, unit)).with_window(w),
             ],
             gauges: vec![
-                Gauge::new("1".to_string(), -7, mixed_meta("1", "cpu_usage")).with_window(w),
+                Gauge::new("1".to_string(), -(i as i64), shape_meta("1", sampler, unit))
+                    .with_window(w),
             ],
-            histograms: vec![
-                ExpHistogram::new("2".to_string(), h, mixed_meta("2", "cpu_usage")).with_window(w),
-            ],
+            histograms: vec![{
+                // The agent's exposition puts the H2 config in a histogram's
+                // metadata (`src/agent/exposition/http/snapshot.rs`), and
+                // `read_table_parquet` needs it to rebuild the buckets — so a
+                // fixture without it is not a snapshot this writer ever sees.
+                let mut m = shape_meta("2", sampler, unit);
+                m.insert("grouping_power".to_string(), "3".to_string());
+                m.insert("max_value_power".to_string(), "8".to_string());
+                ExpHistogram::new("2".to_string(), h, m).with_window(w)
+            }],
         })
+    }
+
+    /// One tick of `cpu_usage` carrying all three metric shapes.
+    fn mixed_snap(ts: u64) -> Snapshot {
+        shapes_snap("cpu_usage", ts, "nanoseconds", 42)
+    }
+
+    /// The `unit` label on a sealed segment's `"0"` column, decoded from the
+    /// stored parquet BLOB.
+    fn segment_unit(bytes: &[u8]) -> String {
+        let table =
+            crate::recorder::rez::read_table_parquet("cpu_usage".to_string(), bytes.to_vec())
+                .unwrap();
+        table
+            .columns
+            .iter()
+            .find(|c| c.name == "0")
+            .unwrap()
+            .metadata["unit"]
+            .clone()
+    }
+
+    #[test]
+    fn each_segments_wal_span_re_anchors_its_own_metadata() {
+        // The metadata anchor is per SEGMENT, not per recording, and that is
+        // load-bearing three ways.
+        //
+        // 1. Label drift. `seal_completed` installs a fresh `TableBuilder`, so
+        //    a segment column re-latches its labels at every rotation. An
+        //    anchor held for the recording's lifetime would leave the WAL
+        //    describing a recovered tail with the FIRST segment's stale labels
+        //    while a sealed tail carried the new ones — the two paths
+        //    disagreeing about the same rows.
+        // 2. Self-containment. The first LIVE WAL row must carry the metadata,
+        //    so recovery never decodes an old segment's footer to learn the
+        //    tail's labels — the exact cost the WAL exists to avoid.
+        // 3. Retention. Hindsight deletes segments by `last_ts < cutoff`
+        //    (`rez_sqlite.rs`'s schema note); an anchor living in a deleted
+        //    segment would put the metadata nowhere at all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        // Bucket 29 against `max_rows = 2` reduces by `(2 / 128) * 29 = 0`.
+        let (mut rec, rid) = recorder(&path, policy(2));
+
+        // Ticks 0-1 seal segment 0; the unit corrects at tick 2; ticks 2-3 seal
+        // segment 1; tick 4 is the live tail.
+        for i in 0..5u64 {
+            let ts = 10_000 + i * 1_000;
+            let unit = if i < 2 { "nanoseconds" } else { "microseconds" };
+            rec.ingest(&shapes_snap("cpu_usage", ts, unit, i), ts, 0)
+                .unwrap();
+            rec.maybe_seal().unwrap();
+        }
+        drop(rec);
+
+        let db = RezDb::open(&path).unwrap();
+        let segments = db.read_segments(rid, "cpu_usage").unwrap();
+        assert_eq!(segments.len(), 2, "two rotations at max_rows = 2");
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| segment_unit(&s.bytes))
+                .collect::<Vec<_>>(),
+            vec!["nanoseconds", "microseconds"],
+            "each segment re-latches its own labels — and they survive the \
+             prune, being in the segment BLOB rather than the WAL"
+        );
+
+        let live = db.live_wal(rid, "cpu_usage").unwrap();
+        assert_eq!(
+            live.iter().map(|r| r.ts).collect::<Vec<_>>(),
+            vec![14_000],
+            "only the tail is past the second segment's watermark"
+        );
+        for c in cells(&live[0]) {
+            let m = c
+                .metadata
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} must re-carry metadata after a seal", c.name));
+            assert_eq!(
+                m.get("unit").map(String::as_str),
+                Some("microseconds"),
+                "the tail's labels are the CURRENT ones, and they are in the \
+                 live WAL itself — no segment lookup, nothing lost to retention"
+            );
+        }
     }
 
     #[test]
@@ -1348,8 +1533,8 @@ mod tests {
         let path = dir.path().join("out.rez");
         let (mut rec, rid) = recorder(&path, never_seals());
 
-        rec.ingest(&mixed_snap(1_000), 1_000, 3);
-        rec.ingest(&mixed_snap(2_000), 2_000, 4);
+        rec.ingest(&mixed_snap(1_000), 1_000, 3).unwrap();
+        rec.ingest(&mixed_snap(2_000), 2_000, 4).unwrap();
         drop(rec);
 
         let db = RezDb::open(&path).unwrap();
@@ -1363,7 +1548,7 @@ mod tests {
             "counters, then gauges, then histograms — `group_by_sampler` order"
         );
         assert_eq!(first[0].value, WalValue::Counter(42));
-        assert_eq!(first[1].value, WalValue::Gauge(-7));
+        assert_eq!(first[1].value, WalValue::Gauge(-42));
         let WalValue::Histogram(gp, mvp, ref buckets) = first[2].value else {
             panic!("the third metric is a histogram: {:?}", first[2].value);
         };
@@ -1404,7 +1589,7 @@ mod tests {
 
         for i in 0..3u64 {
             let (s, ts) = multi_snap(&["cpu_usage"], i);
-            rec.ingest(&s, ts, 0);
+            rec.ingest(&s, ts, 0).unwrap();
             rec.maybe_seal().unwrap();
         }
         rec.finalize((12_000, 5)).unwrap();
