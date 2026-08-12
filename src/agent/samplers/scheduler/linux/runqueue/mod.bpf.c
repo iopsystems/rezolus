@@ -238,14 +238,22 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
     if (get_task_state(prev) == TASK_RUNNING) {
-        idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
-        array_incr(&counters, idx);
-
-        if (prev_cgroup_id < MAX_CGROUPS) {
-            array_incr(&cgroup_ivcsw, prev_cgroup_id);
-        }
-
+        // The idle task is always TASK_RUNNING, so a CPU simply waking up to run
+        // something counted as an involuntary context switch -- nothing was
+        // competing for the CPU, and no task was preempted. The inflation is
+        // load-dependent and largest exactly where a high context-switch rate is
+        // most likely to be misread as contention: on a 32-core host it was 65%
+        // of such switches when otherwise idle, and ~30% under load. The idle
+        // task is excluded here for the same reason it is excluded from the
+        // timing paths below.
         if (prev_pid) {
+            idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
+            array_incr(&counters, idx);
+
+            if (prev_cgroup_id < MAX_CGROUPS) {
+                array_incr(&cgroup_ivcsw, prev_cgroup_id);
+            }
+
             bpf_map_update_elem(&enqueued_at, &prev_pid, &ts, 0);
 
             tsp = bpf_map_lookup_elem(&running_at, &prev_pid);
