@@ -1,5 +1,7 @@
 //! `RezReader`: reads a `.rez` archive as a unified `metriken_query::MetricsSource`
-//! by composing one `ParquetReader` per per-sampler table.
+//! by composing one sub-source per per-sampler table — a `ParquetReader` for a
+//! single-segment table, a `SegmentedParquetReader` for one the streaming
+//! writer sealed more than once.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -7,14 +9,18 @@ use std::sync::Arc;
 
 use metriken_query::{
     BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult,
+    SegmentedParquetReader,
 };
 
 use crate::recorder::rez::{self, RecordingBytes};
 
-/// One opened per-sampler table.
+/// One opened per-sampler table. A table is one or more parquet segments, so
+/// the backing source is either a plain `ParquetReader` (single segment) or a
+/// `SegmentedParquetReader` (many) — both are `MetricsSource`, and everything
+/// below this point treats them identically.
 struct SamplerReader {
     sampler: String,
-    reader: ParquetReader,
+    reader: Box<dyn MetricsSource>,
 }
 
 /// A `.rez` archive presented as one `MetricsSource`. Phase B: a single
@@ -70,9 +76,31 @@ impl RezReader {
             .unwrap_or_default();
         let mut tables = Vec::new();
         for rec in recordings {
-            for (sampler, bytes) in rec.tables {
-                let reader = ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
-                    .map_err(|e| format!("opening table {sampler}: {e}"))?;
+            if !rec.complete {
+                tracing::warn!(
+                    "recording {} was not cleanly finalized; it was recovered up to its \
+                     last checkpoint and data after that may be missing",
+                    rec.dir
+                );
+            }
+            for (sampler, segments) in rec.tables {
+                // A single-segment table keeps the plain reader: the streaming
+                // writer's slow samplers and every atomically written archive
+                // land here, and there is nothing for the splice to do.
+                // Multi-segment tables go to the segment-aware source, which
+                // splices raw samples below PromQL evaluation so a `rate()`
+                // window straddling a seal boundary still computes on complete
+                // data. Both open footer-only against the shared pool.
+                let reader: Box<dyn MetricsSource> = match <[Vec<u8>; 1]>::try_from(segments) {
+                    Ok([bytes]) => Box::new(
+                        ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
+                            .map_err(|e| format!("opening table {sampler}: {e}"))?,
+                    ),
+                    Err(segments) => Box::new(
+                        SegmentedParquetReader::open_bytes_with_pool(segments, Arc::clone(&pool))
+                            .map_err(|e| format!("opening table {sampler}: {e}"))?,
+                    ),
+                };
                 tables.push(SamplerReader { sampler, reader });
             }
         }
@@ -275,39 +303,102 @@ mod tests {
         })
     }
 
+    /// The fixture's rows as `(snapshot, timestamp)`: two samplers
+    /// (`cpu_usage` = the `cpu_cycles` counter plus the `frequency` gauge,
+    /// `blockio_requests` = the `reads` counter), one row per second.
+    ///
+    /// Shared by the atomic and streaming builders below so a segmented archive
+    /// can be compared against a single-segment one holding the *same* rows.
+    fn fixture_rows(n: u64) -> Vec<(Snapshot, u64)> {
+        (0..n)
+            .map(|i| {
+                // Seconds-scale timestamps (1s, 2s, ...) so query-engine time
+                // handling is well-behaved; windows advance each poll → one row
+                // per sampler per poll.
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                (
+                    snap(
+                        ts,
+                        vec![
+                            counter("cpu_cycles", "cpu_usage", i * 1_000, w),
+                            counter("reads", "blockio_requests", i, w),
+                        ],
+                        // A gauge in cpu_usage: bare gauge selectors are valid
+                        // instant vectors, so the delegation test can actually
+                        // evaluate.
+                        vec![gauge("frequency", "cpu_usage", 2_000 + i as i64, w)],
+                    ),
+                    ts,
+                )
+            })
+            .collect()
+    }
+
+    fn rez_labels() -> BTreeMap<String, String> {
+        [("source".to_string(), "rezolus".to_string())]
+            .into_iter()
+            .collect()
+    }
+
+    /// Write `rows` as a single-segment archive (the atomic writer).
+    fn write_atomic_rez(rows: &[(Snapshot, u64)], out: &std::path::Path) {
+        let mut r = RezRecorder::new(rez_labels(), rez_labels(), "rezolus".to_string());
+        for (s, ts) in rows {
+            r.ingest(s, *ts);
+        }
+        r.finalize(out).unwrap();
+    }
+
+    /// Write the same `rows` through the streaming writer with a tiny row cap,
+    /// so every table seals into several segments.
+    fn write_streamed_rez(rows: &[(Snapshot, u64)], max_rows: usize, out: &std::path::Path) {
+        use crate::recorder::rez_stream::{
+            ManifestSeed, RezWriterHandle, SealPolicy, StreamRecorder,
+        };
+
+        let handle = RezWriterHandle::create(
+            out,
+            ManifestSeed {
+                dir: "rezolus".to_string(),
+                labels: rez_labels(),
+                metadata: rez_labels(),
+                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+            },
+        )
+        .unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows,
+                max_age: std::time::Duration::from_secs(3600),
+            },
+        );
+        let mut last_ts = 0;
+        for (s, ts) in rows {
+            rec.ingest(s, *ts, 0);
+            rec.maybe_seal().unwrap();
+            last_ts = *ts;
+        }
+        rec.finalize((last_ts, 0)).unwrap();
+    }
+
+    /// `sampler -> segment count` for a written archive.
+    fn segment_counts(path: &std::path::Path) -> BTreeMap<String, usize> {
+        let (manifest, _) = crate::recorder::rez::read_archive_bytes(path).unwrap();
+        manifest.recordings[0]
+            .tables
+            .iter()
+            .map(|t| (t.sampler.clone(), t.segment_files().len()))
+            .collect()
+    }
+
     /// Build a 2-sampler .rez fixture on disk; return (tempdir, path).
     pub(super) fn two_sampler_rez() -> (tempfile::TempDir, std::path::PathBuf) {
-        let mut r = RezRecorder::new(
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            [("source".to_string(), "rezolus".to_string())]
-                .into_iter()
-                .collect(),
-            "rezolus".to_string(),
-        );
-        for i in 0..3u64 {
-            // Seconds-scale timestamps (1s, 2s, 3s) so query-engine time handling
-            // is well-behaved; windows advance each poll → 3 rows per sampler.
-            let ts = 1_000_000_000 * (i + 1);
-            let w = Some(Window::new(ts - 50_000_000, ts));
-            r.ingest(
-                &snap(
-                    ts,
-                    vec![
-                        counter("cpu_cycles", "cpu_usage", i, w),
-                        counter("reads", "blockio_requests", i, w),
-                    ],
-                    // A gauge in cpu_usage: bare gauge selectors are valid instant
-                    // vectors, so the delegation test can actually evaluate.
-                    vec![gauge("frequency", "cpu_usage", 2_000 + i as i64, w)],
-                ),
-                ts,
-            );
-        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("two.rez");
-        r.finalize(&out).unwrap();
+        write_atomic_rez(&fixture_rows(3), &out);
         (dir, out)
     }
 
@@ -348,6 +439,115 @@ mod tests {
         );
     }
 
+    /// A single-sampler `.rez` holding one histogram, `n` rows, counts rising
+    /// so a delta-based histogram scalar has something to report. Written
+    /// through the STREAMING writer with a small row cap so the table is
+    /// multi-segment and `RezReader` opens it with the segment-aware source —
+    /// the reader that implements the `__run__` conflict policy.
+    fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
+        use crate::recorder::rez_stream::{
+            ManifestSeed, RezWriterHandle, SealPolicy, StreamRecorder,
+        };
+        use metriken_exposition::Histogram as ExpHistogram;
+
+        let handle = RezWriterHandle::create(
+            out,
+            ManifestSeed {
+                dir: "rezolus".to_string(),
+                labels: rez_labels(),
+                metadata: rez_labels(),
+                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+            },
+        )
+        .unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows,
+                max_age: std::time::Duration::from_secs(3600),
+            },
+        );
+        let mut last_ts = 0;
+        for i in 0..n {
+            let ts = 1_000_000_000 * (i + 1);
+            let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+            for _ in 0..=i {
+                h.increment(1_000).unwrap();
+            }
+            let hist = ExpHistogram::new(
+                "latency".to_string(),
+                h,
+                [
+                    ("metric".to_string(), "latency".to_string()),
+                    ("sampler".to_string(), "scheduler_runqueue".to_string()),
+                    // The query engine keys histogram decoding off these, as
+                    // the agent's own snapshots carry them.
+                    ("grouping_power".to_string(), "7".to_string()),
+                    ("max_value_power".to_string(), "64".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .with_window(Some(Window::new(ts - 50_000_000, ts)));
+            let snapshot = Snapshot::V2(SnapshotV2 {
+                systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                duration: std::time::Duration::ZERO,
+                metadata: HashMap::new(),
+                counters: Vec::new(),
+                gauges: Vec::new(),
+                histograms: vec![hist],
+            });
+            rec.ingest(&snapshot, ts, 0);
+            rec.maybe_seal().unwrap();
+            last_ts = ts;
+        }
+        rec.finalize((last_ts, 0)).unwrap();
+    }
+
+    /// End-to-end check of the segmented conflict policy's escape hatch through
+    /// the *front door*. `RezReader` routes every query through `columns()`
+    /// first, and `columns()` requires every filter key to be present on the
+    /// label set — so a `__run__`-qualified selector that `column_map` does not
+    /// tag is rejected as "references no metric present in this .rez" long
+    /// before `query_range` sees it. A dashboard pinning `__run__="0"` for
+    /// stability across an A/B pair must keep working on the side that never
+    /// drifted.
+    ///
+    /// Segmented tables only: `__run__` is a segment-splice concept, so a
+    /// single-segment table (the atomic writer, or a slow sampler that never
+    /// rolled) is opened with the plain `ParquetReader` and knows nothing
+    /// about it.
+    #[test]
+    fn run_qualified_histogram_query_routes_through_rez_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hist.rez");
+        segmented_histogram_rez(6, 2, &path);
+        assert!(
+            segment_counts(&path)["scheduler_runqueue"] > 1,
+            "the fixture must be segmented, or this proves nothing"
+        );
+
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+        let (start, end) = reader.time_range().unwrap();
+
+        let plain = reader.columns("histogram_mean(latency)").unwrap();
+        assert!(!plain.is_empty(), "cols: {plain:?}");
+        let pinned = reader
+            .columns("histogram_mean(latency{__run__=\"0\"})")
+            .unwrap();
+        assert_eq!(pinned, plain, "a run-qualified query must route the same");
+
+        let q = reader.query_range(
+            "histogram_mean(latency{__run__=\"0\"})",
+            start,
+            end + 1.0,
+            1.0,
+        );
+        assert!(q.is_ok(), "pinned histogram query should resolve: {q:?}");
+    }
+
     #[test]
     fn open_recordings_returns_one_reader_per_recording() {
         // Build a 2-recording .rez by reading a 1-recording fixture and writing
@@ -355,7 +555,7 @@ mod tests {
         let (_d, p) = two_sampler_rez();
         let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
         let rec0 = m.recordings.into_iter().next().unwrap();
-        let bytes0: Vec<Vec<u8>> = rb
+        let bytes0: Vec<Vec<Vec<u8>>> = rb
             .into_iter()
             .next()
             .unwrap()
@@ -382,6 +582,146 @@ mod tests {
         assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
         assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
         assert!(!readers[0].1.counter_names().is_empty());
+    }
+
+    /// The whole point of the splice design: a segmented table must answer
+    /// every query exactly as the single-segment table holding the same rows
+    /// does — including a `rate()` window that straddles a segment boundary,
+    /// where a naive per-segment reader would lose the sample it needs.
+    #[test]
+    fn segmented_rez_queries_match_single_segment_equivalent() {
+        let rows = fixture_rows(6);
+        let dir = tempfile::tempdir().unwrap();
+        let single = dir.path().join("single.rez");
+        let segmented = dir.path().join("segmented.rez");
+        write_atomic_rez(&rows, &single);
+        write_streamed_rez(&rows, 2, &segmented);
+
+        // The fixtures must actually differ in segmentation, or this proves
+        // nothing.
+        assert_eq!(
+            segment_counts(&single),
+            [
+                ("blockio_requests".to_string(), 1),
+                ("cpu_usage".to_string(), 1)
+            ]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
+        );
+        assert_eq!(
+            segment_counts(&segmented),
+            [
+                ("blockio_requests".to_string(), 3),
+                ("cpu_usage".to_string(), 3)
+            ]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>(),
+            "6 rows at max_rows=2 → 3 segments per table"
+        );
+
+        let a = RezReader::open_with_pool(&single, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        let b = RezReader::open_with_pool(&segmented, BufferPool::new(64 * 1024 * 1024)).unwrap();
+
+        assert_eq!(a.counter_names(), b.counter_names());
+        assert_eq!(a.gauge_names(), b.gauge_names());
+        assert_eq!(a.time_range_ns(), b.time_range_ns());
+
+        let (start, end) = a.time_range().unwrap();
+        assert_eq!(b.time_range(), Some((start, end)));
+
+        let same = |expr: &str| {
+            let ra = a.query_range(expr, start, end, 1.0).unwrap();
+            let rb = b.query_range(expr, start, end, 1.0).unwrap();
+            assert_eq!(
+                serde_json::to_value(&ra).unwrap(),
+                serde_json::to_value(&rb).unwrap(),
+                "segmented answer differs for {expr}"
+            );
+            ra
+        };
+
+        // A plain gauge over the full span.
+        same("frequency");
+        // A rate window narrow enough that most evaluation points draw their
+        // two samples from *different* segments (segments hold 2 rows each).
+        let rate = same("rate(cpu_cycles[2s])");
+        // Non-degenerate: the query must actually have produced values, or
+        // "identical" would be vacuous.
+        let json = serde_json::to_value(&rate).unwrap();
+        let values = json["result"][0]["values"].as_array().unwrap();
+        assert!(
+            values.iter().any(|v| v[1] != "0"),
+            "the boundary-spanning rate must produce non-zero values: {json}"
+        );
+        // Wider windows too, so the splice is exercised across >2 segments.
+        same("rate(cpu_cycles[4s])");
+        same("irate(cpu_cycles[2s])");
+        same("rate(reads[3s])");
+    }
+
+    /// The common real shape: slow samplers seal once, fast ones many times.
+    /// Both kinds of table must be openable and queryable from one archive.
+    #[test]
+    fn mixed_single_and_multi_segment_tables_are_queryable() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("mixed.rez");
+        // `blockio_requests` reports once per 3 polls, so it accumulates one
+        // row for every 3 `cpu_usage` rows and never reaches the row cap.
+        let rows: Vec<(Snapshot, u64)> = (0..6u64)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                // A stale window means the sampler did not advance → deduped.
+                let slow_end = 1_000_000_000 * (i / 3 + 1);
+                let slow_w = Some(Window::new(slow_end - 50_000_000, slow_end));
+                (
+                    snap(
+                        ts,
+                        vec![
+                            counter("cpu_cycles", "cpu_usage", i * 1_000, w),
+                            counter("reads", "blockio_requests", i / 3, slow_w),
+                        ],
+                        vec![gauge("frequency", "cpu_usage", 2_000 + i as i64, w)],
+                    ),
+                    ts,
+                )
+            })
+            .collect();
+        write_streamed_rez(&rows, 2, &out);
+
+        let counts = segment_counts(&out);
+        assert_eq!(counts.get("cpu_usage"), Some(&3), "{counts:?}");
+        assert_eq!(
+            counts.get("blockio_requests"),
+            Some(&1),
+            "the slow sampler seals exactly once, at finalize: {counts:?}"
+        );
+
+        let reader = RezReader::open_with_pool(&out, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        assert_eq!(
+            reader.counter_names(),
+            vec!["cpu_cycles".to_string(), "reads".to_string()],
+            "both tables contribute to the union"
+        );
+        let (start, end) = reader.time_range().unwrap();
+        // Routing still picks exactly one owner per query, across both kinds.
+        // The 3-segment table…
+        assert!(reader
+            .query_range("rate(cpu_cycles[2s])", start, end, 1.0)
+            .is_ok());
+        // …and the 1-segment one, which never went through the splice.
+        assert!(reader
+            .query_range("rate(reads[4s])", start, end, 1.0)
+            .is_ok());
+        // And a query spanning both still errors naming both samplers.
+        let err = reader
+            .query_range("cpu_cycles + reads", start, end, 1.0)
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("cpu_usage") && msg.contains("blockio_requests"),
+            "got: {msg}"
+        );
     }
 
     #[test]

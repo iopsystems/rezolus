@@ -187,6 +187,59 @@ Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md)
 - Per-source-not-per-node descriptions, and "descriptions only exist if the origin
   supplied them," are **by design** — not backlog.
 
+Source: [streaming segmented `.rez` writer](journal/2026-08-11-rez-streaming-writer.md)
+(implemented + measured 2026-08-12; finalize 19.6–37.1 ms independent of
+recording length, 55 ms under backpressure).
+
+- **Fleet-scale size cost of segmentation** — Open. The Linux fleet
+  re-measurement (2026-08-12) covered finalize, kill recovery, cadence and the
+  read path, but not size: the +1.28 % overhead figure is still macOS-only,
+  from a bespoke replay harness. *Reopen:* before quoting a fleet size
+  overhead. Related: `syscall_latency` reached 144 segments in 900 s.
+- **Per-table kill-loss for low-volume tables** — Open. At fleet scale a quiet
+  table seals every 180–300 s, so an unclean kill can lose its whole recording
+  while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
+  from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
+  close it.
+- **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
+  parquet-only, so the static-site viewer silently fails on every streamed
+  recording. Pre-existing gap, newly load-bearing now that `.rez` is the
+  streaming format. See the `viewer-parity` skill.
+- **Recovered-archive state not surfaced to consumers** — Open. `RezReader`
+  warns and `parquet metadata` reports "not cleanly finalized", but the viewer
+  API and MCP output don't, so a truncated recording can be analyzed silently.
+- **Unbounded startup probe** — Open. `probe_endpoint`/`fetch_agent_metadata`
+  have no timeout; a hung (SIGSTOPed) agent hangs `rezolus record` at startup
+  and the first ctrl-c doesn't break out. D2 bounded only the per-tick path.
+  The trade differs at startup (too tight aborts the recording rather than
+  skipping a sample).
+- **Manifest resolution is O(archive bytes)** — By design, worth knowing. The
+  authoritative manifest is the last tar entry, so resolution scans the archive:
+  sub-10 ms at production settings, 19.3 s on a pathological 18 GB /
+  15k-segment archive. *Reopen:* if segment counts get pathological in practice
+  (the compactor below is the real answer).
+
+- **Offline `.rez` compactor** — Roadmap. Merge a segmented archive's per-table
+  segments into single files offline (likely under `rezolus parquet`): recovers
+  the compression ratio and per-segment footer overhead that streaming trades
+  for durability, and its output is fully v1-readable (`file` + `files`,
+  `version: 1`), making it the forward-compatibility downgrade path. With the
+  segment-aware read path in scope, this is an optimization, not a read-speed
+  requirement. Not needed for the streaming writer to ship.
+- **Full metric-identity column keys in `.rez` tables** — Open. Column names
+  are per-agent-process numeric ids, so an agent restart mid-recording remaps
+  them; the merge policy splits conflicting columns. Keying on metric name +
+  labels at write time would make restarts seamless (write-format change).
+  *Reopen:* if restart-heavy recordings make split columns a real annoyance.
+- **Seal thresholds as compile-time constants** — Open. Byte-first seal
+  thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
+  window) ship as constants in `src/recorder/rez.rs`. *Reopen:* if real
+  workloads need tuning — promote to a `--flag` or config knob.
+- **Fast finalize for the classic parquet path** — By design. The single-file
+  parquet's wide schema is only knowable once recording ends, so its finalize
+  replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
+  with fast stop — likely shape: record to `.rez`, convert offline.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).

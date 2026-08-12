@@ -141,7 +141,34 @@ fn filter_rez(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
     let (manifest, recordings) = rez::read_archive_bytes(path)?;
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+
+    // A typo'd sampler name must not be read as "keep nothing". `dest` defaults
+    // to the INPUT, so an unvalidated `--samplers cpu_usge` overwrote a
+    // long-lived streamed capture in place with an empty manifest that
+    // `RezReader` then opened quite happily, reporting no metrics.
+    let present: BTreeSet<&str> = manifest
+        .recordings
+        .iter()
+        .flat_map(|r| r.tables.iter().map(|t| t.sampler.as_str()))
+        .collect();
+    let unmatched: Vec<&str> = keep
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !present.contains(s))
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "no sampler table named {} in {}; it holds: {}",
+            unmatched.join(", "),
+            path.display(),
+            present.iter().copied().collect::<Vec<_>>().join(", "),
+        )
+        .into());
+    }
+
+    // Whole tables are dropped or kept; a kept table's segments pass through
+    // byte-identical.
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     let mut kept = 0usize;
     let mut total = 0usize;
     for (mut rec, rb) in manifest.recordings.into_iter().zip(recordings) {
@@ -431,5 +458,110 @@ mod tests {
             .map(|t| t.sampler.as_str())
             .collect();
         assert_eq!(samplers, vec!["cpu_usage"]);
+    }
+
+    // `dest` defaults to the input, so an unmatched `--samplers` name used to
+    // overwrite a (possibly multi-day) capture in place with an empty archive
+    // and still exit Ok.
+    #[test]
+    fn filter_rez_rejects_a_sampler_that_is_not_present() {
+        let (_d, path) = two_sampler_rez();
+        let before = std::fs::read(&path).unwrap();
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usge".to_string()].into_iter().collect();
+
+        let err = filter_rez(&path, &keep, None)
+            .expect_err("an unmatched sampler name must be an error, not an empty archive");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cpu_usge"),
+            "names the unmatched sampler: {msg}"
+        );
+        assert!(msg.contains("cpu_usage"), "names what is present: {msg}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "the input must be left untouched"
+        );
+    }
+
+    /// Every `<dir>/<file>` data entry in the tar, in write order.
+    fn tar_entry_names(path: &Path) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut archive = tar::Archive::new(std::fs::File::open(path).unwrap());
+        for entry in archive.entries().unwrap() {
+            let name = entry
+                .unwrap()
+                .path()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if name != crate::recorder::rez::REZ_MANIFEST_NAME {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    // Dropping a table from a segmented archive must drop *all* of its segments
+    // and keep *all* of the survivor's, and the rewritten manifest must name
+    // exactly the files the tar now holds — a stale index would name segments
+    // the output never wrote and fail every reader at open.
+    #[test]
+    fn filter_rez_drops_whole_segmented_tables_and_reindexes() {
+        use crate::recorder::rez;
+        use crate::recorder::rez_stream::write_segmented_rez;
+
+        let d = tempfile::tempdir().unwrap();
+        let path = write_segmented_rez(
+            &d.path().join("full.rez"),
+            "rezolus",
+            Default::default(),
+            &["cpu_usage", "blockio_requests"],
+            6,
+            2,
+            true,
+        );
+        let before = rez::read_archive_bytes(&path).unwrap().1.remove(0).tables;
+        assert!(
+            before.iter().all(|(_, s)| s.len() == 3),
+            "the input must actually be segmented"
+        );
+        let kept_bytes = before
+            .iter()
+            .find(|(s, _)| s == "cpu_usage")
+            .unwrap()
+            .1
+            .clone();
+
+        let out = d.path().join("slim.rez");
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        filter_rez(&path, &keep, Some(&out)).unwrap();
+
+        let (m, mut recordings) = rez::read_archive_bytes(&out).unwrap();
+        let tables = recordings.remove(0).tables;
+        assert_eq!(
+            tables.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+            vec!["cpu_usage"],
+            "the dropped table is gone, segments and all"
+        );
+        assert_eq!(tables[0].1, kept_bytes, "all 3 segments, byte-identical");
+
+        // The manifest index names exactly the files that were emitted.
+        let idx = &m.recordings[0].tables[0];
+        let expected: Vec<String> = idx
+            .segment_files()
+            .iter()
+            .map(|f| format!("rezolus/{f}"))
+            .collect();
+        assert_eq!(tar_entry_names(&out), expected);
+        assert_eq!(idx.files.len(), 3);
+        assert!(
+            !tar_entry_names(&out)
+                .iter()
+                .any(|n| n.contains("blockio_requests")),
+            "no orphaned segment bytes from the dropped table"
+        );
     }
 }

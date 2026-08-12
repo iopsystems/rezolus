@@ -294,7 +294,7 @@ fn combine_rez(
     output: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in files {
         let (manifest, recordings) = rez::read_archive_bytes(file)?;
@@ -307,7 +307,8 @@ fn combine_rez(
                 n += 1;
             }
             rec.dir = dir;
-            let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+            // Segments pass through byte-identical; only the `dir` changes.
+            let bytes: Vec<Vec<Vec<u8>>> = rb.tables.into_iter().map(|(_, b)| b).collect();
             out.push((rec, bytes));
         }
     }
@@ -2634,6 +2635,7 @@ mod tests {
             let table = RezTable {
                 sampler: "cpu_usage".to_string(),
                 timestamps: vec![1_000, 2_000],
+                wall_offsets: Vec::new(),
                 columns: vec![col],
             };
             let d = tempfile::tempdir().unwrap();
@@ -2666,5 +2668,84 @@ mod tests {
         assert_eq!(recordings.len(), 2);
         let dirs: Vec<&str> = manifest.recordings.iter().map(|r| r.dir.as_str()).collect();
         assert_ne!(dirs[0], dirs[1]);
+    }
+
+    // `combine` copies each input's `RezTableIndex` verbatim and lets
+    // `write_archive_bytes` re-canonicalize the file names. On segmented input
+    // that is the whole ballgame: a stale index, a dropped segment, or a
+    // reordered one all produce an archive that opens but reads wrong. Only the
+    // streaming writer produces segmented tables, so this needs a real one.
+    #[test]
+    fn combine_rez_passes_segments_through_and_propagates_completeness() {
+        use crate::recorder::rez;
+        use crate::recorder::rez_stream::write_segmented_rez;
+        use metriken_query::MetricsSource;
+
+        let d = tempfile::tempdir().unwrap();
+        // One cleanly finalized recording…
+        let a = write_segmented_rez(
+            &d.path().join("a.rez"),
+            "rezolus",
+            [("arm".to_string(), "baseline".to_string())]
+                .into_iter()
+                .collect(),
+            &["cpu_usage", "scheduler"],
+            6,
+            2,
+            true,
+        );
+        // …and one recovered from a `.partial` (killed recorder).
+        let b = write_segmented_rez(
+            &d.path().join("b.rez"),
+            "rezolus",
+            [("arm".to_string(), "experiment".to_string())]
+                .into_iter()
+                .collect(),
+            &["cpu_usage", "scheduler"],
+            6,
+            2,
+            false,
+        );
+
+        let seg_bytes = |p: &std::path::Path| -> Vec<(String, Vec<Vec<u8>>)> {
+            rez::read_archive_bytes(p).unwrap().1.remove(0).tables
+        };
+        let a_tables = seg_bytes(&a);
+        let b_tables = seg_bytes(&b);
+        assert!(
+            a_tables.iter().all(|(_, s)| s.len() == 3),
+            "the input must actually be segmented"
+        );
+
+        let out = d.path().join("combined.rez");
+        combine_rez(&[a, b], &out).unwrap();
+
+        let (manifest, recordings) = rez::read_archive_bytes(&out).unwrap();
+        assert_eq!(manifest.recordings.len(), 2);
+
+        // Segment bytes survive byte-identical, in order, per table.
+        assert_eq!(recordings[0].tables, a_tables);
+        assert_eq!(recordings[1].tables, b_tables);
+
+        // `complete` is per recording, so a clean and a recovered input keep
+        // their own answers in the merged archive.
+        assert!(manifest.recordings[0].complete);
+        assert!(!manifest.recordings[1].complete);
+        assert!(recordings[0].complete);
+        assert!(!recordings[1].complete);
+
+        // The manifest names exactly what was written, and the result opens.
+        for rec in &manifest.recordings {
+            for t in &rec.tables {
+                assert_eq!(t.files.len(), t.segment_files().len());
+                assert!(t.file.is_none(), "a multi-segment table has no v1 alias");
+            }
+        }
+        let reader = crate::rez_reader::RezReader::open_with_pool(
+            &out,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert!(!reader.counter_names().is_empty());
     }
 }

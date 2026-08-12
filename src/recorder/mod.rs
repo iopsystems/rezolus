@@ -5,11 +5,13 @@ mod config;
 mod endpoint;
 mod prometheus;
 pub(crate) mod rez;
+pub(crate) mod rez_stream;
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
 use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 pub fn command() -> Command {
     Command::new("record")
@@ -45,7 +47,20 @@ pub fn command() -> Command {
              The .rez format (chosen by a .rez output extension or --format rez) writes a tar\n\
              of manifest.json plus one parquet table per sampler, each at its own cadence. It\n\
              requires a rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable)\n\
-             tags the recording; source and host are auto-populated.",
+             tags the recording; source and host are auto-populated.\n\n\
+             .rez recordings are written to disk in segments as they run, so stopping\n\
+             costs the same whether the recording ran for a minute or a day. Ctrl-c and\n\
+             SIGTERM (e.g. a docker stop) are clean stops: the signal interrupts the wait\n\
+             between samples straight away, so finalizing costs only the write of the\n\
+             still-open segments — at any --interval, comfortably inside a container's\n\
+             stop grace, and never proportional to the recording's length.\n\n\
+             While recording, the archive lives at <output>.partial and is renamed into\n\
+             place only on a clean stop, so an existing output file is untouched until the\n\
+             new recording is complete. Each sampler's open segment is checkpointed when it\n\
+             fills and at least every 5 minutes; if the recorder is SIGKILLed or the machine\n\
+             dies, the .partial is left behind and is readable up to that last checkpoint —\n\
+             `rezolus parquet metadata -i out.rez.partial` reports it as \"not cleanly\n\
+             finalized\".",
         )
         .arg(
             clap::Arg::new("URL")
@@ -259,6 +274,15 @@ async fn fetch_agent_metadata(
     (systeminfo, descriptions, sampler_status)
 }
 
+/// `sleep_until(deadline)` when there is one, otherwise a future that never
+/// resolves — the `tokio::select!` arm shape for an optional deadline.
+async fn sleep_until_opt(deadline: Option<Instant>) {
+    match deadline {
+        Some(d) => tokio::time::sleep_until(d.into()).await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
     let response = client
         .get(url.clone())
@@ -450,6 +474,40 @@ fn build_rez_labels(
     )
 }
 
+/// Open the streaming `.rez` writer for a just-activated endpoint: create
+/// `<output>.partial`, write the initial manifest, and spawn the writer thread.
+///
+/// Both the file creation and the thread spawn can fail, which is why this
+/// happens at activation rather than lazily on the first snapshot.
+fn start_rez_recorder(
+    config: &RecordingConfig,
+    ep: &EndpointState,
+    clock_anchor_wall_ns: u64,
+) -> Result<rez_stream::StreamRecorder, String> {
+    let labels = build_rez_labels(config, ep);
+    let seed = rez_stream::ManifestSeed {
+        dir: rez::recording_dir_slug(&labels),
+        labels,
+        metadata: build_rez_metadata(config, ep),
+        clock_anchor_wall_ns,
+    };
+    rez_stream::RezWriterHandle::create(&config.output, seed).map(rez_stream::StreamRecorder::new)
+}
+
+/// Derive one tick's row stamp from the recording's clock anchor.
+///
+/// Returns `(anchored_ns, wall_offset_ns)`. The anchored stamp is
+/// `anchor + monotonic elapsed`, so row timestamps are strictly increasing for
+/// as long as the recording runs — a recorder-side clock step cannot bake a
+/// decreasing timestamp into an immutable sealed segment (which would feed
+/// `rate()` a dt <= 0). The raw wall reading is not discarded: its difference
+/// from the anchored stamp rides along as the per-row `:wall_offset` sidecar,
+/// so a step locates to the exact tick.
+fn anchored_stamp(anchor_wall_ns: u64, elapsed: Duration, wall_ns: u64) -> (u64, i64) {
+    let anchored_ns = anchor_wall_ns.saturating_add(elapsed.as_nanos() as u64);
+    (anchored_ns, wall_ns as i64 - anchored_ns as i64)
+}
+
 /// Build the `per_source_metadata` JSON written by the recorder.
 ///
 /// When `source` is a JSON array, each name in the array becomes an entry
@@ -509,6 +567,12 @@ struct EndpointWriter {
     converter: Option<prometheus::PrometheusConverter>,
 }
 
+/// Upper bound on a single scrape or endpoint probe, whatever the interval.
+/// The bound exists to keep the tick responsive (age seals, ctrl-c), and that
+/// is a human/container-teardown timescale — a long `--interval` must not buy a
+/// correspondingly long stall.
+const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
 /// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
 /// text format endpoints, with auto-detection.
@@ -522,12 +586,22 @@ pub fn run(config: RecordingConfig) {
         .build()
         .expect("failed to launch async runtime");
 
+    // Raised by the ctrl-c / SIGTERM handler alongside `STATE`. The recording
+    // loop only re-reads `STATE` at the loop top, so without a way to cut the
+    // tick wait short a clean stop costs up to a full `--interval`.
+    let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+    let handler_shutdown = shutdown.clone();
+
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
         println!();
         if state == RUNNING {
             info!("finalizing recording... ctrl+c to terminate early");
             STATE.store(TERMINATING, Ordering::SeqCst);
+            // Store-then-notify: `notify_one` leaves a permit if the loop is
+            // not parked yet, so a signal that lands between the loop-top
+            // `STATE` read and the tick wait is never lost.
+            handler_shutdown.notify_one();
         } else {
             info!("terminating immediately");
             std::process::exit(2);
@@ -551,10 +625,15 @@ pub fn run(config: RecordingConfig) {
         .map(|ep| EndpointState::new(ep.clone()))
         .collect();
 
-    // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus endpoint
-    // yields none, so reject it up front (before probing) rather than recording
-    // an empty archive. Auto-detected prometheus still errors at finalize.
-    if rez::wants_rez(&config.output, config.format) {
+    // `.rez` per-sampler archive mode: selected by a `.rez` output extension or
+    // `--format rez`.
+    let rez_mode = rez::wants_rez(&config.output, config.format);
+
+    if rez_mode {
+        // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus
+        // endpoint yields none, so reject it up front (before probing) rather
+        // than recording an empty archive. Auto-detected prometheus is rejected
+        // right after the probe, below.
         if let Some(ep) = endpoints
             .iter()
             .find(|e| matches!(e.config.protocol, Some(Protocol::Prometheus)))
@@ -563,6 +642,12 @@ pub fn run(config: RecordingConfig) {
                 "error: .rez output requires a rezolus (msgpack) endpoint; {} is configured protocol=prometheus",
                 ep.config.url
             );
+            return;
+        }
+        // Multi-source/A-B `.rez` is deferred; require one endpoint. Checked
+        // before probing so a misconfiguration costs no network round-trips.
+        if endpoints.len() > 1 {
+            eprintln!("error: .rez output currently supports a single endpoint");
             return;
         }
     }
@@ -619,10 +704,53 @@ pub fn run(config: RecordingConfig) {
         std::process::exit(1);
     }
 
+    // ONE clock anchor for the whole recording, never re-anchored: rows are
+    // stamped `clock_anchor_wall_ns + clock_anchor_mono.elapsed()` so they are
+    // strictly increasing even across a recorder-side NTP step. Tick
+    // *scheduling* is already monotonic (`aligned_interval`); this makes the
+    // stamps consistent with it. See `anchored_stamp`.
+    let clock_anchor_wall_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    let clock_anchor_mono = Instant::now();
+
+    // The streaming `.rez` writer is opened here — when the (single) endpoint
+    // becomes active, not lazily on the first snapshot — because creating the
+    // `<output>.partial` and spawning the writer thread are both fallible.
+    let mut rez_recorder: Option<rez_stream::StreamRecorder> = None;
+    if rez_mode {
+        // `.rez` is single-endpoint (guarded above) and at least one endpoint is
+        // active (checked above), so the active endpoint is *the* endpoint. It
+        // can therefore never activate later via the Pending path.
+        if let Some(ep) = endpoints
+            .iter()
+            .find(|ep| ep.status == EndpointStatus::Active)
+        {
+            if ep.protocol() != Some(&Protocol::Msgpack) {
+                eprintln!(
+                    "error: .rez output requires a rezolus (msgpack) endpoint; {} answered as prometheus",
+                    ep.config.url
+                );
+                return;
+            }
+            match start_rez_recorder(&config, ep, clock_anchor_wall_ns) {
+                Ok(rec) => rez_recorder = Some(rec),
+                Err(e) => {
+                    eprintln!("error: failed to start the .rez recording: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+
     let mut writers: Vec<Option<EndpointWriter>> = endpoints
         .iter()
         .map(|ep| {
-            if ep.status == EndpointStatus::Active {
+            // In `.rez` mode there is no msgpack spool at all: snapshots go
+            // straight into the streaming writer, so the temp file and the
+            // re-serialization that fed it are both gone.
+            if ep.status == EndpointStatus::Active && !rez_mode {
                 let writer = match tempfile_in(out_dir.clone()) {
                     Ok(t) => t,
                     Err(e) => {
@@ -655,14 +783,9 @@ pub fn run(config: RecordingConfig) {
 
     let wrapped = config.command.is_some();
 
-    // `.rez` per-sampler archive mode: selected by a `.rez` extension or
-    // `--format rez`. Multi-source/A-B `.rez` is deferred; require one endpoint.
-    let rez_mode = rez::wants_rez(&config.output, config.format);
-    if rez_mode && endpoints.len() > 1 {
-        eprintln!("error: .rez output currently supports a single endpoint");
-        return;
-    }
-    let mut rez_recorder: Option<rez::RezRecorder> = None;
+    // A fatal mid-recording write failure must not look like success: a
+    // supervisor, CI job, or docker healthcheck can only see the exit code.
+    let recording_failed = AtomicBool::new(false);
 
     let outcome: Option<child::Outcome> = rt.block_on(async {
         // Spawn the wrapped command only after probing/writers succeeded, so a
@@ -672,6 +795,11 @@ pub fn run(config: RecordingConfig) {
                 Ok(c) => Some(c),
                 Err(e) => {
                     eprintln!("error: failed to start command: {e}");
+                    // Nothing was recorded, and `exit` skips destructors: stop
+                    // the writer thread and unlink the `.partial` explicitly.
+                    if let Some(rec) = rez_recorder.take() {
+                        rec.abort();
+                    }
                     std::process::exit(1);
                 }
             }
@@ -689,6 +817,37 @@ pub fn run(config: RecordingConfig) {
         let cap_deadline: Option<Instant> =
             config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
+        // How long a single scrape or probe may take before the tick gives up on
+        // it. Without a bound a *hung* endpoint (stalled server, SYN blackhole)
+        // parks `join_all` for TCP-timeout scales, and the tick is what drives
+        // `.rez` age seals and the ctrl-c check (`STATE` is only re-checked at
+        // the loop top) — so one hung endpoint would stall durability and
+        // shutdown, not just this sample.
+        //
+        // Deliberately generous rather than exactly one interval: this must
+        // catch a *hung* endpoint, not a merely slow one. A local agent already
+        // takes ~75 ms to answer, so at `--interval 5ms` a one-interval bound
+        // would time out every single scrape and record nothing at all, where
+        // the honest outcome is sampling at the endpoint's pace. Floored so
+        // short intervals stay recordable, capped so a long interval still
+        // hands back a bounded tick.
+        let scrape_timeout = (interval_dur * 2).clamp(Duration::from_secs(2), MAX_SCRAPE_TIMEOUT);
+        // The last tick's clock observation, handed to `.rez` finalization so
+        // the manifest's `clock_offsets` series covers the tail of the
+        // recording. Seeded with the anchor itself (offset 0 by definition).
+        let mut last_clock: (u64, i64) = (clock_anchor_wall_ns, 0);
+
+        // The same stop deadline the loop top already enforces, hoisted so the
+        // tick wait can be cut short by it rather than overshooting it by up to
+        // one interval. Wrapped mode uses the child's cap (measured from spawn),
+        // everything else the recording window (measured from `start`); the
+        // decision itself stays at the loop top, this only wakes it on time.
+        let loop_deadline: Option<Instant> = if wrapped {
+            cap_deadline
+        } else {
+            config.duration.map(|d| start + Duration::from(d))
+        };
+        let mut deadline_fired = false;
 
         while STATE.load(Ordering::Relaxed) == RUNNING {
             if wrapped {
@@ -724,11 +883,43 @@ pub fn run(config: RecordingConfig) {
                 }
             }
 
-            interval.tick().await;
-            let now_ns = std::time::SystemTime::now()
+            // The tick is this loop's only await point and `STATE` is only read
+            // at the loop top, so an uninterruptible `tick()` bounds
+            // ctrl-c/SIGTERM → exit by a full `--interval`: at `--interval 30s`
+            // a `docker stop` (10s default grace) is SIGKILLed long before the
+            // loop notices, losing every still-unsealed `.rez` segment — which
+            // is exactly the tear-down this feature exists for. Wake early on
+            // the shutdown signal and on the stop deadline; both then take the
+            // decision at the loop top, unchanged.
+            //
+            // Branch order is load-bearing (`biased`): the tick outranks the
+            // deadline so that a `--duration` landing exactly on a tick — the
+            // common case, a whole number of intervals — still takes that final
+            // sample, exactly as the loop-top check did before. The deadline
+            // only ever cuts a PARTIAL interval short.
+            tokio::select! {
+                biased;
+                _ = shutdown.notified() => continue,
+                _ = interval.tick() => {}
+                _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
+                    // Latched so a deadline already in the past cannot spin the
+                    // loop if the top declines to stop for some reason.
+                    deadline_fired = true;
+                    continue;
+                }
+            }
+            // Both clocks, every tick. `wall_ns` is the raw reading every
+            // non-`.rez` consumer has always used (endpoint success stamps, the
+            // prometheus converter, the msgpack spool); `.rez` rows are stamped
+            // on the anchored monotonic timeline and carry the difference as a
+            // per-row observation instead.
+            let wall_ns = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos() as u64;
+            let (anchored_ns, wall_offset_ns) =
+                anchored_stamp(clock_anchor_wall_ns, clock_anchor_mono.elapsed(), wall_ns);
+            last_clock = (anchored_ns, wall_offset_ns);
 
             // Scrape all active endpoints concurrently
             let active_indices: Vec<usize> = endpoints
@@ -743,7 +934,19 @@ pub fn run(config: RecordingConfig) {
                 .map(|&idx| {
                     let client = client.clone();
                     let url = endpoints[idx].scrape_url.clone().unwrap();
-                    async move { (idx, scrape_one(&client, &url).await) }
+                    async move {
+                        let result =
+                            match tokio::time::timeout(scrape_timeout, scrape_one(&client, &url))
+                                .await
+                            {
+                                Ok(result) => result,
+                                Err(_) => Err(format!(
+                                    "timed out after {}",
+                                    humantime::format_duration(scrape_timeout)
+                                )),
+                            };
+                        (idx, result)
+                    }
                 })
                 .collect();
 
@@ -752,12 +955,37 @@ pub fn run(config: RecordingConfig) {
             for (idx, result) in results {
                 match result {
                     Ok(body) => {
-                        endpoints[idx].record_success(now_ns);
+                        endpoints[idx].record_success(wall_ns);
+
+                        // `.rez`: decode once and hand the snapshot straight to
+                        // the streaming writer. No spool, no re-serialization.
+                        if rez_mode {
+                            match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                                Ok(snapshot) => {
+                                    let snapshot = inject_provenance(
+                                        snapshot,
+                                        endpoints[idx].config.source_label(),
+                                        endpoints[idx].config.url.as_str(),
+                                    );
+                                    if let Some(rec) = rez_recorder.as_mut() {
+                                        rec.ingest(&snapshot, anchored_ns, wall_offset_ns);
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        "msgpack decode error for {}: {e}",
+                                        endpoints[idx].config.source_label()
+                                    );
+                                }
+                            }
+                            continue;
+                        }
+
                         if let Some(ref mut ew) = writers[idx] {
                             let bytes = if let Some(ref mut conv) = ew.converter {
                                 // Prometheus: parse text → snapshot → msgpack
                                 let text = String::from_utf8_lossy(&body);
-                                let snapshot = conv.convert(&text, now_ns);
+                                let snapshot = conv.convert(&text, wall_ns);
                                 match rmp_serde::encode::to_vec(&snapshot) {
                                     Ok(b) => b,
                                     Err(e) => {
@@ -778,19 +1006,6 @@ pub fn run(config: RecordingConfig) {
                                             endpoints[idx].config.source_label(),
                                             endpoints[idx].config.url.as_str(),
                                         );
-                                        if rez_mode {
-                                            let rec = rez_recorder.get_or_insert_with(|| {
-                                                let labels =
-                                                    build_rez_labels(&config, &endpoints[idx]);
-                                                let dir = rez::recording_dir_slug(&labels);
-                                                rez::RezRecorder::new(
-                                                    build_rez_metadata(&config, &endpoints[idx]),
-                                                    labels,
-                                                    dir,
-                                                )
-                                            });
-                                            rec.ingest(&snapshot, now_ns);
-                                        }
                                         match rmp_serde::encode::to_vec(&snapshot) {
                                             Ok(b) => b,
                                             Err(e) => {
@@ -838,8 +1053,26 @@ pub fn run(config: RecordingConfig) {
                 .collect();
 
             for idx in pending_indices {
-                if let Some((protocol, url)) = probe_endpoint(&client, &endpoints[idx].config).await
+                // Bounded like the scrapes above, and for the same reason: the
+                // probe runs on the loop, so a hung endpoint here would stall
+                // the tick. A timeout is just a failed probe — retried next tick.
+                let probed = match tokio::time::timeout(
+                    scrape_timeout,
+                    probe_endpoint(&client, &endpoints[idx].config),
+                )
+                .await
                 {
+                    Ok(probed) => probed,
+                    Err(_) => {
+                        warn!(
+                            "probe of {} timed out after {}",
+                            endpoints[idx].config.url,
+                            humantime::format_duration(scrape_timeout)
+                        );
+                        None
+                    }
+                };
+                if let Some((protocol, url)) = probed {
                     if endpoints[idx].config.source.is_none() {
                         if protocol == Protocol::Msgpack {
                             endpoints[idx].config.source = Some("rezolus".to_string());
@@ -869,19 +1102,48 @@ pub fn run(config: RecordingConfig) {
                     endpoints[idx].detected_protocol = Some(protocol.clone());
                     endpoints[idx].status = EndpointStatus::Active;
 
-                    let converter = if protocol == Protocol::Prometheus {
-                        Some(prometheus::PrometheusConverter::with_provenance(
-                            endpoints[idx].config.source_label().to_string(),
-                            endpoints[idx].config.url.to_string(),
-                        ))
-                    } else {
-                        None
-                    };
-                    writers[idx] = Some(EndpointWriter {
-                        writer: tempfile_in(out_dir.clone()).expect("failed to create temp file"),
-                        converter,
-                    });
+                    // `.rez` never reaches here: it is single-endpoint and that
+                    // endpoint must already be Active (startup exits otherwise),
+                    // and an Active endpoint never returns to Pending. It also
+                    // has no spool, so there is nothing to create.
+                    if !rez_mode {
+                        let converter = if protocol == Protocol::Prometheus {
+                            Some(prometheus::PrometheusConverter::with_provenance(
+                                endpoints[idx].config.source_label().to_string(),
+                                endpoints[idx].config.url.to_string(),
+                            ))
+                        } else {
+                            None
+                        };
+                        writers[idx] = Some(EndpointWriter {
+                            writer: tempfile_in(out_dir.clone())
+                                .expect("failed to create temp file"),
+                            converter,
+                        });
+                    }
                 }
+            }
+
+            // Seal checks run every tick, scrape or not: if they were
+            // ingest-driven an unreachable endpoint would leave its pre-outage
+            // rows unsealed forever and the age bound would stop bounding the
+            // kill-loss window.
+            let sealed = match rez_recorder.as_mut() {
+                Some(rec) => rec.maybe_seal(),
+                None => Ok(()),
+            };
+            if let Err(e) = sealed {
+                eprintln!("error: recording failed: {e}");
+                recording_failed.store(true, Ordering::SeqCst);
+                if let Some(rec) = rez_recorder.take() {
+                    // Dropped, not aborted: the `.partial` holds every segment
+                    // sealed before the failure and is the recovery artifact.
+                    eprintln!(
+                        "note: the partial recording is readable at {}",
+                        rec.partial_path().display()
+                    );
+                }
+                break;
             }
         }
 
@@ -906,28 +1168,56 @@ pub fn run(config: RecordingConfig) {
             .count();
 
         if active_count == 0 {
+            // Nothing was captured, so the `.partial` holds no recoverable data:
+            // stop the writer and unlink it rather than leaving a stub behind.
+            // Explicit because the `exit` below skips destructors.
+            if let Some(rec) = rez_recorder.take() {
+                rec.abort();
+            }
             if wrapped {
+                // Same class as a failed write: no output file exists, so
+                // handing back the wrapped command's (possibly zero) status
+                // would tell a supervisor the recording succeeded when the one
+                // thing this process exists to produce was never produced.
                 warn!("command exited before any metrics were recorded");
+                recording_failed.store(true, Ordering::SeqCst);
                 return outcome;
             }
             eprintln!("error: no data was recorded from any endpoint");
             std::process::exit(1);
         }
 
-        // `.rez` mode finalizes a per-sampler tar archive instead of parquet/raw.
+        // `.rez` mode finalizes a per-sampler tar archive instead of parquet/raw:
+        // the segments are already on disk, so this only seals the (small) open
+        // ones, writes the final manifest and renames the `.partial` into place.
         if rez_mode {
-            match rez_recorder.take() {
-                Some(rec) => {
-                    if let Err(e) = rec.finalize(&config.output) {
-                        eprintln!("error saving .rez archive: {e}");
-                    } else {
-                        info!("wrote .rez archive to {}", config.output.display());
-                    }
+            // `None` means the recording already failed mid-run and reported it
+            // (the `.partial` was left in place there); nothing to add here.
+            if let Some(rec) = rez_recorder.take() {
+                if let Err(e) = rec.finalize(last_clock) {
+                    // Must flip `recording_failed`: without it a failed tail
+                    // seal / manifest write / rename (ENOSPC at the end of a
+                    // long capture, a rename EACCES) exits 0, and because the
+                    // `.partial` design never touches a pre-existing output,
+                    // the PREVIOUS run's `out.rez` is still sitting there for
+                    // the next command in the pipeline to analyze.
+                    eprintln!("error saving .rez archive: {e}");
+                    recording_failed.store(true, Ordering::SeqCst);
+                } else {
+                    info!("wrote .rez archive to {}", config.output.display());
                 }
-                None => eprintln!("error: no snapshots captured for .rez archive"),
             }
             return outcome;
         }
+
+        // Every finalization error below is the same class as the `.rez`
+        // finalize failure above: the samples are gone (or partial) and the
+        // only thing a supervisor, CI job or `record && analyze` pipeline can
+        // see is the exit code, so none of these may report success.
+        let fail = |msg: String| {
+            eprintln!("{msg}");
+            recording_failed.store(true, Ordering::SeqCst);
+        };
 
         match config.format {
             Format::Raw => {
@@ -948,10 +1238,10 @@ pub fn run(config: RecordingConfig) {
                         match std::fs::File::create(&dest_path) {
                             Ok(mut dest) => {
                                 if let Err(e) = std::io::copy(&mut ew.writer, &mut dest) {
-                                    eprintln!("error writing {}: {e}", dest_path.display());
+                                    fail(format!("error writing {}: {e}", dest_path.display()));
                                 }
                             }
-                            Err(e) => eprintln!("error creating {}: {e}", dest_path.display()),
+                            Err(e) => fail(format!("error creating {}: {e}", dest_path.display())),
                         }
                     }
                 }
@@ -979,16 +1269,16 @@ pub fn run(config: RecordingConfig) {
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                 {
-                                    eprintln!(
+                                    fail(format!(
                                         "error saving parquet for {}: {e}",
                                         endpoints[idx].config.source_label()
-                                    );
+                                    ));
                                 } else {
                                     info!("wrote {}", dest_path.display());
                                 }
                             }
                             Err(e) => {
-                                eprintln!("error creating {}: {e}", dest_path.display());
+                                fail(format!("error creating {}: {e}", dest_path.display()));
                             }
                         }
                     }
@@ -1014,11 +1304,11 @@ pub fn run(config: RecordingConfig) {
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                 {
-                                    eprintln!("error saving parquet file: {e}");
+                                    fail(format!("error saving parquet file: {e}"));
                                 }
                             }
                             Err(e) => {
-                                eprintln!("error creating output file: {e}");
+                                fail(format!("error creating output file: {e}"));
                             }
                         }
                     }
@@ -1037,7 +1327,7 @@ pub fn run(config: RecordingConfig) {
                             let temp = match tempfile::NamedTempFile::new_in(&out_dir) {
                                 Ok(t) => t,
                                 Err(e) => {
-                                    eprintln!("failed to create temp parquet file: {e}");
+                                    fail(format!("failed to create temp parquet file: {e}"));
                                     continue;
                                 }
                             };
@@ -1052,16 +1342,16 @@ pub fn run(config: RecordingConfig) {
                                     if let Err(e) = converter
                                         .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                     {
-                                        eprintln!(
+                                        fail(format!(
                                             "error converting {} to parquet: {e}",
                                             endpoints[idx].config.source_label()
-                                        );
+                                        ));
                                         continue;
                                     }
                                     temp_parquets.push(temp);
                                 }
                                 Err(e) => {
-                                    eprintln!("error creating temp parquet: {e}");
+                                    fail(format!("error creating temp parquet: {e}"));
                                 }
                             }
                         }
@@ -1071,10 +1361,10 @@ pub fn run(config: RecordingConfig) {
                         // Only one file survived — just move it
                         if let Some(temp) = temp_parquets.into_iter().next() {
                             if let Err(e) = std::fs::copy(temp.path(), &config.output) {
-                                eprintln!("error writing output: {e}");
+                                fail(format!("error writing output: {e}"));
                             }
                         } else {
-                            eprintln!("error: no data was recorded");
+                            fail("error: no data was recorded".to_string());
                         }
                     } else {
                         let paths: Vec<PathBuf> = temp_parquets
@@ -1085,7 +1375,7 @@ pub fn run(config: RecordingConfig) {
                         if let Err(e) =
                             crate::parquet_tools::combine::combine_files(&paths, &config.output)
                         {
-                            eprintln!("error combining parquet files: {e}");
+                            fail(format!("error combining parquet files: {e}"));
                         } else {
                             info!("wrote combined recording to {}", config.output.display());
                         }
@@ -1103,9 +1393,24 @@ pub fn run(config: RecordingConfig) {
         outcome
     });
 
+    // Every path out of the block above already finalized or aborted the `.rez`
+    // writer; this is the backstop for the one below that skips destructors
+    // (`std::process::exit`). Dropping joins the writer thread and leaves the
+    // `.partial` in place, so a missed path costs a recoverable archive, never a
+    // detached thread appending to it after we exit.
+    drop(rez_recorder);
+
+    // Flush buffered logs before exiting the process: std::process::exit
+    // skips destructors, so drop the log drain explicitly first.
+    if recording_failed.load(Ordering::SeqCst) {
+        // Outranks the wrapped command's own status: the command may well have
+        // succeeded, but we failed to record it, and that is what this process
+        // is here to do.
+        drop(_log_drain);
+        std::process::exit(1);
+    }
+
     if let Some(o) = outcome {
-        // Flush buffered logs before exiting the process: std::process::exit
-        // skips destructors, so drop the log drain explicitly first.
         drop(_log_drain);
         std::process::exit(o.exit_code());
     }
@@ -1145,6 +1450,54 @@ mod tests {
             .expect("parse");
         let config = RecordingConfig::from_args(&matches).expect("config");
         assert!(config.command.is_none());
+    }
+
+    // The stamps `.rez` rows carry come from the anchor plus monotonic elapsed,
+    // never from the wall clock directly — a sealed segment is immutable, so a
+    // decreasing stamp there would permanently feed `rate()` a dt <= 0.
+    #[test]
+    fn anchored_stamps_are_strictly_increasing_and_offset_records_the_wall_clock() {
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+        // Ticks a second apart on the monotonic clock, with a wall clock that
+        // runs 1 ms ahead of the anchored timeline.
+        let ticks: Vec<(u64, i64)> = (0..5u64)
+            .map(|i| {
+                let elapsed = Duration::from_secs(i);
+                let wall_ns = ANCHOR + elapsed.as_nanos() as u64 + 1_000_000;
+                anchored_stamp(ANCHOR, elapsed, wall_ns)
+            })
+            .collect();
+
+        for (i, w) in ticks.windows(2).enumerate() {
+            assert!(
+                w[1].0 > w[0].0,
+                "tick {i} did not advance: {:?} -> {:?}",
+                w[0],
+                w[1]
+            );
+        }
+        assert_eq!(ticks[0].0, ANCHOR, "the first stamp is the anchor itself");
+        assert_eq!(ticks[4].0, ANCHOR + 4_000_000_000);
+        for (ts, offset) in &ticks {
+            assert_eq!(*offset, 1_000_000, "wall - anchored, at stamp {ts}");
+        }
+    }
+
+    #[test]
+    fn a_wall_clock_step_moves_the_offset_not_the_timeline() {
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+        let before = anchored_stamp(ANCHOR, Duration::from_secs(10), ANCHOR + 10_000_000_000);
+        // NTP steps the wall clock back 5 s between two ticks 1 s apart.
+        let after = anchored_stamp(ANCHOR, Duration::from_secs(11), ANCHOR + 6_000_000_000);
+
+        assert_eq!(before, (ANCHOR + 10_000_000_000, 0));
+        assert!(
+            after.0 > before.0,
+            "the timeline is immune to the step: {before:?} -> {after:?}"
+        );
+        assert_eq!(after.0, ANCHOR + 11_000_000_000);
+        // The step is not lost, it is data about the clock: -5 s at this tick.
+        assert_eq!(after.1, -5_000_000_000);
     }
 
     #[test]

@@ -253,7 +253,7 @@ fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::E
     let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
     let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
 
-    let mut out: Vec<(rez::RezRecording, Vec<Vec<u8>>)> = Vec::new();
+    let mut out: Vec<rez::RecordingSegments> = Vec::new();
     for ((mut rec, rb), (_labels, reader)) in manifest
         .recordings
         .into_iter()
@@ -267,7 +267,8 @@ fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::E
             crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
             annotated,
         );
-        let bytes: Vec<Vec<u8>> = rb.tables.into_iter().map(|(_, b)| b).collect();
+        // Segments pass through byte-identical; only manifest metadata changes.
+        let bytes: Vec<Vec<Vec<u8>>> = rb.tables.into_iter().map(|(_, b)| b).collect();
         out.push((rec, bytes));
     }
     let n = out.len();
@@ -823,6 +824,53 @@ mod tests {
         let ext: ServiceExtension = serde_json::from_str(embedded).unwrap();
         assert_eq!(ext.service_name, "test");
         assert_eq!(ext.kpis.len(), 1);
+    }
+
+    // `annotate` rewrites the archive in place, so it re-reads and re-writes
+    // every segment; and it validates KPIs through `RezReader`, which on a
+    // segmented archive is the splicing path. Both have to hold: the metadata
+    // lands, and not one byte of table data moves.
+    #[test]
+    fn annotate_rez_leaves_segments_untouched() {
+        use crate::recorder::rez;
+        use crate::recorder::rez_stream::write_segmented_rez;
+
+        let d = tempfile::tempdir().unwrap();
+        let path = write_segmented_rez(
+            &d.path().join("seg.rez"),
+            "rezolus",
+            Default::default(),
+            &["cpu_usage"],
+            6,
+            2,
+            true,
+        );
+        let before = rez::read_archive_bytes(&path).unwrap().1.remove(0).tables;
+        assert_eq!(before[0].1.len(), 3, "the input must actually be segmented");
+
+        // The KPI queries a metric the fixture really has, so `available`
+        // resolves through the segmented reader rather than short-circuiting.
+        let ext_json = r#"{"service_name":"seg","kpis":[{"role":"overview","title":"Ops","query":"rate(cpu_usage_ops[2s])","type":"counter"}]}"#;
+        annotate_rez(&path, ext_json).unwrap();
+
+        let (manifest, mut recordings) = rez::read_archive_bytes(&path).unwrap();
+        assert_eq!(
+            recordings.remove(0).tables,
+            before,
+            "segment bytes pass through byte-identical"
+        );
+
+        let embedded = manifest.recordings[0]
+            .metadata
+            .get(KEY_SERVICE_QUERIES)
+            .expect("the KPI metadata landed in the manifest");
+        let ext: ServiceExtension = serde_json::from_str(embedded).unwrap();
+        assert_eq!(ext.service_name, "seg");
+        assert_eq!(ext.kpis.len(), 1);
+        assert!(
+            ext.kpis[0].available,
+            "the KPI validated against the spliced segments"
+        );
     }
 
     #[test]
