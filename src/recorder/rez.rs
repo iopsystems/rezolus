@@ -747,9 +747,23 @@ pub fn read_archive_reader<R: std::io::Read>(
     }
     // Newest resolvable manifest wins; report the newest failure if none does.
     let mut newest_err: Option<RezError> = None;
-    while let Some(manifest) = manifests.pop() {
+    while let Some(mut manifest) = manifests.pop() {
         match resolve(&manifest, &mut blobs) {
-            Ok(recordings) => return Ok((manifest, recordings)),
+            Ok(recordings) => {
+                // Normalize `complete` on the manifest too, by the same rule
+                // `resolve` applies to `RecordingBytes` (v1 recordings are
+                // complete by construction; the absent flag is not read). The
+                // tools copy `RezRecording` verbatim into an output stamped
+                // `version: 2`, so without this a clean v1 archive would come
+                // out of `combine`/`filter`/`annotate` as `complete: false` and
+                // read back as "not cleanly finalized".
+                if manifest.version < 2 {
+                    for rec in &mut manifest.recordings {
+                        rec.complete = true;
+                    }
+                }
+                return Ok((manifest, recordings));
+            }
             Err(e) => newest_err = newest_err.or(Some(e)),
         }
     }
@@ -1905,6 +1919,76 @@ mod recovery_tests {
             vec![SEG_A.to_vec(), SEG_B.to_vec()],
             "segments resolve in manifest order"
         );
+    }
+
+    /// A hand-built v1 manifest: `version: 1`, a single `file` per table, and
+    /// no `complete` field at all (it did not exist yet).
+    fn v1_manifest() -> Vec<u8> {
+        br#"{
+            "version": 1,
+            "recordings": [{
+                "dir": "rezolus",
+                "labels": {},
+                "metadata": {},
+                "tables": [{
+                    "sampler": "cpu_usage",
+                    "file": "cpu_usage.parquet",
+                    "columns": [],
+                    "rows": 1,
+                    "cadence_ns": null
+                }]
+            }]
+        }"#
+        .to_vec()
+    }
+
+    fn v1_archive() -> Vec<u8> {
+        let m = v1_manifest();
+        tar_bytes(&[
+            (REZ_MANIFEST_NAME, &m),
+            ("rezolus/cpu_usage.parquet", SEG_A),
+        ])
+    }
+
+    /// v1 writers emitted the whole archive at once, so a v1 recording is
+    /// complete by construction and the absent flag must not be interpreted.
+    /// Normalizing at the read boundary — on the returned `RezManifest`, not
+    /// just on `RecordingBytes` — is what keeps the tools honest: they copy
+    /// `RezRecording.complete` verbatim into an output stamped `version: 2`.
+    #[test]
+    fn v1_manifest_reads_as_complete() {
+        let (manifest, recs) = read(&v1_archive()).unwrap();
+        assert_eq!(manifest.version, 1);
+        assert!(
+            manifest.recordings[0].complete,
+            "a v1 recording is complete by construction"
+        );
+        assert!(recs[0].complete);
+    }
+
+    /// End to end: a v1 archive through the read boundary and back out of
+    /// `write_archive_bytes` stays complete, rather than becoming a v2-stamped
+    /// archive that reads as "not cleanly finalized".
+    #[test]
+    fn v1_archive_through_write_archive_bytes_stays_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("v1.rez");
+        std::fs::write(&src, v1_archive()).unwrap();
+
+        let (manifest, recs) = read_archive_bytes(&src).unwrap();
+        let out_recs: Vec<RecordingSegments> = manifest
+            .recordings
+            .into_iter()
+            .zip(recs)
+            .map(|(rec, rb)| (rec, rb.tables.into_iter().map(|(_, b)| b).collect()))
+            .collect();
+        let out = dir.path().join("v2.rez");
+        write_archive_bytes(&out, &out_recs).unwrap();
+
+        let (manifest, recs) = read_archive_bytes(&out).unwrap();
+        assert_eq!(manifest.version, REZ_SCHEMA_VERSION);
+        assert!(manifest.recordings[0].complete);
+        assert!(recs[0].complete);
     }
 
     #[test]
