@@ -476,9 +476,14 @@ fn init_file_mode(
 ) -> AppState {
     info!("Loading data from parquet file...");
 
-    // `.rez` per-sampler archive detection runs first (it is also a tar, so it
-    // must be checked before the A/B-tarball sniffer).
-    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
+    // `.rez` per-sampler archive detection runs first (a v2 tar is also a tar,
+    // so it must be checked before the A/B-tarball sniffer). Dispatch covers
+    // both `.rez` containers (v2 tar and v3 SQLite) — `RezReader` dispatches
+    // on the container internally.
+    if crate::recorder::rez::detect_rez_format(path)
+        .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
+        != crate::recorder::rez::RezFormat::NotRez
+    {
         return init_file_mode_rez(config, path, registry, pool);
     }
 
@@ -998,6 +1003,35 @@ mod tests {
     use super::state::{build_sections_metadata_payload, LazySectionStore};
     use ::dashboard::dashboard::DashboardContext;
     use ::dashboard::Section;
+
+    /// `init_file_mode` must dispatch a v3 (SQLite) `.rez` to
+    /// `init_file_mode_rez`, not the plain-parquet `ParquetReader` path.
+    /// Mutation check: reverting the `detect_rez_format` check in
+    /// `init_file_mode` to `is_rez_path` makes this fail — a v3 file then
+    /// falls through to `ParquetReader::open_with_pool`, which errors on the
+    /// SQLite header and (in real `init_file_mode`, unlike most of this
+    /// crate's error paths) calls `std::process::exit(1)` rather than
+    /// returning an `Err`, so under the mutation this test process aborts
+    /// instead of failing an assertion.
+    #[test]
+    fn init_file_mode_reads_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "fixture sanity: must actually be a v3 SQLite archive"
+        );
+
+        let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+        assert_eq!(*state.parquet_path.read(), Some(rez_path));
+    }
 
     #[test]
     fn lean_section_payload_does_not_repeat_sections() {

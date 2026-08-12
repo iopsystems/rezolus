@@ -13,10 +13,15 @@ use metriken_query::{MetricsSource, QueryResult};
 
 /// Open a recording as a `MetricsSource`, dispatching `.rez` archives to
 /// `RezReader` and everything else to `ParquetReader` (by content, not extension).
+/// Dispatch covers both `.rez` containers (v2 tar and v3 SQLite) — `RezReader`
+/// itself dispatches on the container internally.
 pub(crate) fn open_source(
     file: &std::path::Path,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-    if crate::recorder::rez::is_rez_path(file).unwrap_or(false) {
+    use crate::recorder::rez::RezFormat;
+    if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
+        != RezFormat::NotRez
+    {
         let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
         Ok(std::sync::Arc::new(
             crate::rez_reader::RezReader::open_with_pool(file, pool)?,
@@ -927,6 +932,30 @@ mod tests {
         assert!(
             open_source(&parquet_path).is_ok(),
             "bare parquet should open as a MetricsSource"
+        );
+    }
+
+    /// `open_source` must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
+    /// `ParquetReader`. Mutation check: reverting the `detect_rez_format`
+    /// check in `open_source` to `is_rez_path` makes this fail — `is_rez_path`
+    /// (a tar sniff) reports `false` for a SQLite file, so the call falls
+    /// through to `ParquetReader::open`, which errors on the SQLite header.
+    #[test]
+    fn open_source_reads_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "fixture sanity: must actually be a v3 SQLite archive"
+        );
+        let source = open_source(&rez_path);
+        assert!(
+            source.is_ok(),
+            "open_source must accept a v3 .rez: {:?}",
+            source.err()
         );
     }
 }

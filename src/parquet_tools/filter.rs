@@ -6,31 +6,55 @@ use crate::parquet_metadata::{
     KEY_DESCRIPTIONS, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE,
     NESTED_SERVICE_QUERIES,
 };
+use crate::recorder::rez::RezFormat;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
 
 use super::annotate::extract_metric_selectors;
+
+/// Which branch `run()` takes for `path`. Dispatch is by CONTENT, not
+/// extension, and recognizes both `.rez` containers. `filter_rez` rewrites
+/// through `read_archive_bytes`/`write_archive_bytes`, which only speak the
+/// v2 tar container, so a v3 (SQLite) archive gets an explicit "not yet
+/// supported" error in `run()` rather than silently falling through to the
+/// plain-parquet path or a misleading tar-parse error. Split out from `run()`
+/// so it is testable without triggering `run()`'s `std::process::exit` on the
+/// v3/error arms.
+fn dispatch_format(path: &Path) -> RezFormat {
+    crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez)
+}
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
     // `.rez` archives: drop whole per-sampler tables by --samplers (the
     // KPI-column filter no-ops on all-rezolus .rez data).
-    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
-        let list = args.get_one::<String>("samplers").unwrap_or_else(|| {
-            eprintln!("error: filtering a .rez requires --samplers <a,b,...> (samplers to keep)");
-            std::process::exit(1);
-        });
-        let keep: std::collections::BTreeSet<String> = list
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
-        if let Err(e) = filter_rez(path, &keep, output) {
-            eprintln!("error: failed to filter .rez: {e}");
+    match dispatch_format(path) {
+        RezFormat::V3Sqlite => {
+            eprintln!(
+                "error: filtering a v3 (SQLite) .rez archive is not yet supported; only v2 tar .rez archives can be filtered in place"
+            );
             std::process::exit(1);
         }
-        return;
+        RezFormat::V2Tar => {
+            let list = args.get_one::<String>("samplers").unwrap_or_else(|| {
+                eprintln!(
+                    "error: filtering a .rez requires --samplers <a,b,...> (samplers to keep)"
+                );
+                std::process::exit(1);
+            });
+            let keep: std::collections::BTreeSet<String> = list
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
+            if let Err(e) = filter_rez(path, &keep, output) {
+                eprintln!("error: failed to filter .rez: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        RezFormat::NotRez => {}
     }
 
     let custom_file = args.get_one::<PathBuf>("queries");
@@ -359,6 +383,50 @@ mod tests {
         assert!(names.contains("requests_inflight"));
         assert!(names.contains("ttft"));
         assert_eq!(names.len(), 2);
+    }
+
+    // ── dispatch_format: v3 recognition ──
+    //
+    // `run()` calls `std::process::exit` on several branches (including the
+    // v3-not-yet-supported one), so it cannot be exercised in-process; these
+    // tests cover the classification `run()` matches on instead.
+
+    /// `dispatch_format` must recognize a v3 (SQLite) `.rez` as `V3Sqlite`
+    /// (routing `run()` to the explicit "not yet supported" error), not
+    /// `NotRez` (which would route it to the plain-parquet path and fail with
+    /// an unrelated "Corrupt footer" error).
+    ///
+    /// Mutation check: reverting `dispatch_format` to
+    /// `is_rez_path(path).unwrap_or(false)`-based classification (mapping
+    /// `true` to `V2Tar` and `false` to `NotRez`, as `run()` effectively did
+    /// before migrating to `detect_rez_format`) makes this fail — `is_rez_path`
+    /// is a tar sniff and reports `false` for a SQLite file.
+    #[test]
+    fn dispatch_format_recognizes_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&path);
+        assert_eq!(dispatch_format(&path), RezFormat::V3Sqlite);
+    }
+
+    /// A v2 tar `.rez` still classifies as `V2Tar` (unaffected by the v3
+    /// migration).
+    #[test]
+    fn dispatch_format_recognizes_v2_tar_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        crate::recorder::rez::RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        )
+        .finalize(&path)
+        .unwrap();
+        assert_eq!(dispatch_format(&path), RezFormat::V2Tar);
     }
 
     #[test]

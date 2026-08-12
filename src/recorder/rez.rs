@@ -827,10 +827,17 @@ pub fn read_archive_bytes(path: &Path) -> Result<(RezManifest, Vec<RecordingByte
     read_archive_reader(std::fs::File::open(path)?)
 }
 
-/// True if `reader` yields a `.rez` archive: an uncompressed tar containing a
-/// top-level `manifest.json` member. Distinguishes `.rez` from the A/B tarball
-/// (which has `ab.json` + root-level parquets, no `manifest.json`) and from a
-/// bare parquet (not a tar). Consumes the reader.
+/// True if `reader` yields a v2 `.rez` archive: an uncompressed tar containing
+/// a top-level `manifest.json` member. Distinguishes `.rez` from the A/B
+/// tarball (which has `ab.json` + root-level parquets, no `manifest.json`) and
+/// from a bare parquet (not a tar). Consumes the reader.
+///
+/// This only recognizes the v2 tar container; a v3 SQLite archive is not a
+/// tar, so this correctly (and deliberately) reports `false` for it. Every
+/// `.rez` consumer that needs to recognize both containers should call
+/// [`detect_rez_format`] instead — this function remains as the tar-only
+/// primitive `detect_rez_format` builds on, and for tests that specifically
+/// want to exercise v2 tar sniffing (e.g. of a truncated/partial stream).
 pub fn is_rez_reader<R: std::io::Read>(reader: R) -> Result<bool, RezError> {
     let mut archive = tar::Archive::new(reader);
     let entries = match archive.entries() {
@@ -856,8 +863,12 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
 
 /// Which container a `.rez` path holds. v1/v2 are tar archives; v3 is SQLite.
 ///
-/// `RezReader` dispatches on this; every other `.rez` consumer still gates on
-/// `is_rez_path` and so still sees only v2. Task C2 migrates the rest.
+/// `RezReader` dispatches on this, and so does every other `.rez` front door
+/// (`mcp`, `viewer`, `parquet metadata/annotate/filter/combine`) — all now
+/// recognize both containers. `parquet annotate`/`filter`/`combine` still
+/// only *rewrite* the v2 tar container (`read_archive_bytes`/
+/// `write_archive_bytes`); on a v3 input they report a clear "not yet
+/// supported" error rather than silently misrouting or half-working.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RezFormat {
     V3Sqlite,
@@ -873,10 +884,10 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// The SQLite check goes first because it is a 16-byte read, while the tar
 /// sniff walks entries looking for `manifest.json`. A file shorter than the
 /// magic simply falls through. This sits in front of `is_rez_path` without
-/// changing it: existing callers keep calling `is_rez_path`/`is_rez_reader`
-/// exactly as before, and only see v2 tar archives. A v3 SQLite file is not a
-/// tar, so `is_rez_path` correctly (and unchanged) reports `false` for it;
-/// callers must move to `detect_rez_format` to recognize v3.
+/// changing it: `is_rez_path`/`is_rez_reader` still only recognize the v2 tar
+/// container. A v3 SQLite file is not a tar, so `is_rez_path` correctly (and
+/// unchanged) reports `false` for it; callers that need to recognize both
+/// containers call `detect_rez_format`.
 pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     let mut file = std::fs::File::open(path)?;
     let mut header = [0u8; 16];
@@ -1472,6 +1483,21 @@ mod builder_tests {
 #[cfg(test)]
 pub(crate) mod recorder_tests_support {
     pub use super::recorder_tests::{counter, snap};
+
+    /// Create a minimal, valid, empty v3 `.rez` at `path` (one recording, no
+    /// sampler tables yet) — the cheapest fixture for tests across the crate
+    /// that just need `detect_rez_format(path)` to see `V3Sqlite`.
+    pub(crate) fn empty_v3_rez(path: &std::path::Path) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer};
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+        };
+        RezV3Writer::create(path, seed).unwrap();
+    }
 }
 
 #[cfg(test)]
