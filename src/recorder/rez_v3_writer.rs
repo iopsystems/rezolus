@@ -21,15 +21,20 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
-use std::time::Instant;
 
 use metriken_exposition::Snapshot;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::rez::{dedup_key, group_by_sampler, write_table_parquet, Entry, RezTable};
+use super::rez::{dedup_key, group_by_sampler, write_table_parquet, Entry};
 use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
-use super::rez_stream::{BuilderState, SealPolicy};
+use super::rez_stream::{drain_due, BuilderState, SealPolicy};
+
+/// One sealed segment handed to the writer thread. Shared with the v2 writer:
+/// it is a plain `(sampler, RezTable)` carrier with no container-specific
+/// content, and a second definition would only be a second thing to keep in
+/// step with `TableBuilder::finish`.
+pub(crate) use super::rez_stream::SealJob;
 
 /// Everything known when the recording starts. v3 has no manifest and no
 /// per-recording tar directory — a recording IS a row in `recordings` — so the
@@ -47,13 +52,6 @@ use super::rez_stream::{BuilderState, SealPolicy};
 /// alias baseline/experiment on `arm`/`host` labels only, and `labels` survives
 /// verbatim in the `recordings` row.
 pub(crate) type ManifestSeed = RecordingMeta;
-
-/// One sealed segment handed to the writer thread. The table already carries
-/// its `wall_offsets`; everything here is owned data (`Send + 'static`).
-pub(crate) struct SealJob {
-    pub sampler: String,
-    pub table: RezTable,
-}
 
 enum Msg {
     /// One tick's WAL rows, across all samplers — one transaction.
@@ -581,9 +579,7 @@ impl StreamRecorderV3 {
                 .builders
                 .entry(sampler.to_string())
                 .or_insert_with(|| BuilderState::open_first(sampler, policy));
-            state
-                .builder
-                .push_row(anchored_ts, wall_offset_ns, &entries);
+            state.push_row(anchored_ts, wall_offset_ns, &entries);
         }
         self.handle.wal(wal_rows)
     }
@@ -595,36 +591,18 @@ impl StreamRecorderV3 {
     /// must still get its pre-outage rows sealed, and it is also where a writer
     /// that died asynchronously gets noticed.
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
-        let now = Instant::now();
         let mut batch = Vec::new();
-        for (sampler, state) in self.builders.iter_mut() {
-            let rows = state.builder.rows();
-            if rows == 0 {
-                continue;
-            }
-            // Row and age targets come from the state, not the policy: the
-            // first segment of each sampler is staggered short. The byte cap is
-            // a memory bound and is never staggered.
-            let due = state.builder.approx_bytes() >= self.policy.max_bytes
-                || rows >= state.max_rows
-                || now.duration_since(state.opened_at) >= state.max_age;
-            if !due {
-                continue;
-            }
-            // Rotation is a `mem::replace`: the dedup key lives in `last_keys`
-            // and carries over untouched, while the byte counter correctly
-            // restarts at zero with the fresh segment.
-            let sealed = state.seal_completed(sampler, &self.policy, now);
-            // The metadata anchor is per SEGMENT, so it rotates with the
-            // builder: the next WAL row for this sampler re-carries every
-            // metric's metadata. That is what keeps the live WAL self-contained
-            // once the prune below the new segment's `last_ts` lands, and what
-            // makes the WAL capture label drift exactly where a re-latched
-            // `TableBuilder` captures it.
-            self.described.remove(sampler);
+        for (sampler, builder) in drain_due(&mut self.builders, &self.policy) {
+            // The one thing v3 does that v2 does not. The metadata anchor is
+            // per SEGMENT, so it rotates with the builder: the next WAL row for
+            // this sampler re-carries every metric's metadata. That is what
+            // keeps the live WAL self-contained once the prune below the new
+            // segment's `last_ts` lands, and what makes the WAL capture label
+            // drift exactly where a re-latched `TableBuilder` captures it.
+            self.described.remove(&sampler);
             batch.push(SealJob {
-                sampler: sampler.clone(),
-                table: sealed.finish(),
+                sampler,
+                table: builder.finish(),
             });
         }
         self.handle.seal(batch)
@@ -640,10 +618,11 @@ impl StreamRecorderV3 {
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
-            .filter(|(_, state)| state.builder.rows() > 0)
-            .map(|(sampler, state)| SealJob {
-                sampler,
-                table: state.builder.finish(),
+            .filter_map(|(sampler, state)| {
+                state.into_tail().map(|builder| SealJob {
+                    sampler,
+                    table: builder.finish(),
+                })
             })
             .collect();
         self.handle.seal(tails)?;
@@ -655,16 +634,14 @@ impl StreamRecorderV3 {
     fn open_rows(&self, sampler: &str) -> usize {
         self.builders
             .get(sampler)
-            .map(|state| state.builder.rows())
+            .map(BuilderState::open_rows)
             .unwrap_or(0)
     }
 
     /// The row and age targets the sampler's *current* open segment seals at.
     #[cfg(test)]
     fn open_targets(&self, sampler: &str) -> Option<(usize, std::time::Duration)> {
-        self.builders
-            .get(sampler)
-            .map(|state| (state.max_rows, state.max_age))
+        self.builders.get(sampler).map(BuilderState::targets)
     }
 }
 
@@ -672,7 +649,7 @@ impl StreamRecorderV3 {
 mod tests {
     use super::*;
     use crate::recorder::rez::recorder_tests_support::counter;
-    use crate::recorder::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
+    use crate::recorder::rez::{detect_rez_format, Entry, RezFormat, RezTable, TableBuilder};
     use metriken::Window;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;

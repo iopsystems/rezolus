@@ -23,8 +23,8 @@ use metriken_exposition::Snapshot;
 use tracing::warn;
 
 use super::rez::{
-    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, RezManifest, RezRecording,
-    RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
+    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, Entry, RezManifest,
+    RezRecording, RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
@@ -566,15 +566,17 @@ fn stagger_bucket(sampler: &str) -> u64 {
 /// first segment of each sampler deliberately closes early; see `open_first`.
 ///
 /// `pub(crate)` because the v3 ingest side (`rez_v3_writer::StreamRecorderV3`)
-/// drives the same open-segment bookkeeping against a different writer. Sharing
-/// the type is what stops the stagger and the rotation rule from drifting
-/// between the two containers.
+/// drives the same open-segment bookkeeping against a different writer. The
+/// FIELDS stay private and both containers go through [`drain_due`]: the two
+/// writers differ only in what they build out of a sealed `TableBuilder`, and
+/// widening the fields to share the rest is what let the `due` predicate get
+/// copied in the first place.
 pub(crate) struct BuilderState {
-    pub builder: TableBuilder,
+    builder: TableBuilder,
     /// Instant the current segment was opened (the age bound's origin).
-    pub opened_at: Instant,
-    pub max_rows: usize,
-    pub max_age: Duration,
+    opened_at: Instant,
+    max_rows: usize,
+    max_age: Duration,
 }
 
 impl BuilderState {
@@ -605,20 +607,76 @@ impl BuilderState {
         }
     }
 
+    /// Append one row to the open segment.
+    pub(crate) fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+        self.builder.push_row(ts, wall_offset_ns, entries);
+    }
+
+    /// Whether this open segment is past any seal threshold. An empty builder
+    /// never is.
+    ///
+    /// Row and age targets come from the state, not the policy: the first
+    /// segment of each sampler is staggered short. The byte cap is a memory
+    /// bound and is never staggered.
+    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
+        let rows = self.builder.rows();
+        rows > 0
+            && (self.builder.approx_bytes() >= policy.max_bytes
+                || rows >= self.max_rows
+                || now.duration_since(self.opened_at) >= self.max_age)
+    }
+
     /// Rotate onto a fresh segment after a seal, dropping the startup stagger:
     /// every segment after the first uses the full policy.
-    pub(crate) fn seal_completed(
-        &mut self,
-        sampler: &str,
-        policy: &SealPolicy,
-        now: Instant,
-    ) -> TableBuilder {
+    fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
         let sealed = std::mem::replace(&mut self.builder, TableBuilder::new(sampler.to_string()));
         self.opened_at = now;
         self.max_rows = policy.max_rows;
         self.max_age = policy.max_age;
         sealed
     }
+
+    /// The final partial segment, or `None` when there is nothing to seal.
+    /// Consuming, because a recorder only asks this while finalizing.
+    pub(crate) fn into_tail(self) -> Option<TableBuilder> {
+        (self.builder.rows() > 0).then_some(self.builder)
+    }
+
+    /// Rows in the open segment.
+    #[cfg(test)]
+    pub(crate) fn open_rows(&self) -> usize {
+        self.builder.rows()
+    }
+
+    /// The row and age targets the *current* open segment seals at.
+    #[cfg(test)]
+    pub(crate) fn targets(&self) -> (usize, Duration) {
+        (self.max_rows, self.max_age)
+    }
+}
+
+/// Seal every open segment past a threshold, rotating each onto a fresh
+/// builder, and return the sealed builders by sampler.
+///
+/// **The seal decision lives here and only here.** Both containers call it: v2
+/// turns the result into its `SealJob` for the tar writer, v3 into its own for
+/// the SQLite writer (and clears that sampler's WAL metadata anchor). Those few
+/// lines are all the two ingest paths do differently — everything that could
+/// drift, the `due` predicate and the `mem::replace` rotation that carries
+/// `last_key` forward by leaving it outside the builder, is shared.
+pub(crate) fn drain_due(
+    builders: &mut BTreeMap<String, BuilderState>,
+    policy: &SealPolicy,
+) -> Vec<(String, TableBuilder)> {
+    let now = Instant::now();
+    let mut sealed = Vec::new();
+    for (sampler, state) in builders.iter_mut() {
+        if !state.is_due(policy, now) {
+            continue;
+        }
+        sealed.push((sampler.clone(), state.seal_completed(sampler, policy, now)));
+    }
+    sealed
 }
 
 /// The scrape-side half: per-sampler open segments plus the seal decision.
@@ -664,9 +722,7 @@ impl StreamRecorder {
                 .builders
                 .entry(sampler.to_string())
                 .or_insert_with(|| BuilderState::open_first(sampler, policy));
-            state
-                .builder
-                .push_row(anchored_ts, wall_offset_ns, &entries);
+            state.push_row(anchored_ts, wall_offset_ns, &entries);
         }
     }
 
@@ -677,31 +733,13 @@ impl StreamRecorder {
     /// must still get its pre-outage rows sealed, or the kill-loss window is no
     /// longer bounded in time.
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
-        let now = Instant::now();
-        let mut batch = Vec::new();
-        for (sampler, state) in self.builders.iter_mut() {
-            let rows = state.builder.rows();
-            if rows == 0 {
-                continue;
-            }
-            // Row and age targets come from the state, not the policy: the
-            // first segment of each sampler is staggered short. The byte cap is
-            // a memory bound and is never staggered.
-            let due = state.builder.approx_bytes() >= self.policy.max_bytes
-                || rows >= state.max_rows
-                || now.duration_since(state.opened_at) >= state.max_age;
-            if !due {
-                continue;
-            }
-            // Rotation is a `mem::replace`: the dedup key lives in `last_keys`
-            // and carries over untouched, while the byte counter correctly
-            // restarts at zero with the fresh segment.
-            let sealed = state.seal_completed(sampler, &self.policy, now);
-            batch.push(SealJob {
-                sampler: sampler.clone(),
-                table: sealed.finish(),
-            });
-        }
+        let batch = drain_due(&mut self.builders, &self.policy)
+            .into_iter()
+            .map(|(sampler, builder)| SealJob {
+                sampler,
+                table: builder.finish(),
+            })
+            .collect();
         self.handle.seal(batch)
     }
 
@@ -710,10 +748,11 @@ impl StreamRecorder {
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
-            .filter(|(_, state)| state.builder.rows() > 0)
-            .map(|(sampler, state)| SealJob {
-                sampler,
-                table: state.builder.finish(),
+            .filter_map(|(sampler, state)| {
+                state.into_tail().map(|builder| SealJob {
+                    sampler,
+                    table: builder.finish(),
+                })
             })
             .collect();
         self.handle.finalize(tails, clock_offset)
@@ -735,16 +774,14 @@ impl StreamRecorder {
     fn open_rows(&self, sampler: &str) -> usize {
         self.builders
             .get(sampler)
-            .map(|state| state.builder.rows())
+            .map(BuilderState::open_rows)
             .unwrap_or(0)
     }
 
     /// The row and age targets the sampler's *current* open segment seals at.
     #[cfg(test)]
     fn open_targets(&self, sampler: &str) -> Option<(usize, Duration)> {
-        self.builders
-            .get(sampler)
-            .map(|state| (state.max_rows, state.max_age))
+        self.builders.get(sampler).map(BuilderState::targets)
     }
 }
 
