@@ -308,29 +308,33 @@ mod tests {
 
     #[test]
     fn create_applies_the_one_way_pragmas() {
+        // JOB (a): prove OUR CODE sets these. That requires values SQLite would
+        // not have arrived at by itself, so both assertions here differ from the
+        // default (auto_vacuum NONE=0, journal_mode "delete") and go red if the
+        // pragma is dropped or issued after the first table exists. They are
+        // baked in at creation: a regression writes the wrong value into every
+        // fleet file, and fixing it later means leaving WAL mode and VACUUMing
+        // every one of them.
+        //
+        // `page_size` and `synchronous` are deliberately NOT asserted here —
+        // ours coincide with SQLite's defaults, so they cannot do job (a). See
+        // `create_honors_the_page_size_it_is_given` for whether we set the page
+        // size, and `effective_config_matches_what_was_measured` for whether it
+        // is still the value we benchmarked.
         let dir = tempfile::tempdir().unwrap();
         let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
-        // page_size and auto_vacuum are baked in at creation; a regression here
-        // silently writes the wrong value into every fleet file, and fixing it
-        // later means leaving WAL mode and VACUUMing every one of them.
-        assert_eq!(db.pragma_u32("page_size").unwrap(), PAGE_SIZE);
         assert_eq!(db.pragma_u32("auto_vacuum").unwrap(), 2, "INCREMENTAL");
         assert_eq!(db.pragma_string("journal_mode").unwrap(), "wal");
-        assert_eq!(
-            db.pragma_u32("synchronous").unwrap(),
-            2,
-            "FULL (3 is EXTRA)"
-        );
     }
 
     #[test]
     fn create_honors_the_page_size_it_is_given() {
-        // The assertion above is coincidental: SQLite's compiled default is
-        // already 4096, so it stays green even if the pragma is never issued —
-        // or is issued AFTER journal_mode=WAL or a CREATE TABLE, at which point
-        // SQLite silently ignores it. Creating at a non-default size is what
-        // makes that reordering fail loudly here instead of invisibly in the
-        // fleet.
+        // JOB (a) for `page_size`, which the test above cannot do: SQLite's
+        // compiled default is already 4096, so asserting 4096 on a normally
+        // created file stays green even if the pragma is never issued — or is
+        // issued AFTER journal_mode=WAL or a CREATE TABLE, at which point SQLite
+        // silently ignores it. Creating at a non-default size is what makes that
+        // reordering fail loudly here instead of invisibly in the fleet.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.rez");
         let db = RezDb::create_with_page_size(&path, 8192).unwrap();
@@ -345,18 +349,17 @@ mod tests {
 
     #[test]
     fn open_reapplies_the_per_connection_pragmas() {
-        // synchronous is per-connection and NOT persistent: an open() that
-        // forgets it silently downgrades durability on every subsequent write.
+        // JOB (a) for the per-connection tier. These pragmas are NOT persistent,
+        // so an open() that forgets them silently downgrades durability on every
+        // subsequent write — and only values that differ from SQLite's defaults
+        // (1000 pages, -2000 KiB) can detect that. Asserting `synchronous` here
+        // would not: SQLite's own default is already FULL(2), so it stays green
+        // with the apply removed. It is asserted in
+        // `effective_config_matches_what_was_measured` instead, for job (b).
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.rez");
         drop(RezDb::create(&path).unwrap());
         let db = RezDb::open(&path).unwrap();
-        assert_eq!(db.pragma_u32("synchronous").unwrap(), 2);
-        // These two carry the test. `synchronous` above documents intent but
-        // cannot detect a missing apply: SQLite's own default is already
-        // FULL(2). These defaults differ from ours — 1000 pages and -2000 KiB —
-        // so they read back wrong the moment the per-connection pragmas are
-        // skipped.
         assert_eq!(
             db.pragma_u32("wal_autocheckpoint").unwrap(),
             WAL_AUTOCHECKPOINT_BYTES / PAGE_SIZE,
@@ -367,7 +370,46 @@ mod tests {
             CACHE_SIZE_KIB as i64,
             "256 MiB reader cache, not SQLite's -2000 default"
         );
-        assert_eq!(db.pragma_u32("page_size").unwrap(), PAGE_SIZE, "persisted");
+    }
+
+    #[test]
+    fn effective_config_matches_what_was_measured() {
+        // JOB (b), and it is NOT the same question as job (a). This asserts the
+        // effective configuration regardless of who established it — including
+        // where our value happens to equal SQLite's default, which is exactly
+        // the case that looks tautological and is not.
+        //
+        // EVERY performance number in
+        // docs/journal/2026-08-12-rez-sqlite-container.md was measured at
+        // page_size=4096 and synchronous=FULL: the insert latencies, the
+        // eviction plateau, the 3.14× WAL amplification, the tick-budget
+        // analysis. Nothing in our code would notice if those changed under us.
+        // We compile SQLite from source via `bundled`, so a `cargo update`
+        // bumping libsqlite3-sys, a changed compile-time define
+        // (SQLITE_DEFAULT_SYNCHRONOUS, SQLITE_DEFAULT_PAGE_SIZE), or a platform
+        // difference are all live paths to silently invalidating them. This
+        // test is where that fails instead.
+        //
+        // The values below are LITERALS on purpose. Written as `PAGE_SIZE` this
+        // test would follow the constant and stay green when someone retunes it
+        // without re-running the sweep — which is the other regression it is
+        // here to catch.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        let created = RezDb::create(&path).unwrap();
+        let reopened = RezDb::open(&path).unwrap();
+
+        assert_eq!(PAGE_SIZE, 4096, "the swept and measured page size");
+        // Checked on both connections: page_size must also survive the reopen,
+        // and synchronous must hold on a connection that did not create the file.
+        for (which, db) in [("created", &created), ("reopened", &reopened)] {
+            assert_eq!(db.pragma_u32("page_size").unwrap(), 4096, "{which}");
+            assert_eq!(
+                db.pragma_u32("synchronous").unwrap(),
+                2,
+                "{which}: FULL (3 is EXTRA)"
+            );
+        }
     }
 
     #[test]
