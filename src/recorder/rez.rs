@@ -856,9 +856,8 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
 
 /// Which container a `.rez` path holds. v1/v2 are tar archives; v3 is SQLite.
 ///
-/// Not yet consumed by any caller — `is_rez_path` still gates every existing
-/// `.rez` consumer unchanged. Tasks C1/C2 migrate callers over to this.
-#[allow(dead_code)]
+/// `RezReader` dispatches on this; every other `.rez` consumer still gates on
+/// `is_rez_path` and so still sees only v2. Task C2 migrates the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RezFormat {
     V3Sqlite,
@@ -878,7 +877,6 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// exactly as before, and only see v2 tar archives. A v3 SQLite file is not a
 /// tar, so `is_rez_path` correctly (and unchanged) reports `false` for it;
 /// callers must move to `detect_rez_format` to recognize v3.
-#[allow(dead_code)]
 pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     let mut file = std::fs::File::open(path)?;
     let mut header = [0u8; 16];
