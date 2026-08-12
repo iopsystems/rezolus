@@ -300,18 +300,91 @@ The tear-free-dump premise holds.
 3. **`auto_vacuum=INCREMENTAL` at creation** — see the high-water caveat above.
    Must be decided before the first table exists.
 
-## Still open after the measurements
+## Per-sampler compression ratios (2026-08-12) — and why the cap is the wrong knob
 
-- **Segment byte cap.** The cap is on *in-memory* bytes and encoded segments are
-  much smaller (the fleet's 8 MiB cap yielded ~585 KB encoded for
-  histogram-heavy `syscall_latency`, against a 1.4 MB all-segment average), so
-  the fleet never approached the 41.6 ms insert. But the compression ratio
-  varies by sampler and **has never been measured per-sampler**, so the worst
-  case is unknown. Options: trim the cap (more segments — overhead grows
-  superlinearly past ~25/table, and `syscall_latency` already hits 144 in
-  900 s), or size the writer's bounded channel to absorb the worst observed
-  burst (94.8 ms ≈ 2.1 ticks, so ≥3 ticks of depth). **Measure the per-sampler
-  encoded/in-memory ratio before choosing** — it is one short fleet recording.
+Two 20-minute fleet recordings, per-segment sizes read from the tar, in-memory
+bytes computed **exactly as `push_row` does** (non-null cells only) rather than
+estimated. Validated against a known case: a byte-capped `syscall_latency`
+segment computes to 8,414,208 B = 132 rows × 63,744 B/row — the first row
+crossing the 8,388,608 B cap. All three prior anchors reproduced (mean segment
+1.42 MB vs 1.4; `syscall_latency` 13.0:1 vs ~14:1; worst stall 85.9 ms vs 94.8).
+
+**The ratio spans 1.32:1 to 62:1 — a 47× spread** — but is tight *within* a
+table (±5%). It is predictable per-sampler and useless as a global constant.
+
+| sampler | segs | encoded p99 | ratio | seal reason |
+|---|---|---|---|---|
+| `cpu_usage` | 39 | 6,530,074 | **1.32** | byte |
+| `cpu_branch` / `cpu_l3` | 7 | ~5,183,000 | 1.62 | byte+row |
+| `scheduler_runqueue` | 46 | 3,151,180 | 2.94 | byte |
+| `syscall_latency` | 190 | 714,311 | 13.3 | byte |
+| `blockio_latency` | 48 | 307,221 | 33.2 | byte |
+| `tcp_connect_latency` | 12 | 190,024 | **62.3** | byte |
+| `drivehealth` | 4 | 5,963 | 0.04 | short |
+
+The driver is **entropy, not histogram-ness**: `cpu_bandwidth` is pure scalar
+yet compresses 13.9:1 because its 14 counters are near-constant, while
+`cpu_usage` manages 1.32:1 on 2,363 columns of distinct per-CPU monotonic
+counters. Sparse histograms compress best (`tcp_connect_latency` pays 3,984 B
+per row for a 496-bucket histogram that is nearly all zeros). Sub-1.0 ratios on
+narrow tables are real: the archive writes `value + window_begin + window_width`
+(24 B/scalar cell) against 16 B accounted, plus a ~6 KB parquet footer floor
+per segment.
+
+### The binding constraint is co-seal lockstep, not segment size
+
+`maybe_seal()` seals every due table as one batch. The row-capped tables all
+advance exactly one row per tick from row 0, so they reach 4,096 **in permanent
+lockstep** — 12 tables sealing together every 4096 × 48 ms ≈ 197 s, for a
+**16.16 MiB batch at 85.9 ms p99 ≈ 1.87 ticks**. That is almost certainly the
+94.8 ms worst case observed in the SQLite combined workload. Only **7 of 467
+batches (1.5%) exceed the tick, and every one is a co-seal event** — not a
+single one is a large individual segment. The worst single segment
+(`cpu_usage`, 6.23 MiB → 39.2 ms p99) fits, with 15% headroom.
+
+At fleet cadence **nothing is age-capped**: 4,096 rows arrive in 197 s, well
+inside the 300 s bound. 15 tables are byte-capped, 10 row-capped.
+
+### Decision: keep `max_bytes` at 8 MiB
+
+Lowering it is expensive and aims at the wrong target. Halving to 4 MiB would
+take total segments from 582 to ~1,100 (and `syscall_latency` from 190 to 380,
+deep into the superlinear region) to shrink segments that are *already* 0.68 MB
+— and would do **nothing** about the six lockstep events, because every table
+in them is row-capped, not byte-capped. Two targeted changes beat it:
+
+1. **Stagger seal deadlines per sampler** (offset by a hash of the sampler
+   name, or randomize the initial deadline). Caps the batch at its largest
+   member — 5.18 MiB → 27 ms p99 — and eliminates all 7 over-budget batches at
+   **zero segment-count cost**. This is the whole problem.
+2. **Fix `approx_bytes`** (below). It is the precisely-targeted version of
+   "lower the cap": it shrinks only the poorly-compressing scalar tables and
+   leaves the 13–62:1 histogram tables alone.
+
+| | worst encoded | p99 | total segments |
+|---|---|---|---|
+| today | 6.23 MiB | 39.2 ms | 582 |
+| accounting fixed | 2.49 MiB | **22.1 ms** | 758 |
+| cap halved to 4 MiB | 3.11 MiB | 24.8 ms | ~1,100 |
+
+### Found in passing: `approx_bytes` undercounts memory 2.5× (a **v2 bug**)
+
+`push_row` charges 16 B per scalar cell, but every cell also pushes an
+`Option<Window>` into `col.windows`, which is never counted. Measured on the
+host: `Option<Window>` is **24 B**, so a scalar cell truly costs **40 B — 2.50×
+the accounted 16 B**. Histogram cells are honest (1.01×). Consequence: an
+8 MiB-capped scalar table holds **20.0 MiB** of builder RSS. The cap is a
+memory bound that is 2.5× wrong in the dangerous direction, and this is live in
+merged v2 (`5de241d9`), not just a v3 concern.
+
+### For v3: express the cap as a target *encoded* size
+
+A single global in-memory cap is mismatched at both ends — it makes
+`syscall_latency` emit 190 segments of 0.63 MB (7.6× past the ~25/table
+guidance, and 10× smaller than they need to be) while letting `cpu_usage` emit
+6.23 MiB ones. Now that the per-table ratio is measured and stable within ±5%,
+a cap of *target encoded size × an EWMA of the table's observed ratio* fixes
+both ends: `syscall_latency` drops to ~48 segments, `cpu_usage` to ~3 MiB each.
 - **`page_size` left at the 4096 default and untested.** Larger pages would
   shorten overflow chains for multi-MB BLOBs. Treat as un-optimized, not chosen.
 - **The `-wal` sidecar** reaches 24–79 MB depending on `wal_autocheckpoint` and
