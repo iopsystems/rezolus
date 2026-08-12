@@ -907,21 +907,21 @@ pub(crate) enum Entry<'a> {
 }
 
 impl Entry<'_> {
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Entry::Counter(c) => &c.name,
             Entry::Gauge(g) => &g.name,
             Entry::Histogram(h) => &h.name,
         }
     }
-    fn metadata(&self) -> &HashMap<String, String> {
+    pub(crate) fn metadata(&self) -> &HashMap<String, String> {
         match self {
             Entry::Counter(c) => &c.metadata,
             Entry::Gauge(g) => &g.metadata,
             Entry::Histogram(h) => &h.metadata,
         }
     }
-    fn window(&self) -> Option<Window> {
+    pub(crate) fn window(&self) -> Option<Window> {
         match self {
             Entry::Counter(c) => c.window,
             Entry::Gauge(g) => g.window,

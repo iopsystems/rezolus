@@ -564,12 +564,17 @@ fn stagger_bucket(sampler: &str) -> u64 {
 ///
 /// The row and age targets are fields rather than reads of `policy` because the
 /// first segment of each sampler deliberately closes early; see `open_first`.
-struct BuilderState {
-    builder: TableBuilder,
+///
+/// `pub(crate)` because the v3 ingest side (`rez_v3_writer::StreamRecorderV3`)
+/// drives the same open-segment bookkeeping against a different writer. Sharing
+/// the type is what stops the stagger and the rotation rule from drifting
+/// between the two containers.
+pub(crate) struct BuilderState {
+    pub builder: TableBuilder,
     /// Instant the current segment was opened (the age bound's origin).
-    opened_at: Instant,
-    max_rows: usize,
-    max_age: Duration,
+    pub opened_at: Instant,
+    pub max_rows: usize,
+    pub max_age: Duration,
 }
 
 impl BuilderState {
@@ -584,7 +589,7 @@ impl BuilderState {
     /// large individual segment. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
     /// size and count untouched — `seal_completed` restores the full policy.
-    fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
+    pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         let bucket = stagger_bucket(sampler);
         // Divide before multiplying: `max_rows` is `usize::MAX` in several
         // callers, and `max_rows * bucket` would overflow.
@@ -602,7 +607,12 @@ impl BuilderState {
 
     /// Rotate onto a fresh segment after a seal, dropping the startup stagger:
     /// every segment after the first uses the full policy.
-    fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
+    pub(crate) fn seal_completed(
+        &mut self,
+        sampler: &str,
+        policy: &SealPolicy,
+        now: Instant,
+    ) -> TableBuilder {
         let sealed = std::mem::replace(&mut self.builder, TableBuilder::new(sampler.to_string()));
         self.opened_at = now;
         self.max_rows = policy.max_rows;
