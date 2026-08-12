@@ -55,6 +55,13 @@ pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GR
 pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
+    name = "scheduler_context_switch",
+    description = "The number of voluntary context switches, where a task left the CPU because it blocked",
+    metadata = { kind = "voluntary" }
+)]
+pub static SCHEDULER_VCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+
+#[metric(
     name = "scheduler_runqueue_wait",
     description = "Tracks time spent in the runqueue on a per-CPU basis",
     metadata = { unit = "nanoseconds" }
@@ -91,3 +98,10 @@ pub static CGROUP_SCHEDULER_OFFCPU: CounterGroup = CounterGroup::new(MAX_CGROUPS
     metadata = { kind = "involuntary" }
 )]
 pub static CGROUP_SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_scheduler_context_switch",
+    description = "The number of voluntary context switches on a per-cgroup basis, where a task left the CPU because it blocked",
+    metadata = { kind = "voluntary" }
+)]
+pub static CGROUP_SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
