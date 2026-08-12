@@ -61,6 +61,12 @@ pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX
 )]
 pub static SCHEDULER_RUNQUEUE_WAIT: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
+#[metric(
+    name = "scheduler_discarded_samples",
+    description = "The number of scheduler timing samples discarded because the two timestamps arrived out of order across CPUs, which would otherwise underflow into the top histogram bucket"
+)]
+pub static SCHEDULER_DISCARDED: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+
 /*
  * per-cgroup
  */

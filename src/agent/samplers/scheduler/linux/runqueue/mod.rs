@@ -42,7 +42,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let counters = vec![&SCHEDULER_IVCSW, &SCHEDULER_RUNQUEUE_WAIT];
+    let counters = vec![
+        &SCHEDULER_IVCSW,
+        &SCHEDULER_RUNQUEUE_WAIT,
+        &SCHEDULER_DISCARDED,
+    ];
 
     let bpf = BpfBuilder::new(
         &config,
