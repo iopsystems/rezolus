@@ -218,16 +218,18 @@ still-open segments. That holds at any `--interval` — a `--interval 1m` soak
 recording stops just as promptly as a millisecond one, comfortably inside a
 container's stop grace, and never proportional to the recording's length.
 
-While recording, the archive lives at `<output>.partial` and is renamed into
-place only on a clean stop, so an existing output file is untouched until the
-new recording is complete. Each sampler's open segment is checkpointed when it
-fills and at least every 5 minutes, so an unclean end costs at most the samples
-since then: if the recorder is SIGKILLed or the machine dies, the `.partial` is
-left behind and is readable up to that last checkpoint.
+A `.rez` is a single SQLite file that is valid at every instant, so there is no
+`.partial` staging file — and the output path must not already exist. Every
+sample is committed as it is taken, so if the recorder is SIGKILLed or the
+machine dies the recording is readable where it sits, missing at most one
+sampling interval:
 
 ```bash
-rezolus parquet metadata -i out.rez.partial   # reports "not cleanly finalized"
+rezolus parquet metadata -i out.rez   # reports "not cleanly finalized"
 ```
+
+Pass `--rez-version 2` to write the previous tar container instead, which stages
+at `<output>.partial` and is recoverable only up to its last checkpoint.
 
 ### Viewer
 

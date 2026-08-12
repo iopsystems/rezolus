@@ -15,7 +15,6 @@
 //! hook (`src/main.rs`) prints and calls `process::exit(101)` BEFORE
 //! unwinding, so a panic here never reaches the send-error path, skips
 //! finalize, and in wrapped mode orphans the child.
-#![allow(dead_code)]
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -68,6 +67,11 @@ pub(crate) struct RezV3Writer {
     tx: Option<SyncSender<Msg>>,
     thread: Option<JoinHandle<Result<(), String>>>,
     path: PathBuf,
+    /// The `recordings` row this writer appends to. The recorder does not need
+    /// it — a run writes exactly one recording and every consumer reads the
+    /// `recordings` table back — but a test that inspects the file does, and
+    /// keeping it here is what lets a test name the row without re-deriving it.
+    #[cfg(test)]
     recording_id: i64,
 }
 
@@ -99,6 +103,7 @@ impl RezV3Writer {
             tx: Some(tx),
             thread: Some(thread),
             path: path.to_path_buf(),
+            #[cfg(test)]
             recording_id,
         })
     }
@@ -109,6 +114,7 @@ impl RezV3Writer {
     }
 
     /// The `recordings` row this writer appends to.
+    #[cfg(test)]
     pub(crate) fn recording_id(&self) -> i64 {
         self.recording_id
     }

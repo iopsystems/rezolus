@@ -87,6 +87,14 @@ fn spawn_fake_agent() -> u16 {
 /// The deterministic failure seam is the final rename: the output path is an
 /// existing directory, so renaming `<output>.partial` onto it cannot succeed
 /// (the same class as an ENOSPC or EACCES at the end of a long capture).
+///
+/// **Pinned to `--rez-version 2`, which is the container this test is about.**
+/// The rename, the `.partial` and the "last checkpoint" recovery artifact are
+/// all v2 mechanisms; v3 has none of them (it writes the output file directly
+/// and finalize is a commit), so under the v3 default the same fixture fails at
+/// *creation* instead — see `v3_cannot_create_its_output_and_exits_nonzero`,
+/// which covers that path. Weakening this test to accommodate v3 would have
+/// stopped it guarding the regression it exists for.
 #[test]
 fn failed_rez_finalize_exits_nonzero() {
     let port = spawn_fake_agent();
@@ -104,6 +112,8 @@ fn failed_rez_finalize_exits_nonzero() {
         .arg(format!("http://127.0.0.1:{port}"))
         .arg("-o")
         .arg(&output)
+        .arg("--rez-version")
+        .arg("2")
         .arg("--interval")
         .arg("100ms")
         .arg("--duration")
@@ -125,6 +135,116 @@ fn failed_rez_finalize_exits_nonzero() {
     assert!(
         dir.path().join("out.rez.partial").exists(),
         "the .partial should survive a failed finalize as the recovery artifact"
+    );
+}
+
+/// A v3 recorder that cannot create its output must exit non-zero.
+///
+/// The v3 counterpart to the test above. v3 has no `.partial`: it claims the
+/// output path with `O_EXCL` before the first tick, so an unusable path fails
+/// at startup rather than at finalize — and it must fail *loudly*. Same class
+/// of regression as the one above: a supervisor or a `record && analyze`
+/// pipeline can only see the exit code, and exiting 0 here would hand the next
+/// command whatever was already at that path.
+#[test]
+fn v3_cannot_create_its_output_and_exits_nonzero() {
+    let port = spawn_fake_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+
+    // An existing directory: `create_new` on it cannot succeed.
+    let output = dir.path().join("out.rez");
+    std::fs::create_dir(&output).unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("failed to start the .rez recording"),
+        "expected a startup failure, got stderr:\n{stderr}"
+    );
+    assert!(
+        !out.status.success(),
+        "a .rez that could not be created must not exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    // No staging file is invented on the way past: v3 has none.
+    assert!(!dir.path().join("out.rez.partial").exists());
+}
+
+/// A clean `.rez` recording is a v3 (SQLite) archive by default, and
+/// `parquet metadata` describes it as one.
+///
+/// This is the end-to-end check that the default actually changed: the format
+/// is decided inside `run()`, which owns `std::process::exit`, so the only
+/// place it is observable is the file the real binary leaves behind.
+#[test]
+fn a_default_rez_recording_is_v3_and_describes_itself() {
+    let port = spawn_fake_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a clean recording must exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+
+    // SQLite's file header — the container, checked without linking the crate.
+    let head = std::fs::read(&output).expect("the recording should exist");
+    assert!(
+        head.starts_with(b"SQLite format 3\0"),
+        "the default .rez must be the v3 SQLite container"
+    );
+    assert!(
+        !dir.path().join("out.rez.partial").exists(),
+        "v3 stages nothing"
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("parquet")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus parquet metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        described.status.success(),
+        "metadata must describe a v3 archive\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&described.stderr)
+    );
+    assert!(stdout.contains(".rez archive v3"), "{stdout}");
+    assert!(
+        stdout.contains("fake"),
+        "the recorded sampler must be listed: {stdout}"
+    );
+    assert!(
+        !stdout.contains("not cleanly finalized"),
+        "a clean stop finalizes: {stdout}"
     );
 }
 

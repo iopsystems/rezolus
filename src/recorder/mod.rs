@@ -46,23 +46,23 @@ pub fn command() -> Command {
              # per-metric acquisition windows), tagging the recording with labels\n    \
              rezolus record --url http://localhost:4241 -o out.rez --label arm=redis --label host=node1\n\
              \n\
-             The .rez format (chosen by a .rez output extension or --format rez) writes a tar\n\
-             of manifest.json plus one parquet table per sampler, each at its own cadence. It\n\
-             requires a rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable)\n\
-             tags the recording; source and host are auto-populated.\n\n\
-             .rez recordings are written to disk in segments as they run, so stopping\n\
-             costs the same whether the recording ran for a minute or a day. Ctrl-c and\n\
-             SIGTERM (e.g. a docker stop) are clean stops: the signal interrupts the wait\n\
-             between samples straight away, so finalizing costs only the write of the\n\
-             still-open segments — at any --interval, comfortably inside a container's\n\
-             stop grace, and never proportional to the recording's length.\n\n\
-             While recording, the archive lives at <output>.partial and is renamed into\n\
-             place only on a clean stop, so an existing output file is untouched until the\n\
-             new recording is complete. Each sampler's open segment is checkpointed when it\n\
-             fills and at least every 5 minutes; if the recorder is SIGKILLed or the machine\n\
-             dies, the .partial is left behind and is readable up to that last checkpoint —\n\
-             `rezolus parquet metadata -i out.rez.partial` reports it as \"not cleanly\n\
-             finalized\".",
+             The .rez format (chosen by a .rez output extension or --format rez) holds one\n\
+             parquet table per sampler, each at its own cadence. It requires a\n\
+             rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable) tags the\n\
+             recording; source and host are auto-populated.\n\n\
+             .rez recordings are written to disk as they run, so stopping costs the same\n\
+             whether the recording ran for a minute or a day. Ctrl-c and SIGTERM (e.g. a\n\
+             docker stop) are clean stops: the signal interrupts the wait between samples\n\
+             straight away, so finalizing costs only the write of the still-open segments —\n\
+             at any --interval, comfortably inside a container's stop grace, and never\n\
+             proportional to the recording's length.\n\n\
+             A .rez is a single SQLite file, valid at every instant. There is no .partial,\n\
+             so the output path must not already exist, and every sample is committed as it\n\
+             is taken: a SIGKILL or a power loss costs at most one sampling interval, for\n\
+             every sampler. `rezolus parquet metadata -i out.rez` reports an interrupted\n\
+             recording as \"not cleanly finalized\" and how many samples are still in its\n\
+             write-ahead log. Pass --rez-version 2 to write the previous tar container\n\
+             instead (staged at <output>.partial, recoverable only to its last checkpoint).",
         )
         .arg(
             clap::Arg::new("URL")
@@ -131,6 +131,14 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::Set)
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
+        )
+        .arg(
+            clap::Arg::new("REZ_VERSION")
+                .long("rez-version")
+                .help("Container version for .rez output: 3 (default, a single SQLite file) or 2 (the legacy tar archive, kept for a release or two)")
+                .action(clap::ArgAction::Set)
+                .default_value("3")
+                .value_parser(value_parser!(u8).range(2..=3)),
         )
         .arg(
             clap::Arg::new("METADATA")
@@ -476,8 +484,110 @@ fn build_rez_labels(
     )
 }
 
-/// Open the streaming `.rez` writer for a just-activated endpoint: create
-/// `<output>.partial`, write the initial manifest, and spawn the writer thread.
+/// The streaming `.rez` recorder the loop feeds, in whichever container the run
+/// selected (`--rez-version`).
+///
+/// The recording loop is identical for both and must stay that way: one clock
+/// anchor, a row per tick stamped on the anchored monotonic timeline, a
+/// `maybe_seal` every tick whether or not anything was scraped, and one
+/// finalize. The container is the only thing that varies, so it varies here and
+/// nowhere else.
+enum RezStream {
+    /// v2: a tar archive staged at `<output>.partial`, renamed into place at
+    /// finalize, recoverable up to its last checkpoint.
+    V2(rez_stream::StreamRecorder),
+    /// v3: a single SQLite file, a valid `.rez` at `<output>` from the moment
+    /// it is created. There is no staging path to unlink and no rename to fail,
+    /// so a v3 recorder that is dropped without finalizing leaves a valid,
+    /// recoverable recording whose `complete` flag is simply still 0.
+    V3(rez_v3_writer::StreamRecorderV3),
+}
+
+impl RezStream {
+    /// Append one scraped snapshot.
+    ///
+    /// Fallible in v3 and not in v2, and the difference is real: v3 writes the
+    /// tick to the WAL here, where v2 only appended to in-memory builders and
+    /// could not fail until a seal.
+    fn ingest(
+        &mut self,
+        snapshot: &metriken_exposition::Snapshot,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<(), String> {
+        match self {
+            RezStream::V2(rec) => {
+                rec.ingest(snapshot, anchored_ts, wall_offset_ns);
+                Ok(())
+            }
+            RezStream::V3(rec) => rec.ingest(snapshot, anchored_ts, wall_offset_ns),
+        }
+    }
+
+    fn maybe_seal(&mut self) -> Result<(), String> {
+        match self {
+            RezStream::V2(rec) => rec.maybe_seal(),
+            RezStream::V3(rec) => rec.maybe_seal(),
+        }
+    }
+
+    fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
+        match self {
+            RezStream::V2(rec) => rec.finalize(clock_offset),
+            RezStream::V3(rec) => rec.finalize(clock_offset),
+        }
+    }
+
+    /// What to tell the user after a mid-recording failure: where the data
+    /// captured so far can still be read from. The two containers keep it in
+    /// different places, and v3's is the output path itself.
+    fn recovery_note(&self) -> String {
+        match self {
+            RezStream::V2(rec) => format!(
+                "note: the partial recording is readable at {}",
+                rec.partial_path().display()
+            ),
+            RezStream::V3(rec) => format!(
+                "note: the recording so far is readable at {}",
+                rec.path().display()
+            ),
+        }
+    }
+
+    /// Stop the writer and leave nothing behind. Only for the paths where the
+    /// recording captured no samples at all — a stub is not a recovery artifact,
+    /// and both containers refuse to overwrite, so leaving one behind would also
+    /// block the retry.
+    fn discard(self) {
+        match self {
+            // Unlinks `<output>.partial`; the previous run's output, which v2
+            // never touched, stays where it was.
+            RezStream::V2(rec) => rec.abort(),
+            RezStream::V3(rec) => {
+                let path = rec.path().to_path_buf();
+                // Drop first: joining the writer thread is what guarantees
+                // nothing is still appending to the file we are about to
+                // unlink. v3 has no abort — a dropped writer leaves a valid
+                // recording, which is exactly why this path has to remove it
+                // explicitly rather than rely on a staging convention.
+                drop(rec);
+                // Safe to remove: `RezDb::create` claimed this path with
+                // O_EXCL during THIS run, so it cannot be a file that was
+                // already there.
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(
+                        "failed to remove the empty recording at {}: {e}",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Open the streaming `.rez` writer for a just-activated endpoint and spawn its
+/// writer thread. v3 creates the output file itself; v2 creates
+/// `<output>.partial` and writes an initial manifest.
 ///
 /// Both the file creation and the thread spawn can fail, which is why this
 /// happens at activation rather than lazily on the first snapshot.
@@ -485,15 +595,28 @@ fn start_rez_recorder(
     config: &RecordingConfig,
     ep: &EndpointState,
     clock_anchor_wall_ns: u64,
-) -> Result<rez_stream::StreamRecorder, String> {
+) -> Result<RezStream, String> {
     let labels = build_rez_labels(config, ep);
-    let seed = rez_stream::ManifestSeed {
-        dir: rez::recording_dir_slug(&labels),
+    let metadata = build_rez_metadata(config, ep);
+    // Clap constrains `--rez-version` to 2 or 3, so 2 is the only opt-out and
+    // everything else is v3.
+    if config.rez_version == 2 {
+        let seed = rez_stream::ManifestSeed {
+            dir: rez::recording_dir_slug(&labels),
+            labels,
+            metadata,
+            clock_anchor_wall_ns,
+        };
+        return rez_stream::RezWriterHandle::create(&config.output, seed)
+            .map(|h| RezStream::V2(rez_stream::StreamRecorder::new(h)));
+    }
+    let seed = rez_v3_writer::ManifestSeed {
         labels,
-        metadata: build_rez_metadata(config, ep),
+        metadata,
         clock_anchor_wall_ns,
     };
-    rez_stream::RezWriterHandle::create(&config.output, seed).map(rez_stream::StreamRecorder::new)
+    rez_v3_writer::RezV3Writer::create(&config.output, seed)
+        .map(|w| RezStream::V3(rez_v3_writer::StreamRecorderV3::new(w)))
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
@@ -719,8 +842,9 @@ pub fn run(config: RecordingConfig) {
 
     // The streaming `.rez` writer is opened here — when the (single) endpoint
     // becomes active, not lazily on the first snapshot — because creating the
-    // `<output>.partial` and spawning the writer thread are both fallible.
-    let mut rez_recorder: Option<rez_stream::StreamRecorder> = None;
+    // output (or, in v2, the `<output>.partial`) and spawning the writer thread
+    // are both fallible.
+    let mut rez_recorder: Option<RezStream> = None;
     if rez_mode {
         // `.rez` is single-endpoint (guarded above) and at least one endpoint is
         // active (checked above), so the active endpoint is *the* endpoint. It
@@ -798,9 +922,10 @@ pub fn run(config: RecordingConfig) {
                 Err(e) => {
                     eprintln!("error: failed to start command: {e}");
                     // Nothing was recorded, and `exit` skips destructors: stop
-                    // the writer thread and unlink the `.partial` explicitly.
+                    // the writer thread and remove the empty recording
+                    // explicitly.
                     if let Some(rec) = rez_recorder.take() {
-                        rec.abort();
+                        rec.discard();
                     }
                     std::process::exit(1);
                 }
@@ -923,6 +1048,13 @@ pub fn run(config: RecordingConfig) {
                 anchored_stamp(clock_anchor_wall_ns, clock_anchor_mono.elapsed(), wall_ns);
             last_clock = (anchored_ns, wall_offset_ns);
 
+            // A `.rez` ingest failure for this tick. Held rather than acted on
+            // where it happens: that is inside the per-endpoint result loop,
+            // whose `break` would only leave that loop. Surfaced below,
+            // alongside `maybe_seal`'s — the same class of failure at the same
+            // cadence, and the earlier and more specific of the two wins.
+            let mut ingest_failed: Option<String> = None;
+
             // Scrape all active endpoints concurrently
             let active_indices: Vec<usize> = endpoints
                 .iter()
@@ -970,7 +1102,11 @@ pub fn run(config: RecordingConfig) {
                                         endpoints[idx].config.url.as_str(),
                                     );
                                     if let Some(rec) = rez_recorder.as_mut() {
-                                        rec.ingest(&snapshot, anchored_ns, wall_offset_ns);
+                                        if let Err(e) =
+                                            rec.ingest(&snapshot, anchored_ns, wall_offset_ns)
+                                        {
+                                            ingest_failed.get_or_insert(e);
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -1134,16 +1270,14 @@ pub fn run(config: RecordingConfig) {
                 Some(rec) => rec.maybe_seal(),
                 None => Ok(()),
             };
-            if let Err(e) = sealed {
+            if let Some(e) = ingest_failed.or_else(|| sealed.err()) {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
                 if let Some(rec) = rez_recorder.take() {
-                    // Dropped, not aborted: the `.partial` holds every segment
-                    // sealed before the failure and is the recovery artifact.
-                    eprintln!(
-                        "note: the partial recording is readable at {}",
-                        rec.partial_path().display()
-                    );
+                    // Dropped, not discarded: what is on disk holds everything
+                    // written before the failure and is the recovery artifact —
+                    // in v2 every sealed segment, in v3 every committed tick.
+                    eprintln!("{}", rec.recovery_note());
                 }
                 break;
             }
@@ -1170,11 +1304,11 @@ pub fn run(config: RecordingConfig) {
             .count();
 
         if active_count == 0 {
-            // Nothing was captured, so the `.partial` holds no recoverable data:
-            // stop the writer and unlink it rather than leaving a stub behind.
+            // Nothing was captured, so the recording holds no recoverable data:
+            // stop the writer and remove it rather than leaving a stub behind.
             // Explicit because the `exit` below skips destructors.
             if let Some(rec) = rez_recorder.take() {
-                rec.abort();
+                rec.discard();
             }
             if wrapped {
                 // Same class as a failed write: no output file exists, so
@@ -1189,20 +1323,24 @@ pub fn run(config: RecordingConfig) {
             std::process::exit(1);
         }
 
-        // `.rez` mode finalizes a per-sampler tar archive instead of parquet/raw:
+        // `.rez` mode finalizes a per-sampler archive instead of parquet/raw:
         // the segments are already on disk, so this only seals the (small) open
-        // ones, writes the final manifest and renames the `.partial` into place.
+        // ones and marks the recording complete — in v2 by writing the final
+        // manifest and renaming the `.partial` into place, in v3 by one commit.
         if rez_mode {
             // `None` means the recording already failed mid-run and reported it
-            // (the `.partial` was left in place there); nothing to add here.
+            // (what was on disk was left in place there, and its path printed);
+            // nothing to add here.
             if let Some(rec) = rez_recorder.take() {
                 if let Err(e) = rec.finalize(last_clock) {
                     // Must flip `recording_failed`: without it a failed tail
                     // seal / manifest write / rename (ENOSPC at the end of a
-                    // long capture, a rename EACCES) exits 0, and because the
-                    // `.partial` design never touches a pre-existing output,
-                    // the PREVIOUS run's `out.rez` is still sitting there for
-                    // the next command in the pipeline to analyze.
+                    // long capture, a rename EACCES) exits 0, and neither
+                    // container overwrites a pre-existing output — v2 because
+                    // it stages at `.partial`, v3 because `create` refuses an
+                    // existing file — so the PREVIOUS run's `out.rez` is still
+                    // sitting there for the next command in the pipeline to
+                    // analyze.
                     eprintln!("error saving .rez archive: {e}");
                     recording_failed.store(true, Ordering::SeqCst);
                 } else {
@@ -1395,11 +1533,12 @@ pub fn run(config: RecordingConfig) {
         outcome
     });
 
-    // Every path out of the block above already finalized or aborted the `.rez`
-    // writer; this is the backstop for the one below that skips destructors
-    // (`std::process::exit`). Dropping joins the writer thread and leaves the
-    // `.partial` in place, so a missed path costs a recoverable archive, never a
-    // detached thread appending to it after we exit.
+    // Every path out of the block above already finalized or discarded the
+    // `.rez` writer; this is the backstop for the ones below that skip
+    // destructors (`std::process::exit`). Dropping joins the writer thread and
+    // leaves what is on disk alone — v2's `.partial`, v3's output file — so a
+    // missed path costs a recoverable archive, never a detached thread
+    // appending to it after we exit.
     drop(rez_recorder);
 
     // Flush buffered logs before exiting the process: std::process::exit
@@ -1500,6 +1639,167 @@ mod tests {
         assert_eq!(after.0, ANCHOR + 11_000_000_000);
         // The step is not lost, it is data about the clock: -5 s at this tick.
         assert_eq!(after.1, -5_000_000_000);
+    }
+
+    // ── `--rez-version` wiring ───────────────────────────────────────────────
+    //
+    // These drive `start_rez_recorder` and the `RezStream` it returns rather
+    // than `run()`, which owns `std::process::exit` and a tokio runtime. What
+    // they cover is the wiring: which container a version selects, that the
+    // result is readable end to end, and that a discarded recording leaves
+    // nothing behind. What they do NOT cover is the loop around it — the tick
+    // scheduling, the scrape timeouts and the exit paths are exercised by
+    // `tests/record_lifecycle.rs` against the real binary.
+
+    const TEST_ANCHOR: u64 = 1_700_000_000_000_000_000;
+    const TEST_SECOND: u64 = 1_000_000_000;
+
+    fn rez_config(output: &Path, rez_version: u8) -> RecordingConfig {
+        RecordingConfig {
+            interval: humantime::Duration::from(Duration::from_secs(1)),
+            duration: None,
+            format: Format::Rez,
+            verbose: 0,
+            output: output.to_path_buf(),
+            separate: false,
+            metadata: Vec::new(),
+            labels: vec![("arm".to_string(), "redis".to_string())],
+            rez_version,
+            endpoints: Vec::new(),
+            command: None,
+        }
+    }
+
+    fn rez_endpoint() -> EndpointState {
+        EndpointState::new(endpoint::EndpointConfig {
+            url: Url::parse("http://localhost:4241").unwrap(),
+            source: Some("rezolus".to_string()),
+            role: None,
+            protocol: Some(Protocol::Msgpack),
+        })
+    }
+
+    /// Drive a recorder the way the loop does — ingest, `maybe_seal` every
+    /// tick, then finalize — over `ticks` one-second samples of one counter.
+    fn record_ticks(rec: &mut RezStream, ticks: u64) {
+        for i in 0..ticks {
+            let ts = TEST_ANCHOR + i * TEST_SECOND;
+            let c = rez::recorder_tests_support::counter(
+                "fake_ops",
+                "fake",
+                i,
+                Some(metriken::Window::new(ts - 500, ts)),
+            );
+            let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
+            rec.ingest(&snapshot, ts, 0).expect("ingest");
+            rec.maybe_seal().expect("seal");
+        }
+    }
+
+    #[test]
+    fn rez_version_3_writes_a_sqlite_container_that_round_trips_through_rezreader() {
+        // The default. Writing it is only half the wiring — the recording has
+        // to come back out through the same reader every consumer uses, or the
+        // recorder is producing a file nothing can query.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path, 3);
+        let mut rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+
+        // Valid and openable before a single row is written — there is no
+        // `.partial` standing in for it.
+        assert!(path.exists(), "v3 records at the output path itself");
+        assert!(!dir.path().join("out.rez.partial").exists());
+
+        record_ticks(&mut rec, 3);
+        rec.finalize((TEST_ANCHOR + 3 * TEST_SECOND, 0)).unwrap();
+
+        assert_eq!(
+            rez::detect_rez_format(&path).unwrap(),
+            rez::RezFormat::V3Sqlite
+        );
+        use metriken_query::MetricsSource;
+        let reader = crate::rez_reader::RezReader::open_with_pool(
+            &path,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(reader.counter_names(), vec!["fake_ops".to_string()]);
+        let (start, end) = reader.time_range().unwrap();
+        // A bare counter is not an instant vector; `rate()` is how a counter is
+        // read, and it is also what consumes the acquisition windows the rows
+        // carry.
+        let r = reader.query_range("rate(fake_ops[5s])", start, end + 1.0, 1.0);
+        let metriken_query::QueryResult::Matrix { result } = r.expect("the query must resolve")
+        else {
+            panic!("a range query over a counter is a matrix");
+        };
+        // Values, not merely a successful parse: the counter rises by 1 every
+        // second, so the rate is 1/s wherever it is defined.
+        let points: Vec<f64> = result
+            .iter()
+            .flat_map(|s| s.values.iter().map(|(_, v)| *v))
+            .collect();
+        assert!(!points.is_empty(), "the recorded rows must come back out");
+        assert!(
+            points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
+            "a counter rising 1/s must read back as 1/s: {points:?}"
+        );
+        // The recording's identity survives: labels the run was tagged with,
+        // and the metadata the manifest used to carry.
+        assert_eq!(reader.source(), "rezolus");
+    }
+
+    #[test]
+    fn rez_version_2_still_writes_the_tar_container() {
+        // The opt-out has to keep working for a release or two, `.partial`
+        // staging and all — this is what makes the flag more than a no-op.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path, 2);
+        let mut rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+
+        assert!(
+            dir.path().join("out.rez.partial").exists(),
+            "v2 stages at <output>.partial"
+        );
+        assert!(
+            !path.exists(),
+            "and does not touch the output until finalize"
+        );
+
+        record_ticks(&mut rec, 3);
+        rec.finalize((TEST_ANCHOR + 3 * TEST_SECOND, 0)).unwrap();
+
+        assert_eq!(
+            rez::detect_rez_format(&path).unwrap(),
+            rez::RezFormat::V2Tar
+        );
+    }
+
+    #[test]
+    fn discarding_a_recording_that_captured_nothing_leaves_no_file_behind() {
+        // The "no data was recorded" / "failed to start command" paths: there
+        // is nothing to recover, and both containers refuse to overwrite an
+        // existing output — v2 by staging, v3 because `RezDb::create` claims
+        // the path with O_EXCL — so a stub left behind would block the retry
+        // as well as lying about what was captured.
+        let dir = tempfile::tempdir().unwrap();
+        for version in [2u8, 3] {
+            let path = dir.path().join(format!("v{version}.rez"));
+            let config = rez_config(&path, version);
+            let rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+            rec.discard();
+            assert!(
+                !path.exists() && !dir.path().join(format!("v{version}.rez.partial")).exists(),
+                "v{version}: discard must leave neither the output nor a staging file"
+            );
+            // And the path is free again, which is the property the retry needs.
+            let config = rez_config(&path, version);
+            start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR)
+                .unwrap_or_else(|e| panic!("v{version}: the output path is still claimed: {e}"))
+                .discard();
+        }
     }
 
     #[test]
