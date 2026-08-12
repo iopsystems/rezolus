@@ -11,6 +11,7 @@ use crate::parquet_metadata;
 pub use config::RecordingConfig;
 use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 pub fn command() -> Command {
     Command::new("record")
@@ -762,6 +763,10 @@ pub fn run(config: RecordingConfig) {
 
     let wrapped = config.command.is_some();
 
+    // A fatal mid-recording write failure must not look like success: a
+    // supervisor, CI job, or docker healthcheck can only see the exit code.
+    let recording_failed = AtomicBool::new(false);
+
     let outcome: Option<child::Outcome> = rt.block_on(async {
         // Spawn the wrapped command only after probing/writers succeeded, so a
         // failed setup never starts an expensive workload.
@@ -1073,6 +1078,7 @@ pub fn run(config: RecordingConfig) {
             };
             if let Err(e) = sealed {
                 eprintln!("error: recording failed: {e}");
+                recording_failed.store(true, Ordering::SeqCst);
                 if let Some(rec) = rez_recorder.take() {
                     // Dropped, not aborted: the `.partial` holds every segment
                     // sealed before the failure and is the recovery artifact.
@@ -1317,9 +1323,17 @@ pub fn run(config: RecordingConfig) {
     // detached thread appending to it after we exit.
     drop(rez_recorder);
 
+    // Flush buffered logs before exiting the process: std::process::exit
+    // skips destructors, so drop the log drain explicitly first.
+    if recording_failed.load(Ordering::SeqCst) {
+        // Outranks the wrapped command's own status: the command may well have
+        // succeeded, but we failed to record it, and that is what this process
+        // is here to do.
+        drop(_log_drain);
+        std::process::exit(1);
+    }
+
     if let Some(o) = outcome {
-        // Flush buffered logs before exiting the process: std::process::exit
-        // skips destructors, so drop the log drain explicitly first.
         drop(_log_drain);
         std::process::exit(o.exit_code());
     }
