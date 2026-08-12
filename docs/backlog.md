@@ -196,6 +196,36 @@ recording length, 55 ms under backpressure).
   read path, but not size: the +1.28 % overhead figure is still macOS-only,
   from a bespoke replay harness. *Reopen:* before quoting a fleet size
   overhead. Related: `syscall_latency` reached 144 segments in 900 s.
+## `.rez` v3 — SQLite container
+
+Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-sqlite-container.md)
+(design landed 2026-08-12, `f0d58a74`; both gating measurements passed).
+
+- **Adopt a target-encoded-size cap** — Open. A single global *in-memory*
+  `max_bytes` is mismatched at both ends: it makes `syscall_latency` emit 190
+  segments of 0.63 MB (7.6× past the ~25/table guidance) while letting
+  `cpu_usage` emit 6.23 MiB ones, because the compression ratio spans 1.32:1 to
+  62:1. Now that the per-table ratio is measured and stable within ±5%, a cap of
+  *target encoded size × an EWMA of the observed ratio* fixes both ends.
+- **`page_size` untested** — Open. Left at the 4096 default through the gating
+  measurements; larger pages would shorten overflow chains for multi-MB BLOBs.
+  Un-optimized, not chosen.
+- **`-wal` sidecar footprint** — Open. Reaches 24–79 MB depending on
+  `wal_autocheckpoint` and persists at its high-water size; must be counted in
+  hindsight's footprint or capped via `journal_size_limit` plus a checkpoint at
+  finalize. The default autocheckpoint (1000 pages) measured best for tail
+  latency.
+- **High-water-mark file growth** — By design, mitigated. SQLite never returns
+  freed pages to the OS, so a transient volume spike inflates a hindsight file
+  permanently (measured 16.0× when the working set shrank 16×).
+  `auto_vacuum=INCREMENTAL` at creation is adopted to defend this; it is free in
+  steady state and **cannot be enabled later** without a full `VACUUM`.
+- **Hindsight migration to segments** — Roadmap. Retires the 4 KB slot ring
+  (`src/hindsight/state.rs`) and the separate dump-to-parquet path
+  (`src/hindsight/mod.rs:316`); dump becomes a consistent read or `VACUUM INTO`.
+- **v2 tar → v3 conversion tool** — Open (on demand). Reading v2 stays
+  supported; a converter is only needed to bring old recordings forward.
+
 - **Per-table kill-loss for low-volume tables** — Open. At fleet scale a quiet
   table seals every 180–300 s, so an unclean kill can lose its whole recording
   while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
