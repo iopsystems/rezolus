@@ -27,6 +27,7 @@
 #define IVCSW 0
 #define RUNQ_WAIT 1
 #define DISCARDED 2
+#define VCSW 3
 
 // counters (see constants defined at top)
 struct {
@@ -132,6 +133,14 @@ struct {
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, MAX_CGROUPS);
+} cgroup_vcsw SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_runq_wait SEC(".maps");
 
 struct {
@@ -214,6 +223,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
                 // New cgroup detected, zero the counters
                 u64 zero = 0;
                 bpf_map_update_elem(&cgroup_ivcsw, &prev_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_vcsw, &prev_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_runq_wait, &prev_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &prev_cgroup_id, &zero, BPF_ANY);
             }
@@ -253,6 +263,20 @@ static __always_inline int account__sched_switch(u64* ctx) {
                 *tsp = 0;
             }
         }
+    } else {
+        // prev left the CPU while not runnable, i.e. it blocked: a voluntary
+        // context switch. This mirrors the kernel's own split, which counts
+        // nvcsw when a task deschedules with a non-zero state and nivcsw when
+        // it is preempted while runnable. Emitting both classes is what lets a
+        // consumer tell a blocking wakeup handoff from a true preemption --
+        // with only one class emitted, "no voluntary switches" and "voluntary
+        // switches not measured" are indistinguishable.
+        idx = COUNTER_GROUP_WIDTH * processor_id + VCSW;
+        array_incr(&counters, idx);
+
+        if (prev_cgroup_id < MAX_CGROUPS) {
+            array_incr(&cgroup_vcsw, prev_cgroup_id);
+        }
     }
 
     // for all tasks: track when it went off-cpu
@@ -278,6 +302,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
                 // New cgroup detected, zero the counters
                 u64 zero = 0;
                 bpf_map_update_elem(&cgroup_ivcsw, &next_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_vcsw, &next_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_runq_wait, &next_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &next_cgroup_id, &zero, BPF_ANY);
             }
