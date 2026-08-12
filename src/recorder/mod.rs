@@ -544,6 +544,12 @@ struct EndpointWriter {
     converter: Option<prometheus::PrometheusConverter>,
 }
 
+/// Upper bound on a single scrape or endpoint probe, whatever the interval.
+/// The bound exists to keep the tick responsive (age seals, ctrl-c), and that
+/// is a human/container-teardown timescale — a long `--interval` must not buy a
+/// correspondingly long stall.
+const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
 /// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
 /// text format endpoints, with auto-detection.
@@ -774,6 +780,21 @@ pub fn run(config: RecordingConfig) {
         let cap_deadline: Option<Instant> =
             config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
+        // How long a single scrape or probe may take before the tick gives up on
+        // it. Without a bound a *hung* endpoint (stalled server, SYN blackhole)
+        // parks `join_all` for TCP-timeout scales, and the tick is what drives
+        // `.rez` age seals and the ctrl-c check (`STATE` is only re-checked at
+        // the loop top) — so one hung endpoint would stall durability and
+        // shutdown, not just this sample.
+        //
+        // Deliberately generous rather than exactly one interval: this must
+        // catch a *hung* endpoint, not a merely slow one. A local agent already
+        // takes ~75 ms to answer, so at `--interval 5ms` a one-interval bound
+        // would time out every single scrape and record nothing at all, where
+        // the honest outcome is sampling at the endpoint's pace. Floored so
+        // short intervals stay recordable, capped so a long interval still
+        // hands back a bounded tick.
+        let scrape_timeout = (interval_dur * 2).clamp(Duration::from_secs(2), MAX_SCRAPE_TIMEOUT);
         // The last tick's clock observation, handed to `.rez` finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
@@ -840,7 +861,19 @@ pub fn run(config: RecordingConfig) {
                 .map(|&idx| {
                     let client = client.clone();
                     let url = endpoints[idx].scrape_url.clone().unwrap();
-                    async move { (idx, scrape_one(&client, &url).await) }
+                    async move {
+                        let result =
+                            match tokio::time::timeout(scrape_timeout, scrape_one(&client, &url))
+                                .await
+                            {
+                                Ok(result) => result,
+                                Err(_) => Err(format!(
+                                    "timed out after {}",
+                                    humantime::format_duration(scrape_timeout)
+                                )),
+                            };
+                        (idx, result)
+                    }
                 })
                 .collect();
 
@@ -947,8 +980,26 @@ pub fn run(config: RecordingConfig) {
                 .collect();
 
             for idx in pending_indices {
-                if let Some((protocol, url)) = probe_endpoint(&client, &endpoints[idx].config).await
+                // Bounded like the scrapes above, and for the same reason: the
+                // probe runs on the loop, so a hung endpoint here would stall
+                // the tick. A timeout is just a failed probe — retried next tick.
+                let probed = match tokio::time::timeout(
+                    scrape_timeout,
+                    probe_endpoint(&client, &endpoints[idx].config),
+                )
+                .await
                 {
+                    Ok(probed) => probed,
+                    Err(_) => {
+                        warn!(
+                            "probe of {} timed out after {}",
+                            endpoints[idx].config.url,
+                            humantime::format_duration(scrape_timeout)
+                        );
+                        None
+                    }
+                };
+                if let Some((protocol, url)) = probed {
                     if endpoints[idx].config.source.is_none() {
                         if protocol == Protocol::Msgpack {
                             endpoints[idx].config.source = Some("rezolus".to_string());
