@@ -12,10 +12,6 @@
 //! unwinding, so a panic here never reaches the send-error path, skips
 //! finalize, and in wrapped mode orphans the child.
 
-// The recorder loop wires these up in a follow-up change (D1); until then the
-// tests at the bottom of this file are the only consumers.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
@@ -621,6 +617,12 @@ impl StreamRecorder {
     /// Give up on the recording: stop the writer and unlink the `.partial`.
     pub(crate) fn abort(self) {
         self.handle.abort();
+    }
+
+    /// The in-progress archive's path — the recovery artifact if this recording
+    /// never finalizes.
+    pub(crate) fn partial_path(&self) -> &Path {
+        self.handle.partial_path()
     }
 
     /// Rows in a sampler's open (unsealed) segment.

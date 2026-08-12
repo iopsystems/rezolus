@@ -137,6 +137,9 @@ pub struct RezColumn {
 /// One sampler's table: a timestamp column plus its metric/window columns.
 #[derive(Debug, Clone)]
 pub struct RezTable {
+    /// Read by the atomic writer only — the streaming writer names segments
+    /// from `SealJob::sampler`. See the note on `RezRecorder`.
+    #[allow(dead_code)]
     pub sampler: String,
     pub timestamps: Vec<u64>,
     /// Per-row wall-clock observation: the raw `SystemTime` reading minus the
@@ -152,6 +155,11 @@ pub struct RezTable {
 type RezError = Box<dyn std::error::Error>;
 
 /// Mean row interval hint; `None` when fewer than 2 rows.
+///
+/// Atomic-writer only: the streaming writer keeps the equivalent running totals
+/// per table because its segments are long gone by manifest time. See the note
+/// on `RezRecorder`.
+#[allow(dead_code)]
 pub fn cadence_hint(timestamps: &[u64]) -> Option<u64> {
     if timestamps.len() < 2 {
         return None;
@@ -446,6 +454,7 @@ use std::io::Read;
 use std::path::Path;
 
 /// One recording's data to serialize (borrowed tables).
+#[allow(dead_code)]
 pub struct RecordingData<'a> {
     pub dir: String,
     pub labels: BTreeMap<String, String>,
@@ -477,6 +486,9 @@ pub(crate) fn append_tar_entry<W: std::io::Write>(
 
 /// Write `recordings` to an uncompressed `.rez` tar at `path`. Each recording's
 /// tables are nested under `<dir>/<sampler>.parquet`.
+///
+/// Atomic (whole-archive) writer — see the note on `RezRecorder`.
+#[allow(dead_code)]
 pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), RezError> {
     let mut manifest_recordings = Vec::with_capacity(recordings.len());
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -902,6 +914,9 @@ pub(crate) struct TableBuilder {
     wall_offsets: Vec<i64>,
     order: Vec<String>,
     columns: HashMap<String, RezColumn>,
+    /// Atomic-writer dedup state. `StreamRecorder` keeps its keys outside the
+    /// builder instead, so they survive a segment rotation.
+    #[allow(dead_code)]
     last_key: Option<u64>,
     approx_bytes: usize,
 }
@@ -1101,6 +1116,15 @@ pub(crate) fn dedup_key(entries: &[Entry<'_>], snapshot_ts: u64) -> u64 {
 
 /// Accumulates scraped snapshots into per-sampler tables, deduping by each
 /// sampler's representative acquisition window.
+///
+/// The in-memory, atomic (whole-archive-at-finalize) writer. The recorder loop
+/// no longer uses it — it streams sealed segments through
+/// [`rez_stream::StreamRecorder`](super::rez_stream::StreamRecorder) so
+/// finalization is bounded — but it remains the fixture builder for every
+/// `.rez` test in the tree and the natural base for the deferred offline
+/// compactor. Kept whole (not `#[cfg(test)]`-forked) so the archives tests
+/// exercise stay the archives this crate knows how to write.
+#[allow(dead_code)]
 pub struct RezRecorder {
     tables: BTreeMap<String, TableBuilder>,
     metadata: BTreeMap<String, String>,
@@ -1108,6 +1132,7 @@ pub struct RezRecorder {
     dir: String,
 }
 
+#[allow(dead_code)]
 impl RezRecorder {
     pub fn new(
         metadata: BTreeMap<String, String>,
