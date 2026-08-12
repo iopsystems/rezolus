@@ -14,7 +14,7 @@
 //! finalize, and in wrapped mode orphans the child.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
@@ -193,14 +193,31 @@ struct Encoded {
 fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<(), String> {
     // Next segment sequence number per sampler.
     let mut next_seq: BTreeMap<String, u64> = BTreeMap::new();
+    // Timestamps the `clock_offsets` series already carries. Only finalize
+    // reads it, but it has to be maintained as batches seal — see below.
+    let mut observed: BTreeSet<u64> = BTreeSet::new();
 
     loop {
         match rx.recv() {
             Ok(Msg::Wal(rows)) => db.insert_wal_rows(recording_id, &rows)?,
-            Ok(Msg::Seal(batch)) => seal_batch(&mut db, recording_id, &mut next_seq, batch)?,
+            Ok(Msg::Seal(batch)) => {
+                if let Some(ts) = seal_batch(&mut db, recording_id, &mut next_seq, batch)? {
+                    observed.insert(ts);
+                }
+            }
             Ok(Msg::Finalize { clock_offset }) => {
+                // The loop's final tick observation joins the series only when
+                // it adds a timestamp no sealed row already covers — otherwise
+                // the series would carry two conflicting offsets at one
+                // timestamp and consumers could not read it uniformly. The
+                // row-derived value wins because it is a projection of the
+                // `:wall_offset` column the segment itself carries. Same rule,
+                // and same reason, as the v2 writer.
+                let novel = !observed.contains(&clock_offset.0);
                 return db.transaction(|tx| {
-                    tx.insert_clock_offset(recording_id, clock_offset.0, clock_offset.1)?;
+                    if novel {
+                        tx.insert_clock_offset(recording_id, clock_offset.0, clock_offset.1)?;
+                    }
                     tx.mark_complete(recording_id)
                 });
             }
@@ -212,18 +229,25 @@ fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<
     }
 }
 
-/// Encode one batch's segments, insert them in ONE transaction, then prune the
-/// sealed samplers' WAL — outside it.
+/// Encode one batch's segments, insert them — with the batch's clock
+/// observation — in ONE transaction, then prune the sealed samplers' WAL
+/// outside it. Returns the timestamp of the observation recorded, if any.
 fn seal_batch(
     db: &mut RezDb,
     recording_id: i64,
     next_seq: &mut BTreeMap<String, u64>,
     batch: Vec<SealJob>,
-) -> Result<(), String> {
+) -> Result<Option<u64>, String> {
     // Encoding happens BEFORE the transaction opens: it is CPU work
     // proportional to segment size (the fleet's worst single segment is
     // 6.23 MiB) and would hold the write lock for its whole duration.
     let mut encoded = Vec::with_capacity(batch.len());
+    // The batch's clock observation: the NEWEST sealed row's
+    // `(timestamp, wall_offset)`, paired with that same table's offset — never
+    // one table's timestamp against another's. Derived from the rows just
+    // sealed, so every entry in the series is a projection of the
+    // `:wall_offset` column it summarizes, exactly as in v2.
+    let mut observation: Option<(u64, i64)> = None;
     for job in batch {
         let (Some(&first_ts), Some(&last_ts)) =
             (job.table.timestamps.first(), job.table.timestamps.last())
@@ -235,6 +259,10 @@ fn seal_batch(
         };
         let bytes = write_table_parquet(&job.table)
             .map_err(|e| format!("failed to encode a {} segment: {e}", job.sampler))?;
+        // `>=`, so a later job wins a tie — same rule as v2's `seal_segments`.
+        if observation.is_none_or(|(seen, _)| last_ts >= seen) {
+            observation = Some((last_ts, job.table.wall_offsets.last().copied().unwrap_or(0)));
+        }
         // Bumped before the commit, which is safe only because the writer
         // exits on its first error: no later batch ever reuses this map.
         let seq = next_seq.entry(job.sampler.clone()).or_insert(0);
@@ -254,9 +282,19 @@ fn seal_batch(
     // ONE transaction for the whole batch. The fleet seals 12 tables in
     // lockstep, and 12 implicit commits would be 12 fsyncs at
     // `synchronous=FULL` against a ~46 ms tick.
+    //
+    // The batch's clock observation rides along inside it, for free: no extra
+    // commit, no extra fsync, and it lands iff the segments it was derived
+    // from do. It is a `clock_offsets` ROW rather than something a reader has
+    // to dig out of a segment, which is what keeps drift readable from the
+    // catalog alone — including on a recording that is killed before it ever
+    // finalizes, where these are the only observations there will be.
     db.transaction(|tx| {
         for e in &encoded {
             tx.insert_segment(recording_id, &e.sampler, e.seq, &e.meta, &e.bytes)?;
+        }
+        if let Some((ts, offset)) = observation {
+            tx.insert_clock_offset(recording_id, ts, offset)?;
         }
         Ok(())
     })?;
@@ -275,7 +313,7 @@ fn seal_batch(
     for e in &encoded {
         db.prune_wal(recording_id, &e.sampler, e.meta.last_ts)?;
     }
-    Ok(())
+    Ok(observation.map(|(ts, _)| ts))
 }
 
 #[cfg(test)]
@@ -299,17 +337,22 @@ mod tests {
         }
     }
 
-    /// A sealable job with `ts.len()` rows for `sampler`.
-    fn job(sampler: &str, ts: &[u64]) -> SealJob {
+    /// A sealable job with `ts.len()` rows for `sampler`, every row carrying
+    /// `wall_offset` in the `:wall_offset` sidecar.
+    fn job_with_offset(sampler: &str, ts: &[u64], wall_offset: i64) -> SealJob {
         let mut b = TableBuilder::new(sampler.to_string());
         for (i, &t) in ts.iter().enumerate() {
             let c = counter("0", sampler, i as u64, Some(Window::new(t - 1, t)));
-            b.push_row(t, 7, &[Entry::Counter(&c)]);
+            b.push_row(t, wall_offset, &[Entry::Counter(&c)]);
         }
         SealJob {
             sampler: sampler.to_string(),
             table: b.finish(),
         }
+    }
+
+    fn job(sampler: &str, ts: &[u64]) -> SealJob {
+        job_with_offset(sampler, ts, 7)
     }
 
     /// A job the writer cannot encode: `wall_offsets` shorter than
@@ -497,6 +540,65 @@ mod tests {
     }
 
     #[test]
+    fn kill_before_finalize_still_has_clock_observations() {
+        // Clock drift must survive the kill path, which is the path v3 exists
+        // for. If only `finalize` contributed an observation, a killed
+        // recording would have NONE — and reading drift back out of a sealed
+        // segment means decoding its `:wall_offset` column from the parquet
+        // BLOB, since `segments` catalogs only rows/first_ts/last_ts. v2 could
+        // render drift straight from the manifest with no decode; the
+        // `clock_offsets` rows are what keep that true here.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let mut writer = RezV3Writer::create(&path, seed()).unwrap();
+        let rid = writer.recording_id();
+
+        writer
+            .seal(vec![
+                // The newest row is in the FIRST job, and the older sampler
+                // carries a wildly different offset — so a derivation that
+                // took the last job's, or the batch's oldest row, or mixed one
+                // table's timestamp with another's offset, is visible here.
+                job_with_offset("cpu_usage", &[3_000], 7),
+                job_with_offset("scheduler", &[1_000, 2_000], 99),
+            ])
+            .unwrap();
+        // Killed: no finalize.
+        drop(writer);
+
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_clock_offsets(rid).unwrap(),
+            vec![(3_000, 7)],
+            "the batch's newest sealed row, paired with its OWN table's offset"
+        );
+        assert!(!db.read_recordings().unwrap()[0].complete);
+    }
+
+    #[test]
+    fn finalize_drops_a_tick_observation_a_sealed_row_already_covers() {
+        // Two conflicting offsets at one timestamp would make the series
+        // unreadable, so the row-derived value wins: it is a projection of the
+        // `:wall_offset` column the segment itself carries. Same rule as v2.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let mut writer = RezV3Writer::create(&path, seed()).unwrap();
+        let rid = writer.recording_id();
+
+        writer
+            .seal(vec![job_with_offset("cpu_usage", &[1_000], 7)])
+            .unwrap();
+        writer.finalize((1_000, -11)).unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_clock_offsets(rid).unwrap(),
+            vec![(1_000, 7)],
+            "one observation per timestamp, and the sealed row's wins"
+        );
+    }
+
+    #[test]
     fn writer_error_surfaces_on_the_next_handoff() {
         // A writer-thread failure must surface as the writer's OWN error on a
         // hand-off — that is what decides whether a broken recording gets
@@ -571,7 +673,7 @@ mod tests {
 
         writer.wal(vec![wal_row("cpu_usage", 1_000)]).unwrap();
         writer.seal(vec![job("cpu_usage", &[1_000])]).unwrap();
-        writer.finalize((1_000, -11)).unwrap();
+        writer.finalize((2_000, -11)).unwrap();
 
         // Still the same file at the same path — nothing was renamed into
         // place, because nothing was ever staged.
@@ -585,8 +687,9 @@ mod tests {
         );
         assert_eq!(
             db.read_clock_offsets(rid).unwrap(),
-            vec![(1_000, -11)],
-            "finalize records the loop's last clock observation"
+            vec![(1_000, 7), (2_000, -11)],
+            "the sealed batch's observation, then the loop's last one — which \
+             covers a span no sealed row does, so it joins the series"
         );
         assert_eq!(db.total_rows(rid, "cpu_usage").unwrap(), 1);
     }
