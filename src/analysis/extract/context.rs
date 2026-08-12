@@ -206,6 +206,7 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("rezolus_memory_page_reclaims", "rezolus_rusage"),
     ("rezolus_memory_usage_resident_set_size", "rezolus_rusage"),
     ("scheduler_context_switch", "scheduler_runqueue"),
+    ("scheduler_discarded_samples", "scheduler_runqueue"),
     ("scheduler_offcpu", "scheduler_runqueue"),
     ("scheduler_running", "scheduler_runqueue"),
     ("softirq", "cpu_usage"),
