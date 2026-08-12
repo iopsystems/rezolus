@@ -1119,7 +1119,12 @@ pub fn run(config: RecordingConfig) {
                 rec.abort();
             }
             if wrapped {
+                // Same class as a failed write: no output file exists, so
+                // handing back the wrapped command's (possibly zero) status
+                // would tell a supervisor the recording succeeded when the one
+                // thing this process exists to produce was never produced.
                 warn!("command exited before any metrics were recorded");
+                recording_failed.store(true, Ordering::SeqCst);
                 return outcome;
             }
             eprintln!("error: no data was recorded from any endpoint");
@@ -1134,13 +1139,29 @@ pub fn run(config: RecordingConfig) {
             // (the `.partial` was left in place there); nothing to add here.
             if let Some(rec) = rez_recorder.take() {
                 if let Err(e) = rec.finalize(last_clock) {
+                    // Must flip `recording_failed`: without it a failed tail
+                    // seal / manifest write / rename (ENOSPC at the end of a
+                    // long capture, a rename EACCES) exits 0, and because the
+                    // `.partial` design never touches a pre-existing output,
+                    // the PREVIOUS run's `out.rez` is still sitting there for
+                    // the next command in the pipeline to analyze.
                     eprintln!("error saving .rez archive: {e}");
+                    recording_failed.store(true, Ordering::SeqCst);
                 } else {
                     info!("wrote .rez archive to {}", config.output.display());
                 }
             }
             return outcome;
         }
+
+        // Every finalization error below is the same class as the `.rez`
+        // finalize failure above: the samples are gone (or partial) and the
+        // only thing a supervisor, CI job or `record && analyze` pipeline can
+        // see is the exit code, so none of these may report success.
+        let fail = |msg: String| {
+            eprintln!("{msg}");
+            recording_failed.store(true, Ordering::SeqCst);
+        };
 
         match config.format {
             Format::Raw => {
@@ -1161,10 +1182,10 @@ pub fn run(config: RecordingConfig) {
                         match std::fs::File::create(&dest_path) {
                             Ok(mut dest) => {
                                 if let Err(e) = std::io::copy(&mut ew.writer, &mut dest) {
-                                    eprintln!("error writing {}: {e}", dest_path.display());
+                                    fail(format!("error writing {}: {e}", dest_path.display()));
                                 }
                             }
-                            Err(e) => eprintln!("error creating {}: {e}", dest_path.display()),
+                            Err(e) => fail(format!("error creating {}: {e}", dest_path.display())),
                         }
                     }
                 }
@@ -1192,16 +1213,16 @@ pub fn run(config: RecordingConfig) {
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                 {
-                                    eprintln!(
+                                    fail(format!(
                                         "error saving parquet for {}: {e}",
                                         endpoints[idx].config.source_label()
-                                    );
+                                    ));
                                 } else {
                                     info!("wrote {}", dest_path.display());
                                 }
                             }
                             Err(e) => {
-                                eprintln!("error creating {}: {e}", dest_path.display());
+                                fail(format!("error creating {}: {e}", dest_path.display()));
                             }
                         }
                     }
@@ -1227,11 +1248,11 @@ pub fn run(config: RecordingConfig) {
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                 {
-                                    eprintln!("error saving parquet file: {e}");
+                                    fail(format!("error saving parquet file: {e}"));
                                 }
                             }
                             Err(e) => {
-                                eprintln!("error creating output file: {e}");
+                                fail(format!("error creating output file: {e}"));
                             }
                         }
                     }
@@ -1250,7 +1271,7 @@ pub fn run(config: RecordingConfig) {
                             let temp = match tempfile::NamedTempFile::new_in(&out_dir) {
                                 Ok(t) => t,
                                 Err(e) => {
-                                    eprintln!("failed to create temp parquet file: {e}");
+                                    fail(format!("failed to create temp parquet file: {e}"));
                                     continue;
                                 }
                             };
@@ -1265,16 +1286,16 @@ pub fn run(config: RecordingConfig) {
                                     if let Err(e) = converter
                                         .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
                                     {
-                                        eprintln!(
+                                        fail(format!(
                                             "error converting {} to parquet: {e}",
                                             endpoints[idx].config.source_label()
-                                        );
+                                        ));
                                         continue;
                                     }
                                     temp_parquets.push(temp);
                                 }
                                 Err(e) => {
-                                    eprintln!("error creating temp parquet: {e}");
+                                    fail(format!("error creating temp parquet: {e}"));
                                 }
                             }
                         }
@@ -1284,10 +1305,10 @@ pub fn run(config: RecordingConfig) {
                         // Only one file survived — just move it
                         if let Some(temp) = temp_parquets.into_iter().next() {
                             if let Err(e) = std::fs::copy(temp.path(), &config.output) {
-                                eprintln!("error writing output: {e}");
+                                fail(format!("error writing output: {e}"));
                             }
                         } else {
-                            eprintln!("error: no data was recorded");
+                            fail("error: no data was recorded".to_string());
                         }
                     } else {
                         let paths: Vec<PathBuf> = temp_parquets
@@ -1298,7 +1319,7 @@ pub fn run(config: RecordingConfig) {
                         if let Err(e) =
                             crate::parquet_tools::combine::combine_files(&paths, &config.output)
                         {
-                            eprintln!("error combining parquet files: {e}");
+                            fail(format!("error combining parquet files: {e}"));
                         } else {
                             info!("wrote combined recording to {}", config.output.display());
                         }
