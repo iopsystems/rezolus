@@ -439,6 +439,115 @@ mod tests {
         );
     }
 
+    /// A single-sampler `.rez` holding one histogram, `n` rows, counts rising
+    /// so a delta-based histogram scalar has something to report. Written
+    /// through the STREAMING writer with a small row cap so the table is
+    /// multi-segment and `RezReader` opens it with the segment-aware source —
+    /// the reader that implements the `__run__` conflict policy.
+    fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
+        use crate::recorder::rez_stream::{
+            ManifestSeed, RezWriterHandle, SealPolicy, StreamRecorder,
+        };
+        use metriken_exposition::Histogram as ExpHistogram;
+
+        let handle = RezWriterHandle::create(
+            out,
+            ManifestSeed {
+                dir: "rezolus".to_string(),
+                labels: rez_labels(),
+                metadata: rez_labels(),
+                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+            },
+        )
+        .unwrap();
+        let mut rec = StreamRecorder::with_policy(
+            handle,
+            SealPolicy {
+                max_bytes: usize::MAX,
+                max_rows,
+                max_age: std::time::Duration::from_secs(3600),
+            },
+        );
+        let mut last_ts = 0;
+        for i in 0..n {
+            let ts = 1_000_000_000 * (i + 1);
+            let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+            for _ in 0..=i {
+                h.increment(1_000).unwrap();
+            }
+            let hist = ExpHistogram::new(
+                "latency".to_string(),
+                h,
+                [
+                    ("metric".to_string(), "latency".to_string()),
+                    ("sampler".to_string(), "scheduler_runqueue".to_string()),
+                    // The query engine keys histogram decoding off these, as
+                    // the agent's own snapshots carry them.
+                    ("grouping_power".to_string(), "7".to_string()),
+                    ("max_value_power".to_string(), "64".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .with_window(Some(Window::new(ts - 50_000_000, ts)));
+            let snapshot = Snapshot::V2(SnapshotV2 {
+                systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                duration: std::time::Duration::ZERO,
+                metadata: HashMap::new(),
+                counters: Vec::new(),
+                gauges: Vec::new(),
+                histograms: vec![hist],
+            });
+            rec.ingest(&snapshot, ts, 0);
+            rec.maybe_seal().unwrap();
+            last_ts = ts;
+        }
+        rec.finalize((last_ts, 0)).unwrap();
+    }
+
+    /// End-to-end check of the segmented conflict policy's escape hatch through
+    /// the *front door*. `RezReader` routes every query through `columns()`
+    /// first, and `columns()` requires every filter key to be present on the
+    /// label set — so a `__run__`-qualified selector that `column_map` does not
+    /// tag is rejected as "references no metric present in this .rez" long
+    /// before `query_range` sees it. A dashboard pinning `__run__="0"` for
+    /// stability across an A/B pair must keep working on the side that never
+    /// drifted.
+    ///
+    /// Segmented tables only: `__run__` is a segment-splice concept, so a
+    /// single-segment table (the atomic writer, or a slow sampler that never
+    /// rolled) is opened with the plain `ParquetReader` and knows nothing
+    /// about it.
+    #[test]
+    fn run_qualified_histogram_query_routes_through_rez_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hist.rez");
+        segmented_histogram_rez(6, 2, &path);
+        assert!(
+            segment_counts(&path)["scheduler_runqueue"] > 1,
+            "the fixture must be segmented, or this proves nothing"
+        );
+
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+        let (start, end) = reader.time_range().unwrap();
+
+        let plain = reader.columns("histogram_mean(latency)").unwrap();
+        assert!(!plain.is_empty(), "cols: {plain:?}");
+        let pinned = reader
+            .columns("histogram_mean(latency{__run__=\"0\"})")
+            .unwrap();
+        assert_eq!(pinned, plain, "a run-qualified query must route the same");
+
+        let q = reader.query_range(
+            "histogram_mean(latency{__run__=\"0\"})",
+            start,
+            end + 1.0,
+            1.0,
+        );
+        assert!(q.is_ok(), "pinned histogram query should resolve: {q:?}");
+    }
+
     #[test]
     fn open_recordings_returns_one_reader_per_recording() {
         // Build a 2-recording .rez by reading a 1-recording fixture and writing
