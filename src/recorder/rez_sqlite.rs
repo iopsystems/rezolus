@@ -85,6 +85,15 @@ pub(crate) struct WalRow {
     pub row: Vec<u8>,
 }
 
+/// What one retention pass removed. Returned rather than logged so a caller
+/// can tell "the window moved" from "nothing was old enough yet" — and so a
+/// test can assert the WAL rows went with their segments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Evicted {
+    pub segments: usize,
+    pub wal_rows: usize,
+}
+
 /// How many rows a table holds and what time span they cover, answered from
 /// catalog columns alone — no segment or WAL payload is read. `first_ts` and
 /// `last_ts` are `None` when `rows` is 0.
@@ -246,18 +255,7 @@ impl RezDb {
 
     /// Start a recording, returning its id.
     pub(crate) fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
-        let labels = serde_json::to_string(&meta.labels)
-            .map_err(|e| format!("failed to encode recording labels: {e}"))?;
-        let metadata = serde_json::to_string(&meta.metadata)
-            .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
-        self.conn
-            .execute(
-                "INSERT INTO recordings(labels, metadata, complete, clock_anchor_wall_ns) \
-                 VALUES (?1, ?2, 0, ?3)",
-                rusqlite::params![labels, metadata, meta.clock_anchor_wall_ns as i64],
-            )
-            .map_err(|e| format!("failed to insert recording: {e}"))?;
-        Ok(self.conn.last_insert_rowid())
+        insert_recording_sql(&self.conn, meta)
     }
 
     /// Every recording in the file, in insertion order. A `.rez` may hold
@@ -375,8 +373,18 @@ impl RezDb {
                  WHERE recording_id = ?1 AND sampler = ?2 ORDER BY seq",
             )
             .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+        Self::collect_segments(&mut stmt, rusqlite::params![recording_id, sampler], sampler)
+    }
+
+    /// Shared row-materialization for the two segment queries, which differ
+    /// only in their `WHERE` clause.
+    fn collect_segments(
+        stmt: &mut rusqlite::Statement<'_>,
+        params: &[&dyn rusqlite::ToSql],
+        sampler: &str,
+    ) -> Result<Vec<SegmentRow>, String> {
         let rows = stmt
-            .query_map(rusqlite::params![recording_id, sampler], |row| {
+            .query_map(params, |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
@@ -405,6 +413,71 @@ impl RezDb {
             });
         }
         Ok(out)
+    }
+
+    /// Every segment for `(recording_id, sampler)` that OVERLAPS `[start, end]`
+    /// — `last_ts >= start AND first_ts <= end` — in `seq` order.
+    ///
+    /// This is the ranged dump's selection, and it is a range scan rather than
+    /// a table walk: `segments_by_time` is `(recording_id, sampler, last_ts)`,
+    /// so the `last_ts >= start` half is served by the index.
+    ///
+    /// **Whole segments, always.** A segment is an immutable parquet BLOB, so
+    /// selecting part of one would mean decoding and re-encoding it — the cost
+    /// the container exists to avoid. A caller gets a little more than it asked
+    /// for at each edge and should report the span it actually got.
+    pub(crate) fn segments_overlapping(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<SegmentRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, rows, first_ts, last_ts, bytes FROM segments \
+                 WHERE recording_id = ?1 AND sampler = ?2 \
+                   AND last_ts >= ?3 AND first_ts <= ?4 ORDER BY seq",
+            )
+            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+        // Clamped, not cast: `u64::MAX as i64` is -1, which would silently
+        // select nothing at all for an unbounded upper edge.
+        let params = rusqlite::params![
+            recording_id,
+            sampler,
+            start.min(i64::MAX as u64) as i64,
+            end.min(i64::MAX as u64) as i64,
+        ];
+        Self::collect_segments(&mut stmt, params, sampler)
+    }
+
+    /// Run `f` with every read inside ONE transaction, so all of its queries
+    /// see the same snapshot of the database.
+    ///
+    /// The dump needs this: without it, retention can evict a segment between
+    /// the query that selected it and the read that copies its bytes, and the
+    /// result is a file whose catalog references a BLOB that was never
+    /// written. `BEGIN DEFERRED` takes no locks until the first read and never
+    /// blocks the writer in WAL mode — it just pins the snapshot.
+    ///
+    /// `f` gets `&Self`, so it may call any reader here; it must not write
+    /// through this handle, which is why this is not exposed as a general
+    /// transaction.
+    pub(crate) fn read_snapshot<T>(
+        &self,
+        f: impl FnOnce(&Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.conn
+            .execute_batch("BEGIN DEFERRED")
+            .map_err(|e| format!("failed to open a read snapshot: {e}"))?;
+        let out = f(self);
+        // Read-only either way, so the outcome of ending it cannot change what
+        // was read; the snapshot simply has to be released.
+        let _ = self
+            .conn
+            .execute_batch(if out.is_ok() { "COMMIT" } else { "ROLLBACK" });
+        out
     }
 
     /// Sum of `rows` across every segment for `(recording_id, sampler)`. Does
@@ -661,6 +734,148 @@ impl RezDb {
             .map_err(|e| format!("failed to prune WAL for {sampler}: {e}"))
     }
 
+    /// **Retention.** Drop every segment that lies wholly before `cutoff_ts`,
+    /// and every WAL row stamped before it. This is what makes a bounded
+    /// rolling buffer possible — hindsight's whole reason to exist — and it is
+    /// the only destructive operation the container has.
+    ///
+    /// Segment granularity is deliberate and visible to the caller: a segment
+    /// goes only when its NEWEST row is out of the window (`last_ts <
+    /// cutoff_ts`), so a straddling segment is kept whole and the buffer holds
+    /// *at least* the lookback, never less. Trimming inside a sealed segment
+    /// would mean rewriting an immutable parquet BLOB, which is exactly what
+    /// this container refuses to do.
+    ///
+    /// `segments_by_time` (`recording_id, sampler, last_ts`) makes the segment
+    /// delete an indexed lookup rather than a scan; that index exists for this
+    /// statement.
+    ///
+    /// ONE transaction, and that is load-bearing rather than tidy. Deleting a
+    /// segment lowers `live_wal`'s watermark for its sampler, so WAL rows the
+    /// segment already covered would become live again — a reader would splice
+    /// them back in as a tail. The same-cutoff WAL delete is what stops that,
+    /// and it only stops it if the two land together: a straddling row has
+    /// `ts <= last_ts < cutoff_ts`, so the WAL delete provably covers every row
+    /// the segment delete un-shadows.
+    pub(crate) fn evict_before(
+        &mut self,
+        recording_id: i64,
+        cutoff_ts: u64,
+    ) -> Result<Evicted, String> {
+        self.evict(
+            recording_id,
+            "DELETE FROM segments WHERE recording_id = ?1 AND last_ts < ?2",
+            "DELETE FROM wal WHERE recording_id = ?1 AND ts < ?2",
+            cutoff_ts,
+        )
+    }
+
+    fn evict(
+        &mut self,
+        recording_id: i64,
+        segments_sql: &str,
+        wal_sql: &str,
+        cutoff_ts: u64,
+    ) -> Result<Evicted, String> {
+        self.transaction(|tx| {
+            let params = rusqlite::params![recording_id, cutoff_ts as i64];
+            let segments = tx
+                .tx
+                .execute(segments_sql, params)
+                .map_err(|e| format!("failed to evict segments: {e}"))?;
+            let wal_rows = tx
+                .tx
+                .execute(wal_sql, params)
+                .map_err(|e| format!("failed to evict WAL rows: {e}"))?;
+            Ok(Evicted { segments, wal_rows })
+        })
+    }
+
+    /// Return `pages` freed pages to the filesystem, or as many as the free
+    /// list holds. Requires `auto_vacuum=INCREMENTAL`, which is set at
+    /// creation and cannot be turned on later without a full `VACUUM`.
+    ///
+    /// Eviction alone keeps the file bounded — freed pages are reused and the
+    /// measured steady state is 1.004–1.011× live — but the bound is the
+    /// HIGH-WATER mark: a working set that shrank 16× left the file at 16.0×
+    /// live, 1.5 GB parked on the free list. This is the trickle that gives
+    /// that space back, at a measured p50 3.8 ms / p90 11.4 ms for 100 pages,
+    /// which fits inside a tick. See the journal § "Eviction without VACUUM".
+    ///
+    /// **Stepped to exhaustion, and NOT with `execute_batch`.** This pragma
+    /// reclaims one page per step, and `execute_batch` steps a statement once
+    /// — so the obvious spelling silently reclaims exactly ONE page no matter
+    /// what `pages` says, whatever the argument. Measured here: 655 → 654
+    /// pages per call, versus 655 → 42 when the statement is driven to
+    /// completion. That is not a slow reclaim, it is no reclaim at all: at one
+    /// page per retention pass a hindsight buffer would never work off a
+    /// spike.
+    pub(crate) fn incremental_vacuum(&self, pages: u32) -> Result<(), String> {
+        let fail = |e| format!("failed to reclaim {pages} pages: {e}");
+        let mut stmt = self
+            .conn
+            .prepare(&format!("PRAGMA incremental_vacuum({pages})"))
+            .map_err(fail)?;
+        let mut rows = stmt.query([]).map_err(fail)?;
+        while rows.next().map_err(fail)?.is_some() {}
+        Ok(())
+    }
+
+    /// Write a consistent, compacted copy of the whole database to `dest`,
+    /// which must not exist.
+    ///
+    /// **This is the dump.** It runs inside a read transaction, so the copy is
+    /// a point-in-time snapshot even while the writer keeps committing — the
+    /// property the 4 KB slot ring could not offer, where a dump copied a
+    /// buffer that was being overwritten in place. Measured ~530 MB/s, and it
+    /// rebuilds the destination from scratch, so the dump is also where a
+    /// hindsight buffer's free list gets compacted away for free.
+    ///
+    /// A plain file copy is NOT an equivalent: in WAL mode the main database
+    /// file lags every commit since the last checkpoint, so copying it alone
+    /// silently loses the most recent ticks.
+    pub(crate) fn vacuum_into(&self, dest: &Path) -> Result<(), String> {
+        let dest = dest
+            .to_str()
+            .ok_or_else(|| format!("dump destination {} is not valid UTF-8", dest.display()))?;
+        self.conn
+            .execute("VACUUM INTO ?1", [dest])
+            .map_err(|e| format!("failed to write the dump to {dest}: {e}"))?;
+        Ok(())
+    }
+
+    /// The whole recording's time span — every sampler, segments and WAL
+    /// together — from catalog columns alone. `None` when the recording holds
+    /// no rows at all, which for a rolling buffer means "nothing within the
+    /// lookback".
+    pub(crate) fn recording_time_span(
+        &self,
+        recording_id: i64,
+    ) -> Result<(Option<u64>, Option<u64>), String> {
+        self.conn
+            .query_row(
+                "SELECT MIN(first_ts), MAX(last_ts) FROM ( \
+                   SELECT first_ts, last_ts FROM segments WHERE recording_id = ?1 \
+                   UNION ALL \
+                   SELECT ts, ts FROM wal WHERE recording_id = ?1)",
+                [recording_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?.map(|v| v as u64),
+                        row.get::<_, Option<i64>>(1)?.map(|v| v as u64),
+                    ))
+                },
+            )
+            .map_err(|e| format!("failed to measure recording {recording_id}: {e}"))
+    }
+
+    /// Mark a recording cleanly finalized, outside any batch. The dump uses
+    /// it: a copy taken at time T is a finished artifact even though the
+    /// buffer it came from is still running.
+    pub(crate) fn mark_complete(&mut self, recording_id: i64) -> Result<(), String> {
+        self.transaction(|tx| tx.mark_complete(recording_id))
+    }
+
     pub(crate) fn pragma_u32(&self, name: &str) -> Result<u32, String> {
         let value = self.pragma_i64(name)?;
         u32::try_from(value).map_err(|_| format!("pragma {name} is {value}, not a u32"))
@@ -711,6 +926,16 @@ pub(crate) struct RezTx<'a> {
 }
 
 impl RezTx<'_> {
+    /// Start a recording, returning its id.
+    ///
+    /// In a transaction because a `.rez` can be *assembled* as well as
+    /// recorded: the ranged dump writes a recording row and every segment it
+    /// selected, and either the whole file is that recording or there is no
+    /// file at all.
+    pub(crate) fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
+        insert_recording_sql(&self.tx, meta)
+    }
+
     /// Insert one sealed segment's bytes and catalog facts.
     ///
     /// A plain `INSERT` with a `&[u8]` parameter, NOT incremental BLOB I/O
@@ -778,6 +1003,22 @@ impl RezTx<'_> {
             .map_err(|e| format!("failed to mark recording {recording_id} complete: {e}"))?;
         Ok(())
     }
+}
+
+/// Shared by `RezDb::insert_recording` (its own commit) and
+/// `RezTx::insert_recording` (part of a batch).
+fn insert_recording_sql(conn: &Connection, meta: &RecordingMeta) -> Result<i64, String> {
+    let labels = serde_json::to_string(&meta.labels)
+        .map_err(|e| format!("failed to encode recording labels: {e}"))?;
+    let metadata = serde_json::to_string(&meta.metadata)
+        .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
+    conn.execute(
+        "INSERT INTO recordings(labels, metadata, complete, clock_anchor_wall_ns) \
+         VALUES (?1, ?2, 0, ?3)",
+        rusqlite::params![labels, metadata, meta.clock_anchor_wall_ns as i64],
+    )
+    .map_err(|e| format!("failed to insert recording: {e}"))?;
+    Ok(conn.last_insert_rowid())
 }
 
 /// Shared by `RezDb::insert_segment` (its own commit) and

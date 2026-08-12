@@ -356,7 +356,7 @@ fn table_segments(
 /// only when it first creates that column — so passing each cell's metadata
 /// through verbatim is exactly right: the first mention establishes the
 /// column, later mentions are ignored.
-fn materialize_wal_tail(
+pub(crate) fn materialize_wal_tail(
     sampler: &str,
     rows: &[WalRow],
 ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {

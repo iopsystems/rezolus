@@ -57,9 +57,28 @@ enum Msg {
     Wal(Vec<WalRow>),
     /// One seal batch = one transaction.
     Seal(Vec<SealJob>),
+    /// Retention: drop everything wholly older than `cutoff_ts`, then trickle
+    /// freed pages back if the free list has grown. Only hindsight sends this.
+    Evict { cutoff_ts: u64 },
     /// The loop's last clock observation; marks the recording complete.
     Finalize { clock_offset: (u64, i64) },
 }
+
+/// Reclaim at most this many pages per retention pass. Measured p50 3.8 ms /
+/// p90 11.4 ms for 100 pages, which fits inside a tick — the point is that a
+/// shrunken working set drains back to the filesystem gradually, without ever
+/// putting a full `VACUUM` (12.1 s for 1.5 GB) on the recording path.
+const RECLAIM_PAGES_PER_PASS: u32 = 100;
+
+/// Reclaim only once the free list exceeds this fraction of the file, as a
+/// divisor: `freelist_count * RECLAIM_FREELIST_DIVISOR > page_count`.
+///
+/// Steady-state eviction plateaus at 1.004–1.011× live with freed pages simply
+/// reused, so a healthy rolling buffer sits far below this and never pays for
+/// a reclaim it does not need. It fires when the working set genuinely shrank
+/// — the measured 16.0×-live case — which is the only situation where handing
+/// pages back is worth anything.
+const RECLAIM_FREELIST_DIVISOR: u32 = 10;
 
 /// Handle to the writer thread. Every fallible hand-off reports the writer's
 /// stored error, in the required order: send-failure → join → report.
@@ -134,6 +153,21 @@ impl RezV3Writer {
             return self.check_alive();
         }
         self.send(Msg::Seal(batch))
+    }
+
+    /// Ask the writer to apply retention at `cutoff_ts`.
+    ///
+    /// It goes through the writer thread rather than a second connection for
+    /// the same reason everything else does: the writer OWNS this file, and a
+    /// second writing connection would stall on the write lock for up to
+    /// `busy_timeout` (5 s, rusqlite's default) before failing — which against
+    /// a tick reads as a hang. Readers are unaffected either way; WAL mode
+    /// lets them proceed while this commits.
+    ///
+    /// Fire-and-forget, like `wal` and `seal`: a failure surfaces on the next
+    /// hand-off, which is the convention the whole writer follows.
+    pub(crate) fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
+        self.send(Msg::Evict { cutoff_ts })
     }
 
     /// Record the final clock offset and mark the recording complete.
@@ -227,6 +261,10 @@ fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<
                     observed.insert(ts);
                 }
             }
+            Ok(Msg::Evict { cutoff_ts }) => {
+                db.evict_before(recording_id, cutoff_ts)?;
+                reclaim_if_fragmented(&db)?;
+            }
             Ok(Msg::Finalize { clock_offset }) => {
                 // The loop's final tick observation joins the series only when
                 // it adds a timestamp no sealed row already covers — otherwise
@@ -249,6 +287,27 @@ fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<
             Err(_) => return Ok(()),
         }
     }
+}
+
+/// Hand freed pages back to the filesystem, but only once the free list is a
+/// noticeable fraction of the file. See the two constants for why the guard is
+/// there: without it this would run every pass for no gain, and without the
+/// reclaim a buffer that shrank would keep its high-water size forever.
+fn reclaim_if_fragmented(db: &RezDb) -> Result<(), String> {
+    if should_reclaim(
+        db.pragma_u32("freelist_count")?,
+        db.pragma_u32("page_count")?,
+    ) {
+        db.incremental_vacuum(RECLAIM_PAGES_PER_PASS)?;
+    }
+    Ok(())
+}
+
+/// The guard, as a decision rather than a branch — because it is a decision
+/// about COST, not about outcome: reclaiming an unfragmented file is a no-op
+/// either way, so the only way to test the threshold is to ask it directly.
+fn should_reclaim(free_pages: u32, pages: u32) -> bool {
+    free_pages.saturating_mul(RECLAIM_FREELIST_DIVISOR) > pages
 }
 
 /// Encode one batch's segments, insert them — with the batch's clock
@@ -612,6 +671,16 @@ impl StreamRecorderV3 {
             });
         }
         self.handle.seal(batch)
+    }
+
+    /// Apply retention: everything wholly older than `cutoff_ts` goes.
+    ///
+    /// The recorder never calls this — a recording keeps everything it records
+    /// — but hindsight is the same writer with retention configured, and this
+    /// is the configuration. Call it AFTER `maybe_seal`, so a segment closed
+    /// this tick is catalogued before the cutoff is applied to it.
+    pub(crate) fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
+        self.handle.evict_before(cutoff_ts)
     }
 
     /// Seal the remaining partial segments (small by construction) and mark the
@@ -1063,6 +1132,122 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0],
             "each sampler numbers its own segments from 0"
+        );
+    }
+
+    #[test]
+    fn reclaim_is_skipped_until_the_free_list_is_a_tenth_of_the_file() {
+        // The threshold is a cost decision, so it is asked directly: removing
+        // the guard from `reclaim_if_fragmented` changes what the writer PAYS,
+        // not what the file ends up looking like, and a test that watched
+        // `page_count` would stay green with the guard deleted. (It did — this
+        // test exists because that assertion was found vacuous.)
+        assert!(!should_reclaim(0, 1_000), "nothing free, nothing to do");
+        // A healthy rolling buffer plateaus at 1.004-1.011x live, i.e. a free
+        // list of a percent or so. It must never pay for a reclaim.
+        assert!(!should_reclaim(11, 1_000), "steady state must not trip it");
+        assert!(!should_reclaim(100, 1_000), "exactly a tenth is not MORE");
+        assert!(should_reclaim(101, 1_000), "just past a tenth does");
+        // The case the whole mechanism exists for: a working set that shrank,
+        // measured at 16.0x live with 1.5 GB parked on the free list.
+        assert!(should_reclaim(940, 1_000), "a shrunken working set");
+        // A free list larger than the file is nonsense, but the multiply must
+        // not wrap into "don't reclaim" if it ever happens.
+        assert!(should_reclaim(u32::MAX, 1_000));
+    }
+
+    #[test]
+    fn reclaim_hands_pages_back_in_bounded_passes() {
+        // Eviction alone keeps the file bounded — freed pages get reused — but
+        // the bound is the HIGH-WATER mark: a working set that shrank 16x left
+        // the measured file at 16.0x live, 1.5 GB parked on the free list and
+        // never returned. This is the trickle that fixes that, and it has two
+        // halves that both have to hold: it must NOT run when the free list is
+        // noise (steady state, where it would be pure cost), and it must be
+        // BOUNDED when it does run, so a shrink cannot put a multi-second
+        // reclaim on a tick.
+        use crate::recorder::rez_sqlite::RecordingMeta;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: ANCHOR,
+            })
+            .unwrap();
+
+        let blob = vec![0x5au8; 64 * 1024];
+        for seq in 0..40u64 {
+            db.insert_segment(
+                rid,
+                "cpu_usage",
+                seq,
+                &SegmentMeta {
+                    rows: 1,
+                    first_ts: seq,
+                    last_ts: seq,
+                },
+                &blob,
+            )
+            .unwrap();
+        }
+        let full = db.pragma_u32("page_count").unwrap();
+
+        // Nothing has been freed yet, so a pass cannot shrink the file. (This
+        // says nothing about whether the GUARD ran — see
+        // `reclaim_is_skipped_until_the_free_list_is_a_tenth_of_the_file`,
+        // which is where that claim lives, because it is invisible here.)
+        reclaim_if_fragmented(&db).unwrap();
+        assert_eq!(
+            db.pragma_u32("page_count").unwrap(),
+            full,
+            "a file with nothing on its free list has nothing to give back"
+        );
+
+        // Now shrink the working set hard — the case the journal measured at
+        // 16.0x live.
+        db.evict_before(rid, 38).unwrap();
+        let freed = db.pragma_u32("freelist_count").unwrap();
+        assert!(
+            freed * RECLAIM_FREELIST_DIVISOR > full,
+            "fixture: {freed} free of {full} pages must trip the guard"
+        );
+        assert_eq!(
+            db.pragma_u32("page_count").unwrap(),
+            full,
+            "deleting alone returns nothing to the filesystem — that is the \
+             high-water problem this test is about"
+        );
+
+        // One pass is bounded: it hands back at most RECLAIM_PAGES_PER_PASS,
+        // not the whole free list.
+        reclaim_if_fragmented(&db).unwrap();
+        let after_one = db.pragma_u32("page_count").unwrap();
+        assert!(
+            after_one < full,
+            "a pass over a fragmented file must return pages: {full} -> {after_one}"
+        );
+        assert!(
+            full - after_one <= RECLAIM_PAGES_PER_PASS + 1,
+            "a pass must stay bounded, not reclaim {} pages at once",
+            full - after_one
+        );
+
+        // And it keeps going until the file really has shrunk.
+        for _ in 0..50 {
+            reclaim_if_fragmented(&db).unwrap();
+        }
+        let settled = db.pragma_u32("page_count").unwrap();
+        assert!(
+            settled < full / 4,
+            "the file must drain back toward its live size: {full} -> {settled}"
+        );
+        assert_eq!(
+            db.read_segments(rid, "cpu_usage").unwrap().len(),
+            2,
+            "and the surviving segments are untouched"
         );
     }
 

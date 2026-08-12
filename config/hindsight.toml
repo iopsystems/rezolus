@@ -2,21 +2,27 @@
 # Specify the sampling interval
 interval = "1s"
 
-# Specify the lookback period
+# Specify the lookback period: how far back the rolling buffer reaches.
+# Everything older than this is evicted every tick, which is what keeps the
+# buffer file bounded.
 duration = "15m"
 
 # Specify the address of the Rezolus Agent
 source = "127.0.0.1:4241"
 
-# Specify the path for output file. The directory for the output file is also
-# the location that is used for the ring buffer.
-output = "/tmp/rezolus.parquet"
+# Specify the path for the snapshot output file. Snapshots are `.rez` archives
+# (readable by `rezolus view`, `rezolus mcp` and `rezolus parquet metadata`).
+# The directory holding this file is also where the rolling buffer is kept, so
+# it needs room for the buffer as well as the snapshot.
+output = "/tmp/rezolus.rez"
 
 # Optional: enable HTTP endpoint for remote dump triggering
 # Supports endpoints:
-#   GET  /status     - Buffer status and time range info
-#   GET  /dump       - Download ring buffer as parquet (query params: start, end, last)
-#   POST /dump/file  - Write ring buffer to output file
+#   GET  /status     - Buffer status: retained time range, per-sampler rows and
+#                      segments, on-disk size, and whether retention has started
+#   GET  /dump       - Download the buffer as a .rez archive (query params:
+#                      start, end, last — selection is by whole segment)
+#   POST /dump/file  - Write the buffer to the output file
 # listen = "127.0.0.1:4242"
 
 [log]

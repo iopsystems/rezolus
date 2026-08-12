@@ -1,21 +1,30 @@
 use super::*;
-use std::fs::OpenOptions;
 
+use std::fs::OpenOptions;
+use std::path::Path;
+
+mod buffer;
 mod config;
 mod http;
 mod state;
 
+use buffer::HindsightBuffer;
 pub use config::Config;
 use state::{DumpToFileRequest, DumpToFileResponse, SharedState, TimeRange};
 
 pub fn command() -> Command {
     Command::new("hindsight")
-        .about("Continuously record to an on-disk ring buffer for after-the-fact snapshots")
+        .about("Continuously record to a rolling on-disk buffer for after-the-fact snapshots")
         .long_about(
             "Long-running daemon that pulls from a Rezolus agent and keeps a rolling,\n\
-             high-resolution ring buffer on disk. When an incident happens you snapshot the\n\
-             buffer to a parquet file — effectively recording the minutes *before* the trigger,\n\
+             high-resolution buffer on disk. When an incident happens you snapshot the\n\
+             buffer to a `.rez` file — effectively recording the minutes *before* the trigger,\n\
              at a resolution finer than your normal observability stack keeps.\n\n\
+             The buffer is an ordinary `.rez` recording with retention: everything older than\n\
+             the lookback is evicted every tick, so the file stays bounded. It is readable\n\
+             while it is being written — `rezolus view`, the MCP tools and\n\
+             `rezolus parquet metadata` all open it live — and a snapshot is a consistent\n\
+             point-in-time copy taken without pausing the recording.\n\n\
              Configuration is a TOML file (the only argument). It sets the sampling interval\n\
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
              e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
@@ -24,7 +33,7 @@ pub fn command() -> Command {
              stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
              remote status/dump requests instead.\n\n\
              EXAMPLE:\n    \
-             # Run the ring-buffer daemon using the example config\n    \
+             # Run the rolling-buffer daemon using the example config\n    \
              rezolus hindsight config/hindsight.toml",
         )
         .arg(
@@ -37,10 +46,9 @@ pub fn command() -> Command {
         )
 }
 
-/// Runs the Rezolus `flight-recorder` which is a Rezolus client that pulls data
-/// from the msgpack endpoint and maintains an on-disk buffer across some span
-/// of time. If the process receives a SIGHUP it will persist the ring buffer to
-/// an output file.
+/// Runs the Rezolus `flight-recorder`: a Rezolus client that pulls from the
+/// agent's msgpack endpoint and keeps a rolling `.rez` buffer covering the
+/// configured lookback. On SIGHUP it writes the buffer out to the output file.
 ///
 /// This is intended to be run as a daemon that allows retroactive collection of
 /// high-resolution metrics in the event of an anomaly. To be effective the
@@ -48,11 +56,16 @@ pub fn command() -> Command {
 /// allows for, for example per-second collection in an environment with only
 /// minutely metrics. Additionally the `duration` should allow adequate time to
 /// not only cover the duration of an anomalous event but give time for an
-/// engineer or automated process to respond and trigger the process to persist
-/// the ring buffer.
+/// engineer or automated process to respond and trigger a snapshot.
+///
+/// The buffer is the same streaming `.rez` v3 writer the recorder uses, with
+/// retention configured — see [`buffer`]. That is what replaced the fixed-size
+/// ring of 4 KB slots: a ring nothing but hindsight could read, whose dump
+/// copied a buffer that was being overwritten in place and could therefore
+/// tear.
 ///
 /// Optionally, an HTTP endpoint can be enabled to allow remote triggering of
-/// ring buffer dumps without terminating the service.
+/// snapshots without terminating the service.
 pub fn run(config: Config) {
     let config: Arc<Config> = config.into();
 
@@ -69,7 +82,7 @@ pub fn run(config: Config) {
         let state = STATE.load(Ordering::SeqCst);
 
         if state == RUNNING {
-            info!("triggering ringbuffer capture");
+            info!("triggering buffer capture");
             STATE.store(CAPTURING, Ordering::SeqCst);
         } else if state == CAPTURING {
             info!("waiting for capture to complete before exiting");
@@ -91,16 +104,19 @@ pub fn run(config: Config) {
         }
     };
 
-    let agent_systeminfo: Option<String> = {
-        let mut info_url = url.clone();
-        info_url.set_path("/systeminfo");
+    let fetch = |path: &str| -> Option<String> {
+        let mut u = url.clone();
+        u.set_path(path);
         blocking_client
-            .get(info_url)
+            .get(u)
             .send()
             .ok()
             .filter(|r| r.status().is_success())
             .and_then(|r| r.text().ok())
     };
+
+    let agent_systeminfo = fetch("/systeminfo");
+    let agent_descriptions = fetch("/metrics/descriptions");
 
     if agent_systeminfo.is_some() {
         debug!("fetched systeminfo from agent");
@@ -116,51 +132,55 @@ pub fn run(config: Config) {
         }
     };
 
-    // create our destination file if it doesn't exist, otherwise open the
-    // existing file - it will be truncated only before we write into it
-    let mut destination = OpenOptions::new()
+    let output = config.general().output();
+
+    // Fail fast rather than after fifteen minutes of buffering: if the output
+    // cannot be written there is no point recording anything to dump into it.
+    if let Err(e) = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(config.general().output())
-        .map_err(|e| {
-            error!("failed to open destination file: {e}");
-            std::process::exit(1);
-        })
-        .unwrap();
+        .open(&output)
+    {
+        error!("failed to open destination file: {e}");
+        std::process::exit(1);
+    }
+    if output.extension().is_some_and(|e| e == "parquet") {
+        warn!(
+            "{} will be written as a .rez archive, not parquet — hindsight snapshots \
+             are `.rez` recordings since v3",
+            output.display()
+        );
+    }
 
-    let temp_dir = {
-        let mut path: PathBuf = config.general().output();
+    let buffer_dir = {
+        let mut path = output.clone();
         path.pop();
         path
     };
 
-    // Use NamedTempFile so we can get the path for sharing with HTTP handlers
-    let writer = match tempfile::NamedTempFile::new_in(&temp_dir) {
+    // The buffer lives in a private directory beside the output, so its
+    // `-wal`/`-shm` sidecars cannot collide with anything and the whole lot is
+    // removed together when the daemon exits cleanly.
+    let staging = match tempfile::TempDir::new_in(&buffer_dir) {
         Ok(t) => t,
         Err(error) => {
-            eprintln!("could not open temporary file in: {temp_dir:?}\n{error}");
+            eprintln!("could not open a buffer directory in: {buffer_dir:?}\n{error}");
             std::process::exit(1);
         }
     };
+    let buffer_path = staging.path().join("hindsight.rez");
 
-    // Get the path before we convert to file handle
-    let temp_path = writer.path().to_path_buf();
-
-    let mut writer = writer.into_file();
-
-    // estimate the snapshot size and latency
+    // Probe the endpoint once: it must exist, and the sampling interval has to
+    // leave room for the scrape it implies.
     let start = Instant::now();
-
-    let (snap_len, latency) = if let Ok(response) = blocking_client.get(url.clone()).send() {
+    let latency = if let Ok(response) = blocking_client.get(url.clone()).send() {
         if let Ok(body) = response.bytes() {
             let latency = start.elapsed();
-
             debug!("sampling latency: {} us", latency.as_micros());
             debug!("body size: {}", body.len());
-
-            (body.len(), latency)
+            latency
         } else {
             error!("error reading metrics endpoint");
             std::process::exit(1);
@@ -170,7 +190,6 @@ pub fn run(config: Config) {
         std::process::exit(1);
     };
 
-    // check that the sampling interval and sample latency are compatible
     if config.general().interval().as_micros() < (latency.as_micros() * 2) {
         error!("the sampling interval is too short to reliably record");
         error!(
@@ -180,46 +199,53 @@ pub fn run(config: Config) {
         std::process::exit(1);
     }
 
-    // the snapshot len in blocks
-    // note: we allow for more capacity than we need and round to the next
-    // nearest whole number of blocks
-    let snapshot_len = (1 + snap_len as u64 * 4 / 4096) * 4096;
+    let interval_dur: Duration = config.general().interval().into();
+    let lookback: Duration = config.general().duration().into();
 
-    // the total number of snapshots
-    let snapshot_count = (1 + config.general().duration().as_micros()
-        / config.general().interval().as_micros()) as u64;
+    // Row stamps are `anchor + monotonic elapsed`, exactly as in the recorder,
+    // so a wall-clock step cannot bake a decreasing timestamp into a sealed
+    // segment; the raw reading rides along as a per-row observation instead.
+    let clock_anchor_wall_ns = wall_ns();
+    let clock_anchor_mono = Instant::now();
 
-    // expand the temporary file to hold enough room for all the snapshots
-    let _ = writer.set_len(snapshot_len * snapshot_count).map_err(|e| {
-        error!("failed to grow temporary file: {e}");
-        std::process::exit(1);
-    });
+    let seed = crate::recorder::rez_v3_writer::ManifestSeed {
+        labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
+        metadata: buffer_metadata(interval_dur, &agent_systeminfo, &agent_descriptions),
+        clock_anchor_wall_ns,
+    };
+
+    let mut buffer = match HindsightBuffer::create(&buffer_path, seed, lookback) {
+        Ok(b) => b,
+        Err(e) => {
+            error!("failed to create the hindsight buffer: {e}");
+            std::process::exit(1);
+        }
+    };
+    info!(
+        "buffering {} of metrics at {} in {}",
+        humantime::format_duration(lookback),
+        humantime::format_duration(interval_dur),
+        buffer_path.display()
+    );
 
     let shared_state = Arc::new(SharedState::new(
-        temp_path,
-        snapshot_len,
-        snapshot_count,
-        config.general().interval().into(),
-        config.general().duration().into(),
-        config.general().output(),
+        buffer_path.clone(),
+        output.clone(),
+        interval_dur,
+        lookback,
     ));
 
     let (dump_tx, mut dump_rx) = tokio::sync::mpsc::channel::<DumpToFileRequest>(8);
 
     if let Some(listen_addr) = config.general().listen() {
         let shared = shared_state.clone();
-        let sysinfo = agent_systeminfo.clone();
         rt.spawn(async move {
-            http::serve(listen_addr, shared, dump_tx, sysinfo).await;
+            http::serve(listen_addr, shared, dump_tx).await;
         });
     }
 
-    let shared_for_loop = shared_state.clone();
-
     rt.block_on(async move {
-        let shared = shared_for_loop;
-
-        let mut interval = crate::common::aligned_interval(config.general().interval().into());
+        let mut interval = crate::common::aligned_interval(interval_dur);
 
         while STATE.load(Ordering::Relaxed) < TERMINATING {
             loop {
@@ -228,14 +254,17 @@ pub fn run(config: Config) {
 
                     Some(request) = dump_rx.recv() => {
                         debug!("received dump-to-file request via HTTP");
-                        let response = perform_dump_to_file(
-                            &mut writer,
-                            &mut destination,
-                            &shared,
-                            &config,
-                            &request.time_range,
-                            &agent_systeminfo,
-                        );
+                        // On a blocking thread: a large `VACUUM INTO` must not
+                        // park the HTTP server along with the tick.
+                        let (buffer_path, output, range) =
+                            (buffer_path.clone(), output.clone(), request.time_range);
+                        let response = tokio::task::spawn_blocking(move || {
+                            dump_to_file(&buffer_path, &output, &range)
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            DumpToFileResponse::error(format!("the dump task failed: {e}"))
+                        });
                         let _ = request.response_tx.send(response);
                     }
 
@@ -253,19 +282,23 @@ pub fn run(config: Config) {
                                 debug!("sampling latency: {} us", latency.as_micros());
                                 debug!("body size: {}", body.len());
 
-                                let idx = shared.idx();
+                                let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
+                                    clock_anchor_wall_ns,
+                                    clock_anchor_mono.elapsed(),
+                                    wall_ns(),
+                                );
 
-                                writer
-                                    .seek(SeekFrom::Start(idx * snapshot_len))
-                                    .expect("failed to seek");
-
-                                writer
-                                    .write_all(&body.len().to_be_bytes())
-                                    .expect("failed to write snapshot size");
-
-                                writer.write_all(&body).expect("failed to write snapshot");
-
-                                shared.advance_idx();
+                                match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                                    Ok(snapshot) => {
+                                        if let Err(e) =
+                                            buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
+                                        {
+                                            fatal(&e, &buffer_path);
+                                        }
+                                        shared_state.record_tick();
+                                    }
+                                    Err(e) => warn!("msgpack decode error: {e}"),
+                                }
                             } else {
                                 error!("failed to read response");
                                 std::process::exit(1);
@@ -274,30 +307,36 @@ pub fn run(config: Config) {
                             error!("failed to get metrics");
                             std::process::exit(1);
                         }
+
+                        // Every tick, scrape or not: this is where segments
+                        // seal, where retention runs, and where a writer that
+                        // died asynchronously is noticed.
+                        if let Err(e) = buffer.maintain() {
+                            fatal(&e, &buffer_path);
+                        }
+                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
                     }
                 }
             }
 
-            // Handle Ctrl+C triggered dump (CAPTURING state)
+            // Handle SIGHUP / ctrl-c triggered capture (CAPTURING state)
             if STATE.load(Ordering::Relaxed) == CAPTURING {
-                debug!("flushing writer and preparing destination");
-                let _ = writer.flush();
-
-                let response = perform_dump_to_file(
-                    &mut writer,
-                    &mut destination,
-                    &shared,
-                    &config,
-                    &TimeRange::default(), // no time filter
-                    &agent_systeminfo,
-                );
+                let response = dump_to_file(&buffer_path, &output, &TimeRange::default());
 
                 if let Some(error) = response.error {
                     error!("dump failed: {}", error);
-                } else {
+                } else if let Some(summary) = response.summary {
+                    // The span is what an operator actually wants to read back
+                    // ("did I catch the incident?"), so it leads; whole seconds
+                    // because nanosecond precision here is noise.
+                    let span = summary.retained().unwrap_or_default();
                     info!(
-                        "ringbuffer capture complete: {} snapshots written to {}",
-                        response.snapshots,
+                        "capture complete: {} of metrics, {} rows across {} tables \
+                         ({} bytes) written to {}",
+                        humantime::format_duration(Duration::from_secs(span.as_secs())),
+                        summary.rows,
+                        summary.tables.len(),
+                        summary.bytes,
                         response.path.display()
                     );
                 }
@@ -310,140 +349,61 @@ pub fn run(config: Config) {
             }
         }
     });
+
+    // Only reached on a clean exit; the buffer directory goes with it.
+    drop(staging);
 }
 
-/// Perform a dump of the ring buffer to the destination file
-fn perform_dump_to_file(
-    writer: &mut std::fs::File,
-    destination: &mut std::fs::File,
-    shared: &SharedState,
-    config: &Config,
-    time_range: &TimeRange,
-    agent_systeminfo: &Option<String>,
-) -> DumpToFileResponse {
-    use metriken_exposition::{MsgpackToParquet, ParquetOptions, Snapshot};
-    use std::time::UNIX_EPOCH;
-
-    debug!("capturing ringbuffer and writing to parquet");
-
-    let idx = shared.idx();
-    let valid_count = shared.valid_snapshot_count();
-
-    if let Err(e) = destination.seek(SeekFrom::Start(0)) {
-        return DumpToFileResponse::error(format!("failed to seek destination: {}", e));
+/// Write the buffer out to the configured output path.
+///
+/// This is the whole of what the ring's `perform_dump_to_file` did by walking
+/// slots and running a msgpack→parquet conversion over them. It touches
+/// neither the buffer nor the writer: `VACUUM INTO` copies a point-in-time
+/// snapshot from its own connection while the recording continues.
+fn dump_to_file(buffer_path: &Path, output: &Path, range: &TimeRange) -> DumpToFileResponse {
+    match buffer::dump(buffer_path, output, range) {
+        Ok(summary) => DumpToFileResponse::success(output.to_path_buf(), summary),
+        Err(e) => DumpToFileResponse::error(e),
     }
-    if let Err(e) = destination.set_len(0) {
-        return DumpToFileResponse::error(format!("failed to truncate destination: {}", e));
-    }
+}
 
-    let mut snapshots_written = 0u64;
-    let mut first_timestamp: Option<u64> = None;
-    let mut last_timestamp: Option<u64> = None;
-
-    let temp_dir = {
-        let mut path: PathBuf = config.general().output();
-        path.pop();
-        path
-    };
-
-    let mut packed = match tempfile_in(temp_dir.clone()) {
-        Ok(t) => t,
-        Err(error) => {
-            return DumpToFileResponse::error(format!(
-                "could not open temporary file in: {:?}\n{}",
-                temp_dir, error
-            ));
-        }
-    };
-
-    for offset in 0..valid_count {
-        let mut i = idx + offset;
-        if i >= shared.snapshot_count {
-            i -= shared.snapshot_count;
-        }
-
-        if writer
-            .seek(SeekFrom::Start(i * shared.snapshot_len))
-            .is_err()
-        {
-            continue;
-        }
-
-        let mut len = [0u8; 8];
-        if writer.read_exact(&mut len).is_err() {
-            continue;
-        }
-
-        let size = u64::from_be_bytes(len) as usize;
-        if size == 0 {
-            continue;
-        }
-
-        let mut buf = vec![0u8; size];
-        if writer.read_exact(&mut buf).is_err() {
-            continue;
-        }
-
-        if time_range.start.is_some() || time_range.end.is_some() {
-            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
-                if !time_range.contains(s.systemtime) {
-                    continue;
-                }
-                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
-                    let ts = dur.as_secs();
-                    if first_timestamp.is_none() {
-                        first_timestamp = Some(ts);
-                    }
-                    last_timestamp = Some(ts);
-                }
-            }
-        } else {
-            // No time filter, still track timestamps for response
-            if let Ok(Snapshot::V2(ref s)) = rmp_serde::from_slice::<Snapshot>(&buf) {
-                if let Ok(dur) = s.systemtime.duration_since(UNIX_EPOCH) {
-                    let ts = dur.as_secs();
-                    if first_timestamp.is_none() {
-                        first_timestamp = Some(ts);
-                    }
-                    last_timestamp = Some(ts);
-                }
-            }
-        }
-
-        if packed.write_all(&buf).is_err() {
-            return DumpToFileResponse::error("failed to write to packed file".to_string());
-        }
-        snapshots_written += 1;
-    }
-
-    let _ = packed.flush();
-    if packed.rewind().is_err() {
-        return DumpToFileResponse::error("failed to rewind packed file".to_string());
-    }
-
-    let mut converter = MsgpackToParquet::with_options(
-        ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
-    )
-    .metadata(
-        "sampling_interval_ms".to_string(),
-        config.general().interval().as_millis().to_string(),
+/// A buffer write that failed is not recoverable in place — but everything
+/// committed before it is, and unlike the ring it is in a file anything can
+/// open. Say where before exiting.
+fn fatal(error: &str, buffer_path: &Path) -> ! {
+    error!("the hindsight buffer failed: {error}");
+    error!(
+        "note: everything recorded so far is readable at {}",
+        buffer_path.display()
     );
+    std::process::exit(1);
+}
 
-    if let Some(json) = agent_systeminfo {
-        converter = converter.metadata("systeminfo".to_string(), json.clone());
+fn wall_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+/// The recording's file-level metadata, matching what `rezolus record` writes
+/// so a dump is indistinguishable from a recording to every consumer.
+fn buffer_metadata(
+    interval: Duration,
+    systeminfo: &Option<String>,
+    descriptions: &Option<String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(
+        "sampling_interval_ms".to_string(),
+        interval.as_millis().to_string(),
+    );
+    m.insert("source".to_string(), "rezolus".to_string());
+    if let Some(json) = systeminfo {
+        m.insert("systeminfo".to_string(), json.clone());
     }
-
-    if let Err(e) = converter.convert_file_handle(packed, &mut *destination) {
-        return DumpToFileResponse::error(format!("error saving parquet file: {}", e));
+    if let Some(json) = descriptions {
+        m.insert("descriptions".to_string(), json.clone());
     }
-
-    let _ = destination.flush();
-    debug!("finished parquet dump");
-
-    DumpToFileResponse::success(
-        config.general().output(),
-        snapshots_written,
-        first_timestamp,
-        last_timestamp,
-    )
+    m
 }

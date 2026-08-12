@@ -346,7 +346,7 @@ fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error
 ///
 /// Dispatch is by CONTENT: a v3 `.rez` is a SQLite file whose catalog answers
 /// every question here, a v1/v2 `.rez` is a tar whose `manifest.json` does.
-fn describe_rez_string_at(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+pub(crate) fn describe_rez_string_at(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
     match crate::recorder::rez::detect_rez_format(path)? {
         RezFormat::V3Sqlite => Ok(describe_v3_string(&read_v3_summary(path)?)),
         _ => Ok(describe_rez_string(

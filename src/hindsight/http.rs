@@ -1,3 +1,13 @@
+//! The hindsight HTTP endpoints.
+//!
+//! Every one of them is stated in v3 terms. `/status` used to report the ring's
+//! geometry — slot count, writes so far, and the fill fraction derived from
+//! them — and none of that survives: the buffer is a `.rez` file, not a fixed
+//! array of slots. What replaces it is what the file's own catalog can answer
+//! (`buffer::summarize`), which is both truer and cheaper: no segment or WAL
+//! payload is read to produce it.
+
+use super::buffer;
 use super::state::{DumpToFileRequest, SharedState, TimeRange};
 use tracing::info;
 
@@ -7,15 +17,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::Json;
 use axum::Router;
-use metriken_exposition::{MsgpackToParquet, ParquetOptions, Snapshot};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -24,7 +31,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct AppState {
     pub shared: Arc<SharedState>,
     pub dump_tx: mpsc::Sender<DumpToFileRequest>,
-    pub agent_systeminfo: Option<String>,
 }
 
 /// Query parameters for dump endpoints
@@ -55,7 +61,14 @@ fn parse_timestamp(s: &str) -> Result<SystemTime, String> {
 }
 
 impl DumpParams {
-    /// Resolve the time range from query parameters
+    /// Resolve the time range from query parameters.
+    ///
+    /// The range still selects, but it selects whole segments: a `.rez` segment
+    /// is an immutable parquet BLOB, so a dump keeps any segment that overlaps
+    /// the range rather than rewriting one. The response reports the span
+    /// actually written, which is how a caller learns it got more than it asked
+    /// for — the alternative, silently honoring the request in the reply while
+    /// shipping something wider, is the one thing this must not do.
     pub fn resolve_time_range(&self) -> Result<TimeRange, String> {
         // "last" takes precedence over start/end
         if let Some(last) = &self.last {
@@ -87,23 +100,61 @@ impl DumpParams {
     }
 }
 
-/// Response for GET /status
+/// Response for GET /status.
+///
+/// v3 shape. The ring fields it replaces (`snapshot_count`, and the
+/// `buffer_utilization` computed from it) described a fixed array of slots and
+/// have no analogue here — a `.rez` buffer is bounded by TIME, not by slots, so
+/// what it is doing is described by the span it retains and the size it has
+/// reached.
 #[derive(Serialize)]
 pub struct StatusResponse {
-    pub buffer_duration_secs: u64,
+    /// The configured lookback — `[general] duration`.
+    pub lookback_secs: u64,
     pub sampling_interval_ms: u64,
-    pub snapshot_count: u64,
-    pub snapshots_written: u64,
+    /// Snapshots pulled and ingested since startup.
+    pub ticks_recorded: u64,
+    /// The span actually retained. It reaches at least the lookback once the
+    /// buffer is full, and typically a little further: retention drops whole
+    /// segments rather than rewriting them.
     pub oldest_timestamp: Option<u64>,
     pub newest_timestamp: Option<u64>,
-    pub buffer_utilization: f64,
+    pub retained_secs: Option<u64>,
+    /// Whether retention has begun — the buffer is now dropping as much as it
+    /// takes in rather than still filling. Note this becomes true while
+    /// `retained_secs` still reads just *under* `lookback_secs`: the oldest
+    /// surviving row sits one tick inside the cutoff, by construction.
+    pub at_retention_bound: bool,
+    /// Rows a reader would see across every table.
+    pub rows: u64,
+    /// Bytes on disk, `-wal`/`-shm` sidecars included.
+    pub bytes: u64,
+    /// Pages on the free list against the file's total. Near zero in steady
+    /// state — freed pages are reused in place — and the signal for whether
+    /// the incremental reclaim is keeping up after a spike.
+    pub free_pages: u32,
+    pub pages: u32,
+    pub tables: Vec<TableStatus>,
+}
+
+#[derive(Serialize)]
+pub struct TableStatus {
+    pub sampler: String,
+    pub rows: u64,
+    pub segments: u64,
+    /// Rows committed but not yet sealed. Recoverable after a kill; for a quiet
+    /// table this may be all of its rows.
+    pub live_wal_rows: u64,
 }
 
 /// Response for POST /dump/file
 #[derive(Serialize)]
 pub struct DumpFileResponse {
     pub path: String,
-    pub snapshots: u64,
+    pub rows: u64,
+    pub tables: u64,
+    pub bytes: u64,
+    /// The span the dump actually covers — not the span requested.
     pub time_range: Option<TimeRangeResponse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -115,18 +166,32 @@ pub struct TimeRangeResponse {
     pub end: u64,
 }
 
+impl DumpFileResponse {
+    fn failed(error: String) -> Self {
+        Self {
+            path: String::new(),
+            rows: 0,
+            tables: 0,
+            bytes: 0,
+            time_range: None,
+            error: Some(error),
+        }
+    }
+}
+
+/// Nanosecond row stamps as Unix seconds, which is what these endpoints have
+/// always reported.
+fn to_secs(ns: u64) -> u64 {
+    ns / 1_000_000_000
+}
+
 /// Start the HTTP server
 pub async fn serve(
     listen: SocketAddr,
     shared: Arc<SharedState>,
     dump_tx: mpsc::Sender<DumpToFileRequest>,
-    agent_systeminfo: Option<String>,
 ) {
-    let state = Arc::new(AppState {
-        shared,
-        dump_tx,
-        agent_systeminfo,
-    });
+    let state = Arc::new(AppState { shared, dump_tx });
 
     let app = Router::new()
         .route("/", get(root))
@@ -154,67 +219,98 @@ async fn root() -> String {
          For information, see: https://rezolus.com\n\n\
          Endpoints:\n\
          - GET /status - Buffer status\n\
-         - GET /dump - Download ring buffer\n\
-         - POST /dump/file - Write ring buffer to file\n"
+         - GET /dump - Download the buffer as a .rez archive\n\
+         - POST /dump/file - Write the buffer to the configured output file\n"
     )
 }
 
-async fn status(State(state): State<Arc<AppState>>) -> Json<StatusResponse> {
-    let shared = &state.shared;
-    let snapshots_written = shared.snapshots_written();
-    let valid_count = shared.valid_snapshot_count();
-
-    let utilization = if shared.snapshot_count > 0 {
-        (valid_count as f64) / (shared.snapshot_count as f64)
-    } else {
-        0.0
+async fn status(State(state): State<Arc<AppState>>) -> Response {
+    let shared = Arc::clone(&state.shared);
+    let path = shared.buffer_path.clone();
+    // Reading the catalog is file I/O, however cheap: keep it off the runtime
+    // thread that is also driving the recording.
+    let summary = match tokio::task::spawn_blocking(move || buffer::summarize(&path)).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to read the buffer: {e}"),
+            )
+                .into_response()
+        }
     };
 
-    let (oldest, newest) = get_timestamp_bounds(shared).unwrap_or((None, None));
-
     Json(StatusResponse {
-        buffer_duration_secs: shared.duration.as_secs(),
+        lookback_secs: shared.lookback.as_secs(),
         sampling_interval_ms: shared.interval.as_millis() as u64,
-        snapshot_count: shared.snapshot_count,
-        snapshots_written,
-        oldest_timestamp: oldest,
-        newest_timestamp: newest,
-        buffer_utilization: utilization,
+        ticks_recorded: shared.ticks(),
+        oldest_timestamp: summary.first_ts.map(to_secs),
+        newest_timestamp: summary.last_ts.map(to_secs),
+        retained_secs: summary.retained().map(|d| d.as_secs()),
+        at_retention_bound: shared.at_retention_bound(),
+        rows: summary.rows,
+        bytes: summary.bytes,
+        free_pages: summary.free_pages,
+        pages: summary.pages,
+        tables: summary
+            .tables
+            .iter()
+            .map(|t| TableStatus {
+                sampler: t.sampler.clone(),
+                rows: t.rows,
+                segments: t.segments,
+                live_wal_rows: t.live_wal_rows,
+            })
+            .collect(),
     })
+    .into_response()
 }
 
+/// Download the buffer as a standalone `.rez`.
+///
+/// Built the same way `/dump/file` builds it — a consistent copy taken while
+/// the recording continues — into a temporary file that is served and removed.
+/// It is a `.rez` archive now, not a parquet file: the buffer holds one table
+/// per sampler at its own cadence, which no single parquet schema represents.
 async fn dump(State(state): State<Arc<AppState>>, Query(params): Query<DumpParams>) -> Response {
-    let shared = &state.shared;
-
     let time_range = match params.resolve_time_range() {
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
 
-    let data = match read_filtered_snapshots(shared, &time_range) {
-        Ok(d) => d,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    let shared = Arc::clone(&state.shared);
+    let built = tokio::task::spawn_blocking(move || {
+        let dir = shared
+            .output_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(tempfile::TempDir::new_in)
+            .unwrap_or_else(tempfile::TempDir::new)
+            .map_err(|e| format!("failed to stage the dump: {e}"))?;
+        let staged = dir.path().join("dump.rez");
+        buffer::dump(&shared.buffer_path, &staged, &time_range)?;
+        std::fs::read(&staged).map_err(|e| format!("failed to read the dump: {e}"))
+    })
+    .await;
+
+    let bytes = match built {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("the dump task failed: {e}"),
+            )
+                .into_response()
+        }
     };
 
-    if data.is_empty() {
-        return (
-            StatusCode::OK,
-            "no snapshots match the specified time range",
-        )
-            .into_response();
-    }
-
-    match convert_to_parquet(&data, shared.interval, &state.agent_systeminfo) {
-        Ok(parquet_data) => Response::builder()
-            .header("Content-Type", "application/octet-stream")
-            .header(
-                "Content-Disposition",
-                "attachment; filename=\"dump.parquet\"",
-            )
-            .body(axum::body::Body::from(parquet_data))
-            .unwrap(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
-    }
+    Response::builder()
+        .header("Content-Type", "application/octet-stream")
+        .header("Content-Disposition", "attachment; filename=\"dump.rez\"")
+        .body(axum::body::Body::from(bytes))
+        .unwrap()
 }
 
 async fn dump_to_file(
@@ -224,16 +320,7 @@ async fn dump_to_file(
     let time_range = match params.resolve_time_range() {
         Ok(r) => r,
         Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(DumpFileResponse {
-                    path: String::new(),
-                    snapshots: 0,
-                    time_range: None,
-                    error: Some(e),
-                }),
-            )
-                .into_response()
+            return (StatusCode::BAD_REQUEST, Json(DumpFileResponse::failed(e))).into_response()
         }
     };
 
@@ -246,12 +333,9 @@ async fn dump_to_file(
     if state.dump_tx.send(request).await.is_err() {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(DumpFileResponse {
-                path: String::new(),
-                snapshots: 0,
-                time_range: None,
-                error: Some("sampling loop not available".to_string()),
-            }),
+            Json(DumpFileResponse::failed(
+                "sampling loop not available".to_string(),
+            )),
         )
             .into_response();
     }
@@ -259,204 +343,35 @@ async fn dump_to_file(
     match response_rx.await {
         Ok(response) => {
             if let Some(error) = response.error {
-                (
+                return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(DumpFileResponse {
-                        path: String::new(),
-                        snapshots: 0,
-                        time_range: None,
-                        error: Some(error),
-                    }),
+                    Json(DumpFileResponse::failed(error)),
                 )
-                    .into_response()
-            } else {
-                let time_range = match (response.start_time, response.end_time) {
-                    (Some(start), Some(end)) => Some(TimeRangeResponse { start, end }),
-                    _ => None,
-                };
-                Json(DumpFileResponse {
-                    path: response.path.to_string_lossy().to_string(),
-                    snapshots: response.snapshots,
-                    time_range,
-                    error: None,
-                })
-                .into_response()
+                    .into_response();
             }
+            let summary = response.summary.unwrap_or_default();
+            Json(DumpFileResponse {
+                path: response.path.to_string_lossy().to_string(),
+                rows: summary.rows,
+                tables: summary.tables.len() as u64,
+                bytes: summary.bytes,
+                time_range: match (summary.first_ts, summary.last_ts) {
+                    (Some(start), Some(end)) => Some(TimeRangeResponse {
+                        start: to_secs(start),
+                        end: to_secs(end),
+                    }),
+                    _ => None,
+                },
+                error: None,
+            })
+            .into_response()
         }
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(DumpFileResponse {
-                path: String::new(),
-                snapshots: 0,
-                time_range: None,
-                error: Some("failed to receive response from sampling loop".to_string()),
-            }),
+            Json(DumpFileResponse::failed(
+                "failed to receive response from sampling loop".to_string(),
+            )),
         )
             .into_response(),
     }
-}
-
-/// Read snapshots from the ring buffer, optionally filtering by time
-fn read_filtered_snapshots(
-    shared: &SharedState,
-    time_range: &TimeRange,
-) -> Result<Vec<u8>, String> {
-    let mut file =
-        File::open(&shared.temp_path).map_err(|e| format!("failed to open ring buffer: {}", e))?;
-
-    let idx = shared.idx();
-    let valid_count = shared.valid_snapshot_count();
-
-    let mut result = Vec::new();
-
-    for offset in 0..valid_count {
-        let mut i = idx + offset;
-        if i >= shared.snapshot_count {
-            i -= shared.snapshot_count;
-        }
-
-        file.seek(SeekFrom::Start(i * shared.snapshot_len))
-            .map_err(|e| format!("failed to seek: {}", e))?;
-
-        let mut len_bytes = [0u8; 8];
-        file.read_exact(&mut len_bytes)
-            .map_err(|e| format!("failed to read snapshot length: {}", e))?;
-
-        let size = u64::from_be_bytes(len_bytes) as usize;
-        if size == 0 {
-            continue;
-        }
-
-        let mut buf = vec![0u8; size];
-        file.read_exact(&mut buf)
-            .map_err(|e| format!("failed to read snapshot data: {}", e))?;
-
-        if time_range.start.is_some() || time_range.end.is_some() {
-            if let Some(timestamp) = extract_timestamp(&buf) {
-                if !time_range.contains(timestamp) {
-                    continue;
-                }
-            }
-        }
-
-        result.extend_from_slice(&buf);
-    }
-
-    Ok(result)
-}
-
-/// Extract the timestamp from a msgpack snapshot
-fn extract_timestamp(data: &[u8]) -> Option<SystemTime> {
-    let snapshot: Snapshot = rmp_serde::from_slice(data).ok()?;
-    match snapshot {
-        Snapshot::V2(s) => Some(s.systemtime),
-        _ => None,
-    }
-}
-
-/// Get the oldest and newest timestamps in the ring buffer
-fn get_timestamp_bounds(shared: &SharedState) -> Result<(Option<u64>, Option<u64>), String> {
-    let mut file =
-        File::open(&shared.temp_path).map_err(|e| format!("failed to open ring buffer: {}", e))?;
-
-    let idx = shared.idx();
-    let valid_count = shared.valid_snapshot_count();
-
-    if valid_count == 0 {
-        return Ok((None, None));
-    }
-
-    let mut oldest: Option<SystemTime> = None;
-    let mut newest: Option<SystemTime> = None;
-
-    for offset in [0, valid_count.saturating_sub(1)] {
-        let mut i = idx + offset;
-        if i >= shared.snapshot_count {
-            i -= shared.snapshot_count;
-        }
-
-        file.seek(SeekFrom::Start(i * shared.snapshot_len))
-            .map_err(|e| format!("failed to seek: {}", e))?;
-
-        let mut len_bytes = [0u8; 8];
-        if file.read_exact(&mut len_bytes).is_err() {
-            continue;
-        }
-
-        let size = u64::from_be_bytes(len_bytes) as usize;
-        if size == 0 {
-            continue;
-        }
-
-        let mut buf = vec![0u8; size];
-        if file.read_exact(&mut buf).is_err() {
-            continue;
-        }
-
-        if let Some(timestamp) = extract_timestamp(&buf) {
-            if offset == 0 {
-                oldest = Some(timestamp);
-            } else {
-                newest = Some(timestamp);
-            }
-        }
-    }
-
-    // If only one snapshot, newest == oldest
-    if newest.is_none() && oldest.is_some() {
-        newest = oldest;
-    }
-
-    let oldest_unix = oldest.and_then(|t| t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs()));
-    let newest_unix = newest.and_then(|t| t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs()));
-
-    Ok((oldest_unix, newest_unix))
-}
-
-/// Convert msgpack data to parquet format
-fn convert_to_parquet(
-    data: &[u8],
-    interval: Duration,
-    agent_systeminfo: &Option<String>,
-) -> Result<Vec<u8>, String> {
-    let mut input =
-        tempfile::tempfile().map_err(|e| format!("failed to create temp file: {}", e))?;
-
-    std::io::Write::write_all(&mut input, data)
-        .map_err(|e| format!("failed to write temp file: {}", e))?;
-
-    input
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| format!("failed to seek temp file: {}", e))?;
-
-    let output =
-        tempfile::tempfile().map_err(|e| format!("failed to create output temp file: {}", e))?;
-
-    let mut converter = MsgpackToParquet::with_options(
-        ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
-    )
-    .metadata(
-        "sampling_interval_ms".to_string(),
-        interval.as_millis().to_string(),
-    );
-
-    if let Some(json) = agent_systeminfo {
-        converter = converter.metadata("systeminfo".to_string(), json.clone());
-    }
-
-    converter
-        .convert_file_handle(input, &output)
-        .map_err(|e| format!("failed to convert to parquet: {}", e))?;
-
-    let mut output = output;
-    output
-        .seek(SeekFrom::Start(0))
-        .map_err(|e| format!("failed to seek output file: {}", e))?;
-
-    let mut result = Vec::new();
-    output
-        .read_to_end(&mut result)
-        .map_err(|e| format!("failed to read parquet data: {}", e))?;
-
-    Ok(result)
 }

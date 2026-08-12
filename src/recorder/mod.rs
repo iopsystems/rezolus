@@ -628,7 +628,7 @@ fn start_rez_recorder(
 /// `rate()` a dt <= 0). The raw wall reading is not discarded: its difference
 /// from the anchored stamp rides along as the per-row `:wall_offset` sidecar,
 /// so a step locates to the exact tick.
-fn anchored_stamp(anchor_wall_ns: u64, elapsed: Duration, wall_ns: u64) -> (u64, i64) {
+pub(crate) fn anchored_stamp(anchor_wall_ns: u64, elapsed: Duration, wall_ns: u64) -> (u64, i64) {
     let anchored_ns = anchor_wall_ns.saturating_add(elapsed.as_nanos() as u64);
     (anchored_ns, wall_ns as i64 - anchored_ns as i64)
 }

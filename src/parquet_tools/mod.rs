@@ -2,7 +2,7 @@ mod annotate;
 pub(crate) mod combine;
 mod events;
 mod filter;
-mod metadata;
+pub(crate) mod metadata;
 
 use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
