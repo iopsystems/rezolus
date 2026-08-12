@@ -338,6 +338,16 @@ fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
     for rec in &manifest.recordings {
         let labels: Vec<String> = rec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let _ = writeln!(out, "  recording {} [{}]", rec.dir, labels.join(", "));
+        // Only meaningful from v2 on: v1 predates unclean-kill recovery (every
+        // v1 archive was written whole at finalize), so an absent flag there
+        // means "old writer", not "recovered".
+        if manifest.version >= 2 && !rec.complete {
+            let _ = writeln!(
+                out,
+                "    ! not cleanly finalized — recovered up to its last checkpoint; \
+                 data after that may be missing"
+            );
+        }
         for t in &rec.tables {
             let cadence = t
                 .cadence_ns
@@ -390,5 +400,40 @@ mod rez_tests {
         assert!(s.contains("cpu_usage"), "{s}");
         assert!(s.contains("7 rows"), "{s}");
         assert!(s.contains("~1.000s"), "{s}");
+        assert!(
+            !s.contains("not cleanly finalized"),
+            "a v1 archive has no completeness flag to report: {s}"
+        );
+    }
+
+    // A recording recovered from a `.partial` (killed recorder, power loss)
+    // must say so: its tables are truthful but stop at the last checkpoint.
+    #[test]
+    fn describe_rez_string_flags_an_unfinalized_v2_recording() {
+        let mut m = RezManifest {
+            version: 2,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: Default::default(),
+                metadata: Default::default(),
+                complete: false,
+                clock_anchor_wall_ns: Some(1_700_000_000_000_000_000),
+                clock_offsets: Vec::new(),
+                tables: Vec::new(),
+            }],
+        };
+        assert!(
+            describe_rez_string(&m).contains("not cleanly finalized"),
+            "{}",
+            describe_rez_string(&m)
+        );
+
+        m.recordings[0].complete = true;
+        assert!(!describe_rez_string(&m).contains("not cleanly finalized"));
+
+        // v1 predates the flag entirely, so it is never interpreted there.
+        m.version = 1;
+        m.recordings[0].complete = false;
+        assert!(!describe_rez_string(&m).contains("not cleanly finalized"));
     }
 }

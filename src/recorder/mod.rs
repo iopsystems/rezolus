@@ -46,7 +46,19 @@ pub fn command() -> Command {
              The .rez format (chosen by a .rez output extension or --format rez) writes a tar\n\
              of manifest.json plus one parquet table per sampler, each at its own cadence. It\n\
              requires a rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable)\n\
-             tags the recording; source and host are auto-populated.",
+             tags the recording; source and host are auto-populated.\n\n\
+             .rez recordings are written to disk in segments as they run, so stopping\n\
+             costs the same whether the recording ran for a minute or a day. Ctrl-c and\n\
+             SIGTERM (e.g. a docker stop) are clean stops: finalizing takes about one\n\
+             sampling interval plus the write of the still-open segments — seconds, not\n\
+             minutes, and never proportional to the recording's length.\n\n\
+             While recording, the archive lives at <output>.partial and is renamed into\n\
+             place only on a clean stop, so an existing output file is untouched until the\n\
+             new recording is complete. Each sampler's open segment is checkpointed when it\n\
+             fills and at least every 5 minutes; if the recorder is SIGKILLed or the machine\n\
+             dies, the .partial is left behind and is readable up to that last checkpoint —\n\
+             `rezolus parquet metadata -i out.rez.partial` reports it as \"not cleanly\n\
+             finalized\".",
         )
         .arg(
             clap::Arg::new("URL")

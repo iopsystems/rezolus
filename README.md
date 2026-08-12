@@ -198,6 +198,35 @@ outlives it, recording stops and the command — along with any worker processes
 it spawned — is terminated. The positional `<URL> <OUTPUT>` form still works but
 is deprecated in favor of `--url`/`-o`.
 
+#### `.rez` recordings
+
+Giving the output a `.rez` extension (or passing `--format rez`) writes a
+per-sampler archive instead of a single parquet file: each sampler gets its own
+table at its own cadence, with per-metric acquisition windows the query engine
+uses to bound `rate()`. It requires a Rezolus (msgpack) endpoint, and
+`--label k=v` tags the recording (`source` and `host` are filled in for you):
+
+```bash
+rezolus record --url http://localhost:4241 -o out.rez --label arm=redis
+```
+
+`.rez` recordings are written to disk in segments as they run, so stopping
+costs the same whether the recording ran for a minute or a day. Ctrl-c and
+SIGTERM (a `docker stop`, say) are clean stops: finalizing takes about one
+sampling interval plus the write of the still-open segments — seconds, not
+minutes, and never proportional to the recording's length.
+
+While recording, the archive lives at `<output>.partial` and is renamed into
+place only on a clean stop, so an existing output file is untouched until the
+new recording is complete. Each sampler's open segment is checkpointed when it
+fills and at least every 5 minutes, so an unclean end costs at most the samples
+since then: if the recorder is SIGKILLed or the machine dies, the `.partial` is
+left behind and is readable up to that last checkpoint.
+
+```bash
+rezolus parquet metadata -i out.rez.partial   # reports "not cleanly finalized"
+```
+
 ### Viewer
 
 An interactive web dashboard for exploring recordings or streaming live from a
