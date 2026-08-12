@@ -454,7 +454,7 @@ pub struct RezArchive {
     pub tables: Vec<Vec<RezTable>>,
 }
 
-fn append_tar_entry<W: std::io::Write>(
+pub(crate) fn append_tar_entry<W: std::io::Write>(
     builder: &mut tar::Builder<W>,
     name: &str,
     bytes: &[u8],
@@ -838,7 +838,7 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 
 /// A borrowed snapshot entry, tagged by shape.
-enum Entry<'a> {
+pub(crate) enum Entry<'a> {
     Counter(&'a Counter),
     Gauge(&'a Gauge),
     Histogram(&'a Histogram),
@@ -900,7 +900,7 @@ pub(crate) struct TableBuilder {
 }
 
 impl TableBuilder {
-    fn new(sampler: String) -> Self {
+    pub(crate) fn new(sampler: String) -> Self {
         Self {
             sampler,
             timestamps: Vec::new(),
@@ -924,11 +924,14 @@ impl TableBuilder {
     /// is not accounted, so the number slightly under-reports a sparse table.
     /// Resets with the builder: a fresh builder (a post-rotation segment)
     /// starts at zero.
-    // Read by tests today; the seal-threshold check lands with the streaming
-    // writer.
-    #[allow(dead_code)]
     pub(crate) fn approx_bytes(&self) -> usize {
         self.approx_bytes
+    }
+
+    /// Rows appended so far (the row-count seal threshold, and the
+    /// "never seal an empty builder" test).
+    pub(crate) fn rows(&self) -> usize {
+        self.timestamps.len()
     }
 
     fn col_len(col: &RezColumn) -> usize {
@@ -954,7 +957,12 @@ impl TableBuilder {
     /// `wall_offset_ns` the wall-clock observation for that tick (raw
     /// `SystemTime` reading minus `snapshot_ts`), stored once per row in the
     /// table-level `:wall_offset` sidecar.
-    fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+    pub(crate) fn push_row(
+        &mut self,
+        snapshot_ts: u64,
+        wall_offset_ns: i64,
+        entries: &[Entry<'_>],
+    ) {
         let row = self.timestamps.len();
         self.timestamps.push(snapshot_ts);
         self.wall_offsets.push(wall_offset_ns);
@@ -1014,7 +1022,7 @@ impl TableBuilder {
         self.approx_bytes += added_bytes;
     }
 
-    fn finish(mut self) -> RezTable {
+    pub(crate) fn finish(mut self) -> RezTable {
         let rows = self.timestamps.len();
         let columns = self
             .order
@@ -1032,6 +1040,56 @@ impl TableBuilder {
             columns,
         }
     }
+}
+
+/// Partition a snapshot's metrics by their `sampler` label (`"unattributed"`
+/// when the label is absent). Shared by the in-memory `RezRecorder` and the
+/// streaming `StreamRecorder` so the two ingest paths cannot drift apart.
+pub(crate) fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<'_>>> {
+    let (counters, gauges, histograms) = match snapshot {
+        Snapshot::V1(s) => (&s.counters, &s.gauges, &s.histograms),
+        Snapshot::V2(s) => (&s.counters, &s.gauges, &s.histograms),
+    };
+
+    fn sampler_of(metadata: &HashMap<String, String>) -> &str {
+        metadata
+            .get("sampler")
+            .map(String::as_str)
+            .unwrap_or("unattributed")
+    }
+
+    let mut groups: BTreeMap<&str, Vec<Entry<'_>>> = BTreeMap::new();
+    for c in counters {
+        groups
+            .entry(sampler_of(&c.metadata))
+            .or_default()
+            .push(Entry::Counter(c));
+    }
+    for g in gauges {
+        groups
+            .entry(sampler_of(&g.metadata))
+            .or_default()
+            .push(Entry::Gauge(g));
+    }
+    for h in histograms {
+        groups
+            .entry(sampler_of(&h.metadata))
+            .or_default()
+            .push(Entry::Histogram(h));
+    }
+    groups
+}
+
+/// One sampler group's dedup key: the representative acquisition window (max
+/// `end_ns` among windowed metrics), or `snapshot_ts` when nothing in the group
+/// carries a window (windowless → one row per poll).
+pub(crate) fn dedup_key(entries: &[Entry<'_>], snapshot_ts: u64) -> u64 {
+    entries
+        .iter()
+        .filter_map(|e| e.window())
+        .map(|w| w.end_ns)
+        .max()
+        .unwrap_or(snapshot_ts)
 }
 
 /// Accumulates scraped snapshots into per-sampler tables, deduping by each
@@ -1061,44 +1119,8 @@ impl RezRecorder {
     /// append a row iff its representative window (max `end_ns` among windowed
     /// metrics) advanced, else key on `snapshot_ts` (windowless → per-poll row).
     pub fn ingest(&mut self, snapshot: &Snapshot, snapshot_ts: u64) {
-        let (counters, gauges, histograms) = match snapshot {
-            Snapshot::V1(s) => (&s.counters, &s.gauges, &s.histograms),
-            Snapshot::V2(s) => (&s.counters, &s.gauges, &s.histograms),
-        };
-
-        let mut groups: BTreeMap<&str, Vec<Entry<'_>>> = BTreeMap::new();
-        for c in counters {
-            let s = c
-                .metadata
-                .get("sampler")
-                .map(String::as_str)
-                .unwrap_or("unattributed");
-            groups.entry(s).or_default().push(Entry::Counter(c));
-        }
-        for g in gauges {
-            let s = g
-                .metadata
-                .get("sampler")
-                .map(String::as_str)
-                .unwrap_or("unattributed");
-            groups.entry(s).or_default().push(Entry::Gauge(g));
-        }
-        for h in histograms {
-            let s = h
-                .metadata
-                .get("sampler")
-                .map(String::as_str)
-                .unwrap_or("unattributed");
-            groups.entry(s).or_default().push(Entry::Histogram(h));
-        }
-
-        for (sampler, entries) in groups {
-            let rep_end = entries
-                .iter()
-                .filter_map(|e| e.window())
-                .map(|w| w.end_ns)
-                .max();
-            let key = rep_end.unwrap_or(snapshot_ts);
+        for (sampler, entries) in group_by_sampler(snapshot) {
+            let key = dedup_key(&entries, snapshot_ts);
             let table = self
                 .tables
                 .entry(sampler.to_string())
