@@ -32,17 +32,77 @@ pub struct PerfEvent {
 pub struct PerfCounter {
     counter: perf_event::Counter,
     group: &'static CounterGroup,
+    /// `(time_enabled, time_running)` from the previous read, used to notice a
+    /// counter that stops advancing while still enabled.
+    prev: Option<(u64, u64)>,
+    /// Whether we have already reported this counter as not measuring, so the
+    /// condition is announced once rather than on every refresh.
+    reported: bool,
+}
+
+/// What a single perf counter read means.
+///
+/// The counters are opened requesting `TOTAL_TIME_ENABLED` and
+/// `TOTAL_TIME_RUNNING`; this is the rule for turning those into a decision.
+/// Kept as a pure function because the interesting inputs -- a PMU that is
+/// advertised but does not count, an event that dies mid-flight -- cannot be
+/// produced on demand on real hardware, but are trivial to express as values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PerfRead {
+    /// The event was never placed on the PMU since it was enabled. A `pinned`
+    /// event that cannot be scheduled goes to `PERF_EVENT_STATE_ERROR` and
+    /// reads a frozen value forever, so publishing it would present "no free
+    /// PMU counter" as a measurement of zero.
+    NeverRan,
+    /// The event was placed at some point but has stopped advancing while still
+    /// enabled -- it died after having worked. The value is still a true count
+    /// of what was observed, so it is published, but the condition is worth
+    /// surfacing because the series has silently gone flat.
+    Stalled(u64),
+    /// A live measurement.
+    Live(u64),
+}
+
+/// Classify one perf counter read. Pure; see [`PerfRead`].
+///
+/// Note these are *lifetime* totals, not per-interval deltas, and the value is
+/// published as an absolute cumulative counter. That is precisely why no
+/// multiplex scaling is applied here: the correction factor would be the
+/// lifetime ratio `time_enabled / time_running`, so an event that froze would
+/// have a numerator that keeps growing and a denominator that does not, and the
+/// published value would climb forever off a dead counter -- fabricating a
+/// steady rate out of nothing. Scaling is right for a bounded `perf stat`
+/// window; it is wrong for a monotonic published counter.
+pub fn classify_perf_read(
+    count: u64,
+    time_enabled: u64,
+    time_running: u64,
+    prev: Option<(u64, u64)>,
+) -> PerfRead {
+    if time_running == 0 {
+        return PerfRead::NeverRan;
+    }
+
+    if let Some((prev_enabled, prev_running)) = prev {
+        if time_running == prev_running && time_enabled > prev_enabled {
+            return PerfRead::Stalled(count);
+        }
+    }
+
+    PerfRead::Live(count)
 }
 
 pub struct CpuPerfCounters {
     cpu: usize,
+    name: &'static str,
     counters: Vec<PerfCounter>,
 }
 
 impl CpuPerfCounters {
-    pub fn new(cpu: usize) -> Self {
+    pub fn new(cpu: usize, name: &'static str) -> Self {
         Self {
             cpu,
+            name,
             counters: Vec::new(),
         }
     }
@@ -52,33 +112,79 @@ impl CpuPerfCounters {
         counter: perf_event::Counter,
         group: &'static CounterGroup,
     ) -> &mut Self {
-        self.counters.push(PerfCounter { counter, group });
+        self.counters.push(PerfCounter {
+            counter,
+            group,
+            prev: None,
+            reported: false,
+        });
 
         self
     }
 
     pub fn refresh(&mut self) {
         for c in self.counters.iter_mut() {
-            if let Ok(value) = c.counter.read() {
-                let _ = c.group.set(self.cpu, value);
+            // Read the scheduling info the counter was built to report, rather
+            // than discarding it. Without it, a counter that never got a PMU
+            // slot is indistinguishable from one that legitimately measured
+            // zero.
+            let Ok(cat) = c.counter.read_count_and_time() else {
+                continue;
+            };
+
+            let verdict = classify_perf_read(cat.count, cat.time_enabled, cat.time_running, c.prev);
+            c.prev = Some((cat.time_enabled, cat.time_running));
+
+            match verdict {
+                PerfRead::NeverRan => {
+                    if !c.reported {
+                        c.reported = true;
+                        crate::agent::sampler_status::note_perf_unavailable(
+                            self.name,
+                            "hardware counters were never scheduled onto the PMU \
+                             (time_running = 0); no free counter, or no usable PMU",
+                        );
+                    }
+                }
+                PerfRead::Stalled(value) => {
+                    if !c.reported {
+                        c.reported = true;
+                        crate::agent::sampler_status::note_perf_unavailable(
+                            self.name,
+                            "hardware counters stopped advancing while still enabled; \
+                             the counter was descheduled and its series has gone flat",
+                        );
+                    }
+
+                    let _ = c.group.set(self.cpu, value);
+                }
+                PerfRead::Live(value) => {
+                    let _ = c.group.set(self.cpu, value);
+                }
             }
         }
     }
 }
 
 pub struct PerfCounters {
+    name: &'static str,
     inner: HashMap<usize, CpuPerfCounters>,
 }
 
 impl PerfCounters {
-    pub fn new() -> Self {
+    pub fn new(name: &'static str) -> Self {
         Self {
+            name,
             inner: HashMap::new(),
         }
     }
 
     pub fn push(&mut self, cpu: usize, counter: perf_event::Counter, group: &'static CounterGroup) {
-        let counters = self.inner.entry(cpu).or_insert(CpuPerfCounters::new(cpu));
+        let name = self.name;
+        let counters = self
+            .inner
+            .entry(cpu)
+            .or_insert(CpuPerfCounters::new(cpu, name));
         counters.push(counter, group);
     }
 
@@ -521,7 +627,7 @@ where
                 self.perf_events.len()
             );
 
-            let mut perf_counters = PerfCounters::new();
+            let mut perf_counters = PerfCounters::new(self.name);
 
             for (name, event, group) in self.perf_events.into_iter() {
                 let map = skel.map(name);
@@ -849,5 +955,75 @@ where
             );
         }
         self
+    }
+}
+
+#[cfg(test)]
+mod perf_read_tests {
+    use super::{classify_perf_read, PerfRead};
+
+    /// A working counter on a healthy PMU: fully scheduled for the whole
+    /// window. Measured shape on bare metal (Threadripper 1950X): count 3.5e9,
+    /// time_enabled == time_running.
+    #[test]
+    fn fully_scheduled_counter_is_live() {
+        assert_eq!(
+            classify_perf_read(3_500_068_433, 986_862_857, 986_862_857, None),
+            PerfRead::Live(3_500_068_433)
+        );
+    }
+
+    /// A `pinned` event that could not be placed. Measured shape for `cycles`
+    /// on both a KVM guest and bare metal: everything zero. Publishing this
+    /// would present "no free PMU counter" as a real measurement of zero.
+    #[test]
+    fn never_scheduled_counter_is_suppressed() {
+        assert_eq!(classify_perf_read(0, 0, 0, None), PerfRead::NeverRan);
+    }
+
+    /// time_running == 0 means never placed even if the event was enabled for a
+    /// long time and somehow carries a non-zero count.
+    #[test]
+    fn enabled_but_never_running_is_suppressed() {
+        assert_eq!(
+            classify_perf_read(1234, 1_000_000_000, 0, None),
+            PerfRead::NeverRan
+        );
+    }
+
+    /// A counter that worked and then died: time_enabled keeps advancing while
+    /// time_running is frozen. The count is still true, so it is published, but
+    /// the condition is reported.
+    #[test]
+    fn counter_that_stops_advancing_is_stalled() {
+        let prev = Some((1_000_000_000, 1_000_000_000));
+        assert_eq!(
+            classify_perf_read(42, 2_000_000_000, 1_000_000_000, prev),
+            PerfRead::Stalled(42)
+        );
+    }
+
+    /// Both clocks advancing is the normal case and must not be mistaken for a
+    /// stall, including when the count itself does not move (a genuinely idle
+    /// CPU retires nothing but the counter is still measuring).
+    #[test]
+    fn idle_but_scheduled_counter_is_live_not_stalled() {
+        let prev = Some((1_000_000_000, 1_000_000_000));
+        assert_eq!(
+            classify_perf_read(7, 2_000_000_000, 2_000_000_000, prev),
+            PerfRead::Live(7)
+        );
+    }
+
+    /// A guest whose PMU is advertised but does not count reports itself fully
+    /// scheduled while retiring 395 instructions per second. This rule cannot
+    /// detect that -- it is recorded here so the limitation is explicit rather
+    /// than assumed covered. Detecting it needs a busy-time reference (#1036).
+    #[test]
+    fn fake_vpmu_is_not_detected_by_time_alone() {
+        assert_eq!(
+            classify_perf_read(395, 1_027_487_719, 1_027_487_719, None),
+            PerfRead::Live(395)
+        );
     }
 }
