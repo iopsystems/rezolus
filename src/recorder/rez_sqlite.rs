@@ -57,6 +57,34 @@ pub(crate) struct RecordingRow {
     pub complete: bool,
 }
 
+/// The catalog facts about one sealed segment. The segment's own bytes are an
+/// opaque parquet BLOB the database never looks inside — this is everything
+/// SQLite is asked to know about it.
+pub(crate) struct SegmentMeta {
+    pub rows: u64,
+    pub first_ts: u64,
+    pub last_ts: u64,
+}
+
+/// A row of the `segments` table for one `(recording, sampler)`.
+pub(crate) struct SegmentRow {
+    pub seq: u64,
+    pub meta: SegmentMeta,
+    pub bytes: Vec<u8>,
+}
+
+/// A row of the `wal` table: one sampler's values for one tick, keyed by
+/// `(recording_id, sampler, ts)`. Values-only, not the raw msgpack snapshot —
+/// see the journal § "The WAL is per-sampler rows, not raw snapshots" and
+/// "WAL rows are values-only" (1,925 B vs 10,908 B per sampler per tick,
+/// measured on a real fleet snapshot).
+pub(crate) struct WalRow {
+    pub sampler: String,
+    pub ts: u64,
+    pub wall_offset: i64,
+    pub row: Vec<u8>,
+}
+
 /// An open handle on a `.rez` v3 file.
 pub(crate) struct RezDb {
     conn: Connection,
@@ -239,6 +267,128 @@ impl RezDb {
                 },
                 complete: complete != 0,
             });
+        }
+        Ok(out)
+    }
+
+    /// Insert one sealed segment's bytes and catalog facts.
+    ///
+    /// A plain `INSERT` with a `&[u8]` parameter, NOT incremental BLOB I/O
+    /// (`blob_open`): the gating run measured `blob_open` **15–18% slower**
+    /// at 4–8 MiB, so the simpler API is also the faster one here. See the
+    /// journal § "Insert cost".
+    pub(crate) fn insert_segment(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+        seq: u64,
+        meta: &SegmentMeta,
+        bytes: &[u8],
+    ) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO segments(recording_id, sampler, seq, rows, first_ts, last_ts, bytes) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    recording_id,
+                    sampler,
+                    seq as i64,
+                    meta.rows as i64,
+                    meta.first_ts as i64,
+                    meta.last_ts as i64,
+                    bytes,
+                ],
+            )
+            .map_err(|e| format!("failed to insert segment {sampler}#{seq}: {e}"))?;
+        Ok(())
+    }
+
+    /// Every segment for `(recording_id, sampler)`, in `seq` order.
+    ///
+    /// The `ORDER BY seq` is load-bearing, not cosmetic: the reader splices
+    /// segment bytes together assuming they arrive in sequence order, and SQL
+    /// makes no ordering guarantee without it. (On this SQLite, dropping the
+    /// clause still happens to come out sorted, because the equality WHERE on
+    /// `(recording_id, sampler)` is satisfied by a scan of the covering
+    /// `PRIMARY KEY (recording_id, sampler, seq)` index — confirmed with
+    /// `EXPLAIN QUERY PLAN` during review. That is a query-plan accident, not
+    /// a contract, so the explicit `ORDER BY` stays.)
+    pub(crate) fn read_segments(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+    ) -> Result<Vec<SegmentRow>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, rows, first_ts, last_ts, bytes FROM segments \
+                 WHERE recording_id = ?1 AND sampler = ?2 ORDER BY seq",
+            )
+            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![recording_id, sampler], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            })
+            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (seq, n_rows, first_ts, last_ts, bytes) =
+                row.map_err(|e| format!("failed to read segment row for {sampler}: {e}"))?;
+            out.push(SegmentRow {
+                // Round-trips through INTEGER, same as elsewhere in this
+                // file: these stay inside i64 for any recording anyone will
+                // ever make.
+                seq: seq as u64,
+                meta: SegmentMeta {
+                    rows: n_rows as u64,
+                    first_ts: first_ts as u64,
+                    last_ts: last_ts as u64,
+                },
+                bytes,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Sum of `rows` across every segment for `(recording_id, sampler)`. Does
+    /// not include WAL rows — callers combining sealed and unsealed row
+    /// counts must add `live_wal().len()` themselves.
+    pub(crate) fn total_rows(&self, recording_id: i64, sampler: &str) -> Result<u64, String> {
+        let total: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(rows), 0) FROM segments WHERE recording_id = ?1 AND sampler = ?2",
+                rusqlite::params![recording_id, sampler],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to sum rows for {sampler}: {e}"))?;
+        Ok(total as u64)
+    }
+
+    /// Every distinct sampler with at least one segment for `recording_id`,
+    /// alphabetically. A sampler with only unsealed WAL rows and no sealed
+    /// segment yet will NOT appear here — callers that need "every sampler
+    /// this recording has ever seen" must union with the WAL.
+    pub(crate) fn samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT sampler FROM segments WHERE recording_id = ?1 ORDER BY sampler",
+            )
+            .map_err(|e| format!("failed to query samplers: {e}"))?;
+        let rows = stmt
+            .query_map([recording_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("failed to query samplers: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("failed to read sampler name: {e}"))?);
         }
         Ok(out)
     }
@@ -434,6 +584,159 @@ mod tests {
         assert_eq!(got[0].meta.metadata["source"], "rezolus");
         assert_eq!(got[0].meta.clock_anchor_wall_ns, 1_700_000_000_000_000_000);
         assert!(!got[0].complete, "a fresh recording is not complete");
+    }
+
+    #[test]
+    fn segments_read_back_in_seq_order_not_insertion_order() {
+        // Insert seq 1 BEFORE seq 0. A missing `ORDER BY seq` would still pass
+        // if segments happened to be inserted in order, so this test inserts
+        // out of order on purpose — it is the only way to make the absence of
+        // the ORDER BY fail loudly instead of silently agreeing with rowid
+        // order.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            1,
+            &SegmentMeta {
+                rows: 10,
+                first_ts: 100,
+                last_ts: 200,
+            },
+            b"seq-one-bytes",
+        )
+        .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 5,
+                first_ts: 0,
+                last_ts: 99,
+            },
+            b"seq-zero-bytes",
+        )
+        .unwrap();
+
+        let got = db.read_segments(rid, "cpu_usage").unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(
+            got[0].seq, 0,
+            "seq 0 must come first despite being inserted second"
+        );
+        assert_eq!(got[0].bytes, b"seq-zero-bytes");
+        assert_eq!(got[1].seq, 1);
+        assert_eq!(got[1].bytes, b"seq-one-bytes");
+    }
+
+    #[test]
+    fn total_rows_sums_across_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 3,
+                first_ts: 0,
+                last_ts: 29,
+            },
+            b"a",
+        )
+        .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            1,
+            &SegmentMeta {
+                rows: 2,
+                first_ts: 30,
+                last_ts: 49,
+            },
+            b"b",
+        )
+        .unwrap();
+
+        assert_eq!(db.total_rows(rid, "cpu_usage").unwrap(), 5);
+    }
+
+    #[test]
+    fn samplers_lists_each_sampler_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        let meta = SegmentMeta {
+            rows: 1,
+            first_ts: 0,
+            last_ts: 9,
+        };
+        db.insert_segment(rid, "cpu_usage", 0, &meta, b"a").unwrap();
+        db.insert_segment(rid, "cpu_usage", 1, &meta, b"b").unwrap();
+        db.insert_segment(rid, "blockio", 0, &meta, b"c").unwrap();
+
+        assert_eq!(db.samplers(rid).unwrap(), vec!["blockio", "cpu_usage"]);
+    }
+
+    #[test]
+    fn segments_are_scoped_per_recording() {
+        // A .rez can hold several recordings (multi-host / A-B). Reading one
+        // recording's segments must never see another recording's rows for a
+        // sampler of the same name.
+        let dir = tempfile::tempdir().unwrap();
+        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let meta = |labels: &str| RecordingMeta {
+            labels: [("host".to_string(), labels.to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: 0,
+        };
+        let r1 = db.insert_recording(&meta("h1")).unwrap();
+        let r2 = db.insert_recording(&meta("h2")).unwrap();
+
+        let sm = SegmentMeta {
+            rows: 1,
+            first_ts: 0,
+            last_ts: 9,
+        };
+        db.insert_segment(r1, "cpu_usage", 0, &sm, b"r1-bytes")
+            .unwrap();
+        db.insert_segment(r2, "cpu_usage", 0, &sm, b"r2-bytes")
+            .unwrap();
+
+        let got1 = db.read_segments(r1, "cpu_usage").unwrap();
+        assert_eq!(got1.len(), 1);
+        assert_eq!(got1[0].bytes, b"r1-bytes");
+
+        let got2 = db.read_segments(r2, "cpu_usage").unwrap();
+        assert_eq!(got2.len(), 1);
+        assert_eq!(got2[0].bytes, b"r2-bytes");
+
+        assert_eq!(db.total_rows(r1, "cpu_usage").unwrap(), 1);
+        assert_eq!(db.samplers(r1).unwrap(), vec!["cpu_usage"]);
     }
 
     #[test]
