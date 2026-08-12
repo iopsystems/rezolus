@@ -377,8 +377,8 @@ impl RezDb {
 
     /// Every distinct sampler with at least one segment for `recording_id`,
     /// alphabetically. A sampler with only unsealed WAL rows and no sealed
-    /// segment yet will NOT appear here — callers that need "every sampler
-    /// this recording has ever seen" must union with the WAL.
+    /// segment yet will NOT appear here — use `all_samplers` for "every
+    /// sampler this recording has ever seen".
     pub(crate) fn samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
         let mut stmt = self
             .conn
@@ -396,21 +396,61 @@ impl RezDb {
         Ok(out)
     }
 
+    /// Every distinct sampler this recording has ever seen, alphabetically —
+    /// the union of `segments.sampler` and `wal.sampler`. This is what
+    /// closes the gap `samplers()` deliberately leaves open: a sampler that
+    /// has never sealed a segment (a quiet table, still inside its first
+    /// seal period — the 16-of-26 case this whole design exists to fix) is
+    /// otherwise unnameable, because `samplers()` only sees `segments` and
+    /// this module is the only place that knows the schema well enough to
+    /// look at both tables. Recovery/inventory callers should call this, not
+    /// `samplers()`, when they need to know which tables exist at all.
+    pub(crate) fn all_samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT sampler FROM segments WHERE recording_id = ?1 \
+                 UNION \
+                 SELECT sampler FROM wal WHERE recording_id = ?1 \
+                 ORDER BY sampler",
+            )
+            .map_err(|e| format!("failed to query all_samplers: {e}"))?;
+        // `?1` is the SAME parameter both times it appears (SQLite numbers
+        // parameters, not occurrences), so this binds once, not twice.
+        let rows = stmt
+            .query_map([recording_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("failed to query all_samplers: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("failed to read sampler name: {e}"))?);
+        }
+        Ok(out)
+    }
+
     /// Insert every WAL row for one tick — one sampler each, typically — in a
     /// single transaction. This is the per-tick commit the journal's insert
     /// gating measured at p50 3.6 ms / p99 12.1 ms (26 rows, fleet sizes),
     /// and it is what makes a tick atomic: either every sampler's row for
     /// this tick lands, or none does.
-    pub(crate) fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
-        // `unchecked_transaction`, not `conn.transaction()`: the latter needs
-        // `&mut Connection`, and every other accessor in this file — this one
-        // included, to match the module's `&self` convention — takes `&self`.
-        // Nesting is the hazard `transaction()` guards against at compile
-        // time; this module never opens a transaction across an await point
-        // or re-enters here, so that hazard does not apply.
+    ///
+    /// Takes `&mut self`, unlike every reader in this file: `Connection::
+    /// transaction()` requires `&mut Connection`. An earlier version used
+    /// `unchecked_transaction()` to keep `&self`, on the reasoning that this
+    /// module never nests transactions — but the hazard `&mut` guards
+    /// against is on the CALLER's side, not this function's: B3's writer
+    /// thread owns this `RezDb` outright (the journal makes "no concurrent
+    /// writers to one file" an explicit non-goal) and will plausibly want a
+    /// transaction around a whole co-seal batch. `&mut self` makes "don't
+    /// open a nested transaction while one is outstanding" a compile error
+    /// for that caller instead of a runtime one. Reads stay on `&self`.
+    pub(crate) fn insert_wal_rows(
+        &mut self,
+        recording_id: i64,
+        rows: &[WalRow],
+    ) -> Result<(), String> {
         let tx = self
             .conn
-            .unchecked_transaction()
+            .transaction()
             .map_err(|e| format!("failed to begin WAL transaction: {e}"))?;
         {
             let mut stmt = tx
@@ -864,6 +904,50 @@ mod tests {
     }
 
     #[test]
+    fn all_samplers_includes_a_sampler_that_has_never_sealed() {
+        // This is the API gap `all_samplers` exists to close: `samplers()`
+        // only sees `segments`, so a quiet table still inside its first seal
+        // period — the 16-of-26 fleet case — is nameless to it. A caller with
+        // only `samplers()` cannot discover, let alone recover, a sampler
+        // that has never sealed.
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rid = db
+            .insert_recording(&RecordingMeta {
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        db.insert_segment(
+            rid,
+            "cpu_usage",
+            0,
+            &SegmentMeta {
+                rows: 1,
+                first_ts: 0,
+                last_ts: 9,
+            },
+            b"a",
+        )
+        .unwrap();
+        // "drivehealth" never seals in this test — only a WAL row.
+        db.insert_wal_rows(rid, &[wal_row("drivehealth", 5)])
+            .unwrap();
+
+        assert_eq!(
+            db.samplers(rid).unwrap(),
+            vec!["cpu_usage"],
+            "samplers() legitimately does not see the WAL-only sampler"
+        );
+        assert_eq!(
+            db.all_samplers(rid).unwrap(),
+            vec!["cpu_usage", "drivehealth"],
+            "all_samplers() must see it — this is the whole point of the accessor"
+        );
+    }
+
+    #[test]
     fn segments_are_scoped_per_recording() {
         // A .rez can hold several recordings (multi-host / A-B). Reading one
         // recording's segments must never see another recording's rows for a
@@ -961,7 +1045,7 @@ mod tests {
         // "segment committed" and "prune ran". live_wal must return only the
         // row past the watermark (ts=40); read_wal must still return all
         // four, because the raw table is untouched.
-        let (_dir, db, rid) = wal_test_db();
+        let (_dir, mut db, rid) = wal_test_db();
         db.insert_segment(
             rid,
             "cpu_usage",
@@ -998,7 +1082,7 @@ mod tests {
         // A quiet sampler that has never sealed a segment: every WAL row is
         // live. This is the case that recovered NOTHING under v2 (16 of 26
         // fleet tables at kill -9 120s in).
-        let (_dir, db, rid) = wal_test_db();
+        let (_dir, mut db, rid) = wal_test_db();
         db.insert_wal_rows(
             rid,
             &[wal_row("drivehealth", 5), wal_row("drivehealth", 15)],
@@ -1033,7 +1117,7 @@ mod tests {
         // to do with it: exactly the failure mode this design exists to
         // rule out.
         let dir = tempfile::tempdir().unwrap();
-        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
         let meta = |host: &str| RecordingMeta {
             labels: [("host".to_string(), host.to_string())]
                 .into_iter()
@@ -1092,7 +1176,7 @@ mod tests {
 
     #[test]
     fn prune_is_idempotent_and_bounded_to_one_sampler() {
-        let (_dir, db, rid) = wal_test_db();
+        let (_dir, mut db, rid) = wal_test_db();
         db.insert_wal_rows(
             rid,
             &[
@@ -1125,7 +1209,7 @@ mod tests {
 
     #[test]
     fn insert_wal_rows_inserts_every_row_in_the_batch() {
-        let (_dir, db, rid) = wal_test_db();
+        let (_dir, mut db, rid) = wal_test_db();
         let samplers: Vec<WalRow> = (0..26)
             .map(|i| wal_row(&format!("sampler_{i}"), 100))
             .collect();
@@ -1151,7 +1235,7 @@ mod tests {
         // Two different samplers share ts=10 with a THIRD row that collides
         // with the first on the primary key `(recording_id, sampler, ts)` —
         // that collision is what fails the batch.
-        let (_dir, db, rid) = wal_test_db();
+        let (_dir, mut db, rid) = wal_test_db();
         let err = db
             .insert_wal_rows(
                 rid,
@@ -1188,7 +1272,7 @@ mod tests {
         // Same as segments: a .rez can hold several recordings, and reading
         // one must not see another's WAL rows for a same-named sampler.
         let dir = tempfile::tempdir().unwrap();
-        let db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
         let meta = |host: &str| RecordingMeta {
             labels: [("host".to_string(), host.to_string())]
                 .into_iter()
