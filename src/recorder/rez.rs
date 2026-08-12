@@ -2045,8 +2045,13 @@ mod recovery_tests {
         ];
         let full = tar_bytes(&entries);
         let m2_data = tar_prefix_len(&entries[..4]) + 512;
-        // Segment B is fully present here, but the manifest that references it
-        // is not readable — the previous checkpoint's view is what we can trust.
+        // What this pins is the geometry: segment B is fully present, but the
+        // manifest naming it is not readable, so recovery must fall back to the
+        // previous checkpoint's view rather than to segment B. It does *not*
+        // isolate the read-length check — ablating that check leaves this test
+        // passing, because a truncated JSON tail is independently unparseable
+        // and the parse-failure branch catches it. Only
+        // `truncated_mid_data_falls_back_to_previous_manifest` fails without it.
         assert_recovered_to_first_segment(&full[..m2_data + m2.len() - 3]);
     }
 
@@ -2078,6 +2083,50 @@ mod recovery_tests {
         // Cut exactly after a complete entry, with no footer: iteration ends
         // with no error at all, and the last complete manifest wins.
         assert_recovered_to_first_segment(&full[..tar_prefix_len(&entries[..3])]);
+    }
+
+    // `resolve` *moves* blobs out rather than cloning them, so two index
+    // entries naming one file would leave the second table empty. Reject
+    // instead — and, per the two-phase contract, without having touched
+    // `blobs`, so an older manifest can still be tried against them.
+    #[test]
+    fn resolve_rejects_a_file_referenced_twice() {
+        let table = |sampler: &str| RezTableIndex {
+            sampler: sampler.to_string(),
+            file: Some("cpu_usage.parquet".to_string()),
+            files: Vec::new(),
+            columns: Vec::new(),
+            rows: 1,
+            cadence_ns: None,
+        };
+        let manifest = RezManifest {
+            version: REZ_SCHEMA_VERSION,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: BTreeMap::new(),
+                metadata: BTreeMap::new(),
+                complete: true,
+                clock_anchor_wall_ns: None,
+                clock_offsets: Vec::new(),
+                tables: vec![table("cpu_usage"), table("scheduler")],
+            }],
+        };
+        let mut blobs: HashMap<String, Vec<u8>> =
+            [("rezolus/cpu_usage.parquet".to_string(), SEG_A.to_vec())]
+                .into_iter()
+                .collect();
+
+        let err = match resolve(&manifest, &mut blobs) {
+            Ok(_) => panic!("expected the duplicate reference to be rejected"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("referenced twice"), "{err}");
+        assert!(err.contains("rezolus/cpu_usage.parquet"), "{err}");
+        assert_eq!(
+            blobs.get("rezolus/cpu_usage.parquet").map(Vec::as_slice),
+            Some(SEG_A),
+            "a failed resolve leaves the blobs intact"
+        );
     }
 
     // Tolerance is for truncation, not for a manifest that lies: with no older
