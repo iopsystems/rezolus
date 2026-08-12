@@ -5,6 +5,7 @@ mod config;
 mod endpoint;
 mod prometheus;
 pub(crate) mod rez;
+pub(crate) mod rez_sqlite;
 pub(crate) mod rez_stream;
 
 use crate::parquet_metadata;
