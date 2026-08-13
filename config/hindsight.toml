@@ -16,6 +16,12 @@ source = "127.0.0.1:4241"
 # it needs room for the buffer as well as the snapshot.
 output = "/tmp/rezolus.rez"
 
+# Optional: rows per sealed segment. Defaults to 4096, which at the 1s interval
+# above is one segment per ~68 minutes. Retention and ranged snapshots both work
+# in WHOLE segments, so this also sets the granularity at which the buffer trims
+# — lower it if you scrape much faster than once a second.
+# segment_rows = 4096
+
 # Optional: enable HTTP endpoint for remote dump triggering
 # Supports endpoints:
 #   GET  /status     - Buffer status: retained time range, per-sampler rows and

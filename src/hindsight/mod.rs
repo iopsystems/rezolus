@@ -214,7 +214,18 @@ pub fn run(config: Config) {
         clock_anchor_wall_ns,
     };
 
-    let mut buffer = match HindsightBuffer::create(&buffer_path, seed, lookback) {
+    // Segment size tracks the scrape interval rather than being fixed: the
+    // writer's 4096 rows is a segment per ~68 minutes at the default 1 s
+    // interval, which a faster buffer wants smaller. Everything else about the
+    // seal policy — the byte cap and the age cap — stays the writer's.
+    let mut policy = crate::recorder::rez_stream::SealPolicy::default();
+    if let Some(rows) = config.general().segment_rows() {
+        // `max(1)`: a zero row target would seal a one-row segment every tick
+        // forever rather than doing anything useful with the 0.
+        policy.max_rows = rows.max(1);
+    }
+
+    let mut buffer = match HindsightBuffer::create(&buffer_path, seed, lookback, policy) {
         Ok(b) => b,
         Err(e) => {
             error!("failed to create the hindsight buffer: {e}");

@@ -53,13 +53,12 @@ pub struct HindsightBuffer {
 
 impl HindsightBuffer {
     /// Create the buffer at `path`, which must not exist.
-    pub fn create(path: &Path, seed: ManifestSeed, lookback: Duration) -> Result<Self, String> {
-        Self::with_policy(path, seed, lookback, SealPolicy::default())
-    }
-
-    /// `create`, with the seal policy as a parameter — a test needs segments to
-    /// close after a handful of rows rather than after the production 4096.
-    fn with_policy(
+    ///
+    /// The seal policy is a parameter rather than a constant because segment
+    /// size has to track the scrape interval: `[general] segment_rows` sets it
+    /// and defaults to the writer's 4096, which is a segment per ~68 minutes at
+    /// the default 1 s interval and per ~7 minutes at 10 Hz.
+    pub fn create(
         path: &Path,
         seed: ManifestSeed,
         lookback: Duration,
@@ -268,7 +267,13 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
     let src = RezDb::open(buffer)?;
     match (range.start_ns(), range.end_ns()) {
         (None, None) => src.vacuum_into(&staged)?,
-        (start, end) => copy_range(&src, &staged, start.unwrap_or(0), end.unwrap_or(u64::MAX))?,
+        (start, end) => copy_range(
+            &src,
+            &staged,
+            start.unwrap_or(0),
+            end.unwrap_or(u64::MAX),
+            &|| {},
+        )?,
     }
     drop(src);
 
@@ -325,10 +330,33 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 ///
 /// Every read happens in ONE snapshot, so retention cannot evict a segment
 /// between selecting it and copying its bytes.
-fn copy_range(src: &RezDb, staged: &Path, start: u64, end: u64) -> Result<(), String> {
+///
+/// `listed` is that claim's test seam and is `&|| {}` in production — a
+/// callback rather than a `#[cfg(test)]` hook or a list/copy split, chosen so
+/// that the statements this function runs, and the order it runs them in, are
+/// **the same ones the tests run**. A `cfg(test)` hook would compile a
+/// different function than the one that ships; splitting the phases would
+/// change the shipped structure to suit a test. A no-op closure changes
+/// neither: there is no branch here that only a test takes, only a call whose
+/// body is empty everywhere except in
+/// `a_dump_keeps_a_segment_evicted_after_its_snapshot_opened`.
+///
+/// It fires once the snapshot is PINNED (`read_recordings` is the first read,
+/// and `BEGIN DEFERRED` takes its read mark there) and before a single segment
+/// BLOB has been copied — i.e. exactly the window in which retention running
+/// on the writer's connection would, without the snapshot, delete a segment
+/// out from under the copy.
+fn copy_range(
+    src: &RezDb,
+    staged: &Path,
+    start: u64,
+    end: u64,
+    listed: &dyn Fn(),
+) -> Result<(), String> {
     let mut dst = RezDb::create(staged)?;
     src.read_snapshot(|src| {
         let recordings = src.read_recordings()?;
+        listed();
         dst.transaction(|tx| {
             for rec in &recordings {
                 let id = tx.insert_recording(&rec.meta)?;
@@ -376,7 +404,7 @@ mod tests {
     use super::*;
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use crate::recorder::rez::{detect_rez_format, read_table_parquet, RezFormat};
-    use crate::recorder::rez_sqlite::RecordingMeta;
+    use crate::recorder::rez_sqlite::{Evicted, RecordingMeta};
     use metriken::Window;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -437,8 +465,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
         let mut buf =
-            HindsightBuffer::with_policy(&path, seed(), Duration::from_secs(5), seal_every(4))
-                .unwrap();
+            HindsightBuffer::create(&path, seed(), Duration::from_secs(5), seal_every(4)).unwrap();
 
         for i in 0..12u64 {
             let samplers: &[&str] = if i % 5 == 0 {
@@ -513,8 +540,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
         let mut buf =
-            HindsightBuffer::with_policy(&path, seed(), Duration::from_secs(5), seal_every(2))
-                .unwrap();
+            HindsightBuffer::create(&path, seed(), Duration::from_secs(5), seal_every(2)).unwrap();
         for i in 0..4u64 {
             let (s, ts) = tick(&["cpu_usage"], i);
             buf.ingest(&s, ts, 0).unwrap();
@@ -551,7 +577,7 @@ mod tests {
         let path = dir.path().join("buffer.rez");
         let lookback = Duration::from_millis(4_500);
         let mut buf =
-            HindsightBuffer::with_policy(&path, seed(), lookback, seal_every(usize::MAX)).unwrap();
+            HindsightBuffer::create(&path, seed(), lookback, seal_every(usize::MAX)).unwrap();
         assert!(!buf.at_retention_bound(), "nothing ingested yet");
 
         for i in 0..5u64 {
@@ -690,7 +716,7 @@ mod tests {
         let path = dir.path().join("buffer.rez");
         let dest = dir.path().join("dump.rez");
         let mut buf =
-            HindsightBuffer::with_policy(&path, seed(), Duration::from_secs(3600), seal_every(8))
+            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(8))
                 .unwrap();
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -793,7 +819,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
-        let mut buf = HindsightBuffer::with_policy(
+        let mut buf = HindsightBuffer::create(
             &path,
             seed(),
             Duration::from_secs(900),
@@ -866,7 +892,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
-        let mut buf = HindsightBuffer::with_policy(
+        let mut buf = HindsightBuffer::create(
             &path,
             seed(),
             Duration::from_secs(3600),
@@ -929,6 +955,104 @@ mod tests {
     }
 
     #[test]
+    fn a_dump_keeps_a_segment_evicted_after_its_snapshot_opened() {
+        // **Why hindsight needs no eviction pause.** Retention and a dump run
+        // on different connections with nothing between them — no lock, no
+        // quiesce, no "hold off evicting while a dump is in flight". The only
+        // thing standing between them is the read transaction `copy_range`
+        // opens, and the claim is that it is enough: a segment deleted after
+        // the snapshot opened is still in the dump, because the dump is
+        // reading the database as it stood when it started.
+        //
+        // Deterministic, not a race. The eviction runs in the `listed` seam,
+        // which fires after `read_recordings` has pinned the snapshot and
+        // before the first segment BLOB is read — so "the delete landed inside
+        // the window" is a fact of the call order rather than something the
+        // scheduler has to be persuaded to do. No sleeps, no retries, no
+        // "eventually".
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("buffer.rez");
+        let staged = dir.path().join("dump.rez");
+        // A lookback far past the data, so the ONLY eviction in this test is
+        // the one the seam performs.
+        let mut buf =
+            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(2))
+                .unwrap();
+        for i in 0..12u64 {
+            let (s, ts) = tick(&["cpu_usage"], i);
+            buf.ingest(&s, ts, 0).unwrap();
+            buf.maintain().unwrap();
+        }
+        drop(buf);
+
+        // Everything before ANCHOR+6s: segments [0,1], [2,3] and [4,5].
+        let cutoff = ANCHOR + 6 * SECOND;
+        let evicted = std::cell::Cell::new(Evicted::default());
+
+        let src = RezDb::open(&path).unwrap();
+        copy_range(&src, &staged, 0, u64::MAX, &|| {
+            // A SECOND connection, which is what retention actually is here:
+            // the writer thread owns its own and evicts from it while a dump
+            // reads. Opened inside the seam so it cannot be blamed for pinning
+            // anything itself.
+            let mut writer = RezDb::open(&path).unwrap();
+            let rid = writer.read_recordings().unwrap()[0].id;
+            evicted.set(writer.evict_before(rid, cutoff).unwrap());
+        })
+        .unwrap();
+        drop(src);
+
+        // Fixture, and it has to come first: if the eviction did not actually
+        // delete anything then the assertion below passes for no reason at all,
+        // which is precisely the failure mode this test exists to avoid.
+        assert_eq!(
+            evicted.get().segments,
+            3,
+            "fixture: the seam must really have deleted segments mid-dump"
+        );
+        let after = RezDb::open(&path).unwrap();
+        let rid = after.read_recordings().unwrap()[0].id;
+        assert_eq!(
+            after
+                .read_segments(rid, "cpu_usage")
+                .unwrap()
+                .iter()
+                .map(|s| s.meta.first_ts)
+                .collect::<Vec<_>>(),
+            vec![
+                ANCHOR + 6 * SECOND,
+                ANCHOR + 8 * SECOND,
+                ANCHOR + 10 * SECOND
+            ],
+            "fixture: the SOURCE really did lose those three segments"
+        );
+
+        // The claim. The dump holds all six, including the three the source no
+        // longer has, and their bytes are intact rather than merely catalogued
+        // — a snapshot that covered the catalog but not the BLOBs would leave a
+        // segment row pointing at bytes that were deleted.
+        let dumped = RezDb::open(&staged).unwrap();
+        let rid = dumped.read_recordings().unwrap()[0].id;
+        let segments = dumped.read_segments(rid, "cpu_usage").unwrap();
+        assert_eq!(
+            segments
+                .iter()
+                .map(|s| (s.meta.first_ts, s.meta.last_ts))
+                .collect::<Vec<_>>(),
+            (0..6)
+                .map(|i| (ANCHOR + 2 * i * SECOND, ANCHOR + (2 * i + 1) * SECOND))
+                .collect::<Vec<_>>(),
+            "a dump reads the database as it stood when its snapshot opened; \
+             eviction afterwards cannot reach into it"
+        );
+        for s in &segments {
+            let table = read_table_parquet("cpu_usage".to_string(), s.bytes.clone())
+                .expect("a dumped segment's bytes must still be readable parquet");
+            assert_eq!(table.timestamps.len(), s.meta.rows as usize);
+        }
+    }
+
+    #[test]
     fn a_dump_can_be_trimmed_to_a_time_range() {
         // `/dump?start=&end=` survives the migration, but at segment
         // granularity — so the caller is told the span it actually got rather
@@ -936,7 +1060,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("buffer.rez");
         let mut buf =
-            HindsightBuffer::with_policy(&path, seed(), Duration::from_secs(3600), seal_every(4))
+            HindsightBuffer::create(&path, seed(), Duration::from_secs(3600), seal_every(4))
                 .unwrap();
         for i in 0..12u64 {
             let (s, ts) = tick(&["cpu_usage"], i);

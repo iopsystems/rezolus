@@ -497,6 +497,93 @@ both ends: `syscall_latency` drops to ~48 segments, `cpu_usage` to ~3 MiB each.
   or capped with `journal_size_limit` plus a checkpoint at finalize. The
   autocheckpoint is best expressed **in bytes** (`4 MiB / page_size` pages): at
   4096 that is the ~1000-page default, and the high-water then holds at 4.4 MB.
+  **Under a dump it does not hold** — a held read mark stops the log being
+  recycled — see § "Dump semantics, verified" for the measured shape.
+
+## Dump semantics, verified (2026-08-12) — and one bug found doing it
+
+The dump's snapshot semantics were correct by design and thin on tests. Three
+things came out of closing that gap; the third is a defect.
+
+### "No eviction pause is needed" is now a test, not an argument
+
+`copy_range` reads inside one transaction, so retention deleting a segment
+mid-dump cannot disturb the copy. That was previously argued and skipped as a
+timing race. It does not have to be one: `copy_range` takes a `listed: &dyn
+Fn()` that fires **after `read_recordings` has pinned the snapshot and before
+the first segment BLOB is read**, and is `&|| {}` in production. The test evicts
+three of six segments from a second connection inside that callback and asserts
+the dump still holds all six with readable bytes.
+
+A callback over a `cfg(test)` hook or a list/copy split, deliberately: it is the
+only one of the three where the statements that ship and the statements the test
+runs are the same statements in the same order. Removing `read_snapshot`'s
+`BEGIN DEFERRED` turns the test red on exactly its own assertion (the dump comes
+back with the three surviving segments), and — worth noting — turns *no other
+test* red. Nothing else covered it.
+
+### `-wal` under a dump: bounded by the dump's duration, not by the buffer
+
+The journal had the sidecar measured only for the no-dump case (4.4 MB at the
+4 MiB `wal_autocheckpoint`). Under a dump it is unbounded in principle, because
+a held read mark stops SQLite recycling the log.
+
+Measured locally (macOS, 10 Hz, 2,000-counter payload, two-row segments, a
+buffer of a dozen segments so a dump takes ~250 ms; `tests/hindsight_dump.rs`):
+
+| | `-wal` |
+|---|---|
+| steady state, no dump | **4.67 MB** (plateau; matches the 4.4 MB figure) |
+| after ONE ~250-330 ms dump | 4.67-4.86 MB (**+0 to +185 KB**) |
+| after ~2.2 s of back-to-back dumps | **13.9-18.8 MB** (+9.1 to +13.9 MB, **3.7-6.4 MB/s**) |
+| 1 s after the last dump returned | unchanged, **+0 B**, every run |
+
+The shape: it grows at the writer's WAL byte rate for as long as a read mark is
+held, stops dead when it is released, and **does not shrink** — SQLite recycles
+the log in place, so the file is the high-water mark. A short dump often costs
+nothing at all, because its frames fit in the headroom the file already has.
+
+The rate is not portable (it is payload × cadence × the 3.14× amplification),
+so the test asserts the shape — the file passes its *unpinned* high-water by
+half again — and prints the numbers. Removing the read mark leaves the same
+window growing by **4,120 B, one page**, which is what a threshold of `during >
+before` would have accepted; the assertion is written against the plateau for
+that reason.
+
+The fleet-scale version (a multi-GB buffer, 26 samplers, a `VACUUM INTO` lasting
+seconds) has not been run. The scaling law to check it against is
+`growth ≈ WAL byte rate × dump duration`, capped by nothing.
+
+### BUG: `POST /dump/file` and the SIGHUP capture pause the recording
+
+`rezolus hindsight --help` promises "a snapshot is a consistent point-in-time
+copy taken without pausing the recording", and for `GET /dump` that holds — it
+builds the copy on a blocking task while the loop ticks on. `POST /dump/file`
+does not. The request is handed to the recording loop's own `select!`, and the
+handler body awaits `spawn_blocking(dump)`; `select!` does not poll the tick
+branch while a handler body is running, so **the scrape loop is stopped for the
+whole dump**. `MissedTickBehavior::Skip` then discards the ticks, so they are
+lost rather than deferred. The SIGHUP path is plainer still: `dump_to_file` is
+called synchronously in the loop body.
+
+Measured at 10 Hz against a buffer whose dump takes ~250 ms, over a one-second
+window of back-to-back dumps:
+
+| | ticks | segments sealed |
+|---|---|---|
+| `GET /dump` | **12** | 6 |
+| `POST /dump/file` | **4** | 2 |
+
+It scales with dump duration, i.e. with buffer size — so it is worst on the
+large buffers an incident is actually captured from, and it drops data from the
+minutes *after* the trigger, which for a rolling window is data an operator was
+counting on. Not fixed here (this branch is verification only). The shape of a
+fix is to run the dump off the loop as `GET /dump` already does and reply
+through the oneshot when it finishes, rather than awaiting it inside the arm.
+
+Note the seal count is the blunter instrument of the two and stays blunt: seals
+are row-driven, so pausing `maintain()` alone *delays* seals rather than losing
+them, and the count over a window barely moves. Ticks are the sharp one.
 
 ## Open questions to settle during implementation
 
