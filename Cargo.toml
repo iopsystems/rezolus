@@ -104,6 +104,9 @@ syscall-numbers = "4.0.3"
 sysconf = "0.3.4"
 tempfile = "3.27.0"
 thiserror.workspace = true
+# Direct dep for `parquet convert`'s zstd-compressed raw input. Already in the
+# graph via parquet's `zstd` feature, so this costs no extra build time.
+zstd = "0.13.3"
 tokio = { version = "1.52.2", features = [
     "fs",
     "io-std",

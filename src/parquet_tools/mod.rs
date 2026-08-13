@@ -1,5 +1,6 @@
 mod annotate;
 pub(crate) mod combine;
+mod convert;
 mod events;
 mod filter;
 mod metadata;
@@ -23,6 +24,7 @@ pub fn command() -> Command {
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
              combine    Merge multiple files (multi-node / multi-instance) or build an A/B tarball\n    \
+             convert    Turn a raw msgpack recording (from `record -f raw`) into parquet\n    \
              filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n\n\
              Run `rezolus parquet <subcommand> --help` for per-subcommand examples.",
         )
@@ -305,6 +307,91 @@ pub fn command() -> Command {
                 ),
         )
         .subcommand(
+            Command::new("convert")
+                .about("Convert a raw msgpack recording into parquet")
+                .long_about(
+                    "Convert a recording made with `rezolus record -f raw` (concatenated msgpack\n\
+                     snapshots) into a parquet file that the viewer, the MCP tools and the rest\n\
+                     of `rezolus parquet` can read.\n\n\
+                     The input may be plain or zstd-compressed; which one it is is detected from\n\
+                     the file's contents, not its name. The output defaults to the input path\n\
+                     with .raw/.zst dropped and .parquet appended.\n\n\
+                     The sampling interval is inferred from the snapshot timestamps unless\n\
+                     --interval says otherwise. A raw recording carries no systeminfo or metric\n\
+                     descriptions -- the recorder fetches those from the agent at record time --\n\
+                     so pass them with --systeminfo/--descriptions if you saved them, or add\n\
+                     them later with `rezolus parquet annotate`.\n\n\
+                     A .rez archive cannot be produced from a raw recording: it needs per-sampler\n\
+                     cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
+                     EXAMPLES:\n    \
+                     # Convert a compressed recording (writes rezolus.parquet)\n    \
+                     rezolus parquet convert rezolus.raw.zst\n\n    \
+                     # Choose the output path\n    \
+                     rezolus parquet convert rezolus.raw -o run7.parquet\n\n    \
+                     # A recording made at a non-default cadence\n    \
+                     rezolus parquet convert rezolus.raw --interval 250ms\n\n    \
+                     # Stamp the hardware summary and help text saved alongside it\n    \
+                     rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
+                     # Tag the recording the way `record --metadata` would\n    \
+                     rezolus parquet convert rezolus.raw -m source=llm-perf -m run=boat-7",
+                )
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("Raw recording to convert (plain or zstd-compressed)")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("PATH")
+                        .help("Output parquet path (default: input with .raw/.zst replaced by .parquet)")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("interval")
+                        .short('i')
+                        .long("interval")
+                        .value_name("DURATION")
+                        .help("Sampling interval to stamp, like 1s or 250ms (default: inferred from the snapshot timestamps)")
+                        .value_parser(value_parser!(humantime::Duration))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("systeminfo")
+                        .long("systeminfo")
+                        .value_name("PATH")
+                        .help("JSON hardware summary to embed, or - for stdin")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("descriptions")
+                        .long("descriptions")
+                        .value_name("PATH")
+                        .help("JSON map of metric name to help text to embed, or - for stdin")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("metadata")
+                        .short('m')
+                        .long("metadata")
+                        .value_name("KEY=VALUE")
+                        .help("Add a file-level metadata tag as key=value; repeat for multiple tags")
+                        .action(clap::ArgAction::Append),
+                )
+                .arg(
+                    clap::Arg::new("force")
+                        .long("force")
+                        .help("Overwrite the output file if it already exists")
+                        .action(clap::ArgAction::SetTrue),
+                ),
+        )
+        .subcommand(
             Command::new("filter")
                 .about("Filter parquet columns to only those needed by service extension KPIs")
                 .long_about(
@@ -378,6 +465,10 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
+        Some(("convert", sub_args)) => {
+            convert::run(sub_args);
+            return;
+        }
         Some(("filter", sub_args)) => {
             let registry = load_template_registry(
                 sub_args

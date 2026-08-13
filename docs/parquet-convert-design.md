@@ -1,6 +1,10 @@
 # `rezolus parquet convert` — raw recordings to parquet
 
-Status: **Design approved 2026-08-13. Not yet implemented.**
+Status: **Implemented 2026-08-13** in `src/parquet_tools/convert.rs` (38 unit
+tests). Two things changed during implementation, both noted inline below:
+`--metadata` rejects a malformed argument instead of dropping it the way
+`record` does, and the output's permissions are reset after the staged temp
+file is persisted.
 
 ## The problem
 
@@ -74,6 +78,12 @@ saved alongside it.
 --metadata`. `source=rezolus` is stamped unless `--metadata source=…` overrides
 it.
 
+*Divergence from `record` (implementation):* `record` parses these with
+`filter_map` and silently drops an argument it cannot split on `=`. `convert`
+rejects it instead. Quietly producing a recording that is missing the label you
+asked for is worse than refusing to start, and unlike a live recording there is
+nothing lost by exiting — the input is still there to retry against.
+
 ## Structure
 
 New module `src/parquet_tools/convert.rs`, registered in `mod.rs` the way the
@@ -146,7 +156,16 @@ the other `parquet` subcommands:
   object of string→string)
 - decompression or write failure, including ENOSPC on the temp file
 
-A partial output file is never left behind on failure.
+A partial output file is never left behind on failure: the parquet is written to
+a temp file in the output directory and renamed into place only on success.
+
+*Found in verification (implementation):* staging through `NamedTempFile` also
+carried its 0600 mode onto the output, so a converted recording was private
+where a recorded one is group-readable. The mode is now reset after `persist` to
+whatever plain file creation yields under the current umask, taken from a
+reference file created in the same directory (the process umask cannot be read
+without temporarily setting it). Covered by
+`output_permissions_match_a_normally_created_file`.
 
 ## Testing
 

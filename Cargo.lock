@@ -2957,6 +2957,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "walkdir",
+ "zstd",
 ]
 
 [[package]]
