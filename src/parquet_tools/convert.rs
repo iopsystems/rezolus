@@ -119,9 +119,10 @@ fn infer_interval(reader: &mut (impl io::Read + io::Seek)) -> Option<Duration> {
     deltas.sort_unstable();
     let median = deltas[deltas.len() / 2];
 
-    // Round to the nearest millisecond, since that is the resolution
-    // `sampling_interval_ms` records. Never round down to zero: a degenerate
-    // interval would make every rate in the viewer divide by nothing.
+    // The clamp must stay: a sub-millisecond median would otherwise stamp
+    // `sampling_interval_ms=0`. A measured cadence is clamped rather than
+    // refused the way `interval_millis` refuses an explicit `--interval`, so
+    // that such a recording still converts.
     let ms = (median.as_nanos() as f64 / 1e6).round() as u64;
     Some(Duration::from_millis(ms.max(1)))
 }
@@ -272,22 +273,13 @@ fn load_json(source: &Path, shape: JsonShape, what: &'static str) -> Result<Stri
 /// Matches `record`'s own `--interval` default.
 const FALLBACK_INTERVAL: Duration = Duration::from_millis(1000);
 
-/// Assemble the converter with the file-level metadata keys
-/// `recorder::build_parquet_converter` writes, so a converted recording is
-/// indistinguishable from one `record -f parquet` produced.
-///
-/// `source` is stamped before the user's `--metadata`, which lets
-/// `--metadata source=…` override it — the same precedence `record` gives.
 /// The value stamped into `sampling_interval_ms`, rounded to the nearest whole
 /// millisecond.
 ///
-/// `Duration::as_millis` truncates, which turns 1.5ms into 1ms and — the case
-/// that matters — any sub-millisecond interval into 0. A stamped 0 is worse
-/// than a wrong interval: it is a divide-by-nothing for every rate computed
-/// against the file, so it is refused rather than written.
+/// Below 1ms there is no honest answer, so the interval is refused: rounding
+/// 500us up to 1ms would understate every rate computed against the file by
+/// half, with nothing in the file to say so.
 fn interval_millis(interval: Duration) -> Result<u64, ConvertError> {
-    // Below 1ms there is no honest answer: rounding 500us up to 1ms would
-    // understate every rate by half, with nothing in the file to say so.
     if interval < Duration::from_millis(1) {
         return Err(ConvertError::IntervalTooSmall(interval));
     }
@@ -295,6 +287,12 @@ fn interval_millis(interval: Duration) -> Result<u64, ConvertError> {
     Ok((interval.as_nanos() as f64 / 1e6).round() as u64)
 }
 
+/// Assemble the converter with the file-level metadata keys
+/// `recorder::build_parquet_converter` writes, so a converted recording is
+/// indistinguishable from one `record -f parquet` produced.
+///
+/// `source` is stamped before the user's `--metadata`, which lets
+/// `--metadata source=…` override it — the same precedence `record` gives.
 fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToParquet {
     let mut converter = MsgpackToParquet::with_options(
         ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
@@ -344,15 +342,13 @@ fn decompress_beside_output(
 
 /// Relax the staged file's 0600 to whatever plain file creation yields here.
 ///
-/// The conversion stages through a `NamedTempFile`, which is deliberately
-/// private, and `persist` keeps that mode. `record` writes its parquet with
-/// `File::create`, so a converted recording would otherwise be unreadable by
-/// the group that a recorded one is readable by — surprising, and only
-/// discovered by whoever cannot open the file.
+/// `NamedTempFile` is deliberately private and `persist` keeps that mode, so a
+/// converted recording would otherwise be unreadable by the group that can read
+/// a `record`-written one.
 ///
-/// The mode is taken from a reference file created in the same directory
-/// rather than by reading the process umask, which cannot be queried without
-/// temporarily setting it.
+/// The mode comes from a reference file created in the same directory rather
+/// than from the process umask, which cannot be read without temporarily
+/// setting it.
 #[cfg(unix)]
 fn apply_default_permissions(target: &Path, dir: &Path) -> io::Result<()> {
     let reference = dir.join(format!(".rezolus-convert-{}.perm", std::process::id()));
@@ -397,8 +393,9 @@ fn convert_file(
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or(Path::new("."));
 
-            // Held for the duration: dropping it removes the decompressed
-            // intermediate, including on the error paths below.
+            // `_scratch` must stay bound until the conversion finishes:
+            // dropping it deletes the decompressed intermediate that `source`
+            // reads from. Holding it also cleans up on the error paths below.
             let _scratch;
             let mut source = if kind == InputKind::Zstd {
                 let (tmp, handle) = decompress_beside_output(input, out_dir)?;
@@ -504,12 +501,20 @@ pub(crate) fn run(args: &clap::ArgMatches) {
             .flatten()
             .collect();
             if !missing.is_empty() {
+                // `annotate` is only offered for systeminfo: it has no
+                // --descriptions route, so naming it for both would send the
+                // reader after a flag that does not exist.
+                let recovery = if opts.systeminfo.is_none() {
+                    " `rezolus parquet annotate <file> --systeminfo <path>` can add the \
+                     hardware summary later; descriptions can only be set here."
+                } else {
+                    " Descriptions can only be set here, by reconverting with --force."
+                };
                 println!(
-                    "Note: no {} in the output — a raw recording does not carry {}. \
-                     Supply them with --systeminfo/--descriptions, or add them later \
-                     with `rezolus parquet annotate`.",
+                    "Note: no {} in the output — a raw recording does not carry {}.{}",
                     missing.join(" or "),
                     if missing.len() == 1 { "it" } else { "them" },
+                    recovery,
                 );
             }
         }

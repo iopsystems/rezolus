@@ -380,10 +380,10 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::Set),
                 )
                 .arg(
-                    // Deliberately no -i alias: `rezolus parquet metadata -i`
-                    // means the INPUT FILE, and an agent generalizing that to
-                    // `convert -i recording.raw` would otherwise get
-                    // "expected number at 0" from the duration parser.
+                    // `--interval` must never gain a `-i` alias: `parquet
+                    // metadata -i` means the input file, so `convert -i
+                    // recording.raw` would parse a path as a duration and
+                    // report "expected number at 0".
                     clap::Arg::new("interval")
                         .long("interval")
                         .value_name("DURATION")
