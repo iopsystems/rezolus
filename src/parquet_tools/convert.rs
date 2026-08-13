@@ -168,6 +168,9 @@ pub(crate) enum ConvertError {
     },
     /// A `--metadata` argument was not `key=value`.
     BadMetadata(String),
+    /// An explicit `--interval` below the millisecond resolution the
+    /// `sampling_interval_ms` footer key can represent.
+    IntervalTooSmall(Duration),
 }
 
 impl std::fmt::Display for ConvertError {
@@ -191,6 +194,11 @@ impl std::fmt::Display for ConvertError {
             Self::BadMetadata(arg) => {
                 write!(f, "--metadata must be key=value, got {arg:?}")
             }
+            Self::IntervalTooSmall(d) => write!(
+                f,
+                "--interval {d:?} is below 1ms; sampling_interval_ms records whole \
+                 milliseconds and a sub-millisecond value would be stamped as 0"
+            ),
         }
     }
 }
@@ -270,14 +278,28 @@ const FALLBACK_INTERVAL: Duration = Duration::from_millis(1000);
 ///
 /// `source` is stamped before the user's `--metadata`, which lets
 /// `--metadata source=…` override it — the same precedence `record` gives.
-fn build_converter(interval: Duration, opts: &ConvertOptions) -> MsgpackToParquet {
+/// The value stamped into `sampling_interval_ms`, rounded to the nearest whole
+/// millisecond.
+///
+/// `Duration::as_millis` truncates, which turns 1.5ms into 1ms and — the case
+/// that matters — any sub-millisecond interval into 0. A stamped 0 is worse
+/// than a wrong interval: it is a divide-by-nothing for every rate computed
+/// against the file, so it is refused rather than written.
+fn interval_millis(interval: Duration) -> Result<u64, ConvertError> {
+    // Below 1ms there is no honest answer: rounding 500us up to 1ms would
+    // understate every rate by half, with nothing in the file to say so.
+    if interval < Duration::from_millis(1) {
+        return Err(ConvertError::IntervalTooSmall(interval));
+    }
+
+    Ok((interval.as_nanos() as f64 / 1e6).round() as u64)
+}
+
+fn build_converter(interval_ms: u64, opts: &ConvertOptions) -> MsgpackToParquet {
     let mut converter = MsgpackToParquet::with_options(
         ParquetOptions::new().max_batch_size(crate::parquet_metadata::MAX_ROW_GROUP_SIZE),
     )
-    .metadata(
-        "sampling_interval_ms".to_string(),
-        interval.as_millis().to_string(),
-    )
+    .metadata("sampling_interval_ms".to_string(), interval_ms.to_string())
     .metadata("source".to_string(), "rezolus".to_string());
 
     for (key, value) in &opts.metadata {
@@ -360,6 +382,12 @@ fn convert_file(
         return Err(ConvertError::OutputExists(output.to_path_buf()));
     }
 
+    // Validated before any reading or writing: an unusable --interval should
+    // cost nothing, not a full decompress-and-convert pass.
+    if let Some(explicit) = opts.interval {
+        interval_millis(explicit)?;
+    }
+
     match sniff(input)? {
         InputKind::Parquet => Err(ConvertError::InputIsParquet),
         InputKind::Tar => Err(ConvertError::InputIsTar),
@@ -396,7 +424,7 @@ fn convert_file(
             // Write through a temp file so a failure part-way leaves no
             // half-written parquet for the next command to pick up.
             let staged = tempfile::NamedTempFile::new_in(out_dir)?;
-            let rows = build_converter(interval, opts)
+            let rows = build_converter(interval_millis(interval)?, opts)
                 .convert_file_handle(source, staged.as_file().try_clone()?)
                 .map_err(|e| ConvertError::Stream(e.to_string()))?;
             staged
@@ -811,6 +839,49 @@ mod tests {
                 .get("sampling_interval_ms")
                 .map(String::as_str),
             Some("5000")
+        );
+    }
+
+    #[test]
+    fn sub_millisecond_interval_is_rejected() {
+        // `sampling_interval_ms` holds whole milliseconds, so 500us would be
+        // stamped as 0 and every rate computed against this file would be
+        // divided by a zero interval. Refuse rather than write that.
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 500_000)));
+        let output = dir.path().join("out.parquet");
+
+        let opts = ConvertOptions {
+            interval: Some(Duration::from_micros(500)),
+            ..Default::default()
+        };
+        let err = convert_file(&input, &output, &opts).unwrap_err();
+
+        assert!(
+            matches!(err, ConvertError::IntervalTooSmall(_)),
+            "got {err:?}"
+        );
+        assert!(!output.exists(), "nothing should be written");
+    }
+
+    #[test]
+    fn sub_millisecond_precision_rounds_to_the_nearest_millisecond() {
+        // 1.5ms is representable-ish; truncation would call it 1ms.
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(2, 1_500_000)));
+        let output = dir.path().join("out.parquet");
+
+        let opts = ConvertOptions {
+            interval: Some(Duration::from_micros(1500)),
+            ..Default::default()
+        };
+        convert_file(&input, &output, &opts).unwrap();
+
+        assert_eq!(
+            footer(&output)
+                .get("sampling_interval_ms")
+                .map(String::as_str),
+            Some("2")
         );
     }
 

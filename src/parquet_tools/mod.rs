@@ -311,33 +311,61 @@ pub fn command() -> Command {
                 .about("Convert a raw msgpack recording into parquet")
                 .long_about(
                     "Convert a recording made with `rezolus record -f raw` (concatenated msgpack\n\
-                     snapshots) into a parquet file that the viewer, the MCP tools and the rest\n\
-                     of `rezolus parquet` can read.\n\n\
+                     snapshots, one per sampling tick) into a parquet file that the viewer, the\n\
+                     MCP tools and the rest of `rezolus parquet` can read.\n\n\
+                     Raw is the cheapest capture mode: the recorder appends snapshots as they\n\
+                     arrive and finalizing is a byte copy rather than a conversion that grows\n\
+                     with run length, so long unattended captures record raw and convert\n\
+                     afterwards. Recording straight to parquet (`record -f parquet`) is simpler\n\
+                     for a short supervised run.\n\n\
                      The input may be plain or zstd-compressed; which one it is is detected from\n\
-                     the file's contents, not its name. The output defaults to the input path\n\
-                     with .raw/.zst dropped and .parquet appended.\n\n\
-                     The sampling interval is inferred from the snapshot timestamps unless\n\
-                     --interval says otherwise. A raw recording carries no systeminfo or metric\n\
-                     descriptions -- the recorder fetches those from the agent at record time --\n\
-                     so pass them with --systeminfo/--descriptions if you saved them, or add\n\
-                     them later with `rezolus parquet annotate`.\n\n\
+                     the file's contents, not its name. The output path defaults to the input\n\
+                     with a trailing .zst and then a trailing .raw stripped, and .parquet\n\
+                     appended: rezolus.raw.zst becomes rezolus.parquet, and a name with neither\n\
+                     suffix just gains one (capture.msgpack becomes capture.msgpack.parquet).\n\n\
+                     The sampling interval stamped into the file is inferred from the median gap\n\
+                     between snapshot timestamps unless --interval says otherwise. A recording\n\
+                     with fewer than two snapshots falls back to 1s, so pass --interval if such a\n\
+                     recording was made at another cadence.\n\n\
+                     A raw recording carries no systeminfo or metric descriptions: the recorder\n\
+                     fetches those over HTTP from the running rezolus agent while recording (its\n\
+                     /systeminfo and /metrics/descriptions endpoints) and they never enter the\n\
+                     snapshot stream. Without them the conversion still succeeds and every metric\n\
+                     still queries normally; what you lose is the viewer's hardware panel and the\n\
+                     help text beside each metric. Prefer stamping them here in one pass if you\n\
+                     saved them -- and if that agent is still running, the same two endpoints can\n\
+                     be curled now, at conversion time, to recover them. Afterwards, `rezolus parquet annotate\n\
+                     <file> --systeminfo <path>` can still add the hardware summary, but there is\n\
+                     no annotate route for descriptions: those can only be supplied here, which\n\
+                     means reconverting the original raw input over the output (--force).\n\n\
                      A .rez archive cannot be produced from a raw recording: it needs per-sampler\n\
                      cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
                      EXAMPLES:\n    \
+                     # The producing side, for reference\n    \
+                     rezolus record -f raw --url http://localhost:4241 -o rezolus.raw\n\n    \
                      # Convert a compressed recording (writes rezolus.parquet)\n    \
                      rezolus parquet convert rezolus.raw.zst\n\n    \
                      # Choose the output path\n    \
                      rezolus parquet convert rezolus.raw -o run7.parquet\n\n    \
                      # A recording made at a non-default cadence\n    \
                      rezolus parquet convert rezolus.raw --interval 250ms\n\n    \
-                     # Stamp the hardware summary and help text saved alongside it\n    \
+                     # Save the two metadata blobs at record time, from the agent being recorded\n    \
+                     curl -s http://localhost:4241/systeminfo > sysinfo.json\n    \
+                     curl -s http://localhost:4241/metrics/descriptions > help.json\n\n    \
+                     # ...then stamp them into the conversion\n    \
                      rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
+                     # Or pipe one of them straight in, with - for stdin\n    \
+                     curl -s http://localhost:4241/systeminfo | rezolus parquet convert rezolus.raw --systeminfo -\n\n    \
                      # Tag the recording the way `record --metadata` would\n    \
-                     rezolus parquet convert rezolus.raw -m source=llm-perf -m run=boat-7",
+                     rezolus parquet convert rezolus.raw -m source=llm-perf -m run=boat-7\n\n    \
+                     # Replace an output left by an earlier attempt\n    \
+                     rezolus parquet convert rezolus.raw --force\n\n    \
+                     # Descriptions were missed the first time -- reconvert over the old output\n    \
+                     rezolus parquet convert rezolus.raw --descriptions help.json --force",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Raw recording to convert (plain or zstd-compressed)")
+                        .help("Raw recording to convert (plain or zstd-compressed). Must be a real file; stdin is not accepted here")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -347,16 +375,19 @@ pub fn command() -> Command {
                         .short('o')
                         .long("output")
                         .value_name("PATH")
-                        .help("Output parquet path (default: input with .raw/.zst replaced by .parquet)")
+                        .help("Output parquet path (default: input with a trailing .zst then .raw stripped and .parquet appended). Refuses to overwrite an existing file unless --force")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
                 )
                 .arg(
+                    // Deliberately no -i alias: `rezolus parquet metadata -i`
+                    // means the INPUT FILE, and an agent generalizing that to
+                    // `convert -i recording.raw` would otherwise get
+                    // "expected number at 0" from the duration parser.
                     clap::Arg::new("interval")
-                        .short('i')
                         .long("interval")
                         .value_name("DURATION")
-                        .help("Sampling interval to stamp, like 1s or 250ms (default: inferred from the snapshot timestamps)")
+                        .help("Sampling interval to stamp, as a number with a unit (ns, us, ms, s, m, h) -- 1s, 250ms. Stamped as whole milliseconds, rounded to the nearest; anything below 1ms is rejected. Default: inferred from the median gap between snapshot timestamps, or 1s if the recording holds fewer than two snapshots")
                         .value_parser(value_parser!(humantime::Duration))
                         .action(clap::ArgAction::Set),
                 )
@@ -364,7 +395,7 @@ pub fn command() -> Command {
                     clap::Arg::new("systeminfo")
                         .long("systeminfo")
                         .value_name("PATH")
-                        .help("JSON hardware summary to embed, or - for stdin")
+                        .help("JSON hardware summary to embed, as served by the agent's /systeminfo endpoint; any JSON value is accepted and stored verbatim. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
                 )
@@ -372,7 +403,7 @@ pub fn command() -> Command {
                     clap::Arg::new("descriptions")
                         .long("descriptions")
                         .value_name("PATH")
-                        .help("JSON map of metric name to help text to embed, or - for stdin")
+                        .help("Metric help text to embed, as served by the agent's /metrics/descriptions endpoint: a flat JSON object of name to string, {\"cpu_usage\":\"CPU time by state\"}. Use - for stdin (only one of --systeminfo/--descriptions can read stdin)")
                         .value_parser(value_parser!(PathBuf))
                         .action(clap::ArgAction::Set),
                 )
@@ -381,13 +412,13 @@ pub fn command() -> Command {
                         .short('m')
                         .long("metadata")
                         .value_name("KEY=VALUE")
-                        .help("Add a file-level metadata tag as key=value; repeat for multiple tags")
+                        .help("Add a file-level metadata tag as key=value; repeat for multiple tags. Split on the first =, so values may contain = and may be empty. Keys are free-form, but `source` is the one the viewer and MCP tools read to identify where a recording came from (it defaults to rezolus). Tags are applied after the two keys convert derives, `source` and `sampling_interval_ms`, so a tag with either name wins -- set the interval with --interval rather than -m sampling_interval_ms=")
                         .action(clap::ArgAction::Append),
                 )
                 .arg(
                     clap::Arg::new("force")
                         .long("force")
-                        .help("Overwrite the output file if it already exists")
+                        .help("Overwrite the output file if it already exists (without this, an existing output is an error and nothing is written)")
                         .action(clap::ArgAction::SetTrue),
                 ),
         )

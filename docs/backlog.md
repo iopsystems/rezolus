@@ -179,11 +179,18 @@ Source: [simple-capture viewer](journal/2026-07-03-simple-capture-viewer.md).
 
 Source: [per-source descriptions](journal/2026-07-04-per-source-descriptions.md).
 
-- **Backfill descriptions on a parquet lacking `# HELP`** — Open (optional). A
+- **Backfill descriptions on a parquet lacking `# HELP`** — Open. A
   Prometheus capture whose exporter emits no `# HELP` has blank descriptions
   (nothing to harvest at record time). A `parquet annotate --descriptions name=text`
   path could backfill the footer `descriptions` key after the fact. *Reopen:* if
   blank-description foreign captures become a recurring annoyance.
+  **Second motivation (2026-08-13):** `parquet convert` gave raw recordings the
+  same gap, and harder — `annotate` already takes `--systeminfo`, so a converted
+  file can get its hardware summary back, but descriptions have no annotate route
+  at all. The only recovery is a full `--force` reconvert of the original raw
+  input, which is a poor trade for one footer key. Making `annotate` accept
+  `--descriptions` (file or `name=text`) closes both cases at once; scoped as its
+  own PR, deliberately kept out of the `convert` change.
 - Per-source-not-per-node descriptions, and "descriptions only exist if the origin
   supplied them," are **by design** — not backlog.
 

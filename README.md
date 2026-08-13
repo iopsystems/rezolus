@@ -295,13 +295,15 @@ rezolus parquet convert rezolus.raw.zst              # writes rezolus.parquet
 rezolus parquet filter rezolus.parquet -o slim.parquet
 ```
 
-`convert` infers the sampling interval from the snapshot timestamps; pass
-`--interval` to override it. A raw recording carries no `systeminfo` or metric
-descriptions — the recorder fetches those from the agent's HTTP endpoints while
-recording — so supply them with `--systeminfo` / `--descriptions` if you saved
-them, or attach them afterwards with `parquet annotate`. A `.rez` archive cannot
-be produced from a raw recording: it needs the per-sampler cadence and
-acquisition windows that a raw snapshot stream never carried.
+`convert` infers the sampling interval from the median gap between snapshot
+timestamps; pass `--interval` to override it. A raw recording carries no
+`systeminfo` or metric descriptions — the recorder fetches those from the
+agent's `/systeminfo` and `/metrics/descriptions` endpoints while recording — so
+supply them with `--systeminfo` / `--descriptions` if you saved them. Afterwards
+`parquet annotate --systeminfo` can still add the hardware summary, but there is
+no annotate route for descriptions. A `.rez` archive cannot be produced from a
+raw recording: it needs the per-sampler cadence and acquisition windows that a
+raw snapshot stream never carried.
 
 ### MCP Server
 

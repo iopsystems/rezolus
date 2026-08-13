@@ -185,6 +185,37 @@ building `Snapshot::V2(SnapshotV2{…})` values and tempfiles:
 - malformed inputs: truncated mid-stream, and a parquet file as input — both
   exit non-zero with the specific message
 
+## Verification findings (implementation)
+
+The `document-feature` loop (5 blind user-simulations + a fresh-eyes critic per
+round, 3 rounds) passed 5/5 blind sims in every round. Two of its findings were
+not documentation problems:
+
+**`-i` collided across sibling subcommands.** `rezolus parquet metadata -i FILE`
+means the *input file*; `convert -i 250ms` meant the *interval*. An agent
+generalizing from one to the other got `expected number at 0` from the duration
+parser, with the required positional also missing. Fixed in the CLI, not the
+prose: `--interval` has no short alias, so `-i` now fails with `unexpected
+argument '-i' found`.
+
+**A sub-millisecond `--interval` stamped zero.** `sampling_interval_ms` holds
+whole milliseconds and `Duration::as_millis` truncates, so `--interval 500us`
+wrote `sampling_interval_ms=0` — a divide-by-nothing for every rate computed
+against the file. The inference path had a `.max(1)` floor; the explicit path
+never did. Now a single `interval_millis` rounds to the nearest millisecond and
+rejects anything below 1ms outright, since rounding 500us up to 1ms would
+understate every rate by half with nothing in the file to say so. Covered by
+`sub_millisecond_interval_is_rejected` and
+`sub_millisecond_precision_rounds_to_the_nearest_millisecond`.
+
+## Deferred
+
+`parquet annotate --descriptions` — a converted recording can get its
+`systeminfo` back via `annotate --systeminfo`, but descriptions have no annotate
+route, so the only recovery is a `--force` reconvert of the original raw input.
+Deliberately out of scope here; tracked in `docs/backlog.md` under
+"Parquet / recorder" alongside the pre-existing Prometheus-`# HELP` case.
+
 ## Documentation
 
 Run the `document-feature` skill after implementation: it writes the `--help`
