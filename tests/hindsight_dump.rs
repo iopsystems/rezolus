@@ -14,19 +14,23 @@
 //! close one segment. `[general] segment_rows` is what makes that
 //! configurable.
 //!
-//! **Dumps are taken over `GET /dump`, not `POST /dump/file`, and the two are
-//! not equivalent.** `GET /dump` builds the copy on a blocking task while the
-//! recording loop keeps ticking. `POST /dump/file` hands the request to the
-//! recording loop's own `select!`, whose handler body awaits the dump — so the
-//! tick branch is not polled until the copy finishes, and the recording is
-//! paused for its duration. Measured here at 10 Hz against a buffer whose dump
-//! takes ~250 ms: **12 ticks over a second of back-to-back `GET /dump`s versus
-//! 4 over a second of `POST /dump/file`s**, and 6 segments sealed versus 2.
-//! That contradicts what `rezolus hindsight --help` promises ("a snapshot is a
-//! consistent point-in-time copy taken without pausing the recording") and
-//! scales with buffer size, so it matters most on the large buffers an
-//! incident is captured from. Reported, not fixed here — this branch is
-//! verification only.
+//! **All three trigger paths are exercised, because they were not always
+//! equivalent.** `GET /dump` has always built its copy on a blocking task
+//! while the recording loop kept ticking. `POST /dump/file` and the SIGHUP
+//! capture used to run the dump *inside* the recording loop — the HTTP request
+//! was handled by the loop's own `select!`, whose handler body awaited the
+//! dump, and SIGHUP dumped in the loop body — so the tick branch was not
+//! polled until the copy finished and the recording was paused for its
+//! duration. `MissedTickBehavior::Skip` then *discarded* the ticks that went
+//! by, so they were lost rather than late. Measured over a one-second window
+//! of back-to-back dumps at 10 Hz, ten ticks due, with only
+//! `src/hindsight/mod.rs` reverted: **`GET /dump` 14 ticks / 6 seals,
+//! `POST /dump/file` 2 / 1, SIGHUP 1 / 1** — against **12 / 5, 13 / 6 and
+//! 12 / 5** once every dump runs off the loop. That contradicted what
+//! `rezolus hindsight --help` promises ("a snapshot is a consistent
+//! point-in-time copy taken without pausing the recording") and scaled with
+//! buffer size, so it was worst on the large buffers an incident is captured
+//! from. The three tests below are one body run over each trigger in turn.
 //!
 //! Reading the archives directly with `rusqlite` and `parquet` rather than
 //! through the crate: `rezolus` has no library target, so an integration test
@@ -43,6 +47,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use metriken_exposition::{Counter, Snapshot, SnapshotV2};
@@ -164,6 +169,12 @@ struct Hindsight {
     /// The rolling buffer the daemon is writing — its private staging file,
     /// taken from the daemon's own startup log rather than guessed at.
     buffer: PathBuf,
+    /// Where `POST /dump/file` and a SIGHUP capture write — `[general] output`.
+    output: PathBuf,
+    /// Every log line the daemon has written since startup. Kept rather than
+    /// discarded because the SIGHUP path has no reply channel: "capture
+    /// complete" on stderr is the only signal that one finished.
+    log: Arc<Mutex<Vec<String>>>,
     _dir: tempfile::TempDir,
     client: reqwest::blocking::Client,
 }
@@ -183,6 +194,7 @@ impl Hindsight {
         let port = free_port();
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
         let config = dir.path().join("hindsight.toml");
+        let output = dir.path().join("snapshot.rez");
         std::fs::write(
             &config,
             format!(
@@ -196,7 +208,7 @@ impl Hindsight {
                  [log]\n\
                  level = \"info\"\n",
                 INTERVAL.as_millis(),
-                dir.path().join("snapshot.rez").display(),
+                output.display(),
             ),
         )
         .expect("failed to write the hindsight config");
@@ -231,16 +243,25 @@ impl Hindsight {
                 "timed out waiting for rezolus hindsight to start buffering"
             );
         };
-        // Drain the rest so the daemon can never block on a full stderr pipe.
-        std::thread::spawn(move || {
-            let mut sink = Vec::new();
-            let _ = log.read_to_end(&mut sink);
-        });
+        // Drain the rest so the daemon can never block on a full stderr pipe,
+        // keeping the lines: `capture_via_sighup` reads completion out of them.
+        let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        {
+            let lines = Arc::clone(&lines);
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                while log.read_line(&mut line).unwrap_or(0) > 0 {
+                    lines.lock().unwrap().push(std::mem::take(&mut line));
+                }
+            });
+        }
 
         let mut h = Self {
             child,
             port,
             buffer,
+            output,
+            log: lines,
             _dir: dir,
             client: http_client(),
         };
@@ -313,6 +334,106 @@ impl Hindsight {
         );
         std::fs::write(dest, &body).expect("failed to save the dump");
         elapsed
+    }
+
+    /// Dump into the daemon's own configured output file over
+    /// `POST /dump/file?start=0`, returning how long the request took.
+    ///
+    /// The same `?start=0` as [`Self::dump_to`], and for the same reason: it is
+    /// the ranged path, which selects segments and materializes the live tail
+    /// rather than copying the whole file verbatim.
+    fn dump_to_file(&self) -> Duration {
+        let start = Instant::now();
+        let response = self
+            .client
+            .post(format!("http://127.0.0.1:{}/dump/file?start=0", self.port))
+            .send()
+            .expect("POST /dump/file failed");
+        let status = response.status();
+        let body = response.text().expect("POST /dump/file body");
+        let elapsed = start.elapsed();
+        assert!(
+            status.is_success(),
+            "POST /dump/file returned {status}: {body}"
+        );
+        let json: serde_json::Value = serde_json::from_str(&body)
+            .unwrap_or_else(|e| panic!("bad /dump/file body {body}: {e}"));
+        assert!(
+            json.get("error").is_none_or(|e| e.is_null()),
+            "POST /dump/file reported an error: {body}"
+        );
+        assert!(
+            json["rows"].as_u64().unwrap_or(0) > 0,
+            "POST /dump/file wrote an empty dump: {body}"
+        );
+        elapsed
+    }
+
+    /// Trigger a capture the way an operator does — `systemctl kill -sHUP` —
+    /// and block until the daemon logs that it finished, returning how long
+    /// that took.
+    ///
+    /// The completion line is the only handle on this path: SIGHUP has no
+    /// caller to reply to. Waiting for it also keeps the signal semantics
+    /// straight, since a second signal *during* a capture means "terminate
+    /// once it is done" rather than "capture again".
+    fn capture_via_sighup(&self) -> Duration {
+        let from = self.log.lock().unwrap().len();
+        let start = Instant::now();
+        self.signal(libc::SIGHUP);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            {
+                let log = self.log.lock().unwrap();
+                if log[from..].iter().any(|l| l.contains("capture complete")) {
+                    return start.elapsed();
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "timed out waiting for a SIGHUP capture to complete (the \
+                     daemon may have exited); log since the signal: {:?}",
+                    &log[from..]
+                );
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Signal the daemon, without waiting for anything to come of it.
+    fn signal(&self, sig: libc::c_int) {
+        // SAFETY: `kill` on a pid this process owns and has not yet reaped.
+        unsafe { libc::kill(self.child.id() as libc::pid_t, sig) };
+    }
+
+    fn log_has(&self, needle: &str) -> bool {
+        self.log.lock().unwrap().iter().any(|l| l.contains(needle))
+    }
+
+    fn wait_for_log(&self, needle: &str, within: Duration) {
+        let deadline = Instant::now() + within;
+        while !self.log_has(needle) {
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for {needle:?} in the daemon's log: {:?}",
+                self.log.lock().unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Wait for the daemon to exit of its own accord, failing if it does not.
+    fn wait_for_exit(&mut self, within: Duration) -> std::process::ExitStatus {
+        let deadline = Instant::now() + within;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("failed to poll the daemon") {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "rezolus hindsight did not exit within {within:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// Block until `f` holds of the daemon's status, returning it. Every wait in
@@ -508,6 +629,14 @@ fn assert_strictly_increasing(what: &str, stamps: &[u64]) {
 /// while a copy is in flight". This drives dumps back to back for a second and
 /// asserts the daemon ticked and sealed straight through them, at full rate.
 ///
+/// Run once per trigger path, because the three are separate code and only one
+/// of them was ever right: `GET /dump` always ran off the loop, while
+/// `POST /dump/file` was awaited inside the recording loop's `select!` and the
+/// SIGHUP capture ran in the loop body. Both of those held the tick branch
+/// unpolled for the length of the copy, and `MissedTickBehavior::Skip`
+/// *discards* what they held off rather than deferring it — so the samples
+/// were gone, not late.
+///
 /// **The fixture is the load-bearing part**, and it was calibrated rather than
 /// guessed. A dump has to be slow enough that a stalled writer would visibly
 /// lose ticks: at 10 Hz the tick budget is 100 ms, so a dump that finishes in
@@ -523,14 +652,93 @@ fn assert_strictly_increasing(what: &str, stamps: &[u64]) {
 /// stall first if a reader could hold the writer off.
 #[test]
 fn sealing_continues_while_dumps_are_in_flight() {
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("dump.rez");
+    sealing_continues_through("GET /dump", 12, |h| h.dump_to(&dest));
+}
+
+/// The same claim over `POST /dump/file` — the path that writes the daemon's
+/// configured output file, and the one an operator triggers remotely.
+#[test]
+fn sealing_continues_while_file_dumps_are_in_flight() {
+    sealing_continues_through("POST /dump/file", 12, |h| h.dump_to_file());
+}
+
+/// The same claim over SIGHUP — `systemctl kill -sHUP rezolus-hindsight`, the
+/// trigger the README documents and the one with no HTTP endpoint involved.
+///
+/// One capture at a time, driven off the daemon's own completion line: a second
+/// signal arriving *during* a capture means "terminate when it is done", so the
+/// test may not simply fire signals back to back. The gap that leaves between
+/// captures is a couple of milliseconds of polling, which the fixture assertion
+/// on coverage still has to clear.
+///
+/// A *fatter* buffer than the HTTP paths use — 60 segments rather than 12 —
+/// because a SIGHUP capture takes no time range, and an unbounded dump is a
+/// whole-file `VACUUM INTO` that runs several times faster than the ranged copy
+/// the HTTP tests take. Calibrated against the unfixed daemon, which is the
+/// only calibration worth anything here: at 12 segments a capture finished in
+/// ~66 ms, inside a single 100 ms tick, and this test passed on a daemon that
+/// paused; at 40 it took ~220 ms and the daemon still got 3 of the 4 seals the
+/// assertion demands through the gaps; at 60 it takes ~330 ms and a paused
+/// daemon is not close.
+#[test]
+fn sealing_continues_while_a_sighup_capture_is_in_flight() {
+    sealing_continues_through("SIGHUP", 60, |h| h.capture_via_sighup());
+}
+
+/// A second signal while a capture is in flight stops the daemon **after** that
+/// capture, not instead of it — the contract the daemon states in its own log
+/// ("waiting for capture to complete before exiting").
+///
+/// This is the shutdown half of taking captures off the recording loop. The
+/// capture now runs on its own task while the loop keeps ticking, so "exit when
+/// it is done" is a thing the loop has to wait for rather than a statement
+/// about where it already is.
+#[test]
+fn a_second_signal_waits_for_the_capture_then_stops_the_daemon() {
+    let mut h = Hindsight::start(2, WIDE);
+    // A dozen segments puts a capture at ~70 ms, so the second signal lands
+    // well inside it.
+    h.wait_until(
+        "a buffer big enough that a capture outlasts a signal",
+        |s| s.segments("fake") >= 12,
+    );
+
+    h.signal(libc::SIGHUP);
+    // Gated on the loop having STARTED the capture, not on the signal handler
+    // having asked for one: a second signal that arrives in between is a
+    // request to stop with nothing yet to wait for, and the daemon rightly
+    // exits without capturing.
+    h.wait_for_log("capture in progress", Duration::from_secs(10));
+    h.signal(libc::SIGHUP);
+
+    let status = h.wait_for_exit(Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "rezolus hindsight exited with {status} after a capture-then-terminate \
+         signal pair"
+    );
+    h.wait_for_log("capture complete", Duration::from_secs(5));
+    let bytes = std::fs::metadata(&h.output).map(|m| m.len()).unwrap_or(0);
+    assert!(
+        bytes > 0,
+        "the capture the second signal waited for wrote nothing to {}",
+        h.output.display()
+    );
+}
+
+fn sealing_continues_through(
+    trigger: &str,
+    min_segments: u64,
+    mut dump: impl FnMut(&Hindsight) -> Duration,
+) {
     // Two-row segments at 10 Hz: a seal every ~200 ms, so a one-second window
     // is due about five of them.
     let h = Hindsight::start(2, WIDE);
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
 
     let before = h.wait_until("a buffer big enough to make a dump slow", |s| {
-        s.segments("fake") >= 12
+        s.segments("fake") >= min_segments
     });
 
     // Back-to-back dumps for a second. Each one opens its own connection, takes
@@ -540,7 +748,7 @@ fn sealing_continues_while_dumps_are_in_flight() {
     let mut dumps = 0u32;
     let mut busy = Duration::ZERO;
     while started.elapsed() < window {
-        busy += h.dump_to(&dest);
+        busy += dump(&h);
         dumps += 1;
     }
     let elapsed = started.elapsed();
@@ -548,35 +756,43 @@ fn sealing_continues_while_dumps_are_in_flight() {
     let (a, b) = (before.segments("fake"), after.segments("fake"));
     let ticks = after.ticks_recorded - before.ticks_recorded;
 
+    println!(
+        "MEASURED {trigger}: {ticks} ticks and {} seals over {elapsed:?} \
+         ({dumps} dumps, {busy:?} spent inside one, {:?} each)",
+        b - a,
+        busy / dumps
+    );
+
     // Fixture first: a window that dumps did not actually occupy proves
     // nothing, and neither does one they occupied with dumps too short to
     // matter. Both are stated, because both have silently degraded once.
     assert!(
         busy >= elapsed * 3 / 4,
-        "fixture: dumps covered only {busy:?} of the {elapsed:?} window, so a \
-         blocked writer would have had it mostly to itself anyway"
+        "fixture: {trigger} dumps covered only {busy:?} of the {elapsed:?} \
+         window, so a blocked writer would have had it mostly to itself anyway"
     );
     assert!(
         busy / dumps >= INTERVAL,
-        "fixture: the average dump took {:?}, less than the {INTERVAL:?} tick \
-         period — a writer blocked for the whole of every dump would still \
-         make every tick, and this test would pass on a daemon that pauses",
+        "fixture: the average {trigger} dump took {:?}, less than the \
+         {INTERVAL:?} tick period — a writer blocked for the whole of every \
+         dump would still make every tick, and this test would pass on a \
+         daemon that pauses",
         busy / dumps
     );
 
     // The claim.
     assert!(
         b - a >= 4,
-        "sealing was throttled by the dumps: {} segments sealed ({a} -> {b}) \
-         in {elapsed:?} of back-to-back dumps ({dumps} of them, {busy:?} \
-         spent inside one), where ~5 are due",
+        "sealing was throttled by the {trigger} dumps: {} segments sealed \
+         ({a} -> {b}) in {elapsed:?} of back-to-back dumps ({dumps} of them, \
+         {busy:?} spent inside one), where ~5 are due",
         b - a
     );
     assert!(
         ticks >= 9,
-        "the scrape loop lost ticks to the dumps: {ticks} in {elapsed:?} at a \
-         {INTERVAL:?} interval, where 10 are due ({dumps} dumps, {busy:?} \
-         spent inside one)"
+        "the scrape loop lost ticks to the {trigger} dumps: {ticks} in \
+         {elapsed:?} at a {INTERVAL:?} interval, where 10 are due ({dumps} \
+         dumps, {busy:?} spent inside one)"
     );
 }
 

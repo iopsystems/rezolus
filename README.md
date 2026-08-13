@@ -156,7 +156,7 @@ production incident at full resolution.
 The buffer is an ordinary `.rez` recording trimmed to the configured lookback,
 so you can open it with `rezolus view` or the MCP tools _while it is being
 written_, and a snapshot is a consistent point-in-time copy taken without
-pausing the recording.
+pausing the recording — however it is triggered, by signal or over HTTP.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 

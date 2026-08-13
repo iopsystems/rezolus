@@ -554,7 +554,7 @@ The fleet-scale version (a multi-GB buffer, 26 samplers, a `VACUUM INTO` lasting
 seconds) has not been run. The scaling law to check it against is
 `growth ≈ WAL byte rate × dump duration`, capped by nothing.
 
-### BUG: `POST /dump/file` and the SIGHUP capture pause the recording
+### BUG (fixed): `POST /dump/file` and the SIGHUP capture pause the recording
 
 `rezolus hindsight --help` promises "a snapshot is a consistent point-in-time
 copy taken without pausing the recording", and for `GET /dump` that holds — it
@@ -577,13 +577,55 @@ window of back-to-back dumps:
 It scales with dump duration, i.e. with buffer size — so it is worst on the
 large buffers an incident is actually captured from, and it drops data from the
 minutes *after* the trigger, which for a rolling window is data an operator was
-counting on. Not fixed here (this branch is verification only). The shape of a
-fix is to run the dump off the loop as `GET /dump` already does and reply
-through the oneshot when it finishes, rather than awaiting it inside the arm.
+counting on.
 
-Note the seal count is the blunter instrument of the two and stays blunt: seals
-are row-driven, so pausing `maintain()` alone *delays* seals rather than losing
-them, and the count over a window barely moves. Ticks are the sharp one.
+**Pre-existing, not a v3 regression:** the same `select!` shape is in the v2
+loop (`git show a569546e^:src/hindsight/mod.rs`, lines 226 and 286). What v3
+added was a dump slow enough to measure it.
+
+**Fixed** by taking every dump off the recording loop. The loop now *spawns*
+each dump — HTTP requests into a `JoinSet`, the SIGHUP capture onto its own
+task reporting back through a channel — and goes straight back to the
+`select!`; the reply still travels the request's `oneshot`, so a caller (and a
+failure) reaches its destination exactly as before, just from the spawned task
+rather than the arm. The capture's completion is logged where it always was, in
+the loop, off a `capture_rx` arm. Dumps are serialized against each other by a
+`Mutex` taken *inside* the spawned task, which keeps the one-at-a-time property
+the in-loop version had for free without giving the loop back the wait. Same
+numbers, same fixture, after the fix:
+
+| | ticks | segments sealed |
+|---|---|---|
+| `GET /dump` | 14 → **12** | 6 → 5 |
+| `POST /dump/file` | 2 → **13** | 1 → 6 |
+| SIGHUP | 1 → **12** | 1 → 5 |
+
+(10 ticks and ~5 seals are due per second; the left-hand figures are the same
+build with only `src/hindsight/mod.rs` reverted.)
+
+Note the seal count is the blunter instrument of the two: seals are row-driven,
+so pausing `maintain()` alone *delays* seals rather than losing them. It is
+blunt but not useless — a loop stopped for most of a second does show up in it,
+as 1 seal against the 5 due.
+
+Two decisions the fix had to make and did not have to before. **Two dumps at
+once** serialize rather than run concurrently or be rejected: they all write the
+same output path, and while `buffer::dump` stages and renames (so nothing
+tears), a caller told "your dump is at *path*" should not be reading another
+request's copy. **A dump in flight at shutdown** is waited for, not abandoned:
+its caller is still holding a request open, and the buffer it is reading lives
+in the staging directory the daemon deletes on the way out. A third signal
+still exits immediately, which is the escape hatch if that wait is unwelcome.
+
+The SIGHUP capture's fixture needed its own calibration, and it is a good
+example of how easily this kind of test goes vacuous: SIGHUP takes no time
+range, so it is a whole-file `VACUUM INTO` rather than the ranged copy the HTTP
+tests take, and at the HTTP fixture's 12 segments it finished in ~66 ms —
+*inside* one 100 ms tick, where a fully paused daemon still makes nearly every
+tick and the test passes on broken code. At 40 segments (~220 ms) the paused
+daemon still scraped 3 of the 4 seals the assertion demands, through the gaps
+between captures. The test runs at 60 segments (~330 ms), where the unfixed
+daemon manages 1.
 
 ## Open questions to settle during implementation
 

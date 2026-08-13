@@ -31,7 +31,9 @@ pub fn command() -> Command {
              ([general] output). See config/hindsight.toml for a documented starting point.\n\n\
              TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to the output file without\n\
              stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
-             remote status/dump requests instead.\n\n\
+             remote status/dump requests instead. Either way the recording keeps running for the\n\
+             whole of the snapshot — a capture costs no samples, including the samples taken\n\
+             while it is being written.\n\n\
              EXAMPLE:\n    \
              # Run the rolling-buffer daemon using the example config\n    \
              rezolus hindsight config/hindsight.toml",
@@ -78,6 +80,12 @@ pub fn run(config: Config) {
         .build()
         .expect("failed to launch async runtime");
 
+    // Wakes the recording loop when a signal changes STATE, so a capture starts
+    // on the signal rather than on the next tick. The loop reads STATE itself —
+    // this only says "look again" — so a dropped or full channel costs nothing
+    // but the tick of latency the loop used to have anyway.
+    let (signal_tx, mut signal_rx) = tokio::sync::mpsc::channel::<()>(1);
+
     ctrlc::set_handler(move || {
         let state = STATE.load(Ordering::SeqCst);
 
@@ -91,6 +99,8 @@ pub fn run(config: Config) {
             info!("terminating immediately");
             std::process::exit(2);
         }
+
+        let _ = signal_tx.try_send(());
     })
     .expect("failed to set ctrl-c handler");
 
@@ -258,17 +268,40 @@ pub fn run(config: Config) {
     rt.block_on(async move {
         let mut interval = crate::common::aligned_interval(interval_dur);
 
-        while STATE.load(Ordering::Relaxed) < TERMINATING {
-            loop {
-                tokio::select! {
-                    biased;
+        // Dumps run OFF this loop — that is the whole shape of what follows.
+        // Every dump is spawned and its result comes back asynchronously,
+        // because a `select!` does not poll its other branches while a handler
+        // body is awaiting, and `MissedTickBehavior::Skip` DISCARDS the ticks
+        // that go by in the meantime rather than deferring them. A dump taken
+        // inline therefore does not delay samples, it deletes them — worst on
+        // the large buffers an incident is captured from, and precisely over
+        // the minutes after the trigger when the incident is still unfolding.
+        let mut dumps = tokio::task::JoinSet::new();
+        // One dump at a time, whatever triggered it: they all write the same
+        // output path, and serializing keeps the guarantee the in-loop version
+        // gave for free — a caller is told about a file holding its own copy,
+        // not one another dump renamed into place a moment later. Waiting for
+        // the gate happens on the spawned task, so the loop keeps ticking.
+        let dump_gate = Arc::new(tokio::sync::Mutex::new(()));
+        // The SIGHUP/ctrl-c capture, which has no caller to reply to: it
+        // reports back here so its completion is logged from the loop and the
+        // state machine advances in one place.
+        let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel::<DumpToFileResponse>(1);
+        let mut capturing = false;
 
-                    Some(request) = dump_rx.recv() => {
-                        debug!("received dump-to-file request via HTTP");
+        loop {
+            tokio::select! {
+                biased;
+
+                Some(request) = dump_rx.recv() => {
+                    debug!("received dump-to-file request via HTTP");
+                    let (buffer_path, output, range) =
+                        (buffer_path.clone(), output.clone(), request.time_range);
+                    let gate = dump_gate.clone();
+                    dumps.spawn(async move {
+                        let _serialized = gate.lock().await;
                         // On a blocking thread: a large `VACUUM INTO` must not
                         // park the HTTP server along with the tick.
-                        let (buffer_path, output, range) =
-                            (buffer_path.clone(), output.clone(), request.time_range);
                         let response = tokio::task::spawn_blocking(move || {
                             dump_to_file(&buffer_path, &output, &range)
                         })
@@ -276,88 +309,117 @@ pub fn run(config: Config) {
                         .unwrap_or_else(|e| {
                             DumpToFileResponse::error(format!("the dump task failed: {e}"))
                         });
+                        // The reply moved off the loop with the work; a failure
+                        // is still a reply, and still reaches the caller.
                         let _ = request.response_tx.send(response);
+                    });
+                }
+
+                // Reap finished HTTP dumps so the set cannot grow unbounded.
+                // They have already answered their own callers.
+                Some(_) = dumps.join_next(), if !dumps.is_empty() => {}
+
+                Some(response) = capture_rx.recv() => {
+                    capturing = false;
+                    let terminating = STATE.load(Ordering::SeqCst) == TERMINATING;
+                    // Back to RUNNING BEFORE the log line, so a second signal
+                    // sent on seeing that line reads as a new capture rather
+                    // than as "terminate once the capture is done".
+                    if !terminating {
+                        STATE.store(RUNNING, Ordering::SeqCst);
                     }
+                    log_capture(&response);
+                    if terminating {
+                        break;
+                    }
+                }
 
-                    _ = interval.tick() => {
-                        if STATE.load(Ordering::Relaxed) != RUNNING {
-                            break;
-                        }
+                // A signal changed STATE; the check below acts on it.
+                Some(_) = signal_rx.recv() => {}
 
-                        let start = Instant::now();
+                _ = interval.tick() => {
+                    let start = Instant::now();
 
-                        if let Ok(response) = async_client.get(url.clone()).send().await {
-                            if let Ok(body) = response.bytes().await {
-                                let latency = start.elapsed();
+                    if let Ok(response) = async_client.get(url.clone()).send().await {
+                        if let Ok(body) = response.bytes().await {
+                            let latency = start.elapsed();
 
-                                debug!("sampling latency: {} us", latency.as_micros());
-                                debug!("body size: {}", body.len());
+                            debug!("sampling latency: {} us", latency.as_micros());
+                            debug!("body size: {}", body.len());
 
-                                let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
-                                    clock_anchor_wall_ns,
-                                    clock_anchor_mono.elapsed(),
-                                    wall_ns(),
-                                );
+                            let (anchored_ns, wall_offset_ns) = crate::recorder::anchored_stamp(
+                                clock_anchor_wall_ns,
+                                clock_anchor_mono.elapsed(),
+                                wall_ns(),
+                            );
 
-                                match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
-                                    Ok(snapshot) => {
-                                        if let Err(e) =
-                                            buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
-                                        {
-                                            fatal(&e, &buffer_path);
-                                        }
-                                        shared_state.record_tick();
+                            match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                                Ok(snapshot) => {
+                                    if let Err(e) =
+                                        buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
+                                    {
+                                        fatal(&e, &buffer_path);
                                     }
-                                    Err(e) => warn!("msgpack decode error: {e}"),
+                                    shared_state.record_tick();
                                 }
-                            } else {
-                                error!("failed to read response");
-                                std::process::exit(1);
+                                Err(e) => warn!("msgpack decode error: {e}"),
                             }
                         } else {
-                            error!("failed to get metrics");
+                            error!("failed to read response");
                             std::process::exit(1);
                         }
-
-                        // Every tick, scrape or not: this is where segments
-                        // seal, where retention runs, and where a writer that
-                        // died asynchronously is noticed.
-                        if let Err(e) = buffer.maintain() {
-                            fatal(&e, &buffer_path);
-                        }
-                        shared_state.set_at_retention_bound(buffer.at_retention_bound());
+                    } else {
+                        error!("failed to get metrics");
+                        std::process::exit(1);
                     }
+
+                    // Every tick, scrape or not: this is where segments
+                    // seal, where retention runs, and where a writer that
+                    // died asynchronously is noticed.
+                    if let Err(e) = buffer.maintain() {
+                        fatal(&e, &buffer_path);
+                    }
+                    shared_state.set_at_retention_bound(buffer.at_retention_bound());
                 }
             }
 
-            // Handle SIGHUP / ctrl-c triggered capture (CAPTURING state)
-            if STATE.load(Ordering::Relaxed) == CAPTURING {
-                let response = dump_to_file(&buffer_path, &output, &TimeRange::default());
-
-                if let Some(error) = response.error {
-                    error!("dump failed: {}", error);
-                } else if let Some(summary) = response.summary {
-                    // The span is what an operator actually wants to read back
-                    // ("did I catch the incident?"), so it leads; whole seconds
-                    // because nanosecond precision here is noise.
-                    let span = summary.retained().unwrap_or_default();
-                    info!(
-                        "capture complete: {} of metrics, {} rows across {} tables \
-                         ({} bytes) written to {}",
-                        humantime::format_duration(Duration::from_secs(span.as_secs())),
-                        summary.rows,
-                        summary.tables.len(),
-                        summary.bytes,
-                        response.path.display()
-                    );
+            // A SIGHUP / ctrl-c capture, started here and finished on the
+            // `capture_rx` arm above. The recording goes on running underneath
+            // it — the state stays CAPTURING so a second signal still means
+            // "exit when this finishes", but the loop is free the whole time.
+            if !capturing {
+                let state = STATE.load(Ordering::SeqCst);
+                if state >= TERMINATING {
+                    // Signalled twice before the capture even began: the second
+                    // signal asked to stop, and there is nothing to wait for.
+                    break;
                 }
-
-                if STATE.load(Ordering::SeqCst) == TERMINATING {
-                    return;
-                } else {
-                    STATE.store(RUNNING, Ordering::SeqCst);
+                if state == CAPTURING {
+                    capturing = true;
+                    info!("capture in progress; the recording continues");
+                    let (buffer_path, output) = (buffer_path.clone(), output.clone());
+                    let (gate, done) = (dump_gate.clone(), capture_tx.clone());
+                    tokio::spawn(async move {
+                        let _serialized = gate.lock().await;
+                        let response = tokio::task::spawn_blocking(move || {
+                            dump_to_file(&buffer_path, &output, &TimeRange::default())
+                        })
+                        .await
+                        .unwrap_or_else(|e| {
+                            DumpToFileResponse::error(format!("the capture task failed: {e}"))
+                        });
+                        let _ = done.send(response).await;
+                    });
                 }
             }
+        }
+
+        // A dump in flight at shutdown is finished, not abandoned: its caller
+        // is still waiting on a reply, and the buffer it is reading lives in a
+        // staging directory this function removes on the way out.
+        if !dumps.is_empty() {
+            info!("waiting for {} dump(s) in flight", dumps.len());
+            while dumps.join_next().await.is_some() {}
         }
     });
 
@@ -375,6 +437,29 @@ fn dump_to_file(buffer_path: &Path, output: &Path, range: &TimeRange) -> DumpToF
     match buffer::dump(buffer_path, output, range) {
         Ok(summary) => DumpToFileResponse::success(output.to_path_buf(), summary),
         Err(e) => DumpToFileResponse::error(e),
+    }
+}
+
+/// Report a SIGHUP / ctrl-c capture. It is the only trace such a capture
+/// leaves: there is no caller to answer, so a failure that is not logged here
+/// is a failure nobody ever hears about.
+fn log_capture(response: &DumpToFileResponse) {
+    if let Some(error) = &response.error {
+        error!("dump failed: {}", error);
+    } else if let Some(summary) = &response.summary {
+        // The span is what an operator actually wants to read back ("did I
+        // catch the incident?"), so it leads; whole seconds because nanosecond
+        // precision here is noise.
+        let span = summary.retained().unwrap_or_default();
+        info!(
+            "capture complete: {} of metrics, {} rows across {} tables \
+             ({} bytes) written to {}",
+            humantime::format_duration(Duration::from_secs(span.as_secs())),
+            summary.rows,
+            summary.tables.len(),
+            summary.bytes,
+            response.path.display()
+        );
     }
 }
 
