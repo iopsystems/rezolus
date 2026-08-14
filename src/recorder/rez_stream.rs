@@ -23,8 +23,9 @@ use metriken_exposition::Snapshot;
 use tracing::warn;
 
 use super::rez::{
-    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, Entry, RezManifest,
-    RezRecording, RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
+    append_tar_entry, dedup_key, entries_approx_bytes, group_by_sampler, write_table_parquet,
+    Entry, RezManifest, RezRecording, RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME,
+    REZ_SCHEMA_VERSION,
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
@@ -605,13 +606,29 @@ fn stagger_bucket(sampler: &str) -> u64 {
 /// copied in the first place.
 pub(crate) struct BuilderState {
     builder: TableBuilder,
+    account: SegmentAccount,
+}
+
+/// Everything the seal decision reads about an open segment, and none of the
+/// rows.
+///
+/// **Separate from `TableBuilder` because only one of the two containers keeps
+/// the rows.** v2 buffers them and encodes the builder it has been filling; v3
+/// writes each row to the WAL and rebuilds the table from it at seal time, so
+/// it has nothing to ask `rows()` or `approx_bytes()` of. Both must still seal
+/// at the same row from the same input, which they do by both deciding here —
+/// the alternative is two copies of a four-term predicate drifting apart in a
+/// way that only shows up as differently-shaped archives.
+pub(crate) struct SegmentAccount {
+    rows: usize,
+    approx_bytes: usize,
     /// Instant the current segment was opened (the age bound's origin).
     opened_at: Instant,
     max_rows: usize,
     max_age: Duration,
 }
 
-impl BuilderState {
+impl SegmentAccount {
     /// Open a sampler's **first** segment, with row and age targets reduced by
     /// a deterministic per-sampler fraction of up to 50%.
     ///
@@ -621,7 +638,7 @@ impl BuilderState {
     /// forever. Co-seals, not large individual segments, are what put a seal
     /// over the tick budget. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
-    /// size and count untouched — `seal_completed` restores the full policy.
+    /// size and count untouched — `rotate` restores the full policy.
     pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         let bucket = stagger_bucket(sampler);
         // Divide before multiplying: `max_rows` is `usize::MAX` in several
@@ -629,7 +646,8 @@ impl BuilderState {
         let row_offset = (policy.max_rows / (2 * STAGGER_BUCKETS as usize)) * bucket as usize;
         let age_offset = (policy.max_age / (2 * STAGGER_BUCKETS as u32)) * bucket as u32;
         Self {
-            builder: TableBuilder::new(sampler.to_string()),
+            rows: 0,
+            approx_bytes: 0,
             opened_at: Instant::now(),
             // `max(1)` so a small policy can never yield a zero row target,
             // which would seal a one-row segment every tick forever.
@@ -638,32 +656,70 @@ impl BuilderState {
         }
     }
 
-    /// Append one row to the open segment.
-    pub(crate) fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
-        self.builder.push_row(ts, wall_offset_ns, entries);
+    /// Account one appended row. `bytes` is [`entries_approx_bytes`] of that
+    /// row, which is exactly what `TableBuilder::push_row` would have charged.
+    pub(crate) fn add_row(&mut self, bytes: usize) {
+        self.rows += 1;
+        self.approx_bytes += bytes;
     }
 
-    /// Whether this open segment is past any seal threshold. An empty builder
+    /// Whether this open segment is past any seal threshold. An empty segment
     /// never is.
     ///
-    /// Row and age targets come from the state, not the policy: the first
+    /// Row and age targets come from the account, not the policy: the first
     /// segment of each sampler is staggered short. The byte cap is a memory
     /// bound and is never staggered.
-    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
-        let rows = self.builder.rows();
-        rows > 0
-            && (self.builder.approx_bytes() >= policy.max_bytes
-                || rows >= self.max_rows
+    pub(crate) fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
+        self.rows > 0
+            && (self.approx_bytes >= policy.max_bytes
+                || self.rows >= self.max_rows
                 || now.duration_since(self.opened_at) >= self.max_age)
     }
 
-    /// Rotate onto a fresh segment after a seal, dropping the startup stagger:
+    /// Reset onto a fresh segment after a seal, dropping the startup stagger:
     /// every segment after the first uses the full policy.
-    fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
-        let sealed = std::mem::replace(&mut self.builder, TableBuilder::new(sampler.to_string()));
+    pub(crate) fn rotate(&mut self, policy: &SealPolicy, now: Instant) {
+        self.rows = 0;
+        self.approx_bytes = 0;
         self.opened_at = now;
         self.max_rows = policy.max_rows;
         self.max_age = policy.max_age;
+    }
+
+    /// Rows in the open segment.
+    pub(crate) fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// The row and age targets the *current* open segment seals at.
+    #[cfg(test)]
+    pub(crate) fn targets(&self) -> (usize, Duration) {
+        (self.max_rows, self.max_age)
+    }
+}
+
+impl BuilderState {
+    pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
+        Self {
+            builder: TableBuilder::new(sampler.to_string()),
+            account: SegmentAccount::open_first(sampler, policy),
+        }
+    }
+
+    /// Append one row to the open segment, and account it.
+    pub(crate) fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+        self.builder.push_row(ts, wall_offset_ns, entries);
+        self.account.add_row(entries_approx_bytes(entries));
+    }
+
+    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
+        self.account.is_due(policy, now)
+    }
+
+    /// Rotate onto a fresh builder after a seal.
+    fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
+        let sealed = std::mem::replace(&mut self.builder, TableBuilder::new(sampler.to_string()));
+        self.account.rotate(policy, now);
         sealed
     }
 
@@ -682,7 +738,7 @@ impl BuilderState {
     /// The row and age targets the *current* open segment seals at.
     #[cfg(test)]
     pub(crate) fn targets(&self) -> (usize, Duration) {
-        (self.max_rows, self.max_age)
+        self.account.targets()
     }
 }
 
@@ -1626,15 +1682,15 @@ mod tests {
     fn tiny_policy_never_yields_a_zero_target() {
         for max_rows in [1usize, 2, 8, 127] {
             let state = BuilderState::open_first("scheduler", &stagger_policy(max_rows));
+            let (target, _) = state.targets();
             assert!(
-                state.max_rows >= 1 && state.max_rows <= max_rows,
-                "max_rows={max_rows} gave a target of {}",
-                state.max_rows
+                target >= 1 && target <= max_rows,
+                "max_rows={max_rows} gave a target of {target}"
             );
         }
         // `usize::MAX` must not overflow the offset arithmetic.
         let state = BuilderState::open_first("scheduler", &stagger_policy(usize::MAX));
-        assert!(state.max_rows >= usize::MAX / 2);
+        assert!(state.targets().0 >= usize::MAX / 2);
     }
 
     #[test]
