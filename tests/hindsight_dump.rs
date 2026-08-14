@@ -1095,6 +1095,11 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     /// remaining headroom (up to 4 MiB at the measured 3.7-7.5 MB/s, i.e.
     /// ~1 s here); the rest is margin.
     const SUSTAINED: Duration = Duration::from_secs(2);
+    /// Ceiling on how long the read mark is held while waiting for the sidecar
+    /// to pass its target. Reached only when the daemon is committing far below
+    /// its configured rate; a failure here means the growth never happened, not
+    /// that it was merely slow.
+    const SUSTAINED_MAX: Duration = Duration::from_secs(60);
 
     let h = Hindsight::start(2, WIDE);
     let dir = tempfile::tempdir().unwrap();
@@ -1149,10 +1154,20 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     let after_one = size();
 
     // Then dumps back to back, so the read mark is effectively continuous.
+    //
+    // Held until the sidecar has actually grown past its unpinned high-water,
+    // rather than for a fixed span. What is being demonstrated is that a held
+    // read mark lets committed data accumulate past the point autocheckpoint
+    // would otherwise cap the file at — and how long that takes is a function
+    // of how fast the daemon commits, which on a loaded machine is a fraction
+    // of the configured rate. A fixed window asserts the host's throughput; a
+    // target with a generous deadline asserts the mechanism.
     let before = size();
+    let target = plateau + plateau / 2;
+    let deadline = Instant::now() + SUSTAINED_MAX;
     let started = Instant::now();
     let (mut dumps, mut busy) = (0u32, Duration::ZERO);
-    while started.elapsed() < SUSTAINED {
+    while (started.elapsed() < SUSTAINED || size() < target) && Instant::now() < deadline {
         busy += h.dump_to(&dest);
         dumps += 1;
     }
