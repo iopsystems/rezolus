@@ -329,7 +329,7 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 /// creates the column, so every segment describes itself.
 ///
 /// So the live tail is *materialized into a segment* first, through the very
-/// function the reader uses ([`crate::rez_reader::materialize_wal_tail`]), and
+/// function the reader uses ([`crate::recorder::rez_v3_writer::materialize_wal_tail`]), and
 /// selection then happens purely over segments. Reusing that function rather
 /// than assembling columns here is not stylistic either: it injects
 /// `metric_type` via `push_row` exactly as the writer does, and a hand-rolled
@@ -392,8 +392,9 @@ fn copy_range(
                         first_ts: first.ts,
                         last_ts: last.ts,
                     };
-                    let bytes = crate::rez_reader::materialize_wal_tail(&sampler, &tail)
-                        .map_err(|e| format!("failed to seal the {sampler} tail: {e}"))?;
+                    let bytes =
+                        crate::recorder::rez_v3_writer::materialize_wal_tail(&sampler, &tail)
+                            .map_err(|e| format!("failed to seal the {sampler} tail: {e}"))?;
                     if let Some(bytes) = bytes {
                         tx.insert_segment(id, &sampler, seq, &meta, &bytes)?;
                     }

@@ -16,16 +16,17 @@
 //! unwinding, so a panic here never reaches the send-error path, skips
 //! finalize, and in wrapped mode orphans the child.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
 
-use metriken_exposition::Snapshot;
+use metriken::Window;
+use metriken_exposition::{Counter, Gauge, Histogram as ExpHistogram, Snapshot};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::rez::{dedup_key, group_by_sampler, write_table_parquet, Entry};
+use super::rez::{dedup_key, group_by_sampler, write_table_parquet, Entry, TableBuilder};
 use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
 use super::rez_stream::{drain_due, BuilderState, SealPolicy};
 
@@ -562,7 +563,91 @@ impl WalValue {
     }
 }
 
-/// Encode one sampler's cells for one tick into a `wal.row` BLOB.
+//// Encode a sampler's live WAL rows as one parquet segment — `None` when there
+/// is no tail.
+///
+/// **This replays the rows through `TableBuilder::push_row`, the same call
+/// `ingest` makes, rather than assembling columns directly.** That is not
+/// stylistic. `WalCell::metadata` is the snapshot *entry's* metadata and does
+/// not carry `metric_type` — `push_row` injects it. A tail built by copying
+/// that metadata into a `RezColumn` yields a segment a natively sealed one
+/// does not match, and `read_table_parquet` then reads every gauge back as a
+/// counter. Going through the writer's own call makes the two shapes identical
+/// by construction instead of by careful duplication.
+///
+/// Metadata is carried only on the first WAL row in which a metric appears in
+/// the current segment's WAL span, and `push_row` reads a column's metadata
+/// only when it first creates that column — so passing each cell's metadata
+/// through verbatim is exactly right: the first mention establishes the
+/// column, later mentions are ignored.
+pub(crate) fn materialize_wal_tail(
+    sampler: &str,
+    rows: &[WalRow],
+) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = TableBuilder::new(sampler.to_string());
+    for row in rows {
+        // Owned entries, because `Entry` borrows. Built into three vectors —
+        // one per shape — with `order` remembering where each cell went, so
+        // the entries are handed to `push_row` in the cells' original order.
+        // Column order is `push_row`'s insertion order, so preserving it is
+        // what keeps a materialized segment's schema in the same order a
+        // natively sealed one has.
+        let cells = decode_wal_row(&row.row)?;
+        let mut counters: Vec<Counter> = Vec::new();
+        let mut gauges: Vec<Gauge> = Vec::new();
+        let mut histograms: Vec<ExpHistogram> = Vec::new();
+        let mut order: Vec<(u8, usize)> = Vec::with_capacity(cells.len());
+        for cell in cells {
+            let metadata: HashMap<String, String> = cell
+                .metadata
+                .map(|m| m.into_iter().collect())
+                .unwrap_or_default();
+            let window = cell.window.map(|(begin, end)| Window::new(begin, end));
+            match cell.value {
+                WalValue::Counter(v) => {
+                    order.push((0, counters.len()));
+                    counters.push(Counter::new(cell.name, v, metadata).with_window(window));
+                }
+                WalValue::Gauge(v) => {
+                    order.push((1, gauges.len()));
+                    gauges.push(Gauge::new(cell.name, v, metadata).with_window(window));
+                }
+                WalValue::Histogram(grouping_power, max_value_power, buckets) => {
+                    // The H2 config travels with the buckets, so nothing has to
+                    // be recovered from the metadata row.
+                    let h = histogram::Histogram::from_buckets(
+                        grouping_power,
+                        max_value_power,
+                        buckets,
+                    )
+                    .map_err(|e| {
+                        format!(
+                            "failed to rebuild the {sampler} histogram {}: {e}",
+                            cell.name
+                        )
+                    })?;
+                    order.push((2, histograms.len()));
+                    histograms.push(ExpHistogram::new(cell.name, h, metadata).with_window(window));
+                }
+            }
+        }
+        let entries: Vec<Entry<'_>> = order
+            .iter()
+            .map(|&(kind, i)| match kind {
+                0 => Entry::Counter(&counters[i]),
+                1 => Entry::Gauge(&gauges[i]),
+                _ => Entry::Histogram(&histograms[i]),
+            })
+            .collect();
+        builder.push_row(row.ts, row.wall_offset, &entries);
+    }
+    Ok(Some(write_table_parquet(&builder.finish())?))
+}
+
+// Encode one sampler's cells for one tick into a `wal.row` BLOB.
 pub(crate) fn encode_wal_row(cells: &[WalCell]) -> Result<Vec<u8>, String> {
     rmp_serde::to_vec(cells).map_err(|e| format!("failed to encode a WAL row: {e}"))
 }
