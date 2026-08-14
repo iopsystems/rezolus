@@ -296,7 +296,9 @@ rezolus parquet filter rezolus.parquet -o slim.parquet
 ```
 
 `convert` infers the sampling interval from the median gap between snapshot
-timestamps; pass `--interval` to override it. A raw recording carries no
+timestamps; pass `--interval` to override it. It warns on stderr (without
+failing) when the sampled gaps have no dominant cadence, or when they are closer
+together than the whole milliseconds `sampling_interval_ms` can hold. A raw recording carries no
 `systeminfo` or metric descriptions — the recorder fetches those from the
 agent's `/systeminfo` and `/metrics/descriptions` endpoints while recording — so
 supply them with `--systeminfo` / `--descriptions` if you saved them. Afterwards

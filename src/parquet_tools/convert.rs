@@ -80,6 +80,41 @@ fn default_output_path(input: &Path) -> PathBuf {
 /// multi-gigabyte recording.
 const INTERVAL_SAMPLE_SNAPSHOTS: usize = 11;
 
+/// An inferred interval, plus anything about the sample that makes it a poor
+/// description of the recording.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Inferred {
+    pub interval: Duration,
+    pub concern: Option<IntervalConcern>,
+}
+
+/// Why a stamped interval should not be trusted at face value. Both cases are
+/// invisible in the output file, which is why they are reported at conversion.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IntervalConcern {
+    /// The median was below 1ms and the stamped value was clamped up to it, so
+    /// every rate against this file understates the real cadence.
+    Clamped { median: Duration },
+    /// Too few sampled gaps cluster around the median for it to stand for a
+    /// cadence — a stitched recording, or one full of restart gaps.
+    Irregular {
+        within: usize,
+        of: usize,
+        median: Duration,
+    },
+}
+
+/// How far from the median a gap may fall and still count as on-cadence.
+const CADENCE_TOLERANCE: f64 = 0.25;
+
+/// The fraction of gaps that must be on-cadence for the median to describe the
+/// recording.
+///
+/// With `CADENCE_TOLERANCE`, these two exist to stay silent on the case the
+/// median was chosen to absorb: one stalled sample in ten gaps leaves 90%
+/// on-cadence. Warning there would contradict the inference it reports on.
+const CADENCE_QUORUM: f64 = 0.60;
+
 /// Infer the recording's sampling interval from the first snapshots'
 /// timestamps, rewinding the reader afterwards.
 ///
@@ -91,7 +126,7 @@ const INTERVAL_SAMPLE_SNAPSHOTS: usize = 11;
 /// Uses the median delta, not the mean, so one stalled sample — a scheduling
 /// hiccup, a slow scrape — does not drag the answer off the real cadence.
 /// Returns `None` when there are fewer than two snapshots to compare.
-fn infer_interval(reader: &mut (impl io::Read + io::Seek)) -> Option<Duration> {
+fn infer_interval(reader: &mut (impl io::Read + io::Seek)) -> Option<Inferred> {
     use metriken_exposition::Snapshot;
 
     let mut times = Vec::with_capacity(INTERVAL_SAMPLE_SNAPSHOTS);
@@ -119,12 +154,39 @@ fn infer_interval(reader: &mut (impl io::Read + io::Seek)) -> Option<Duration> {
     deltas.sort_unstable();
     let median = deltas[deltas.len() / 2];
 
+    let on_cadence = deltas
+        .iter()
+        .filter(|d| {
+            **d >= median.mul_f64(1.0 - CADENCE_TOLERANCE)
+                && **d <= median.mul_f64(1.0 + CADENCE_TOLERANCE)
+        })
+        .count();
+
     // The clamp must stay: a sub-millisecond median would otherwise stamp
     // `sampling_interval_ms=0`. A measured cadence is clamped rather than
     // refused the way `interval_millis` refuses an explicit `--interval`, so
-    // that such a recording still converts.
+    // that such a recording still converts — with a concern attached, since
+    // nothing in the output file would otherwise show that it was clamped.
     let ms = (median.as_nanos() as f64 / 1e6).round() as u64;
-    Some(Duration::from_millis(ms.max(1)))
+
+    // Clamping wins when both apply: it is the more specific fact, and the one
+    // with no remedy.
+    let concern = if median < Duration::from_millis(1) {
+        Some(IntervalConcern::Clamped { median })
+    } else if (on_cadence as f64) < CADENCE_QUORUM * deltas.len() as f64 {
+        Some(IntervalConcern::Irregular {
+            within: on_cadence,
+            of: deltas.len(),
+            median,
+        })
+    } else {
+        None
+    };
+
+    Some(Inferred {
+        interval: Duration::from_millis(ms.max(1)),
+        concern,
+    })
 }
 
 /// Everything the conversion needs beyond the two paths.
@@ -149,6 +211,9 @@ pub(crate) struct Converted {
     pub interval: Duration,
     /// False when `--interval` supplied the value.
     pub interval_inferred: bool,
+    /// Always `None` for an explicit `--interval`: the operator asserted the
+    /// cadence, so the sample's shape is not evidence against it.
+    pub concern: Option<IntervalConcern>,
 }
 
 #[derive(Debug)]
@@ -406,12 +471,12 @@ fn convert_file(
                 std::fs::File::open(input)?
             };
 
-            let (interval, interval_inferred) = match opts.interval {
-                Some(explicit) => (explicit, false),
-                None => (
-                    infer_interval(&mut source).unwrap_or(FALLBACK_INTERVAL),
-                    true,
-                ),
+            let (interval, interval_inferred, concern) = match opts.interval {
+                Some(explicit) => (explicit, false, None),
+                None => match infer_interval(&mut source) {
+                    Some(got) => (got.interval, true, got.concern),
+                    None => (FALLBACK_INTERVAL, true, None),
+                },
             };
             // `infer_interval` rewinds too, but the conversion is wrong in a
             // way nothing downstream can see if the handle is mid-stream, so
@@ -433,6 +498,7 @@ fn convert_file(
                 rows,
                 interval,
                 interval_inferred,
+                concern,
             })
         }
     }
@@ -491,6 +557,26 @@ pub(crate) fn run(args: &clap::ArgMatches) {
                 done.rows,
                 done.interval,
             );
+            // Advisory, on stderr, exit code unchanged: the stamped value is
+            // the best reading of the recording, not a failure to produce one.
+            match done.concern {
+                Some(IntervalConcern::Clamped { median }) => eprintln!(
+                    "warning: snapshots are {median:?} apart, faster than the whole \
+                     milliseconds sampling_interval_ms can hold; it was stamped as \
+                     {:?}, so rates against this file understate the real cadence. \
+                     --interval cannot express this either.",
+                    done.interval,
+                ),
+                Some(IntervalConcern::Irregular { within, of, median }) => eprintln!(
+                    "warning: snapshot spacing is irregular — only {within} of {of} \
+                     sampled gaps are within {:.0}% of the {median:?} median, so no \
+                     single interval describes this recording. {:?} was stamped; pass \
+                     --interval to set it yourself.",
+                    CADENCE_TOLERANCE * 100.0,
+                    done.interval,
+                ),
+                None => {}
+            }
             // Say what is missing rather than letting it be discovered in the
             // viewer as absent help text and a blank hardware summary.
             let missing: Vec<&str> = [
@@ -656,16 +742,28 @@ mod tests {
             .collect()
     }
 
+    /// The inferred interval, asserting the sample raised no concern.
+    fn inferred_clean(bytes: Vec<u8>) -> Duration {
+        let mut r = Cursor::new(bytes);
+        let got = infer_interval(&mut r).expect("expected an interval");
+        assert_eq!(got.concern, None, "expected no concern");
+        got.interval
+    }
+
     #[test]
     fn infer_interval_finds_one_second() {
-        let mut r = Cursor::new(raw_stream(&cadence(5, 1_000_000_000)));
-        assert_eq!(infer_interval(&mut r), Some(Duration::from_millis(1000)));
+        assert_eq!(
+            inferred_clean(raw_stream(&cadence(5, 1_000_000_000))),
+            Duration::from_millis(1000)
+        );
     }
 
     #[test]
     fn infer_interval_finds_a_sub_second_cadence() {
-        let mut r = Cursor::new(raw_stream(&cadence(5, 250_000_000)));
-        assert_eq!(infer_interval(&mut r), Some(Duration::from_millis(250)));
+        assert_eq!(
+            inferred_clean(raw_stream(&cadence(5, 250_000_000))),
+            Duration::from_millis(250)
+        );
     }
 
     #[test]
@@ -680,14 +778,97 @@ mod tests {
             base + 5_000_000_000,
             base + 6_000_000_000,
         ];
+        // No concern: warning about the very sample the median absorbs would
+        // contradict the inference. This pins CADENCE_TOLERANCE/QUORUM.
+        assert_eq!(inferred_clean(raw_stream(&ts)), Duration::from_millis(1000));
+    }
+
+    #[test]
+    fn infer_interval_flags_a_clamped_sub_millisecond_cadence() {
+        // 500us apart: unrepresentable in sampling_interval_ms, stamped as 1ms.
+        let mut r = Cursor::new(raw_stream(&cadence(5, 500_000)));
+        let got = infer_interval(&mut r).unwrap();
+
+        assert_eq!(got.interval, Duration::from_millis(1));
+        assert_eq!(
+            got.concern,
+            Some(IntervalConcern::Clamped {
+                median: Duration::from_micros(500)
+            })
+        );
+    }
+
+    #[test]
+    fn infer_interval_flags_spacing_with_no_dominant_cadence() {
+        // Half the gaps 1s, half 250ms — a recording stitched from two sources.
+        // Whatever the median lands on describes only half the file.
+        let base = 1_786_645_704_000_000_000u64;
+        let mut ts = vec![base];
+        for step in [
+            1_000_000_000u64,
+            250_000_000,
+            1_000_000_000,
+            250_000_000,
+            1_000_000_000,
+            250_000_000,
+        ] {
+            ts.push(ts.last().unwrap() + step);
+        }
         let mut r = Cursor::new(raw_stream(&ts));
-        assert_eq!(infer_interval(&mut r), Some(Duration::from_millis(1000)));
+        let got = infer_interval(&mut r).unwrap();
+
+        match got.concern {
+            Some(IntervalConcern::Irregular { within, of, .. }) => {
+                assert_eq!(of, 6, "six gaps sampled");
+                assert!(within < 4, "expected a minority on-cadence, got {within}");
+            }
+            other => panic!("expected Irregular, got {other:?}"),
+        }
     }
 
     #[test]
     fn infer_interval_returns_none_for_a_single_snapshot() {
         let mut r = Cursor::new(raw_stream(&cadence(1, 1_000_000_000)));
-        assert_eq!(infer_interval(&mut r), None);
+        assert!(infer_interval(&mut r).is_none());
+    }
+
+    #[test]
+    fn an_explicit_interval_never_raises_a_concern() {
+        // The operator asserted the cadence; the sample's shape is not evidence
+        // against it, and interval_millis already refused what it could not
+        // represent.
+        let dir = tempfile::tempdir().unwrap();
+        let base = 1_786_645_704_000_000_000u64;
+        let ts = [base, base + 1_000_000_000, base + 30_000_000_000];
+        let input = write_input(dir.path(), "r.raw", &raw_stream(&ts));
+        let output = dir.path().join("out.parquet");
+
+        let opts = ConvertOptions {
+            interval: Some(Duration::from_millis(1000)),
+            ..Default::default()
+        };
+        let done = convert_file(&input, &output, &opts).unwrap();
+
+        assert_eq!(done.concern, None);
+    }
+
+    #[test]
+    fn a_concern_still_produces_a_converted_file() {
+        // The warning is advisory: the stamped value is the best reading
+        // available, not a failure.
+        let dir = tempfile::tempdir().unwrap();
+        let input = write_input(dir.path(), "r.raw", &raw_stream(&cadence(5, 500_000)));
+        let output = dir.path().join("out.parquet");
+
+        let done = convert_file(&input, &output, &ConvertOptions::default()).unwrap();
+
+        assert!(done.concern.is_some());
+        assert_eq!(
+            footer(&output)
+                .get("sampling_interval_ms")
+                .map(String::as_str),
+            Some("1")
+        );
     }
 
     #[test]

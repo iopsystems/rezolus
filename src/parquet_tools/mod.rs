@@ -326,7 +326,10 @@ pub fn command() -> Command {
                      The sampling interval stamped into the file is inferred from the median gap\n\
                      between snapshot timestamps unless --interval says otherwise. A recording\n\
                      with fewer than two snapshots falls back to 1s, so pass --interval if such a\n\
-                     recording was made at another cadence.\n\n\
+                     recording was made at another cadence. Inference warns on stderr when the\n\
+                     sampled gaps have no dominant cadence, or when they are closer together than\n\
+                     the whole milliseconds the stamped value can hold; the conversion still\n\
+                     succeeds in both cases.\n\n\
                      A raw recording carries no systeminfo or metric descriptions: the recorder\n\
                      fetches those over HTTP from the running rezolus agent while recording (its\n\
                      /systeminfo and /metrics/descriptions endpoints) and they never enter the\n\

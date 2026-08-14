@@ -185,6 +185,59 @@ building `Snapshot::V2(SnapshotV2{…})` values and tempfiles:
 - malformed inputs: truncated mid-stream, and a parquet file as input — both
   exit non-zero with the specific message
 
+## Increment: warning on an implausible inferred interval
+
+Inference always produces a number, and until now it produced it silently. Two
+cases make that number a poor description of the recording, and both are
+invisible in the output file:
+
+**The clamped case.** A median below 1ms cannot be represented by
+`sampling_interval_ms` and is clamped up to 1ms, so every rate computed against
+the file understates the real cadence.
+
+**The irregular case.** When the sampled gaps do not cluster around any single
+value — a recording stitched from two sources, or one full of restart gaps —
+the median is arithmetic rather than meaningful, and no single stamped interval
+describes the file.
+
+`infer_interval` returns `Option<Inferred>`, pairing the interval with an
+optional `IntervalConcern` (`Clamped` or `Irregular`). `Converted` carries the
+concern out to `run`, which prints one `warning:` line to stderr. The conversion
+still succeeds and exits 0: the stamped value is the best available reading, not
+a failure. An explicit `--interval` never warns — the operator asserted it, and
+`interval_millis` already refuses the value it could not represent.
+
+### The irregularity rule
+
+Count the sampled deltas within ±25% of the median; warn when fewer than 60%
+qualify.
+
+Those constants have one job: **not firing on the case the median exists to
+absorb.** `infer_interval` uses a median precisely so a single stalled sample
+does not move the answer, so a rule that then warns about that stall would
+contradict the design it is reporting on. One stall in ten deltas leaves 90%
+inside the band — silent. A recording stitched from a 1s half and a 250ms half
+leaves about 50% — warned. The rule fires when there is no dominant cadence at
+all, which is exactly when any single stamped value misleads.
+
+### Remedies differ, so the two warnings read differently
+
+The irregular warning names `--interval` as the fix. The clamped warning must
+not: `interval_millis` rejects an explicit sub-millisecond value too, so there
+is no value the operator could pass. It states the format limit instead —
+`sampling_interval_ms` holds whole milliseconds, and this recording is faster
+than that. Offering a remedy that the next command refuses would be worse than
+offering none.
+
+### Scope of the verdict
+
+Inference reads only the first `INTERVAL_SAMPLE_SNAPSHOTS` snapshots, so the
+concern describes the sample the interval was drawn from, not the whole file. A
+recording that turns gappy later will not warn. This is deliberate rather than a
+gap to close: the warning is evidence about exactly the data the stamped value
+came from, and widening it to the whole file would mean a full read to produce
+a number that is already only a header-derived estimate.
+
 ## Verification findings (implementation)
 
 The `document-feature` loop (5 blind user-simulations + a fresh-eyes critic per
