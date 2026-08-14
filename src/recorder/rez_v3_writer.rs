@@ -62,6 +62,10 @@ enum Msg {
     Evict { cutoff_ts: u64 },
     /// The loop's last clock observation; marks the recording complete.
     Finalize { clock_offset: (u64, i64) },
+    /// Reply once everything queued ahead of this has been committed. Carries
+    /// no data and changes nothing — see [`RezV3Writer::sync`].
+    #[cfg(test)]
+    Sync(SyncSender<()>),
 }
 
 /// Reclaim at most this many pages per retention pass — sized to fit inside a
@@ -170,6 +174,37 @@ impl RezV3Writer {
         self.send(Msg::Evict { cutoff_ts })
     }
 
+    /// Block until everything handed off so far has been committed.
+    ///
+    /// **The one place the writer is not fire-and-forget, and it exists because
+    /// the file lags the caller.** Every other hand-off queues work and returns
+    /// immediately, so a caller that hands off an ingest or an eviction and
+    /// then opens a SECOND connection to look at the file — `summarize`, a
+    /// dump, `/status` — can legitimately observe the state from before its own
+    /// last call. That is fine for a status reading and fatal for an assertion.
+    ///
+    /// Ordering is what makes this work rather than any locking: the channel is
+    /// FIFO and the writer is single-threaded, so the reply cannot be sent
+    /// until every earlier message has been fully handled.
+    ///
+    /// A dropped reply channel is treated as success — it means the writer
+    /// exited, and its error surfaces through the usual hand-off path rather
+    /// than here.
+    ///
+    /// **Test-only, and that is a statement about the callers rather than the
+    /// mechanism.** Nothing in production asserts on the file immediately after
+    /// handing off a tick: `/status` reporting retention a tick behind is
+    /// inherent to an asynchronous writer and harmless. Tests do assert it, and
+    /// without a barrier they race the writer. Give this a `cfg`-free home the
+    /// moment a real caller needs to see its own last tick.
+    #[cfg(test)]
+    pub(crate) fn sync(&mut self) -> Result<(), String> {
+        let (tx, rx) = sync_channel(0);
+        self.send(Msg::Sync(tx))?;
+        let _ = rx.recv();
+        Ok(())
+    }
+
     /// Record the final clock offset and mark the recording complete.
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         self.send(Msg::Finalize { clock_offset })?;
@@ -255,6 +290,12 @@ fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<
 
     loop {
         match rx.recv() {
+            // Nothing to do but answer: arriving here at all means every
+            // message queued before it has already been handled.
+            #[cfg(test)]
+            Ok(Msg::Sync(reply)) => {
+                let _ = reply.send(());
+            }
             Ok(Msg::Wal(rows)) => db.insert_wal_rows(recording_id, &rows)?,
             Ok(Msg::Seal(batch)) => {
                 if let Some(ts) = seal_batch(&mut db, recording_id, &mut next_seq, batch)? {
@@ -710,6 +751,14 @@ impl StreamRecorderV3 {
     /// this tick is catalogued before the cutoff is applied to it.
     pub(crate) fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
         self.handle.evict_before(cutoff_ts)
+    }
+
+    /// Block until the writer has committed everything handed off so far; see
+    /// [`RezV3Writer::sync`]. Needed before reading the file through a second
+    /// connection, which otherwise sees the state from before the last tick.
+    #[cfg(test)]
+    pub(crate) fn sync(&mut self) -> Result<(), String> {
+        self.handle.sync()
     }
 
     /// Seal the remaining partial segments (small by construction) and mark the

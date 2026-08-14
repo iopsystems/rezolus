@@ -121,6 +121,17 @@ impl HindsightBuffer {
         Ok(())
     }
 
+    /// Block until the writer has committed everything handed off so far.
+    ///
+    /// The recording loop must NOT call this — the writer being asynchronous
+    /// is what keeps sealing and eviction off the tick path. It is for a caller
+    /// that is about to inspect the file through a second connection and needs
+    /// to see its own last tick, rather than the state from before it.
+    #[cfg(test)]
+    pub fn sync(&mut self) -> Result<(), String> {
+        self.rec.sync()
+    }
+
     /// The retention cutoff: everything wholly older than this goes. `None`
     /// until the first row lands, since there is nothing to measure back from.
     fn cutoff(&self) -> Option<u64> {
@@ -603,6 +614,11 @@ mod tests {
         // retains *more* than the lookback. The retained span straddles the
         // lookback from both sides depending on what has sealed; the covered
         // span crosses it once.
+        // `summarize` opens its own connection, so it sees the file rather than
+        // this buffer's queued work. Without the barrier the eviction above may
+        // still be in flight and the file still spans all six ticks — which is
+        // how this read, and only this read, went flaky.
+        buf.sync().unwrap();
         let retained = summarize(&path).unwrap().retained().unwrap();
         assert!(
             retained < lookback,
