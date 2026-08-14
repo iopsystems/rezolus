@@ -20,21 +20,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use metriken::Window;
 use metriken_exposition::{Counter, Gauge, Histogram as ExpHistogram, Snapshot};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
-use super::rez::{dedup_key, group_by_sampler, write_table_parquet, Entry, TableBuilder};
+use super::rez::{
+    dedup_key, entries_approx_bytes, group_by_sampler, write_table_parquet, Entry, TableBuilder,
+};
 use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
-use super::rez_stream::{drain_due, BuilderState, SealPolicy};
-
-/// One sealed segment handed to the writer thread. Shared with the v2 writer:
-/// it is a plain `(sampler, RezTable)` carrier with no container-specific
-/// content, and a second definition would only be a second thing to keep in
-/// step with `TableBuilder::finish`.
-pub(crate) use super::rez_stream::SealJob;
+use super::rez_stream::{SealPolicy, SegmentAccount};
 
 /// Everything known when the recording starts. v3 has no manifest and no
 /// per-recording tar directory — a recording IS a row in `recordings` — so the
@@ -57,7 +54,7 @@ enum Msg {
     /// One tick's WAL rows, across all samplers — one transaction.
     Wal(Vec<WalRow>),
     /// One seal batch = one transaction.
-    Seal(Vec<SealJob>),
+    Seal(Vec<String>),
     /// Retention: drop everything wholly older than `cutoff_ts`, then trickle
     /// freed pages back if the free list has grown. Only hindsight sends this.
     Evict { cutoff_ts: u64 },
@@ -151,9 +148,10 @@ impl RezV3Writer {
         self.send(Msg::Wal(rows))
     }
 
-    /// Hand one seal batch (= one transaction) to the writer. Blocks while the
-    /// channel is full: that is the intended backpressure signal.
-    pub(crate) fn seal(&mut self, batch: Vec<SealJob>) -> Result<(), String> {
+    /// Hand one seal batch (= one transaction) to the writer, as the samplers
+    /// to seal. Blocks while the channel is full: that is the intended
+    /// backpressure signal.
+    pub(crate) fn seal(&mut self, batch: Vec<String>) -> Result<(), String> {
         if batch.is_empty() {
             return self.check_alive();
         }
@@ -388,18 +386,16 @@ fn seal_batch(
     db: &mut RezDb,
     recording_id: i64,
     next_seq: &mut BTreeMap<String, u64>,
-    batch: Vec<SealJob>,
+    batch: Vec<String>,
 ) -> Result<Option<u64>, String> {
-    // Encoding happens BEFORE the transaction opens: it is CPU work
-    // proportional to segment size (the fleet's worst single segment is
-    // 6.23 MiB) and would hold the write lock for its whole duration.
+    // Read and encode BEFORE the transaction opens. Both are proportional to
+    // segment size and would hold the write lock for their whole duration.
     //
-    // The cost, and it is a real divergence from v2, which encoded and
-    // appended one segment at a time: the WHOLE batch is resident before
-    // anything is inserted — ~75 MiB for a 12-table co-seal of worst-case
-    // segments. That is bounded (by the batch, which the seal policy bounds)
-    // and it is the price of "insert all of them in one transaction"; the
-    // alternative is holding the write lock across every encode.
+    // `live_wal` is what defines the segment: its watermark returns exactly the
+    // rows past this sampler's newest sealed segment, and because the ingest
+    // side hands rows and seal requests down one FIFO channel, those are
+    // exactly the rows the seal decision was made about. Nothing has to be
+    // snapshotted or passed along for that to hold.
     let mut encoded = Vec::with_capacity(batch.len());
     // The batch's clock observation: the NEWEST sealed row's
     // `(timestamp, wall_offset)`, paired with that same table's offset — never
@@ -407,29 +403,34 @@ fn seal_batch(
     // sealed, so every entry in the series is a projection of the
     // `:wall_offset` column it summarizes, exactly as in v2.
     let mut observation: Option<(u64, i64)> = None;
-    for job in batch {
-        let (Some(&first_ts), Some(&last_ts)) =
-            (job.table.timestamps.first(), job.table.timestamps.last())
-        else {
-            // A zero-row table has no time span to catalog and no WAL rows to
-            // prune. The ingest side never seals one; the writer declines to
-            // invent a span for it rather than failing the recording.
+    for sampler in batch {
+        let rows = db.live_wal(recording_id, &sampler)?;
+        let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+            // No live rows: nothing to catalog and nothing to prune. The ingest
+            // side never seals an empty segment, and a sampler whose rows were
+            // already sealed is not an error worth failing the recording over.
             continue;
         };
-        let bytes = write_table_parquet(&job.table)
-            .map_err(|e| format!("failed to encode a {} segment: {e}", job.sampler))?;
-        // `>=`, so a later job wins a tie — same rule as v2's `seal_segments`.
+        let (first_ts, last_ts, wall_offset, count) =
+            (first.ts, last.ts, last.wall_offset, rows.len() as u64);
+        let Some(bytes) = materialize_wal_tail(&sampler, &rows)
+            .map_err(|e| format!("failed to encode a {sampler} segment: {e}"))?
+        else {
+            continue;
+        };
+        // `>=`, so a later sampler wins a tie — same rule as v2's
+        // `seal_segments`.
         if observation.is_none_or(|(seen, _)| last_ts >= seen) {
-            observation = Some((last_ts, job.table.wall_offsets.last().copied().unwrap_or(0)));
+            observation = Some((last_ts, wall_offset));
         }
         // Bumped before the commit, which is safe only because the writer
         // exits on its first error: no later batch ever reuses this map.
-        let seq = next_seq.entry(job.sampler.clone()).or_insert(0);
+        let seq = next_seq.entry(sampler.clone()).or_insert(0);
         encoded.push(Encoded {
-            sampler: job.sampler,
+            sampler,
             seq: *seq,
             meta: SegmentMeta {
-                rows: job.table.timestamps.len() as u64,
+                rows: count,
                 first_ts,
                 last_ts,
             },
@@ -563,7 +564,7 @@ impl WalValue {
     }
 }
 
-//// Encode a sampler's live WAL rows as one parquet segment — `None` when there
+/// Encode a sampler's live WAL rows as one parquet segment — `None` when there
 /// is no tail.
 ///
 /// **This replays the rows through `TableBuilder::push_row`, the same call
@@ -672,10 +673,18 @@ pub(crate) fn decode_wal_row(bytes: &[u8]) -> Result<Vec<WalCell>, String> {
 /// every tick is committed as it arrives, for quiet tables as much as busy
 /// ones, so an unclean kill costs one tick rather than a whole open segment.
 pub(crate) struct StreamRecorderV3 {
-    /// Open segment per sampler: builder, open instant, and current targets.
-    builders: BTreeMap<String, BuilderState>,
-    /// Window-advance dedup keys. Held here, not on the builder, so dedup
-    /// survives a builder rotation: the key of a row in an already-sealed
+    /// Open segment per sampler — the seal decision's inputs, and no rows.
+    ///
+    /// **The rows live in the WAL and nowhere else.** v2 keeps a parallel
+    /// `TableBuilder` per sampler and encodes it at seal time; here the WAL row
+    /// committed each tick is already a complete record of that tick, so
+    /// buffering the same values a second time would double both the per-tick
+    /// allocation and the resident footprint to hold a copy that has to agree
+    /// with the WAL about what a segment contains. Sealing reads them back
+    /// instead — see `maybe_seal`.
+    accounts: BTreeMap<String, SegmentAccount>,
+    /// Window-advance dedup keys. Held here, not on the account, so dedup
+    /// survives a segment rotation: the key of a row in an already-sealed
     /// segment must still suppress a re-observation.
     last_keys: BTreeMap<String, u64>,
     /// Per sampler, the metrics whose metadata is already in the CURRENT
@@ -693,7 +702,7 @@ impl StreamRecorderV3 {
 
     pub(crate) fn with_policy(handle: RezV3Writer, policy: SealPolicy) -> Self {
         Self {
-            builders: BTreeMap::new(),
+            accounts: BTreeMap::new(),
             last_keys: BTreeMap::new(),
             described: BTreeMap::new(),
             handle,
@@ -791,39 +800,51 @@ impl StreamRecorderV3 {
             accepted.push((sampler, key, entries));
         }
 
-        // Pass 2: infallible. The builders and the dedup keys advance together.
+        // Pass 2: infallible. The accounts and the dedup keys advance together.
+        // Only the accounting advances here — the values themselves are in
+        // `wal_rows`, committed below.
         for (sampler, key, entries) in accepted {
             self.last_keys.insert(sampler.to_string(), key);
             let policy = &self.policy;
-            let state = self
-                .builders
+            self.accounts
                 .entry(sampler.to_string())
-                .or_insert_with(|| BuilderState::open_first(sampler, policy));
-            state.push_row(anchored_ts, wall_offset_ns, &entries);
+                .or_insert_with(|| SegmentAccount::open_first(sampler, policy))
+                .add_row(entries_approx_bytes(&entries));
         }
         self.handle.wal(wal_rows)
     }
 
     /// Seal every open segment past any threshold, as ONE batch → one
-    /// transaction. Empty builders never seal.
+    /// transaction. Empty segments never seal.
     ///
     /// Call this every loop iteration, scrape or not: an unreachable endpoint
     /// must still get its pre-outage rows sealed, and it is also where a writer
     /// that died asynchronously gets noticed.
+    ///
+    /// **The rows are not here, so the batch names samplers rather than
+    /// carrying tables.** The writer thread reads each sampler's live WAL and
+    /// rebuilds its segment from that. Which rows those are is settled by
+    /// ordering rather than by a snapshot taken here: the channel is FIFO and
+    /// the writer single-threaded, so every WAL row handed off before this
+    /// message is committed before it is read, and every row after it is not
+    /// yet visible to `live_wal`'s watermark. The segment therefore covers
+    /// exactly the rows this decision was made about.
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
+        let now = Instant::now();
         let mut batch = Vec::new();
-        for (sampler, builder) in drain_due(&mut self.builders, &self.policy) {
-            // The one thing v3 does that v2 does not. The metadata anchor is
-            // per SEGMENT, so it rotates with the builder: the next WAL row for
-            // this sampler re-carries every metric's metadata. That is what
-            // keeps the live WAL self-contained once the prune below the new
-            // segment's `last_ts` lands, and what makes the WAL capture label
-            // drift exactly where a re-latched `TableBuilder` captures it.
-            self.described.remove(&sampler);
-            batch.push(SealJob {
-                sampler,
-                table: builder.finish(),
-            });
+        for (sampler, account) in self.accounts.iter_mut() {
+            if !account.is_due(&self.policy, now) {
+                continue;
+            }
+            account.rotate(&self.policy, now);
+            // The metadata anchor is per SEGMENT, so it rotates with the
+            // account: the next WAL row for this sampler re-carries every
+            // metric's metadata. That is what keeps the live WAL
+            // self-contained once the prune below the new segment's `last_ts`
+            // lands, and what makes the WAL capture label drift exactly where
+            // the rebuilt table captures it.
+            self.described.remove(sampler);
+            batch.push(sampler.clone());
         }
         self.handle.seal(batch)
     }
@@ -854,14 +875,10 @@ impl StreamRecorderV3 {
     /// segments and nothing else, so the WAL is left empty and no consumer pays
     /// for a replay it does not need.
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
-        let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
+        let tails: Vec<String> = std::mem::take(&mut self.accounts)
             .into_iter()
-            .filter_map(|(sampler, state)| {
-                state.into_tail().map(|builder| SealJob {
-                    sampler,
-                    table: builder.finish(),
-                })
-            })
+            .filter(|(_, account)| account.rows() > 0)
+            .map(|(sampler, _)| sampler)
             .collect();
         self.handle.seal(tails)?;
         self.handle.finalize(clock_offset)
@@ -870,16 +887,16 @@ impl StreamRecorderV3 {
     /// Rows in a sampler's open (unsealed) segment.
     #[cfg(test)]
     fn open_rows(&self, sampler: &str) -> usize {
-        self.builders
+        self.accounts
             .get(sampler)
-            .map(BuilderState::open_rows)
+            .map(SegmentAccount::rows)
             .unwrap_or(0)
     }
 
     /// The row and age targets the sampler's *current* open segment seals at.
     #[cfg(test)]
     fn open_targets(&self, sampler: &str) -> Option<(usize, std::time::Duration)> {
-        self.builders.get(sampler).map(BuilderState::targets)
+        self.accounts.get(sampler).map(SegmentAccount::targets)
     }
 }
 
@@ -887,7 +904,7 @@ impl StreamRecorderV3 {
 mod tests {
     use super::*;
     use crate::recorder::rez::recorder_tests_support::counter;
-    use crate::recorder::rez::{detect_rez_format, Entry, RezFormat, RezTable, TableBuilder};
+    use crate::recorder::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
     use metriken::Window;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
@@ -904,46 +921,78 @@ mod tests {
         }
     }
 
-    /// A sealable job with `ts.len()` rows for `sampler`, every row carrying
+    /// Commit `ts.len()` WAL rows for `sampler`, every row carrying
     /// `wall_offset` in the `:wall_offset` sidecar.
-    fn job_with_offset(sampler: &str, ts: &[u64], wall_offset: i64) -> SealJob {
-        let mut b = TableBuilder::new(sampler.to_string());
-        for (i, &t) in ts.iter().enumerate() {
-            let c = counter("0", sampler, i as u64, Some(Window::new(t - 1, t)));
-            b.push_row(t, wall_offset, &[Entry::Counter(&c)]);
-        }
-        SealJob {
-            sampler: sampler.to_string(),
-            table: b.finish(),
-        }
-    }
-
-    fn job(sampler: &str, ts: &[u64]) -> SealJob {
-        job_with_offset(sampler, ts, 7)
-    }
-
-    /// A job the writer cannot encode: `wall_offsets` shorter than
-    /// `timestamps` fails `RecordBatch`'s equal-length check inside
-    /// `write_table_parquet`. Same shape of mid-recording writer failure as a
-    /// full disk: it happens on the writer thread, after the hand-off returned.
-    fn unencodable_job(sampler: &str) -> SealJob {
-        SealJob {
-            sampler: sampler.to_string(),
-            table: RezTable {
+    ///
+    /// This is the whole of a segment's input now: sealing reads the live WAL
+    /// back rather than being handed a table, so a test that wants a sealable
+    /// segment writes the rows a tick would have written and then names the
+    /// sampler. Metadata rides the first row only, as `ingest` anchors it.
+    fn commit_wal(writer: &mut RezV3Writer, sampler: &str, ts: &[u64], wall_offset: i64) {
+        let rows: Vec<WalRow> = ts
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| WalRow {
                 sampler: sampler.to_string(),
-                timestamps: vec![1_000, 2_000],
-                wall_offsets: vec![0],
-                columns: Vec::new(),
-            },
-        }
+                ts: t,
+                wall_offset,
+                row: encode_wal_row(&[WalCell {
+                    name: "0".to_string(),
+                    metadata: (i == 0).then(|| {
+                        [("sampler".to_string(), sampler.to_string())]
+                            .into_iter()
+                            .collect()
+                    }),
+                    value: WalValue::Counter(i as u64),
+                    window: Some((t - 1, t)),
+                }])
+                .unwrap(),
+            })
+            .collect();
+        writer.wal(rows).unwrap();
     }
 
+    /// `commit_wal` at the offset most tests do not care about.
+    fn commit(writer: &mut RezV3Writer, sampler: &str, ts: &[u64]) {
+        commit_wal(writer, sampler, ts, 7);
+    }
+
+    /// WAL rows the writer cannot turn into a segment: the bucket vector does
+    /// not match the H2 config it is tagged with, so `Histogram::from_buckets`
+    /// rejects it inside `materialize_wal_tail`. Same shape of mid-recording
+    /// writer failure as a full disk — it happens on the writer thread, after
+    /// the hand-off returned.
+    fn commit_unencodable(writer: &mut RezV3Writer, sampler: &str) {
+        let row = WalRow {
+            sampler: sampler.to_string(),
+            ts: 1_000,
+            wall_offset: 0,
+            row: encode_wal_row(&[WalCell {
+                name: "0".to_string(),
+                metadata: None,
+                value: WalValue::Histogram(7, 64, vec![1, 2, 3]),
+                window: None,
+            }])
+            .unwrap(),
+        };
+        writer.wal(vec![row]).unwrap();
+    }
+
+    /// One committed WAL row. The payload is a real encoded cell rather than a
+    /// placeholder: sealing decodes the live WAL to build the segment, so a row
+    /// that cannot be decoded is a row that cannot be sealed.
     fn wal_row(sampler: &str, ts: u64) -> WalRow {
         WalRow {
             sampler: sampler.to_string(),
             ts,
             wall_offset: 7,
-            row: format!("row@{ts}").into_bytes(),
+            row: encode_wal_row(&[WalCell {
+                name: "0".to_string(),
+                metadata: None,
+                value: WalValue::Counter(ts),
+                window: Some((ts.saturating_sub(1), ts)),
+            }])
+            .unwrap(),
         }
     }
 
@@ -1012,11 +1061,10 @@ mod tests {
             .unwrap();
         }
 
+        commit(&mut writer, "cpu_usage", &[1_000, 2_000]);
+        commit(&mut writer, "blockio", &[10]);
         writer
-            .seal(vec![
-                job("cpu_usage", &[1_000, 2_000]),
-                job("blockio", &[10]),
-            ])
+            .seal(vec!["cpu_usage".to_string(), "blockio".to_string()])
             .unwrap();
         let err = writer
             .finalize((2_000, 7))
@@ -1044,13 +1092,19 @@ mod tests {
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
         let rid = writer.recording_id();
 
-        for ts in [10, 20, 30, 40] {
+        for ts in [10, 20, 30] {
             writer
                 .wal(vec![wal_row("cpu_usage", ts), wal_row("blockio", ts)])
                 .unwrap();
         }
-        // cpu_usage seals its first three ticks; blockio seals nothing.
-        writer.seal(vec![job("cpu_usage", &[10, 20, 30])]).unwrap();
+        // cpu_usage seals what is live at this point — 10..30 — and blockio
+        // seals nothing. The tick at 40 is committed AFTER the seal request, so
+        // the channel's ordering is what keeps it out of the segment: it is not
+        // yet visible to `live_wal` when the writer reaches the seal.
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
+        writer
+            .wal(vec![wal_row("cpu_usage", 40), wal_row("blockio", 40)])
+            .unwrap();
         writer.finalize((40, 7)).unwrap();
 
         let db = RezDb::open(&path).unwrap();
@@ -1099,7 +1153,12 @@ mod tests {
             vec![10, 20, 30, 40, 50],
             "every ingested tick is recoverable"
         );
-        assert_eq!(live[0].row, b"row@10");
+        // The payload survived intact, not just the row: decoding it is what a
+        // reader materializing this tail has to do.
+        assert_eq!(
+            decode_wal_row(&live[0].row).unwrap()[0].value,
+            WalValue::Counter(10)
+        );
         assert!(
             !db.read_recordings().unwrap()[0].complete,
             "a recording killed before finalize is not complete"
@@ -1120,15 +1179,14 @@ mod tests {
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
         let rid = writer.recording_id();
 
+        // The newest row belongs to the sampler named FIRST, and the older
+        // sampler carries a wildly different offset — so a derivation that took
+        // the last sampler's, or the batch's oldest row, or mixed one table's
+        // timestamp with another's offset, is visible here.
+        commit_wal(&mut writer, "cpu_usage", &[3_000], 7);
+        commit_wal(&mut writer, "scheduler", &[1_000, 2_000], 99);
         writer
-            .seal(vec![
-                // The newest row is in the FIRST job, and the older sampler
-                // carries a wildly different offset — so a derivation that
-                // took the last job's, or the batch's oldest row, or mixed one
-                // table's timestamp with another's offset, is visible here.
-                job_with_offset("cpu_usage", &[3_000], 7),
-                job_with_offset("scheduler", &[1_000, 2_000], 99),
-            ])
+            .seal(vec!["cpu_usage".to_string(), "scheduler".to_string()])
             .unwrap();
         // Killed: no finalize.
         drop(writer);
@@ -1152,9 +1210,8 @@ mod tests {
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
         let rid = writer.recording_id();
 
-        writer
-            .seal(vec![job_with_offset("cpu_usage", &[1_000], 7)])
-            .unwrap();
+        commit_wal(&mut writer, "cpu_usage", &[1_000], 7);
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
         writer.finalize((1_000, -11)).unwrap();
 
         let db = RezDb::open(&path).unwrap();
@@ -1175,14 +1232,16 @@ mod tests {
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
 
         // The hand-off itself succeeds: the failure happens on the writer.
-        writer.seal(vec![unencodable_job("cpu_usage")]).unwrap();
+        commit_unencodable(&mut writer, "cpu_usage");
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
 
         // The next send that finds the receiver gone joins and reports. A
         // bounded retry, because the channel buffers one message and the
         // writer fails asynchronously.
         let mut surfaced = None;
         for _ in 0..500 {
-            match writer.seal(vec![job("scheduler", &[1_000])]) {
+            commit(&mut writer, "scheduler", &[1_000]);
+            match writer.seal(vec!["scheduler".to_string()]) {
                 Ok(()) => std::thread::sleep(std::time::Duration::from_millis(1)),
                 Err(e) => {
                     surfaced = Some(e);
@@ -1212,7 +1271,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
-        writer.seal(vec![unencodable_job("cpu_usage")]).unwrap();
+        commit_unencodable(&mut writer, "cpu_usage");
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
 
         let mut surfaced = None;
         for _ in 0..500 {
@@ -1239,7 +1299,7 @@ mod tests {
         let rid = writer.recording_id();
 
         writer.wal(vec![wal_row("cpu_usage", 1_000)]).unwrap();
-        writer.seal(vec![job("cpu_usage", &[1_000])]).unwrap();
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
         writer.finalize((2_000, -11)).unwrap();
 
         // Still the same file at the same path — nothing was renamed into
@@ -1271,11 +1331,18 @@ mod tests {
         let mut writer = RezV3Writer::create(&path, seed()).unwrap();
         let rid = writer.recording_id();
 
-        writer.seal(vec![job("cpu_usage", &[10, 20])]).unwrap();
+        // Each round commits the rows that round's segment should cover, then
+        // seals — the WAL tail is what the segment is, so the rows have to land
+        // between seals rather than all up front.
+        commit(&mut writer, "cpu_usage", &[10, 20]);
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
+        commit(&mut writer, "cpu_usage", &[30]);
+        commit(&mut writer, "blockio", &[30]);
         writer
-            .seal(vec![job("cpu_usage", &[30]), job("blockio", &[30])])
+            .seal(vec!["cpu_usage".to_string(), "blockio".to_string()])
             .unwrap();
-        writer.seal(vec![job("cpu_usage", &[40])]).unwrap();
+        commit(&mut writer, "cpu_usage", &[40]);
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
         writer.finalize((40, 7)).unwrap();
 
         let db = RezDb::open(&path).unwrap();
@@ -1849,6 +1916,66 @@ mod tests {
                  live WAL itself — no segment lookup, nothing lost to retention"
             );
         }
+    }
+
+    // THE claim the WAL-sourced seal rests on: a segment built by replaying the
+    // WAL is the segment the buffered builder would have produced. Everything
+    // downstream — the reader, `rate()` over a seal boundary, a v2/v3
+    // comparison — assumes the two are interchangeable.
+    //
+    // Compared as encoded parquet bytes rather than field by field, because the
+    // ways this can go wrong are all in the encoding: `WalCell::metadata` does
+    // not carry `metric_type` (`push_row` injects it), and column ORDER is
+    // insertion order, so a replay that assembled columns directly, or visited
+    // cells in a different order, yields a segment a reader treats differently
+    // while every individual value still matches.
+    #[test]
+    fn a_wal_sourced_segment_is_byte_identical_to_a_buffered_one() {
+        let sampler = "cpu_usage";
+        let ts = [1_000u64, 2_000, 3_000];
+
+        // What the builder path produced: push each row, encode the table.
+        let mut b = TableBuilder::new(sampler.to_string());
+        for (i, &t) in ts.iter().enumerate() {
+            let c = counter("0", sampler, i as u64, Some(Window::new(t - 1, t)));
+            b.push_row(t, 7, &[Entry::Counter(&c)]);
+        }
+        let buffered = write_table_parquet(&b.finish()).unwrap();
+
+        // What the WAL path produces from the same ticks, metadata anchored on
+        // the first row exactly as `ingest` anchors it.
+        let rows: Vec<WalRow> = ts
+            .iter()
+            .enumerate()
+            .map(|(i, &t)| WalRow {
+                sampler: sampler.to_string(),
+                ts: t,
+                wall_offset: 7,
+                row: encode_wal_row(&[WalCell {
+                    name: "0".to_string(),
+                    // The same metadata the entry carries above — `ingest`
+                    // copies the snapshot entry's map into the cell verbatim.
+                    metadata: (i == 0).then(|| {
+                        [
+                            ("metric".to_string(), "0".to_string()),
+                            ("sampler".to_string(), sampler.to_string()),
+                        ]
+                        .into_iter()
+                        .collect()
+                    }),
+                    value: WalValue::Counter(i as u64),
+                    window: Some((t - 1, t)),
+                }])
+                .unwrap(),
+            })
+            .collect();
+        let replayed = materialize_wal_tail(sampler, &rows).unwrap().unwrap();
+
+        assert_eq!(
+            replayed, buffered,
+            "a segment replayed from the WAL must be what buffering would have \
+             written, byte for byte"
+        );
     }
 
     #[test]
