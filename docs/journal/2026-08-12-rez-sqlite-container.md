@@ -447,6 +447,16 @@ inside the 300 s bound. 15 tables are byte-capped, 10 row-capped.
 
 ### Decision: keep `max_bytes` at 8 MiB
 
+> **AMENDED 2026-08-13** — see
+> [recorder resource footprint](2026-08-13-recorder-resource-footprint.md) § Part 1.
+> The value survives, the reasoning below does not stand alone: it argues from
+> segment count and encoded size without testing CPU. A 28-cell sweep found the
+> seal caps are effectively **CPU-neutral** (3.3× range in seal CPU lands inside
+> a 4.4% band on total process CPU), so the caps are chosen for finalize wall
+> and peak memory instead. `max_bytes` stays at 8 MiB because 32 MiB — better on
+> archive size and query time — costs finalize 549.8 → 827.3 ms. `max_rows` was
+> retuned 4096 → 900 (finalize 1147.6 → 549.8 ms at the same byte cap).
+
 Lowering it is expensive and aims at the wrong target. Halving to 4 MiB would
 take total segments from 582 to ~1,100 (and `syscall_latency` from 190 to 380,
 deep into the superlinear region) to shrink segments that are *already* 0.68 MB
@@ -478,6 +488,12 @@ memory bound that is 2.5× wrong in the dangerous direction, and this is live in
 merged v2 (`5de241d9`), not just a v3 concern.
 
 ### For v3: express the cap as a target *encoded* size
+
+> **AMENDED 2026-08-13** — still reasonable, lower urgency. Segment count drives
+> *read* cost (~12 ms/segment), which belongs to the offline compactor rather
+> than the agent, and it has no bearing on peak RSS — that is set by column
+> count, not segment size. See
+> [recorder resource footprint](2026-08-13-recorder-resource-footprint.md).
 
 A single global in-memory cap is mismatched at both ends — it makes
 `syscall_latency` emit 190 segments of 0.63 MB (7.6× past the ~25/table

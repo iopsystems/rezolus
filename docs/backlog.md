@@ -196,13 +196,50 @@ recording length, 55 ms under backpressure).
   read path, but not size: the +1.28 % overhead figure is still macOS-only,
   from a bespoke replay harness. *Reopen:* before quoting a fleet size
   overhead. Related: `syscall_latency` reached 144 segments in 900 s.
+## Recorder resource footprint
+
+Source: [Recorder resource footprint — seal cost and peak RSS](journal/2026-08-13-recorder-resource-footprint.md)
+(peak RSS 843 → 189 MB; seal policy retuned).
+
+- **Per-metric `:window_*` sidecars triple every table's column count** — Open,
+  and the structural root cause behind the recorder's memory profile.
+  `cpu_usage` is 5,846 columns where ~1,950 would do: for a BPF sampler all
+  metrics in a tick share one acquisition window (the maps are read once), so a
+  window pair per metric carries no extra information. `:wall_offset` already
+  demonstrates the cheaper table-level shape. A 3× column reduction is upstream
+  of parquet writer memory, archive size and read cost at once.
+- **WAL-sourced seals — drop `TableBuilder`** — Open. Every value is written
+  twice per tick (builder + WAL), two independent sources of truth for segment
+  contents. Worth ~50 MiB of RSS (9%); the real case is per-tick cost and
+  single-source correctness. The read path already materializes a live WAL tail
+  as a segment (`40937a21`). Cost to weigh: `cpu_usage` seals at ~107 rows with
+  a 62,522 B WAL row, so a seal reads back ~6.5 MiB.
+- **Recorder and hindsight have no self-metrics** — Open. Neither registers a
+  single metric, so hindsight's own footprint is invisible on every fleet host
+  it runs on. Natural shape is a per-sampler table at the recorder's own cadence.
+- **`rezolus_memory_usage_resident_set_size` reports a peak, not current RSS** —
+  Open, and a defect in a shipped metric. It is fed from `ru_maxrss`
+  (`src/agent/samplers/rezolus/rusage/mod.rs`), a monotonic high-water mark,
+  under a name and description ("The total amount of memory allocated by
+  Rezolus") that read as current usage — so it can never decrease. Either point
+  it at `/proc/self/statm` or rename it to say high-water.
+- **Flaky test** — Open.
+  `hindsight::buffer::tests::at_retention_bound_flips_once_the_recording_outlasts_the_lookback`
+  fails ~1 run in 6. Deterministic inputs, so the race is likely the writer
+  thread's channel not being drained before the later assertions.
+- **`WRITER_CACHE_SIZE_KIB` sized, not fitted** — Open, low value. 16 MiB is
+  reasoned from `SealPolicy::max_bytes`; the knee between 2 and 256 MiB is
+  un-swept.
+
 ## `.rez` v3 — SQLite container
 
 Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-sqlite-container.md)
 (design landed 2026-08-12, `f0d58a74`; both gating measurements passed).
 
-- **Adopt a target-encoded-size cap** — Open. A single global *in-memory*
-  `max_bytes` is mismatched at both ends: it makes `syscall_latency` emit 190
+- **Adopt a target-encoded-size cap** — Open, **lower urgency after the 2026-08-13
+  footprint work**: segment count drives read cost (the compactor's problem) and
+  does not affect peak RSS, which is set by column count. A single global
+  *in-memory* `max_bytes` is mismatched at both ends: it makes `syscall_latency` emit 190
   segments of 0.63 MB (7.6× past the ~25/table guidance) while letting
   `cpu_usage` emit 6.23 MiB ones, because the compression ratio spans 1.32:1 to
   62:1. Now that the per-table ratio is measured and stable within ±5%, a cap of
