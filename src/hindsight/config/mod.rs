@@ -23,7 +23,7 @@ fn duration() -> String {
 }
 
 fn output() -> String {
-    "/tmp/rezolus.parquet".into()
+    "/tmp/rezolus.rez".into()
 }
 
 #[derive(Deserialize, Default)]

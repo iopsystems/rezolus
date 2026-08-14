@@ -191,17 +191,33 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let pinned = args.get_one::<String>("pinned");
 
     // `.rez` inputs: assemble a multi-recording archive (label-set model).
-    if files
-        .iter()
-        .any(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
+    // Dispatch is by CONTENT, not extension, and recognizes both `.rez`
+    // containers (v2 tar and v3 SQLite).
     {
-        if !files
+        use crate::recorder::rez::RezFormat;
+        let formats: Vec<RezFormat> = files
             .iter()
-            .all(|f| crate::recorder::rez::is_rez_path(f).unwrap_or(false))
-        {
-            return Err("cannot mix .rez and .parquet inputs in combine".into());
+            .map(|f| crate::recorder::rez::detect_rez_format(f).unwrap_or(RezFormat::NotRez))
+            .collect();
+
+        if formats.iter().any(|f| *f != RezFormat::NotRez) {
+            if !formats.iter().all(|f| *f != RezFormat::NotRez) {
+                return Err("cannot mix .rez and .parquet inputs in combine".into());
+            }
+            // `combine_rez` rewrites recordings through `read_archive_bytes`/
+            // `write_archive_bytes`, which only speak the v2 tar container.
+            // Mixing v2 and v3 (or combining all-v3) is a real question this
+            // task leaves out of scope: error clearly rather than silently
+            // mis-assembling or corrupting an archive.
+            if formats.contains(&RezFormat::V3Sqlite) {
+                return Err(
+                    "combining v3 (SQLite) .rez archives is not yet supported; only v2 tar \
+                     .rez archives can be combined"
+                        .into(),
+                );
+            }
+            return combine_rez(&files, output);
         }
-        return combine_rez(&files, output);
     }
 
     let mut inputs = load_inputs(&files)?;
@@ -2747,5 +2763,116 @@ mod tests {
         )
         .unwrap();
         assert!(!reader.counter_names().is_empty());
+    }
+
+    /// Minimal, valid, empty v2 tar `.rez` — the v2 counterpart of
+    /// `recorder_tests_support::empty_v3_rez`.
+    fn make_empty_v2_rez(path: &std::path::Path) {
+        crate::recorder::rez::RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        )
+        .finalize(path)
+        .unwrap();
+    }
+
+    /// Build ArgMatches for `parquet combine <FILES...> -o <output>` and call
+    /// `run()` on them, exactly as the CLI does.
+    fn run_combine(
+        files: &[PathBuf],
+        output: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut args: Vec<String> = vec!["parquet".to_string(), "combine".to_string()];
+        args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
+        args.push("-o".to_string());
+        args.push(output.to_string_lossy().into_owned());
+        let matches = crate::parquet_tools::command()
+            .try_get_matches_from(args)
+            .unwrap();
+        let (_, sub) = matches.subcommand().unwrap();
+        run(sub)
+    }
+
+    /// `parquet combine` recognizes a v3 (SQLite) `.rez` as a `.rez` input (not
+    /// a bare parquet), but `combine_rez` rewrites recordings through
+    /// `read_archive_bytes`/`write_archive_bytes`, which only speak the v2 tar
+    /// container — so all-v3 inputs get an explicit "not yet supported" error
+    /// rather than being silently treated as plain parquet (and failing with
+    /// an unrelated footer error) or half-combined into a corrupt archive.
+    ///
+    /// Mutation check: reverting the front-door classification in `run()` to
+    /// `is_rez_path` makes this fail — `is_rez_path` reports `false` for both
+    /// v3 inputs, so `run()` never takes the `.rez` branch at all and the
+    /// error comes from `load_inputs` trying (and failing) to read the SQLite
+    /// bytes as a parquet footer, which does not mention "v3".
+    #[test]
+    fn combine_rejects_all_v3_sqlite_rez_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rez");
+        let b = dir.path().join("b.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&a);
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&b);
+        for f in [&a, &b] {
+            assert_eq!(
+                crate::recorder::rez::detect_rez_format(f).unwrap(),
+                crate::recorder::rez::RezFormat::V3Sqlite,
+                "fixture sanity: must actually be a v3 SQLite archive"
+            );
+        }
+        let out = dir.path().join("out.rez");
+
+        let err = run_combine(&[a, b], &out).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("v3"),
+            "expected an explicit v3-not-supported error, got: {msg}"
+        );
+        assert!(
+            !out.exists(),
+            "must not write a (half-assembled) output on the unsupported path"
+        );
+    }
+
+    /// Mixing a v2 tar input with a v3 SQLite input is deliberately out of
+    /// scope (same reasoning as the all-v3 case above): it must error
+    /// clearly, not silently combine only the v2 side or misroute the v3
+    /// input to the plain-parquet path.
+    ///
+    /// Mutation check: reverting the front-door classification in `run()` to
+    /// `is_rez_path` makes this fail — `is_rez_path` reports `true` for the
+    /// v2 input and `false` for the v3 one, so `.any()` still takes the
+    /// `.rez` branch but `.all()` fails, producing the older, misleading
+    /// "cannot mix .rez and .parquet inputs" error (the v3 file isn't a
+    /// parquet at all) instead of a v3-specific one.
+    #[test]
+    fn combine_rejects_mixed_v2_and_v3_rez_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.rez");
+        make_empty_v2_rez(&a);
+        let b = dir.path().join("b.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&b);
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&a).unwrap(),
+            crate::recorder::rez::RezFormat::V2Tar,
+            "fixture sanity: must actually be a v2 tar archive"
+        );
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&b).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "fixture sanity: must actually be a v3 SQLite archive"
+        );
+        let out = dir.path().join("out.rez");
+
+        let err = run_combine(&[a, b], &out).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("v3"),
+            "expected an explicit v3-not-supported error for a mixed v2/v3 combine, got: {msg}"
+        );
     }
 }

@@ -18,6 +18,11 @@ pub struct General {
 
     // optional HTTP listen address for dump endpoint
     listen: Option<String>,
+
+    // How many rows a table accumulates before its segment is sealed. Unset
+    // means the writer's own default (900), which is what every deployment
+    // should use.
+    segment_rows: Option<usize>,
 }
 
 impl Default for General {
@@ -28,6 +33,7 @@ impl Default for General {
             source: source(),
             output: output(),
             listen: None,
+            segment_rows: None,
         }
     }
 }
@@ -71,6 +77,19 @@ impl General {
     pub fn url(&self) -> Url {
         let source = self.source();
         Url::try_from(format!("http://{source}/metrics/binary").as_str()).unwrap()
+    }
+
+    /// Rows per sealed segment, or `None` for the writer's default.
+    ///
+    /// Segment size is a latency/granularity trade the buffer otherwise makes
+    /// for you: bigger segments amortize the per-seal cost, smaller ones bound
+    /// how much a dump has to carry whole at each edge (retention and ranged
+    /// dumps both work in whole segments) and how long a row waits in the WAL
+    /// before it is sealed. At the 1 s default interval 900 rows is a segment
+    /// per ~15 minutes, which is right for a 15 m lookback and wrong for a
+    /// buffer scraped ten times a second.
+    pub fn segment_rows(&self) -> Option<usize> {
+        self.segment_rows
     }
 
     pub fn listen(&self) -> Option<SocketAddr> {

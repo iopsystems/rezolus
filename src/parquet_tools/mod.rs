@@ -3,7 +3,7 @@ pub(crate) mod combine;
 mod convert;
 mod events;
 mod filter;
-mod metadata;
+pub(crate) mod metadata;
 
 use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
@@ -40,7 +40,9 @@ pub fn command() -> Command {
                      override with --queries <file.json>. --undo strips a prior annotation.\n\n\
                      A .rez archive is also accepted: --queries embeds a ServiceExtension (KPIs)\n\
                      into each recording's manifest metadata. Since a .rez is source=rezolus with\n\
-                     no built-in template, --queries is required for a .rez.\n\n\
+                     no built-in template, --queries is required for a .rez. Only v2 (tar) .rez\n\
+                     archives can be annotated in place today; a v3 (SQLite) archive errors\n\
+                     clearly rather than being silently mishandled.\n\n\
                      EXAMPLES:\n    \
                      # Attach KPIs from the built-in template for this file's source\n    \
                      rezolus parquet annotate rezolus.parquet\n\n    \
@@ -171,7 +173,9 @@ pub fn command() -> Command {
                      is `redis` and b.parquet's is `valkey`.\n\n\
                      .rez inputs: given single-recording `.rez` archives and a `.rez` output,\n\
                      combine assembles them into one multi-recording `.rez` (for multi-host or\n\
-                     A/B), preserving each recording's labels.\n\n\
+                     A/B), preserving each recording's labels. Only v2 (tar) .rez archives can be\n\
+                     combined today; a v3 (SQLite) input, or a mix of v2 and v3 inputs, errors\n\
+                     clearly instead of silently mis-assembling.\n\n\
                      EXAMPLES:\n    \
                      # Row-merge a rezolus agent file with a service file\n    \
                      rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
@@ -478,7 +482,7 @@ pub fn command() -> Command {
                     clap::Arg::new("samplers")
                         .long("samplers")
                         .value_name("A,B,...")
-                        .help("For .rez archives: comma-separated sampler names to KEEP; all other per-sampler tables are dropped (required for .rez, ignored for parquet)")
+                        .help("For .rez archives: comma-separated sampler names to KEEP; all other per-sampler tables are dropped (required for .rez, ignored for parquet). Only v2 (tar) .rez archives can be filtered today; a v3 (SQLite) archive errors clearly.")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 ),

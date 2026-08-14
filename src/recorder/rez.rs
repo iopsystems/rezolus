@@ -109,6 +109,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use metriken::Window;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 // Only the test-only eager reader (read_table_parquet) needs these.
 #[cfg(test)]
 use arrow::array::ListArray;
@@ -277,11 +279,56 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
     Ok((schema, batch))
 }
 
+/// Parquet writer settings for a `.rez` segment.
+///
+/// **Passing `None` here would not select parquet-rs's defaults — it selects
+/// `Compression::UNCOMPRESSED`.** That is the trap this function exists to
+/// close, so it must always be `Some(..)`.
+///
+/// **Compression: LZ4.** These columns are already RLE- and bit-packed by the
+/// parquet encoders, so an entropy coder has little left to find; LZ4 is where
+/// the ratio curve flattens, and it pays for its own encode by shrinking the
+/// BLOB the segment insert then writes. Stronger codecs are rejected on
+/// *memory*, not ratio or CPU: zstd's compression contexts are per column
+/// writer, and this writer instantiates thousands of those at once (below).
+/// `LZ4_RAW` rather than legacy `LZ4` because the legacy variant is a
+/// Hadoop-framed encoding parquet-rs writes only for pre-2.9.0 readers.
+///
+/// Note that the codec has no bearing on read speed even though it halves the
+/// archive; query time tracks segment *count*, which is `SealPolicy`'s
+/// business, not this function's.
+///
+/// **Dictionary encoding: off, and this is the recorder's largest memory
+/// decision.** `ArrowWriter` instantiates a column writer for every column of
+/// a row group simultaneously, each carrying its own `DictEncoder` buffer and
+/// interner. Rezolus tables are wide in a way that makes this dominant — a
+/// per-CPU table runs to thousands of columns, since every metric also carries
+/// `:window_begin`/`:window_width` sidecars — so dictionary state, not row
+/// data, sets peak RSS during a seal.
+///
+/// It costs nothing to disable because the data is the worst possible
+/// dictionary input: u64 counters and gauges, where a monotonic counter makes
+/// every value distinct and the dictionary as large as the column it encodes.
+/// There are no string columns; metric names and labels live in the parquet
+/// schema, not the data.
+///
+/// **Deliberately left at parquet-rs defaults:** `write_batch_size`,
+/// statistics granularity, and the page-size limits. Each looks like it should
+/// bound per-column-writer memory and none of them measurably does, while
+/// chunk-level statistics costs finalize latency and read pruning. The
+/// dictionary is the whole effect.
+fn segment_writer_props() -> WriterProperties {
+    WriterProperties::builder()
+        .set_compression(Compression::LZ4_RAW)
+        .set_dictionary_enabled(false)
+        .build()
+}
+
 /// Serialize one table to parquet bytes.
 pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
     let (schema, batch) = table_to_batch(table)?;
     let mut buf: Vec<u8> = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buf, schema, None)?;
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(segment_writer_props()))?;
     writer.write(&batch)?;
     writer.close()?;
     Ok(buf)
@@ -827,10 +874,17 @@ pub fn read_archive_bytes(path: &Path) -> Result<(RezManifest, Vec<RecordingByte
     read_archive_reader(std::fs::File::open(path)?)
 }
 
-/// True if `reader` yields a `.rez` archive: an uncompressed tar containing a
-/// top-level `manifest.json` member. Distinguishes `.rez` from the A/B tarball
-/// (which has `ab.json` + root-level parquets, no `manifest.json`) and from a
-/// bare parquet (not a tar). Consumes the reader.
+/// True if `reader` yields a v2 `.rez` archive: an uncompressed tar containing
+/// a top-level `manifest.json` member. Distinguishes `.rez` from the A/B
+/// tarball (which has `ab.json` + root-level parquets, no `manifest.json`) and
+/// from a bare parquet (not a tar). Consumes the reader.
+///
+/// This only recognizes the v2 tar container; a v3 SQLite archive is not a
+/// tar, so this correctly (and deliberately) reports `false` for it. Every
+/// `.rez` consumer that needs to recognize both containers should call
+/// [`detect_rez_format`] instead — this function remains as the tar-only
+/// primitive `detect_rez_format` builds on, and for tests that specifically
+/// want to exercise v2 tar sniffing (e.g. of a truncated/partial stream).
 pub fn is_rez_reader<R: std::io::Read>(reader: R) -> Result<bool, RezError> {
     let mut archive = tar::Archive::new(reader);
     let entries = match archive.entries() {
@@ -854,6 +908,51 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
     is_rez_reader(std::fs::File::open(path)?)
 }
 
+/// Which container a `.rez` path holds. v1/v2 are tar archives; v3 is SQLite.
+///
+/// `RezReader` dispatches on this, and so does every other `.rez` front door
+/// (`mcp`, `viewer`, `parquet metadata/annotate/filter/combine`) — all now
+/// recognize both containers. `parquet annotate`/`filter`/`combine` still
+/// only *rewrite* the v2 tar container (`read_archive_bytes`/
+/// `write_archive_bytes`); on a v3 input they report a clear "not yet
+/// supported" error rather than silently misrouting or half-working.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RezFormat {
+    V3Sqlite,
+    V2Tar,
+    NotRez,
+}
+
+/// SQLite's file header: bytes 0..16 of every database it creates.
+const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
+
+/// Detect a `.rez` container by content, not extension.
+///
+/// The SQLite check goes first because it is a 16-byte read, while the tar
+/// sniff walks entries looking for `manifest.json`. A file shorter than the
+/// magic simply falls through. This sits in front of `is_rez_path` without
+/// changing it: `is_rez_path`/`is_rez_reader` still only recognize the v2 tar
+/// container. A v3 SQLite file is not a tar, so `is_rez_path` correctly (and
+/// unchanged) reports `false` for it; callers that need to recognize both
+/// containers call `detect_rez_format`.
+pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0u8; 16];
+    let is_sqlite = match file.read_exact(&mut header) {
+        Ok(()) => &header == SQLITE_MAGIC,
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
+        Err(e) => return Err(e.into()),
+    };
+    if is_sqlite {
+        return Ok(RezFormat::V3Sqlite);
+    }
+    if is_rez_path(path)? {
+        Ok(RezFormat::V2Tar)
+    } else {
+        Ok(RezFormat::NotRez)
+    }
+}
+
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 
 /// A borrowed snapshot entry, tagged by shape.
@@ -864,21 +963,21 @@ pub(crate) enum Entry<'a> {
 }
 
 impl Entry<'_> {
-    fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         match self {
             Entry::Counter(c) => &c.name,
             Entry::Gauge(g) => &g.name,
             Entry::Histogram(h) => &h.name,
         }
     }
-    fn metadata(&self) -> &HashMap<String, String> {
+    pub(crate) fn metadata(&self) -> &HashMap<String, String> {
         match self {
             Entry::Counter(c) => &c.metadata,
             Entry::Gauge(g) => &g.metadata,
             Entry::Histogram(h) => &h.metadata,
         }
     }
-    fn window(&self) -> Option<Window> {
+    pub(crate) fn window(&self) -> Option<Window> {
         match self {
             Entry::Counter(c) => c.window,
             Entry::Gauge(g) => g.window,
@@ -902,18 +1001,17 @@ impl Entry<'_> {
 /// separately below).
 const VALUE_SLOT_BYTES: usize = 16;
 /// In-memory cost of the `Option<Window>` that `push_row` pushes alongside
-/// every counted cell. Measured, not assumed: 24 B. `Window` is two `u64`s
-/// with no niche, so the option tag costs a whole word of padding.
+/// every counted cell: 24 B, because `Window` is two `u64`s with no niche, so
+/// the option tag costs a whole word of padding.
 const WINDOW_SLOT_BYTES: usize = 24;
 /// Per-cell overhead: value slot + window slot.
 ///
-/// This is a *memory bound*, and until now it was 2.5x optimistic: the window
-/// slot was documented as included but never counted, so a scalar cell was
-/// charged 16 B against a true 40 B and an 8 MiB-capped scalar table really
-/// held 20.0 MiB of builder RSS. Counting it means the effective cap is now
-/// reached ~2.5x sooner for scalar-heavy tables (worst measured segment drops
-/// 6.23 MiB -> 2.49 MiB encoded). That is intended: the cap is what bounds
-/// resident memory, so it has to be honest about what a cell costs.
+/// **Both slots, and that is the point.** This is a bound on resident memory,
+/// so it has to charge what a cell actually costs — a window is pushed for
+/// every counted cell, so counting only the value slot understates a scalar
+/// cell by more than half and lets a scalar-heavy table run well past the byte
+/// cap that is supposed to bound it. `push_row_accumulates_approx_bytes` and
+/// `approx_bytes_counts_the_window_slot` pin both halves against the layout.
 const CELL_OVERHEAD_BYTES: usize = VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES;
 /// Bytes per histogram bucket: `push_row` clones the histogram's bucket
 /// `Box<[u64]>` into the column.
@@ -1040,9 +1138,11 @@ impl TableBuilder {
                     Some(CELL_OVERHEAD_BYTES)
                 }
                 (Entry::Histogram(h), RezValues::Histogram(v)) => {
-                    // The clone below copies the whole bucket `Box<[u64]>`
-                    // (7,424 buckets ≈ 58 KB at gp=7/mvp=64), which is why the
-                    // cap counts bytes rather than rows.
+                    // The clone below copies the whole bucket `Box<[u64]>` —
+                    // 496 buckets ≈ 4 KB at the `HISTOGRAM_GROUPING_POWER` = 3
+                    // that `docs/principles.md` standardizes on. One histogram
+                    // cell is ~100x a scalar one, which is why the seal cap
+                    // counts bytes rather than rows.
                     let buckets = h.value.as_slice().len();
                     v.push(Some(h.value.clone()));
                     Some(CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
@@ -1057,6 +1157,39 @@ impl TableBuilder {
         self.approx_bytes += added_bytes;
     }
 
+    /// Return a finished column's growth slack to the allocator.
+    ///
+    /// Every column here was built by repeated `push`, so its capacity is a
+    /// power-of-two ceiling over its length. `approx_bytes` counts *pushed
+    /// cells*, so the seal cap is honest about the data and silent about the
+    /// slack, and a table can hand the writer up to twice what the cap allowed.
+    /// Padding is already done by the time this runs, so the length is final
+    /// and the shrink is exact.
+    ///
+    /// Pre-sizing the columns instead is worse: `Vec::with_capacity(max_rows)`
+    /// over-allocates badly for exactly the wide tables that seal on the byte
+    /// cap long before they reach the row cap.
+    fn shrink(col: &mut RezColumn) {
+        match &mut col.values {
+            RezValues::Counter(v) => v.shrink_to_fit(),
+            RezValues::Gauge(v) => v.shrink_to_fit(),
+            RezValues::Histogram(v) => v.shrink_to_fit(),
+        }
+        col.windows.shrink_to_fit();
+    }
+
+    /// Consume the builder into the table the writer will encode.
+    ///
+    /// **Shrinking here targets the seal-time peak, not the accumulation
+    /// footprint.** An open builder keeps its slack for as long as it is open —
+    /// that is what makes the pushes amortized-O(1) — and what this reclaims is
+    /// the slack on a table about to sit in the writer's channel and then be
+    /// encoded, the moment when the batch, the arrow copy and the parquet
+    /// output buffer are all resident together.
+    ///
+    /// This runs on the scrape thread, so its cost is bounded deliberately: one
+    /// realloc-and-copy per column, and the transient double-allocation a
+    /// shrink needs is one column's worth, never the whole table's.
     pub(crate) fn finish(mut self) -> RezTable {
         let rows = self.timestamps.len();
         let columns = self
@@ -1065,9 +1198,12 @@ impl TableBuilder {
             .map(|name| {
                 let mut col = self.columns.remove(name).unwrap();
                 Self::pad(&mut col, rows);
+                Self::shrink(&mut col);
                 col
             })
             .collect();
+        self.timestamps.shrink_to_fit();
+        self.wall_offsets.shrink_to_fit();
         RezTable {
             sampler: self.sampler,
             timestamps: self.timestamps,
@@ -1320,6 +1456,53 @@ mod builder_tests {
         );
     }
 
+    // `approx_bytes` bounds the DATA, and a `Vec` grown by push carries up to
+    // 2x that in capacity, which the writer would then hold across the channel
+    // and the encode. `finish` returns the slack. 100 rows is chosen to land
+    // between powers of two, so a build that stops shrinking fails here instead
+    // of coincidentally passing.
+    #[test]
+    fn finish_returns_the_growth_slack() {
+        let mut b = TableBuilder::new("s".to_string());
+        let c = Counter::new("0".to_string(), 1, cmeta("s"));
+        let g = Gauge::new("1".to_string(), 1, cmeta("s"));
+        for row in 0..100u64 {
+            b.push_row(row * 1_000, 0, &[Entry::Counter(&c), Entry::Gauge(&g)]);
+        }
+        // Pre-condition: without it a shrink that does nothing still passes.
+        assert!(
+            b.timestamps.capacity() > b.timestamps.len(),
+            "the fixture must actually have slack to return"
+        );
+
+        let t = b.finish();
+        assert_eq!(t.timestamps.capacity(), t.timestamps.len(), "timestamps");
+        assert_eq!(
+            t.wall_offsets.capacity(),
+            t.wall_offsets.len(),
+            "wall_offsets"
+        );
+        assert_eq!(
+            t.columns.len(),
+            2,
+            "one counter column and one gauge column"
+        );
+        for col in &t.columns {
+            let (len, cap) = match &col.values {
+                RezValues::Counter(v) => (v.len(), v.capacity()),
+                RezValues::Gauge(v) => (v.len(), v.capacity()),
+                RezValues::Histogram(v) => (v.len(), v.capacity()),
+            };
+            assert_eq!(cap, len, "{} values", col.name);
+            assert_eq!(
+                col.windows.capacity(),
+                col.windows.len(),
+                "{} windows",
+                col.name
+            );
+        }
+    }
+
     // Regression: `approx_bytes` bounds resident memory, and it used to charge
     // a scalar cell only its value slot (16 B) while `push_row` also pushed an
     // `Option<Window>` (24 B) — a 2.5x optimistic bound. This pins the window
@@ -1431,6 +1614,21 @@ mod builder_tests {
 #[cfg(test)]
 pub(crate) mod recorder_tests_support {
     pub use super::recorder_tests::{counter, snap};
+
+    /// Create a minimal, valid, empty v3 `.rez` at `path` (one recording, no
+    /// sampler tables yet) — the cheapest fixture for tests across the crate
+    /// that just need `detect_rez_format(path)` to see `V3Sqlite`.
+    pub(crate) fn empty_v3_rez(path: &std::path::Path) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer};
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+        };
+        RezV3Writer::create(path, seed).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -2123,6 +2321,71 @@ mod archive_tests {
             RezValues::Counter(v) => assert_eq!(v, &vec![Some(10), Some(20)]),
             _ => panic!("expected counter"),
         }
+    }
+
+    fn write_minimal_v2_archive(path: &Path) {
+        let t = RezTable {
+            sampler: "cpu_usage".to_string(),
+            timestamps: vec![1_000, 2_000],
+            wall_offsets: Vec::new(),
+            columns: vec![counter_col("0", vec![Some(1), Some(2)], vec![None, None])],
+        };
+        let tables = [t];
+        write_archive(
+            path,
+            &[RecordingData {
+                dir: "rezolus".to_string(),
+                labels: [("source".to_string(), "rezolus".to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: BTreeMap::new(),
+                tables: &tables,
+            }],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn detects_v3_sqlite_v2_tar_and_neither() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // v3: a SQLite database created by the v3 container module.
+        let v3 = dir.path().join("v3.rez");
+        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        assert_eq!(detect_rez_format(&v3).unwrap(), RezFormat::V3Sqlite);
+
+        // v2: an actual tar archive, built the way the other tests here do.
+        let v2 = dir.path().join("v2.rez");
+        write_minimal_v2_archive(&v2);
+        assert_eq!(detect_rez_format(&v2).unwrap(), RezFormat::V2Tar);
+
+        // Neither: a bare parquet file.
+        let pq = dir.path().join("x.parquet");
+        std::fs::write(&pq, b"PAR1").unwrap();
+        assert_eq!(detect_rez_format(&pq).unwrap(), RezFormat::NotRez);
+
+        // Neither: a file too short to hold the SQLite magic. This must not panic
+        // or error — it falls through to the tar sniff and comes back NotRez.
+        let tiny = dir.path().join("tiny");
+        std::fs::write(&tiny, b"hi").unwrap();
+        assert_eq!(detect_rez_format(&tiny).unwrap(), RezFormat::NotRez);
+    }
+
+    #[test]
+    fn detection_does_not_change_is_rez_path() {
+        // Every existing consumer still calls is_rez_path; adding the v3 detector
+        // must not alter what it reports for a v2 archive or a non-archive.
+        let dir = tempfile::tempdir().unwrap();
+        let v2 = dir.path().join("v2.rez");
+        write_minimal_v2_archive(&v2);
+        assert!(is_rez_path(&v2).unwrap());
+
+        let v3 = dir.path().join("v3.rez");
+        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        // A v3 file is NOT a tar, so the legacy sniff correctly says false.
+        // This is why callers must migrate to detect_rez_format rather than
+        // having is_rez_path silently start returning true for SQLite files.
+        assert!(!is_rez_path(&v3).unwrap());
     }
 }
 

@@ -555,15 +555,20 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        let reader: Arc<dyn metriken_query::MetricsSource> =
-            if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
-                Arc::new(crate::rez_reader::RezReader::open_with_pool(
-                    path,
-                    Arc::clone(&self.pool),
-                )?)
-            } else {
-                Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?)
-            };
+        // Dispatch covers both `.rez` containers (v2 tar and v3 SQLite) — by
+        // content, not extension; `RezReader` dispatches on the container
+        // internally.
+        let is_rez = crate::recorder::rez::detect_rez_format(path)
+            .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
+            != crate::recorder::rez::RezFormat::NotRez;
+        let reader: Arc<dyn metriken_query::MetricsSource> = if is_rez {
+            Arc::new(crate::rez_reader::RezReader::open_with_pool(
+                path,
+                Arc::clone(&self.pool),
+            )?)
+        } else {
+            Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?)
+        };
 
         {
             let mut cache = self.reader_cache.write().unwrap();
@@ -732,6 +737,31 @@ mod tests {
         });
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
+    }
+
+    /// `get_reader` must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
+    /// `ParquetReader::open_with_pool`. Mutation check: reverting the
+    /// `detect_rez_format` check to `is_rez_path` makes this fail — a v3 file
+    /// then falls through to `ParquetReader`, which errors on the SQLite
+    /// header instead of opening the archive.
+    #[tokio::test]
+    async fn get_reader_opens_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "fixture sanity: must actually be a v3 SQLite archive"
+        );
+
+        let server = Server::new();
+        let result = server.get_reader(rez_path.to_str().unwrap()).await;
+        assert!(
+            result.is_ok(),
+            "get_reader must accept a v3 .rez: {:?}",
+            result.err().map(|e| e.to_string())
+        );
     }
 
     #[test]

@@ -1,86 +1,75 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::oneshot;
 
-/// Shared state between sampling loop and HTTP handlers
-#[allow(dead_code)]
-pub struct SharedState {
-    /// Path to the temporary ring buffer file
-    pub temp_path: PathBuf,
-    /// Size of each snapshot slot in bytes (aligned to 4KB)
-    pub snapshot_len: u64,
-    /// Total number of snapshot slots in the ring buffer
-    pub snapshot_count: u64,
-    /// Sampling interval
-    pub interval: Duration,
-    /// Total buffer duration
-    pub duration: Duration,
-    /// Path for output file (used by dump-to-file)
-    pub output_path: PathBuf,
+use super::buffer::Summary;
 
-    /// Current write index (next position to write to)
-    /// Updated atomically by the sampling loop after each write
-    idx: AtomicU64,
-    /// Total number of snapshots written since startup
-    /// Used to determine if buffer has wrapped
-    snapshots_written: AtomicU64,
+/// Shared state between the sampling loop and the HTTP handlers.
+///
+/// What used to live here was the ring's geometry — slot size, slot count, the
+/// write index, and how many writes had happened so the handlers could tell a
+/// wrapped buffer from a partly-filled one. None of it has a v3 analogue: the
+/// buffer is a `.rez` file, and every question the handlers used to answer
+/// from these fields is now answered by reading its catalog
+/// ([`super::buffer::summarize`]), which any process can do at any time.
+///
+/// What remains is what the file cannot tell you: where it is, where a dump
+/// should go, and the configuration the loop is running at.
+pub struct SharedState {
+    /// The buffer `.rez` the loop is writing.
+    pub buffer_path: PathBuf,
+    /// Where `/dump/file` and SIGHUP write the buffer out.
+    pub output_path: PathBuf,
+    /// Sampling interval.
+    pub interval: Duration,
+    /// How far back the buffer is asked to reach — `[general] duration`.
+    pub lookback: Duration,
+    /// Snapshots pulled from the agent and ingested since startup. Not a ring
+    /// position and not a capacity: just how much work the loop has done.
+    ticks: AtomicU64,
+    /// Whether retention has begun. Published by the loop rather than derived
+    /// from the file: the buffer knows the span it has COVERED, and eviction
+    /// keeps the span it RETAINS permanently just under the lookback — see
+    /// [`super::buffer::HindsightBuffer::at_retention_bound`].
+    at_retention_bound: AtomicBool,
 }
 
 impl SharedState {
     pub fn new(
-        temp_path: PathBuf,
-        snapshot_len: u64,
-        snapshot_count: u64,
-        interval: Duration,
-        duration: Duration,
+        buffer_path: PathBuf,
         output_path: PathBuf,
+        interval: Duration,
+        lookback: Duration,
     ) -> Self {
         Self {
-            temp_path,
-            snapshot_len,
-            snapshot_count,
-            interval,
-            duration,
+            buffer_path,
             output_path,
-            idx: AtomicU64::new(0),
-            snapshots_written: AtomicU64::new(0),
+            interval,
+            lookback,
+            ticks: AtomicU64::new(0),
+            at_retention_bound: AtomicBool::new(false),
         }
     }
 
-    /// Get the current write index
-    pub fn idx(&self) -> u64 {
-        self.idx.load(Ordering::SeqCst)
+    pub fn record_tick(&self) {
+        self.ticks.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Update the write index after a successful write
-    pub fn advance_idx(&self) {
-        let mut idx = self.idx.load(Ordering::SeqCst) + 1;
-        if idx >= self.snapshot_count {
-            idx = 0;
-        }
-        self.idx.store(idx, Ordering::SeqCst);
-        self.snapshots_written.fetch_add(1, Ordering::SeqCst);
+    pub fn ticks(&self) -> u64 {
+        self.ticks.load(Ordering::Relaxed)
     }
 
-    /// Get the total number of snapshots written
-    pub fn snapshots_written(&self) -> u64 {
-        self.snapshots_written.load(Ordering::SeqCst)
+    pub fn set_at_retention_bound(&self, at_bound: bool) {
+        self.at_retention_bound.store(at_bound, Ordering::Relaxed);
     }
 
-    /// Check if the buffer has been filled at least once
-    #[allow(dead_code)]
-    pub fn buffer_filled(&self) -> bool {
-        self.snapshots_written() >= self.snapshot_count
-    }
-
-    /// Get the number of valid snapshots in the buffer
-    pub fn valid_snapshot_count(&self) -> u64 {
-        self.snapshots_written().min(self.snapshot_count)
+    pub fn at_retention_bound(&self) -> bool {
+        self.at_retention_bound.load(Ordering::Relaxed)
     }
 }
 
-/// Time range filter for dump operations
+/// Time range filter for dump operations.
 #[derive(Debug, Clone, Default)]
 pub struct TimeRange {
     pub start: Option<SystemTime>,
@@ -92,50 +81,47 @@ impl TimeRange {
         Self { start, end }
     }
 
-    /// Check if a timestamp falls within this range
-    pub fn contains(&self, timestamp: SystemTime) -> bool {
-        if let Some(start) = self.start {
-            if timestamp < start {
-                return false;
-            }
-        }
-        if let Some(end) = self.end {
-            if timestamp > end {
-                return false;
-            }
-        }
-        true
+    /// The range as row stamps. A `.rez` row is stamped `anchor + monotonic
+    /// elapsed` where the anchor is a wall-clock reading, so nanoseconds since
+    /// the epoch is the comparable form. A time before the epoch clamps to 0,
+    /// which selects everything — the same thing it meant as a filter.
+    pub fn start_ns(&self) -> Option<u64> {
+        self.start.map(to_ns)
+    }
+
+    pub fn end_ns(&self) -> Option<u64> {
+        self.end.map(to_ns)
     }
 }
 
-/// Request to dump the ring buffer to the configured output file
+fn to_ns(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
+/// Request to dump the buffer to the configured output file.
 pub struct DumpToFileRequest {
     pub time_range: TimeRange,
     pub response_tx: oneshot::Sender<DumpToFileResponse>,
 }
 
-/// Response from a dump-to-file operation
+/// Response from a dump-to-file operation.
 #[derive(Debug)]
 pub struct DumpToFileResponse {
     pub path: PathBuf,
-    pub snapshots: u64,
-    pub start_time: Option<u64>,
-    pub end_time: Option<u64>,
+    /// What the dump actually holds. Note the span may reach further back than
+    /// the request asked for: a dump trims at segment granularity, so the
+    /// caller is told what it got rather than what it asked for.
+    pub summary: Option<Summary>,
     pub error: Option<String>,
 }
 
 impl DumpToFileResponse {
-    pub fn success(
-        path: PathBuf,
-        snapshots: u64,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-    ) -> Self {
+    pub fn success(path: PathBuf, summary: Summary) -> Self {
         Self {
             path,
-            snapshots,
-            start_time,
-            end_time,
+            summary: Some(summary),
             error: None,
         }
     }
@@ -143,9 +129,7 @@ impl DumpToFileResponse {
     pub fn error(error: String) -> Self {
         Self {
             path: PathBuf::new(),
-            snapshots: 0,
-            start_time: None,
-            end_time: None,
+            summary: None,
             error: Some(error),
         }
     }

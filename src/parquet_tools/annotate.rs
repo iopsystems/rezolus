@@ -5,31 +5,53 @@ use std::path::{Path, PathBuf};
 use crate::parquet_metadata::{
     KEY_NODE, KEY_PER_SOURCE_METADATA, KEY_SERVICE_QUERIES, KEY_SOURCE, KEY_SYSTEMINFO,
 };
+use crate::recorder::rez::RezFormat;
 use crate::viewer::{ServiceExtension, TemplateRegistry};
 use metriken_query::{MetricsSource, ParquetReader};
+
+/// Which branch `run()` takes for `path`. Dispatch is by CONTENT, not
+/// extension, and recognizes both `.rez` containers. `annotate_rez` rewrites
+/// through `read_archive_bytes`/`write_archive_bytes`, which only speak the
+/// v2 tar container, so a v3 (SQLite) archive gets an explicit "not yet
+/// supported" error in `run()` rather than silently falling through to the
+/// plain-parquet path (which would fail with a confusing footer error) or a
+/// misleading tar-parse error. Split out from `run()` so it is testable
+/// without triggering `run()`'s `std::process::exit` on the v3/error arms.
+fn dispatch_format(path: &Path) -> RezFormat {
+    crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez)
+}
 
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
-    if crate::recorder::rez::is_rez_path(path).unwrap_or(false) {
-        let custom = args.get_one::<PathBuf>("queries").unwrap_or_else(|| {
-            eprintln!("error: annotating a .rez requires --queries <service-extension.json> (a .rez has no service template)");
+    match dispatch_format(path) {
+        RezFormat::V3Sqlite => {
+            eprintln!(
+                "error: annotating a v3 (SQLite) .rez archive is not yet supported; only v2 tar .rez archives can be annotated in place"
+            );
             std::process::exit(1);
-        });
-        let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
-            eprintln!("error: failed to read {custom:?}: {e}");
-            std::process::exit(1);
-        });
-        // parse-validate up front
-        let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
-            eprintln!("error: invalid service extension JSON: {e}");
-            std::process::exit(1);
-        });
-        annotate_rez(path, &content).unwrap_or_else(|e| {
-            eprintln!("error: failed to annotate .rez: {e}");
-            std::process::exit(1);
-        });
-        return;
+        }
+        RezFormat::V2Tar => {
+            let custom = args.get_one::<PathBuf>("queries").unwrap_or_else(|| {
+                eprintln!("error: annotating a .rez requires --queries <service-extension.json> (a .rez has no service template)");
+                std::process::exit(1);
+            });
+            let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
+                eprintln!("error: failed to read {custom:?}: {e}");
+                std::process::exit(1);
+            });
+            // parse-validate up front
+            let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
+                eprintln!("error: invalid service extension JSON: {e}");
+                std::process::exit(1);
+            });
+            annotate_rez(path, &content).unwrap_or_else(|e| {
+                eprintln!("error: failed to annotate .rez: {e}");
+                std::process::exit(1);
+            });
+            return;
+        }
+        RezFormat::NotRez => {}
     }
 
     let node = args.get_one::<String>("node");
@@ -496,6 +518,50 @@ mod tests {
     fn extract_selectors_from_histogram() {
         let sel: Vec<_> = extract_metric_selectors("ttft").into_iter().collect();
         assert_eq!(sel, vec!["ttft"]);
+    }
+
+    // ── dispatch_format: v3 recognition ──
+    //
+    // `run()` calls `std::process::exit` on several branches (including the
+    // v3-not-yet-supported one), so it cannot be exercised in-process; these
+    // tests cover the classification `run()` matches on instead.
+
+    /// `dispatch_format` must recognize a v3 (SQLite) `.rez` as `V3Sqlite`
+    /// (routing `run()` to the explicit "not yet supported" error), not
+    /// `NotRez` (which would route it to the plain-parquet path and fail with
+    /// an unrelated "Corrupt footer" error).
+    ///
+    /// Mutation check: reverting `dispatch_format` to
+    /// `is_rez_path(path).unwrap_or(false)`-based classification (mapping
+    /// `true` to `V2Tar` and `false` to `NotRez`, as `run()` effectively did
+    /// before migrating to `detect_rez_format`) makes this fail — `is_rez_path`
+    /// is a tar sniff and reports `false` for a SQLite file.
+    #[test]
+    fn dispatch_format_recognizes_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&path);
+        assert_eq!(dispatch_format(&path), RezFormat::V3Sqlite);
+    }
+
+    /// A v2 tar `.rez` still classifies as `V2Tar` (unaffected by the v3
+    /// migration).
+    #[test]
+    fn dispatch_format_recognizes_v2_tar_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        crate::recorder::rez::RezRecorder::new(
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            "rezolus".to_string(),
+        )
+        .finalize(&path)
+        .unwrap();
+        assert_eq!(dispatch_format(&path), RezFormat::V2Tar);
     }
 
     // ── set_node_metadata tests ──

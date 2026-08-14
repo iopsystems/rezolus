@@ -283,6 +283,106 @@ bytes against writer-maintained counters, for 92 s: **0 torn reads, 0
 `SQLITE_BUSY`, 0 errors**. Writer impact **+0.7 ms** (p50 4.494 vs 3.780 ms).
 The tear-free-dump premise holds.
 
+### `page_size` selection — **measured, and 4096 kept**
+
+`PRAGMA page_size` only takes effect on a database that does not yet exist;
+changing it later means `journal_mode=delete` + full `VACUUM` + back to WAL, on
+every file already written. So it is swept before any code writes a v3 file.
+Sweep on `10.1.0.1`, **databases on NVMe** (`/dev/nvme0n1p2`, ext4, under
+`$HOME`; only the throwaway harness lived on the tmpfs `/tmp`), SQLite 3.53.2,
+`journal_mode=WAL` + `synchronous=FULL` + `auto_vacuum=INCREMENTAL` fixed
+throughout. Budget is the fleet-measured **~46 ms tick**.
+
+**Two of the effects that look like `page_size` are other knobs**, and finding
+them changed the answer:
+
+1. **WAL checkpoint volume.** `wal_autocheckpoint` defaults to *1000 pages*, so
+   at 64 KiB it fires after 64 MB instead of 4 MB. Held at 1000 pages, larger
+   pages looked faster at p50 (1.4 MiB insert 8.0 → 4.5 ms) and much worse at
+   p99 (19.2 → 72.0 ms) — both artifacts of checkpoint spacing. Held at a
+   **constant 4 MiB of WAL** (`wal_autocheckpoint = 4 MiB / page_size`), the
+   steady-state p99 is flat at 15.6–18.2 ms for *every* page size. Everything
+   below is measured at the constant-byte cap.
+2. **The 2 MiB default page cache.** Most of the small-page read penalty is
+   `cache_size`, not chain length: at 4096, warm sequential BLOB reads go
+   **229.6 → 409.6 MB/s** with `cache_size=-262144`, and 460.2 MB/s adding
+   `mmap_size`. The 4096-vs-65536 read gap shrinks from 2.3× to **1.35×**.
+
+Segment insert, autocommit (one fsync each), 300/300/200 iterations, p50 / p99
+ms:
+
+| `page_size` | 0.5 MiB | 1.4 MiB (fleet avg) | 4 MiB |
+|---|---|---|---|
+| **4096** | 3.85 / 14.7 | **8.03 / 19.2** | 29.0 / 35.2 |
+| 8192 | 3.61 / 13.7 | 7.48 / 17.5 | 24.1 / 30.5 |
+| 16384 | 3.49 / 12.9 | 7.11 / 15.9 | 22.2 / 26.3 |
+| 32768 | 3.40 / 12.2 | 7.07 / 16.6 | 21.8 / 28.2 |
+| 65536 | 3.41 / 11.2 | 6.92 / 15.9 | 21.7 / 27.2 |
+
+Per-tick commit (26 rows × 1,925 B, one txn), WAL bytes written per tick,
+realistic mixed workload (2,500 ticks, 26 samplers, staggered seals, deferred
+prune, 8 segments/sampler retained = 292.5 MB live), and `-wal` high-water:
+
+| `page_size` | tick p50 / p99 / max | WAL B/tick | ×payload | mix db/live (late range) | freelist | `-wal` hw: default / 4 MiB cap | warm read: default / 256 MiB cache |
+|---|---|---|---|---|---|---|---|
+| **4096** | **2.70 / 11.1 / 15.1** | **156,920** | **3.14×** | **1.0117** (1.0084–1.0132) | 0.87% | **4.4 / 4.4 MB** | 230 / 410 MB/s |
+| 8192 | 2.71 / 7.9 / 14.9 | 200,142 | 4.00× | 1.0108 (1.0076–1.0123) | 0.86% | 8.8 / 4.4 MB | 347 / 556 MB/s |
+| 16384 | 2.77 / 8.5 / 35.0 | 236,726 | 4.73× | 1.0112 (1.0080–1.0127) | 0.88% | 17.8 / 4.6 MB | 464 / 564 MB/s |
+| 32768 | 2.89 / 9.0 / 37.0 | 308,245 | 6.16× | 1.0171 (1.0139–1.0187) | 0.86% | 34.2 / 5.0 MB | 537 / 599 MB/s |
+| 65536 | 3.26 / 9.7 / 43.2 | 410,570 | 8.20× | 1.0180 (1.0148–1.0196) | 0.86% | 67.3 / 5.6 MB | 534 / 624 MB/s |
+
+**Eviction stays bounded at every page size** — the mix plateaus at 1.011–1.018×
+live and does not drift, and the free list holds a near-constant **2.55–2.59 MB
+regardless of page size** (631 pages at 4096, 39 at 65536). The
+free-list-granularity worry did not materialize; what does show up is that
+32768/65536 park 5.5 MB more on a 292 MB file (1.0180 vs 1.0117) because the
+reuse unit is coarser.
+
+**The overflow-chain hypothesis was right about the mechanism and small about
+the magnitude.** The 1.4 → 4 MiB throughput dip is chains: the 4 MiB/1.4 MiB
+throughput ratio goes 0.83 at 4096 to **0.96 at 65536** — the dip nearly
+disappears. But flattening it is worth 145 → 193 MiB/s at 4 MiB, i.e. **7.3 ms
+on a 4 MiB segment**, against a 46 ms tick. (This harness's 4096 baseline runs
+~1.4× slower than measurement 2 above — `auto_vacuum` on, a `wal` table
+present, shared host — so read the sweep as relative within itself.)
+
+**Decision: keep `page_size=4096`. Measured and kept, not defaulted into.**
+
+- What larger pages actually buy, after the two confounds are removed: **−11% on
+  the average segment insert** (8.03 → 7.11 ms at 16384, 0.9 ms of a 46 ms
+  tick), −23% at 4 MiB, and **+26% on warm reads** (460 → 578 MB/s) once
+  `cache_size` and `mmap_size` are raised — down from +102% before them.
+  `VACUUM INTO` — the hindsight dump — goes 470 → 667 →
+  712 MB/s. Real, but none of it is binding: §"the binding constraint is co-seal
+  lockstep" already showed segment insert is not what overruns the tick, and
+  staggering fixes that at zero cost.
+- What 4096 buys, and it is not tunable away: **the lowest per-tick WAL
+  amplification, 3.14× vs 4.73× at 16384 and 8.20× at 65536.** That is
+  156,920 B/tick vs 236,726 / 410,570 — **3.4 vs 5.1 / 8.9 MB/s written
+  continuously, on every fleet host, forever**, to persist 50,050 B/tick of
+  rows. It is the one operation that runs every tick, and it is the only place
+  the page size shows up as an unavoidable cost rather than a preference.
+- Per-tick commit *latency* does not discriminate (2.70 → 3.26 ms p50), but the
+  per-tick **tail** does, in the wrong direction: mix tick max 15.1 ms at 4096
+  vs 35.0–43.2 ms at ≥16384, from larger checkpoint units.
+- 4096 also gives the smallest `-wal` sidecar under any checkpoint policy and
+  the finest free-list granularity for hindsight's reuse.
+- The asymmetry decides it. `cache_size` and `wal_autocheckpoint` are runtime
+  pragmas, changeable on any file at any time; `page_size` is welded in at
+  creation. **73–80% of the apparent large-page win came from those two
+  reversible knobs** (80% of the 1.4 MiB insert gain, 73% of the read gain).
+  Spending the irreversible decision to buy back the remainder — while paying
+  1.5–2.6× the WAL write volume on every tick — is the wrong trade.
+
+**Two runtime pragmas fall out of this and should ship with v3** (both
+reversible, both worth more than the page size was): set
+**`wal_autocheckpoint` in bytes, not pages** — at 4096 that is the ~1000-page
+default already, so nothing changes today, but it stops the sidecar and the p99
+from tracking any future page-size change; and **raise `cache_size` on reader
+connections** (256 MiB measured `-262144`) — **+78% on segment reads at 4096**,
+229.6 → 409.6 MB/s, the single largest read-side win found in this sweep and
+entirely free.
+
 ## Design amendments from the measurements
 
 1. **The WAL prune moves OUT of the seal transaction** — this reverses open
@@ -347,6 +447,16 @@ inside the 300 s bound. 15 tables are byte-capped, 10 row-capped.
 
 ### Decision: keep `max_bytes` at 8 MiB
 
+> **AMENDED 2026-08-13** — see
+> [recorder resource footprint](2026-08-13-recorder-resource-footprint.md) § Part 1.
+> The value survives, the reasoning below does not stand alone: it argues from
+> segment count and encoded size without testing CPU. A 28-cell sweep found the
+> seal caps are effectively **CPU-neutral** (3.3× range in seal CPU lands inside
+> a 4.4% band on total process CPU), so the caps are chosen for finalize wall
+> and peak memory instead. `max_bytes` stays at 8 MiB because 32 MiB — better on
+> archive size and query time — costs finalize 549.8 → 827.3 ms. `max_rows` was
+> retuned 4096 → 900 (finalize 1147.6 → 549.8 ms at the same byte cap).
+
 Lowering it is expensive and aims at the wrong target. Halving to 4 MiB would
 take total segments from 582 to ~1,100 (and `syscall_latency` from 190 to 380,
 deep into the superlinear region) to shrink segments that are *already* 0.68 MB
@@ -379,6 +489,12 @@ merged v2 (`5de241d9`), not just a v3 concern.
 
 ### For v3: express the cap as a target *encoded* size
 
+> **AMENDED 2026-08-13** — still reasonable, lower urgency. Segment count drives
+> *read* cost (~12 ms/segment), which belongs to the offline compactor rather
+> than the agent, and it has no bearing on peak RSS — that is set by column
+> count, not segment size. See
+> [recorder resource footprint](2026-08-13-recorder-resource-footprint.md).
+
 A single global in-memory cap is mismatched at both ends — it makes
 `syscall_latency` emit 190 segments of 0.63 MB (7.6× past the ~25/table
 guidance, and 10× smaller than they need to be) while letting `cpu_usage` emit
@@ -388,12 +504,144 @@ both ends: `syscall_latency` drops to ~48 segments, `cpu_usage` to ~3 MiB each.
 
 ### Still un-tuned (measured, but not optimized)
 
-- **`page_size` left at the 4096 default and untested.** Larger pages would
-  shorten overflow chains for multi-MB BLOBs. Treat as un-optimized, not chosen.
+- ~~**`page_size` left at the 4096 default and untested.**~~ **Swept
+  {4096…65536} and 4096 kept** — see "`page_size` selection" above. Larger pages
+  do shorten the chains, but the win is ≤26% on non-binding operations while
+  per-tick WAL amplification rises 3.14× → 8.20×.
 - **The `-wal` sidecar** reaches 24–79 MB depending on `wal_autocheckpoint` and
   persists at its high-water size; it must be counted in hindsight's footprint,
-  or capped with `journal_size_limit` plus a checkpoint at finalize. The default
-  autocheckpoint (1000 pages) measured best for tail latency.
+  or capped with `journal_size_limit` plus a checkpoint at finalize. The
+  autocheckpoint is best expressed **in bytes** (`4 MiB / page_size` pages): at
+  4096 that is the ~1000-page default, and the high-water then holds at 4.4 MB.
+  **Under a dump it does not hold** — a held read mark stops the log being
+  recycled — see § "Dump semantics, verified" for the measured shape.
+
+## Dump semantics, verified (2026-08-12) — and one bug found doing it
+
+The dump's snapshot semantics were correct by design and thin on tests. Three
+things came out of closing that gap; the third is a defect.
+
+### "No eviction pause is needed" is now a test, not an argument
+
+`copy_range` reads inside one transaction, so retention deleting a segment
+mid-dump cannot disturb the copy. That was previously argued and skipped as a
+timing race. It does not have to be one: `copy_range` takes a `listed: &dyn
+Fn()` that fires **after `read_recordings` has pinned the snapshot and before
+the first segment BLOB is read**, and is `&|| {}` in production. The test evicts
+three of six segments from a second connection inside that callback and asserts
+the dump still holds all six with readable bytes.
+
+A callback over a `cfg(test)` hook or a list/copy split, deliberately: it is the
+only one of the three where the statements that ship and the statements the test
+runs are the same statements in the same order. Removing `read_snapshot`'s
+`BEGIN DEFERRED` turns the test red on exactly its own assertion (the dump comes
+back with the three surviving segments), and — worth noting — turns *no other
+test* red. Nothing else covered it.
+
+### `-wal` under a dump: bounded by the dump's duration, not by the buffer
+
+The journal had the sidecar measured only for the no-dump case (4.4 MB at the
+4 MiB `wal_autocheckpoint`). Under a dump it is unbounded in principle, because
+a held read mark stops SQLite recycling the log.
+
+Measured locally (macOS, 10 Hz, 2,000-counter payload, two-row segments, a
+buffer of a dozen segments so a dump takes ~250 ms; `tests/hindsight_dump.rs`):
+
+| | `-wal` |
+|---|---|
+| steady state, no dump | **4.67 MB** (plateau; matches the 4.4 MB figure) |
+| after ONE ~250-330 ms dump | 4.67-4.86 MB (**+0 to +185 KB**) |
+| after ~2.2 s of back-to-back dumps | **13.9-18.8 MB** (+9.1 to +13.9 MB, **3.7-6.4 MB/s**) |
+| 1 s after the last dump returned | unchanged, **+0 B**, every run |
+
+The shape: it grows at the writer's WAL byte rate for as long as a read mark is
+held, stops dead when it is released, and **does not shrink** — SQLite recycles
+the log in place, so the file is the high-water mark. A short dump often costs
+nothing at all, because its frames fit in the headroom the file already has.
+
+The rate is not portable (it is payload × cadence × the 3.14× amplification),
+so the test asserts the shape — the file passes its *unpinned* high-water by
+half again — and prints the numbers. Removing the read mark leaves the same
+window growing by **4,120 B, one page**, which is what a threshold of `during >
+before` would have accepted; the assertion is written against the plateau for
+that reason.
+
+The fleet-scale version (a multi-GB buffer, 26 samplers, a `VACUUM INTO` lasting
+seconds) has not been run. The scaling law to check it against is
+`growth ≈ WAL byte rate × dump duration`, capped by nothing.
+
+### BUG (fixed): `POST /dump/file` and the SIGHUP capture pause the recording
+
+`rezolus hindsight --help` promises "a snapshot is a consistent point-in-time
+copy taken without pausing the recording", and for `GET /dump` that holds — it
+builds the copy on a blocking task while the loop ticks on. `POST /dump/file`
+does not. The request is handed to the recording loop's own `select!`, and the
+handler body awaits `spawn_blocking(dump)`; `select!` does not poll the tick
+branch while a handler body is running, so **the scrape loop is stopped for the
+whole dump**. `MissedTickBehavior::Skip` then discards the ticks, so they are
+lost rather than deferred. The SIGHUP path is plainer still: `dump_to_file` is
+called synchronously in the loop body.
+
+Measured at 10 Hz against a buffer whose dump takes ~250 ms, over a one-second
+window of back-to-back dumps:
+
+| | ticks | segments sealed |
+|---|---|---|
+| `GET /dump` | **12** | 6 |
+| `POST /dump/file` | **4** | 2 |
+
+It scales with dump duration, i.e. with buffer size — so it is worst on the
+large buffers an incident is actually captured from, and it drops data from the
+minutes *after* the trigger, which for a rolling window is data an operator was
+counting on.
+
+**Pre-existing, not a v3 regression:** the same `select!` shape is in the v2
+loop (`git show a569546e^:src/hindsight/mod.rs`, lines 226 and 286). What v3
+added was a dump slow enough to measure it.
+
+**Fixed** by taking every dump off the recording loop. The loop now *spawns*
+each dump — HTTP requests into a `JoinSet`, the SIGHUP capture onto its own
+task reporting back through a channel — and goes straight back to the
+`select!`; the reply still travels the request's `oneshot`, so a caller (and a
+failure) reaches its destination exactly as before, just from the spawned task
+rather than the arm. The capture's completion is logged where it always was, in
+the loop, off a `capture_rx` arm. Dumps are serialized against each other by a
+`Mutex` taken *inside* the spawned task, which keeps the one-at-a-time property
+the in-loop version had for free without giving the loop back the wait. Same
+numbers, same fixture, after the fix:
+
+| | ticks | segments sealed |
+|---|---|---|
+| `GET /dump` | 14 → **12** | 6 → 5 |
+| `POST /dump/file` | 2 → **13** | 1 → 6 |
+| SIGHUP | 1 → **12** | 1 → 5 |
+
+(10 ticks and ~5 seals are due per second; the left-hand figures are the same
+build with only `src/hindsight/mod.rs` reverted.)
+
+Note the seal count is the blunter instrument of the two: seals are row-driven,
+so pausing `maintain()` alone *delays* seals rather than losing them. It is
+blunt but not useless — a loop stopped for most of a second does show up in it,
+as 1 seal against the 5 due.
+
+Two decisions the fix had to make and did not have to before. **Two dumps at
+once** serialize rather than run concurrently or be rejected: they all write the
+same output path, and while `buffer::dump` stages and renames (so nothing
+tears), a caller told "your dump is at *path*" should not be reading another
+request's copy. **A dump in flight at shutdown** is waited for, not abandoned:
+its caller is still holding a request open, and the buffer it is reading lives
+in the staging directory the daemon deletes on the way out. A third signal
+still exits immediately, which is the escape hatch if that wait is unwelcome.
+
+The SIGHUP capture's fixture needed its own calibration, and it is a good
+example of how easily this kind of test goes vacuous: SIGHUP takes no time
+range, so it is a whole-file `VACUUM INTO` rather than the ranged copy the HTTP
+tests take, and at the HTTP fixture's 12 segments it finished in ~66 ms —
+*inside* one 100 ms tick, where a fully paused daemon still makes nearly every
+tick and the test passes on broken code. At 40 segments (~220 ms) the paused
+daemon still scraped 3 of the 4 seals the assertion demands, through the gaps
+between captures. The test runs at 60 segments (~330 ms), where the unfixed
+daemon manages 1.
 
 ## Open questions to settle during implementation
 

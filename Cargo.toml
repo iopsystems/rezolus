@@ -29,7 +29,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.17.1-alpha.13"
+version = "5.17.1-alpha.14"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -75,6 +75,9 @@ parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "simdutf8",
     "zstd",
+    # `Compression::LZ4_RAW`, the codec `.rez` segments are written with. Pulls
+    # in `lz4_flex` (pure Rust, no C). See `rez::segment_writer_props`.
+    "lz4",
 ] }
 prometheus-parse = "0.2.5"
 plain = "0.2.3"
@@ -85,6 +88,9 @@ reqwest = { version = "0.13.3", default-features = false, features = [
     "blocking",
     "rustls-no-provider",
 ] }
+# `bundled` compiles SQLite from source: slower builds, but no runtime system
+# dependency, which is what the `.deb` in [package.metadata.deb] needs.
+rusqlite = { version = "0.40", features = ["bundled", "blob"] }
 rustls = { version = "0.23", default-features = false, features = [
     "logging",
     "ring",

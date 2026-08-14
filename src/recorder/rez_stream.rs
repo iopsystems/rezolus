@@ -23,8 +23,8 @@ use metriken_exposition::Snapshot;
 use tracing::warn;
 
 use super::rez::{
-    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, RezManifest, RezRecording,
-    RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
+    append_tar_entry, dedup_key, group_by_sampler, write_table_parquet, Entry, RezManifest,
+    RezRecording, RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
@@ -526,11 +526,43 @@ pub(crate) struct SealPolicy {
     pub max_age: Duration,
 }
 
+/// The two caps and the age bound.
+///
+/// **Seal policy is not a CPU knob.** Sealing is a minority of what the
+/// recorder burns — the per-tick scrape/decode/ingest path dominates — so
+/// moving these caps trades finalize latency, peak memory and the kill-loss
+/// window against each other, and barely touches CPU. Tune them for those
+/// three, not for throughput.
+///
+/// The two caps are not redundant: they bind on disjoint sets of tables.
+/// `max_rows` splits the *thin* tables, which would otherwise take a long time
+/// to reach any byte threshold; `max_bytes` splits the *wide* ones, which reach
+/// it almost immediately. Each therefore costs close to nothing on the tables
+/// the other one reaches.
+///
+/// `max_bytes` bounds finalize wall-clock, which is what the streaming writer
+/// exists to protect — a container gets on the order of ten seconds between
+/// SIGTERM and SIGKILL, and an unsealed tail has to fit in it. A larger cap is
+/// tempting because it produces fewer, denser segments, which shrinks the
+/// archive and speeds queries (read cost tracks segment count); that trade
+/// belongs to the offline compactor, which can have it without charging the
+/// agent for it.
+///
+/// Going smaller is worse than it looks. Segments are the encoder's unit of
+/// compression, so starving them re-pays per-column-chunk footer metadata on
+/// every split and denies the RLE and dictionary encoders anything to amortize
+/// over; well below this the archive inflates several-fold. 8 MiB is where that
+/// curve has flattened and finalize has not yet climbed.
+///
+/// `max_rows` is what bounds the finalize tail on thin tables, and it is nearly
+/// free precisely because it does not reach the wide ones.
 impl Default for SealPolicy {
     fn default() -> Self {
         Self {
             max_bytes: 8 * 1024 * 1024,
-            max_rows: 4096,
+            max_rows: 900,
+            // Not a free variable like the two caps: this bounds how much an
+            // unclean kill loses, not seal cost. Trade it against segment count.
             max_age: Duration::from_secs(300),
         }
     }
@@ -564,7 +596,14 @@ fn stagger_bucket(sampler: &str) -> u64 {
 ///
 /// The row and age targets are fields rather than reads of `policy` because the
 /// first segment of each sampler deliberately closes early; see `open_first`.
-struct BuilderState {
+///
+/// `pub(crate)` because the v3 ingest side (`rez_v3_writer::StreamRecorderV3`)
+/// drives the same open-segment bookkeeping against a different writer. The
+/// FIELDS stay private and both containers go through [`drain_due`]: the two
+/// writers differ only in what they build out of a sealed `TableBuilder`, and
+/// widening the fields to share the rest is what let the `due` predicate get
+/// copied in the first place.
+pub(crate) struct BuilderState {
     builder: TableBuilder,
     /// Instant the current segment was opened (the age bound's origin).
     opened_at: Instant,
@@ -578,13 +617,12 @@ impl BuilderState {
     ///
     /// This is a *phase offset*, not a period change. Every row-capped table
     /// otherwise advances exactly one row per tick starting from row 0, so they
-    /// all reach `max_rows` in permanent lockstep: 12 tables measured sealing
-    /// as a single 16.16 MiB batch every ~197 s, and every one of the 7 (of
-    /// 467) over-budget batches at fleet scale was such a co-seal rather than a
-    /// large individual segment. Shortening only the first segment desyncs the
+    /// all reach `max_rows` in permanent lockstep and seal as one large batch
+    /// forever. Co-seals, not large individual segments, are what put a seal
+    /// over the tick budget. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
     /// size and count untouched — `seal_completed` restores the full policy.
-    fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
+    pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         let bucket = stagger_bucket(sampler);
         // Divide before multiplying: `max_rows` is `usize::MAX` in several
         // callers, and `max_rows * bucket` would overflow.
@@ -600,6 +638,25 @@ impl BuilderState {
         }
     }
 
+    /// Append one row to the open segment.
+    pub(crate) fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+        self.builder.push_row(ts, wall_offset_ns, entries);
+    }
+
+    /// Whether this open segment is past any seal threshold. An empty builder
+    /// never is.
+    ///
+    /// Row and age targets come from the state, not the policy: the first
+    /// segment of each sampler is staggered short. The byte cap is a memory
+    /// bound and is never staggered.
+    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
+        let rows = self.builder.rows();
+        rows > 0
+            && (self.builder.approx_bytes() >= policy.max_bytes
+                || rows >= self.max_rows
+                || now.duration_since(self.opened_at) >= self.max_age)
+    }
+
     /// Rotate onto a fresh segment after a seal, dropping the startup stagger:
     /// every segment after the first uses the full policy.
     fn seal_completed(&mut self, sampler: &str, policy: &SealPolicy, now: Instant) -> TableBuilder {
@@ -609,6 +666,48 @@ impl BuilderState {
         self.max_age = policy.max_age;
         sealed
     }
+
+    /// The final partial segment, or `None` when there is nothing to seal.
+    /// Consuming, because a recorder only asks this while finalizing.
+    pub(crate) fn into_tail(self) -> Option<TableBuilder> {
+        (self.builder.rows() > 0).then_some(self.builder)
+    }
+
+    /// Rows in the open segment.
+    #[cfg(test)]
+    pub(crate) fn open_rows(&self) -> usize {
+        self.builder.rows()
+    }
+
+    /// The row and age targets the *current* open segment seals at.
+    #[cfg(test)]
+    pub(crate) fn targets(&self) -> (usize, Duration) {
+        (self.max_rows, self.max_age)
+    }
+}
+
+/// Seal every open segment past a threshold, rotating each onto a fresh
+/// builder, and return the sealed builders by sampler.
+///
+/// **The seal decision lives here and only here.** Both containers call it: v2
+/// turns the result into its `SealJob` for the tar writer, v3 into its own for
+/// the SQLite writer (and clears that sampler's WAL metadata anchor). Those few
+/// lines are all the two ingest paths do differently — everything that could
+/// drift, the `due` predicate and the `mem::replace` rotation that carries
+/// `last_key` forward by leaving it outside the builder, is shared.
+pub(crate) fn drain_due(
+    builders: &mut BTreeMap<String, BuilderState>,
+    policy: &SealPolicy,
+) -> Vec<(String, TableBuilder)> {
+    let now = Instant::now();
+    let mut sealed = Vec::new();
+    for (sampler, state) in builders.iter_mut() {
+        if !state.is_due(policy, now) {
+            continue;
+        }
+        sealed.push((sampler.clone(), state.seal_completed(sampler, policy, now)));
+    }
+    sealed
 }
 
 /// The scrape-side half: per-sampler open segments plus the seal decision.
@@ -654,9 +753,7 @@ impl StreamRecorder {
                 .builders
                 .entry(sampler.to_string())
                 .or_insert_with(|| BuilderState::open_first(sampler, policy));
-            state
-                .builder
-                .push_row(anchored_ts, wall_offset_ns, &entries);
+            state.push_row(anchored_ts, wall_offset_ns, &entries);
         }
     }
 
@@ -667,31 +764,13 @@ impl StreamRecorder {
     /// must still get its pre-outage rows sealed, or the kill-loss window is no
     /// longer bounded in time.
     pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
-        let now = Instant::now();
-        let mut batch = Vec::new();
-        for (sampler, state) in self.builders.iter_mut() {
-            let rows = state.builder.rows();
-            if rows == 0 {
-                continue;
-            }
-            // Row and age targets come from the state, not the policy: the
-            // first segment of each sampler is staggered short. The byte cap is
-            // a memory bound and is never staggered.
-            let due = state.builder.approx_bytes() >= self.policy.max_bytes
-                || rows >= state.max_rows
-                || now.duration_since(state.opened_at) >= state.max_age;
-            if !due {
-                continue;
-            }
-            // Rotation is a `mem::replace`: the dedup key lives in `last_keys`
-            // and carries over untouched, while the byte counter correctly
-            // restarts at zero with the fresh segment.
-            let sealed = state.seal_completed(sampler, &self.policy, now);
-            batch.push(SealJob {
-                sampler: sampler.clone(),
-                table: sealed.finish(),
-            });
-        }
+        let batch = drain_due(&mut self.builders, &self.policy)
+            .into_iter()
+            .map(|(sampler, builder)| SealJob {
+                sampler,
+                table: builder.finish(),
+            })
+            .collect();
         self.handle.seal(batch)
     }
 
@@ -700,10 +779,11 @@ impl StreamRecorder {
     pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
-            .filter(|(_, state)| state.builder.rows() > 0)
-            .map(|(sampler, state)| SealJob {
-                sampler,
-                table: state.builder.finish(),
+            .filter_map(|(sampler, state)| {
+                state.into_tail().map(|builder| SealJob {
+                    sampler,
+                    table: builder.finish(),
+                })
             })
             .collect();
         self.handle.finalize(tails, clock_offset)
@@ -725,16 +805,14 @@ impl StreamRecorder {
     fn open_rows(&self, sampler: &str) -> usize {
         self.builders
             .get(sampler)
-            .map(|state| state.builder.rows())
+            .map(BuilderState::open_rows)
             .unwrap_or(0)
     }
 
     /// The row and age targets the sampler's *current* open segment seals at.
     #[cfg(test)]
     fn open_targets(&self, sampler: &str) -> Option<(usize, Duration)> {
-        self.builders
-            .get(sampler)
-            .map(|state| (state.max_rows, state.max_age))
+        self.builders.get(sampler).map(BuilderState::targets)
     }
 }
 

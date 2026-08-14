@@ -149,9 +149,14 @@ sudo systemctl restart rezolus-exporter
 
 Sometimes per-second collection is too expensive, and some problems are
 impossible to understand without fine-grained data. Hindsight keeps a
-high-resolution ring buffer on disk so you can record a snapshot _after_ a
+high-resolution rolling buffer on disk so you can record a snapshot _after_ a
 problem has already occurred — effectively going back in time to root-cause a
 production incident at full resolution.
+
+The buffer is an ordinary `.rez` recording trimmed to the configured lookback,
+so you can open it with `rezolus view` or the MCP tools _while it is being
+written_, and a snapshot is a consistent point-in-time copy taken without
+pausing the recording — however it is triggered, by signal or over HTTP.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
@@ -159,7 +164,7 @@ Hindsight is **disabled by default**. Review the config before enabling it.
 sudo editor /etc/rezolus/hindsight.toml
 sudo systemctl enable rezolus-hindsight
 sudo systemctl start rezolus-hindsight
-# trigger a save of the ring buffer to the output file
+# trigger a save of the buffer to the output file
 sudo systemctl kill -sHUP rezolus-hindsight
 ```
 
@@ -218,16 +223,18 @@ still-open segments. That holds at any `--interval` — a `--interval 1m` soak
 recording stops just as promptly as a millisecond one, comfortably inside a
 container's stop grace, and never proportional to the recording's length.
 
-While recording, the archive lives at `<output>.partial` and is renamed into
-place only on a clean stop, so an existing output file is untouched until the
-new recording is complete. Each sampler's open segment is checkpointed when it
-fills and at least every 5 minutes, so an unclean end costs at most the samples
-since then: if the recorder is SIGKILLed or the machine dies, the `.partial` is
-left behind and is readable up to that last checkpoint.
+A `.rez` is a single SQLite file that is valid at every instant, so there is no
+`.partial` staging file — and the output path must not already exist. Every
+sample is committed as it is taken, so if the recorder is SIGKILLed or the
+machine dies the recording is readable where it sits, missing at most one
+sampling interval:
 
 ```bash
-rezolus parquet metadata -i out.rez.partial   # reports "not cleanly finalized"
+rezolus parquet metadata -i out.rez   # reports "not cleanly finalized"
 ```
+
+Pass `--rez-version 2` to write the previous tar container instead, which stages
+at `<output>.partial` and is recoverable only up to its last checkpoint.
 
 ### Viewer
 
@@ -472,13 +479,16 @@ listen = "127.0.0.1:4242"
 
 Available endpoints:
 
-- `GET /status` — returns buffer status including time range, utilization, and
-  snapshot count
-- `GET /dump` — downloads the ring buffer as a parquet file
-- `POST /dump/file` — writes the ring buffer to the configured output file
+- `GET /status` — returns buffer status: the time range actually retained, rows
+  and segments per sampler, on-disk size, and whether retention has started
+- `GET /dump` — downloads the buffer as a `.rez` archive
+- `POST /dump/file` — writes the buffer to the configured output file
 
 The `/dump` and `/dump/file` endpoints support query parameters for time
-filtering:
+filtering. A `.rez` segment is an immutable parquet blob, so a filtered dump
+keeps any segment overlapping the range rather than splitting one: you may get
+a little more than you asked for, and `/dump/file` reports the span it actually
+wrote.
 
 | Parameter | Description                             | Example                       |
 | --------- | --------------------------------------- | ----------------------------- |
@@ -492,11 +502,11 @@ Examples:
 # check buffer status
 curl http://localhost:4242/status
 
-# download last 5 minutes as parquet
-curl -o dump.parquet "http://localhost:4242/dump?last=5m"
+# download last 5 minutes as a .rez archive
+curl -o dump.rez "http://localhost:4242/dump?last=5m"
 
 # download a specific time range using RFC 3339 datetime
-curl -o dump.parquet "http://localhost:4242/dump?start=2024-01-01T12:00:00Z&end=2024-01-01T13:00:00Z"
+curl -o dump.rez "http://localhost:4242/dump?start=2024-01-01T12:00:00Z&end=2024-01-01T13:00:00Z"
 
 # trigger a dump to the configured output file
 curl -X POST http://localhost:4242/dump/file

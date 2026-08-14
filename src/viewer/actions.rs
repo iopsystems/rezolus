@@ -237,8 +237,14 @@ pub async fn upload_parquet(
     if let Err(e) = std::fs::write(&temp_path, &body) {
         return ApiResponse::err(format!("failed to store upload: {e}"), "io_error");
     }
-    // `.rez` is also a tar, so check it before the A/B-tarball sniffer.
-    if crate::recorder::rez::is_rez_path(&temp_path).unwrap_or(false) {
+    // `.rez` (v2 tar) is also a tar, so check it before the A/B-tarball
+    // sniffer. Dispatch is by CONTENT of the staged upload, not extension or
+    // filename, and covers both `.rez` containers (v2 tar and v3 SQLite) —
+    // `RezReader` dispatches on the container internally.
+    if crate::recorder::rez::detect_rez_format(&temp_path)
+        .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
+        != crate::recorder::rez::RezFormat::NotRez
+    {
         return ingest_rez_from_path(&state, temp_path, filename);
     }
     if super::ab_extract::looks_like_ab_tarball(&temp_path) {
@@ -926,4 +932,44 @@ fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
         )
         .body(Body::from(body))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::dashboard::TemplateRegistry;
+
+    fn upload_only_state() -> Arc<AppState> {
+        let store: Arc<dyn MetricsSource> = Arc::new(MemoryStore::builder().build());
+        Arc::new(AppState::new(store, TemplateRegistry::empty()))
+    }
+
+    /// `upload_parquet` must dispatch a v3 (SQLite) `.rez` upload to
+    /// `ingest_rez_from_path`, not the plain-parquet ingest path. Mutation
+    /// check: reverting the `detect_rez_format` check on the staged upload to
+    /// `is_rez_path` makes this fail — the sniff runs on CONTENT, not
+    /// filename, so a v3 upload then falls through to
+    /// `ingest_baseline_from_path`, which tries to open the SQLite bytes as a
+    /// bare parquet and returns an `invalid_parquet` error instead of
+    /// `success`.
+    #[tokio::test]
+    async fn upload_parquet_accepts_v3_sqlite_rez() {
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&rez_path);
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&rez_path).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "fixture sanity: must actually be a v3 SQLite archive"
+        );
+        let bytes = std::fs::read(&rez_path).unwrap();
+
+        let state = upload_only_state();
+        let response = upload_parquet(State(state), HeaderMap::new(), Bytes::from(bytes)).await;
+        let value = serde_json::to_value(&response.0).unwrap();
+        assert_eq!(
+            value["status"], "success",
+            "upload_parquet must accept a v3 .rez upload: {value}"
+        );
+    }
 }
