@@ -8,7 +8,7 @@ use serde::Deserialize;
 use tempfile::tempfile_in;
 use tracing::{debug, error, info, warn};
 
-use std::io::{Read, Seek, Write};
+use std::io::{Seek, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

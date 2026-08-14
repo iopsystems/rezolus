@@ -5,7 +5,7 @@ use crate::agent::*;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use plist::Value;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
