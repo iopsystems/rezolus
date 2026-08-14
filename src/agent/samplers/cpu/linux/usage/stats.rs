@@ -38,6 +38,16 @@ pub static CPU_USAGE_USER: WindowedCounterGroup = WindowedCounterGroup::new(MAX_
 )]
 pub static CPU_USAGE_SYSTEM: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
+// Deliberately a distinct metric name rather than another `cpu_usage` state:
+// this time is a *subset* of user+system, not a disjoint category, so exposing
+// it as a third state would double-count any sum across states.
+#[metric(
+    name = "cpu_usage_exited_tasks",
+    description = "The amount of CPU time that was consumed by tasks which have since exited, and so is no longer attributable to any live per-task series",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static CPU_USAGE_EXITED: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+
 /*
  * per-cgroup metrics
  */
@@ -55,6 +65,13 @@ pub static CGROUP_CPU_USAGE_USER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
     metadata = { state = "system", unit = "nanoseconds" }
 )]
 pub static CGROUP_CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_cpu_usage_exited_tasks",
+    description = "The amount of CPU time that was consumed by tasks which have since exited, on a per-cgroup basis",
+    metadata = { unit = "nanoseconds" }
+)]
+pub static CGROUP_CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 /*
  * per-task metrics

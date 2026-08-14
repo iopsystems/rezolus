@@ -26,6 +26,8 @@
 // counter positions
 #define IVCSW 0
 #define RUNQ_WAIT 1
+#define DISCARDED 2
+#define VCSW 3
 
 // counters (see constants defined at top)
 struct {
@@ -131,6 +133,14 @@ struct {
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, MAX_CGROUPS);
+} cgroup_vcsw SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
 } cgroup_runq_wait SEC(".maps");
 
 struct {
@@ -175,7 +185,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
     struct task_struct* prev = (struct task_struct*)ctx[1];
     struct task_struct* next = (struct task_struct*)ctx[2];
 
-    u32 pid, idx;
+    u32 idx;
     // prev and next can belong to different cgroups; track each separately so
     // runqueue wait and off-cpu time are never charged to prev's cgroup.
     // MAX_CGROUPS is the "no attribution" sentinel.
@@ -185,6 +195,19 @@ static __always_inline int account__sched_switch(u64* ctx) {
 
     u32 processor_id = bpf_get_smp_processor_id();
     u64 ts = bpf_ktime_get_ns();
+
+    // The idle task (pid 0) is not a runqueue participant: it never waits to be
+    // scheduled, and unlike a real task its slot in the per-pid arrays below is
+    // shared by every CPU. Tracking it fabricates runqueue wait for the root
+    // cgroup, and because `ts` is sampled here but consumed further down, it
+    // lets a remote CPU publish a newer timestamp into slot 0 mid-handler --
+    // making `ts - *tsp` underflow into the top histogram bucket. Measured on a
+    // 32-core host: 65% of the writes below were the idle task, and the top
+    // bucket accrued 59-189 samples/s while the machine was otherwise idle.
+    // `trace_enqueue()` already skips pid 0 on the wakeup path; skipping it here
+    // keeps the switch path consistent with it.
+    u32 prev_pid = BPF_CORE_READ(prev, pid);
+    u32 next_pid = BPF_CORE_READ(next, pid);
 
     // read the prev task cgroup details and push to ringbuf if new cgroup
     void* prev_task_group = BPF_CORE_READ(prev, sched_task_group);
@@ -200,6 +223,7 @@ static __always_inline int account__sched_switch(u64* ctx) {
                 // New cgroup detected, zero the counters
                 u64 zero = 0;
                 bpf_map_update_elem(&cgroup_ivcsw, &prev_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_vcsw, &prev_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_runq_wait, &prev_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &prev_cgroup_id, &zero, BPF_ANY);
             }
@@ -214,36 +238,63 @@ static __always_inline int account__sched_switch(u64* ctx) {
     // - update prev->pid enqueued_at with now
     // - calculate how long prev task was running and update hist
     if (get_task_state(prev) == TASK_RUNNING) {
-        idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
+        // The idle task is always TASK_RUNNING, so a CPU simply waking up to run
+        // something counted as an involuntary context switch -- nothing was
+        // competing for the CPU, and no task was preempted. The inflation is
+        // load-dependent and largest exactly where a high context-switch rate is
+        // most likely to be misread as contention: on a 32-core host it was 65%
+        // of such switches when otherwise idle, and ~30% under load. The idle
+        // task is excluded here for the same reason it is excluded from the
+        // timing paths below.
+        if (prev_pid) {
+            idx = COUNTER_GROUP_WIDTH * processor_id + IVCSW;
+            array_incr(&counters, idx);
+
+            if (prev_cgroup_id < MAX_CGROUPS) {
+                array_incr(&cgroup_ivcsw, prev_cgroup_id);
+            }
+
+            bpf_map_update_elem(&enqueued_at, &prev_pid, &ts, 0);
+
+            tsp = bpf_map_lookup_elem(&running_at, &prev_pid);
+            if (tsp && *tsp) {
+                // A timestamp pair can arrive out of order across CPUs; an
+                // unguarded subtraction would wrap to ~2^64 and land in the top
+                // bucket. Discard instead, and count it so the condition stays
+                // observable rather than silently vanishing.
+                if (ts >= *tsp) {
+                    histogram_incr(&running, HISTOGRAM_POWER, ts - *tsp);
+                } else {
+                    array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+                }
+
+                *tsp = 0;
+            }
+        }
+    } else {
+        // prev left the CPU while not runnable, i.e. it blocked: a voluntary
+        // context switch. This mirrors the kernel's own split, which counts
+        // nvcsw when a task deschedules with a non-zero state and nivcsw when
+        // it is preempted while runnable. Emitting both classes is what lets a
+        // consumer tell a blocking wakeup handoff from a true preemption --
+        // with only one class emitted, "no voluntary switches" and "voluntary
+        // switches not measured" are indistinguishable.
+        idx = COUNTER_GROUP_WIDTH * processor_id + VCSW;
         array_incr(&counters, idx);
 
         if (prev_cgroup_id < MAX_CGROUPS) {
-            array_incr(&cgroup_ivcsw, prev_cgroup_id);
-        }
-
-        pid = BPF_CORE_READ(prev, pid);
-
-        bpf_map_update_elem(&enqueued_at, &pid, &ts, 0);
-
-        tsp = bpf_map_lookup_elem(&running_at, &pid);
-        if (tsp && *tsp) {
-            delta_ns = ts - *tsp;
-
-            histogram_incr(&running, HISTOGRAM_POWER, delta_ns);
-
-            *tsp = 0;
+            array_incr(&cgroup_vcsw, prev_cgroup_id);
         }
     }
 
     // for all tasks: track when it went off-cpu
-    pid = BPF_CORE_READ(prev, pid);
-
-    bpf_map_update_elem(&offcpu_at, &pid, &ts, 0);
+    if (prev_pid) {
+        bpf_map_update_elem(&offcpu_at, &prev_pid, &ts, 0);
+    }
 
     // next task has moved into running
     // - update next->pid running_at with now
     // - calculate how long next task was enqueued, update hist
-    pid = BPF_CORE_READ(next, pid);
 
     // read the next task cgroup details and push to ringbuf if new cgroup
     void* next_task_group = BPF_CORE_READ(next, sched_task_group);
@@ -259,46 +310,59 @@ static __always_inline int account__sched_switch(u64* ctx) {
                 // New cgroup detected, zero the counters
                 u64 zero = 0;
                 bpf_map_update_elem(&cgroup_ivcsw, &next_cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_vcsw, &next_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_runq_wait, &next_cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_offcpu, &next_cgroup_id, &zero, BPF_ANY);
             }
         }
     }
 
-    bpf_map_update_elem(&running_at, &pid, &ts, 0);
+    if (next_pid) {
+        bpf_map_update_elem(&running_at, &next_pid, &ts, 0);
 
-    tsp = bpf_map_lookup_elem(&enqueued_at, &pid);
-    if (tsp && *tsp) {
-        delta_ns = ts - *tsp;
-
-        histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
-
-        idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
-        array_add(&counters, idx, delta_ns);
-
-        if (next_cgroup_id < MAX_CGROUPS) {
-            array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
-        }
-
-        *tsp = 0;
-
-        // calculate how long it was off-cpu, not including runqueue wait,
-        // and increment stats
-        tsp = bpf_map_lookup_elem(&offcpu_at, &pid);
+        tsp = bpf_map_lookup_elem(&enqueued_at, &next_pid);
         if (tsp && *tsp) {
-            offcpu_ns = ts - *tsp;
+            if (ts >= *tsp) {
+                delta_ns = ts - *tsp;
 
-            if (offcpu_ns > delta_ns) {
-                offcpu_ns = offcpu_ns - delta_ns;
+                histogram_incr(&runqlat, HISTOGRAM_POWER, delta_ns);
 
-                histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
+                idx = COUNTER_GROUP_WIDTH * processor_id + RUNQ_WAIT;
+                array_add(&counters, idx, delta_ns);
 
                 if (next_cgroup_id < MAX_CGROUPS) {
-                    array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                    array_add(&cgroup_runq_wait, next_cgroup_id, delta_ns);
                 }
-            }
 
-            *tsp = 0;
+                *tsp = 0;
+
+                // calculate how long it was off-cpu, not including runqueue wait,
+                // and increment stats
+                tsp = bpf_map_lookup_elem(&offcpu_at, &next_pid);
+                if (tsp && *tsp) {
+                    if (ts >= *tsp) {
+                        offcpu_ns = ts - *tsp;
+
+                        if (offcpu_ns > delta_ns) {
+                            offcpu_ns = offcpu_ns - delta_ns;
+
+                            histogram_incr(&offcpu, HISTOGRAM_POWER, offcpu_ns);
+
+                            if (next_cgroup_id < MAX_CGROUPS) {
+                                array_add(&cgroup_offcpu, next_cgroup_id, offcpu_ns);
+                            }
+                        }
+                    } else {
+                        array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+                    }
+
+                    *tsp = 0;
+                }
+            } else {
+                array_incr(&counters, COUNTER_GROUP_WIDTH * processor_id + DISCARDED);
+
+                *tsp = 0;
+            }
         }
     }
 

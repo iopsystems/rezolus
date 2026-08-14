@@ -288,6 +288,9 @@ File operations for parquet recordings:
 - **Combine** — merge a Rezolus parquet with service-level parquet files,
   joining on timestamps to produce a unified multi-source recording, or package
   two captures as an A/B tarball for the viewer's compare mode.
+- **Convert** — turn a raw msgpack recording (from `record -f raw`) into
+  parquet. The input may be plain or zstd-compressed; which one it is is
+  detected from the file's contents, not its name.
 - **Filter** — drop metric columns not referenced by a file's service extension
   KPIs, shrinking the recording.
 
@@ -295,8 +298,21 @@ File operations for parquet recordings:
 rezolus parquet metadata -i rezolus.parquet
 rezolus parquet annotate rezolus.parquet --queries ext.json
 rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
+rezolus parquet convert rezolus.raw.zst              # writes rezolus.parquet
 rezolus parquet filter rezolus.parquet -o slim.parquet
 ```
+
+`convert` infers the sampling interval from the median gap between snapshot
+timestamps; pass `--interval` to override it. It warns on stderr (without
+failing) when the sampled gaps have no dominant cadence, or when they are closer
+together than the whole milliseconds `sampling_interval_ms` can hold. A raw recording carries no
+`systeminfo` or metric descriptions — the recorder fetches those from the
+agent's `/systeminfo` and `/metrics/descriptions` endpoints while recording — so
+supply them with `--systeminfo` / `--descriptions` if you saved them. Afterwards
+`parquet annotate --systeminfo` can still add the hardware summary, but there is
+no annotate route for descriptions. A `.rez` archive cannot be produced from a
+raw recording: it needs the per-sampler cadence and acquisition windows that a
+raw snapshot stream never carried.
 
 ### MCP Server
 
@@ -418,6 +434,7 @@ target/release/rezolus view http://localhost:4241
 # parquet file operations
 target/release/rezolus parquet metadata -i rezolus.parquet
 target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
+target/release/rezolus parquet convert rezolus.raw.zst
 ```
 
 To rebuild the browser-only static viewer (`site/viewer/`) that ships the PromQL

@@ -123,6 +123,50 @@ pub fn set_active_if_absent(name: &'static str) {
         });
 }
 
+/// Record that a sampler's hardware perf counters are not measuring.
+///
+/// Unlike a probe attach, this is only discoverable at read time -- a counter
+/// that never got a PMU slot, or that stopped advancing after having worked,
+/// looks identical to a healthy one until its `time_running` is inspected. The
+/// perf read threads call this once per affected counter so the condition
+/// reaches `/samplers` instead of only a log line, letting a consumer tell
+/// *not measured* from a genuine zero.
+///
+/// Idempotent per sampler: repeated calls refresh the reason rather than
+/// accumulating entries.
+///
+/// Called from the BPF builder's perf read threads (Linux-only); on other
+/// platforms it is exercised only by unit tests, so suppress the dead-code lint
+/// there, matching `classify_program`/`rollup_health` above.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn note_perf_unavailable(name: &'static str, reason: &str) {
+    let mut registry = registry().lock().unwrap();
+
+    let entry = registry.entry(name).or_insert_with(|| SamplerStatus {
+        name: name.to_string(),
+        state: SamplerState::Active,
+        health: None,
+        programs: Vec::new(),
+    });
+
+    if let Some(existing) = entry.programs.iter_mut().find(|p| p.name == "pmu") {
+        existing.error = Some(reason.to_string());
+    } else {
+        entry.programs.push(ProgramStatus {
+            name: "pmu".to_string(),
+            attached: false,
+            error: Some(reason.to_string()),
+            intent: None,
+            label: Some("hardware perf counters".to_string()),
+            expected: true,
+            verdict: ProbeVerdict::Unsupported,
+        });
+    }
+
+    let verdicts: Vec<ProbeVerdict> = entry.programs.iter().map(|p| p.verdict).collect();
+    entry.health = Some(rollup_health(true, &verdicts));
+}
+
 /// Snapshot of all sampler statuses, sorted by name (BTreeMap order).
 pub fn snapshot() -> Vec<SamplerStatus> {
     registry().lock().unwrap().values().cloned().collect()

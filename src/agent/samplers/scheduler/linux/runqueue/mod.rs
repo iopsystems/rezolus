@@ -8,6 +8,7 @@
 //! * `scheduler/running`
 //! * `scheduler/offcpu`
 //! * `scheduler/context_switch/involuntary`
+//! * `scheduler/context_switch/voluntary`
 
 const NAME: &str = "scheduler_runqueue";
 
@@ -29,6 +30,7 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 
 static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
     &CGROUP_SCHEDULER_IVCSW,
+    &CGROUP_SCHEDULER_VCSW,
     &CGROUP_SCHEDULER_OFFCPU,
     &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
 ];
@@ -42,7 +44,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let counters = vec![&SCHEDULER_IVCSW, &SCHEDULER_RUNQUEUE_WAIT];
+    // order must match the counter positions in mod.bpf.c
+    let counters = vec![
+        &SCHEDULER_IVCSW,
+        &SCHEDULER_RUNQUEUE_WAIT,
+        &SCHEDULER_DISCARDED,
+        &SCHEDULER_VCSW,
+    ];
 
     let bpf = BpfBuilder::new(
         &config,
@@ -60,6 +68,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .packed_counters("cgroup_runq_wait", &CGROUP_SCHEDULER_RUNQUEUE_WAIT)
     .packed_counters("cgroup_offcpu", &CGROUP_SCHEDULER_OFFCPU)
     .packed_counters("cgroup_ivcsw", &CGROUP_SCHEDULER_IVCSW)
+    .packed_counters("cgroup_vcsw", &CGROUP_SCHEDULER_VCSW)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(if kernel_has_btf() {
         &[
@@ -96,6 +105,7 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_runq_wait" => &self.maps.cgroup_runq_wait,
             "cgroup_offcpu" => &self.maps.cgroup_offcpu,
             "cgroup_ivcsw" => &self.maps.cgroup_ivcsw,
+            "cgroup_vcsw" => &self.maps.cgroup_vcsw,
             "cgroup_info" => &self.maps.cgroup_info,
             _ => unimplemented!(),
         }

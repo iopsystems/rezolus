@@ -49,10 +49,17 @@ pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GR
 
 #[metric(
     name = "scheduler_context_switch",
-    description = "The number of involuntary context switches",
+    description = "The number of involuntary context switches, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
     metadata = { kind = "involuntary" }
 )]
 pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+
+#[metric(
+    name = "scheduler_context_switch",
+    description = "The number of voluntary context switches, where a task left the CPU because it blocked",
+    metadata = { kind = "voluntary" }
+)]
+pub static SCHEDULER_VCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_runqueue_wait",
@@ -60,6 +67,12 @@ pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX
     metadata = { unit = "nanoseconds" }
 )]
 pub static SCHEDULER_RUNQUEUE_WAIT: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+
+#[metric(
+    name = "scheduler_discarded_samples",
+    description = "The number of scheduler timing samples discarded because the two timestamps arrived out of order across CPUs, which would otherwise underflow into the top histogram bucket"
+)]
+pub static SCHEDULER_DISCARDED: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
 
 /*
  * per-cgroup
@@ -81,7 +94,14 @@ pub static CGROUP_SCHEDULER_OFFCPU: CounterGroup = CounterGroup::new(MAX_CGROUPS
 
 #[metric(
     name = "cgroup_scheduler_context_switch",
-    description = "The number of involuntary context switches on a per-cgroup basis",
+    description = "The number of involuntary context switches on a per-cgroup basis, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
     metadata = { kind = "involuntary" }
 )]
 pub static CGROUP_SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
+
+#[metric(
+    name = "cgroup_scheduler_context_switch",
+    description = "The number of voluntary context switches on a per-cgroup basis, where a task left the CPU because it blocked",
+    metadata = { kind = "voluntary" }
+)]
+pub static CGROUP_SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
