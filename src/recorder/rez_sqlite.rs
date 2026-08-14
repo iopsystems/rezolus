@@ -19,20 +19,58 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags};
 
 /// Fixed at file creation and NOT changeable afterwards without leaving WAL
-/// mode and running a full `VACUUM`. 4096 was swept against {8192..65536} and
-/// kept: larger pages win ≤26% on operations that are not the binding
-/// constraint, while per-tick WAL amplification rises 3.14× → 8.20×.
-/// See the journal, § "`page_size` selection".
+/// mode and running a full `VACUUM`, so treat it as permanent.
+///
+/// Larger pages help operations that are not the binding constraint, and cost
+/// where it hurts: every tick commits a small WAL row, so write amplification
+/// scales with the page size. Optimize for the per-tick write, not the bulk
+/// read.
 pub(crate) const PAGE_SIZE: u32 = 4096;
 
-/// Cap the `-wal` sidecar by BYTES, not pages. At `PAGE_SIZE` this is the
-/// ~1000-page SQLite default, so nothing changes today — it stops the sidecar
-/// (67 MB at 64 KiB pages) and the p99 from tracking any future page size.
+/// Cap the `-wal` sidecar by BYTES, not pages. At `PAGE_SIZE` this is close to
+/// SQLite's own ~1000-page default, so it changes nothing today — it exists so
+/// that the sidecar's size, and the checkpoint pause it implies, cannot track a
+/// future page size.
 const WAL_AUTOCHECKPOINT_BYTES: u32 = 4 * 1024 * 1024;
 
-/// 256 MiB of page cache, as a negative (kibibyte-denominated) `cache_size`.
-/// Worth +78% on segment reads (229.6 → 409.6 MB/s) and entirely reversible.
-const CACHE_SIZE_KIB: i32 = -262_144;
+/// Page cache for a connection that READS segments back, as a negative
+/// (kibibyte-denominated) `cache_size`. Large because a reader replays whole
+/// segments and benefits from holding them; see `WRITER_CACHE_SIZE_KIB` for why
+/// a writing connection must not take this.
+const READER_CACHE_SIZE_KIB: i32 = -262_144;
+
+/// 16 MiB of page cache for a connection that only WRITES.
+///
+/// **Split from the reader's cache because a writer cannot use it.** The
+/// reader's figure buys segment-read throughput; a recording writer inserts
+/// opaque BLOBs and never reads one back, so the only pages it benefits from
+/// caching are catalog b-trees, which are kilobytes.
+///
+/// It is not merely wasted headroom. `cache_size` is an upper bound rather than
+/// an allocation, but a seal batch dirties every overflow page of every segment
+/// it inserts inside one transaction — megabytes of BLOB is thousands of pages
+/// — so a co-seal walks the writer's cache to whatever cap it is given, and
+/// SQLite does not hand it back. On an always-on agent that is permanent
+/// resident memory.
+///
+/// 16 MiB is sized from `SealPolicy::max_bytes`: two segments' worth, so a
+/// single segment's insert fits with room to spare. Overrunning it is safe and
+/// nearly free, which is what makes a small cache the right default — in WAL
+/// mode a full cache spills dirty pages to the `-wal` before the commit, and
+/// segment inserts are append-only pages that are never re-dirtied, so a
+/// spilled page is written once either way.
+const WRITER_CACHE_SIZE_KIB: i32 = -16_384;
+
+/// These are NEGATIVE kibibytes, so the writer's cap is the GREATER number.
+/// Easy to invert while retuning, and an inversion is silent — it hands the
+/// always-on writer the big cache and the analysis reader the small one, which
+/// is precisely backwards and costs only performance, so nothing else fails.
+/// A compile error rather than a test, because there is no reason to let a
+/// build with the two crossed over exist at all.
+const _: () = assert!(
+    WRITER_CACHE_SIZE_KIB > READER_CACHE_SIZE_KIB,
+    "the writer's page cache must be smaller than the reader's"
+);
 
 /// v3. Written once at creation; a reader that finds anything else should
 /// refuse the file rather than guess.
@@ -74,10 +112,12 @@ pub(crate) struct SegmentRow {
 }
 
 /// A row of the `wal` table: one sampler's values for one tick, keyed by
-/// `(recording_id, sampler, ts)`. Values-only, not the raw msgpack snapshot —
-/// see the journal § "The WAL is per-sampler rows, not raw snapshots" and
-/// "WAL rows are values-only" (1,925 B vs 10,908 B per sampler per tick,
-/// measured on a real fleet snapshot).
+/// `(recording_id, sampler, ts)`.
+///
+/// Values-only, not the raw msgpack snapshot: names and metadata repeat
+/// unchanged every tick, so carrying them per row costs several times the
+/// payload for nothing. They are re-anchored once per segment instead — see
+/// `WalCell`.
 pub(crate) struct WalRow {
     pub sampler: String,
     pub ts: u64,
@@ -173,7 +213,12 @@ impl RezDb {
         // CANNOT be turned on later without a full VACUUM.
         db.set_pragma("auto_vacuum", "INCREMENTAL")?;
         db.set_journal_mode_wal()?;
-        db.apply_connection_pragmas()?;
+        // Creating a `.rez` means writing one: the recorder's and hindsight's
+        // live buffers both start here, and both are the always-on processes
+        // whose RSS this is protecting. The only other `create` in the tree is
+        // `hindsight::buffer::copy_range`'s dump destination, which is likewise
+        // insert-only.
+        db.apply_connection_pragmas(WRITER_CACHE_SIZE_KIB)?;
 
         db.conn
             .execute_batch(SCHEMA_SQL)
@@ -198,13 +243,26 @@ impl RezDb {
         // `page_size`, `auto_vacuum` and `journal_mode` persist in the file;
         // these do not, and forgetting them silently downgrades durability
         // (synchronous falls back to NORMAL) on every subsequent write.
-        db.apply_connection_pragmas()?;
+        //
+        // The reader cache, because every bulk segment read in the tree arrives
+        // through `open` — `rez_reader::read_v3_recordings`, and hindsight's
+        // dump source. The two `open` call sites that go on to write
+        // (hindsight's staged dump) take it too, deliberately: they are
+        // short-lived, offline and bounded by the dump, so no long-running
+        // process holds it.
+        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
         Ok(db)
     }
 
     /// The pragmas that live on the connection, not in the file. Applied by
     /// both `create` and `open`.
-    fn apply_connection_pragmas(&self) -> Result<(), String> {
+    ///
+    /// `cache_size_kib` is the caller's because it is the one per-connection
+    /// knob whose right value depends on what the connection is FOR; see
+    /// `READER_CACHE_SIZE_KIB` and `WRITER_CACHE_SIZE_KIB`. Everything else here
+    /// is a property of the file's durability contract and is identical on
+    /// every connection.
+    fn apply_connection_pragmas(&self, cache_size_kib: i32) -> Result<(), String> {
         // FULL, not NORMAL: it survives power loss, not merely process death,
         // and on the combined workload it is no worse at any percentile that
         // threatens the tick budget — the tail is checkpoint and prune work,
@@ -216,9 +274,7 @@ impl RezDb {
         // `PAGE_SIZE`.
         let pages = WAL_AUTOCHECKPOINT_BYTES / self.pragma_u32("page_size")?.max(1);
         self.set_pragma("wal_autocheckpoint", pages)?;
-        // Applied to writers too: `cache_size` is an upper bound on the page
-        // cache, not an allocation, and readers are the ones that benefit.
-        self.set_pragma("cache_size", CACHE_SIZE_KIB)?;
+        self.set_pragma("cache_size", cache_size_kib)?;
         // NOT set here, and worth knowing about: `busy_timeout` is 5000 ms —
         // rusqlite's default, not SQLite's own (which is 0, i.e. fail at
         // once) and not ours. It never fires for the writer, which owns its
@@ -305,17 +361,17 @@ impl RezDb {
     /// rolls back — leaving the database exactly as it was — when `f` returns
     /// `Err` or the commit itself fails.
     ///
-    /// This exists because the fleet seals **12 tables in lockstep** (see the
-    /// journal § "The binding constraint is co-seal lockstep"). Without a way
-    /// to group them, one co-seal is 12 implicit commits, i.e. 12 fsyncs at
-    /// `synchronous=FULL`, against a ~46 ms tick budget — and a single
-    /// 1.4 MB segment insert already measures 5.5 ms p50.
+    /// This exists because samplers seal in lockstep — a dozen tables at once
+    /// is normal. Without a way to group them, one co-seal is a dozen implicit
+    /// commits, i.e. a dozen fsyncs at `synchronous=FULL`, against a tick
+    /// budget that a single segment insert already eats into.
     ///
     /// `f` receives a `RezTx`, not the connection: SQL stays inside this
     /// module, and `RezTx` deliberately exposes only the *writes that belong
     /// in a seal batch*. `prune_wal` is NOT among them, which is how "the
-    /// prune runs outside the seal transaction" (p90 78 ms in-transaction) is
-    /// made unrepresentable rather than merely documented.
+    /// prune runs outside the seal transaction" is made unrepresentable rather
+    /// than merely documented — inside it, a quiet sampler's accumulated rows
+    /// make the delete long enough to threaten the tick.
     pub(crate) fn transaction<T>(
         &mut self,
         f: impl FnOnce(&RezTx<'_>) -> Result<T, String>,
@@ -548,10 +604,8 @@ impl RezDb {
     }
 
     /// Insert every WAL row for one tick — one sampler each, typically — in a
-    /// single transaction. This is the per-tick commit the journal's insert
-    /// gating measured at p50 3.6 ms / p99 12.1 ms (26 rows, fleet sizes),
-    /// and it is what makes a tick atomic: either every sampler's row for
-    /// this tick lands, or none does.
+    /// single transaction. This is what makes a tick atomic: either every
+    /// sampler's row for this tick lands, or none does.
     ///
     /// Takes `&mut self`, unlike every reader in this file: `Connection::
     /// transaction()` requires `&mut Connection`. An earlier version used
@@ -590,28 +644,27 @@ impl RezDb {
     /// rule, not just a helper for it: **`ts > COALESCE(MAX(last_ts) of that
     /// sampler's segments, 0)`.**
     ///
-    /// The prune (`prune_wal`) deliberately runs OUTSIDE the seal
-    /// transaction: doing it inside measured p90 78 ms / max 245 ms (a quiet
-    /// sampler accumulates ~6,500 rows before sealing, deleting ~71 MB in one
-    /// commit — see the journal § "Insert cost"). That means a crash between
-    /// "segment committed" and "prune ran" can leave WAL rows whose `ts` is
-    /// already covered by a sealed segment. Rather than prevent that
-    /// straddle, recovery tolerates it: a row is live iff its `ts` is past
-    /// the watermark of the sealed segments for its own sampler, full stop —
-    /// one idempotent rule that needs no ordering guarantee between sealing
-    /// and pruning.
+    /// The prune (`prune_wal`) deliberately runs OUTSIDE the seal transaction,
+    /// because a quiet sampler accumulates thousands of rows before it seals
+    /// and deleting them in the seal's own commit puts tens of megabytes of
+    /// delete on the tick path. That means a crash between "segment committed"
+    /// and "prune ran" can leave WAL rows whose `ts` is already covered by a
+    /// sealed segment. Rather than prevent that straddle, recovery tolerates
+    /// it: a row is live iff its `ts` is past the watermark of the sealed
+    /// segments for its own sampler, full stop — one idempotent rule that needs
+    /// no ordering guarantee between sealing and pruning.
     ///
     /// `COALESCE(..., 0)` is what makes the rule correct for a sampler with
     /// no segments at all, not just a straddling one: the subquery's `MAX`
     /// over zero rows is SQL `NULL`, which `COALESCE` turns into `0`, so
     /// `ts > 0` — every row with a real timestamp — is live. That is exactly
     /// the quiet-table case: a sampler that has never sealed keeps its WHOLE
-    /// history live, which is the fix for the v2 finding (16 of 26 fleet
-    /// tables recovered nothing at `kill -9` 120 s in, because kill-safety
-    /// was per-segment and those tables had not sealed one yet).
+    /// history live. That is the property the tar container could not offer,
+    /// where kill-safety was per-segment and a table that had not sealed one
+    /// yet recovered nothing at all.
     ///
     /// This turns the prune into a pure background optimisation with no
-    /// correctness role — worth p90 212.7 → 44.4 ms on seal ticks.
+    /// correctness role.
     pub(crate) fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
         let mut stmt = self
             .conn
@@ -795,20 +848,16 @@ impl RezDb {
     /// list holds. Requires `auto_vacuum=INCREMENTAL`, which is set at
     /// creation and cannot be turned on later without a full `VACUUM`.
     ///
-    /// Eviction alone keeps the file bounded — freed pages are reused and the
-    /// measured steady state is 1.004–1.011× live — but the bound is the
-    /// HIGH-WATER mark: a working set that shrank 16× left the file at 16.0×
-    /// live, 1.5 GB parked on the free list. This is the trickle that gives
-    /// that space back, at a measured p50 3.8 ms / p90 11.4 ms for 100 pages,
-    /// which fits inside a tick. See the journal § "Eviction without VACUUM".
+    /// Eviction alone keeps the file bounded, since freed pages get reused —
+    /// but the bound it keeps is the HIGH-WATER mark, so a transient spike
+    /// parks space on the free list permanently. This is the trickle that gives
+    /// it back, sized (`pages`) to fit inside a tick.
     ///
     /// **Stepped to exhaustion, and NOT with `execute_batch`.** This pragma
-    /// reclaims one page per step, and `execute_batch` steps a statement once
-    /// — so the obvious spelling silently reclaims exactly ONE page no matter
-    /// what `pages` says, whatever the argument. Measured here: 655 → 654
-    /// pages per call, versus 655 → 42 when the statement is driven to
-    /// completion. That is not a slow reclaim, it is no reclaim at all: at one
-    /// page per retention pass a hindsight buffer would never work off a
+    /// reclaims one page per step and `execute_batch` steps a statement once,
+    /// so the obvious spelling silently reclaims exactly ONE page whatever
+    /// `pages` says. That is not a slow reclaim, it is no reclaim at all: at
+    /// one page per retention pass a hindsight buffer would never work off a
     /// spike.
     pub(crate) fn incremental_vacuum(&self, pages: u32) -> Result<(), String> {
         let fail = |e| format!("failed to reclaim {pages} pages: {e}");
@@ -826,10 +875,9 @@ impl RezDb {
     ///
     /// **This is the dump.** It runs inside a read transaction, so the copy is
     /// a point-in-time snapshot even while the writer keeps committing — the
-    /// property the 4 KB slot ring could not offer, where a dump copied a
-    /// buffer that was being overwritten in place. Measured ~530 MB/s, and it
-    /// rebuilds the destination from scratch, so the dump is also where a
-    /// hindsight buffer's free list gets compacted away for free.
+    /// property a ring of slots overwritten in place cannot offer. It also
+    /// rebuilds the destination from scratch, so a dump is where a hindsight
+    /// buffer's free list gets compacted away for free.
     ///
     /// A plain file copy is NOT an equivalent: in WAL mode the main database
     /// file lags every commit since the last checkpoint, so copying it alone
@@ -918,9 +966,9 @@ impl RezDb {
 /// closure. Everything here lands or nothing does.
 ///
 /// What is absent is as deliberate as what is present: there is no `prune_wal`
-/// and no read accessor. The prune belongs OUTSIDE the seal transaction
-/// (measured p90 78 ms / max 245 ms inside it), and `live_wal`'s watermark
-/// filter is what makes a crash between the two harmless — see `live_wal`.
+/// and no read accessor. The prune belongs OUTSIDE the seal transaction, where
+/// its cost cannot land on a tick, and `live_wal`'s watermark filter is what
+/// makes a crash between the two harmless — see `live_wal`.
 pub(crate) struct RezTx<'a> {
     tx: rusqlite::Transaction<'a>,
 }
@@ -939,9 +987,9 @@ impl RezTx<'_> {
     /// Insert one sealed segment's bytes and catalog facts.
     ///
     /// A plain `INSERT` with a `&[u8]` parameter, NOT incremental BLOB I/O
-    /// (`blob_open`): the gating run measured `blob_open` **15–18% slower**
-    /// at 4–8 MiB, so the simpler API is also the faster one here. See the
-    /// journal § "Insert cost".
+    /// (`blob_open`). At the sizes a segment reaches, `blob_open`'s two-step
+    /// (reserve, then stream) is measurably slower than handing SQLite the
+    /// whole buffer, so the simpler API is also the faster one here.
     pub(crate) fn insert_segment(
         &self,
         recording_id: i64,
@@ -1157,8 +1205,37 @@ mod tests {
         );
         assert_eq!(
             db.pragma_i64("cache_size").unwrap(),
-            CACHE_SIZE_KIB as i64,
+            READER_CACHE_SIZE_KIB as i64,
             "256 MiB reader cache, not SQLite's -2000 default"
+        );
+    }
+
+    #[test]
+    fn a_writing_connection_does_not_get_the_reader_cache() {
+        // A `create` connection is the recorder's and hindsight's live writer;
+        // giving it the reader's cache spends hundreds of MiB of resident
+        // memory on a segment-read optimization it never executes.
+        //
+        // That the two constants are ORDERED is a compile-time assertion beside
+        // them; this is the other half — that `create` reaches for the writer's
+        // one. Both connections are asserted, so a change that applied one
+        // cache everywhere fails here rather than quietly halving read
+        // throughput.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        let created = RezDb::create(&path).unwrap();
+        assert_eq!(
+            created.pragma_i64("cache_size").unwrap(),
+            WRITER_CACHE_SIZE_KIB as i64,
+            "a created (writing) connection takes the writer cache"
+        );
+        assert_eq!(
+            RezDb::open(&path)
+                .unwrap()
+                .pragma_i64("cache_size")
+                .unwrap(),
+            READER_CACHE_SIZE_KIB as i64,
+            "an opened connection still takes the reader cache"
         );
     }
 

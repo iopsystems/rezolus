@@ -109,6 +109,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use metriken::Window;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 // Only the test-only eager reader (read_table_parquet) needs these.
 #[cfg(test)]
 use arrow::array::ListArray;
@@ -277,11 +279,56 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
     Ok((schema, batch))
 }
 
+/// Parquet writer settings for a `.rez` segment.
+///
+/// **Passing `None` here would not select parquet-rs's defaults — it selects
+/// `Compression::UNCOMPRESSED`.** That is the trap this function exists to
+/// close, so it must always be `Some(..)`.
+///
+/// **Compression: LZ4.** These columns are already RLE- and bit-packed by the
+/// parquet encoders, so an entropy coder has little left to find; LZ4 is where
+/// the ratio curve flattens, and it pays for its own encode by shrinking the
+/// BLOB the segment insert then writes. Stronger codecs are rejected on
+/// *memory*, not ratio or CPU: zstd's compression contexts are per column
+/// writer, and this writer instantiates thousands of those at once (below).
+/// `LZ4_RAW` rather than legacy `LZ4` because the legacy variant is a
+/// Hadoop-framed encoding parquet-rs writes only for pre-2.9.0 readers.
+///
+/// Note that the codec has no bearing on read speed even though it halves the
+/// archive; query time tracks segment *count*, which is `SealPolicy`'s
+/// business, not this function's.
+///
+/// **Dictionary encoding: off, and this is the recorder's largest memory
+/// decision.** `ArrowWriter` instantiates a column writer for every column of
+/// a row group simultaneously, each carrying its own `DictEncoder` buffer and
+/// interner. Rezolus tables are wide in a way that makes this dominant — a
+/// per-CPU table runs to thousands of columns, since every metric also carries
+/// `:window_begin`/`:window_width` sidecars — so dictionary state, not row
+/// data, sets peak RSS during a seal.
+///
+/// It costs nothing to disable because the data is the worst possible
+/// dictionary input: u64 counters and gauges, where a monotonic counter makes
+/// every value distinct and the dictionary as large as the column it encodes.
+/// There are no string columns; metric names and labels live in the parquet
+/// schema, not the data.
+///
+/// **Deliberately left at parquet-rs defaults:** `write_batch_size`,
+/// statistics granularity, and the page-size limits. Each looks like it should
+/// bound per-column-writer memory and none of them measurably does, while
+/// chunk-level statistics costs finalize latency and read pruning. The
+/// dictionary is the whole effect.
+fn segment_writer_props() -> WriterProperties {
+    WriterProperties::builder()
+        .set_compression(Compression::LZ4_RAW)
+        .set_dictionary_enabled(false)
+        .build()
+}
+
 /// Serialize one table to parquet bytes.
 pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
     let (schema, batch) = table_to_batch(table)?;
     let mut buf: Vec<u8> = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buf, schema, None)?;
+    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(segment_writer_props()))?;
     writer.write(&batch)?;
     writer.close()?;
     Ok(buf)
@@ -954,18 +1001,17 @@ impl Entry<'_> {
 /// separately below).
 const VALUE_SLOT_BYTES: usize = 16;
 /// In-memory cost of the `Option<Window>` that `push_row` pushes alongside
-/// every counted cell. Measured, not assumed: 24 B. `Window` is two `u64`s
-/// with no niche, so the option tag costs a whole word of padding.
+/// every counted cell: 24 B, because `Window` is two `u64`s with no niche, so
+/// the option tag costs a whole word of padding.
 const WINDOW_SLOT_BYTES: usize = 24;
 /// Per-cell overhead: value slot + window slot.
 ///
-/// This is a *memory bound*, and until now it was 2.5x optimistic: the window
-/// slot was documented as included but never counted, so a scalar cell was
-/// charged 16 B against a true 40 B and an 8 MiB-capped scalar table really
-/// held 20.0 MiB of builder RSS. Counting it means the effective cap is now
-/// reached ~2.5x sooner for scalar-heavy tables (worst measured segment drops
-/// 6.23 MiB -> 2.49 MiB encoded). That is intended: the cap is what bounds
-/// resident memory, so it has to be honest about what a cell costs.
+/// **Both slots, and that is the point.** This is a bound on resident memory,
+/// so it has to charge what a cell actually costs — a window is pushed for
+/// every counted cell, so counting only the value slot understates a scalar
+/// cell by more than half and lets a scalar-heavy table run well past the byte
+/// cap that is supposed to bound it. `push_row_accumulates_approx_bytes` and
+/// `approx_bytes_counts_the_window_slot` pin both halves against the layout.
 const CELL_OVERHEAD_BYTES: usize = VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES;
 /// Bytes per histogram bucket: `push_row` clones the histogram's bucket
 /// `Box<[u64]>` into the column.
@@ -1092,9 +1138,11 @@ impl TableBuilder {
                     Some(CELL_OVERHEAD_BYTES)
                 }
                 (Entry::Histogram(h), RezValues::Histogram(v)) => {
-                    // The clone below copies the whole bucket `Box<[u64]>`
-                    // (7,424 buckets ≈ 58 KB at gp=7/mvp=64), which is why the
-                    // cap counts bytes rather than rows.
+                    // The clone below copies the whole bucket `Box<[u64]>` —
+                    // 496 buckets ≈ 4 KB at the `HISTOGRAM_GROUPING_POWER` = 3
+                    // that `docs/principles.md` standardizes on. One histogram
+                    // cell is ~100x a scalar one, which is why the seal cap
+                    // counts bytes rather than rows.
                     let buckets = h.value.as_slice().len();
                     v.push(Some(h.value.clone()));
                     Some(CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
@@ -1109,6 +1157,39 @@ impl TableBuilder {
         self.approx_bytes += added_bytes;
     }
 
+    /// Return a finished column's growth slack to the allocator.
+    ///
+    /// Every column here was built by repeated `push`, so its capacity is a
+    /// power-of-two ceiling over its length. `approx_bytes` counts *pushed
+    /// cells*, so the seal cap is honest about the data and silent about the
+    /// slack, and a table can hand the writer up to twice what the cap allowed.
+    /// Padding is already done by the time this runs, so the length is final
+    /// and the shrink is exact.
+    ///
+    /// Pre-sizing the columns instead is worse: `Vec::with_capacity(max_rows)`
+    /// over-allocates badly for exactly the wide tables that seal on the byte
+    /// cap long before they reach the row cap.
+    fn shrink(col: &mut RezColumn) {
+        match &mut col.values {
+            RezValues::Counter(v) => v.shrink_to_fit(),
+            RezValues::Gauge(v) => v.shrink_to_fit(),
+            RezValues::Histogram(v) => v.shrink_to_fit(),
+        }
+        col.windows.shrink_to_fit();
+    }
+
+    /// Consume the builder into the table the writer will encode.
+    ///
+    /// **Shrinking here targets the seal-time peak, not the accumulation
+    /// footprint.** An open builder keeps its slack for as long as it is open —
+    /// that is what makes the pushes amortized-O(1) — and what this reclaims is
+    /// the slack on a table about to sit in the writer's channel and then be
+    /// encoded, the moment when the batch, the arrow copy and the parquet
+    /// output buffer are all resident together.
+    ///
+    /// This runs on the scrape thread, so its cost is bounded deliberately: one
+    /// realloc-and-copy per column, and the transient double-allocation a
+    /// shrink needs is one column's worth, never the whole table's.
     pub(crate) fn finish(mut self) -> RezTable {
         let rows = self.timestamps.len();
         let columns = self
@@ -1117,9 +1198,12 @@ impl TableBuilder {
             .map(|name| {
                 let mut col = self.columns.remove(name).unwrap();
                 Self::pad(&mut col, rows);
+                Self::shrink(&mut col);
                 col
             })
             .collect();
+        self.timestamps.shrink_to_fit();
+        self.wall_offsets.shrink_to_fit();
         RezTable {
             sampler: self.sampler,
             timestamps: self.timestamps,
@@ -1370,6 +1454,53 @@ mod builder_tests {
             CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES,
             "one histogram cell is the per-cell overhead plus its buckets"
         );
+    }
+
+    // `approx_bytes` bounds the DATA, and a `Vec` grown by push carries up to
+    // 2x that in capacity, which the writer would then hold across the channel
+    // and the encode. `finish` returns the slack. 100 rows is chosen to land
+    // between powers of two, so a build that stops shrinking fails here instead
+    // of coincidentally passing.
+    #[test]
+    fn finish_returns_the_growth_slack() {
+        let mut b = TableBuilder::new("s".to_string());
+        let c = Counter::new("0".to_string(), 1, cmeta("s"));
+        let g = Gauge::new("1".to_string(), 1, cmeta("s"));
+        for row in 0..100u64 {
+            b.push_row(row * 1_000, 0, &[Entry::Counter(&c), Entry::Gauge(&g)]);
+        }
+        // Pre-condition: without it a shrink that does nothing still passes.
+        assert!(
+            b.timestamps.capacity() > b.timestamps.len(),
+            "the fixture must actually have slack to return"
+        );
+
+        let t = b.finish();
+        assert_eq!(t.timestamps.capacity(), t.timestamps.len(), "timestamps");
+        assert_eq!(
+            t.wall_offsets.capacity(),
+            t.wall_offsets.len(),
+            "wall_offsets"
+        );
+        assert_eq!(
+            t.columns.len(),
+            2,
+            "one counter column and one gauge column"
+        );
+        for col in &t.columns {
+            let (len, cap) = match &col.values {
+                RezValues::Counter(v) => (v.len(), v.capacity()),
+                RezValues::Gauge(v) => (v.len(), v.capacity()),
+                RezValues::Histogram(v) => (v.len(), v.capacity()),
+            };
+            assert_eq!(cap, len, "{} values", col.name);
+            assert_eq!(
+                col.windows.capacity(),
+                col.windows.len(),
+                "{} windows",
+                col.name
+            );
+        }
     }
 
     // Regression: `approx_bytes` bounds resident memory, and it used to charge

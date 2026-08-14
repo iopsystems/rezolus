@@ -2152,6 +2152,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lz4_flex"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ef0d4ed8669f8f8826eb00dc878084aa8f253506c4fd5e8f58f5bce72ddb97e"
+dependencies = [
+ "twox-hash",
+]
+
+[[package]]
 name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2561,6 +2570,7 @@ dependencies = [
  "chrono",
  "half",
  "hashbrown 0.17.1",
+ "lz4_flex",
  "num-bigint",
  "num-integer",
  "num-traits",
@@ -2936,7 +2946,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.17.1-alpha.11"
+version = "5.17.1-alpha.12"
 dependencies = [
  "allan",
  "anyhow",
