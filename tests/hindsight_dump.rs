@@ -744,18 +744,30 @@ fn sealing_continues_through(
         s.segments("fake") >= min_segments
     });
 
-    // Back-to-back dumps for a second. Each one opens its own connection, takes
-    // its own read mark, and copies every segment in the buffer.
+    // Back-to-back dumps. Each one opens its own connection, takes its own read
+    // mark, and copies every segment in the buffer.
+    //
+    // Kept up until enough ticks have gone by to say anything about them, not
+    // for a fixed span: the comparison below is seals against ticks, so the
+    // window has to contain enough ticks for the ratio to mean something. How
+    // long that takes is the host's business — a loaded one runs the loop at a
+    // fraction of its configured rate — and waiting for the ticks measures the
+    // mechanism where waiting for the clock measures the machine.
+    const MIN_TICKS: u64 = 8;
     let window = Duration::from_secs(1);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let started = Instant::now();
     let mut dumps = 0u32;
     let mut busy = Duration::ZERO;
-    while started.elapsed() < window {
+    let mut after = h.status();
+    while (started.elapsed() < window || after.ticks_recorded - before.ticks_recorded < MIN_TICKS)
+        && Instant::now() < deadline
+    {
         busy += dump(&h);
         dumps += 1;
+        after = h.status();
     }
     let elapsed = started.elapsed();
-    let after = h.status();
     let (a, b) = (before.segments("fake"), after.segments("fake"));
     let ticks = after.ticks_recorded - before.ticks_recorded;
 
@@ -802,12 +814,12 @@ fn sealing_continues_through(
          {busy:?} spent inside one, over {elapsed:?})",
         b - a
     );
-    // And the loop kept running at all. Deliberately a floor rather than a
-    // rate: the fixture above has already established that dumps covered most
-    // of the window and that each one outlasted a tick period, so a loop that
-    // stopped for its dumps could not reach even this.
+    // And the loop kept running while the dumps did. The window above is held
+    // open until this many ticks land, so falling short means they stopped
+    // arriving entirely — which, given the fixture established that dumps
+    // covered most of the window, is a loop that stopped for its dumps.
     assert!(
-        ticks >= 3,
+        ticks >= MIN_TICKS,
         "the scrape loop stalled during the {trigger} dumps: only {ticks} \
          ticks in {elapsed:?} at a {INTERVAL:?} interval ({dumps} dumps, \
          {busy:?} spent inside one)"
