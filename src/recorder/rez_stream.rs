@@ -526,11 +526,43 @@ pub(crate) struct SealPolicy {
     pub max_age: Duration,
 }
 
+/// The two caps and the age bound.
+///
+/// **Seal policy is not a CPU knob.** Sealing is a minority of what the
+/// recorder burns — the per-tick scrape/decode/ingest path dominates — so
+/// moving these caps trades finalize latency, peak memory and the kill-loss
+/// window against each other, and barely touches CPU. Tune them for those
+/// three, not for throughput.
+///
+/// The two caps are not redundant: they bind on disjoint sets of tables.
+/// `max_rows` splits the *thin* tables, which would otherwise take a long time
+/// to reach any byte threshold; `max_bytes` splits the *wide* ones, which reach
+/// it almost immediately. Each therefore costs close to nothing on the tables
+/// the other one reaches.
+///
+/// `max_bytes` bounds finalize wall-clock, which is what the streaming writer
+/// exists to protect — a container gets on the order of ten seconds between
+/// SIGTERM and SIGKILL, and an unsealed tail has to fit in it. A larger cap is
+/// tempting because it produces fewer, denser segments, which shrinks the
+/// archive and speeds queries (read cost tracks segment count); that trade
+/// belongs to the offline compactor, which can have it without charging the
+/// agent for it.
+///
+/// Going smaller is worse than it looks. Segments are the encoder's unit of
+/// compression, so starving them re-pays per-column-chunk footer metadata on
+/// every split and denies the RLE and dictionary encoders anything to amortize
+/// over; well below this the archive inflates several-fold. 8 MiB is where that
+/// curve has flattened and finalize has not yet climbed.
+///
+/// `max_rows` is what bounds the finalize tail on thin tables, and it is nearly
+/// free precisely because it does not reach the wide ones.
 impl Default for SealPolicy {
     fn default() -> Self {
         Self {
             max_bytes: 8 * 1024 * 1024,
-            max_rows: 4096,
+            max_rows: 900,
+            // Not a free variable like the two caps: this bounds how much an
+            // unclean kill loses, not seal cost. Trade it against segment count.
             max_age: Duration::from_secs(300),
         }
     }
@@ -585,10 +617,9 @@ impl BuilderState {
     ///
     /// This is a *phase offset*, not a period change. Every row-capped table
     /// otherwise advances exactly one row per tick starting from row 0, so they
-    /// all reach `max_rows` in permanent lockstep: 12 tables measured sealing
-    /// as a single 16.16 MiB batch every ~197 s, and every one of the 7 (of
-    /// 467) over-budget batches at fleet scale was such a co-seal rather than a
-    /// large individual segment. Shortening only the first segment desyncs the
+    /// all reach `max_rows` in permanent lockstep and seal as one large batch
+    /// forever. Co-seals, not large individual segments, are what put a seal
+    /// over the tick budget. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
     /// size and count untouched — `seal_completed` restores the full policy.
     pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {

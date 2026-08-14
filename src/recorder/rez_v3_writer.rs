@@ -64,20 +64,20 @@ enum Msg {
     Finalize { clock_offset: (u64, i64) },
 }
 
-/// Reclaim at most this many pages per retention pass. Measured p50 3.8 ms /
-/// p90 11.4 ms for 100 pages, which fits inside a tick — the point is that a
-/// shrunken working set drains back to the filesystem gradually, without ever
-/// putting a full `VACUUM` (12.1 s for 1.5 GB) on the recording path.
+/// Reclaim at most this many pages per retention pass — sized to fit inside a
+/// tick. The point of a cap at all is that a shrunken working set drains back
+/// to the filesystem gradually; a full `VACUUM` would return the same space in
+/// one step and stall the recording for seconds doing it.
 const RECLAIM_PAGES_PER_PASS: u32 = 100;
 
 /// Reclaim only once the free list exceeds this fraction of the file, as a
 /// divisor: `freelist_count * RECLAIM_FREELIST_DIVISOR > page_count`.
 ///
-/// Steady-state eviction plateaus at 1.004–1.011× live with freed pages simply
-/// reused, so a healthy rolling buffer sits far below this and never pays for
-/// a reclaim it does not need. It fires when the working set genuinely shrank
-/// — the measured 16.0×-live case — which is the only situation where handing
-/// pages back is worth anything.
+/// Steady-state eviction reuses freed pages, so the free list stays a rounding
+/// error on a healthy rolling buffer and never pays for a reclaim it does not
+/// need. This fires only when the working set genuinely shrank and left the
+/// file many times larger than its contents, which is the one situation where
+/// handing pages back is worth anything.
 const RECLAIM_FREELIST_DIVISOR: u32 = 10;
 
 /// Handle to the writer thread. Every fallible hand-off reports the writer's
@@ -274,12 +274,18 @@ fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, recording_id: i64) -> Result<
                 // `:wall_offset` column the segment itself carries. Same rule,
                 // and same reason, as the v2 writer.
                 let novel = !observed.contains(&clock_offset.0);
-                return db.transaction(|tx| {
+                db.transaction(|tx| {
                     if novel {
                         tx.insert_clock_offset(recording_id, clock_offset.0, clock_offset.1)?;
                     }
                     tx.mark_complete(recording_id)
-                });
+                })?;
+                // AFTER `mark_complete`, deliberately: reclaiming space is an
+                // optimization, and a crash partway through it must leave a
+                // complete recording that is merely larger than it needed to
+                // be — never an incomplete one that happens to be compact.
+                reclaim_all(&db)?;
+                return Ok(());
             }
             // The handle was dropped without finalizing. Nothing to clean up:
             // the file is already a valid `.rez` holding every committed tick,
@@ -308,6 +314,29 @@ fn reclaim_if_fragmented(db: &RezDb) -> Result<(), String> {
 /// either way, so the only way to test the threshold is to ask it directly.
 fn should_reclaim(free_pages: u32, pages: u32) -> bool {
     free_pages.saturating_mul(RECLAIM_FREELIST_DIVISOR) > pages
+}
+
+/// Drain the whole free list back to the filesystem, in one go. Finalize only.
+///
+/// **Without this a finished recording keeps every page its WAL pruning freed.**
+/// Pruning deletes rows continuously — that is how the WAL stays a tail rather
+/// than a second copy of the recording — and each deleted row's page lands on
+/// SQLite's free list, available for reuse but never returned to the
+/// filesystem. `reclaim_if_fragmented` is the trickle that returns them, but
+/// only the retention path calls it, so a `record` run reclaims nothing. The
+/// sparser the recording, the larger the share of the file that is dead.
+///
+/// Unguarded, unlike the retention path. `should_reclaim` exists to keep a
+/// *recurring* per-tick cost off a file that would not benefit; this runs once,
+/// at the end, on a file nobody is waiting to write to again, and on an already
+/// compact file it is a no-op costing one `freelist_count` lookup.
+///
+/// Uncapped, also unlike the retention path: `RECLAIM_PAGES_PER_PASS` bounds a
+/// pass so a reclaim cannot overrun a tick, and there is no next tick here.
+/// `u32::MAX` is "as many as the free list holds" — `incremental_vacuum` stops
+/// when it runs out.
+fn reclaim_all(db: &RezDb) -> Result<(), String> {
+    db.incremental_vacuum(u32::MAX)
 }
 
 /// Encode one batch's segments, insert them — with the batch's clock
@@ -387,13 +416,13 @@ fn seal_batch(
         Ok(())
     })?;
 
-    // OUTSIDE the transaction, deliberately: pruning inside it measured p90
-    // 78 ms / max 245 ms (a quiet sampler accumulates ~6,500 rows before
-    // sealing), and `live_wal`'s watermark filter makes a crash between the
-    // commit above and the delete below harmless — a straddling row is simply
-    // not live. The prune is a pure background optimisation, worth p90
-    // 212.7 → 44.4 ms on seal ticks. `RezTx` does not expose `prune_wal`, so
-    // this ordering is enforced by the type, not by this comment.
+    // OUTSIDE the transaction, deliberately: a quiet sampler accumulates
+    // thousands of rows before it seals, so pruning inside the seal commit puts
+    // a large delete on the tick path. `live_wal`'s watermark filter makes a
+    // crash between the commit above and the delete below harmless — a
+    // straddling row is simply not live — which leaves the prune a pure
+    // background optimisation. `RezTx` does not expose `prune_wal`, so this
+    // ordering is enforced by the type, not by this comment.
     //
     // Each sampler is pruned only up to its OWN segment's `last_ts`: rows a
     // sampler ingested after the sealed span, and every other sampler's rows,
@@ -406,9 +435,9 @@ fn seal_batch(
 
 /// One metric's contribution to a WAL row: exactly what
 /// `TableBuilder::push_row` needs to place the value in its column, and nothing
-/// else. The recorder's own `Snapshot` entry carries a good deal more — that is
-/// the difference between 1,925 B and 10,908 B per sampler per tick, measured
-/// on a real fleet snapshot (see the journal § "WAL rows are values-only").
+/// else. The recorder's own `Snapshot` entry carries a good deal more, and
+/// carrying it per tick would cost several times the payload for information
+/// that does not change between ticks.
 ///
 /// Encoded with `rmp_serde::to_vec`, which writes structs as ARRAYS and enums
 /// as `[index, payload]`, so these field names cost nothing on the wire and are
@@ -441,10 +470,10 @@ pub(crate) struct WalCell {
     /// current segment** — `maybe_seal` clears the tracking for a sampler when
     /// it seals, so each segment's WAL span re-anchors its own metadata.
     ///
-    /// Repeating it every tick is precisely the full-msgpack cost the
-    /// measurement rejected; re-anchoring costs one payload per metric per
-    /// segment, ~1 tick in `max_rows` (~0.02% at the 4096-row default). What
-    /// that buys is an invariant contained entirely in the live WAL: **the
+    /// Repeating it every tick is exactly the full-msgpack cost values-only
+    /// rows exist to avoid; re-anchoring costs one payload per metric per
+    /// *segment*, i.e. roughly one tick in `max_rows`. What that buys is an
+    /// invariant contained entirely in the live WAL: **the
     /// first live WAL row mentioning a metric carries its metadata.** No
     /// segment lookup, so no decoding an arbitrarily old segment footer to
     /// learn a tail's labels — the cost the WAL exists to avoid — and nothing
@@ -1143,13 +1172,13 @@ mod tests {
         // `page_count` would stay green with the guard deleted. (It did — this
         // test exists because that assertion was found vacuous.)
         assert!(!should_reclaim(0, 1_000), "nothing free, nothing to do");
-        // A healthy rolling buffer plateaus at 1.004-1.011x live, i.e. a free
-        // list of a percent or so. It must never pay for a reclaim.
+        // A healthy rolling buffer reuses freed pages, leaving a free list of a
+        // percent or so. It must never pay for a reclaim.
         assert!(!should_reclaim(11, 1_000), "steady state must not trip it");
         assert!(!should_reclaim(100, 1_000), "exactly a tenth is not MORE");
         assert!(should_reclaim(101, 1_000), "just past a tenth does");
         // The case the whole mechanism exists for: a working set that shrank,
-        // measured at 16.0x live with 1.5 GB parked on the free list.
+        // leaving most of the file parked on the free list.
         assert!(should_reclaim(940, 1_000), "a shrunken working set");
         // A free list larger than the file is nonsense, but the multiply must
         // not wrap into "don't reclaim" if it ever happens.
@@ -1159,9 +1188,9 @@ mod tests {
     #[test]
     fn reclaim_hands_pages_back_in_bounded_passes() {
         // Eviction alone keeps the file bounded — freed pages get reused — but
-        // the bound is the HIGH-WATER mark: a working set that shrank 16x left
-        // the measured file at 16.0x live, 1.5 GB parked on the free list and
-        // never returned. This is the trickle that fixes that, and it has two
+        // the bound is the HIGH-WATER mark, so a working set that shrinks hard
+        // leaves most of the file parked on the free list and never returned.
+        // This is the trickle that fixes that, and it has two
         // halves that both have to hold: it must NOT run when the free list is
         // noise (steady state, where it would be pure cost), and it must be
         // BOUNDED when it does run, so a shrink cannot put a multi-second
@@ -1206,8 +1235,7 @@ mod tests {
             "a file with nothing on its free list has nothing to give back"
         );
 
-        // Now shrink the working set hard — the case the journal measured at
-        // 16.0x live.
+        // Now shrink the working set hard — the case the mechanism exists for.
         db.evict_before(rid, 38).unwrap();
         let freed = db.pragma_u32("freelist_count").unwrap();
         assert!(
@@ -1693,8 +1721,8 @@ mod tests {
     fn wal_rows_carry_each_metrics_metadata_once_then_values_only() {
         // The WAL row is the recovery record for a table that may never seal,
         // so it has to be self-describing — but repeating every metric's label
-        // map on every tick is exactly the 10,908 B/sampler/tick that the
-        // values-only measurement rejected. Metadata therefore rides the FIRST
+        // map on every tick is exactly the per-tick cost values-only rows exist
+        // to avoid. Metadata therefore rides the FIRST
         // row a metric appears in and never again; by the time that row can be
         // pruned, a segment covering it carries the same metadata.
         let dir = tempfile::tempdir().unwrap();

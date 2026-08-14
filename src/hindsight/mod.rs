@@ -225,7 +225,7 @@ pub fn run(config: Config) {
     };
 
     // Segment size tracks the scrape interval rather than being fixed: the
-    // writer's 4096 rows is a segment per ~68 minutes at the default 1 s
+    // writer's 900 rows is a segment per ~15 minutes at the default 1 s
     // interval, which a faster buffer wants smaller. Everything else about the
     // seal policy — the byte cap and the age cap — stays the writer's.
     let mut policy = crate::recorder::rez_stream::SealPolicy::default();
