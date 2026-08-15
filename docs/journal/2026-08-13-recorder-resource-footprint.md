@@ -193,16 +193,45 @@ The dictionary fix removed this redundancy's *cost*, not the redundancy. Whoever
 picks this up gets a 3× reduction in column count, which is upstream of parquet
 memory, archive size, and read cost simultaneously.
 
-## Open / next
+## WAL-sourced seals — DONE, and it bought more than memory
 
-- **WAL-sourced seals (drop `TableBuilder`).** Every value is written twice per
-  tick — once to the builder, once to the WAL — and the two are independent
-  sources of truth about segment contents. Worth ~50 MiB (9%), but the case is
-  correctness and per-tick cost, not memory. Enabler: the read path already
-  materializes a live WAL tail into a segment (`40937a21`). Cost being measured
-  by shadow read-back: `cpu_usage` seals on the byte cap at ~107 rows, and its
-  WAL row is **62,522 B**, so a seal must read back ~6.5 MiB, ~56× per 300 s
-  run. Watch for interaction with the now-16 MiB writer cache.
+Sealing a v3 segment now replays that sampler's live WAL instead of encoding a
+parallel `TableBuilder`, so a tick's values are written once rather than twice.
+Measured against merged main (`c07767fb`) on a 32-core host under a live
+workload, three interleaved rounds per arm at a 50 ms interval for 300 s:
+
+| | buffered | WAL-sourced | |
+|---|---|---|---|
+| peak RSS | 192 MB | **115 MB** | −40% |
+| process CPU | 89.5 s | **69.3 s** | −23% |
+| archive | 261.3 MB | 278.1 MB | +6.4% |
+| query | 3.07 s | 3.25 s | +6% |
+
+**The archive grew because the recording holds more data, not more overhead —
+and that is the headline result.** At 2,400 ticks due in 120 s, the buffered
+arm captured 2,187 and the WAL-sourced one 2,391: **dropped ticks fall from
+8.9% to 0.4%**. Per row the archive is slightly *smaller* (1,992 vs 2,024 B),
+which is what the byte-identical segment property predicts. Query time tracks
+the extra segments the extra rows produce.
+
+So the per-tick saving was not headroom. At a 50 ms cadence the scrape loop
+could not keep up with its own bookkeeping and was losing roughly one tick in
+eleven; removing the second copy bought that back.
+
+Three predictions, all wrong in the same direction: ~50 MiB estimated against
+77 measured, CPU direction called as "within 2×, sign unknown" against −23%,
+and the fidelity effect not anticipated at all. The shadow read-back that
+sized the cost (2.7 s of decode per 300 s run) was accurate; what it could not
+see was the `push_row` cost it displaced.
+
+Structured as three commits — extract the seal accounting so both containers
+keep one predicate, relocate `materialize_wal_tail` to the module owning WAL
+rows, then the change. The claim everything rests on (a replayed segment is
+the segment buffering would have produced) is asserted as encoded parquet
+bytes, and caught a fixture defect on first run where the data pages matched
+byte-for-byte and the embedded arrow schema did not.
+
+## Open / next
 - **Agent↔recorder transport.** The msgpack decode path is 108.9 MiB (18%).
   Shared memory would target it; scoped as a separate project. Note the payload
   itself is small — ~142 KiB per tick across all samplers — so the prize is

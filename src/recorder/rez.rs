@@ -1017,6 +1017,32 @@ const CELL_OVERHEAD_BYTES: usize = VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES;
 /// `Box<[u64]>` into the column.
 const HISTOGRAM_BUCKET_BYTES: usize = 8;
 
+/// What one row of `entries` adds to a table's `approx_bytes`.
+///
+/// **Split out so the byte cap binds identically whether or not a container
+/// keeps the rows.** The v2 writer buffers into a `TableBuilder` and gets this
+/// figure as a side effect of `push_row`; the v3 writer keeps only the WAL and
+/// rebuilds the table at seal time, so it has no builder to ask and must arrive
+/// at the same number to seal at the same row. Two spellings of "what a row
+/// costs" would drift, and the symptom — two containers producing differently
+/// sized segments from identical input — is invisible until someone compares
+/// them.
+///
+/// A cell whose shape does not match its column's established type is skipped
+/// by `push_row` and charged nothing here, for the same reason: it is not
+/// stored.
+pub(crate) fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
+    entries
+        .iter()
+        .map(|e| match e {
+            Entry::Counter(_) | Entry::Gauge(_) => CELL_OVERHEAD_BYTES,
+            Entry::Histogram(h) => {
+                CELL_OVERHEAD_BYTES + h.value.as_slice().len() * HISTOGRAM_BUCKET_BYTES
+            }
+        })
+        .sum()
+}
+
 /// A growing per-sampler table. Columns are sparse: shorter than the row count
 /// until padded (a metric absent in some rows gets `None` there).
 pub(crate) struct TableBuilder {
@@ -1057,6 +1083,10 @@ impl TableBuilder {
     /// is not accounted, so the number slightly under-reports a sparse table.
     /// Resets with the builder: a fresh builder (a post-rotation segment)
     /// starts at zero.
+    /// Test-only: the seal decision reads `SegmentAccount`, not the builder,
+    /// so both containers reach it identically. This is what
+    /// `entries_approx_bytes_matches_what_push_row_accounts` pins that against.
+    #[cfg(test)]
     pub(crate) fn approx_bytes(&self) -> usize {
         self.approx_bytes
     }
@@ -1501,6 +1531,33 @@ mod builder_tests {
                 col.name
             );
         }
+    }
+
+    // `entries_approx_bytes` is what lets a container with no builder seal at
+    // the same row a buffering one does, which is only true if it returns
+    // exactly what `push_row` charges. Asserted against the builder itself over
+    // a row carrying every cell shape, rather than by restating the arithmetic
+    // — a restatement drifts in lockstep with the bug it should catch.
+    #[test]
+    fn entries_approx_bytes_matches_what_push_row_accounts() {
+        let c = Counter::new("c".to_string(), 1, cmeta("s"));
+        let g = Gauge::new("g".to_string(), 1, cmeta("s"));
+        let h = Histogram::new("h".to_string(), hist(7, 64), cmeta("s"));
+        let entries = [Entry::Counter(&c), Entry::Gauge(&g), Entry::Histogram(&h)];
+
+        let mut b = TableBuilder::new("s".to_string());
+        b.push_row(1_000, 0, &entries);
+        assert_eq!(
+            entries_approx_bytes(&entries),
+            b.approx_bytes(),
+            "the builderless estimate must equal what push_row charges"
+        );
+
+        // Again on a second row, so an estimate that only matches while columns
+        // are being created cannot pass.
+        let before = b.approx_bytes();
+        b.push_row(2_000, 0, &entries);
+        assert_eq!(entries_approx_bytes(&entries), b.approx_bytes() - before);
     }
 
     // Regression: `approx_bytes` bounds resident memory, and it used to charge

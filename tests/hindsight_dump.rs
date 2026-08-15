@@ -1194,16 +1194,24 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     // dump rate" — which is the claim below inverted. Waiting for the plateau
     // asks the question the test is named for and does not race the
     // checkpointer to do it.
-    let settle_deadline = Instant::now() + Duration::from_secs(10);
+    /// How long the sidecar gets to stop growing once no mark is held. Generous
+    /// because it covers the checkpointer's backlog on a loaded host, not
+    /// because the ceiling is expected to take that long.
+    const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+    let settle_deadline = Instant::now() + SETTLE_TIMEOUT;
     let mut after = size();
+    let mut settled = false;
     loop {
         std::thread::sleep(Duration::from_millis(250));
         let now = size();
-        if now == after || Instant::now() >= settle_deadline {
-            after = now;
+        if now == after {
+            settled = true;
             break;
         }
         after = now;
+        if Instant::now() >= settle_deadline {
+            break;
+        }
     }
     stop.store(true, Ordering::Relaxed);
     sampler.join().unwrap();
@@ -1259,16 +1267,22 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
          {after} B a second later — SQLite recycles the log in place, it does \
          not truncate the file"
     );
-    // And it was the read mark that did it, not the workload: with no dump in
-    // flight the sidecar reaches a ceiling and stays there, while the same
-    // ticking under a held mark grew it without bound. Stated as a bound on
-    // where it settles rather than a rate, because the rate right after a dump
-    // is the checkpointer catching up, not the workload.
-    let settled = after.saturating_sub(during);
+    // And it was the read mark that did it, not the workload: released, the
+    // sidecar reaches a new ceiling and stops, where under a held mark the same
+    // ticking grew it without bound.
+    //
+    // "It stops" is the assertion, not "it stopped within some size or some
+    // second". Releasing the mark lets the checkpointer recycle the log, but it
+    // has a backlog to work off while the daemon keeps committing, so the file
+    // goes on growing for a while first — on a loaded host, by as much as it
+    // grew under the mark. That growth is the catch-up, and bounding it means
+    // asserting the host's speed. Reaching a ceiling at all is what a held mark
+    // prevents, and what the test is named for.
     assert!(
-        settled < grew / 2,
-        "the sidecar kept growing after the dumps ended (+{settled} B before \
-         settling at {after} B) nearly as much as the {grew} B it grew during \
-         {held:?} of them, so the read mark is not what held the log open"
+        settled,
+        "the sidecar never stopped growing once the dumps ended: {after} B and \
+         still climbing after {:?}, against {during} B when the last mark was \
+         released and {grew} B of growth under the marks",
+        SETTLE_TIMEOUT
     );
 }

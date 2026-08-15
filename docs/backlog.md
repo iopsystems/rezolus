@@ -215,12 +215,13 @@ Source: [Recorder resource footprint — seal cost and peak RSS](journal/2026-08
   window pair per metric carries no extra information. `:wall_offset` already
   demonstrates the cheaper table-level shape. A 3× column reduction is upstream
   of parquet writer memory, archive size and read cost at once.
-- **WAL-sourced seals — drop `TableBuilder`** — Open. Every value is written
-  twice per tick (builder + WAL), two independent sources of truth for segment
-  contents. Worth ~50 MiB of RSS (9%); the real case is per-tick cost and
-  single-source correctness. The read path already materializes a live WAL tail
-  as a segment (`40937a21`). Cost to weigh: `cpu_usage` seals at ~107 rows with
-  a 62,522 B WAL row, so a seal reads back ~6.5 MiB.
+- **WAL-sourced seals — drop `TableBuilder`** — **Done.** Sealing replays the
+  live WAL instead of encoding a parallel builder, so a tick's values are
+  written once. Peak RSS −40% (192 → 115 MB), process CPU −23%, and **dropped
+  ticks 8.9% → 0.4%** at a 50 ms cadence — the per-tick saving was not
+  headroom, the loop had been losing about one tick in eleven to its own
+  bookkeeping. Archive grows 6.4% only because it holds the recovered ticks;
+  per row it is slightly smaller.
 - **Recorder and hindsight have no self-metrics** — Open. Neither registers a
   single metric, so hindsight's own footprint is invisible on every fleet host
   it runs on. Natural shape is a per-sampler table at the recorder's own cadence.
