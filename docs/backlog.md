@@ -203,18 +203,40 @@ recording length, 55 ms under backpressure).
   read path, but not size: the +1.28 % overhead figure is still macOS-only,
   from a bespoke replay harness. *Reopen:* before quoting a fleet size
   overhead. Related: `syscall_latency` reached 144 segments in 900 s.
+## Acquisition-window sidecars
+
+Source: [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md)
+(design, pre-build; every figure measured on a 32-core host).
+
+- **Emit sidecars only for metrics that have a window** — Open, recorder-side,
+  lossless. 1,650 of `cpu_usage`'s 2,063 metrics carry no window yet get two
+  columns each, so **3,310 of its 6,206 columns are all-null**; six tables are
+  windowless entirely and pay 3×. Worth 2.1× on `cpu_usage`, 2.8× on
+  `syscall_counts`. Settle first: a reader must treat an absent sidecar as it
+  treats an all-null one (`metriken-query` pairing logic).
+- **Bound the counter sweep to *possible* CPUs** — Open, agent-side.
+  `src/agent/bpf/counters.rs:157` sweeps `0..MAX_CPUS` with `MAX_CPUS = 1024`
+  (`src/agent/mod.rs:50`) unconditionally, walking 992 empty slots on a 32-core
+  host and taking a clock reading for each. Bound by
+  `/sys/devices/system/cpu/possible`, never by online, or a hotplugged CPU is
+  missed. Gated on measuring how large `possible` really is fleet-wide.
+- **Window the region read, not each entry** — Open, agent-side.
+  `acq.window()` (`src/agent/timing.rs:46`) reads the clock per call and is
+  called per entry — ~20k `clock_gettime` per tick for `cpu_usage` alone, so
+  the 1.22 ms window span is largely the cost of measuring. One begin and one
+  end per map by construction; `cpu_usage`'s window columns 826 → 6, and
+  windows get *tighter* once the sweep is bounded. Gated on measuring the
+  clock-read share (~40% is arithmetic, not `perf`).
+
 ## Recorder resource footprint
 
 Source: [Recorder resource footprint — seal cost and peak RSS](journal/2026-08-13-recorder-resource-footprint.md)
 (peak RSS 843 → 189 MB; seal policy retuned).
 
-- **Per-metric `:window_*` sidecars triple every table's column count** — Open,
-  and the structural root cause behind the recorder's memory profile.
-  `cpu_usage` is 5,846 columns where ~1,950 would do: for a BPF sampler all
-  metrics in a tick share one acquisition window (the maps are read once), so a
-  window pair per metric carries no extra information. `:wall_offset` already
-  demonstrates the cheaper table-level shape. A 3× column reduction is upstream
-  of parquet writer memory, archive size and read cost at once.
+- **Per-metric `:window_*` sidecars triple every table's column count** —
+  **Diagnosed**, and the cause is not the redundancy this item assumed. See
+  [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md); the three
+  proposals below replace it.
 - **WAL-sourced seals — drop `TableBuilder`** — **Done.** Sealing replays the
   live WAL instead of encoding a parallel builder, so a tick's values are
   written once. Peak RSS −40% (192 → 115 MB), process CPU −23%, and **dropped
