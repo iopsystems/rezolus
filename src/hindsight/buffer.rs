@@ -848,6 +848,11 @@ mod tests {
             buf.ingest(&s, ts, 0).unwrap();
             buf.maintain().unwrap();
         }
+        // Everything below reads the file through its OWN connection, so it
+        // sees what the writer has committed rather than what this buffer has
+        // handed off. Without the barrier the last ticks may still be in
+        // flight and the row count comes up short.
+        buf.sync().unwrap();
 
         assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V3Sqlite);
 
