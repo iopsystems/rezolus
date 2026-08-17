@@ -70,9 +70,12 @@ const INTERVAL: Duration = Duration::from_millis(100);
 /// scales with archive size, so anything that makes tables narrower moves this:
 /// these counters carry no acquisition window, and when the writer stopped
 /// emitting sidecar columns for windowless metrics each one went from three
-/// columns to one, taking the average dump from comfortably over `INTERVAL` to
-/// 91 ms and making the fixture fail.
-const WIDE: usize = 6000;
+/// columns to one, taking the average dump to 91 ms against a 100 ms tick.
+///
+/// Raise it only as far as that needs. It is also the per-tick scrape cost of
+/// three daemons running in parallel, so overshooting starves the runner
+/// instead: at 6000 these tests died at startup on a 3-core CI box.
+const WIDE: usize = 3000;
 
 // ---------------------------------------------------------------------------
 // The stand-in agent, as in `record_lifecycle.rs`
