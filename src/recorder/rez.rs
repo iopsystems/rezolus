@@ -259,19 +259,37 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
             }
         }
 
-        let (begin, width) = window_offset_columns(&col.windows, &table.timestamps);
-        fields.push(Field::new(
-            format!("{}:window_begin", col.name),
-            DataType::Int64,
-            true,
-        ));
-        arrays.push(Arc::new(Int64Array::from(begin)));
-        fields.push(Field::new(
-            format!("{}:window_width", col.name),
-            DataType::UInt64,
-            true,
-        ));
-        arrays.push(Arc::new(UInt64Array::from(width)));
+        // Sidecars only where there is a window to put in them. **Most metrics
+        // do not have one** — whole samplers (`cpu_perf`, `cpu_bandwidth`,
+        // `cpu_frequency`, ...) are windowless, and the per-cgroup and per-task
+        // halves of `cpu_usage` are too — so emitting the pair unconditionally
+        // spent over half a wide table's columns on nulls.
+        //
+        // Absence and all-nulls read identically: both readers resolve a
+        // window per row through an `Option` that a missing column simply
+        // leaves `None`, which is also the path every pre-windows parquet
+        // already takes.
+        //
+        // The one behavioural difference is deliberate. An all-null sidecar
+        // still gets a per-row window resolved, and with no offset and no
+        // width that lands on `(base, base)` — a zero-width window, which
+        // claims the observation happened at an exact instant. It did not; we
+        // do not know when it happened. No sidecar says exactly that instead.
+        if col.windows.iter().any(Option::is_some) {
+            let (begin, width) = window_offset_columns(&col.windows, &table.timestamps);
+            fields.push(Field::new(
+                format!("{}:window_begin", col.name),
+                DataType::Int64,
+                true,
+            ));
+            arrays.push(Arc::new(Int64Array::from(begin)));
+            fields.push(Field::new(
+                format!("{}:window_width", col.name),
+                DataType::UInt64,
+                true,
+            ));
+            arrays.push(Arc::new(UInt64Array::from(width)));
+        }
     }
 
     let schema = Arc::new(Schema::new(fields));
@@ -1918,6 +1936,120 @@ mod table_tests {
         ]
         .into_iter()
         .collect()
+    }
+
+    /// Schema field names of an encoded table, in order.
+    fn schema_fields(bytes: Vec<u8>) -> Vec<String> {
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes)).unwrap();
+        reader
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    fn col(name: &str, values: Vec<Option<u64>>, windows: Vec<Option<Window>>) -> RezColumn {
+        RezColumn {
+            name: name.to_string(),
+            metadata: meta(name, "counter"),
+            values: RezValues::Counter(values),
+            windows,
+        }
+    }
+
+    // A metric without a window gets no sidecar columns. This is where the
+    // table's width actually goes: whole samplers are windowless, and so are
+    // the per-cgroup and per-task halves of `cpu_usage`, so emitting the pair
+    // unconditionally spent over half a wide table's columns on nulls.
+    #[test]
+    fn a_windowless_column_gets_no_sidecars() {
+        let table = RezTable {
+            sampler: "s".to_string(),
+            timestamps: vec![1_000, 2_000],
+            wall_offsets: vec![7, 7],
+            columns: vec![
+                col(
+                    "windowed",
+                    vec![Some(1), Some(2)],
+                    vec![
+                        Some(Window::new(900, 1_000)),
+                        Some(Window::new(1_900, 2_000)),
+                    ],
+                ),
+                col("windowless", vec![Some(3), Some(4)], vec![None, None]),
+            ],
+        };
+        let fields = schema_fields(write_table_parquet(&table).unwrap());
+
+        assert!(fields.contains(&"windowed:window_begin".to_string()));
+        assert!(fields.contains(&"windowed:window_width".to_string()));
+        assert!(
+            !fields.iter().any(|f| f.starts_with("windowless:window")),
+            "a column with no windows must not carry sidecars: {fields:?}"
+        );
+        // And the count, so the saving is pinned rather than implied:
+        // timestamp + :wall_offset + two values + one pair of sidecars.
+        assert_eq!(fields.len(), 6, "{fields:?}");
+    }
+
+    // A column keeps its sidecars if ANY row has a window — partial coverage is
+    // not the windowless case, and dropping the pair there would discard real
+    // observations.
+    #[test]
+    fn one_windowed_row_is_enough_to_keep_the_sidecars() {
+        let table = RezTable {
+            sampler: "s".to_string(),
+            timestamps: vec![1_000, 2_000],
+            wall_offsets: vec![7, 7],
+            columns: vec![col(
+                "sparse",
+                vec![Some(1), Some(2)],
+                vec![None, Some(Window::new(1_900, 2_000))],
+            )],
+        };
+        let fields = schema_fields(write_table_parquet(&table).unwrap());
+        assert!(
+            fields.contains(&"sparse:window_begin".to_string()),
+            "{fields:?}"
+        );
+
+        let back =
+            read_table_parquet("s".to_string(), write_table_parquet(&table).unwrap()).unwrap();
+        assert_eq!(
+            back.columns[0].windows,
+            vec![None, Some(Window::new(1_900, 2_000))],
+            "the row that had a window keeps it, the row that did not stays None"
+        );
+    }
+
+    // Windowedness can flip between one segment and the next — a metric that
+    // was read with a window in one seal period and without one in the next.
+    // The two segments then carry DIFFERENT schemas, which the segmented
+    // reader resolves as a union; this pins that the writer produces that
+    // union honestly rather than, say, carrying a stale sidecar forward.
+    #[test]
+    fn windowedness_may_differ_between_segments_of_one_table() {
+        let with = RezTable {
+            sampler: "s".to_string(),
+            timestamps: vec![1_000],
+            wall_offsets: vec![7],
+            columns: vec![col("m", vec![Some(1)], vec![Some(Window::new(900, 1_000))])],
+        };
+        let without = RezTable {
+            sampler: "s".to_string(),
+            timestamps: vec![2_000],
+            wall_offsets: vec![7],
+            columns: vec![col("m", vec![Some(2)], vec![None])],
+        };
+
+        let a = schema_fields(write_table_parquet(&with).unwrap());
+        let b = schema_fields(write_table_parquet(&without).unwrap());
+        assert!(a.contains(&"m:window_begin".to_string()), "{a:?}");
+        assert!(!b.contains(&"m:window_begin".to_string()), "{b:?}");
+        // The value column is common to both, which is what lets a reader
+        // union the two segments into one series.
+        assert!(a.contains(&"m".to_string()) && b.contains(&"m".to_string()));
     }
 
     #[test]

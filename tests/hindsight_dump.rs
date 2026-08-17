@@ -63,7 +63,16 @@ const INTERVAL: Duration = Duration::from_millis(100);
 /// without this; the `-wal` measurement needs it to reach a checkpoint at all.
 /// The two tests that only care about row identity use a single counter and
 /// run in ~2 s.
-const WIDE: usize = 2000;
+///
+/// **Calibrated so a dump outlasts a tick period**, which the sealing tests
+/// assert as a fixture — a dump shorter than `INTERVAL` could not distinguish a
+/// writer that keeps running from one that pauses for every dump. Dump cost
+/// scales with archive size, so anything that makes tables narrower moves this:
+/// these counters carry no acquisition window, and when the writer stopped
+/// emitting sidecar columns for windowless metrics each one went from three
+/// columns to one, taking the average dump from comfortably over `INTERVAL` to
+/// 91 ms and making the fixture fail.
+const WIDE: usize = 6000;
 
 // ---------------------------------------------------------------------------
 // The stand-in agent, as in `record_lifecycle.rs`
