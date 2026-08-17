@@ -4,6 +4,7 @@ mod convert;
 mod events;
 mod filter;
 pub(crate) mod metadata;
+mod split_groups;
 
 use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
