@@ -209,24 +209,31 @@ Source: [window sidecar cost](journal/2026-08-17-window-sidecar-cost.md)
 (design, pre-build; every figure measured on a 32-core host).
 
 - **Emit sidecars only for metrics that have a window** — Open, recorder-side,
-  lossless. 1,650 of `cpu_usage`'s 2,063 metrics carry no window yet get two
-  columns each, so **3,310 of its 6,206 columns are all-null**; six tables are
+  lossless, **lands on its own**. `rez.rs:262` pushes both sidecar fields
+  unconditionally, but only 413 of `cpu_usage`'s ~2,068 metrics have a window,
+  so **3,310 of its 6,206 columns are all-null**; six tables (`cpu_perf`,
+  `cpu_bandwidth`, `cpu_frequency`, `cpu_l3`, `cpu_dtlb`, `cpu_branch`) are
   windowless entirely and pay 3×. Worth 2.1× on `cpu_usage`, 2.8× on
   `syscall_counts`. Settle first: a reader must treat an absent sidecar as it
   treats an all-null one (`metriken-query` pairing logic).
-- **Bound the counter sweep to *possible* CPUs** — Open, agent-side.
-  `src/agent/bpf/counters.rs:157` sweeps `0..MAX_CPUS` with `MAX_CPUS = 1024`
-  (`src/agent/mod.rs:50`) unconditionally, walking 992 empty slots on a 32-core
-  host and taking a clock reading for each. Bound by
-  `/sys/devices/system/cpu/possible`, never by online, or a hotplugged CPU is
-  missed. Gated on measuring how large `possible` really is fleet-wide.
-- **Window the region read, not each entry** — Open, agent-side.
-  `acq.window()` (`src/agent/timing.rs:46`) reads the clock per call and is
-  called per entry — ~20k `clock_gettime` per tick for `cpu_usage` alone, so
-  the 1.22 ms window span is largely the cost of measuring. One begin and one
-  end per map by construction; `cpu_usage`'s window columns 826 → 6, and
-  windows get *tighter* once the sweep is bounded. Gated on measuring the
-  clock-read share (~40% is arithmetic, not `perf`).
+- **Window the region read, not each entry** — Open, agent-side. One `begin`
+  and one `end` per map read, which is what an acquisition is; `cpu_usage`'s
+  window columns 826 → 6. Honestly ~1.75× wider typical windows (12–37 µs →
+  21–65 µs), which is 0.004% → 0.0065% of a 1 s scrape — negligible where it
+  lands. The real gain besides columns: an entry's `end` currently records
+  where the sweep reached it, a property of our loop rather than of the
+  observation.
+- **Bound the counter sweep to *possible* CPUs** — Open, agent-side,
+  independent of the above. `src/agent/bpf/counters.rs:157` sweeps
+  `0..MAX_CPUS` with `MAX_CPUS = 1024` (`src/agent/mod.rs:50`)
+  unconditionally, walking 992 empty slots on a 32-core host every refresh.
+  Bound by `/sys/devices/system/cpu/possible`, never by online, or a
+  hotplugged CPU is missed.
+- **Measure the per-entry clock-read cost** — Open, and it gates any
+  performance claim for the two above. The obvious estimate (8,192 iterations
+  in a 65 µs group span) implies 8 ns/iteration, below one vDSO
+  `clock_gettime`, so it cannot be right: either the loop is shorter than
+  modelled or the window closes before the sweep ends. `perf` on the agent.
 
 ## Recorder resource footprint
 
