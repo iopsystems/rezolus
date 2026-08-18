@@ -179,6 +179,10 @@ work being self-evident from the loop bound.
 
 ## Addendum (2026-08-17): split tables reopened, gated on measurement
 
+> **Update 2026-08-18:** the gate ran — see
+> [split-table read-cost gate](2026-08-18-split-table-read-cost-gate.md).
+> Queries 0.55–0.68×, archive 0.63× versus the wide layout.
+
 The "Split tables per cohort" rejection above is superseded by the
 acquisition-groups design (spec in the local, untracked
 `docs/superpowers/specs/2026-08-17-acquisition-groups-design.md`): the
