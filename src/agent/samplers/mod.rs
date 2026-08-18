@@ -26,6 +26,18 @@ pub struct SamplerEntry {
 #[distributed_slice]
 pub static SAMPLERS: [SamplerEntry] = [..];
 
+/// Declared acquisition groups (design: one per source read section).
+/// Samplers register their groups here; the V3 snapshot builder enumerates
+/// this slice. `(sampler, name)` pairs must be unique and the name `main`
+/// is reserved for the transitional default group.
+///
+/// `timing` (and therefore `AcquisitionGroup`) is only compiled on Linux
+/// (see `#[cfg(target_os = "linux")] mod timing;` in `src/agent/mod.rs`), so
+/// this registry is Linux-only too.
+#[cfg(target_os = "linux")]
+#[distributed_slice]
+pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup] = [..];
+
 /// The (module_path, sampler_name) pairs for every registered sampler.
 pub fn sampler_modules() -> Vec<(&'static str, &'static str)> {
     SAMPLERS.iter().map(|e| (e.module, e.name)).collect()
@@ -189,6 +201,34 @@ mod attribution_tests {
                  `{resolved}`; add (\"{name}\", \"{truth}\") to METRIC_SAMPLERS in \
                  src/analysis/extract/context.rs",
                 metric.module(),
+            );
+        }
+    }
+
+    /// Trivially passes today since no sampler has migrated to acquisition
+    /// groups yet (the slice is empty on this platform, or entirely absent
+    /// off Linux). Guards future sampler migrations: once samplers start
+    /// registering groups, this catches a copy-pasted duplicate
+    /// `(sampler, name)` pair or an accidental use of the reserved `"main"`
+    /// group name.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn acquisition_groups_have_unique_names_and_avoid_the_reserved_main_name() {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        for group in super::ACQUISITION_GROUPS {
+            assert_ne!(
+                group.name, "main",
+                "`main` is reserved for the snapshot builder's transitional default group \
+                 (sampler `{}`)",
+                group.sampler
+            );
+            assert!(
+                seen.insert((group.sampler, group.name)),
+                "duplicate acquisition group ({}, {})",
+                group.sampler,
+                group.name
             );
         }
     }
