@@ -262,31 +262,95 @@ fn encode(schema: Schema, arrays: Vec<ArrayRef>) -> Result<Vec<u8>, Error> {
 
 /// Copy every recording/segment of a v3 `.rez` through `split_segment` into a
 /// fresh v3 file. `Wide` mode produces the provenance-matched baseline.
+///
+/// `RezDb::create` refuses a path that already exists, so a run that fails
+/// partway through must not leave an invalid file behind at `output` — that
+/// would turn every retry into a confusing "file exists" instead of the real
+/// error. The copy itself lives in `split_rez_body`; this wrapper's only job
+/// is to clean up the partial output on that path.
 pub(crate) fn split_rez(input: &Path, output: &Path, mode: &SplitMode) -> Result<(), Error> {
     let in_db = RezDb::open(input)?;
     let mut out_db = RezDb::create(output)?;
+    let result = split_rez_body(&in_db, &mut out_db, mode);
+    if result.is_err() {
+        // Drop the connection before unlinking so nothing holds the file
+        // open on the way out. Best-effort: a failure to remove here should
+        // not shadow the real error.
+        drop(out_db);
+        let _ = std::fs::remove_file(output);
+    }
+    result
+}
+
+/// The copy loop for `split_rez`, isolated so the wrapper can distinguish
+/// "we created `output` and something after that failed" from "we never
+/// touched `output` at all" (`RezDb::create` above already ruled out the
+/// latter by the time this runs).
+///
+/// WAL materialization is deliberately NOT implemented here: this is
+/// measurement-gate scaffolding for cleanly finalized `rezolus record`
+/// output, not the production read path (`rez_reader.rs` does the real
+/// recovery/replay). The live-WAL guard below turns "this recording still
+/// has unsealed rows" into a loud refusal instead of a silent drop — either a
+/// whole quiet sampler (never sealed, so absent from `samplers()`) or the
+/// tail of rows past a sampler's last seal.
+fn split_rez_body(in_db: &RezDb, out_db: &mut RezDb, mode: &SplitMode) -> Result<(), Error> {
     for rec in in_db.read_recordings()? {
-        let out_id = out_db.insert_recording(&rec.meta)?;
+        // `all_samplers`, not `samplers`: the latter only sees samplers with
+        // at least one sealed segment, which would silently drop a sampler
+        // still inside its first seal period.
+        let samplers = in_db.all_samplers(rec.id)?;
+
+        let mut live = Vec::new();
+        for sampler in &samplers {
+            if !in_db.live_wal(rec.id, sampler)?.is_empty() {
+                live.push(sampler.as_str());
+            }
+        }
+        if !live.is_empty() {
+            return Err(format!(
+                "recording {} has live WAL rows for sampler(s) {}: split-groups only handles \
+                 finalized recordings (finalize or snapshot the recording first)",
+                rec.id,
+                live.join(", ")
+            )
+            .into());
+        }
+
         let offsets = in_db.read_clock_offsets(rec.id)?;
+        // One transaction per recording (not per segment): `insert_segment`
+        // commits and fsyncs on its own, and batching every write for this
+        // recording — the recording row, its clock offsets, every split
+        // segment, and the completion flag — into one `transaction` call
+        // both avoids a commit per segment and makes the recording atomic:
+        // either all of it lands in the output file, or none of it does.
         out_db.transaction(|tx| {
+            let out_id = tx.insert_recording(&rec.meta)?;
             for (ts, off) in &offsets {
                 tx.insert_clock_offset(out_id, *ts, *off)?;
             }
-            Ok(())
-        })?;
-        for sampler in in_db.samplers(rec.id)? {
-            for seg in in_db.read_segments(rec.id, &sampler)? {
-                for (group, bytes) in split_segment(&seg.bytes, mode)? {
-                    let table = if group.is_empty() {
-                        sampler.clone()
-                    } else {
-                        format!("{sampler}/{group}")
-                    };
-                    out_db.insert_segment(out_id, &table, seg.seq, &seg.meta, &bytes)?;
+            for sampler in &samplers {
+                for seg in in_db.read_segments(rec.id, sampler)? {
+                    for (group, bytes) in
+                        split_segment(&seg.bytes, mode).map_err(|e| e.to_string())?
+                    {
+                        let table = if group.is_empty() {
+                            sampler.clone()
+                        } else {
+                            format!("{sampler}/{group}")
+                        };
+                        // `seg.meta` (rows/first_ts/last_ts) is reused
+                        // verbatim: valid only because `split_segment`
+                        // repartitions columns, never rows. A row-filtering
+                        // change there would have to recompute `rows` (and
+                        // the timestamps) here too.
+                        tx.insert_segment(out_id, &table, seg.seq, &seg.meta, &bytes)?;
+                    }
                 }
             }
-        }
-        out_db.mark_complete(out_id)?;
+            tx.mark_complete(out_id)?;
+            Ok(())
+        })?;
     }
     Ok(())
 }
@@ -593,8 +657,9 @@ mod tests {
         let input = dir.path().join("wide.rez");
         let output = dir.path().join("split.rez");
 
-        // Build a minimal v3 file: one recording, one sampler, one segment.
-        let db = RezDb::create(&input).unwrap();
+        // Build a minimal v3 file: one recording, one sampler, one segment,
+        // one clock offset — everything sealed, nothing left in the WAL.
+        let mut db = RezDb::create(&input).unwrap();
         let rec_id = db
             .insert_recording(&crate::recorder::rez_sqlite::RecordingMeta {
                 labels: [("source".to_string(), "rezolus".to_string())].into(),
@@ -615,7 +680,8 @@ mod tests {
             &seg,
         )
         .unwrap();
-        let mut db = db;
+        db.transaction(|tx| tx.insert_clock_offset(rec_id, 1_500_000, -250))
+            .unwrap();
         db.mark_complete(rec_id).unwrap();
         drop(db);
 
@@ -637,6 +703,91 @@ mod tests {
         );
         let segs = out_db.read_segments(recs[0].id, "cpu_usage/acq0").unwrap();
         assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].seq, 0);
         assert_eq!(segs[0].meta.rows, 2);
+
+        // Clock offsets round-trip unchanged.
+        let in_db = RezDb::open(&input).unwrap();
+        assert_eq!(
+            out_db.read_clock_offsets(recs[0].id).unwrap(),
+            in_db.read_clock_offsets(rec_id).unwrap(),
+        );
+    }
+
+    #[test]
+    fn split_rez_wide_mode_keeps_table_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("wide.rez");
+        let output = dir.path().join("wide_out.rez");
+
+        let mut db = RezDb::create(&input).unwrap();
+        let rec_id = db
+            .insert_recording(&crate::recorder::rez_sqlite::RecordingMeta {
+                labels: [("source".to_string(), "rezolus".to_string())].into(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 1_000,
+            })
+            .unwrap();
+        db.insert_segment(
+            rec_id,
+            "cpu_usage",
+            0,
+            &crate::recorder::rez_sqlite::SegmentMeta {
+                rows: 2,
+                first_ts: 1_000_000,
+                last_ts: 2_000_000,
+            },
+            &fixture_bytes(),
+        )
+        .unwrap();
+        db.mark_complete(rec_id).unwrap();
+        drop(db);
+
+        split_rez(&input, &output, &SplitMode::Wide).unwrap();
+
+        let out_db = RezDb::open(&output).unwrap();
+        let recs = out_db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 1);
+        let tables = out_db.samplers(recs[0].id).unwrap();
+        assert_eq!(tables, vec!["cpu_usage"]);
+        let segs = out_db.read_segments(recs[0].id, "cpu_usage").unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].meta.rows, 2);
+    }
+
+    #[test]
+    fn split_rez_refuses_live_wal() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("wide.rez");
+        let output = dir.path().join("split.rez");
+
+        let mut db = RezDb::create(&input).unwrap();
+        let rec_id = db
+            .insert_recording(&crate::recorder::rez_sqlite::RecordingMeta {
+                labels: [("source".to_string(), "rezolus".to_string())].into(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 1_000,
+            })
+            .unwrap();
+        // A WAL row for a sampler that has never sealed a segment, left
+        // unsealed on purpose — the "quiet table, first seal period" case
+        // `all_samplers`/`live_wal` exist to surface.
+        db.insert_wal_rows(
+            rec_id,
+            &[crate::recorder::rez_sqlite::WalRow {
+                sampler: "scheduler".to_string(),
+                ts: 1_000_000,
+                wall_offset: 10,
+                row: b"placeholder".to_vec(),
+            }],
+        )
+        .unwrap();
+        db.mark_complete(rec_id).unwrap();
+        drop(db);
+
+        let err = split_rez(&input, &output, &SplitMode::Groups).unwrap_err();
+        assert!(err.to_string().contains("scheduler"));
+        // Fix 3: a failed run must not leave a partial output file behind.
+        assert!(!output.exists());
     }
 }
