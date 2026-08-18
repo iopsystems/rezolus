@@ -4,6 +4,7 @@ mod convert;
 mod events;
 mod filter;
 pub(crate) mod metadata;
+mod split_groups;
 
 use arrow::datatypes::SchemaRef;
 use clap::{value_parser, ArgMatches, Command};
@@ -487,6 +488,39 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::Set),
                 ),
         )
+        .subcommand(
+            Command::new("split-groups")
+                .hide(true)
+                .about(
+                    "DEV: rewrite a v3 .rez into per-acquisition-group tables \
+                     (read-cost measurement scaffolding; see \
+                     docs/journal/2026-08-17-window-sidecar-cost.md)",
+                )
+                .arg(
+                    clap::Arg::new("input")
+                        .short('i')
+                        .long("input")
+                        .value_name("REZ")
+                        .help("Input .rez file (v3/SQLite)")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("REZ")
+                        .help("Output .rez file to write")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("wide")
+                        .long("wide")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Identity re-encode (provenance-matched wide baseline)"),
+                ),
+        )
 }
 
 pub fn run(args: ArgMatches) {
@@ -517,6 +551,16 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("metadata", sub_args)) => metadata::run(sub_args),
+        Some(("split-groups", sub_args)) => {
+            let input = sub_args.get_one::<PathBuf>("input").unwrap();
+            let output = sub_args.get_one::<PathBuf>("output").unwrap();
+            let mode = if sub_args.get_flag("wide") {
+                split_groups::SplitMode::Wide
+            } else {
+                split_groups::SplitMode::Groups
+            };
+            split_groups::split_rez(input, output, &mode)
+        }
         _ => unreachable!(),
     };
 

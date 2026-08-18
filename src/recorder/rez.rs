@@ -317,7 +317,7 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
 /// bound per-column-writer memory and none of them measurably does, while
 /// chunk-level statistics costs finalize latency and read pruning. The
 /// dictionary is the whole effect.
-fn segment_writer_props() -> WriterProperties {
+pub(crate) fn segment_writer_props() -> WriterProperties {
     WriterProperties::builder()
         .set_compression(Compression::LZ4_RAW)
         .set_dictionary_enabled(false)
