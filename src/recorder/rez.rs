@@ -1260,6 +1260,9 @@ pub(crate) fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<
             // for this snapshot rather than fabricate an empty-but-wrong split.
             static WARNED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
+            // Relaxed: no data is published alongside the flag, so a racing
+            // pair of threads has nothing to synchronize — worst case is one
+            // duplicate warning line, never a torn read.
             if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 warn!(
                     "received a SnapshotV3 payload; this build records v2 only — \
@@ -1736,6 +1739,43 @@ mod recorder_tests {
 
     pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
         Counter::new(name.to_string(), value, cmeta(name, sampler)).with_window(window)
+    }
+
+    // Interim behavior until native V3 ingest lands: a V3 payload here means
+    // the agent was flipped ahead of this recorder build, so group_by_sampler
+    // must warn and record nothing for it, not panic and not fabricate a
+    // (wrong) split from a shape it can't borrow from.
+    #[test]
+    fn group_by_sampler_skips_v3_without_panicking() {
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+        use std::collections::BTreeMap as Map;
+
+        let schema = GroupSchema {
+            counters: vec![MetricDesc {
+                name: "cpu_usage".to_string(),
+                metadata: Map::new(),
+            }],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let group = GroupSnapshot {
+            name: "cpu_usage/percpu".to_string(),
+            schema_hash: schema.hash(),
+            schema: Some(schema),
+            window: None,
+            counters: vec![Some(7)],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let snapshot = Snapshot::V3(SnapshotV3 {
+            systemtime: SystemTime::now(),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            groups: vec![group],
+        });
+
+        let groups = group_by_sampler(&snapshot);
+        assert!(groups.is_empty(), "V3 records nothing in this build");
     }
 
     #[test]
