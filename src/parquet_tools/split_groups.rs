@@ -12,6 +12,10 @@
 //! so split-arm query timings exclude the rate-bounds arithmetic the wide
 //! arm's per-metric sidecar reads perform — a stated bias toward the split
 //! layout, resolved when the real reader learns table-level pairing.
+//! A group's name follows its lexicographically smallest member, so if a
+//! measurement aborts with a `route()` cross-timeline refusal the cause is
+//! that member going quiet for a whole seal period (naming instability),
+//! not the layout under test.
 //! Delete this module once the real grouped writer lands (Stage 3+).
 
 use std::collections::HashMap;
