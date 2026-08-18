@@ -488,6 +488,37 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::Set),
                 ),
         )
+        .subcommand(
+            Command::new("split-groups")
+                .hide(true)
+                .about(
+                    "DEV: rewrite a v3 .rez into per-acquisition-group tables \
+                     (read-cost measurement scaffolding; see \
+                     docs/superpowers/specs/2026-08-17-acquisition-groups-design.md)",
+                )
+                .arg(
+                    clap::Arg::new("input")
+                        .short('i')
+                        .long("input")
+                        .value_name("REZ")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("REZ")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("wide")
+                        .long("wide")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Identity re-encode (provenance-matched wide baseline)"),
+                ),
+        )
 }
 
 pub fn run(args: ArgMatches) {
@@ -518,6 +549,20 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("metadata", sub_args)) => metadata::run(sub_args),
+        Some(("split-groups", sub_args)) => {
+            let input = sub_args.get_one::<PathBuf>("input").unwrap();
+            let output = sub_args.get_one::<PathBuf>("output").unwrap();
+            let mode = if sub_args.get_flag("wide") {
+                split_groups::SplitMode::Wide
+            } else {
+                split_groups::SplitMode::Groups
+            };
+            if let Err(e) = split_groups::split_rez(input, output, &mode) {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+            return;
+        }
         _ => unreachable!(),
     };
 

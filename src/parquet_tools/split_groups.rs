@@ -5,11 +5,6 @@
 //! Grouping is inferred: windowed metrics cohort by agreeing
 //! `:window_begin` columns; windowless metrics group by base-metric family.
 //! Delete this module once the real grouped writer lands (Stage 3+).
-//!
-//! `#[allow(dead_code)]` below: nothing calls into this module yet — the CLI
-//! wiring that drives `split_rez` from a subcommand is the next task.
-
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::Path;
