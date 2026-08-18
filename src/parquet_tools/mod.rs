@@ -501,6 +501,7 @@ pub fn command() -> Command {
                         .short('i')
                         .long("input")
                         .value_name("REZ")
+                        .help("Input .rez file (v3/SQLite)")
                         .required(true)
                         .value_parser(value_parser!(PathBuf)),
                 )
@@ -509,6 +510,7 @@ pub fn command() -> Command {
                         .short('o')
                         .long("output")
                         .value_name("REZ")
+                        .help("Output .rez file to write")
                         .required(true)
                         .value_parser(value_parser!(PathBuf)),
                 )
@@ -557,11 +559,7 @@ pub fn run(args: ArgMatches) {
             } else {
                 split_groups::SplitMode::Groups
             };
-            if let Err(e) = split_groups::split_rez(input, output, &mode) {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-            return;
+            split_groups::split_rez(input, output, &mode)
         }
         _ => unreachable!(),
     };
