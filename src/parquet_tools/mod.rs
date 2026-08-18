@@ -494,7 +494,7 @@ pub fn command() -> Command {
                 .about(
                     "DEV: rewrite a v3 .rez into per-acquisition-group tables \
                      (read-cost measurement scaffolding; see \
-                     docs/superpowers/specs/2026-08-17-acquisition-groups-design.md)",
+                     docs/journal/2026-08-17-window-sidecar-cost.md)",
                 )
                 .arg(
                     clap::Arg::new("input")

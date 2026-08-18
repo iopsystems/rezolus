@@ -1,9 +1,17 @@
 //! DEV SCAFFOLDING for the acquisition-groups design
-//! (docs/superpowers/specs/2026-08-17-acquisition-groups-design.md).
+//! (docs/journal/2026-08-17-window-sidecar-cost.md).
 //! Rewrites a v3 `.rez` into per-acquisition-group tables so the split
 //! layout's read cost can be measured before any production writer changes.
 //! Grouping is inferred: windowed metrics cohort by agreeing
 //! `:window_begin` columns; windowless metrics group by base-metric family.
+//! Each windowed group's table-level window columns are emitted as
+//! `:window_begin`/`:window_width` (leading colon, no metric id — same
+//! reserved shape as `:wall_offset`) so today's reader skips them as
+//! sidecars instead of surfacing them as phantom metrics; today's reader
+//! does not yet pair table-level sidecars with the members they describe,
+//! so split-arm query timings exclude the rate-bounds arithmetic the wide
+//! arm's per-metric sidecar reads perform — a stated bias toward the split
+//! layout, resolved when the real reader learns table-level pairing.
 //! Delete this module once the real grouped writer lands (Stage 3+).
 
 use std::collections::HashMap;
@@ -182,29 +190,36 @@ pub(crate) fn split_segment(
         }
     }
 
-    // Deterministic names: windowed groups ranked by first non-null begin
-    // (acquisition order within the tick), then families ranked by name.
-    let mut windowed: Vec<(i64, usize)> = Vec::new(); // (first begin, groups idx)
-    let mut families: Vec<(String, usize)> = Vec::new();
-    for (gi, (key, _)) in groups.iter().enumerate() {
-        match key {
-            Key::Windowed(begins) => {
-                let first = begins.iter().find_map(|b| *b).unwrap_or(i64::MAX);
-                windowed.push((first, gi));
-            }
-            Key::Family(f) => families.push((f.clone(), gi)),
-        }
-    }
-    windowed.sort();
-    families.sort();
+    // Deterministic, segment-stable names: a windowed group is named after
+    // the lexicographically smallest member BASE column name it contains
+    // (`acq_{m}`), not its per-segment rank. BPF cohort membership is
+    // schema-stable across segments — the same columns join the same
+    // cohort every tick — so the min member, and therefore the name, is
+    // stable even when a cohort goes quiet for a segment and every later
+    // rank would otherwise shift. Family groups keep their `f_{metric}`
+    // names, already stable. Sort the final tables by name for
+    // deterministic output order.
+    let mut named: Vec<(String, usize)> = groups
+        .iter()
+        .enumerate()
+        .map(|(gi, (key, members))| {
+            let name = match key {
+                Key::Windowed(_) => {
+                    let min_base = members
+                        .iter()
+                        .map(|(_, base)| base.as_str())
+                        .min()
+                        .expect("group has at least one member");
+                    format!("acq_{min_base}")
+                }
+                Key::Family(f) => format!("f_{f}"),
+            };
+            (name, gi)
+        })
+        .collect();
+    named.sort();
 
     let mut out = Vec::new();
-    let named: Vec<(String, usize)> = windowed
-        .into_iter()
-        .enumerate()
-        .map(|(rank, (_, gi))| (format!("acq{rank}"), gi))
-        .chain(families.into_iter().map(|(f, gi)| (format!("f_{f}"), gi)))
-        .collect();
     for (name, gi) in named {
         let (key, members) = &groups[gi];
         let mut fields: Vec<Field> = vec![schema.field(ts_idx).clone()];
@@ -214,7 +229,7 @@ pub(crate) fn split_segment(
             arrays.push(Arc::clone(batch.column(wi)));
         }
         if let Key::Windowed(begins) = key {
-            fields.push(Field::new("window_begin", DataType::Int64, true));
+            fields.push(Field::new(":window_begin", DataType::Int64, true));
             arrays.push(Arc::new(Int64Array::from(begins.clone())));
             // Table window width: per-row max over the members' widths.
             let mut width: Vec<Option<u64>> = vec![None; rows];
@@ -233,7 +248,7 @@ pub(crate) fn split_segment(
                     }
                 }
             }
-            fields.push(Field::new("window_width", DataType::UInt64, true));
+            fields.push(Field::new(":window_width", DataType::UInt64, true));
             arrays.push(Arc::new(UInt64Array::from(width)));
         }
         for (ci, _) in members {
@@ -343,7 +358,9 @@ fn split_rez_body(in_db: &RezDb, out_db: &mut RezDb, mode: &SplitMode) -> Result
                     }
                 }
             }
-            tx.mark_complete(out_id)?;
+            if rec.complete {
+                tx.mark_complete(out_id)?;
+            }
             Ok(())
         })?;
     }
@@ -449,21 +466,21 @@ mod tests {
         let out = split_segment(&fixture_bytes(), &SplitMode::Groups).unwrap();
         let mut got: Vec<&str> = out.iter().map(|(n, _)| n.as_str()).collect();
         got.sort();
-        assert_eq!(got, vec!["acq0", "acq1", "f_gamma_total"]);
+        assert_eq!(got, vec!["acq_0", "acq_2", "f_gamma_total"]);
     }
 
     #[test]
     fn windowed_group_has_table_level_window_and_members() {
         let out = split_segment(&fixture_bytes(), &SplitMode::Groups).unwrap();
-        let (_, bytes) = out.iter().find(|(n, _)| n == "acq0").unwrap();
+        let (_, bytes) = out.iter().find(|(n, _)| n == "acq_0").unwrap();
         let b = decode(bytes);
         assert_eq!(
             names(&b),
             vec![
                 "timestamp",
                 WALL_OFFSET_COLUMN,
-                "window_begin",
-                "window_width",
+                ":window_begin",
+                ":window_width",
                 "0",
                 "1"
             ]
@@ -505,7 +522,7 @@ mod tests {
     #[test]
     fn value_field_metadata_survives_the_split() {
         let out = split_segment(&fixture_bytes(), &SplitMode::Groups).unwrap();
-        let (_, bytes) = out.iter().find(|(n, _)| n == "acq1").unwrap();
+        let (_, bytes) = out.iter().find(|(n, _)| n == "acq_2").unwrap();
         let b = decode(bytes);
         let f = b.schema().field_with_name("2").cloned().unwrap();
         assert_eq!(f.metadata().get("metric").map(String::as_str), Some("beta"));
@@ -550,17 +567,17 @@ mod tests {
 
         let out = split_segment(&bytes, &SplitMode::Groups).unwrap();
         let got: Vec<&str> = out.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(got, vec!["acq0"], "must merge into a single cohort");
+        assert_eq!(got, vec!["acq_0"], "must merge into a single cohort");
 
-        let (_, bytes) = out.iter().find(|(n, _)| n == "acq0").unwrap();
+        let (_, bytes) = out.iter().find(|(n, _)| n == "acq_0").unwrap();
         let b = decode(bytes);
         assert_eq!(
             names(&b),
             vec![
                 "timestamp",
                 WALL_OFFSET_COLUMN,
-                "window_begin",
-                "window_width",
+                ":window_begin",
+                ":window_width",
                 "0",
                 "1"
             ]
@@ -621,15 +638,15 @@ mod tests {
         let out = split_segment(&bytes, &SplitMode::Groups).unwrap();
         assert_eq!(out.len(), 1);
         let (name, bytes) = &out[0];
-        assert_eq!(name, "acq0");
+        assert_eq!(name, "acq_0");
         let b = decode(bytes);
         assert_eq!(
             names(&b),
             vec![
                 "timestamp",
                 WALL_OFFSET_COLUMN,
-                "window_begin",
-                "window_width",
+                ":window_begin",
+                ":window_width",
                 "0",
                 "1:buckets"
             ]
@@ -691,12 +708,12 @@ mod tests {
         assert_eq!(
             tables,
             vec![
-                "cpu_usage/acq0",
-                "cpu_usage/acq1",
+                "cpu_usage/acq_0",
+                "cpu_usage/acq_2",
                 "cpu_usage/f_gamma_total"
             ]
         );
-        let segs = out_db.read_segments(recs[0].id, "cpu_usage/acq0").unwrap();
+        let segs = out_db.read_segments(recs[0].id, "cpu_usage/acq_0").unwrap();
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].seq, 0);
         assert_eq!(segs[0].meta.rows, 2);
@@ -707,6 +724,46 @@ mod tests {
             out_db.read_clock_offsets(recs[0].id).unwrap(),
             in_db.read_clock_offsets(rec_id).unwrap(),
         );
+    }
+
+    /// A recording that was never `mark_complete`d on the input side (e.g.
+    /// killed before finalize) must not come out complete on the output
+    /// side just because the copy itself succeeded.
+    #[test]
+    fn split_rez_does_not_promote_an_incomplete_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("wide.rez");
+        let output = dir.path().join("split.rez");
+
+        let db = RezDb::create(&input).unwrap();
+        let rec_id = db
+            .insert_recording(&crate::recorder::rez_sqlite::RecordingMeta {
+                labels: [("source".to_string(), "rezolus".to_string())].into(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 1_000,
+            })
+            .unwrap();
+        db.insert_segment(
+            rec_id,
+            "cpu_usage",
+            0,
+            &crate::recorder::rez_sqlite::SegmentMeta {
+                rows: 2,
+                first_ts: 1_000_000,
+                last_ts: 2_000_000,
+            },
+            &fixture_bytes(),
+        )
+        .unwrap();
+        // Deliberately not marked complete.
+        drop(db);
+
+        split_rez(&input, &output, &SplitMode::Groups).unwrap();
+
+        let out_db = RezDb::open(&output).unwrap();
+        let recs = out_db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert!(!recs[0].complete);
     }
 
     #[test]

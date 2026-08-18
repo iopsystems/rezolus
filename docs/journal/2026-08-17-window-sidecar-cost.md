@@ -177,6 +177,28 @@ about (2).
 and the semantics, not by a CPU claim, and (3) is justified by the redundant
 work being self-evident from the loop bound.
 
+## Addendum (2026-08-17): split tables reopened, gated on measurement
+
+The "Split tables per cohort" rejection above is superseded by the
+acquisition-groups design (spec in the local, untracked
+`docs/superpowers/specs/2026-08-17-acquisition-groups-design.md`): the
+layout direction is now table == acquisition group == window, with the
+objections here answered by three commitments — a same-timeline union in
+`RezReader::route` for within-sampler queries, the sampler retained as the
+manifest/filter unit, and per-sweep (not per-entity) group granularity so
+drivehealth/syscall_latency stay one table each. The segment-count/read-cost
+objection is not waved away but measured first: `rezolus parquet
+split-groups` (hidden dev subcommand) plus `scripts/split-rez-measure.sh`
+rewrite an existing recording into the split layout and compare read cost
+against a provenance-matched wide re-encode. Building the gate produced two
+findings that are themselves design inputs: cohort inference must tolerate
+per-column null patterns (zero-suppression gives every column its own null
+pattern, so exact window equality fragments to one group per column), and
+group identity must not be derived from per-segment rank (a cohort going
+quiet shifts every later rank and reproduces exactly the `route()` refusal
+predicted above). Explicit, sampler-declared group identity — the design's
+core — is what removes both inference hazards.
+
 ## Notes
 
 (2) and (3) change agent-emitted data and therefore every consumer and the

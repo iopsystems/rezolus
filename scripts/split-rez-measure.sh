@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Read-cost measurement for the split-table gate
-# (docs/superpowers/specs/2026-08-17-acquisition-groups-design.md).
+# (docs/journal/2026-08-17-window-sidecar-cost.md).
 #
 # Usage: scripts/split-rez-measure.sh <wide-v3.rez>
 #
@@ -38,9 +38,15 @@ trap cleanup EXIT
 # set -e; require ALL metrics up front so a bad input fails in seconds.
 METRICS=$("$REZOLUS" mcp describe-metrics "$IN")
 for m in cpu_usage cgroup_cpu_cycles scheduler_runqueue_wait; do
-  grep -qF "$m" <<<"$METRICS" \
+  # describe-metrics lists each metric alone on its own bulleted line
+  # ("• <name>"), so anchor to the whole line rather than substring-match —
+  # a plain `grep -F "$m"` would also hit e.g. cgroup_cpu_usage when
+  # checking for cpu_usage, or match inside description prose.
+  grep -qE "^• ${m}\$" <<<"$METRICS" \
     || { echo "missing metric: $m — pick queries from describe-metrics" >&2; exit 1; }
 done
+
+[ -e "$IN-wal" ] && { echo "input has an uncheckpointed WAL sidecar ($IN-wal): checkpoint or snapshot it first" >&2; exit 1; }
 
 echo "# rewriting arms into $DIR" >&2
 cp "$IN" "$DIR/orig.rez"
