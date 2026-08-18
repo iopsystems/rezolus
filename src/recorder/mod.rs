@@ -366,23 +366,29 @@ fn inject_provenance(
                 endpoint_url,
             );
         }
-        metriken_exposition::Snapshot::V3(_) => {
-            // Native V3 ingest (schema-hash caching, per-group WAL) lands in a
-            // later stage. A V3 payload here means the agent was flipped to
-            // snapshot_format = "v3" ahead of this recorder build. V3's
-            // grouped shape has no flat `counters`/`gauges`/`histograms` to
-            // inject provenance into directly, so leave the snapshot
-            // untouched: the `.rez` ingest path drops it in
-            // `group_by_sampler` (warns there), and the raw/parquet
-            // passthrough path re-serializes it as-is for the external
-            // msgpack-to-parquet converter, which expands V3 via accessors.
-            static WARNED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                warn!(
-                    "received a SnapshotV3 payload; this build records v2 only — \
-                     set [general] snapshot_format = \"v2\" on the agent"
-                );
+        metriken_exposition::Snapshot::V3(ref mut v3) => {
+            // V3 metric identity lives in the group schemas; inject provenance
+            // there and recompute each schema_hash so the producer contract
+            // (schema_hash == schema.hash()) holds for the recorded payload.
+            // Groups transmitted without a schema can't be labeled — leave them;
+            // the .rez ingest path skips V3 wholesale anyway (group_by_sampler),
+            // and the raw/parquet passthrough records schema-bearing groups fully
+            // labeled.
+            for group in &mut v3.groups {
+                if let Some(schema) = &mut group.schema {
+                    for desc in schema
+                        .counters
+                        .iter_mut()
+                        .chain(schema.gauges.iter_mut())
+                        .chain(schema.histograms.iter_mut())
+                    {
+                        desc.metadata
+                            .insert("source".to_string(), source.to_string());
+                        desc.metadata
+                            .insert("endpoint".to_string(), endpoint_url.to_string());
+                    }
+                    group.schema_hash = schema.hash();
+                }
             }
         }
     }
@@ -1579,6 +1585,82 @@ pub fn run(config: RecordingConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The producer (this recorder) owns the `schema_hash == schema.hash()`
+    // contract for every schema-bearing group it labels. A group without a
+    // schema can't be labeled at all (there's no MetricDesc to write into)
+    // and must be left exactly as received.
+    #[test]
+    fn inject_provenance_labels_v3_group_schemas_and_recomputes_hash() {
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
+        use std::collections::{BTreeMap, HashMap};
+        use std::time::{Duration, SystemTime};
+
+        let schema = GroupSchema {
+            counters: vec![MetricDesc {
+                name: "cpu_usage".to_string(),
+                metadata: BTreeMap::new(),
+            }],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let labeled_group = GroupSnapshot {
+            name: "cpu_usage/percpu".to_string(),
+            schema_hash: schema.hash(),
+            schema: Some(schema),
+            window: None,
+            counters: vec![Some(42)],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let schemaless_group = GroupSnapshot {
+            name: "cpu_usage/aggregate".to_string(),
+            schema_hash: (0, 0),
+            schema: None,
+            window: None,
+            counters: Vec::new(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+
+        let snapshot = Snapshot::V3(SnapshotV3 {
+            systemtime: SystemTime::now(),
+            duration: Duration::ZERO,
+            metadata: HashMap::new(),
+            groups: vec![labeled_group, schemaless_group],
+        });
+
+        let out = inject_provenance(snapshot, "svc", "http://x");
+        let Snapshot::V3(v3) = out else {
+            panic!("expected V3");
+        };
+
+        let labeled = &v3.groups[0];
+        let schema = labeled.schema.as_ref().expect("schema retained");
+        for desc in schema
+            .counters
+            .iter()
+            .chain(schema.gauges.iter())
+            .chain(schema.histograms.iter())
+        {
+            assert_eq!(desc.metadata.get("source").map(String::as_str), Some("svc"));
+            assert_eq!(
+                desc.metadata.get("endpoint").map(String::as_str),
+                Some("http://x")
+            );
+        }
+        assert_eq!(
+            labeled.validate(),
+            Ok(()),
+            "schema_hash was recomputed to match the labeled schema"
+        );
+
+        let schemaless = &v3.groups[1];
+        assert!(
+            schemaless.schema.is_none(),
+            "a group transmitted without a schema is left untouched"
+        );
+    }
 
     #[test]
     fn command_arg_graph_is_valid() {
