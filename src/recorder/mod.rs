@@ -366,6 +366,25 @@ fn inject_provenance(
                 endpoint_url,
             );
         }
+        metriken_exposition::Snapshot::V3(_) => {
+            // Native V3 ingest (schema-hash caching, per-group WAL) lands in a
+            // later stage. A V3 payload here means the agent was flipped to
+            // snapshot_format = "v3" ahead of this recorder build. V3's
+            // grouped shape has no flat `counters`/`gauges`/`histograms` to
+            // inject provenance into directly, so leave the snapshot
+            // untouched: the `.rez` ingest path drops it in
+            // `group_by_sampler` (warns there), and the raw/parquet
+            // passthrough path re-serializes it as-is for the external
+            // msgpack-to-parquet converter, which expands V3 via accessors.
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                warn!(
+                    "received a SnapshotV3 payload; this build records v2 only — \
+                     set [general] snapshot_format = \"v2\" on the agent"
+                );
+            }
+        }
     }
     snapshot
 }

@@ -954,6 +954,7 @@ pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
 }
 
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
+use tracing::warn;
 
 /// A borrowed snapshot entry, tagged by shape.
 pub(crate) enum Entry<'a> {
@@ -1250,6 +1251,23 @@ pub(crate) fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<
     let (counters, gauges, histograms) = match snapshot {
         Snapshot::V1(s) => (&s.counters, &s.gauges, &s.histograms),
         Snapshot::V2(s) => (&s.counters, &s.gauges, &s.histograms),
+        Snapshot::V3(_) => {
+            // Native V3 ingest (schema-hash caching, per-group WAL) lands in a
+            // later stage. A V3 payload here means the agent was flipped to
+            // snapshot_format = "v3" ahead of this recorder build. There is
+            // nothing borrowable in this flat (counters, gauges, histograms)
+            // shape for V3's grouped layout, so warn once and record nothing
+            // for this snapshot rather than fabricate an empty-but-wrong split.
+            static WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                warn!(
+                    "received a SnapshotV3 payload; this build records v2 only — \
+                     set [general] snapshot_format = \"v2\" on the agent"
+                );
+            }
+            return BTreeMap::new();
+        }
     };
 
     fn sampler_of(metadata: &HashMap<String, String>) -> &str {
