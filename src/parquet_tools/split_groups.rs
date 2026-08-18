@@ -2,16 +2,17 @@
 //! (docs/superpowers/specs/2026-08-17-acquisition-groups-design.md).
 //! Rewrites a v3 `.rez` into per-acquisition-group tables so the split
 //! layout's read cost can be measured before any production writer changes.
-//! Grouping is inferred: windowed metrics cohort by identical
+//! Grouping is inferred: windowed metrics cohort by agreeing
 //! `:window_begin` columns; windowless metrics group by base-metric family.
 //! Delete this module once the real grouped writer lands (Stage 3+).
 //!
-//! `#[allow(dead_code)]` below: nothing calls into this module yet — Task 3
-//! adds `split_rez`, which drives `split_segment` against a real `.rez` file.
+//! `#[allow(dead_code)]` below: nothing calls into this module yet — the CLI
+//! wiring that drives `split_rez` from a subcommand is the next task.
 
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, UInt64Array};
@@ -21,9 +22,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 
 use crate::recorder::rez::{segment_writer_props, WALL_OFFSET_COLUMN};
-// NOTE: Task 3 restores `use crate::recorder::rez_sqlite::RezDb;` and
-// `use std::path::Path;` when it adds `split_rez`, which drives this module
-// against a real .rez file.
+use crate::recorder::rez_sqlite::RezDb;
 
 type Error = Box<dyn std::error::Error>;
 
@@ -259,6 +258,37 @@ fn encode(schema: Schema, arrays: Vec<ArrayRef>) -> Result<Vec<u8>, Error> {
     writer.write(&batch)?;
     writer.close()?;
     Ok(buf)
+}
+
+/// Copy every recording/segment of a v3 `.rez` through `split_segment` into a
+/// fresh v3 file. `Wide` mode produces the provenance-matched baseline.
+pub(crate) fn split_rez(input: &Path, output: &Path, mode: &SplitMode) -> Result<(), Error> {
+    let in_db = RezDb::open(input)?;
+    let mut out_db = RezDb::create(output)?;
+    for rec in in_db.read_recordings()? {
+        let out_id = out_db.insert_recording(&rec.meta)?;
+        let offsets = in_db.read_clock_offsets(rec.id)?;
+        out_db.transaction(|tx| {
+            for (ts, off) in &offsets {
+                tx.insert_clock_offset(out_id, *ts, *off)?;
+            }
+            Ok(())
+        })?;
+        for sampler in in_db.samplers(rec.id)? {
+            for seg in in_db.read_segments(rec.id, &sampler)? {
+                for (group, bytes) in split_segment(&seg.bytes, mode)? {
+                    let table = if group.is_empty() {
+                        sampler.clone()
+                    } else {
+                        format!("{sampler}/{group}")
+                    };
+                    out_db.insert_segment(out_id, &table, seg.seq, &seg.meta, &bytes)?;
+                }
+            }
+        }
+        out_db.mark_complete(out_id)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -555,5 +585,58 @@ mod tests {
             f1.metadata().get("metric").map(String::as_str),
             Some("alpha_hist")
         );
+    }
+
+    #[test]
+    fn split_rez_rewrites_a_v3_container_into_group_tables() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("wide.rez");
+        let output = dir.path().join("split.rez");
+
+        // Build a minimal v3 file: one recording, one sampler, one segment.
+        let db = RezDb::create(&input).unwrap();
+        let rec_id = db
+            .insert_recording(&crate::recorder::rez_sqlite::RecordingMeta {
+                labels: [("source".to_string(), "rezolus".to_string())].into(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 1_000,
+            })
+            .unwrap();
+        let seg = fixture_bytes();
+        db.insert_segment(
+            rec_id,
+            "cpu_usage",
+            0,
+            &crate::recorder::rez_sqlite::SegmentMeta {
+                rows: 2,
+                first_ts: 1_000_000,
+                last_ts: 2_000_000,
+            },
+            &seg,
+        )
+        .unwrap();
+        let mut db = db;
+        db.mark_complete(rec_id).unwrap();
+        drop(db);
+
+        split_rez(&input, &output, &SplitMode::Groups).unwrap();
+
+        let out_db = RezDb::open(&output).unwrap();
+        let recs = out_db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 1);
+        assert!(recs[0].complete);
+        let mut tables = out_db.samplers(recs[0].id).unwrap();
+        tables.sort();
+        assert_eq!(
+            tables,
+            vec![
+                "cpu_usage/acq0",
+                "cpu_usage/acq1",
+                "cpu_usage/f_gamma_total"
+            ]
+        );
+        let segs = out_db.read_segments(recs[0].id, "cpu_usage/acq0").unwrap();
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].meta.rows, 2);
     }
 }
