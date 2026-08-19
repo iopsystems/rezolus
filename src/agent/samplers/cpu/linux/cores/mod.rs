@@ -39,12 +39,15 @@ impl Sampler for Cores {
         NAME
     }
 
+    // Acquisition-group bracket (principle 18): acquire before the read,
+    // finish after the single `set()`. An invalid `online` line drops the
+    // guard without `finish()` (discard-on-error, same as a read failure) —
+    // the sampler never partially-computed `online` before this check, so
+    // there is no "some values set" case to distinguish here.
     async fn refresh(&self) {
-        use crate::agent::timing::Acquisition;
-
         let mut file = self.file.lock().await;
 
-        let acq = Acquisition::begin();
+        let guard = CPU_CORES_ACQ.acquire();
 
         file.rewind().await.unwrap();
 
@@ -54,8 +57,6 @@ impl Sampler for Cores {
 
         let _ = file.read_to_string(&mut raw).await.unwrap();
 
-        let window = acq.window();
-
         for range in raw.trim().split(',') {
             let mut parts = range.split('-');
 
@@ -63,7 +64,8 @@ impl Sampler for Cores {
             let second: Option<usize> = parts.next().map(|text| text.parse()).transpose().unwrap();
 
             if parts.next().is_some() {
-                // The line is invalid
+                // The line is invalid: discard (drop the guard) rather than
+                // finish with a value computed from a partial parse.
                 return;
             }
 
@@ -78,6 +80,7 @@ impl Sampler for Cores {
             }
         }
 
-        CPU_CORES.set_with_window(online as _, window);
+        CPU_CORES.set(online as _);
+        guard.finish();
     }
 }

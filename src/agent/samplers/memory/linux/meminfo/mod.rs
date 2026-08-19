@@ -2,7 +2,7 @@ const NAME: &str = "memory_meminfo";
 
 use crate::agent::*;
 
-use metriken::WindowedLazyGauge as LazyGauge;
+use metriken::LazyGauge;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::Mutex;
@@ -74,18 +74,23 @@ impl MeminfoInner {
         })
     }
 
+    // Acquisition-group bracket (principle 18): `MEMINFO_ACQ.acquire()` before
+    // the read, `guard.finish()` after every value from this parse is set.
+    // Any read error (`?`) drops the guard without `finish()` — the previous
+    // window stands (discard-on-error; missing beats wrong). A partial parse
+    // (some recognized keys found, others missing from this particular
+    // `/proc/meminfo` snapshot) is NOT an error path: the loop only ever sets
+    // the keys it actually finds, so there is no "some values set, then an
+    // error" case here to decide between finish/discard — the read itself is
+    // the only failure mode, and it fails before any `set()` call.
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
-        use crate::agent::timing::Acquisition;
-
-        let acq = Acquisition::begin();
+        let guard = MEMINFO_ACQ.acquire();
 
         self.file.rewind().await?;
 
         self.data.clear();
 
         self.file.read_to_string(&mut self.data).await?;
-
-        let window = acq.window();
 
         let lines = self.data.lines();
 
@@ -97,10 +102,12 @@ impl MeminfoInner {
 
             if let Some(gauge) = self.gauges.get_mut(*parts.first().unwrap()) {
                 if let Some(Ok(v)) = parts.get(1).map(|v| v.parse::<i64>()) {
-                    gauge.set_with_window(v * KIBIBYTES as i64, window);
+                    gauge.set(v * KIBIBYTES as i64);
                 }
             }
         }
+
+        guard.finish();
 
         Ok(())
     }
