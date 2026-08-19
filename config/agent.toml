@@ -17,6 +17,12 @@ ttl = "10ms"
 # Example:
 # btf_path = "/path/to/vmlinux-5.15.0-generic.btf"
 
+# Snapshot wire format served on /metrics/binary. "v2" (default) is the flat
+# per-metric format; "v3" emits acquisition-group snapshots (transitional —
+# the default flips once samplers migrate; see
+# docs/journal/2026-08-17-window-sidecar-cost.md).
+# snapshot_format = "v2"
+
 [scheduler]
 # By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
 # collection happens with minimal delay. Other policies are: `normal` and `fifo`
