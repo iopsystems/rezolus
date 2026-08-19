@@ -105,6 +105,16 @@ impl DriveHealth {
         let mut drives = enumerate();
         drives.truncate(MAX_DRIVES);
 
+        // Real population, not backing capacity (principle 18: "membership
+        // comes from registration, not values"). `drives` is dense — every
+        // index in `0..drives.len()` is a real, discovered drive — and every
+        // per-drive set() (`refresh()`, below) indexes `DRIVE_TEMPERATURE`/
+        // the NVMe counter groups by that same contiguous index, so a prefix
+        // bound is correct here (not the metadata-presence mechanism, which
+        // is for sparse/task-style membership). Set once at startup
+        // discovery, before any snapshot walk reads it.
+        DRIVEHEALTH_SWEEP_ACQ.set_member_bound(drives.len());
+
         // Per-index labels are read once at discovery and never change for the
         // life of the process (startup-only discovery; hotplug is out of scope
         // for Phase 1). Temperature is labeled for every drive; the NVMe-only
@@ -174,11 +184,20 @@ impl Sampler for DriveHealth {
         // from overlapping, so there is structurally never a second task
         // that could race this one for the group). `acquire()` brackets
         // `read_all` plus the per-drive `set()` loop that follows it;
-        // `finish()` publishes only if the sweep produced at least one
-        // usable reading — a sweep where every drive's read failed
-        // (`ok == 0`) discards (drops the guard) instead, leaving the
-        // group's previous window standing rather than pairing a
-        // fully-failed sweep with a fresh one.
+        // `finish()` publishes only if the sweep published at least one
+        // value — a sweep where every drive's read failed to produce
+        // ANYTHING publishable (`ok == 0`) discards (drops the guard)
+        // instead, leaving the group's previous window standing rather than
+        // pairing a fully-failed sweep with a fresh one. "Published
+        // something" means either a temperature or an NVMe throttle-counter
+        // reading, not temperature alone: a cleanly-parsed NVMe drive that
+        // legitimately reports no temperature (composite temperature 0K —
+        // see `nvme::read_health`) still yields six throttle counters from
+        // the same log-page read, and a fleet of such drives must not go
+        // permanently unstamped just because `temperature_c` is always
+        // `None` for them. (See `stats::DRIVEHEALTH_SWEEP_ACQ`'s doc comment
+        // for the walk-union window behavior this bracket inherits from
+        // every declared group.)
         let drives = self.drives.clone();
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
@@ -187,7 +206,7 @@ impl Sampler for DriveHealth {
             let readings = read_all(&drives);
             let ok = readings
                 .iter()
-                .filter(|r| r.temperature_c.is_some())
+                .filter(|r| r.temperature_c.is_some() || r.nvme.is_some())
                 .count();
             for (idx, r) in readings.into_iter().enumerate() {
                 if let Some(celsius) = r.temperature_c {
@@ -221,7 +240,10 @@ impl Sampler for DriveHealth {
                 guard.discard();
             }
 
-            debug!("{NAME}: read {ok}/{} drive temperatures", drives.len());
+            debug!(
+                "{NAME}: published readings for {ok}/{} drive(s)",
+                drives.len()
+            );
             reading.store(false, Ordering::Release);
         });
     }

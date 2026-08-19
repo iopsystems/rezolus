@@ -67,6 +67,14 @@ impl NvidiaInner {
         let nvml = Nvml::init()?;
         let devices = nvml.device_count()? as usize;
 
+        // Real population, not backing capacity (MAX_GPUS). `nvml.device_count()`
+        // enumerates devices densely — every index in `0..devices` is a real
+        // GPU, and `refresh_nvml()`'s device loop indexes every metric group
+        // by that same contiguous index — so a prefix bound is correct
+        // (dense indexing, not the sparse metadata-presence mechanism). Set
+        // once at init, before any snapshot walk reads it.
+        GPU_NVIDIA_ACQ.set_member_bound(devices);
+
         let mut gpm_supported = vec![false; devices];
 
         for id in 0..devices {

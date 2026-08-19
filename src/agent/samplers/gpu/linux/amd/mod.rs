@@ -85,6 +85,14 @@ impl AmdInner {
             return Ok(None);
         }
 
+        // Real population, not backing capacity (MAX_GPUS). `rsmi_num_monitor_devices`
+        // enumerates devices densely — every id in `0..devices` is a real GPU,
+        // and `refresh()`'s device loop indexes every metric group by that
+        // same contiguous id — so a prefix bound is correct (dense indexing,
+        // not the sparse metadata-presence mechanism). Set once at init,
+        // before any snapshot walk reads it.
+        GPU_AMD_SMI_ACQ.set_member_bound(devices);
+
         Ok(Some(Self { rocm, devices }))
     }
 

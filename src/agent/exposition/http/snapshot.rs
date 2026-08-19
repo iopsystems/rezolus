@@ -1850,10 +1850,16 @@ mod tests {
     // Fixture-level: no real ioctls, no real `DriveHealth` sampler. This
     // mirrors drivehealth's exact metric shape (a plain `GaugeGroup` tagged
     // `acq_group`, stamped by one `AcquisitionGroup` covering the whole
-    // sweep) to pin two properties any refresh-read sampler migrated under
-    // principle 18 must have: a stamped sweep's window reaches BOTH V2 and
-    // V3 output, and a failed/discarded sweep leaves the previous window
-    // standing rather than publishing a fresh one with no new values.
+    // sweep, sized to backing capacity `MAX_DRIVES`-style with `set_member_bound`
+    // pinning real population) to pin three properties any refresh-read
+    // sampler migrated under principle 18 must have: a stamped sweep's
+    // window reaches BOTH V2 and V3 output; a failed/discarded sweep leaves
+    // the previous window standing rather than publishing a fresh one with
+    // no new values; and — the regression pin for the member-bound fix — a
+    // declared group's V3 population reflects `set_member_bound`'s real
+    // count, not the backing array's full 64-slot capacity (an unbounded
+    // walk would otherwise emit 63 always-`None` entries here, exactly the
+    // `drivehealth_sweep`-on-a-driveless-host bug this fixture pins).
 
     static DRIVEHEALTH_SHAPE_GROUP: AcquisitionGroup =
         AcquisitionGroup::new("unattributed", "drivehealth_shape_probe");
@@ -1861,16 +1867,23 @@ mod tests {
     #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
     static DRIVEHEALTH_SHAPE_GROUP_ENTRY: &'static AcquisitionGroup = &DRIVEHEALTH_SHAPE_GROUP;
 
+    // 64 backing entries (drivehealth's own MAX_DRIVES), only 1 populated —
+    // mirrors a single-drive host with drivehealth's real capacity, not a
+    // toy 2-entry group.
     #[metric(
         name = "snapshot_drivehealth_shape_temperature",
         metadata = { acq_group = "drivehealth_shape_probe" }
     )]
-    static DRIVEHEALTH_SHAPE_TEMPERATURE: metriken::GaugeGroup = metriken::GaugeGroup::new(2);
+    static DRIVEHEALTH_SHAPE_TEMPERATURE: metriken::GaugeGroup = metriken::GaugeGroup::new(64);
 
     #[test]
     fn drivehealth_shape_stamped_sweep_window_reaches_v2_and_v3_output() {
-        // The sweep: acquire, set every drive's value, finish — exactly
-        // `linux/mod.rs`'s `spawn_blocking` task shape.
+        // The sweep: set the member bound to the real (single-drive)
+        // population, acquire, set the one drive's value, finish — exactly
+        // `linux/mod.rs`'s `spawn_blocking` task shape (`DriveHealth::new`
+        // calls `set_member_bound(drives.len())` once at discovery; this
+        // fixture does the equivalent for its one fixture "drive").
+        DRIVEHEALTH_SHAPE_GROUP.set_member_bound(1);
         let guard = DRIVEHEALTH_SHAPE_GROUP.acquire();
         let _ = DRIVEHEALTH_SHAPE_TEMPERATURE.set(0, 42);
         guard.finish();
@@ -1916,6 +1929,22 @@ mod tests {
             group.window,
             Some(group_window),
             "V3 output carries the same sweep group window"
+        );
+
+        // The member-bound regression pin: exactly 1 schema slot (the real
+        // population), not 64 (the backing capacity).
+        let schema = group.schema.as_ref().expect("schema present");
+        assert_eq!(
+            schema.gauges.len(),
+            1,
+            "set_member_bound(1) on a 64-entry backing array emits exactly 1 schema slot, \
+             not the full backing capacity — the fix for the always-None entries a missing \
+             bound produces on every device-group sampler"
+        );
+        assert_eq!(
+            group.gauges.len(),
+            1,
+            "value slots match the bounded schema, not the backing capacity"
         );
     }
 

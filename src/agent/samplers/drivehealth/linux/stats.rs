@@ -26,6 +26,12 @@ pub const MAX_DRIVES: usize = 64;
 /// `cpu_usage`'s three separate BPF map reads, there is exactly one source
 /// per drive here — unambiguously one read section for the whole sweep. See
 /// `docs/principles.md` principle 18's "device sweep" read-section shape.
+/// A sweep that finishes while the V3 builder's walk is between this
+/// group's first touch and its own emit point yields the honest union of
+/// both windows (`resolve_walk_window` in `snapshot.rs`), not just one — at
+/// this sampler's 60s read cadence that shows up as an occasional
+/// ~60s-wide `rate()` uncertainty band on these counters, which is expected
+/// and honest, not a bug.
 pub static DRIVEHEALTH_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("drivehealth"),
     "drivehealth_sweep",

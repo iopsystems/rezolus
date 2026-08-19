@@ -120,12 +120,19 @@ pub(crate) fn split_segment(
 
     // Partition value columns into groups.
     //
-    // Cohorting key: a metric's `:window_begin`, not its full window.
-    // `Acquisition::begin()` (src/agent/timing.rs) fixes `begin_ns` once per
-    // sweep, while each member's `window()` call recomputes `end_ns` at the
-    // moment that member is read — so members of one acquisition share
-    // `begin` but carry distinct `end`s. Cohorting on the full window would
-    // degenerate to one group per column.
+    // Cohorting key: a metric's `:window_begin`, not its full window. This
+    // remains correct — a safe superset — under acquisition groups (see
+    // `docs/principles.md` principle 18, `src/agent/timing.rs`): every
+    // member of one declared group is now stamped from the SAME
+    // `AcquisitionGroup`, so they share both `begin` and `end`, and
+    // cohorting on the full window would work equally well for such a
+    // recording. `:window_begin` alone stays the key because it also
+    // correctly cohorts a pre-acquisition-group (or otherwise per-member
+    // stamped) recording, where members sharing one sweep's `begin` could
+    // legitimately carry distinct `end`s — cohorting on the full window
+    // there would degenerate to one group per column. Using only `begin`
+    // costs nothing on a group-stamped recording (identical `begin` implies
+    // identical `end` there) while staying correct on the older shape.
     enum Key {
         // Coalesced `:window_begin` values across every member joined so
         // far (row-aligned, `None` where no member has reported yet).
