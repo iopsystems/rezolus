@@ -18,6 +18,8 @@ fn now_wall_ns() -> u64 {
 /// Run `read` while capturing its acquisition window: begin is wall time before
 /// the call; end is begin + monotonic elapsed (immune to an NTP step during the
 /// read). Use for a single read block (a drivehealth ioctl, a `/proc` file read).
+// consumers are Linux samplers today
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn timed<T>(read: impl FnOnce() -> T) -> (T, Window) {
     let begin_ns = now_wall_ns();
     let begin_mono = Instant::now();
@@ -31,11 +33,15 @@ pub(crate) fn timed<T>(read: impl FnOnce() -> T) -> (T, Window) {
 /// captures wall + monotonic start; each `window()` closes at the current instant
 /// (begin + monotonic elapsed), so entries stamped later carry a marginally wider
 /// window — honest, since they were read later.
+// consumers are Linux samplers today
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) struct Acquisition {
     begin_ns: u64,
     begin_mono: Instant,
 }
 
+// consumers are Linux samplers today
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl Acquisition {
     pub(crate) fn begin() -> Self {
         Self {
@@ -75,9 +81,20 @@ impl GroupWindowSlot {
         }
     }
 
+    // The fences below are load-bearing on weak-memory targets (arm64): a
+    // `Release` STORE only orders accesses that come BEFORE it, so it cannot
+    // pin the field stores that come after the odd `seq` store — without the
+    // release fence they may become visible first, and a reader can pass both
+    // sequence checks around a torn pair. Symmetrically, an `Acquire` LOAD
+    // only orders accesses AFTER it, so the field reads need the acquire
+    // fence to keep them from sinking below the validation load. The
+    // contention test caught exactly this tear on an arm64 host when the
+    // fences were plain Release/Acquire orderings on the seq accesses; x86's
+    // stronger model hides it.
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
-        self.seq.store(s.wrapping_add(1), Ordering::Release); // odd: in progress
+        self.seq.store(s.wrapping_add(1), Ordering::Relaxed); // odd: in progress
+        std::sync::atomic::fence(Ordering::Release); // field stores stay below the odd store
         self.begin_ns.store(w.begin_ns, Ordering::Relaxed);
         self.end_ns.store(w.end_ns, Ordering::Relaxed);
         self.seq.store(s.wrapping_add(2), Ordering::Release); // even: stable
@@ -95,7 +112,8 @@ impl GroupWindowSlot {
             }
             let begin = self.begin_ns.load(Ordering::Relaxed);
             let end = self.end_ns.load(Ordering::Relaxed);
-            if self.seq.load(Ordering::Acquire) == s1 {
+            std::sync::atomic::fence(Ordering::Acquire); // field reads stay above the validation load
+            if self.seq.load(Ordering::Relaxed) == s1 {
                 return Some(Window::new(begin, end));
             }
         }
