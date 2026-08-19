@@ -153,6 +153,34 @@ fn create(
 
     let sampler_mods = crate::agent::samplers::sampler_modules();
 
+    // Resolve every declared group's window ONCE, up front, instead of
+    // once per tagged metric: 138 metrics carry `acq_group` today (10
+    // wave-1 counter samplers + this branch's histogram wave), resolving
+    // into ~40 distinct groups. A per-metric resolve (the original version
+    // of this fix) paid a `group_registry()` lookup AND an
+    // `AcquisitionGroup::window()` seqlock read 138 times; reading each
+    // group's window here, once, cuts the actual seqlock reads to ~40 —
+    // the per-metric step below becomes a cheap in-memory `HashMap` lookup
+    // against this snapshot, not a fresh atomic read.
+    //
+    // This also closes an intra-snapshot consistency hole the per-metric
+    // version had: every member of a group now sees the SAME window for
+    // this V2 snapshot (read once, before any member is visited), matching
+    // `create_v3`'s first-touch semantics (see its `Entry::Vacant` arm).
+    // Unlike `create_v3`, there is no walk-spanning "latest" re-read at
+    // emit time to reconcile against — resolving once, up front, in effect
+    // makes EVERY metric first-touch, so a group that gets re-stamped
+    // mid-walk by a racing sampler tick is simply not observed by this
+    // snapshot. That is the safe direction: `AcquisitionGuard::finish`
+    // stamps last (see `AcquisitionGroup::acquire`), so a window can only
+    // ever LAG the true acquisition, never lead it — not observing a
+    // fresher stamp mid-walk means this snapshot's windows are, at worst, a
+    // touch stale, never claiming freshness a value doesn't actually have.
+    let group_windows: HashMap<&str, Option<Window>> = group_registry()
+        .iter()
+        .map(|(key, group)| (key.as_str(), group.window()))
+        .collect();
+
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
         let (value, stored_window) = metric.value_with_window();
 
@@ -178,20 +206,21 @@ fn create(
         // per-metric `Windowed*` wrapper) carry `acq_group` in their static
         // metadata but no per-metric window of their own —
         // `value_with_window()`/`load_with_window(idx)` fall through to the
-        // trait's windowless default (`None`) for them. Resolve the group
-        // the same way `create_v3` does (same `group_registry()`) and use
-        // ITS window instead, so V2 output doesn't silently go window-blind
-        // for every metric that migrates. A metric with no `acq_group`
-        // keeps its existing per-metric window path untouched below.
+        // trait's windowless default (`None`) for them. Look up the
+        // pre-resolved group window (`group_windows`, above) instead, so
+        // V2 output doesn't silently go window-blind for every metric that
+        // migrates. A metric with no `acq_group` keeps its existing
+        // per-metric window path untouched below.
         //
-        // `group_window` is `Option<Option<Window>>`: `None` means "not a
-        // group member, don't override"; `Some(None)` means "is a member of
-        // a group that just hasn't been stamped yet" (still no window, but
-        // deliberately, not by falling through to a stale per-metric
-        // value). `.unwrap_or(stored_window)` therefore does exactly the
-        // right thing in both cases: outer `None` → keep `stored_window`;
-        // outer `Some(w)` → replace it with the group's `w` (which may
-        // itself be `None`).
+        // `group_window` is `Option<Option<Window>>`: outer `None` means
+        // "not a group member (or an unresolved/typo'd tag — see the
+        // `debug_assert!` below), don't override"; `Some(None)` means "is
+        // a member of a group that just hasn't been stamped yet" (still no
+        // window, but deliberately, not by falling through to a stale
+        // per-metric value). `.unwrap_or(stored_window)` therefore does
+        // exactly the right thing in both cases: outer `None` → keep
+        // `stored_window`; outer `Some(w)` → replace it with the group's
+        // `w` (which may itself be `None`).
         //
         // The window this attaches is a whole-group ACQUISITION window
         // (one stamp covering an entire sweep — a per-CPU read, a map
@@ -203,9 +232,30 @@ fn create(
         // semantic V3 already uses: V2 and V3 consumers see the identical
         // acquisition-window meaning for a migrated metric.
         let group_window: Option<Option<Window>> = metric.metadata().get("acq_group").map(|g| {
-            group_registry()
-                .get(&format!("{sampler}/{g}"))
-                .and_then(|group| group.window())
+            let key = format!("{sampler}/{g}");
+            match group_windows.get(key.as_str()) {
+                Some(w) => *w,
+                None => {
+                    // Same typo/rename-mismatch guard as create_v3's
+                    // (identical message shape, deliberately): a metric
+                    // naming an `acq_group` that doesn't resolve against
+                    // the registry is a migration bug on EITHER format, not
+                    // just V3's. V2 has no default-group fallback to route
+                    // to, so the practical effect is just "no override" —
+                    // this metric keeps its (already windowless, for a
+                    // migrated type) `stored_window` — but the mismatch
+                    // itself must not pass silently in tests/debug builds.
+                    debug_assert!(
+                        false,
+                        "metric `{name}` declares acq_group=\"{g}\" for sampler `{sampler}`, \
+                         but no AcquisitionGroup (\"{sampler}\", \"{g}\") is registered on \
+                         ACQUISITION_GROUPS; V2 output keeps this metric's untouched per-metric \
+                         window path instead of overriding it (create_v3 has a default group to \
+                         fall back to; V2 does not)",
+                    );
+                    None
+                }
+            }
         });
 
         // V2 has no group concept — `acq_group` only means something to
