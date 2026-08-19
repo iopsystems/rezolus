@@ -1844,6 +1844,140 @@ mod tests {
         );
     }
 
+    // --- Part B: refresh-read sampler shape (drivehealth's GaugeGroup +
+    // single-sweep-group pattern) --------------------------------------
+    //
+    // Fixture-level: no real ioctls, no real `DriveHealth` sampler. This
+    // mirrors drivehealth's exact metric shape (a plain `GaugeGroup` tagged
+    // `acq_group`, stamped by one `AcquisitionGroup` covering the whole
+    // sweep) to pin two properties any refresh-read sampler migrated under
+    // principle 18 must have: a stamped sweep's window reaches BOTH V2 and
+    // V3 output, and a failed/discarded sweep leaves the previous window
+    // standing rather than publishing a fresh one with no new values.
+
+    static DRIVEHEALTH_SHAPE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "drivehealth_shape_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static DRIVEHEALTH_SHAPE_GROUP_ENTRY: &'static AcquisitionGroup = &DRIVEHEALTH_SHAPE_GROUP;
+
+    #[metric(
+        name = "snapshot_drivehealth_shape_temperature",
+        metadata = { acq_group = "drivehealth_shape_probe" }
+    )]
+    static DRIVEHEALTH_SHAPE_TEMPERATURE: metriken::GaugeGroup = metriken::GaugeGroup::new(2);
+
+    #[test]
+    fn drivehealth_shape_stamped_sweep_window_reaches_v2_and_v3_output() {
+        // The sweep: acquire, set every drive's value, finish — exactly
+        // `linux/mod.rs`'s `spawn_blocking` task shape.
+        let guard = DRIVEHEALTH_SHAPE_GROUP.acquire();
+        let _ = DRIVEHEALTH_SHAPE_TEMPERATURE.set(0, 42);
+        guard.finish();
+        let group_window = DRIVEHEALTH_SHAPE_GROUP
+            .window()
+            .expect("group was just stamped");
+
+        let v2 = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = v2 else {
+            panic!("expected V2")
+        };
+        let g = s
+            .gauges
+            .iter()
+            .find(|g| {
+                g.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_drivehealth_shape_temperature")
+                    && g.metadata.get("id").map(String::as_str) == Some("0")
+            })
+            .expect("stamped drive-0 gauge present in V2 output");
+        assert_eq!(
+            g.window,
+            Some(group_window),
+            "V2 output carries the sweep group's window for a plain GaugeGroup member"
+        );
+
+        let mut cache = SkeletonCache::new();
+        let v3 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = v3 else {
+            panic!("expected V3")
+        };
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/drivehealth_shape_probe")
+            .expect("declared drivehealth-shape group present in V3 output");
+        assert_eq!(
+            group.window,
+            Some(group_window),
+            "V3 output carries the same sweep group window"
+        );
+    }
+
+    static DRIVEHEALTH_SHAPE_DISCARD_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "drivehealth_shape_discard_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static DRIVEHEALTH_SHAPE_DISCARD_GROUP_ENTRY: &'static AcquisitionGroup =
+        &DRIVEHEALTH_SHAPE_DISCARD_GROUP;
+
+    #[metric(
+        name = "snapshot_drivehealth_shape_discard_temperature",
+        metadata = { acq_group = "drivehealth_shape_discard_probe" }
+    )]
+    static DRIVEHEALTH_SHAPE_DISCARD_TEMPERATURE: metriken::GaugeGroup =
+        metriken::GaugeGroup::new(1);
+
+    #[test]
+    fn drivehealth_shape_discard_on_failed_sweep_leaves_previous_window_standing() {
+        // First sweep: every drive read ok, `finish()` publishes.
+        let guard = DRIVEHEALTH_SHAPE_DISCARD_GROUP.acquire();
+        let _ = DRIVEHEALTH_SHAPE_DISCARD_TEMPERATURE.set(0, 55);
+        guard.finish();
+        let first_window = DRIVEHEALTH_SHAPE_DISCARD_GROUP
+            .window()
+            .expect("first sweep stamped");
+
+        // Second sweep: every drive's read failed (`ok == 0` in
+        // `linux/mod.rs`'s terms) — the sampler calls `discard()` instead of
+        // `finish()`, exactly like `AcquisitionGuard::drop`. No new value is
+        // set either (a fully-failed sweep touches nothing).
+        let guard = DRIVEHEALTH_SHAPE_DISCARD_GROUP.acquire();
+        guard.discard();
+
+        assert_eq!(
+            DRIVEHEALTH_SHAPE_DISCARD_GROUP.window(),
+            Some(first_window),
+            "a discarded sweep must not advance the group's window"
+        );
+
+        let mut cache = SkeletonCache::new();
+        let v3 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = v3 else {
+            panic!("expected V3")
+        };
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/drivehealth_shape_discard_probe")
+            .expect("declared group present in V3 output");
+        assert_eq!(
+            group.window,
+            Some(first_window),
+            "V3 output still carries the first sweep's window, not a fabricated new one"
+        );
+    }
+
     // --- SnapshotV3 -----------------------------------------------------
 
     // The registered sampler for a metric defined in this test module is

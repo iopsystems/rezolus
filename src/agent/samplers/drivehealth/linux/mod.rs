@@ -24,7 +24,7 @@ const NAME: &str = "drivehealth";
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 use crate::agent::*;
-use metriken::WindowedCounterGroup;
+use metriken::CounterGroup;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -166,25 +166,36 @@ impl Sampler for DriveHealth {
         // Offload to the blocking pool and return immediately: each read is a
         // device command, so it must not run on the async worker. Drives are
         // read in parallel; the gauge is updated when the read completes.
+        //
+        // Acquisition-group bracket (principle 18): this `spawn_blocking`
+        // task is `DRIVEHEALTH_SWEEP_ACQ`'s single writer — `refresh()`
+        // itself never acquires/finishes the group, only dispatches this
+        // task (and the `reading` flag above already prevents two sweeps
+        // from overlapping, so there is structurally never a second task
+        // that could race this one for the group). `acquire()` brackets
+        // `read_all` plus the per-drive `set()` loop that follows it;
+        // `finish()` publishes only if the sweep produced at least one
+        // usable reading — a sweep where every drive's read failed
+        // (`ok == 0`) discards (drops the guard) instead, leaving the
+        // group's previous window standing rather than pairing a
+        // fully-failed sweep with a fresh one.
         let drives = self.drives.clone();
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
+            let guard = DRIVEHEALTH_SWEEP_ACQ.acquire();
+
             let readings = read_all(&drives);
             let ok = readings
                 .iter()
                 .filter(|r| r.temperature_c.is_some())
                 .count();
             for (idx, r) in readings.into_iter().enumerate() {
-                // Bind the window before r.nvme is moved below. A valid reading always
-                // carries its acquisition window (device::read_one), so value + window are
-                // written together via the enforced wrapper — the tear surface is gone.
-                let win = r.window;
-                if let (Some(celsius), Some(w)) = (r.temperature_c, win) {
-                    DRIVE_TEMPERATURE.set_with_window(idx, celsius, w);
+                if let Some(celsius) = r.temperature_c {
+                    let _ = DRIVE_TEMPERATURE.set(idx, celsius);
                 }
                 // NVMe thermal-throttle counters (from the same log-page read).
-                if let (Some(h), Some(w)) = (r.nvme, win) {
-                    let counters: [(&WindowedCounterGroup, u64); 6] = [
+                if let Some(h) = r.nvme {
+                    let counters: [(&CounterGroup, u64); 6] = [
                         (&DRIVE_TEMPERATURE_WARNING_TIME, h.warning_temp_time_s),
                         (&DRIVE_TEMPERATURE_CRITICAL_TIME, h.critical_temp_time_s),
                         (&DRIVE_THERMAL_THROTTLE_TIME_1, h.thermal_mgmt_time_s[0]),
@@ -199,10 +210,17 @@ impl Sampler for DriveHealth {
                         ),
                     ];
                     for (group, value) in counters {
-                        group.set_with_window(idx, value, w);
+                        let _ = group.set(idx, value);
                     }
                 }
             }
+
+            if ok > 0 {
+                guard.finish();
+            } else {
+                guard.discard();
+            }
+
             debug!("{NAME}: read {ok}/{} drive temperatures", drives.len());
             reading.store(false, Ordering::Release);
         });
@@ -254,66 +272,29 @@ mod tests {
         }
         assert!(!set.is_empty(), "no gauge values populated after refresh");
 
-        // Each populated drive must also carry a non-zero acquisition window.
-        for (i, _) in set.iter().take(5) {
-            let (_, w) = DRIVE_TEMPERATURE.load_with_window(*i);
-            let w = w.unwrap_or_else(|| panic!("no window recorded for drive {i}"));
-            println!(
-                "  idx {i} window = [{}, {}] ({} ns)",
-                w.begin_ns,
-                w.end_ns,
-                w.width_ns()
-            );
-            assert!(w.end_ns >= w.begin_ns);
-            assert!(
-                w.width_ns() > 0,
-                "read window should be non-zero for drive {i}"
-            );
-        }
+        // The sweep's single acquisition group must carry a non-zero window
+        // (principle 18: one group for the whole sweep, not one per drive —
+        // see `stats::DRIVEHEALTH_SWEEP_ACQ`'s doc comment).
+        let w = DRIVEHEALTH_SWEEP_ACQ
+            .window()
+            .expect("no window recorded for the sweep");
+        println!(
+            "  sweep window = [{}, {}] ({} ns)",
+            w.begin_ns,
+            w.end_ns,
+            w.width_ns()
+        );
+        assert!(w.end_ns >= w.begin_ns);
+        assert!(w.width_ns() > 0, "read window should be non-zero");
     }
 
-    /// The real async tear case in miniature: a background writer loops
-    /// `set_with_window` on a windowed gauge group (as drivehealth's
-    /// `spawn_blocking` read does) while a reader loops `load_with_window`. The
-    /// writer links value -> window (begin_ns == value, end_ns == value + 1), so
-    /// a torn read — a value from one write paired with a window from another —
-    /// is caught by the assertions. With the enforced wrapper's single-lock pair
-    /// read/write, this must never fire.
-    #[test]
-    fn concurrent_scrape_never_tears_value_and_window() {
-        use metriken::{Window, WindowedGaugeGroup};
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        // A single-entry windowed gauge group standing in for DRIVE_TEMPERATURE.
-        let group = WindowedGaugeGroup::new(1);
-        let stop = AtomicBool::new(false);
-
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let mut k: i64 = 1;
-                while !stop.load(Ordering::Relaxed) {
-                    let kk = k as u64;
-                    group.set_with_window(0, k, Window::new(kk, kk + 1));
-                    k += 1;
-                    if k == i64::MAX {
-                        k = 1;
-                    }
-                }
-            });
-
-            for _ in 0..2_000_000 {
-                let (value, window) = group.load_with_window(0);
-                if let (Some(v), Some(w)) = (value, window) {
-                    let vv = v as u64;
-                    assert_eq!(
-                        w.begin_ns, vv,
-                        "torn read: value {v} paired with stale window {w:?}"
-                    );
-                    assert_eq!(w.end_ns, vv + 1, "torn read: mismatched window end");
-                }
-            }
-
-            stop.store(true, Ordering::Relaxed);
-        });
-    }
+    // The async tear case this sampler used to be exposed to (a background
+    // writer racing a reader over a per-entry `set_with_window`/
+    // `load_with_window` pair) no longer applies: `DRIVE_TEMPERATURE` is a
+    // plain `GaugeGroup` now, written with `set()` only, and its acquisition
+    // window comes from `DRIVEHEALTH_SWEEP_ACQ`'s single-writer group slot
+    // (see `crate::agent::timing::GroupWindowSlot`, which has its own
+    // tear-freedom test) rather than a per-entry windowed cell. The
+    // metriken-level torn-read guarantee for `WindowedGaugeGroup` itself is
+    // still covered directly in that crate's own test suite.
 }
