@@ -21,6 +21,28 @@ ttl = "10ms"
 # per-metric format; "v3" emits acquisition-group snapshots (transitional —
 # the default flips once samplers migrate; see
 # docs/journal/2026-08-17-window-sidecar-cost.md).
+#
+# Before flipping to "v3", make sure every consumer of this agent (exporter,
+# recorder, viewer, hindsight, or anything else hitting /metrics/binary or
+# /metrics/json) is running a build that understands SnapshotV3 — an older
+# build does not. Three concrete things that go wrong on a mismatched
+# consumer:
+#   - An exporter built before SnapshotV3 existed cannot decode a v3 payload
+#     at all. Older exporter builds served /metrics as HTTP 200 with an
+#     empty body forever, with nothing logged at any level — an
+#     undiagnosable fleet-wide blackout. A current exporter build logs this
+#     loudly (error level, every failed poll) instead of going dark, but an
+#     exporter build from before that fix still goes dark silently.
+#   - Acquisition windows are absent from v3 output for any metric whose
+#     sampler hasn't migrated to a declared acquisition group yet (which is
+#     effectively everything today) — rate()/irate() uncertainty bands lose
+#     precision for those metrics under v3 until each sampler migrates.
+#   - /metrics/json's shape changes wholesale under v3: a flat
+#     `{counters: [...], gauges: [...], histograms: [...]}` becomes
+#     `{groups: [{name, schema, counters, gauges, histograms}, ...]}`. Any
+#     tooling that parses /metrics/json directly (not through this repo's
+#     own viewer/MCP/parquet tooling, which already handle both) needs to be
+#     updated before this flips, not after.
 # snapshot_format = "v2"
 
 [scheduler]

@@ -407,6 +407,45 @@ fn group_registry() -> &'static HashMap<String, &'static AcquisitionGroup> {
     })
 }
 
+/// Reconcile a declared group's window across one `create_v3` walk.
+///
+/// `first` is read at the group's first touch, before any of its members'
+/// values are read (see the `Entry::Vacant` arm in `create_v3`). For a
+/// group with few members or a fast walk that's also the window this
+/// function emits with. But the walk over the FULL registry — every
+/// group, every member — has measured as long as several milliseconds
+/// (mean 1.85ms, max 5.7ms observed span), which is long enough for an
+/// async sampler write to complete a whole new `acquire()`/`finish()`
+/// cycle in the middle of it. `latest` is a second read of the same
+/// group's window, taken at emit time after all of that group's values
+/// have been read. If `first` and `latest` differ, some of the values
+/// just read may actually be newer than `first` claims — the window can
+/// only ever LAG the true acquisition time (`AcquisitionGuard` stamps
+/// last), never lead it, so `first` alone would UNDER-claim what this
+/// walk covers. The honest fix is the union: `first.begin_ns` is still
+/// correct (nothing read during the walk is older than that), so keep it,
+/// and extend the end to `latest.end_ns` to honestly bracket every value
+/// this walk actually read, rather than silently narrowing the claimed
+/// window to only the pre-mid-walk-stamp subset.
+///
+/// `first: None, latest: Some(_)` means the group was stamped for the
+/// first time during this very walk (unstamped at first touch, stamped by
+/// the time of emit) — there's nothing to union with, so `latest` alone is
+/// the walk's window. `first: Some(_), latest: None` is not expected in
+/// practice (a group's seqlock only reads `None` before its first-ever
+/// stamp, and stamps never revert to unstamped outside the seqlock's
+/// documented u64-wraps-to-exactly-0 edge case) — `first` is kept rather
+/// than discarding a real reading for a transient artifact.
+fn resolve_walk_window(first: Option<Window>, latest: Option<Window>) -> Option<Window> {
+    match (first, latest) {
+        (Some(f), Some(l)) if f == l => Some(f),
+        (Some(f), Some(l)) => Some(Window::new(f.begin_ns, l.end_ns)),
+        (None, Some(l)) => Some(l),
+        (Some(f), None) => Some(f),
+        (None, None) => None,
+    }
+}
+
 /// Build a `SnapshotV3` (acquisition-group snapshot) from the current
 /// metriken registry, mirroring `create`'s walk/naming/metadata rules with
 /// one addition: routing each entry into an acquisition group.
@@ -495,7 +534,7 @@ fn create_v3(
         // `metric_metadata` (the shared prefix) and below (the per-kind
         // walk/naming/membership rules, which are NOT shared and are
         // duplicated independently in each function).
-        let (metadata, sampler) = metric_metadata(metric, &sampler_mods);
+        let (mut metadata, sampler) = metric_metadata(metric, &sampler_mods);
 
         // Route: a declared `acq_group` wins only if it actually resolves
         // against the registry; otherwise fall back to the sampler's
@@ -549,6 +588,18 @@ fn create_v3(
             }
         };
 
+        // Redundant on a declared group's members: the group's own name
+        // (`GroupSnapshot.name`, `"{sampler}/{acq_group}"`) already says
+        // this. Left in place it would be one more copy of the same
+        // key/value pair repeated in every member's `MetricDesc.metadata`
+        // — for a large declared group (thousands of tasks/cgroups/CPUs)
+        // that's thousands of identical, wasted copies. Default groups
+        // don't have an `acq_group` key to strip (routing only reads it,
+        // never sets one), so this is a no-op there.
+        if declared {
+            metadata.remove("acq_group");
+        }
+
         let entry_name = format!("{metric_id}");
 
         match value {
@@ -578,6 +629,27 @@ fn create_v3(
                         }
                     }
 
+                    // `counter_value(idx)` above and `load_metadata(idx)`
+                    // here are two SEPARATE reads, not one atomic pair —
+                    // unlike `AcquisitionGroup`'s window (a seqlock), a
+                    // group entry's value and its metadata have no shared
+                    // lock. A slot recycled by a concurrent writer between
+                    // these two reads (e.g. a pid/cgroup id reused mid-tick)
+                    // can pair the NEW occupant's value with the OLD
+                    // occupant's labels, or vice versa, for that one tick.
+                    // This matches V2's `create()`, which has the identical
+                    // two-step read here — not a regression introduced by
+                    // V3. Measured under a deliberate concurrent-recycle
+                    // hammer: ~2-3% of ticks torn; in production today it's
+                    // effectively zero, because sampler writes complete
+                    // synchronously inside `refresh()` rather than racing
+                    // the snapshot builder from another task. Migration
+                    // note: a sampler that calls `insert_metadata` more
+                    // than once per slot per refresh (cpu usage does 4)
+                    // should move to a single atomic metadata update
+                    // (`set_metadata`, one call) when it migrates to a
+                    // declared group, to close this window rather than
+                    // just narrow it.
                     let mut entry_metadata = metadata.clone();
                     entry_metadata.insert("id".to_string(), idx.to_string());
                     if let Some(m) = g.load_metadata(idx) {
@@ -599,14 +671,22 @@ fn create_v3(
                 for idx in 0..g.entries() {
                     let v = g.gauge_value(idx);
 
-                    // Transitional V2-style sentinel skip — default groups only. See doc comment.
-                    if !declared {
-                        let Some(v) = v else { continue };
-                        if v == i64::MIN {
-                            continue;
-                        }
+                    // Transitional V2-style sentinel skip — default groups
+                    // only. See doc comment. Unlike CounterGroup's `== 0`
+                    // (still live below: 0 is a legitimate initialized-
+                    // but-untouched counter value, indistinguishable from
+                    // an explicit 0), there is no `== i64::MIN` check here:
+                    // `GaugeGroup::gauge_value` already maps its internal
+                    // never-set sentinel to `None` before this ever sees
+                    // it (metriken owns that mapping), so `Some(i64::MIN)`
+                    // cannot occur — an explicit re-check here would be
+                    // dead code.
+                    if !declared && v.is_none() {
+                        continue;
                     }
 
+                    // Separate value/metadata reads, same torn-recycle
+                    // caveat as the CounterGroup arm above.
                     let mut entry_metadata = metadata.clone();
                     entry_metadata.insert("id".to_string(), idx.to_string());
                     if let Some(m) = g.load_metadata(idx) {
@@ -758,7 +838,25 @@ fn create_v3(
     let mut group_snapshots: Vec<GroupSnapshot> = Vec::with_capacity(groups.len());
 
     for (group_name, group) in groups {
-        let window = group.window;
+        // A metric routes to (and so creates) a `GroupBuilder` before its
+        // `Value` is matched below, so a metric whose value kind isn't one
+        // `create_v3` knows how to expose (falls into the `_ => {}` arm —
+        // e.g. a `HistogramGroup`-typed metric, a gap V2's `create` shares)
+        // can leave a group with nothing ever pushed into it. An
+        // empty-schema `GroupSnapshot` carries no information a receiver
+        // can use and would otherwise be hashed and transmitted every
+        // tick for nothing — and it contradicts this function's own doc
+        // comment, which says a group nothing routes to is absent. Skip it
+        // entirely rather than emit a zero-member group.
+        if group.counters.is_empty() && group.gauges.is_empty() && group.histograms.is_empty() {
+            continue;
+        }
+
+        // Re-read the window here (after this group's values, above) and
+        // reconcile with the first-touch read via `resolve_walk_window` —
+        // see its doc comment for why a second read is necessary.
+        let latest_window = group_registry.get(&group_name).and_then(|ag| ag.window());
+        let window = resolve_walk_window(group.window, latest_window);
         let (counter_descs, counter_values): (Vec<MetricDesc>, Vec<Option<u64>>) =
             group.counters.into_iter().unzip();
         let (gauge_descs, gauge_values): (Vec<MetricDesc>, Vec<Option<i64>>) =
@@ -826,6 +924,49 @@ mod tests {
     use metriken::metric;
     use metriken::Window;
     use std::time::{Duration, SystemTime};
+
+    // --- resolve_walk_window ---------------------------------------------
+
+    #[test]
+    fn resolve_walk_window_unchanged_returns_the_same_window() {
+        let w = Window::new(1_000, 2_000);
+        assert_eq!(resolve_walk_window(Some(w), Some(w)), Some(w));
+    }
+
+    #[test]
+    fn resolve_walk_window_changed_returns_the_union() {
+        let first = Window::new(1_000, 2_000);
+        let latest = Window::new(3_000, 4_000);
+        assert_eq!(
+            resolve_walk_window(Some(first), Some(latest)),
+            Some(Window::new(1_000, 4_000)),
+            "keeps first's begin, extends to latest's end"
+        );
+    }
+
+    #[test]
+    fn resolve_walk_window_both_none_is_none() {
+        assert_eq!(resolve_walk_window(None, None), None);
+    }
+
+    #[test]
+    fn resolve_walk_window_stamped_for_the_first_time_mid_walk_uses_latest() {
+        let latest = Window::new(5_000, 6_000);
+        assert_eq!(
+            resolve_walk_window(None, Some(latest)),
+            Some(latest),
+            "nothing to union with a never-yet-stamped first read"
+        );
+    }
+
+    #[test]
+    fn resolve_walk_window_transient_unstamped_latest_keeps_first() {
+        // Not expected in practice (see the doc comment: a group's seqlock
+        // only reads None before its first-ever stamp), but a real earlier
+        // reading must never be discarded for an artifact read.
+        let first = Window::new(1_000, 2_000);
+        assert_eq!(resolve_walk_window(Some(first), None), Some(first));
+    }
 
     #[metric(name = "snapshot_sampler_label_probe")]
     static SAMPLER_LABEL_PROBE: metriken::Counter = metriken::Counter::new();
@@ -943,6 +1084,11 @@ mod tests {
         assert!(
             group.counters[idx].is_some(),
             "probe counter has a Some(_) value slot"
+        );
+        assert!(
+            !schema.counters[idx].metadata.contains_key("acq_group"),
+            "acq_group is redundant with the declared group's own name and must be stripped \
+             from each member's metadata, not duplicated across every one"
         );
     }
 
@@ -1229,6 +1375,51 @@ mod tests {
                 .iter()
                 .any(|g| g.name == "unattributed/never_routed"),
             "a registered group nothing routes to should not appear in the snapshot"
+        );
+    }
+
+    // A `HistogramGroup`-typed metric: its `Value::HistogramGroup` isn't a
+    // kind `create_v3` (or V2's `create`) knows how to expose, so it falls
+    // into the match's `_ => {}` arm — the group it routes to gets a
+    // `GroupBuilder` (created for the window read at first touch) but
+    // never has anything pushed into it. Given its own dedicated declared
+    // group, it's the only thing that would ever route there.
+    static V3_UNHANDLED_VALUE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "unhandled_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_UNHANDLED_VALUE_GROUP_ENTRY: &'static AcquisitionGroup = &V3_UNHANDLED_VALUE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_unhandled_probe",
+        metadata = { acq_group = "unhandled_probe" }
+    )]
+    static V3_UNHANDLED_HISTOGRAM_GROUP: metriken::HistogramGroup =
+        metriken::HistogramGroup::new(2, 7, 32);
+
+    #[test]
+    fn group_with_only_unhandled_value_metrics_is_not_emitted() {
+        // Before this fix, routing alone (which happens before the Value
+        // match) was enough to create the GroupBuilder, so a group whose
+        // only routed metric is an unhandled Value kind shipped as an
+        // empty-schema GroupSnapshot every tick — hashed and transmitted
+        // for nothing, and silently contradicting the "nothing routed here
+        // means absent" contract pinned by the test above.
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+        assert!(
+            !s.groups
+                .iter()
+                .any(|g| g.name == "unattributed/unhandled_probe"),
+            "a group whose only routed metric is an unhandled Value kind must not be emitted"
         );
     }
 

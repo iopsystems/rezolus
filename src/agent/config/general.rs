@@ -9,6 +9,17 @@ fn default_snapshot_format() -> SnapshotFormat {
 /// `V2` is today's flat per-metric format. `V3` emits acquisition-group
 /// snapshots. This is transitional: the default flips to `V3` once samplers
 /// migrate; see docs/journal/2026-08-17-window-sidecar-cost.md.
+///
+/// Before setting this to `V3`, see `config/agent.toml`'s longer comment on
+/// this key for the full operator guidance. Short version: every consumer
+/// (exporter, recorder, viewer, ...) needs a build that understands V3 — an
+/// exporter built before `SnapshotV3` existed cannot decode it (older
+/// builds went dark silently; current builds log the decode failure
+/// loudly instead); acquisition windows are absent from `V3` output for any
+/// metric whose sampler hasn't migrated to a declared group yet (which is
+/// effectively everything today); and `/metrics/json`'s shape changes
+/// wholesale (`groups: [...]` instead of flat `counters`/`gauges`/
+/// `histograms` arrays).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SnapshotFormat {
