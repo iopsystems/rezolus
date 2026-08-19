@@ -84,6 +84,17 @@ impl<'a> CounterMap<'a> {
 /// (each used to carry a marginally later window than the one before it in
 /// the sweep), because there is no longer a per-entry window to encode —
 /// see `docs/journal/2026-08-17-window-sidecar-cost.md` proposal 2.
+///
+/// The bracket is wider than any single value's actual read: `finish()`
+/// only runs after every counter has been set (the stamp-last rule forces
+/// this ordering — see [`AcquisitionGroup::acquire`]), so the window's
+/// `end` is the time the *whole* sweep finished, not the time any one
+/// counter's value was captured. That makes the reported width an upper
+/// bound on the true acquisition time, never an underestimate — it can only
+/// over-state how long the read took, exactly the safe direction for an
+/// uncertainty window. Measured ~1.75× wider than the old per-entry windows
+/// (12–37 µs → 21–65 µs), an accepted cost against a scrape interval
+/// measured in tens or hundreds of milliseconds (journal proposal 2).
 pub struct Counters<'a> {
     counter_map: CounterMap<'a>,
     counters: Vec<&'static LazyCounter>,
@@ -155,6 +166,17 @@ impl<'a> Counters<'a> {
 /// every entry has been written. There is no longer a per-entry window —
 /// entries do not encode sweep order — see `docs/journal/2026-08-17-window-sidecar-cost.md`
 /// proposal 2.
+///
+/// The bracket is wider than any single entry's actual read, for the same
+/// reason as [`Counters`]: `finish()` only runs once every per-CPU entry has
+/// been set (stamp-last forces this — see [`AcquisitionGroup::acquire`]),
+/// so the window's `end` marks when the whole sweep finished, not when any
+/// individual entry's value was captured. The reported width is therefore
+/// an upper bound on the true per-entry acquisition time, never an
+/// underestimate — over-stating the uncertainty is the safe direction.
+/// Measured ~1.75× wider than the old per-entry windows this replaces
+/// (12–37 µs → 21–65 µs), an accepted cost against a scrape interval
+/// measured in tens or hundreds of milliseconds (journal proposal 2).
 pub struct CpuCounters<'a> {
     counter_map: CounterMap<'a>,
     counters: Vec<&'static CounterGroup>,
@@ -171,6 +193,16 @@ impl<'a> CpuCounters<'a> {
         group: &'static AcquisitionGroup,
     ) -> Self {
         let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
+
+        // Boot-fixed population bound: the real number of per-CPU slots
+        // this group will ever populate, distinct from each member
+        // `CounterGroup`'s `MAX_CPUS`-sized backing array (an
+        // implementation ceiling — see docs/principles.md principle 6).
+        // `possible_cpus()` is already clamped to `MAX_CPUS` (see
+        // `bpf/mod.rs`), so this can never exceed a member's `entries()`.
+        // The V3 snapshot builder walks only `0..bound` for a declared
+        // group with a bound set, instead of the full backing capacity.
+        group.set_member_bound(possible_cpus());
 
         Self {
             counter_map,

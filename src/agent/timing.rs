@@ -4,7 +4,7 @@
 //! `docs/journal/2026-07-10-all-sampler-observation-windows.md`.
 
 use metriken::Window;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Wall-clock nanoseconds since the Unix epoch, saturating to 0 before it.
@@ -106,6 +106,11 @@ impl GroupWindowSlot {
     /// example a drivehealth-style sampler with a blocking probe task
     /// alongside `refresh()`) must stamp the group from that one task only,
     /// never from both.
+    // Only reachable from the Linux-only BPF sampler refresh path (via
+    // AcquisitionGuard::finish); non-Linux builds compile this file (stats.rs
+    // constructs AcquisitionGroup statics for cross-platform metric identity)
+    // but never drive a refresh, so store() is genuinely unused there.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
         debug_assert_eq!(
@@ -153,6 +158,9 @@ pub(crate) struct AcquisitionGroup {
     pub sampler: &'static str,
     pub name: &'static str,
     slot: GroupWindowSlot,
+    // 0 = unbounded (walk the full backing array's `entries()`); nonzero =
+    // the real member-population bound. See `set_member_bound`/`member_bound`.
+    member_bound: AtomicUsize,
 }
 
 impl AcquisitionGroup {
@@ -164,6 +172,40 @@ impl AcquisitionGroup {
             sampler,
             name,
             slot: GroupWindowSlot::new(),
+            member_bound: AtomicUsize::new(0),
+        }
+    }
+
+    /// Set the group's member-population bound: the real number of
+    /// populated members (e.g. `possible_cpus()` for a per-CPU group), as
+    /// opposed to the backing array's `entries()` capacity — a fixed
+    /// implementation ceiling (`MAX_CPUS`), not a population count (see
+    /// `docs/principles.md` principle 6: "over-allocates on small
+    /// machines"). The V3 snapshot builder walks only `0..bound` for a
+    /// group that has one set, instead of the full `entries()`, so an
+    /// ~18-CPU host does not emit 1024 mostly-empty slots per tick.
+    ///
+    /// Expected to be called exactly once, at sampler init, before any
+    /// snapshot walk reads it — the population is boot-fixed (CPUs coming
+    /// online later are still within the possible-CPU bound computed at
+    /// init). This is not a documented multi-writer API: a second call
+    /// silently overwrites the first (last-write-wins), which is fine for
+    /// the single-init contract but would not be safe as a runtime toggle.
+    // Only called from `CpuCounters::new`, Linux-only; see the note on
+    // `GroupWindowSlot::store`. `member_bound()` itself (the read side) is
+    // NOT guarded the same way — the V3 snapshot builder reads it
+    // unconditionally on every platform, whether or not anything ever set it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn set_member_bound(&self, n: usize) {
+        self.member_bound.store(n, Ordering::Relaxed);
+    }
+
+    /// The group's member-population bound, if one has been set (`None`
+    /// means unbounded: walk the full `entries()`).
+    pub(crate) fn member_bound(&self) -> Option<usize> {
+        match self.member_bound.load(Ordering::Relaxed) {
+            0 => None,
+            n => Some(n),
         }
     }
 
@@ -189,6 +231,9 @@ impl AcquisitionGroup {
     /// blocking probe running alongside `refresh()`) must have that one
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
+    // Only reachable from the Linux-only BPF sampler refresh path; see the
+    // note on `GroupWindowSlot::store`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
         AcquisitionGuard::begin(&self.slot)
     }
@@ -217,12 +262,16 @@ impl AcquisitionGroup {
 /// readers see "no new data this tick", which is the honest signal. A group
 /// whose reads keep failing simply stops advancing, visibly, in the data —
 /// missing beats wrong.
+// Only constructed from the Linux-only BPF sampler refresh path (via
+// AcquisitionGroup::acquire); see the note on `GroupWindowSlot::store`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
     begin_ns: u64,
     begin_mono: Instant,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn begin(slot: &'a GroupWindowSlot) -> Self {
         Self {
@@ -352,6 +401,18 @@ mod tests {
             advanced > 100,
             "writer made no visible progress ({advanced}) — vacuous run"
         );
+    }
+
+    #[test]
+    fn member_bound_defaults_unbounded_then_roundtrips() {
+        let group = AcquisitionGroup::new("test_sampler", "member_bound_probe");
+        assert_eq!(group.member_bound(), None, "unset bound is unbounded");
+        group.set_member_bound(3);
+        assert_eq!(group.member_bound(), Some(3));
+        // Last-write-wins, per the single-init contract documented on
+        // `set_member_bound`.
+        group.set_member_bound(5);
+        assert_eq!(group.member_bound(), Some(5));
     }
 
     #[test]

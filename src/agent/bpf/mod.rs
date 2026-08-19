@@ -92,8 +92,14 @@ pub use sync_primitive::SyncPrimitive;
 /// considers *possible* (a CPU that could be hot-added), not which are
 /// currently online, so the answer is `max_id + 1` — the number of possible
 /// slots — not a count of the listed ids, which may have gaps. Returns
-/// `None` if the content is empty or doesn't parse as expected, so the
-/// caller can fall back rather than trust a bogus bound.
+/// `None` if the content is empty, doesn't parse as expected, or the
+/// implied count overflows `usize` (`checked_add`, not `+1`: a garbage
+/// mask like `"0-18446744073709551615"` must fall back, not wrap to 0 in
+/// release), so the caller can fall back rather than trust a bogus bound.
+///
+/// Deliberately NOT clamped to `MAX_CPUS` here — that is a separate
+/// concern ([`clamp_possible_cpus`]) so this function stays a pure parse of
+/// what the file says, testable against arbitrarily large masks.
 fn parse_possible_cpus(contents: &str) -> Option<usize> {
     let mut max_id: Option<usize> = None;
 
@@ -111,23 +117,72 @@ fn parse_possible_cpus(contents: &str) -> Option<usize> {
         max_id = Some(max_id.map_or(hi, |m| m.max(hi)));
     }
 
-    max_id.map(|m| m + 1)
+    max_id.and_then(|m| m.checked_add(1))
+}
+
+/// Clamp a parsed possible-CPU count to [`crate::agent::MAX_CPUS`].
+///
+/// Every per-CPU BPF counter map is sized for exactly `MAX_CPUS` slots —
+/// `CounterMap::new`'s mmap region is `bank_cachelines * CACHELINE_SIZE *
+/// MAX_CPUS` bytes, and every sampler's `mod.bpf.c` sizes `max_entries` the
+/// same way — so a sweep bound above `MAX_CPUS` indexes
+/// `counters[idx + cpu * bank_width]` off the end of the mapped slice. A
+/// host whose `/sys/devices/system/cpu/possible` mask exceeds `MAX_CPUS`
+/// (large `CONFIG_NR_CPUS`, hypervisor firmware reporting a big possible
+/// range) is real, not hypothetical, so every migrated sampler's `refresh()`
+/// would panic every tick without this clamp. This is the documented
+/// silent-undercount tradeoff, not a crash: `docs/principles.md` principle
+/// 6 already accepts "over-allocates on small machines, silently
+/// under-counts past 1024 CPUs" as `MAX_CPUS`'s known ceiling; clamping
+/// here is what actually delivers that promise for a possible-CPU sweep
+/// bound instead of a fixed one.
+fn clamp_possible_cpus(n: usize) -> usize {
+    n.min(crate::agent::MAX_CPUS)
 }
 
 /// Number of possible CPUs on this host, per
 /// `/sys/devices/system/cpu/possible` — POSSIBLE, deliberately not ONLINE,
 /// so a CPU that comes up mid-recording was already counted and a sweep
-/// bound taken at agent start does not miss it. Parsed once and cached;
-/// falls back to [`crate::agent::MAX_CPUS`] if the file is missing, empty,
-/// or fails to parse, so a sweep bound here degrades to the old fixed bound
-/// rather than to zero.
+/// bound taken at agent start does not miss it. Parsed once and cached,
+/// then clamped to [`crate::agent::MAX_CPUS`] (see [`clamp_possible_cpus`])
+/// so no caller can forget the clamp and index a per-CPU BPF map's mmap
+/// region out of bounds. Falls back to `MAX_CPUS` if the file is missing,
+/// empty, or fails to parse, so a sweep bound here degrades to the old
+/// fixed bound rather than to zero.
 pub(crate) fn possible_cpus() -> usize {
     static CACHE: OnceLock<usize> = OnceLock::new();
     *CACHE.get_or_init(|| {
-        std::fs::read_to_string("/sys/devices/system/cpu/possible")
-            .ok()
-            .and_then(|s| parse_possible_cpus(&s))
-            .unwrap_or(crate::agent::MAX_CPUS)
+        let contents = match std::fs::read_to_string("/sys/devices/system/cpu/possible") {
+            Ok(contents) => contents,
+            Err(e) => {
+                debug!(
+                    "failed to read /sys/devices/system/cpu/possible ({e}); \
+                     falling back to MAX_CPUS={}",
+                    crate::agent::MAX_CPUS
+                );
+                return crate::agent::MAX_CPUS;
+            }
+        };
+
+        let Some(n) = parse_possible_cpus(&contents) else {
+            warn!(
+                "failed to parse /sys/devices/system/cpu/possible ({contents:?}); \
+                 falling back to MAX_CPUS={}",
+                crate::agent::MAX_CPUS
+            );
+            return crate::agent::MAX_CPUS;
+        };
+
+        let clamped = clamp_possible_cpus(n);
+        if clamped != n {
+            warn!(
+                "possible CPU count {n} exceeds MAX_CPUS={}; per-CPU BPF counter maps are \
+                 sized for MAX_CPUS, so clamping the sweep bound — CPUs beyond MAX_CPUS are \
+                 silently excluded from per-CPU sweeps (docs/principles.md principle 6)",
+                crate::agent::MAX_CPUS
+            );
+        }
+        clamped
     })
 }
 
@@ -227,7 +282,7 @@ impl Sampler for AsyncBpf {
 
 #[cfg(test)]
 mod possible_cpus_tests {
-    use super::parse_possible_cpus;
+    use super::{clamp_possible_cpus, parse_possible_cpus};
 
     #[test]
     fn parses_a_single_range() {
@@ -265,5 +320,37 @@ mod possible_cpus_tests {
     #[test]
     fn garbage_content_is_unparseable() {
         assert_eq!(parse_possible_cpus("not-a-cpu-list"), None);
+    }
+
+    #[test]
+    fn parser_does_not_clamp_a_mask_beyond_max_cpus() {
+        // The parser is NOT the bound: a possible mask bigger than
+        // MAX_CPUS (1024) parses to its literal value. Clamping is
+        // `clamp_possible_cpus`'s job, exercised separately below.
+        assert_eq!(parse_possible_cpus("0-8191"), Some(8192));
+    }
+
+    #[test]
+    fn overflowing_max_id_falls_back_to_unparseable_rather_than_wrapping() {
+        // usize::MAX as the high end of a range: max_id + 1 must not wrap
+        // to 0 (which would silently produce a zero-CPU sweep in release,
+        // where integer overflow does not panic).
+        assert_eq!(parse_possible_cpus("0-18446744073709551615"), None);
+    }
+
+    #[test]
+    fn clamp_is_a_no_op_at_or_under_max_cpus() {
+        assert_eq!(clamp_possible_cpus(1), 1);
+        assert_eq!(clamp_possible_cpus(32), 32);
+        assert_eq!(
+            clamp_possible_cpus(crate::agent::MAX_CPUS),
+            crate::agent::MAX_CPUS
+        );
+    }
+
+    #[test]
+    fn clamp_bounds_a_mask_beyond_max_cpus() {
+        assert_eq!(clamp_possible_cpus(8192), crate::agent::MAX_CPUS);
+        assert_eq!(clamp_possible_cpus(usize::MAX), crate::agent::MAX_CPUS);
     }
 }

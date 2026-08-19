@@ -408,7 +408,19 @@ fn group_registry() -> &'static HashMap<String, &'static AcquisitionGroup> {
     REGISTRY.get_or_init(|| {
         let mut registry: HashMap<String, &'static AcquisitionGroup> = HashMap::new();
         for group in crate::agent::samplers::ACQUISITION_GROUPS {
-            registry.insert(format!("{}/{}", group.sampler, group.name), group);
+            let key = format!("{}/{}", group.sampler, group.name);
+            let prev = registry.insert(key.clone(), group);
+            debug_assert!(
+                prev.is_none(),
+                "duplicate acquisition-group registry key `{key}` — every registered group's \
+                 (sampler, name) pair must stay globally unique, including on non-Linux builds, \
+                 where `samplers::bpf_sampler_name` collapses every BPF sampler's \
+                 `attribute_sampler` resolution to the shared \"unattributed\" bucket (stats.rs \
+                 is `include!`d there for metric-identity continuity, with no matching \
+                 SamplerEntry). Qualify the group's `name` with its sampler, e.g. \
+                 `<sampler>_<shortname>` — see the naming rule documented on \
+                 `samplers::ACQUISITION_GROUPS`.",
+            );
         }
         registry
     })
@@ -503,11 +515,26 @@ fn resolve_walk_window(first: Option<Window>, latest: Option<Window>) -> Option<
 /// returns metric-by-metric once each sampler declares real groups.
 ///
 /// Declared groups use registration membership instead: every entry in
-/// `0..group.entries()` is a member, full stop. Counter/gauge group entries
-/// send `Some(value)` including an honest zero — no sentinel skip — and a
-/// group whose backing store was never written at all reports `None` for
-/// every member ("registered but no reading yet"), never fabricating a
-/// value or silently dropping the member. The group's window comes from the
+/// `0..group.entries()` is a member, full stop — UNLESS the group has a
+/// member-population bound set ([`AcquisitionGroup::set_member_bound`]), in
+/// which case membership is `0..bound.min(group.entries())`. Registration
+/// membership for a per-CPU group like a `CpuCounters`-backed one IS its
+/// possible-CPU population; the backing array's `entries()` is an
+/// implementation ceiling sized for the worst case (`MAX_CPUS`; see
+/// docs/principles.md principle 6 and
+/// docs/superpowers/plans/2026-08-18-stage3c-wave1-sampler-migration.md),
+/// not a claim that every one of those slots is a real member on this host.
+/// Counter/gauge group entries within the bound send `Some(value)`
+/// including an honest zero — no sentinel skip — and a group whose backing
+/// store was never written at all reports `None` for every member
+/// ("registered but no reading yet"), never fabricating a value or
+/// silently dropping the member. A scalar (non-group) declared metric
+/// behaves differently: a `LazyCounter`/`LazyGauge` reports no value at all
+/// (`metric.value()` is `None`) until its first `set()`/`increment()`, so
+/// it is simply ABSENT from the group's schema — not present with a `None`
+/// value — until then; that first appearance is one schema rebuild
+/// (`SkeletonCache` absorbs it like any other schema change) rather than an
+/// ongoing cost. The group's window comes from the
 /// registered [`AcquisitionGroup`]'s own window slot, not from any
 /// per-metric window.
 ///
@@ -548,11 +575,17 @@ fn create_v3(
         // default group (and flag the mismatch in debug builds — see the
         // function-level doc comment).
         let mut declared = false;
+        // The member-population bound for a declared, group-typed metric
+        // (`CounterGroup`/`GaugeGroup`): `Some(n)` walks `0..n` instead of
+        // the full backing-array `entries()`. Resolved alongside routing,
+        // before `group_key` is moved into `groups.entry` below.
+        let mut member_bound: Option<usize> = None;
         let group_key = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
                 let key = format!("{sampler}/{acq_group}");
-                if group_registry.contains_key(&key) {
+                if let Some(ag) = group_registry.get(&key) {
                     declared = true;
+                    member_bound = ag.member_bound();
                     key
                 } else {
                     debug_assert!(
@@ -595,17 +628,20 @@ fn create_v3(
             }
         };
 
-        // Redundant on a declared group's members: the group's own name
-        // (`GroupSnapshot.name`, `"{sampler}/{acq_group}"`) already says
-        // this. Left in place it would be one more copy of the same
-        // key/value pair repeated in every member's `MetricDesc.metadata`
-        // — for a large declared group (thousands of tasks/cgroups/CPUs)
-        // that's thousands of identical, wasted copies. Default groups
-        // don't have an `acq_group` key to strip (routing only reads it,
-        // never sets one), so this is a no-op there.
-        if declared {
-            metadata.remove("acq_group");
-        }
+        // Strip unconditionally, not just when `declared`. On the declared
+        // path it is redundant with the group's own name (`GroupSnapshot.name`,
+        // `"{sampler}/{acq_group}"`) — left in place it would be one more
+        // copy of the same key/value pair repeated in every member's
+        // `MetricDesc.metadata`, thousands of identical wasted copies for a
+        // large declared group (tasks/cgroups/CPUs). On the unmatched-registry
+        // fallback path (the `debug_assert!` arm above — a typo'd or
+        // renamed group), the metric still carries its stale `acq_group`
+        // value even though it just got routed to the DEFAULT group instead;
+        // leaving it in would leak that value as a phantom label on release
+        // builds, where the `debug_assert!` compiles away and this fallback
+        // runs silently instead of panicking. A metric with no `acq_group`
+        // tag at all has nothing to remove, so this is a no-op there.
+        metadata.remove("acq_group");
 
         let entry_name = format!("{metric_id}");
 
@@ -625,7 +661,20 @@ fn create_v3(
                 Some(v),
             )),
             Value::CounterGroup(g) => {
-                for idx in 0..g.entries() {
+                // Registration membership for a per-CPU (or similar) group
+                // IS the group's real member population — `possible_cpus()`
+                // for a `CpuCounters`-backed group — not the backing
+                // array's `entries()` capacity, which is a fixed
+                // implementation ceiling (`MAX_CPUS`; see docs/principles.md
+                // principle 6, "over-allocates on small machines") sized
+                // for the worst case, not this host. Walking the full
+                // capacity on every declared group would put an ~18-CPU
+                // host's tick at ~19× the entries it actually populated;
+                // walk the bound instead when one is set (clamped to
+                // `entries()` in case a stale/misconfigured bound somehow
+                // exceeds the backing array).
+                let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                for idx in 0..bound {
                     let v = g.counter_value(idx);
 
                     // Transitional V2-style sentinel skip — default groups only. See doc comment.
@@ -675,7 +724,10 @@ fn create_v3(
                 }
             }
             Value::GaugeGroup(g) => {
-                for idx in 0..g.entries() {
+                // Same member-population bound as the `CounterGroup` arm
+                // above — see its comment.
+                let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                for idx in 0..bound {
                     let v = g.gauge_value(idx);
 
                     // Transitional V2-style sentinel skip — default groups
@@ -1547,6 +1599,125 @@ mod tests {
         assert!(
             find_default("1").is_none(),
             "default group's transitional sentinel skip drops the zero entry"
+        );
+    }
+
+    // Dedicated group + metric: 8 backing entries, member_bound set to 3.
+    // Distinct from `V3_DECLARED_COUNTER_GROUP` above (entries=2, no bound
+    // — that test is this one's "unbounded behaves as today" control).
+    static V3_BOUNDED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "bounded_counter_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_BOUNDED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_BOUNDED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_bounded_counters",
+        metadata = { acq_group = "bounded_counter_probe" }
+    )]
+    static V3_BOUNDED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    #[test]
+    fn declared_group_member_bound_limits_population_below_entries() {
+        // Write every one of the 8 backing slots so an unbounded walk would
+        // see all 8 (this is not a zero-skip scenario — see the honest-zero
+        // test above for that).
+        for idx in 0..8 {
+            V3_BOUNDED_COUNTERS.add(idx, 10 + idx as u64);
+        }
+        V3_BOUNDED_GROUP.set_member_bound(3);
+        let guard = V3_BOUNDED_GROUP.acquire();
+        guard.finish();
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/bounded_counter_probe")
+            .expect("bounded declared group present");
+        assert_eq!(group.validate(), Ok(()));
+
+        let schema = group.schema.as_ref().expect("schema present");
+        assert_eq!(
+            schema.counters.len(),
+            3,
+            "member_bound=3 on an 8-entry backing array emits exactly 3 schema slots, \
+             not the full backing capacity"
+        );
+        assert_eq!(
+            group.counters.len(),
+            3,
+            "value slots match the bounded schema, not the backing capacity"
+        );
+        for (idx, desc) in schema.counters.iter().enumerate() {
+            assert_eq!(
+                desc.metadata.get("id").map(String::as_str),
+                Some(idx.to_string()).as_deref(),
+                "bounded members are the first `bound` indices, in order"
+            );
+            assert!(
+                !desc.metadata.contains_key("acq_group"),
+                "acq_group must still be stripped on a bounded declared group's members"
+            );
+        }
+    }
+
+    // Dedicated group + metric: 2 backing entries, member_bound set larger
+    // than entries (5). The bound must clamp to entries, not read/emit
+    // out-of-bounds slots.
+    static V3_OVERBOUND_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "overbound_counter_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_OVERBOUND_GROUP_ENTRY: &'static AcquisitionGroup = &V3_OVERBOUND_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_overbound_counters",
+        metadata = { acq_group = "overbound_counter_probe" }
+    )]
+    static V3_OVERBOUND_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(2);
+
+    #[test]
+    fn declared_group_member_bound_larger_than_entries_clamps_to_entries() {
+        V3_OVERBOUND_COUNTERS.add(0, 1);
+        V3_OVERBOUND_COUNTERS.add(1, 2);
+        V3_OVERBOUND_GROUP.set_member_bound(5);
+        let guard = V3_OVERBOUND_GROUP.acquire();
+        guard.finish();
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/overbound_counter_probe")
+            .expect("overbound declared group present");
+        assert_eq!(group.validate(), Ok(()));
+
+        let schema = group.schema.as_ref().expect("schema present");
+        assert_eq!(
+            schema.counters.len(),
+            2,
+            "a bound larger than entries() clamps to entries(), never reads past the backing array"
         );
     }
 

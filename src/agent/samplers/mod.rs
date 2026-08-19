@@ -30,6 +30,26 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 /// Samplers register their groups here; the V3 snapshot builder enumerates
 /// this slice. `(sampler, name)` pairs must be unique and the name `main`
 /// is reserved for the transitional default group.
+///
+/// # Naming rule
+///
+/// A group's `name` must be `<sampler>_<shortname>`, where `<sampler>` is
+/// the Linux sampler name (e.g. `"blockio_requests"`) and `<shortname>` is
+/// the map/builder-call it brackets (e.g. `"errors"`), UNLESS `<shortname>`
+/// is identical to `<sampler>` itself — a full duplicate that would stutter
+/// (`cpu_usage_cpu_usage`) — in which case use a short, unambiguous token
+/// instead (`cpu_usage`'s own per-state group is `cpu_usage_cpu`, not
+/// `cpu_usage_cpu_usage`).
+///
+/// This is stricter than "unique within the sampler" because every BPF
+/// sampler's `stats.rs` is ALSO compiled directly on non-Linux platforms
+/// (see `bpf_sampler_name`'s doc comment), where every one of them
+/// attributes to the single shared `"unattributed"` sampler bucket — so two
+/// different samplers both naming a group `"counters"` would collide there
+/// even though they never collide on Linux. Always prefixing with the real
+/// sampler name keeps the group name globally unique across every sampler
+/// EVEN under that collapse. `group_registry()` (in
+/// `agent::exposition::http::snapshot`) `debug_assert!`s this at first use.
 #[distributed_slice]
 pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup] = [..];
 

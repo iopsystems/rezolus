@@ -8,7 +8,7 @@ use linkme::distributed_slice;
 // directly on non-Linux platforms (see `cpu/mod.rs`'s
 // `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
 // identity stable across platforms, while `mod.rs`'s BPF sampler code is
-// Linux-only. A metric declaring `acq_group = "migrations"` must find its
+// Linux-only. A metric declaring `acq_group = "cpu_migrations_migrations"` must find its
 // group registered on every platform that compiles this file, not just the
 // one that actually drives it.
 //
@@ -16,7 +16,7 @@ use linkme::distributed_slice;
 /// sampler's own BPF refresh path).
 pub static MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_migrations"),
-    "migrations",
+    "cpu_migrations_migrations",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -47,14 +47,14 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "cpu_migrations",
     description = "The number of process CPU migrations",
-    metadata = { direction = "from", acq_group = "migrations" }
+    metadata = { direction = "from", acq_group = "cpu_migrations_migrations" }
 )]
 pub static CPU_MIGRATIONS_FROM: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_migrations",
     description = "The number of process CPU migrations",
-    metadata = { direction = "to", acq_group = "migrations" }
+    metadata = { direction = "to", acq_group = "cpu_migrations_migrations" }
 )]
 pub static CPU_MIGRATIONS_TO: CounterGroup = CounterGroup::new(MAX_CPUS);
 

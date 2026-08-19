@@ -14,7 +14,7 @@ use linkme::distributed_slice;
 /// sampler's own BPF refresh path).
 pub static EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_tlb_flush"),
-    "events",
+    "cpu_tlb_flush_events",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -45,42 +45,42 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
-    metadata = { reason = "task_switch", acq_group = "events" }
+    metadata = { reason = "task_switch", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_TASK_SWITCH: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
-    metadata = { reason = "remote_shootdown", acq_group = "events" }
+    metadata = { reason = "remote_shootdown", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_REMOTE_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
-    metadata = { reason = "local_shootdown", acq_group = "events" }
+    metadata = { reason = "local_shootdown", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_LOCAL_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
-    metadata = { reason = "local_mm_shootdown", acq_group = "events" }
+    metadata = { reason = "local_mm_shootdown", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_LOCAL_MM_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events",
-    metadata = { reason = "remote_send_ipi", acq_group = "events" }
+    metadata = { reason = "remote_send_ipi", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_REMOTE_SEND_IPI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_tlb_flush",
     description = "The number of tlb_flush events with unknown reason (e.g., ARM64 where reason breakdown is unavailable)",
-    metadata = { reason = "unknown", acq_group = "events" }
+    metadata = { reason = "unknown", acq_group = "cpu_tlb_flush_events" }
 )]
 pub static TLB_FLUSH_UNKNOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
 

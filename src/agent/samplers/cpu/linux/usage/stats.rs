@@ -12,15 +12,15 @@ use linkme::distributed_slice;
 // brackets, not one group for the whole sampler.
 pub static CPU_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
-    "cpu_usage",
+    "cpu_usage_cpu",
 );
 pub static SOFTIRQ_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
-    "softirq",
+    "cpu_usage_softirq",
 );
 pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("cpu_usage"),
-    "softirq_time",
+    "cpu_usage_softirq_time",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -55,14 +55,14 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "cpu_usage",
     description = "The amount of CPU time spent in each state",
-    metadata = { state = "user", unit = "nanoseconds", acq_group = "cpu_usage" }
+    metadata = { state = "user", unit = "nanoseconds", acq_group = "cpu_usage_cpu" }
 )]
 pub static CPU_USAGE_USER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_usage",
     description = "The amount of CPU time spent in each state",
-    metadata = { state = "system", unit = "nanoseconds", acq_group = "cpu_usage" }
+    metadata = { state = "system", unit = "nanoseconds", acq_group = "cpu_usage_cpu" }
 )]
 pub static CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CPUS);
 
@@ -72,7 +72,7 @@ pub static CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "cpu_usage_exited_tasks",
     description = "The amount of CPU time that was consumed by tasks which have since exited, and so is no longer attributable to any live per-task series",
-    metadata = { unit = "nanoseconds", acq_group = "cpu_usage" }
+    metadata = { unit = "nanoseconds", acq_group = "cpu_usage_cpu" }
 )]
 pub static CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CPUS);
 
@@ -121,70 +121,70 @@ pub static TASK_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "hi", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "hi", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_HI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "timer", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "timer", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_TIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "net_tx", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "net_tx", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_NET_TX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "net_rx", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "net_rx", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_NET_RX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "block", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "block", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_BLOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "irq_poll", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "irq_poll", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_IRQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "tasklet", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "tasklet", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_TASKLET: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "sched", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "sched", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_SCHED: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "hrtimer", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "hrtimer", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_HRTIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq",
     description = "The count of softirqs",
-    metadata = { unit = "interrupts", kind = "rcu", acq_group = "softirq" }
+    metadata = { unit = "interrupts", kind = "rcu", acq_group = "cpu_usage_softirq" }
 )]
 pub static SOFTIRQ_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);
 
@@ -193,69 +193,69 @@ pub static SOFTIRQ_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "hi", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "hi", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_HI: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "timer", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "timer", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_TIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "net_tx", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "net_tx", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_NET_TX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "net_rx", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "net_rx", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_NET_RX: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "block", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "block", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_BLOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "irq_poll", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "irq_poll", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_IRQ_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "tasklet", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "tasklet", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_TASKLET: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "sched", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "sched", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_SCHED: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "hrtimer", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "hrtimer", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_HRTIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "softirq_time",
     description = "The time spent in softirq handlers",
-    metadata = { unit = "nanoseconds", kind = "rcu", acq_group = "softirq_time" }
+    metadata = { unit = "nanoseconds", kind = "rcu", acq_group = "cpu_usage_softirq_time" }
 )]
 pub static SOFTIRQ_TIME_RCU: CounterGroup = CounterGroup::new(MAX_CPUS);

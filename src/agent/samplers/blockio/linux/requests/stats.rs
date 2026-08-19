@@ -15,11 +15,11 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 );
 pub static ERRORS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("blockio_requests"),
-    "errors",
+    "blockio_requests_errors",
 );
 pub static REQUEUES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("blockio_requests"),
-    "requeues",
+    "blockio_requests_requeues",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
@@ -153,49 +153,49 @@ pub static BLOCKIO_FLUSH_BYTES: LazyCounter = LazyCounter::new(Counter::default)
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "io", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "io", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_IO: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "timeout", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "timeout", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "nospc", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "nospc", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_NOSPC: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "target", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "target", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_TARGET: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "protection", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "protection", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_PROTECTION: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "unsupported", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "unsupported", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_UNSUPPORTED: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "read", error = "other", unit = "operations", acq_group = "errors" }
+    metadata = { op = "read", error = "other", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_READ_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -203,49 +203,49 @@ pub static BLOCKIO_READ_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::defau
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "io", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "io", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_IO: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "timeout", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "timeout", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "nospc", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "nospc", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_NOSPC: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "target", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "target", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_TARGET: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "protection", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "protection", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_PROTECTION: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "unsupported", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "unsupported", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_UNSUPPORTED: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "write", error = "other", unit = "operations", acq_group = "errors" }
+    metadata = { op = "write", error = "other", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_WRITE_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -253,49 +253,49 @@ pub static BLOCKIO_WRITE_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::defa
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "io", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "io", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_IO: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "timeout", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "timeout", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "nospc", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "nospc", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_NOSPC: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "target", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "target", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_TARGET: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "protection", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "protection", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_PROTECTION: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "unsupported", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "unsupported", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_UNSUPPORTED: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "flush", error = "other", unit = "operations", acq_group = "errors" }
+    metadata = { op = "flush", error = "other", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_FLUSH_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -303,49 +303,49 @@ pub static BLOCKIO_FLUSH_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::defa
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "io", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "io", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_IO: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "timeout", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "timeout", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "nospc", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "nospc", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_NOSPC: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "target", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "target", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_TARGET: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "protection", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "protection", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_PROTECTION: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "unsupported", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "unsupported", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_UNSUPPORTED: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_errors",
     description = "Terminal block IO failures",
-    metadata = { op = "discard", error = "other", unit = "operations", acq_group = "errors" }
+    metadata = { op = "discard", error = "other", unit = "operations", acq_group = "blockio_requests_errors" }
 )]
 pub static BLOCKIO_DISCARD_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::default);
 
@@ -359,27 +359,27 @@ pub static BLOCKIO_DISCARD_ERR_OTHER: LazyCounter = LazyCounter::new(Counter::de
 #[metric(
     name = "blockio_requeues",
     description = "Block IO requests put back on the queue for retry",
-    metadata = { op = "read", unit = "operations", acq_group = "requeues" }
+    metadata = { op = "read", unit = "operations", acq_group = "blockio_requests_requeues" }
 )]
 pub static BLOCKIO_READ_REQUEUE: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_requeues",
     description = "Block IO requests put back on the queue for retry",
-    metadata = { op = "write", unit = "operations", acq_group = "requeues" }
+    metadata = { op = "write", unit = "operations", acq_group = "blockio_requests_requeues" }
 )]
 pub static BLOCKIO_WRITE_REQUEUE: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_requeues",
     description = "Block IO requests put back on the queue for retry",
-    metadata = { op = "flush", unit = "operations", acq_group = "requeues" }
+    metadata = { op = "flush", unit = "operations", acq_group = "blockio_requests_requeues" }
 )]
 pub static BLOCKIO_FLUSH_REQUEUE: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "blockio_requeues",
     description = "Block IO requests put back on the queue for retry",
-    metadata = { op = "discard", unit = "operations", acq_group = "requeues" }
+    metadata = { op = "discard", unit = "operations", acq_group = "blockio_requests_requeues" }
 )]
 pub static BLOCKIO_DISCARD_REQUEUE: LazyCounter = LazyCounter::new(Counter::default);
