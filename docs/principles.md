@@ -549,6 +549,17 @@ enforces, and that reviewers must protect:
   possible CPUs, never the array capacity); a quiet member reports zero,
   it does not vanish. Value-sentinel membership is a V2 transitional
   behavior confined to the un-migrated default groups.
+- **Reader-stamped groups: the acquisition is the exposition read.** A
+  mmap-direct `PackedCounters` group has no sampler `refresh()` read to
+  bracket — the snapshot builder's own walk IS the acquisition, so
+  `create`/`create_v3` acquire/mark_end/finish it themselves
+  (`AcquisitionGroup::set_reader_stamped`). The published window therefore
+  describes when the builder READ the value out of the BPF map, not any
+  property of when the counter itself last changed — an artifact of how
+  the value is exposed, not a staleness claim. It is still an honest,
+  deliberate upper bound (marking the end immediately after that group's
+  member reads, not at eventual publish, keeps the width microsecond-scale
+  — the read span — rather than walk-scale).
 
 **What we refuse.**
 - Per-entry window stamping in new or migrated samplers.
@@ -558,8 +569,13 @@ enforces, and that reviewers must protect:
   syscall_latency shape this design exists to remove).
 
 **Not yet migrated** (windows still per-entry or absent): gpu, memory,
-cpu/cores, drivehealth. `PackedCounters` (mmap-direct cgroup/task counters —
-its acquisition is the exposition read, bracketed by `create`/`create_v3`
+cpu/cores, drivehealth, and `cpu_bandwidth`'s two ringbuf-populated cgroup
+gauges (`cgroup_cpu_bandwidth_quota`, `cgroup_cpu_bandwidth_period_duration`
+— set via a `ringbuf_handler`, not mmap-attached, so they are not
+`PackedCounters` and wave-2 Part A's reader-stamped migration does not
+cover them; they still fall into their sampler's windowless default
+group). `PackedCounters` (mmap-direct cgroup/task counters — its
+acquisition is the exposition read, bracketed by `create`/`create_v3`
 themselves) migrated in wave-2 Part A; declared reader-stamped groups use
 metadata-presence membership (`load_metadata(idx).is_some()`), never
 `0..entries()`, so a `MAX_PID`-scale group like `task_cpu_usage` never walks

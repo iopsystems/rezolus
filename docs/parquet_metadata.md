@@ -65,6 +65,17 @@ Structural differences from a single parquet file:
   `<metric>:window_begin` / `<metric>:window_width` companions; the query
   engine consumes them for `rate()`/`irate()` uncertainty bounds and readers
   must not treat `:window_*` columns as metrics.
+- **Reader-stamped (packed cgroup/task) windows are exposition-derived, not
+  a staleness claim.** For mmap-direct cgroup/task counters
+  (`cgroup_cpu_usage`, `task_cpu_usage`, and similar `PackedCounters`-backed
+  metrics), the window brackets the snapshot builder's own read of the
+  value out of the BPF map, not any property of when the underlying BPF
+  counter last changed — an artifact of how the value is exposed. It is a
+  deliberate upper bound on the read span, honest in the same "never
+  under-states uncertainty" direction as every other acquisition window,
+  and (since the builder marks the window's end immediately after reading
+  a group's members, not at eventual publish time) is itself
+  microsecond-scale, not a claim that the counter is only that fresh.
 - **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
   assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
   `.parquet` combine, nothing is quantized, so windows and sampling-jitter

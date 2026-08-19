@@ -195,8 +195,20 @@ fn create(
     // ever LAG the true acquisition, never lead it — not observing a
     // fresher stamp mid-walk means this snapshot's windows are, at worst, a
     // touch stale, never claiming freshness a value doesn't actually have.
+    // Reader-stamped groups are filtered OUT here — see the doc comment
+    // below on `reader_stamped_groups`/`ReaderStampedBracket` for why this
+    // map cannot serve them (it would return a previous tick's stale
+    // bracket, or `None` on the first call, never this tick's actual
+    // read). Excluding them means a scalar `Counter`/`Gauge`/`Histogram`
+    // that somehow ends up tagged with a reader-stamped group's name (not
+    // possible today — see `reader_stamped_group`'s doc comment below —
+    // but not structurally prevented either) misses here and falls into
+    // the `None =>` arm's mismatch handling below, rather than silently
+    // resolving to a stale or absent window as if it were a legitimate
+    // sampler-stamped miss.
     let group_windows: HashMap<(&str, &str), Option<Window>> = group_registry()
         .values()
+        .filter(|group| !group.is_reader_stamped())
         .map(|group| ((group.sampler, group.name), group.window()))
         .collect();
 
@@ -207,20 +219,35 @@ fn create(
     // group's members — would return whatever bracket a PREVIOUS `create()`
     // call left behind (or `None`, on the very first call), never this
     // tick's actual read. Track them separately: acquire the bracket at
-    // first touch (below, in the CounterGroup/GaugeGroup arms), then patch
-    // every entry pushed for that group once the bracket finishes, after
-    // the whole per-metric loop completes (see the finalization loop after
-    // it). That "finish once the loop completes" boundary is coarser than
+    // first touch (below, in the CounterGroup/GaugeGroup arms), mark its
+    // end immediately after each touching metric's member-value loop
+    // (`AcquisitionGuard::mark_end` — the LAST such call before finish()
+    // wins, so a group touched by several like-entity members, e.g.
+    // `cgroup_syscall`'s 16 op-class maps, still ends up with its true
+    // last-member-read as the end), then finish() (publish) once the whole
+    // per-metric loop completes (see the finalization loop after it) and
+    // patch every entry pushed for that group to the published window.
+    // Publish timing ("finish once the loop completes") is coarser than
     // `create_v3`'s per-group emit point — V2's flat, single-pass walk has
     // no per-group deferred-emit stage to hook a tighter boundary into —
-    // but it is still an honest, safe-direction bracket: acquire() still
-    // happens at each group's own true first touch (a distinct begin_ns
-    // per group), only the finish() point is shared and conservatively
-    // later than the tightest possible, which only widens the window,
-    // never narrows or mis-times it.
+    // but `mark_end()` decouples the reported WIDTH from that publish
+    // delay entirely: the width is this group's own read span (µs-scale),
+    // not walk-scale, regardless of how much unrelated work runs between
+    // mark_end() and finish(). Only visibility (when the window appears at
+    // all) lags slightly behind the tightest possible, which is the same
+    // safe direction `AcquisitionGuard` already guarantees elsewhere —
+    // begin_ns is each group's true first touch either way.
+    //
+    // `counter_positions`/`gauge_positions` are APPEND-ONLY: a position is
+    // pushed here exactly once (immediately after the matching
+    // `s.counters`/`s.gauges` push, same index), never removed or reused.
+    // The finalization loop below patches each one exactly once; the
+    // `debug_assert!` there pins that "exactly once" — a position appearing
+    // twice (a future bug re-touching the same entry) would silently
+    // overwrite an already-patched window otherwise.
     struct ReaderStampedBracket {
         group: &'static AcquisitionGroup,
-        guard: Option<AcquisitionGuard<'static>>,
+        guard: AcquisitionGuard<'static>,
         counter_positions: Vec<usize>,
         gauge_positions: Vec<usize>,
     }
@@ -301,23 +328,31 @@ fn create(
             match group_windows.get(&(sampler_attr, g)) {
                 Some(w) => *w,
                 None => {
-                    // Same typo/rename-mismatch guard as create_v3's
-                    // (identical message shape, deliberately): a metric
-                    // naming an `acq_group` that doesn't resolve against
-                    // the registry is a migration bug on EITHER format, not
-                    // just V3's. V2 has no default-group fallback to route
-                    // to, so the practical effect is just "no override" —
-                    // this metric keeps its (already windowless, for a
-                    // migrated type) `stored_window` — but the mismatch
-                    // itself must not pass silently in tests/debug builds.
-                    debug_assert!(
-                        false,
-                        "metric `{name}` declares acq_group=\"{g}\" for sampler `{sampler}`, \
-                         but no AcquisitionGroup (\"{sampler}\", \"{g}\") is registered on \
-                         ACQUISITION_GROUPS; V2 output keeps this metric's untouched per-metric \
-                         window path instead of overriding it (create_v3 has a default group to \
-                         fall back to; V2 does not)",
-                    );
+                    // A miss here has two possible causes, and only one is
+                    // a bug. (1) The group IS registered but reader-stamped
+                    // — deliberately excluded from `group_windows` above,
+                    // not a typo; `CounterGroup`/`GaugeGroup` handle this
+                    // legitimately via `reader_stamped_group` below, and a
+                    // scalar `Counter`/`Gauge`/`Histogram` hitting it is
+                    // flagged by THAT arm's own, more specific
+                    // `debug_assert!` (clearer than this generic message,
+                    // which would otherwise wrongly claim the group isn't
+                    // registered at all) — so skip the generic assert here
+                    // and let the per-kind check downstream catch it. (2)
+                    // The group genuinely isn't registered — a typo or
+                    // rename mismatch, a migration bug on EITHER format,
+                    // not just V3's (same message shape as create_v3's,
+                    // deliberately).
+                    if !reader_stamped_groups.contains_key(&(sampler_attr, g)) {
+                        debug_assert!(
+                            false,
+                            "metric `{name}` declares acq_group=\"{g}\" for sampler \
+                             `{sampler}`, but no AcquisitionGroup (\"{sampler}\", \"{g}\") is \
+                             registered on ACQUISITION_GROUPS; V2 output keeps this metric's \
+                             untouched per-metric window path instead of overriding it \
+                             (create_v3 has a default group to fall back to; V2 does not)",
+                        );
+                    }
                     None
                 }
             }
@@ -326,10 +361,20 @@ fn create(
         // Reader-stamped groups (see the doc comment above
         // `reader_stamped_groups`): resolved independently of
         // `group_window` above, which cannot serve them. Only
-        // `Value::CounterGroup`/`Value::GaugeGroup` ever consult this today
-        // — no scalar `Counter`/`Gauge`/`Histogram` is ever
-        // `PackedCounters`-backed — but it's resolved once here, uniformly,
-        // rather than duplicated inside each arm.
+        // `Value::CounterGroup`/`Value::GaugeGroup` consult this to build a
+        // `ReaderStampedBracket` today — no scalar `Counter`/`Gauge`/
+        // `Histogram` is ever `PackedCounters`-backed, since `PackedCounters`
+        // only ever wraps a `CounterGroup`. The scalar arms below instead
+        // `debug_assert!` that this is `None` for them: if a future packed
+        // SCALAR type is ever added, routing it correctly needs the same
+        // acquire-at-first-touch/mark_end/patch-at-finish machinery
+        // `ReaderStampedBracket` already gives CounterGroup/GaugeGroup —
+        // extend that struct (or give scalars their own single-entry
+        // variant of it) rather than silently letting a reader-stamped tag
+        // fall through to `group_window`'s `stored_window` fallback, which
+        // would silently under-report (a scalar `LazyCounter`'s
+        // `value_with_window()` is windowless for a migrated type, same as
+        // any other wave-1 metric) rather than carrying the real bracket.
         let reader_stamped_group: Option<&'static AcquisitionGroup> =
             metric.metadata().get("acq_group").and_then(|g| {
                 let sampler_attr =
@@ -347,14 +392,34 @@ fn create(
         let name = format!("{metric_id}");
 
         match value {
-            Some(Value::Counter(value)) => s.counters.push(
-                Counter::new(name, value, metadata)
-                    .with_window(group_window.unwrap_or(stored_window)),
-            ),
-            Some(Value::Gauge(value)) => s.gauges.push(
-                Gauge::new(name, value, metadata)
-                    .with_window(group_window.unwrap_or(stored_window)),
-            ),
+            Some(Value::Counter(value)) => {
+                debug_assert!(
+                    reader_stamped_group.is_none(),
+                    "metric `{}` is a scalar Counter tagged with a reader-stamped acq_group; \
+                     PackedCounters only ever wraps a CounterGroup, so this combination isn't \
+                     supported yet — see the doc comment on `reader_stamped_group` for what \
+                     routing a packed scalar would need",
+                    metric.name()
+                );
+                s.counters.push(
+                    Counter::new(name, value, metadata)
+                        .with_window(group_window.unwrap_or(stored_window)),
+                )
+            }
+            Some(Value::Gauge(value)) => {
+                debug_assert!(
+                    reader_stamped_group.is_none(),
+                    "metric `{}` is a scalar Gauge tagged with a reader-stamped acq_group; \
+                     PackedCounters only ever wraps a CounterGroup, so this combination isn't \
+                     supported yet — see the doc comment on `reader_stamped_group` for what \
+                     routing a packed scalar would need",
+                    metric.name()
+                );
+                s.gauges.push(
+                    Gauge::new(name, value, metadata)
+                        .with_window(group_window.unwrap_or(stored_window)),
+                )
+            }
             Some(Value::CounterGroup(g)) => {
                 // Reader-stamped group (`PackedCounters` mmap-direct): the
                 // walk-spanning bracket is acquired at first touch and
@@ -368,12 +433,36 @@ fn create(
                 // semantics, so a migrated packed metric's V2 output is
                 // byte-identical except for windows (pinned by
                 // `v2_output_is_unchanged_except_windows_for_a_migrated_packed_metric`).
+                //
+                // Deliberately NOT switching V2 to `create_v3`'s
+                // metadata-presence membership: for `task_cpu_usage` this
+                // keeps a real `0..MAX_PID` = 4,194,304-iteration walk
+                // every V2 tick (cheap per-iteration — a value load plus a
+                // sentinel-skip branch, no allocation for the common
+                // unpopulated case — but O(capacity), not O(population),
+                // unlike V3's `metadata_snapshot()` walk). The two aren't
+                // just a performance tradeoff: they can DISAGREE. If a
+                // task's `task_info` ringbuf event is ever dropped (BPF
+                // ringbuf momentarily full — see
+                // `src/agent/samplers/cpu/linux/usage/mod.bpf.c`'s
+                // `handle_task_info`/`handle_task_exit`, and the retry
+                // fix in the accompanying `fix(bpf)` commit for the
+                // window this leaves even after that fix), the counter
+                // VALUE can still be nonzero (BPF increments it
+                // unconditionally in the hot path) while `load_metadata`
+                // for that index is `None` (the metadata insert that
+                // would have registered it never happened). Value-based
+                // walk-and-skip still finds and emits that entry (unlabeled
+                // beyond `id`, but present, still summable); metadata-
+                // presence membership would silently drop it. Keeping V2's
+                // existing walk preserves that fallback robustness, not
+                // just historical byte-parity.
                 if let Some(ag) = reader_stamped_group {
                     let bracket = reader_stamped_brackets
                         .entry((ag.sampler, ag.name))
                         .or_insert_with(|| ReaderStampedBracket {
                             group: ag,
-                            guard: Some(ag.acquire()),
+                            guard: ag.acquire(),
                             counter_positions: Vec::new(),
                             gauge_positions: Vec::new(),
                         });
@@ -400,6 +489,9 @@ fn create(
                         ));
                         bracket.counter_positions.push(s.counters.len() - 1);
                     }
+                    // Mark the end right after this metric's member values
+                    // were read — see the doc comment on `ReaderStampedBracket`.
+                    bracket.guard.mark_end();
                 } else {
                     for counter_id in 0..g.entries() {
                         // Atomic pair read: value + window under one lock, so a
@@ -441,7 +533,7 @@ fn create(
                         .entry((ag.sampler, ag.name))
                         .or_insert_with(|| ReaderStampedBracket {
                             group: ag,
-                            guard: Some(ag.acquire()),
+                            guard: ag.acquire(),
                             counter_positions: Vec::new(),
                             gauge_positions: Vec::new(),
                         });
@@ -469,6 +561,8 @@ fn create(
                         ));
                         bracket.gauge_positions.push(s.gauges.len() - 1);
                     }
+                    // See the CounterGroup arm above.
+                    bracket.guard.mark_end();
                 } else {
                     for gauge_id in 0..g.entries() {
                         // Atomic pair read (see CounterGroup arm above); same
@@ -497,6 +591,14 @@ fn create(
                 }
             }
             Some(Value::Histogram(h)) => {
+                debug_assert!(
+                    reader_stamped_group.is_none(),
+                    "metric `{}` is a Histogram tagged with a reader-stamped acq_group; \
+                     PackedCounters only ever wraps a CounterGroup, so this combination isn't \
+                     supported yet — see the doc comment on `reader_stamped_group` for what \
+                     routing a packed scalar would need",
+                    metric.name()
+                );
                 if let Some(value) = h.load() {
                     metadata.insert(
                         "grouping_power".to_string(),
@@ -517,21 +619,37 @@ fn create(
         }
     }
 
-    // Finish every reader-stamped bracket now that the per-metric loop has
-    // read every member's value (see the doc comment on
-    // `reader_stamped_groups`), then patch the freshly stamped window into
-    // every entry recorded for that group above — `Counter`/`Gauge`'s
-    // `window` field is public exactly so this post-hoc patch is possible
-    // without re-pushing.
+    // Publish every reader-stamped bracket now that the per-metric loop has
+    // read every member's value — each bracket's window content was
+    // already decided by its last `mark_end()` call above; `finish()` here
+    // only decides when it becomes visible (see the doc comment on
+    // `ReaderStampedBracket`) — then patch the published window into every
+    // entry recorded for that group above. `Counter`/`Gauge`'s `window`
+    // field is public exactly so this post-hoc patch is possible without
+    // re-pushing. `bracket.guard` is moved out of `bracket` by value here
+    // (a partial move — `bracket.group`/`counter_positions`/
+    // `gauge_positions` stay usable below); every `ReaderStampedBracket`
+    // was constructed with a real guard (never a placeholder), so there is
+    // no `Option` to unwrap.
     for (_, bracket) in reader_stamped_brackets {
-        if let Some(guard) = bracket.guard {
-            guard.finish();
-        }
+        bracket.guard.finish();
         let window = bracket.group.window();
         for idx in bracket.counter_positions {
+            debug_assert!(
+                s.counters[idx].window.is_none(),
+                "counter_positions is append-only and each position is patched exactly \
+                 once; a Some(_) here means this index was already patched — a bug, not a \
+                 legitimate re-touch"
+            );
             s.counters[idx].window = window;
         }
         for idx in bracket.gauge_positions {
+            debug_assert!(
+                s.gauges[idx].window.is_none(),
+                "gauge_positions is append-only and each position is patched exactly once; \
+                 a Some(_) here means this index was already patched — a bug, not a \
+                 legitimate re-touch"
+            );
             s.gauges[idx].window = window;
         }
     }
@@ -938,13 +1056,20 @@ fn create_v3(
                 // bracket right here, at first touch, instead of reading a
                 // window some sampler already stamped. There is nothing to
                 // read yet — `window` stays `None` until the group-emit loop
-                // below calls `guard.finish()` once every member's value has
-                // been read. Unlike the sampler-stamped case, there is no
-                // racing writer to guard against: the ONLY writer for a
-                // reader-stamped group's slot is this very walk (see
-                // `AcquisitionGroup::set_reader_stamped`'s doc comment on the
-                // single-writer contract), so this acquire()/finish() pair
-                // is honest, not an approximation.
+                // below calls `guard.finish()` to PUBLISH. The published
+                // WIDTH, though, is decided earlier: the CounterGroup/
+                // GaugeGroup arms call `guard.mark_end()` immediately after
+                // each touching metric's member-value loop, so the window's
+                // end reflects when this group's own values were actually
+                // read (µs-scale), not when `finish()` happens to run after
+                // the rest of the tick's walk — see
+                // `AcquisitionGuard::mark_end`. Unlike the sampler-stamped
+                // case, there is no racing writer to guard against: the
+                // ONLY writer for a reader-stamped group's slot is this very
+                // walk (see `AcquisitionGroup::set_reader_stamped`'s doc
+                // comment on the single-writer contract), so this
+                // acquire()/mark_end()/finish() sequence is honest, not an
+                // approximation.
                 //
                 // Sampler-stamped groups keep the original discipline: read
                 // the window now, before any of this group's members'
@@ -1056,6 +1181,21 @@ fn create_v3(
                             v,
                         ));
                     }
+                    // Mark the end HERE — right after this metric's member
+                    // values were actually read — not at emit time, when
+                    // `finish()` runs below after the rest of the walk
+                    // (every other group's schema assembly, hashing, etc.)
+                    // has also happened. See `AcquisitionGuard::mark_end`.
+                    // A group with several like-entity members (e.g.
+                    // `cgroup_syscall`'s 16 op-class maps) touches this arm
+                    // once per member; each call moves the mark forward, so
+                    // the LAST touch — this group's true last member read —
+                    // is what ends up published, exactly like `finish()`'s
+                    // original stamp-last derivation, just decoupled from
+                    // publish timing.
+                    if let Some(guard) = group.reader_guard.as_mut() {
+                        guard.mark_end();
+                    }
                 } else {
                     // Registration membership for a per-CPU (or similar)
                     // group IS the group's real member population —
@@ -1149,6 +1289,12 @@ fn create_v3(
                             },
                             v,
                         ));
+                    }
+                    // See the CounterGroup arm above: mark the end right
+                    // after THIS metric's member values were read, not at
+                    // emit time.
+                    if let Some(guard) = group.reader_guard.as_mut() {
+                        guard.mark_end();
                     }
                 } else {
                     // Same member-population bound as the `CounterGroup` arm
@@ -1335,19 +1481,39 @@ fn create_v3(
         // tick for nothing — and it contradicts this function's own doc
         // comment, which says a group nothing routes to is absent. Skip it
         // entirely rather than emit a zero-member group.
+        //
+        // For a reader-stamped group this `continue` also drops
+        // `group.reader_guard` WITHOUT calling `finish()` — an explicit
+        // guard-discard, not an oversight: the same "no `finish()` on a
+        // read that produced nothing" discipline `AcquisitionGuard`
+        // documents for an ordinary failed read (see its doc comment).
+        // The group's window slot keeps whatever it held before; nothing
+        // was actually read this tick, so there is nothing honest to
+        // publish. In practice this path is reachable only in a
+        // synthetic/test registry — a real reader-stamped group only
+        // creates a `GroupBuilder` when some metric routed to it (the
+        // `Entry::Vacant` arm above), and that same metric's
+        // CounterGroup/GaugeGroup arm always pushes SOMETHING (an entry
+        // per registered/populated index) or the metric wasn't a member at
+        // all — so an empty reader-stamped group here would mean a routed
+        // metric matched no `Value` arm `create_v3` knows how to expose.
         if group.counters.is_empty() && group.gauges.is_empty() && group.histograms.is_empty() {
             continue;
         }
 
         // Reader-stamped groups (`PackedCounters` mmap-direct): `finish()`
-        // the bracket acquired at first touch, now that every member's
-        // value has been read above (stamp-last, same rule
-        // `AcquisitionGuard` enforces for sampler-stamped groups — see its
-        // doc comment — applied here to the reader instead of a sampler).
-        // No `resolve_walk_window` reconciliation is needed: the ONLY
-        // writer for a reader-stamped group's slot is this walk itself
-        // (see `AcquisitionGroup::set_reader_stamped`'s single-writer
-        // note), so this acquire()/finish() pair is the complete, sole
+        // PUBLISHES the bracket acquired at first touch — stamp-last, same
+        // rule `AcquisitionGuard` enforces for sampler-stamped groups (see
+        // its doc comment), applied here to the reader instead of a
+        // sampler. The published WIDTH was already decided earlier, by the
+        // last `mark_end()` call the CounterGroup/GaugeGroup arms made for
+        // this group (immediately after each touching metric's member-
+        // value loop, above) — `finish()` here only decides WHEN the slot
+        // becomes visible, not what it contains. No `resolve_walk_window`
+        // reconciliation is needed: the ONLY writer for a reader-stamped
+        // group's slot is this walk itself (see
+        // `AcquisitionGroup::set_reader_stamped`'s single-writer note), so
+        // this acquire()/mark_end()/finish() sequence is the complete, sole
         // write for the tick — there is no concurrent background sampler
         // that could have re-stamped it mid-walk, unlike the sampler-
         // stamped case `resolve_walk_window` guards against.
@@ -2375,6 +2541,11 @@ mod tests {
     // Dedicated group + metric, touched by no other test. 8 backing
     // entries; only a handful get metadata, standing in for a packed
     // cgroup/task map where most of MAX_CGROUPS/MAX_PID is unregistered.
+    // 8 has no significance beyond "small and arbitrary" — this test is
+    // about window/bracket behavior, not membership-at-scale (that's
+    // `reader_stamped_sparse_group_emits_only_metadata_populated_indices`,
+    // at 1000 entries, and `reader_stamped_group_at_max_pid_scale_...`,
+    // below, at the real `MAX_PID`).
     static V3_READER_STAMPED_GROUP: AcquisitionGroup =
         AcquisitionGroup::new("unattributed", "reader_stamped_probe");
 
@@ -2488,6 +2659,16 @@ mod tests {
 
     #[test]
     fn reader_stamped_group_at_max_pid_scale_never_walks_entries_without_set_reader_stamped() {
+        // The first `.add()` below triggers `CounterGroup::get_or_init()`,
+        // which lazily allocates the FULL `MAX_PID`-sized backing array —
+        // one `Vec<AtomicU64>` of 4,194,304 elements, ~33MB. That is a
+        // one-time, bounded allocation independent of what this test is
+        // pinning: metriken's own value storage, not the bug (which was
+        // `create_v3` pushing ~4.2M `MetricDesc`/`HashMap` OUTPUT entries).
+        // Expect this test to cost ~33MB regardless of pass/fail; the
+        // catastrophic case is a SEPARATE, much larger cost this test
+        // exists to prove doesn't happen.
+        //
         // Populate exactly 2 of MAX_PID entries, and — critically — never
         // call `MAX_PID_SCALE_GROUP.set_reader_stamped()`. If routing ever
         // regresses to depending on that call alone, this test allocates

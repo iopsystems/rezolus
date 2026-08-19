@@ -352,6 +352,10 @@ pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
     begin_ns: u64,
     begin_mono: Instant,
+    // Set by `mark_end()`; when present, `finish()` publishes THIS end
+    // instead of re-deriving it from elapsed-at-publish-time. See
+    // `mark_end`'s doc comment for why the two can differ.
+    marked_end_ns: Option<u64>,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -361,17 +365,56 @@ impl<'a> AcquisitionGuard<'a> {
             slot,
             begin_ns: now_wall_ns(),
             begin_mono: Instant::now(),
+            marked_end_ns: None,
         }
     }
 
-    /// Stamp begin (captured at `acquire()`) through begin + monotonic
-    /// elapsed into the slot. Call this once the read section succeeded and
-    /// values are set — stamp-last, so a racing reader never pairs a value
-    /// with a window that outran it.
-    pub(crate) fn finish(self) {
+    /// Record the window's end AT THIS INSTANT — the moment the group's
+    /// last member value was actually read — instead of letting `finish()`
+    /// derive it from elapsed-at-publish-time.
+    ///
+    /// Publication order is unchanged: `finish()` still runs after this,
+    /// still stamps last, still gives a racing reader the same "can only
+    /// lag, never lead" guarantee (stamp-last constrains WHEN the slot
+    /// becomes visible, not what END value it carries). What changes is
+    /// the CONTENT of the published window.
+    ///
+    /// This matters specifically for reader-stamped groups
+    /// (`PackedCounters` mmap-direct — see `AcquisitionGroup::set_reader_stamped`):
+    /// their bracket spans `acquire()` at the group's first member touch
+    /// through `finish()`, which in `create`/`create_v3` runs at the
+    /// group's emit point — AFTER the rest of that tick's registry walk
+    /// (every other group's schema assembly, hashing, etc.) has also run.
+    /// Without `mark_end()`, that walk time gets counted INTO the window's
+    /// width, inflating a genuine microsecond-scale read span into a
+    /// millisecond-scale one that has nothing to do with how long this
+    /// group's own values took to read. Calling `mark_end()` immediately
+    /// after the group's member-value loop — before any of that
+    /// unrelated walk work — pins the width to the group's own read span;
+    /// `finish()` (called later, at the same publish point as before)
+    /// only decides WHEN that already-decided width becomes visible.
+    ///
+    /// A guard that never calls this behaves exactly as before:
+    /// `finish()` derives the end from elapsed-at-publish-time, which is
+    /// what a sampler-stamped group's bracket wants (its member-value
+    /// loop runs immediately before `finish()`, so publish-time elapsed
+    /// already IS the read span).
+    pub(crate) fn mark_end(&mut self) {
         let elapsed = self.begin_mono.elapsed().as_nanos() as u64;
-        self.slot
-            .store(Window::new(self.begin_ns, self.begin_ns + elapsed));
+        self.marked_end_ns = Some(self.begin_ns + elapsed);
+    }
+
+    /// Stamp begin (captured at `acquire()`) through end into the slot —
+    /// the end marked by `mark_end()`, if one was recorded, otherwise
+    /// begin plus monotonic elapsed AT THIS CALL (the original behavior).
+    /// Call this once the read section succeeded and values are set —
+    /// stamp-last, so a racing reader never pairs a value with a window
+    /// that outran it.
+    pub(crate) fn finish(self) {
+        let end_ns = self
+            .marked_end_ns
+            .unwrap_or_else(|| self.begin_ns + self.begin_mono.elapsed().as_nanos() as u64);
+        self.slot.store(Window::new(self.begin_ns, end_ns));
     }
 
     /// Consume the guard without stamping. Use on an error path to make the
@@ -529,6 +572,48 @@ mod tests {
         acq.finish();
         let w = SLOT.load().expect("finish() stamped the slot");
         assert!(w.begin_ns > 0, "wall-clock begin");
+        assert!(w.width_ns() >= 2_000_000, ">=2ms width: {}", w.width_ns());
+    }
+
+    #[test]
+    fn mark_end_pins_the_width_to_the_read_span_not_the_publish_delay() {
+        // The exact shape this exists for: a group's member-value loop
+        // finishes quickly, but `finish()` (publish) is deferred behind
+        // unrelated work — e.g. `create_v3`'s emit loop processing every
+        // OTHER group before reaching this one. Without `mark_end()`, that
+        // deferred-publish delay leaks into the reported width.
+        static SLOT: GroupWindowSlot = GroupWindowSlot::new();
+        let mut acq = AcquisitionGuard::begin(&SLOT);
+        std::thread::sleep(std::time::Duration::from_millis(3)); // the group's own read span
+        acq.mark_end();
+        std::thread::sleep(std::time::Duration::from_millis(50)); // unrelated walk work, NOT this group's read
+        acq.finish();
+
+        let w = SLOT.load().expect("finish() stamped the slot");
+        assert!(w.begin_ns > 0, "wall-clock begin");
+        assert!(
+            w.width_ns() < 20_000_000,
+            "width must reflect the ~3ms read span marked by mark_end(), not the ~50ms \
+             publish delay after it: {}",
+            w.width_ns()
+        );
+        assert!(
+            w.width_ns() >= 2_000_000,
+            ">=2ms width (the marked read span itself): {}",
+            w.width_ns()
+        );
+    }
+
+    #[test]
+    fn finish_without_mark_end_derives_the_end_at_publish_time_as_before() {
+        // A guard that never calls mark_end() behaves exactly as it did
+        // before mark_end() existed — the sampler-stamped path, whose
+        // member-value loop runs immediately before finish().
+        static SLOT: GroupWindowSlot = GroupWindowSlot::new();
+        let acq = AcquisitionGuard::begin(&SLOT);
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        acq.finish();
+        let w = SLOT.load().expect("finish() stamped the slot");
         assert!(w.width_ns() >= 2_000_000, ">=2ms width: {}", w.width_ns());
     }
 
