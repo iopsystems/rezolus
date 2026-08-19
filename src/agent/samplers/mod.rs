@@ -200,11 +200,15 @@ mod attribution_tests {
         }
     }
 
-    /// Trivially passes today since no sampler has migrated to acquisition
-    /// groups yet (the slice is empty on this platform). Guards future
-    /// sampler migrations: once samplers start registering groups, this
-    /// catches a copy-pasted duplicate `(sampler, name)` pair or an
-    /// accidental use of the reserved `"main"` group name.
+    /// No PRODUCTION sampler has migrated to acquisition groups yet, but
+    /// the slice is NOT empty in this test binary: the `snapshot` module's
+    /// own V3-builder tests register fixture `AcquisitionGroup`s via
+    /// `#[distributed_slice(ACQUISITION_GROUPS)]` (`linkme` slices are
+    /// populated crate-wide at link time, cfg(test) included, regardless of
+    /// which test actually runs). Guards future sampler migrations too:
+    /// once real samplers start registering groups, this still catches a
+    /// copy-pasted duplicate `(sampler, name)` pair or an accidental use of
+    /// the reserved `"main"` group name.
     #[test]
     fn acquisition_groups_have_unique_names_and_avoid_the_reserved_main_name() {
         use std::collections::HashSet;

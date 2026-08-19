@@ -5,13 +5,14 @@ use crate::agent::external_metrics::{
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
-use metriken::{Value, Window};
+use metriken::Value;
 use metriken_exposition::{
     Counter, Gauge, GroupSchema, GroupSnapshot, Histogram, MetricDesc, Snapshot, SnapshotV2,
     SnapshotV3,
 };
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 pub struct SnapshotBuilder {
@@ -267,24 +268,63 @@ fn create(
 /// (`"<sampler>/<name>"`).
 ///
 /// Each tick, `create_v3` still has to assemble a fresh [`GroupSchema`] for
-/// every group to know each member's current metadata (that assembly is no
-/// more expensive than what V2's `create` already does every tick — no
-/// regression there). What the cache actually buys is skipping
-/// [`GroupSchema::hash`]: a full canonical msgpack serialization of the
-/// schema followed by an FNV-1a-128 fold, the one per-tick cost that scales
-/// with schema size rather than with "did anything change". When a group's
-/// member-name list (the cheap part — just the `MetricDesc::name` strings,
-/// already produced while building the schema) is byte-identical to the
-/// previous tick's, the freshly assembled schema is discarded in favor of
-/// the cached one and its hash is reused verbatim; only a genuine membership
-/// change (a metric added/removed from the group) pays for a fresh hash.
+/// every group — full metadata included — to know each member's current
+/// state; that assembly always runs, cache hit or miss. What the cache
+/// skips is [`GroupSchema::hash`]: a full canonical msgpack serialization of
+/// the schema followed by an FNV-1a-128 fold, the one per-tick cost that
+/// scales with schema size rather than with "did anything change". When the
+/// freshly assembled schema is `==` the previous tick's cached schema
+/// (`GroupSchema` derives `PartialEq`, comparing every member's name AND
+/// metadata, not just names — see the note on why below), it's discarded in
+/// favor of the cached one and the cached hash is reused verbatim; only a
+/// genuine change pays for a fresh hash.
+///
+/// # Honest cost accounting (this is NOT a net allocation win yet)
+///
+/// Despite skipping the hash fold, V3 currently allocates MORE per tick
+/// than V2 on the cache-HIT path — measured 1.2–3.4× V2's allocations, with
+/// the emit-time `cached.schema.clone()` alone accounting for 54% of
+/// allocations at 2k members. The spec's target ("a stable group allocates
+/// ~nothing on a hit") is deferred, not delivered by this cache; reaching
+/// it needs two follow-up changes this commit does not make: (a) folding
+/// member identity + metadata into a rolling hash so the metadata
+/// `BTreeMap`/`MetricDesc` assembly itself moves behind the cache-miss
+/// branch instead of running unconditionally every tick, and (b) removing
+/// the emit-time schema clone, which needs an upstream `metriken-exposition`
+/// change (an `Arc`/`Cow`-backed schema, or serializing `GroupSnapshot` by
+/// reference instead of by value) since `GroupSnapshot::schema` is an owned
+/// `Option<GroupSchema>` today. Both are named follow-up work for the
+/// Stage-3d measurement plan, not implied by anything below.
+///
+/// # Why full-schema equality, not just member names
+///
+/// An earlier version of this cache compared member NAME lists only. That's
+/// unsound: metriken metadata mutates in place at a stable index
+/// (`insert_metadata`/`set_metadata`, e.g. a task's `comm` or a cgroup's
+/// `name`), and the kernel recycles PIDs and cgroup ids — so a slot's
+/// metadata can change while its `"{metric_id}x{idx}"` name stays byte-for-
+/// byte identical. A names-only cache would call that a hit, keep serving
+/// the OLD occupant's metadata under an UNCHANGED `schema_hash`, and a
+/// receiver caching parsed schemas by `(name, schema_hash)` would bind new
+/// values to dead labels indefinitely. Comparing the whole `GroupSchema`
+/// (names AND metadata) closes that hole at the cost of a full struct
+/// comparison instead of a name-list comparison — cheap next to the hash
+/// fold it's still avoiding.
+///
+/// # No eviction
+///
+/// Entries are never removed. Acceptable because the key space is bounded
+/// by the number of acquisition groups a build can ever produce (samplers'
+/// declared groups plus one default group per sampler plus `external/main`)
+/// — a small, essentially fixed set, not something that grows with runtime
+/// cardinality (CPUs, tasks, cgroups... those are members WITHIN a group's
+/// schema, not distinct group keys).
 pub(crate) struct SkeletonCache {
     entries: HashMap<String, GroupSkeleton>,
     rebuilds: u64,
 }
 
 struct GroupSkeleton {
-    member_names: Vec<String>,
     schema: GroupSchema,
     hash: (u64, u64),
 }
@@ -298,22 +338,38 @@ impl SkeletonCache {
     }
 
     /// Number of times a group's schema has been rebuilt (hash recomputed)
-    /// since this cache was created. Exposed for tests.
-    #[allow(dead_code)]
+    /// since this cache was created.
+    #[cfg(test)]
     pub(crate) fn rebuilds(&self) -> u64 {
         self.rebuilds
     }
 }
 
-/// Per-group accumulation while walking the metriken registry: the group's
-/// shared acquisition window plus, per kind, the (descriptor, value) pairs
-/// in schema order.
+/// Per-group accumulation while walking the metriken registry: per kind,
+/// the (descriptor, value) pairs in schema order. The group's acquisition
+/// window is deliberately NOT accumulated here — see `create_v3`, which
+/// reads it once per group at emit time instead.
 #[derive(Default)]
 struct GroupBuilder {
-    window: Option<Window>,
     counters: Vec<(MetricDesc, Option<u64>)>,
     gauges: Vec<(MetricDesc, Option<i64>)>,
     histograms: Vec<(MetricDesc, Option<histogram::Histogram>)>,
+}
+
+/// The `(sampler, name) -> AcquisitionGroup` registry, built once. Sound to
+/// cache for the process lifetime: `ACQUISITION_GROUPS` is a `linkme`
+/// distributed slice, populated at link time before `main` runs and never
+/// mutated afterward — every entry that will ever exist already does by the
+/// time this first initializes.
+fn group_registry() -> &'static HashMap<String, &'static AcquisitionGroup> {
+    static REGISTRY: OnceLock<HashMap<String, &'static AcquisitionGroup>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut registry: HashMap<String, &'static AcquisitionGroup> = HashMap::new();
+        for group in crate::agent::samplers::ACQUISITION_GROUPS {
+            registry.insert(format!("{}/{}", group.sampler, group.name), group);
+        }
+        registry
+    })
 }
 
 /// Build a `SnapshotV3` (acquisition-group snapshot) from the current
@@ -333,7 +389,21 @@ struct GroupBuilder {
 /// migration bug (a typo, or a group that was renamed on one side and not
 /// the other): it is routed to the default group so the tick still produces
 /// a valid snapshot, but `debug_assert!` catches it in tests/debug builds
-/// rather than letting it pass silently in release.
+/// rather than letting it pass silently in release. Note what that means
+/// operationally: on a debug build this panics the scrape task for that one
+/// tick (`/metrics/binary`'s handler task, not the sampler tasks) — the
+/// `tokio::sync::Mutex` guarding `SnapshotBuilder` does not poison on a
+/// panicked holder, so the next scrape simply retries and calls `refresh()`
+/// again rather than the agent wedging.
+///
+/// The mirror case — an `AcquisitionGroup` IS registered but no metric ever
+/// names it via `acq_group` — is not an error at all (e.g. a group declared
+/// ahead of the sampler code that will use it). `create_v3` only creates a
+/// `GroupBuilder` when some metric actually routes to a group, so a
+/// registered-but-unused group is silently absent from the emitted
+/// snapshot's `groups` list entirely, rather than appearing as an empty
+/// `GroupSnapshot`. Pinned by
+/// `registered_group_with_no_routed_metrics_is_absent_from_the_snapshot`.
 ///
 /// # Default vs. declared group semantics
 ///
@@ -371,11 +441,7 @@ fn create_v3(
     cache: &mut SkeletonCache,
 ) -> Snapshot {
     let sampler_mods = crate::agent::samplers::sampler_modules();
-
-    let mut group_registry: HashMap<String, &'static AcquisitionGroup> = HashMap::new();
-    for group in crate::agent::samplers::ACQUISITION_GROUPS {
-        group_registry.insert(format!("{}/{}", group.sampler, group.name), group);
-    }
+    let group_registry = group_registry();
 
     let mut groups: HashMap<String, GroupBuilder> = HashMap::new();
 
@@ -403,37 +469,34 @@ fn create_v3(
         // Route: a declared `acq_group` wins only if it actually resolves
         // against the registry; otherwise fall back to the sampler's
         // default group (and flag the mismatch in debug builds — see the
-        // function-level doc comment).
+        // function-level doc comment). The group's window is deliberately
+        // NOT read here: doing it per-metric would mean an unused seqlock
+        // load for every member after the first (only the read that
+        // happened to create the `GroupBuilder` mattered) and makes the
+        // result depend on walk order for no reason. `create_v3` reads it
+        // once per group at emit time instead, from this same registry.
         let mut declared = false;
-        let mut group_window = None;
         let group_key = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
                 let key = format!("{sampler}/{acq_group}");
-                match group_registry.get(&key) {
-                    Some(group) => {
-                        declared = true;
-                        group_window = group.window();
-                        key
-                    }
-                    None => {
-                        debug_assert!(
-                            false,
-                            "metric `{name}` declares acq_group=\"{acq_group}\" for sampler \
-                             `{sampler}`, but no AcquisitionGroup (\"{sampler}\", \
-                             \"{acq_group}\") is registered on ACQUISITION_GROUPS; routing to \
-                             the default group instead",
-                        );
-                        format!("{sampler}/main")
-                    }
+                if group_registry.contains_key(&key) {
+                    declared = true;
+                    key
+                } else {
+                    debug_assert!(
+                        false,
+                        "metric `{name}` declares acq_group=\"{acq_group}\" for sampler \
+                         `{sampler}`, but no AcquisitionGroup (\"{sampler}\", \
+                         \"{acq_group}\") is registered on ACQUISITION_GROUPS; routing to \
+                         the default group instead",
+                    );
+                    format!("{sampler}/main")
                 }
             }
             None => format!("{sampler}/main"),
         };
 
-        let group = groups.entry(group_key).or_insert_with(|| GroupBuilder {
-            window: group_window,
-            ..Default::default()
-        });
+        let group = groups.entry(group_key).or_default();
 
         let entry_name = format!("{metric_id}");
 
@@ -511,24 +574,39 @@ fn create_v3(
                 }
             }
             Value::Histogram(h) => {
-                if let Some(hv) = h.load() {
-                    let mut entry_metadata = metadata;
-                    entry_metadata.insert(
-                        "grouping_power".to_string(),
-                        h.config().grouping_power().to_string(),
-                    );
-                    entry_metadata.insert(
-                        "max_value_power".to_string(),
-                        h.config().max_value_power().to_string(),
-                    );
+                // `config()` doesn't require a loaded value, so this is
+                // always available regardless of what `load()` returns
+                // below.
+                let mut entry_metadata = metadata;
+                entry_metadata.insert(
+                    "grouping_power".to_string(),
+                    h.config().grouping_power().to_string(),
+                );
+                entry_metadata.insert(
+                    "max_value_power".to_string(),
+                    h.config().max_value_power().to_string(),
+                );
 
-                    group.histograms.push((
-                        MetricDesc {
-                            name: entry_name,
-                            metadata: entry_metadata,
-                        },
-                        Some(hv),
-                    ));
+                let hv = h.load();
+                let desc = MetricDesc {
+                    name: entry_name,
+                    metadata: entry_metadata,
+                };
+                if declared {
+                    // Registration membership: this metric IS the member,
+                    // full stop — `None` means "registered but no reading
+                    // yet" (e.g. before its BPF map attaches), not "not a
+                    // member". Omitting it here would make membership
+                    // value-derived on the declared path, churning the
+                    // schema hash on exactly the transient event (a
+                    // histogram that hasn't loaded yet) the design commits
+                    // to NOT treating as a membership change.
+                    group.histograms.push((desc, hv));
+                } else if let Some(hv) = hv {
+                    // Default path: unchanged V2-style membership-by-
+                    // presence — an unloaded histogram isn't a member at
+                    // all.
+                    group.histograms.push((desc, Some(hv)));
                 }
             }
             _ => {}
@@ -644,46 +722,38 @@ fn create_v3(
             histograms: histogram_descs,
         };
 
-        let names_match = cache.entries.get(&group_name).is_some_and(|cached| {
-            let total = schema.counters.len() + schema.gauges.len() + schema.histograms.len();
-            cached.member_names.len() == total
-                && cached.member_names.iter().eq(schema
-                    .counters
-                    .iter()
-                    .chain(schema.gauges.iter())
-                    .chain(schema.histograms.iter())
-                    .map(|d| &d.name))
-        });
-
-        let (schema, hash) = if names_match {
-            let cached = cache.entries.get(&group_name).expect("checked above");
-            (cached.schema.clone(), cached.hash)
-        } else {
-            let hash = schema.hash();
-            let member_names: Vec<String> = schema
-                .counters
-                .iter()
-                .chain(schema.gauges.iter())
-                .chain(schema.histograms.iter())
-                .map(|d| d.name.clone())
-                .collect();
-            cache.entries.insert(
-                group_name.clone(),
-                GroupSkeleton {
-                    member_names,
-                    schema: schema.clone(),
-                    hash,
-                },
-            );
-            cache.rebuilds += 1;
-            (schema, hash)
+        // Full-schema equality (names AND metadata), not just a name-list
+        // comparison — see the `SkeletonCache` doc comment for why a
+        // names-only cache is unsound (metadata mutates in place at a
+        // stable index when the kernel recycles a pid/cgroup id).
+        let (schema, hash) = match cache.entries.get(&group_name) {
+            Some(cached) if cached.schema == schema => (cached.schema.clone(), cached.hash),
+            _ => {
+                let hash = schema.hash();
+                cache.entries.insert(
+                    group_name.clone(),
+                    GroupSkeleton {
+                        schema: schema.clone(),
+                        hash,
+                    },
+                );
+                cache.rebuilds += 1;
+                (schema, hash)
+            }
         };
+
+        // Read the group's window ONCE here, from the same registry used
+        // for routing — not accumulated per-member during the walk above
+        // (see the note on `GroupBuilder`). A group not found in the
+        // registry (every default group, `external/main`, and the
+        // fallback group an unmatched `acq_group` lands in) is windowless.
+        let window = group_registry.get(&group_name).and_then(|ag| ag.window());
 
         group_snapshots.push(GroupSnapshot {
             name: group_name,
             schema_hash: hash,
             schema: Some(schema),
-            window: group.window,
+            window,
             counters: counter_values,
             gauges: gauge_values,
             histograms: histogram_values,
@@ -863,9 +933,29 @@ mod tests {
         );
     }
 
+    // Dedicated group + metric, touched by no other test. `rustc test`
+    // threads tests in parallel within one process, sharing the whole
+    // metriken registry: a test that instead asserted on the shared
+    // `unattributed/main`/`external/main` buckets (several other tests
+    // write into those) would be coupled to what else happens to be
+    // running concurrently, not to anything this test itself does.
+    static V3_STABILITY_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "stability_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_STABILITY_GROUP_ENTRY: &'static AcquisitionGroup = &V3_STABILITY_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_stability_probe",
+        metadata = { acq_group = "stability_probe" }
+    )]
+    static V3_STABILITY_PROBE: metriken::Counter = metriken::Counter::new();
+
     #[test]
     fn skeleton_cache_is_stable_across_ticks() {
-        SAMPLER_LABEL_PROBE.increment();
+        V3_STABILITY_PROBE.increment();
+        let guard = V3_STABILITY_GROUP.acquire();
+        guard.finish();
 
         let mut cache = SkeletonCache::new();
         let snap1 = create_v3(
@@ -877,9 +967,11 @@ mod tests {
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
         };
-        let rebuilds_after_first = cache.rebuilds();
+        // Safe to assert unconditionally: `cache` was just created, so 0 is
+        // a known baseline (not a comparison across two ticks that could be
+        // perturbed by a concurrently running test's unrelated group).
         assert!(
-            rebuilds_after_first > 0,
+            cache.rebuilds() > 0,
             "first tick builds every observed group's schema at least once"
         );
 
@@ -892,27 +984,31 @@ mod tests {
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
         };
-        assert_eq!(
-            cache.rebuilds(),
-            rebuilds_after_first,
-            "second tick with an unchanged registry rebuilds nothing"
-        );
 
-        let mut hashes1: Vec<_> = s1
+        // NOT asserting `cache.rebuilds()` unchanged between the two ticks
+        // here: it's a global counter across every group this tick
+        // produces (the full metriken registry, not just this test's own
+        // group), so a concurrently running test mutating ITS OWN group's
+        // membership between these two calls would legitimately bump it —
+        // that's real concurrent-test interference, not a property of the
+        // cache. What's actually pinned, scoped to the one group this test
+        // owns exclusively, is that its schema hash doesn't change when
+        // nothing about it does.
+        let hash1 = s1
             .groups
             .iter()
-            .map(|g| (g.name.clone(), g.schema_hash))
-            .collect();
-        let mut hashes2: Vec<_> = s2
+            .find(|g| g.name == "unattributed/stability_probe")
+            .expect("group present in tick 1")
+            .schema_hash;
+        let hash2 = s2
             .groups
             .iter()
-            .map(|g| (g.name.clone(), g.schema_hash))
-            .collect();
-        hashes1.sort();
-        hashes2.sort();
+            .find(|g| g.name == "unattributed/stability_probe")
+            .expect("group present in tick 2")
+            .schema_hash;
         assert_eq!(
-            hashes1, hashes2,
-            "schema hashes are stable across ticks with unchanged membership"
+            hash1, hash2,
+            "schema hash is stable across ticks for an unchanged group"
         );
     }
 
@@ -946,6 +1042,149 @@ mod tests {
                 );
             }
         }
+    }
+
+    // C1 regression fixture: a declared CounterGroup whose metadata gets
+    // mutated at a stable index between ticks, simulating what happens when
+    // the kernel recycles a pid/cgroup id — the value slot stays written
+    // (metriken's backing array never moves an occupied slot), but the
+    // metadata attached to that index changes to describe the new
+    // occupant.
+    static V3_RECYCLE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "recycle_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_RECYCLE_GROUP_ENTRY: &'static AcquisitionGroup = &V3_RECYCLE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_recycle_probe",
+        metadata = { acq_group = "recycle_probe" }
+    )]
+    static V3_RECYCLE_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(1);
+
+    #[test]
+    fn declared_group_schema_reflects_metadata_mutated_at_a_stable_index() {
+        // C1 regression: the skeleton cache used to key on member NAMES
+        // only (`"{metric_id}x{idx}"`, which does NOT change across a
+        // recycle — the index is the same, only what's attached to it
+        // changed). A names-only cache would call the second tick below a
+        // hit and keep serving the FIRST tick's metadata under an
+        // unchanged `schema_hash`. Comparing full schema equality (see the
+        // `SkeletonCache` doc comment) closes that hole: the metadata
+        // change must be visible in the emitted `MetricDesc` AND must
+        // change the schema hash, or a receiver caching parsed schemas by
+        // `(name, schema_hash)` would bind the new values to dead labels
+        // indefinitely.
+        V3_RECYCLE_COUNTERS.set(0, 1);
+        V3_RECYCLE_COUNTERS.set_metadata(0, [("comm".to_string(), "old_task".to_string())].into());
+
+        let guard = V3_RECYCLE_GROUP.acquire();
+        guard.finish();
+
+        let mut cache = SkeletonCache::new();
+        let snap1 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s1) = snap1 else {
+            panic!("expected V3")
+        };
+        let group1 = s1
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/recycle_probe")
+            .expect("declared group present in tick 1");
+        let schema1 = group1.schema.as_ref().expect("schema present");
+        let desc1 = schema1
+            .counters
+            .iter()
+            .find(|d| {
+                d.metadata.get("metric").map(String::as_str) == Some("snapshot_v3_recycle_probe")
+            })
+            .expect("member present in tick 1");
+        assert_eq!(
+            desc1.metadata.get("comm").map(String::as_str),
+            Some("old_task")
+        );
+
+        // Recycle: same index, same value, DIFFERENT occupant's metadata.
+        V3_RECYCLE_COUNTERS.set(0, 1);
+        V3_RECYCLE_COUNTERS.set_metadata(0, [("comm".to_string(), "new_task".to_string())].into());
+
+        let guard = V3_RECYCLE_GROUP.acquire();
+        guard.finish();
+
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        let group2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/recycle_probe")
+            .expect("declared group present in tick 2");
+        let schema2 = group2.schema.as_ref().expect("schema present");
+        let desc2 = schema2
+            .counters
+            .iter()
+            .find(|d| {
+                d.metadata.get("metric").map(String::as_str) == Some("snapshot_v3_recycle_probe")
+            })
+            .expect("member present in tick 2");
+
+        assert_eq!(
+            desc2.metadata.get("comm").map(String::as_str),
+            Some("new_task"),
+            "the new occupant's metadata is served, not the stale one's"
+        );
+        assert_ne!(
+            group1.schema_hash, group2.schema_hash,
+            "a metadata-only change at a stable index must change the schema hash \
+             (the cache must not reuse the stale schema)"
+        );
+    }
+
+    // Mirror of the unmatched-`acq_group` debug_assert case: here the
+    // registry entry is real and correctly named, but no metric ever
+    // routes to it via `acq_group`.
+    static V3_UNUSED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "never_routed");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_UNUSED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_UNUSED_GROUP;
+
+    #[test]
+    fn registered_group_with_no_routed_metrics_is_absent_from_the_snapshot() {
+        // Pinning the behavior actually implemented: `create_v3` only
+        // creates a `GroupBuilder` when a metric routes to a group, so a
+        // registered-but-unused group does not appear in the snapshot at
+        // all — no empty `GroupSnapshot` is synthesized for it. If this
+        // ever needs to change (e.g. so a discovery UI can see every
+        // declared group, even empty ones), this test is the marker to
+        // update alongside the function doc comment on `create_v3`.
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+        assert!(
+            !s.groups
+                .iter()
+                .any(|g| g.name == "unattributed/never_routed"),
+            "a registered group nothing routes to should not appear in the snapshot"
+        );
     }
 
     // Same shape (2 entries), same write pattern (only index 0 touched) —
@@ -1088,7 +1327,13 @@ mod tests {
         // OPPOSITE order — standing in for the store's HashMap iteration
         // reordering tick-to-tick with no real membership change. The
         // group's member order, schema, and hash must all be unaffected.
-        let rebuilds_after_first = cache.rebuilds();
+        // (Not asserting the global `cache.rebuilds()` counter unchanged
+        // here — it accumulates across every group this tick produces, not
+        // just `external/main`, so a concurrently running test's own
+        // group would legitimately bump it. `external/main`'s schema hash
+        // below is what's actually scoped to this test: nothing else in
+        // the suite ever passes non-empty external metrics, so this group
+        // is exclusively this test's to perturb or not.)
         let snap2 = create_v3(
             SystemTime::now(),
             Duration::from_secs(1),
@@ -1098,11 +1343,6 @@ mod tests {
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
         };
-        assert_eq!(
-            cache.rebuilds(),
-            rebuilds_after_first,
-            "reordered-but-unchanged membership rebuilds nothing"
-        );
 
         let group2 = s2
             .groups
@@ -1146,9 +1386,16 @@ mod tests {
             None,
         );
         let snap = v3_builder.build(Instant::now()).await;
-        assert!(
-            matches!(snap, Snapshot::V3(_)),
-            "snapshot_format = \"v3\" selects the V3 builder"
-        );
+        let Snapshot::V3(s) = snap else {
+            panic!("snapshot_format = \"v3\" selects the V3 builder")
+        };
+        for g in &s.groups {
+            assert_eq!(
+                g.validate(),
+                Ok(()),
+                "group `{}` failed to validate",
+                g.name
+            );
+        }
     }
 }
