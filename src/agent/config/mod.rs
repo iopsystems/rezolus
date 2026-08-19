@@ -14,6 +14,7 @@ mod scheduler;
 
 use external_metrics::ExternalMetrics;
 use general::General;
+pub use general::SnapshotFormat;
 use log::Log;
 use sampler::Sampler as SamplerConfig;
 use scheduler::Scheduler;

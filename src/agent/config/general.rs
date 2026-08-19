@@ -77,8 +77,6 @@ impl General {
         self.btf_path.as_deref()
     }
 
-    // wired to the snapshot builder (next task)
-    #[allow(dead_code)]
     pub fn snapshot_format(&self) -> SnapshotFormat {
         self.snapshot_format
     }

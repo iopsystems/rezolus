@@ -63,8 +63,6 @@ impl Acquisition {
 /// the previous tick's window (the design's stamp-last rule: samplers set
 /// values first, stamp the window last, so the window can only lag, never
 /// lead).
-// consumed by the V3 snapshot builder (next task)
-#[allow(dead_code)]
 pub(crate) struct GroupWindowSlot {
     // even = stable, odd = write in progress; 0 = never stamped. Parity
     // survives u64 wrap (2^64 is even); a wrap that lands exactly on 0
@@ -74,8 +72,11 @@ pub(crate) struct GroupWindowSlot {
     end_ns: AtomicU64,
 }
 
-#[allow(dead_code)] // consumed by the V3 snapshot builder (next task)
 impl GroupWindowSlot {
+    // Not yet called from production code: the only caller is
+    // `AcquisitionGroup::new()`, itself unreached until a sampler migrates
+    // (see the note there).
+    #[allow(dead_code)]
     pub(crate) const fn new() -> Self {
         Self {
             seq: AtomicU64::new(0),
@@ -109,6 +110,10 @@ impl GroupWindowSlot {
     /// example a drivehealth-style sampler with a blocking probe task
     /// alongside `refresh()`) must stamp the group from that one task only,
     /// never from both.
+    // Not yet called from production code — the only caller is
+    // `AcquisitionGuard::finish()`, unreached until a sampler migrates (see
+    // the note on `AcquisitionGroup::new()`).
+    #[allow(dead_code)]
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
         debug_assert_eq!(
@@ -152,16 +157,19 @@ impl GroupWindowSlot {
 /// [`crate::agent::samplers::ACQUISITION_GROUPS`]; the V3 snapshot builder
 /// enumerates the slice to assemble SnapshotV3 groups. The name `main` is
 /// reserved for the builder's transitional default groups.
-// consumed by the V3 snapshot builder (next task)
-#[allow(dead_code)]
 pub(crate) struct AcquisitionGroup {
     pub sampler: &'static str,
     pub name: &'static str,
     slot: GroupWindowSlot,
 }
 
-#[allow(dead_code)] // consumed by the V3 snapshot builder (next task)
 impl AcquisitionGroup {
+    // Not yet called from production code: no sampler constructs an
+    // `AcquisitionGroup` until it migrates to a declared group (that's a
+    // per-sampler follow-up, not this task). The V3 snapshot builder only
+    // reads groups that samplers have already registered on
+    // `ACQUISITION_GROUPS`; it never constructs one itself.
+    #[allow(dead_code)]
     pub(crate) const fn new(sampler: &'static str, name: &'static str) -> Self {
         Self {
             sampler,
@@ -192,6 +200,10 @@ impl AcquisitionGroup {
     /// blocking probe running alongside `refresh()`) must have that one
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
+    // Not yet called from production code — see the note on `new()`. Only
+    // exercised by the V3 snapshot builder's own tests today, stamping a
+    // synthetic group to exercise the declared-group path.
+    #[allow(dead_code)]
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
         AcquisitionGuard::begin(&self.slot)
     }
