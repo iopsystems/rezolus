@@ -88,21 +88,29 @@ impl AmdInner {
         Ok(Some(Self { rocm, devices }))
     }
 
+    // Acquisition-group bracket (principle 18): ONE group for the whole
+    // device sweep (see `stats::GPU_AMD_SMI_ACQ`'s doc comment for the
+    // grounding/ruling), not one per device or per metric family. Every
+    // `rocm_smi` call below is independently fallible (a sensor absent on a
+    // given GPU model, a transient library error) — that is normal, expected
+    // partial telemetry, not a failure of the read section as a whole (the
+    // same reasoning as `memory_meminfo`'s per-key parse: a "recognized key
+    // missing from this read" is not an error path). So the group always
+    // `finish()`es once the device loop completes; there is no bulk
+    // "read_all failed" signal here the way `drivehealth`'s `read_all` has,
+    // so no `discard()` branch is needed — an individual field that keeps
+    // failing simply keeps its stale value, unrelated to the group's window.
     fn refresh(&mut self) {
-        for id in 0..self.devices {
-            let acq = crate::agent::timing::Acquisition::begin();
+        let guard = GPU_AMD_SMI_ACQ.acquire();
 
+        for id in 0..self.devices {
             /*
              * memory
              */
 
             if let (Ok(total), Ok(used)) = (self.rocm.memory_total(id), self.rocm.memory_used(id)) {
-                GPU_MEMORY_USED.set_with_window(id, used as i64, acq.window());
-                GPU_MEMORY_FREE.set_with_window(
-                    id,
-                    total.saturating_sub(used) as i64,
-                    acq.window(),
-                );
+                let _ = GPU_MEMORY_USED.set(id, used as i64);
+                let _ = GPU_MEMORY_FREE.set(id, total.saturating_sub(used) as i64);
             }
 
             /*
@@ -110,11 +118,11 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.busy_percent(id) {
-                GPU_UTILIZATION.set_with_window(id, v as i64, acq.window());
+                let _ = GPU_UTILIZATION.set(id, v as i64);
             }
 
             if let Ok(v) = self.rocm.memory_busy_percent(id) {
-                GPU_MEMORY_UTILIZATION.set_with_window(id, v as i64, acq.window());
+                let _ = GPU_MEMORY_UTILIZATION.set(id, v as i64);
             }
 
             /*
@@ -122,15 +130,15 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Edge) {
-                GPU_TEMPERATURE_EDGE.set_with_window(id, v, acq.window());
+                let _ = GPU_TEMPERATURE_EDGE.set(id, v);
             }
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Junction) {
-                GPU_TEMPERATURE_JUNCTION.set_with_window(id, v, acq.window());
+                let _ = GPU_TEMPERATURE_JUNCTION.set(id, v);
             }
 
             if let Ok(v) = self.rocm.temperature(id, TempSensor::Memory) {
-                GPU_TEMPERATURE_MEMORY.set_with_window(id, v, acq.window());
+                let _ = GPU_TEMPERATURE_MEMORY.set(id, v);
             }
 
             /*
@@ -138,11 +146,11 @@ impl AmdInner {
              */
 
             if let Ok(v) = self.rocm.power_milliwatts(id) {
-                GPU_POWER_USAGE.set_with_window(id, v as i64, acq.window());
+                let _ = GPU_POWER_USAGE.set(id, v as i64);
             }
 
             if let Ok(v) = self.rocm.energy_millijoules(id) {
-                GPU_ENERGY_CONSUMPTION.set_with_window(id, v, acq.window());
+                let _ = GPU_ENERGY_CONSUMPTION.set(id, v);
             }
 
             /*
@@ -154,12 +162,12 @@ impl AmdInner {
             // always read identically on these GPUs.
             if let Ok(hz) = self.rocm.clock_hz(id, ClockType::System) {
                 let hz = hz as i64;
-                GPU_CLOCK_GRAPHICS.set_with_window(id, hz, acq.window());
-                GPU_CLOCK_COMPUTE.set_with_window(id, hz, acq.window());
+                let _ = GPU_CLOCK_GRAPHICS.set(id, hz);
+                let _ = GPU_CLOCK_COMPUTE.set(id, hz);
             }
 
             if let Ok(hz) = self.rocm.clock_hz(id, ClockType::Memory) {
-                GPU_CLOCK_MEMORY.set_with_window(id, hz as i64, acq.window());
+                let _ = GPU_CLOCK_MEMORY.set(id, hz as i64);
             }
 
             /*
@@ -167,9 +175,11 @@ impl AmdInner {
              */
 
             if let Ok((sent, received)) = self.rocm.pcie_throughput(id) {
-                GPU_PCIE_THROUGHPUT_TX.set_with_window(id, sent as i64, acq.window());
-                GPU_PCIE_THROUGHPUT_RX.set_with_window(id, received as i64, acq.window());
+                let _ = GPU_PCIE_THROUGHPUT_TX.set(id, sent as i64);
+                let _ = GPU_PCIE_THROUGHPUT_RX.set(id, received as i64);
             }
         }
+
+        guard.finish();
     }
 }
