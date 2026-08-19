@@ -20,6 +20,111 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+/// Group a flat, ordered list of `(item, group)` pairs into batches of
+/// same-group items, by the group's POINTER identity (not any name or
+/// value equality — see [`crate::agent::timing::AcquisitionGroup`], which
+/// has no `PartialEq`; two different `AcquisitionGroup` statics are always
+/// distinct even if they happened to share a `name`). Two pairs land in
+/// the same batch iff they name literally the same `&'static
+/// AcquisitionGroup`, regardless of how far apart they are in `items` —
+/// this is what lets `BpfBuilder::histogram` registrations for a
+/// multi-member family (e.g. syscall_latency's 16 op-class histograms)
+/// merge into one `HistogramBatch` (see `histogram.rs`) even though the
+/// call sites list them as 16 separate `.histogram()` lines, not one
+/// `.histograms(group, vec![...])` call.
+///
+/// Batch order is first-appearance order (the first pair naming a given
+/// group determines where that group's batch sits in the output); within
+/// a batch, member order is registration order. Pure grouping logic, no
+/// I/O — generic over the item type so it's unit-testable without a real
+/// BPF skeleton (see the `tests` module below); `Histogram`/`HistogramBatch`
+/// construction (which DOES need a live skeleton) happens at the call site
+/// in [`Builder::build`], not in here.
+fn batch_by_group<T>(
+    items: Vec<(T, &'static AcquisitionGroup)>,
+) -> Vec<(&'static AcquisitionGroup, Vec<T>)> {
+    let mut batches: Vec<(&'static AcquisitionGroup, Vec<T>)> = Vec::new();
+    for (item, group) in items {
+        match batches
+            .iter_mut()
+            .find(|(batch_group, _)| std::ptr::eq(*batch_group, group))
+        {
+            Some((_, members)) => members.push(item),
+            None => batches.push((group, vec![item])),
+        }
+    }
+    batches
+}
+
+#[cfg(test)]
+mod batch_by_group_tests {
+    use super::*;
+
+    static GROUP_A: AcquisitionGroup = AcquisitionGroup::new("batch_test", "a");
+    static GROUP_B: AcquisitionGroup = AcquisitionGroup::new("batch_test", "b");
+
+    /// Non-consecutive registrations naming the SAME group (by pointer)
+    /// merge into one batch, preserving member order — the exact shape
+    /// `syscall_latency`'s 16 `.histogram()` calls rely on: every call
+    /// names `&LATENCIES_ACQ`, and they must all land in one batch stamped
+    /// once, not 16.
+    #[test]
+    fn non_consecutive_same_group_registrations_merge_preserving_order() {
+        let items = vec![
+            ("one", &GROUP_A),
+            ("two", &GROUP_B),
+            ("three", &GROUP_A),
+            ("four", &GROUP_A),
+        ];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 2, "two distinct groups, two batches");
+
+        let (group, members) = &batches[0];
+        assert!(std::ptr::eq(*group, &GROUP_A), "first batch is GROUP_A");
+        assert_eq!(
+            members,
+            &["one", "three", "four"],
+            "GROUP_A's members merge in registration order, even though \
+             GROUP_B's registration split them"
+        );
+
+        let (group, members) = &batches[1];
+        assert!(std::ptr::eq(*group, &GROUP_B), "second batch is GROUP_B");
+        assert_eq!(members, &["two"]);
+    }
+
+    /// Distinct groups never merge, even a single-member "family of one"
+    /// (e.g. tcp_packet_latency's lone histogram) — each keeps its own
+    /// batch.
+    #[test]
+    fn distinct_groups_do_not_merge() {
+        let items = vec![("a", &GROUP_A), ("b", &GROUP_B)];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].1, &["a"]);
+        assert_eq!(batches[1].1, &["b"]);
+    }
+
+    /// A single group's registrations, even just one, all land in exactly
+    /// one batch — the degenerate "family of one" case every
+    /// single-histogram sampler (tcp_packet_latency, tcp_connect_latency)
+    /// hits.
+    #[test]
+    fn single_group_single_item_is_one_batch_of_one() {
+        let items = vec![("only", &GROUP_A)];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 1);
+        assert!(std::ptr::eq(batches[0].0, &GROUP_A));
+        assert_eq!(batches[0].1, &["only"]);
+    }
+}
+
 pub struct BpfProgStats {
     pub run_time: &'static LazyCounter,
     pub run_count: &'static LazyCounter,
@@ -631,18 +736,19 @@ where
             // different groups, including a single-member family's own
             // group, each get their own one-member batch. See
             // `HistogramBatch`'s doc comment for the granularity rule this
-            // implements.
-            let mut histogram_batches: Vec<HistogramBatch> = Vec::new();
-            for (name, histogram, group) in self.histograms.into_iter() {
-                let h = Histogram::new(skel.map(name), histogram);
-                match histogram_batches
-                    .iter_mut()
-                    .find(|batch| batch.shares_group(group))
-                {
-                    Some(batch) => batch.push(h),
-                    None => histogram_batches.push(HistogramBatch::new(group, vec![h])),
-                }
-            }
+            // implements, and `batch_by_group`'s doc comment / tests for
+            // the pure grouping logic itself.
+            let mut histogram_batches: Vec<HistogramBatch> = batch_by_group(
+                self.histograms
+                    .into_iter()
+                    .map(|(name, histogram, group)| {
+                        (Histogram::new(skel.map(name), histogram), group)
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(group, histograms)| HistogramBatch::new(group, histograms))
+            .collect();
 
             let mut cpu_counters: Vec<CpuCounters> = self
                 .cpu_counters

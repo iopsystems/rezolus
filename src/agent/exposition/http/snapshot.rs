@@ -154,14 +154,22 @@ fn create(
     let sampler_mods = crate::agent::samplers::sampler_modules();
 
     // Resolve every declared group's window ONCE, up front, instead of
-    // once per tagged metric: 138 metrics carry `acq_group` today (10
-    // wave-1 counter samplers + this branch's histogram wave), resolving
-    // into ~40 distinct groups. A per-metric resolve (the original version
-    // of this fix) paid a `group_registry()` lookup AND an
-    // `AcquisitionGroup::window()` seqlock read 138 times; reading each
-    // group's window here, once, cuts the actual seqlock reads to ~40 —
-    // the per-metric step below becomes a cheap in-memory `HashMap` lookup
-    // against this snapshot, not a fresh atomic read.
+    // once per tagged metric: 138 metrics carry `acq_group` today (14
+    // wave-1 counter groups + 11 histogram-wave groups, 25 distinct groups
+    // total — see `group_registry()`'s doc comment for how that registry
+    // is built). A per-metric resolve (the original version of this fix)
+    // paid a `group_registry()` lookup AND an `AcquisitionGroup::window()`
+    // seqlock read 138 times; reading each group's window here, once, cuts
+    // the actual seqlock reads to 25 — the per-metric step below becomes a
+    // cheap in-memory `HashMap` lookup against this snapshot, not a fresh
+    // atomic read.
+    //
+    // Keyed by `(sampler, name)` — the SAME parts `AcquisitionGroup`
+    // itself stores (`group.sampler`/`group.name`, both already
+    // `&'static str`) — rather than `group_registry()`'s own
+    // `"{sampler}/{name}"` joined `String` key, so building this map costs
+    // no allocation at all, and neither does a per-metric lookup below
+    // (a `(&str, &str)` tuple, not a freshly `format!`ed `String`).
     //
     // This also closes an intra-snapshot consistency hole the per-metric
     // version had: every member of a group now sees the SAME window for
@@ -176,9 +184,9 @@ fn create(
     // ever LAG the true acquisition, never lead it — not observing a
     // fresher stamp mid-walk means this snapshot's windows are, at worst, a
     // touch stale, never claiming freshness a value doesn't actually have.
-    let group_windows: HashMap<&str, Option<Window>> = group_registry()
-        .iter()
-        .map(|(key, group)| (key.as_str(), group.window()))
+    let group_windows: HashMap<(&str, &str), Option<Window>> = group_registry()
+        .values()
+        .map(|group| ((group.sampler, group.name), group.window()))
         .collect();
 
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
@@ -232,8 +240,23 @@ fn create(
         // semantic V3 already uses: V2 and V3 consumers see the identical
         // acquisition-window meaning for a migrated metric.
         let group_window: Option<Option<Window>> = metric.metadata().get("acq_group").map(|g| {
-            let key = format!("{sampler}/{g}");
-            match group_windows.get(key.as_str()) {
+            // `sampler` (above) is an owned `String` — needed for the
+            // metadata map, and cloned into every `CounterGroup`/
+            // `GaugeGroup` entry below, so it can't be a borrow of
+            // `sampler_mods` itself. For the allocation-free tuple lookup
+            // we need a `&str` that lives across the WHOLE loop (to match
+            // `group_windows`' `&'static str` components), not a fresh
+            // per-iteration owned `String` — so resolve it a second time
+            // here, only for tagged metrics, via the same
+            // `attribute_sampler` call `metric_metadata` already makes
+            // internally (cheap: a linear scan over ~25 registered
+            // samplers, no allocation) rather than widening the shared
+            // `metric_metadata` helper's return type (used identically by
+            // `create_v3`).
+            let sampler_attr =
+                crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
+
+            match group_windows.get(&(sampler_attr, g)) {
                 Some(w) => *w,
                 None => {
                     // Same typo/rename-mismatch guard as create_v3's

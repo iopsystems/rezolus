@@ -148,22 +148,13 @@ pub struct HistogramBatch<'a> {
 }
 
 impl<'a> HistogramBatch<'a> {
+    /// Construct a batch directly from its already-assembled members.
+    /// Grouping a flat `.histogram()` registration list by group pointer
+    /// identity (which member goes in which batch) is `builder.rs`'s
+    /// `batch_by_group`'s job, not this type's — see its doc comment and
+    /// tests for that pure grouping logic.
     pub fn new(group: &'static AcquisitionGroup, histograms: Vec<Histogram<'a>>) -> Self {
         Self { group, histograms }
-    }
-
-    /// Whether `group` is the SAME declared [`AcquisitionGroup`] this batch
-    /// was created with (pointer identity, not name equality — every
-    /// `AcquisitionGroup` is a distinct `'static`, so this is exact).
-    pub fn shares_group(&self, group: &'static AcquisitionGroup) -> bool {
-        std::ptr::eq(self.group, group)
-    }
-
-    /// Add another histogram to this batch. Used while assembling batches
-    /// from the builder's flat registration list — see
-    /// [`crate::agent::bpf::builder::Builder::histogram`].
-    pub fn push(&mut self, histogram: Histogram<'a>) {
-        self.histograms.push(histogram);
     }
 
     pub fn refresh(&mut self) {
