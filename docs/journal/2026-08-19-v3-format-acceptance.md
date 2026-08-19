@@ -242,3 +242,42 @@ membership; per-tick schema/value allocation) — this run adds live
 20-plus-sampler numbers to them but changes neither the explanation nor the
 backlog: the deferred rolling-hash-membership and schema-by-reference work
 already named in the Stage 3c wave-1 record is what has to close them.
+
+## Addendum (2026-08-19): schema-omission deferred — compression closes the wire gap
+
+The wire question above got its answer the same day, in two parts.
+
+**Measured: gzip collapses the schema overhead.** Same agent build, same
+host, one scrape each way (`Accept-Encoding: gzip` against the endpoint's
+existing `CompressionLayer`):
+
+| | raw bytes | gzip bytes | ratio |
+|---|---|---|---|
+| v2 | 166,572 | 21,262 | 7.8× |
+| v3 | 216,496 | 23,700 | 9.1× |
+
+The compressed v3-vs-v2 delta is **+2.4 KB/tick (+11.5%)** — the
+schema-resend regression effectively disappears for any consumer that
+negotiates compression, because the schema section is exactly the kind of
+repetitive text gzip eats.
+
+**Decided: the conditional-fetch mechanism is deferred, with its design
+banked.** Accounting for who actually pays the uncompressed bytes: loopback
+consumers (the deployment model) pay ~nothing and their real cost —
+re-parsing schemas — is already solved by receiver-side hash-skip; the
+agent's serialize cost is a memcpy-shaped encode of a cached structure; raw
+recordings pay ~11% but raw is a niche format that native `.rez` ingest
+obsoletes; only remote-scrape fleets would genuinely pay, and that is not
+the current topology. Revisit if it becomes one.
+
+The banked design, should it be needed: the consumer announces, per group,
+the ONE hash it currently holds (the schema it needs to decode anyway —
+working state echoed, not new state); the agent omits schemas whose current
+hash matches, includes the rest. No history is retained on either side —
+PID wraparound means churned schemas essentially never recur, so a hash
+*set* grows forever and never hits; only current-vs-current comparison is
+worth anything. The agent stays stateless; a consumer that lost its cache
+announces nothing and gets full payloads. **Hard caveat:** this is a
+transport optimization only — any path that persists payload bytes verbatim
+(the raw recording format) must not use it, or the stored payloads become
+undecodable without stream context.
