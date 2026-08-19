@@ -1,5 +1,7 @@
 use crate::agent::config::SnapshotFormat;
-use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue, ExternalMetricsStore};
+use crate::agent::external_metrics::{
+    ExternalMetric, ExternalMetricValue, ExternalMetricsStore, MetricKey,
+};
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
@@ -538,7 +540,40 @@ fn create_v3(
     if !external_metrics.is_empty() {
         let group = groups.entry("external/main".to_string()).or_default();
 
-        for (i, metric) in external_metrics.into_iter().enumerate() {
+        // `get_active()`'s Vec order follows the store's `HashMap<MetricKey,
+        // _>` iteration order, which is not a stable contract tick-to-tick
+        // (hashbrown makes no ordering guarantee, independent of any TTL
+        // eviction/insertion churn). Sort by the identity-derived name
+        // assigned below so the group's member order — and therefore the
+        // skeleton cache's name-list comparison — is deterministic
+        // regardless of store iteration order; otherwise the cache would
+        // spuriously "miss" (and rebuild/rehash) on every tick whenever the
+        // store happened to reorder with no real membership change.
+        let mut entries: Vec<(String, ExternalMetric)> = external_metrics
+            .into_iter()
+            .map(|metric| {
+                // A positional name (e.g. `external{i}`) is not a stable
+                // identity: both membership and Vec order can churn
+                // tick-to-tick, so the same metric would silently reattach
+                // under a different name — a name-keyed consumer would read
+                // that as a valid continuous series when it isn't one. Name
+                // alone isn't sufficient either, since two external metrics
+                // may share a name with different labels. Derive the entry
+                // name from (name, labels) via the same hash the store's own
+                // `MetricKey` uses for identity (`hash_labels`: sorted-key
+                // `DefaultHasher`, not process-randomized — verified: three
+                // separate process runs over the same label set produced the
+                // identical hash), so a metric's values reattach under the
+                // same name every tick regardless of where it lands in the
+                // store.
+                let labels_hash = MetricKey::new(&metric.name, &metric.labels).labels_hash;
+                let entry_name = format!("external/{}#{labels_hash:016x}", metric.name);
+                (entry_name, metric)
+            })
+            .collect();
+        entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (entry_name, metric) in entries {
             let mut metadata: BTreeMap<String, String> = [
                 ("metric".to_string(), metric.name.clone()),
                 ("source".to_string(), "external".to_string()),
@@ -548,8 +583,6 @@ fn create_v3(
             for (k, v) in metric.labels {
                 metadata.insert(k, v);
             }
-
-            let entry_name = format!("external{i}");
 
             match metric.value {
                 ExternalMetricValue::Counter(v) => {
@@ -913,6 +946,180 @@ mod tests {
                 );
             }
         }
+    }
+
+    // Same shape (2 entries), same write pattern (only index 0 touched) —
+    // one declared, one not. `CounterGroup`'s backing array zero-initializes
+    // eagerly across ALL entries the moment any one index is written, so
+    // index 1 reads `Some(0)` in both fixtures either way: the metriken
+    // group API gives no way to independently distinguish "a member that is
+    // genuinely present and reads zero" from "a phantom slot that merely
+    // exists because the backing array got initialized" once that's
+    // happened. What this test honestly pins is the observable CONTRACT
+    // difference the V3 design layers on top of that identical reading: a
+    // declared group reports index 1 as `Some(0)` (registration membership,
+    // no sentinel skip) while an otherwise-identical undeclared group
+    // suppresses it entirely (V2's transitional value-sentinel skip,
+    // default groups only).
+    static V3_DECLARED_COUNTER_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "counter_group_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_DECLARED_COUNTER_GROUP_ENTRY: &'static AcquisitionGroup = &V3_DECLARED_COUNTER_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_declared_counter_group",
+        metadata = { acq_group = "counter_group_probe" }
+    )]
+    static V3_DECLARED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(2);
+
+    #[metric(name = "snapshot_v3_default_counter_group")]
+    static V3_DEFAULT_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(2);
+
+    #[test]
+    fn declared_group_includes_zero_counter_entries_default_group_skips_them() {
+        V3_DECLARED_COUNTERS.increment(0);
+        V3_DEFAULT_COUNTERS.increment(0);
+
+        let guard = V3_DECLARED_COUNTER_GROUP.acquire();
+        guard.finish();
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+
+        let declared = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/counter_group_probe")
+            .expect("declared counter group present");
+        let declared_schema = declared.schema.as_ref().expect("schema present");
+        let find_declared = |id: &str| {
+            declared_schema.counters.iter().position(|d| {
+                d.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v3_declared_counter_group")
+                    && d.metadata.get("id").map(String::as_str) == Some(id)
+            })
+        };
+        let idx0 = find_declared("0").expect("index 0 present in declared group");
+        let idx1 = find_declared("1").expect("index 1 present in declared group (no zero-skip)");
+        assert_eq!(
+            declared.counters[idx0],
+            Some(1),
+            "index 0 nonzero as written"
+        );
+        assert_eq!(
+            declared.counters[idx1],
+            Some(0),
+            "index 1 included as an honest Some(0), not suppressed"
+        );
+
+        let default_group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/main")
+            .expect("default group present");
+        let default_schema = default_group.schema.as_ref().expect("schema present");
+        let find_default = |id: &str| {
+            default_schema.counters.iter().position(|d| {
+                d.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v3_default_counter_group")
+                    && d.metadata.get("id").map(String::as_str) == Some(id)
+            })
+        };
+        assert!(
+            find_default("0").is_some(),
+            "default group keeps the nonzero entry"
+        );
+        assert!(
+            find_default("1").is_none(),
+            "default group's transitional sentinel skip drops the zero entry"
+        );
+    }
+
+    #[test]
+    fn external_metrics_get_stable_identity_names_and_deterministic_schema() {
+        let labels_a: HashMap<String, String> = [("env".to_string(), "prod".to_string())].into();
+        let labels_b: HashMap<String, String> = [("env".to_string(), "dev".to_string())].into();
+
+        let make = |labels: HashMap<String, String>, value: u64| ExternalMetric {
+            name: "ext_shared_name".into(),
+            labels,
+            value: ExternalMetricValue::Counter(value),
+            last_updated: std::time::Instant::now(),
+            window: None,
+        };
+
+        let mut cache = SkeletonCache::new();
+        let snap1 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![make(labels_a.clone(), 1), make(labels_b.clone(), 2)],
+            &mut cache,
+        );
+        let Snapshot::V3(s1) = snap1 else {
+            panic!("expected V3")
+        };
+        let group1 = s1
+            .groups
+            .iter()
+            .find(|g| g.name == "external/main")
+            .expect("external group present");
+        let schema1 = group1.schema.as_ref().expect("schema present");
+        let names1: Vec<&str> = schema1.counters.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names1.len(),
+            2,
+            "two distinct entries for same-name, different-label metrics"
+        );
+        assert_ne!(
+            names1[0], names1[1],
+            "distinct entry names for distinct label sets"
+        );
+
+        // Second tick: same two metrics, but handed to create_v3 in the
+        // OPPOSITE order — standing in for the store's HashMap iteration
+        // reordering tick-to-tick with no real membership change. The
+        // group's member order, schema, and hash must all be unaffected.
+        let rebuilds_after_first = cache.rebuilds();
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![make(labels_b.clone(), 2), make(labels_a.clone(), 1)],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        assert_eq!(
+            cache.rebuilds(),
+            rebuilds_after_first,
+            "reordered-but-unchanged membership rebuilds nothing"
+        );
+
+        let group2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "external/main")
+            .expect("external group present");
+        assert_eq!(
+            group1.schema_hash, group2.schema_hash,
+            "schema hash stable despite input-order reordering"
+        );
+
+        let schema2 = group2.schema.as_ref().expect("schema present");
+        let names2: Vec<&str> = schema2.counters.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(
+            names1, names2,
+            "member order is deterministic (sorted), not input-order-dependent"
+        );
     }
 
     #[tokio::test]
