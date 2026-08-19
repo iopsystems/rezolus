@@ -66,7 +66,10 @@ impl Acquisition {
 // consumed by the V3 snapshot builder (next task)
 #[allow(dead_code)]
 pub(crate) struct GroupWindowSlot {
-    seq: AtomicU64, // even = stable, odd = write in progress; 0 = never stamped
+    // even = stable, odd = write in progress; 0 = never stamped. Parity
+    // survives u64 wrap (2^64 is even); a wrap that lands exactly on 0
+    // degrades to "no window" for one cycle, never a wrong window.
+    seq: AtomicU64,
     begin_ns: AtomicU64,
     end_ns: AtomicU64,
 }
@@ -91,8 +94,28 @@ impl GroupWindowSlot {
     // contention test caught exactly this tear on an arm64 host when the
     // fences were plain Release/Acquire orderings on the seq accesses; x86's
     // stronger model hides it.
+    //
+    /// # Single-writer contract
+    ///
+    /// This slot supports exactly one concurrent writer. The seqlock's
+    /// odd/even parity is what lets readers detect a torn write; two
+    /// writers racing each other can each observe an even `seq`, both bump
+    /// it odd, and interleave their field stores before either bumps it
+    /// back even — the result is a torn window (a begin from one writer
+    /// paired with an end from the other) behind a seq value that reads as
+    /// perfectly stable. There is no retry that catches this: it is not a
+    /// transient tear a reader spins past, it is a permanently wrong pair.
+    /// A sampler that drives its acquisition from more than one task (for
+    /// example a drivehealth-style sampler with a blocking probe task
+    /// alongside `refresh()`) must stamp the group from that one task only,
+    /// never from both.
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
+        debug_assert_eq!(
+            s & 1,
+            0,
+            "GroupWindowSlot has a single writer; concurrent store() detected"
+        );
         self.seq.store(s.wrapping_add(1), Ordering::Relaxed); // odd: in progress
         std::sync::atomic::fence(Ordering::Release); // field stores stay below the odd store
         self.begin_ns.store(w.begin_ns, Ordering::Relaxed);
@@ -100,6 +123,10 @@ impl GroupWindowSlot {
         self.seq.store(s.wrapping_add(2), Ordering::Release); // even: stable
     }
 
+    /// Retries on a torn read with no bound or backoff. That's acceptable
+    /// here because the writer's critical section is nanoseconds long
+    /// against a millisecond-scale sampler tick — the writer's duty cycle
+    /// makes an unlucky reader spin at most a couple of iterations.
     pub(crate) fn load(&self) -> Option<Window> {
         loop {
             let s1 = self.seq.load(Ordering::Acquire);
@@ -130,7 +157,7 @@ impl GroupWindowSlot {
 pub(crate) struct AcquisitionGroup {
     pub sampler: &'static str,
     pub name: &'static str,
-    pub slot: GroupWindowSlot,
+    slot: GroupWindowSlot,
 }
 
 #[allow(dead_code)] // consumed by the V3 snapshot builder (next task)
@@ -146,21 +173,59 @@ impl AcquisitionGroup {
     /// Bracket one read section. Set values between `acquire()` and
     /// `finish()`; `finish()` stamps the window LAST so a racing scrape can
     /// pair values with the previous window but never with a future one.
+    ///
+    /// On the success path, call `finish()` once values are set. On an
+    /// error path, call `discard()` (or just let `?` return and drop the
+    /// guard — the two are equivalent). Dropping the guard without
+    /// `finish()` does NOT stamp: the group keeps whatever window it had
+    /// before, which readers see as "nothing new" this tick. That is a
+    /// deliberate choice — see [`AcquisitionGuard`] for the reasoning.
+    ///
+    /// # Single-writer contract
+    ///
+    /// A group has exactly one writer. Calling `acquire()` concurrently
+    /// from two tasks for the same group is a bug: both guards stamp the
+    /// same underlying [`GroupWindowSlot`], and two interleaved `store()`s
+    /// can produce a torn window that reads as perfectly valid (see
+    /// [`GroupWindowSlot::store`]) — there is no retry that catches it. A
+    /// sampler whose reads span more than one task (a drivehealth-style
+    /// blocking probe running alongside `refresh()`) must have that one
+    /// task own the group and call `acquire()`/`finish()`, not `refresh()`
+    /// as well.
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
         AcquisitionGuard::begin(&self.slot)
     }
+
+    /// Read the group's current window, if it has ever been stamped. Used
+    /// by the V3 snapshot builder; read-only by design — reaching around
+    /// this and storing into the slot directly would bypass the guard's
+    /// stamp-last discipline.
+    pub(crate) fn window(&self) -> Option<Window> {
+        self.slot.load()
+    }
 }
 
-/// Begin-marker for a group read section; `finish()` (or drop) stamps
-/// wall-begin + monotonic-elapsed into the slot, same clock discipline as
-/// [`timed`].
+/// Begin-marker for a group read section, same clock discipline as [`timed`].
+///
+/// `finish()` is the ONLY path that stamps the window into the slot.
+/// `discard()` (or an ordinary drop, e.g. via a `?`-return) consumes the
+/// guard WITHOUT stamping.
+///
+/// This is a deliberate asymmetry with `timed`/`Acquisition`, which stamp
+/// unconditionally: a group's values live in ordinary metric storage that
+/// a failed read may have left untouched from the previous tick, so
+/// stamping on drop would pair last tick's values with THIS tick's window
+/// — a confident, wrong observation for an interval nothing actually
+/// measured. Not stamping leaves the group's window exactly where it was;
+/// readers see "no new data this tick", which is the honest signal. A group
+/// whose reads keep failing simply stops advancing, visibly, in the data —
+/// missing beats wrong.
 // consumed by the V3 snapshot builder (next task)
 #[allow(dead_code)]
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
     begin_ns: u64,
     begin_mono: Instant,
-    finished: bool,
 }
 
 #[allow(dead_code)] // consumed by the V3 snapshot builder (next task)
@@ -170,28 +235,23 @@ impl<'a> AcquisitionGuard<'a> {
             slot,
             begin_ns: now_wall_ns(),
             begin_mono: Instant::now(),
-            finished: false,
         }
     }
 
-    pub(crate) fn finish(mut self) {
-        self.stamp();
+    /// Stamp begin (captured at `acquire()`) through begin + monotonic
+    /// elapsed into the slot. Call this once the read section succeeded and
+    /// values are set — stamp-last, so a racing reader never pairs a value
+    /// with a window that outran it.
+    pub(crate) fn finish(self) {
+        let elapsed = self.begin_mono.elapsed().as_nanos() as u64;
+        self.slot
+            .store(Window::new(self.begin_ns, self.begin_ns + elapsed));
     }
 
-    fn stamp(&mut self) {
-        if !self.finished {
-            self.finished = true;
-            let elapsed = self.begin_mono.elapsed().as_nanos() as u64;
-            self.slot
-                .store(Window::new(self.begin_ns, self.begin_ns + elapsed));
-        }
-    }
-}
-
-impl Drop for AcquisitionGuard<'_> {
-    fn drop(&mut self) {
-        self.stamp(); // an early-return read section still gets an honest window
-    }
+    /// Consume the guard without stamping. Use on an error path to make the
+    /// "no update this tick" intent explicit at the call site; a bare
+    /// `?`-return that drops the guard has the identical effect.
+    pub(crate) fn discard(self) {}
 }
 
 #[cfg(test)]
@@ -241,27 +301,57 @@ mod tests {
         assert_eq!(slot.load(), Some(w2), "latest stamp wins");
     }
 
+    // This test's value depends on two things that must not be weakened:
+    // an arm64 runner in CI (x86's TSO memory model hides this bug class —
+    // it was invisible there even when the release/acquire fences were
+    // missing) and >=5M reader iterations in a debug build. Measured by the
+    // reviewer on the CI's only weak-memory runner (macos-latest, arm64,
+    // debug build): the pre-fix tear was caught 0/30 runs at 200k
+    // iterations, but 5/5 at 5M — and 5M costs ~0.42s on correct code. Do
+    // not shrink either the iteration count or drop the arm64 requirement.
     #[test]
     fn group_slot_is_tear_free_under_contention() {
         // Writer stamps (n, n+1) pairs; readers must never observe a mixed pair.
         let slot = std::sync::Arc::new(GroupWindowSlot::new());
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
         let ws = slot.clone();
         let wstop = stop.clone();
+        let wbarrier = barrier.clone();
         let writer = std::thread::spawn(move || {
+            wbarrier.wait();
             let mut n = 0u64;
             while !wstop.load(std::sync::atomic::Ordering::Relaxed) {
                 ws.store(Window::new(n, n + 1));
                 n += 2;
             }
         });
-        for _ in 0..200_000 {
+
+        barrier.wait();
+        let mut observed = 0u64; // Some(_) loads: contention actually exercised
+        let mut advanced = 0u64; // distinct begin_ns values: writer made progress
+        let mut last_begin = None;
+        for _ in 0..5_000_000 {
             if let Some(w) = slot.load() {
                 assert_eq!(w.end_ns, w.begin_ns + 1, "torn read: {w:?}");
+                observed += 1;
+                if last_begin != Some(w.begin_ns) {
+                    advanced += 1;
+                    last_begin = Some(w.begin_ns);
+                }
             }
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         writer.join().unwrap();
+
+        assert!(
+            observed > 1_000_000,
+            "reader saw too few stamps ({observed}) — not exercising contention"
+        );
+        assert!(
+            advanced > 100,
+            "writer made no visible progress ({advanced}) — vacuous run"
+        );
     }
 
     #[test]
@@ -276,12 +366,15 @@ mod tests {
     }
 
     #[test]
-    fn acquisition_guard_stamps_on_drop() {
+    fn acquisition_guard_drop_discards() {
         static SLOT: GroupWindowSlot = GroupWindowSlot::new();
         {
             let _acq = AcquisitionGuard::begin(&SLOT);
             // early return / ? path: guard dropped without finish()
         }
-        assert!(SLOT.load().is_some(), "drop stamps an honest window");
+        assert!(
+            SLOT.load().is_none(),
+            "drop must not stamp: a failed read leaves the slot exactly as it was"
+        );
     }
 }
