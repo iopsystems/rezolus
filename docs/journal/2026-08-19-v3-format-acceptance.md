@@ -281,3 +281,49 @@ announces nothing and gets full payloads. **Hard caveat:** this is a
 transport optimization only — any path that persists payload bytes verbatim
 (the raw recording format) must not use it, or the stored payloads become
 undecodable without stream context.
+
+## Addendum (2026-08-19): histogram wave + V2 window restoration re-measured
+
+Re-ran a lighter pass on the same host after five more commits landed
+(histogram-group migration for 8 samplers, a V2 window-regression fix, and a
+group-granularity collapse rule) — branch tip `78e69e38`. Same rules:
+production agent/exporter untouched, isolated ports, 60-scrape captures.
+
+**1. V2 windows restored on migrated groups.** Decoded 20 default-format
+(v2) ticks, all samplers, and checked the trailing per-entry window on every
+counter/gauge/histogram, grouped by its `sampler` metadata. Samplers with no
+unmigrated remainder show a window on **100%** of entries (`blockio_latency`,
+`blockio_requests`, `network_interfaces`, `network_traffic`,
+`syscall_latency`, both `tcp_*_latency` samplers, `tcp_receive`,
+`tcp_retransmit`, `tcp_traffic`) — matching drive-health/memory samplers that
+were windowed independently of this migration and remain unaffected
+(`drivehealth`, `memory_meminfo`, `memory_vmstat`, `cpu_cores`, all 100%).
+Samplers still carrying an unmigrated remainder alongside migrated groups
+show a fraction, not 100%, and it tracks the split exactly: for
+`cpu_usage`, the migrated per-CPU `cpu_usage`/`softirq`/`softirq_time`
+metrics carry a window on every entry while `cgroup_cpu_usage`,
+`cgroup_cpu_usage_exited_tasks`, and `task_cpu_usage` (still unmigrated, per-
+task/per-cgroup) carry none — confirmed by inspecting one tick's metadata
+directly, not just the aggregate fraction. Genuinely unmigrated samplers
+(`cpu_dtlb`, `cpu_frequency`, `cpu_l3`, `cpu_perf`, `rezolus_rusage`) are
+0% windowed, unchanged from before wave 1. The regression fix restores
+exactly the windows the migrated groups declare — no more, no less.
+
+**2. V3 histogram groups present, windowed, stable.** A v3-flagged
+all-samplers run decoded to **39 total groups: 25 migrated (non-`/main`) +
+14 default**. All 11 target histogram-wave groups
+(`blockio_latency_latencies`, `blockio_requests_sizes`,
+`scheduler_runqueue_{runqlat,running,offcpu}`, `syscall_latency_latencies`,
+`tcp_{connect,packet}_latency_latency`, `tcp_receive_{srtt,jitter}`,
+`tcp_traffic_sizes`) carried a window on all 60 ticks, median widths
+0.9–9.8 µs (tail up to 48.7 µs for `syscall_latency_latencies`, the widest
+per-syscall-type sweep), and **schema-hash churn 0.0000** across every
+group — same behavior as the wave-1 counter groups. All 25 migrated groups
+(counter + histogram) were windowed on every tick with zero churn.
+
+**3. No blow-up.** v3 bytes/tick: median 335,557 (was 358,065.5 in the
+wave-1 120-scrape run); entries/tick: median 2,666.0 (was 2,797.5). Both
+*lower* than the prior run despite 11 more groups — the fixed-size histogram
+groups add only ~33 declared slots combined, and the dominant term is still
+the dynamic `/main` groups' live task/cgroup population, which varies run to
+run with the workload. Same ballpark, no regression.
