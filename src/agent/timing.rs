@@ -299,21 +299,24 @@ impl AcquisitionGroup {
     }
 }
 
-/// Begin-marker for a group read section, same clock discipline as [`timed`].
+/// Begin-marker for a group read section: captures wall-clock begin plus a
+/// monotonic start instant at `acquire()`, so the published width comes
+/// from monotonic elapsed time and cannot be corrupted by an NTP step
+/// during the read (same clock discipline `now_wall_ns()`/`Instant` give
+/// every acquisition primitive in this module).
 ///
 /// `finish()` is the ONLY path that stamps the window into the slot.
 /// `discard()` (or an ordinary drop, e.g. via a `?`-return) consumes the
 /// guard WITHOUT stamping.
 ///
-/// This is a deliberate asymmetry with `timed`/`Acquisition`, which stamp
-/// unconditionally: a group's values live in ordinary metric storage that
-/// a failed read may have left untouched from the previous tick, so
-/// stamping on drop would pair last tick's values with THIS tick's window
-/// — a confident, wrong observation for an interval nothing actually
-/// measured. Not stamping leaves the group's window exactly where it was;
-/// readers see "no new data this tick", which is the honest signal. A group
-/// whose reads keep failing simply stops advancing, visibly, in the data —
-/// missing beats wrong.
+/// This is a deliberate design choice: a group's values live in ordinary
+/// metric storage that a failed read may have left untouched from the
+/// previous tick, so stamping unconditionally on drop would pair last
+/// tick's values with THIS tick's window — a confident, wrong observation
+/// for an interval nothing actually measured. Not stamping leaves the
+/// group's window exactly where it was; readers see "no new data this
+/// tick", which is the honest signal. A group whose reads keep failing
+/// simply stops advancing, visibly, in the data — missing beats wrong.
 // Only constructed from the Linux-only BPF sampler refresh path (via
 // AcquisitionGroup::acquire); see the note on `GroupWindowSlot::store`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -390,11 +393,13 @@ impl<'a> AcquisitionGuard<'a> {
     /// "no update this tick" intent explicit at the call site; a bare
     /// `?`-return that drops the guard has the identical effect.
     ///
-    /// No production sampler calls this explicitly today — they all rely on
-    /// the identical bare-drop path instead — but it stays part of the
-    /// documented API (and is exercised by this module's own test) for
-    /// call sites that want the intent spelled out.
-    #[allow(dead_code)]
+    /// `drivehealth` is the exemplar production caller: its `spawn_blocking`
+    /// sweep calls this explicitly when `read_all` produced zero usable
+    /// drive readings (see `samplers::drivehealth::linux::mod`), spelling
+    /// out "this sweep found nothing" at the call site rather than relying
+    /// on an implicit bare-drop. Other sites still use the equivalent
+    /// bare-drop path (a `?`-return) where the guard was never going to be
+    /// finished either way.
     pub(crate) fn discard(self) {}
 }
 

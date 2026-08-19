@@ -544,6 +544,23 @@ enforces, and that reviewers must protect:
   different metric families keep their own groups even when read
   back-to-back. `cpu_usage` is three counter families = three groups;
   `syscall_latency` is sixteen class-instances of one family = one group.
+- **Device-visit sweeps** (`gpu_amd_smi`, `gpu_nvidia`): a loop that visits
+  each device once and issues several independently-fallible calls per
+  visit is ONE group, even though those calls span metric families — the
+  read section is device-major by a property of the source itself
+  (per-device handles reached one at a time), and splitting it family-major
+  without restructuring the loop would just emit several groups all
+  wearing one identical whole-loop window: no new information, pure schema
+  bloat. This is a distinct archetype, not a loosening of the family rule
+  above — it applies only when (a) the loop visits like entities, (b) the
+  per-visit calls are independently fallible with no phase boundary between
+  them, and (c) the families genuinely cannot be read family-major without
+  re-visiting every device once per family. Accepted cost: a call that
+  keeps failing for one device retains its stale value under a window that
+  just got freshly stamped by the OTHER calls in that same visit — the same
+  trade `drivehealth` already makes across drives, named explicitly here so
+  it's a known, documented property of the archetype rather than a
+  surprise a reviewer has to rediscover.
 - **Membership comes from registration, not values.** A declared group's
   schema is what the sampler registers (bounded by real population — e.g.
   possible CPUs, never the array capacity); a quiet member reports zero,
