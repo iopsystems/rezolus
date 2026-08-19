@@ -35,38 +35,32 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .histogram("other_latency", &SYSCALL_OTHER_LATENCY, &OTHER_LATENCY_ACQ)
-    .histogram("read_latency", &SYSCALL_READ_LATENCY, &READ_LATENCY_ACQ)
-    .histogram("write_latency", &SYSCALL_WRITE_LATENCY, &WRITE_LATENCY_ACQ)
-    .histogram("poll_latency", &SYSCALL_POLL_LATENCY, &POLL_LATENCY_ACQ)
-    .histogram("lock_latency", &SYSCALL_LOCK_LATENCY, &LOCK_LATENCY_ACQ)
-    .histogram("time_latency", &SYSCALL_TIME_LATENCY, &TIME_LATENCY_ACQ)
-    .histogram("sleep_latency", &SYSCALL_SLEEP_LATENCY, &SLEEP_LATENCY_ACQ)
-    .histogram(
-        "socket_latency",
-        &SYSCALL_SOCKET_LATENCY,
-        &SOCKET_LATENCY_ACQ,
-    )
-    .histogram("yield_latency", &SYSCALL_YIELD_LATENCY, &YIELD_LATENCY_ACQ)
+    // All 16 syscall-class latency histograms share ONE group: they are
+    // LIKE ENTITIES (one "syscall latency" family, distinguished by the
+    // `op` label) read as a single sweep — see stats.rs's `LATENCIES_ACQ`
+    // doc comment. `BpfBuilder` batches every `.histogram()` call below
+    // (same group reference) into one `HistogramBatch`, so it is stamped
+    // once per refresh, not 16 times.
+    .histogram("other_latency", &SYSCALL_OTHER_LATENCY, &LATENCIES_ACQ)
+    .histogram("read_latency", &SYSCALL_READ_LATENCY, &LATENCIES_ACQ)
+    .histogram("write_latency", &SYSCALL_WRITE_LATENCY, &LATENCIES_ACQ)
+    .histogram("poll_latency", &SYSCALL_POLL_LATENCY, &LATENCIES_ACQ)
+    .histogram("lock_latency", &SYSCALL_LOCK_LATENCY, &LATENCIES_ACQ)
+    .histogram("time_latency", &SYSCALL_TIME_LATENCY, &LATENCIES_ACQ)
+    .histogram("sleep_latency", &SYSCALL_SLEEP_LATENCY, &LATENCIES_ACQ)
+    .histogram("socket_latency", &SYSCALL_SOCKET_LATENCY, &LATENCIES_ACQ)
+    .histogram("yield_latency", &SYSCALL_YIELD_LATENCY, &LATENCIES_ACQ)
     .histogram(
         "filesystem_latency",
         &SYSCALL_FILESYSTEM_LATENCY,
-        &FILESYSTEM_LATENCY_ACQ,
+        &LATENCIES_ACQ,
     )
-    .histogram(
-        "memory_latency",
-        &SYSCALL_MEMORY_LATENCY,
-        &MEMORY_LATENCY_ACQ,
-    )
-    .histogram(
-        "process_latency",
-        &SYSCALL_PROCESS_LATENCY,
-        &PROCESS_LATENCY_ACQ,
-    )
-    .histogram("query_latency", &SYSCALL_QUERY_LATENCY, &QUERY_LATENCY_ACQ)
-    .histogram("ipc_latency", &SYSCALL_IPC_LATENCY, &IPC_LATENCY_ACQ)
-    .histogram("timer_latency", &SYSCALL_TIMER_LATENCY, &TIMER_LATENCY_ACQ)
-    .histogram("event_latency", &SYSCALL_EVENT_LATENCY, &EVENT_LATENCY_ACQ)
+    .histogram("memory_latency", &SYSCALL_MEMORY_LATENCY, &LATENCIES_ACQ)
+    .histogram("process_latency", &SYSCALL_PROCESS_LATENCY, &LATENCIES_ACQ)
+    .histogram("query_latency", &SYSCALL_QUERY_LATENCY, &LATENCIES_ACQ)
+    .histogram("ipc_latency", &SYSCALL_IPC_LATENCY, &LATENCIES_ACQ)
+    .histogram("timer_latency", &SYSCALL_TIMER_LATENCY, &LATENCIES_ACQ)
+    .histogram("event_latency", &SYSCALL_EVENT_LATENCY, &LATENCIES_ACQ)
     .map("syscall_lut", syscall_lut())
     .build()?;
 

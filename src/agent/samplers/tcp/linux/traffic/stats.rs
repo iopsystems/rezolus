@@ -20,21 +20,21 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
-/// One group per histogram map read (each `Histogram` reads exactly one
-/// BPF map per refresh).
-pub static RX_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+/// ONE group for both size histograms: LIKE ENTITIES (one "tcp size"
+/// family, distinguished by the `direction` label) read as a single sweep
+/// — see the `# Granularity rule` on
+/// `crate::agent::samplers::ACQUISITION_GROUPS`. Distinct from
+/// `COUNTERS_ACQ` above, a different metric family (bytes/packets
+/// counters vs. size distribution). `BpfBuilder::histogram` batches every
+/// call naming this group into one `HistogramBatch`, stamped once per
+/// refresh — see `bpf/histogram.rs`.
+pub static SIZES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("tcp_traffic"),
-    "tcp_traffic_rx_size",
-);
-pub static TX_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("tcp_traffic"),
-    "tcp_traffic_tx_size",
+    "tcp_traffic_sizes",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static RX_SIZE_ACQ_REG: &'static AcquisitionGroup = &RX_SIZE_ACQ;
-#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static TX_SIZE_ACQ_REG: &'static AcquisitionGroup = &TX_SIZE_ACQ;
+static SIZES_ACQ_REG: &'static AcquisitionGroup = &SIZES_ACQ;
 
 #[metric(
     name = "tcp_bytes",
@@ -53,7 +53,7 @@ pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "tcp_size",
     description = "Distribution of the size of TCP packets transferred, ignoring fragmentation",
-    metadata = { direction = "receive", unit = "bytes", acq_group = "tcp_traffic_rx_size" }
+    metadata = { direction = "receive", unit = "bytes", acq_group = "tcp_traffic_sizes" }
 )]
 pub static TCP_RX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
@@ -74,7 +74,7 @@ pub static TCP_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "tcp_size",
     description = "Distribution of the size of TCP packets transferred, ignoring fragmentation",
-    metadata = { direction = "transmit", unit = "bytes", acq_group = "tcp_traffic_tx_size" }
+    metadata = { direction = "transmit", unit = "bytes", acq_group = "tcp_traffic_sizes" }
 )]
 pub static TCP_TX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 

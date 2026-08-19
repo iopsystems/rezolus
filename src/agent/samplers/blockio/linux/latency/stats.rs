@@ -8,33 +8,21 @@ use linkme::distributed_slice;
 // directly on non-Linux platforms (see `blockio/mod.rs`'s
 // `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
 // identity stable across platforms, while `mod.rs`'s BPF sampler code is
-// Linux-only. One group per histogram map read (each `Histogram` reads
-// exactly one BPF map per refresh).
-pub static READ_LATENCY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+// Linux-only.
+//
+// ONE group for all 4 op-class latency histograms: LIKE ENTITIES (one
+// "blockio latency" family, distinguished by the `op` label) read as a
+// single sweep, not 4 independent read sections — see the `# Granularity
+// rule` on `crate::agent::samplers::ACQUISITION_GROUPS`.
+// `BpfBuilder::histogram` batches every call naming this group into one
+// `HistogramBatch`, stamped once per refresh — see `bpf/histogram.rs`.
+pub static LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("blockio_latency"),
-    "blockio_latency_read_latency",
-);
-pub static WRITE_LATENCY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio_latency"),
-    "blockio_latency_write_latency",
-);
-pub static FLUSH_LATENCY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio_latency"),
-    "blockio_latency_flush_latency",
-);
-pub static DISCARD_LATENCY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
-    crate::agent::samplers::bpf_sampler_name("blockio_latency"),
-    "blockio_latency_discard_latency",
+    "blockio_latency_latencies",
 );
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static READ_LATENCY_ACQ_REG: &'static AcquisitionGroup = &READ_LATENCY_ACQ;
-#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static WRITE_LATENCY_ACQ_REG: &'static AcquisitionGroup = &WRITE_LATENCY_ACQ;
-#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static FLUSH_LATENCY_ACQ_REG: &'static AcquisitionGroup = &FLUSH_LATENCY_ACQ;
-#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static DISCARD_LATENCY_ACQ_REG: &'static AcquisitionGroup = &DISCARD_LATENCY_ACQ;
+static LATENCIES_ACQ_REG: &'static AcquisitionGroup = &LATENCIES_ACQ;
 
 /*
  * bpf prog stats
@@ -61,7 +49,7 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_latency",
     description = "Distribution of blockio operation latency in nanoseconds",
-    metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_read_latency" }
+    metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_latencies" }
 )]
 pub static BLOCKIO_READ_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -69,7 +57,7 @@ pub static BLOCKIO_READ_LATENCY: RwLockHistogram =
 #[metric(
     name = "blockio_latency",
     description = "Distribution of blockio operation latency in nanoseconds",
-    metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_write_latency" }
+    metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_latencies" }
 )]
 pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -77,7 +65,7 @@ pub static BLOCKIO_WRITE_LATENCY: RwLockHistogram =
 #[metric(
     name = "blockio_latency",
     description = "Distribution of blockio operation latency in nanoseconds",
-    metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_flush_latency" }
+    metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_latencies" }
 )]
 pub static BLOCKIO_FLUSH_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -85,7 +73,7 @@ pub static BLOCKIO_FLUSH_LATENCY: RwLockHistogram =
 #[metric(
     name = "blockio_latency",
     description = "Distribution of blockio operation latency in nanoseconds",
-    metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_discard_latency" }
+    metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_latencies" }
 )]
 pub static BLOCKIO_DISCARD_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);

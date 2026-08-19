@@ -621,11 +621,28 @@ where
                 .map(|(name, counters, group)| Counters::new(skel.map(name), counters, group))
                 .collect();
 
-            let mut histograms: Vec<Histogram> = self
-                .histograms
-                .into_iter()
-                .map(|(name, histogram, group)| Histogram::new(skel.map(name), histogram, group))
-                .collect();
+            // Batch histogram registrations by their declared group's
+            // pointer identity (NOT registration order or map name): every
+            // `.histogram()` call that named the SAME `&'static
+            // AcquisitionGroup` lands in one `HistogramBatch`, so a
+            // multi-member family (e.g. syscall_latency's 16 op-class
+            // histograms, all registered against one shared group) is read
+            // — and its window stamped — as a single sweep. Calls naming
+            // different groups, including a single-member family's own
+            // group, each get their own one-member batch. See
+            // `HistogramBatch`'s doc comment for the granularity rule this
+            // implements.
+            let mut histogram_batches: Vec<HistogramBatch> = Vec::new();
+            for (name, histogram, group) in self.histograms.into_iter() {
+                let h = Histogram::new(skel.map(name), histogram);
+                match histogram_batches
+                    .iter_mut()
+                    .find(|batch| batch.shares_group(group))
+                {
+                    Some(batch) => batch.push(h),
+                    None => histogram_batches.push(HistogramBatch::new(group, vec![h])),
+                }
+            }
 
             let mut cpu_counters: Vec<CpuCounters> = self
                 .cpu_counters
@@ -732,7 +749,7 @@ where
                     v.refresh();
                 }
 
-                for v in &mut histograms {
+                for v in &mut histogram_batches {
                     v.refresh();
                 }
 
@@ -834,10 +851,22 @@ where
     /// name and the `histogram` is the userspace histogram. The histogram
     /// parameters used in both the BPF and userpsace histograms must match
     /// exactly. `group` is the declared [`AcquisitionGroup`] whose
-    /// acquisition brackets this map's refresh (single writer: the group
-    /// must not be shared with any other read section — including another
-    /// histogram's, since each `Histogram` reads its own map). See
-    /// `Histogram` for more details on the assumptions and requirements.
+    /// acquisition brackets this map's refresh.
+    ///
+    /// Unlike `counters`/`cpu_counters`, `group` here is NOT required to be
+    /// unique per call: registering several histograms against the SAME
+    /// group is how a multi-member metric family (e.g. syscall_latency's 16
+    /// op-class latency histograms) shares one read section instead of
+    /// getting one each — `build()` batches every `.histogram()` call that
+    /// named the same group (by pointer identity) into one
+    /// [`HistogramBatch`], stamped once per refresh. See its doc comment
+    /// for the granularity rule (LIKE
+    /// entities within one family share a group; DIFFERENT families get
+    /// their own, even read back-to-back) and its `# Single-writer
+    /// contract` section for what "not shared with any other read section"
+    /// actually means once histograms can share a group: the group must
+    /// still never be named by a `.counters()`/`.cpu_counters()` call, or
+    /// by a histogram belonging to a conceptually different family.
     pub fn histogram(
         mut self,
         name: &'static str,

@@ -31,6 +31,31 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 /// this slice. `(sampler, name)` pairs must be unique and the name `main`
 /// is reserved for the transitional default group.
 ///
+/// # Granularity rule
+///
+/// A group is one read section over LIKE ENTITIES: several instances of
+/// ONE metric family, distinguished from one another only by a label
+/// within that family (a syscall class, a block IO op, a TCP direction, a
+/// per-CPU index), share the sweep that reads them and therefore share ONE
+/// group — not one group per instance. `cpu_usage`'s three `cpu_counters`
+/// groups (`cpu`, `softirq`, `softirq_time`) are three separate BPF maps —
+/// three separate read sections — each internally a per-CPU sweep of LIKE
+/// entities (one group per map, not one per CPU). syscall_latency's 16
+/// syscall-class latency histograms are the inverse shape: sixteen BPF
+/// maps, but ONE read section over one conceptual family ("syscall
+/// latency", distinguished by an `op` label) — one group, not sixteen.
+///
+/// DIFFERENT metric families keep separate groups even when their reads
+/// happen back-to-back inside the same sampler's refresh: tcp_receive's
+/// `srtt` and `jitter` are two distinct measurements, not label-instances
+/// of one family, so they stay two groups; scheduler_runqueue's
+/// `runqlat`/`running`/`offcpu` are three distinct families for the same
+/// reason. See `docs/journal/2026-08-17-window-sidecar-cost.md`'s addendum
+/// (which names syscall_latency, alongside drivehealth, as the
+/// collapse-to-one-group case) and `src/agent/bpf/histogram.rs`'s
+/// `HistogramBatch` for where this rule is mechanically enforced for
+/// histograms.
+///
 /// # Naming rule
 ///
 /// A group's `name` must be `<sampler>_<shortname>`, where `<sampler>` is

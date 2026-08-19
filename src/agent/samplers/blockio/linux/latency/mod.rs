@@ -35,14 +35,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .histogram("read_latency", &BLOCKIO_READ_LATENCY, &READ_LATENCY_ACQ)
-    .histogram("write_latency", &BLOCKIO_WRITE_LATENCY, &WRITE_LATENCY_ACQ)
-    .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY, &FLUSH_LATENCY_ACQ)
-    .histogram(
-        "discard_latency",
-        &BLOCKIO_DISCARD_LATENCY,
-        &DISCARD_LATENCY_ACQ,
-    )
+    // All 4 op-class latency histograms share ONE group — see stats.rs's
+    // `LATENCIES_ACQ` doc comment.
+    .histogram("read_latency", &BLOCKIO_READ_LATENCY, &LATENCIES_ACQ)
+    .histogram("write_latency", &BLOCKIO_WRITE_LATENCY, &LATENCIES_ACQ)
+    .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY, &LATENCIES_ACQ)
+    .histogram("discard_latency", &BLOCKIO_DISCARD_LATENCY, &LATENCIES_ACQ)
     .disabled_programs(if kernel_has_btf() {
         &[
             "block_rq_insert_raw",

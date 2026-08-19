@@ -83,7 +83,7 @@ fn whole_pages<T>(count: usize) -> usize {
 }
 
 use counters::{Counters, CpuCounters, PackedCounters};
-use histogram::Histogram;
+use histogram::{Histogram, HistogramBatch};
 pub use sync_primitive::SyncPrimitive;
 
 /// Parse the CPU count implied by `/sys/devices/system/cpu/possible`

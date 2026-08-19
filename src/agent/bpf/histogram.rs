@@ -29,44 +29,28 @@ use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 ///
 /// # Windowing
 ///
-/// The mmap read is bracketed by one [`AcquisitionGroup`] acquisition:
-/// `acquire()` before the read, `finish()` after the bucket data has been
-/// written into the histogram (stamp-last — see
-/// [`AcquisitionGroup::acquire`]). The bucket data itself is written with
-/// the plain, windowless [`RwLockHistogram::update_from`]; the group's
-/// acquisition window is the ONLY place this read's timing is recorded now
-/// — there is no more per-metric window stamped alongside the buckets (that
-/// was `RwLockHistogram::set_with_window`, which this replaces). This
-/// mirrors `counters.rs`'s `Counters`/`CpuCounters`: one group per read
-/// section, member data set plain, window stamped once at the end of the
-/// section.
-///
-/// Each `Histogram` wraps exactly one BPF map and its own `refresh()` reads
-/// that one map — nothing here ever brackets more than one map's read in a
-/// single acquisition, so every declared histogram group in the migrated
-/// samplers is one group per histogram (never shared across histograms);
-/// see `docs/superpowers/plans/2026-08-18-stage3c-wave1-sampler-migration.md`
-/// for the samplers this was rolled out to.
-///
-/// The bracket is wider than the actual bucket read for the same reason as
-/// the counters machinery: `finish()` only runs once `update_from` has
-/// returned, so the window's `end` is when the WHOLE read (mmap access +
-/// bucket copy) completed, not some earlier instant within it — an honest
-/// upper bound on the true acquisition time, never an underestimate.
+/// A `Histogram` does NOT bracket its own read. Acquisition is owned by the
+/// [`HistogramBatch`] it belongs to: several histograms that are LIKE
+/// ENTITIES — instances of one metric family distinguished by a label
+/// (e.g. syscall_latency's 16 `op`-labeled latency histograms) — are read
+/// together under ONE acquisition, not one each. See `HistogramBatch`'s
+/// doc comment for the granularity rule and why, and the `# Granularity
+/// rule` section on
+/// [`crate::agent::samplers::ACQUISITION_GROUPS`]. `refresh()` here is just
+/// the mmap read + the plain, windowless [`RwLockHistogram::update_from`]
+/// — no group, no window, no acquire/finish. That used to be
+/// `RwLockHistogram::set_with_window`, stamping a window on every single
+/// histogram; the window is now stamped once, by the owning batch, after
+/// every histogram in it has refreshed.
 pub struct Histogram<'a> {
     _map: &'a libbpf_rs::Map<'a>,
     mmap: memmap2::MmapMut,
     buckets: usize,
     histogram: &'static RwLockHistogram,
-    group: &'static AcquisitionGroup,
 }
 
 impl<'a> Histogram<'a> {
-    pub fn new(
-        map: &'a libbpf_rs::Map,
-        histogram: &'static RwLockHistogram,
-        group: &'static AcquisitionGroup,
-    ) -> Self {
+    pub fn new(map: &'a libbpf_rs::Map, histogram: &'static RwLockHistogram) -> Self {
         let buckets = histogram.config().total_buckets();
 
         let mmap_len = whole_pages::<u64>(buckets) * PAGE_SIZE;
@@ -94,20 +78,103 @@ impl<'a> Histogram<'a> {
             mmap,
             buckets,
             histogram,
-            group,
         }
     }
 
+    /// Read the BPF map and update the histogram's bucket data. Windowless
+    /// on purpose — see the `# Windowing` section on the type doc comment:
+    /// the owning [`HistogramBatch`] is what stamps a window, once, around
+    /// every histogram in the batch's `refresh()`.
     pub fn refresh(&mut self) {
-        // Bracket the mmap read + bucket copy as one acquisition; the
-        // histogram's buckets are written plain (`update_from`), and the
-        // group's window covers the whole read (stamped by `finish()`,
-        // last — see the `# Windowing` section above).
-        let acq = self.group.acquire();
-
         let (_prefix, buckets, _suffix) = unsafe { self.mmap.align_to::<u64>() };
         let n = self.buckets;
         let _ = self.histogram.update_from(&buckets[0..n]);
+    }
+}
+
+/// A set of histograms that share ONE [`AcquisitionGroup`] — one read
+/// section, stamped once, over all of them.
+///
+/// # Granularity rule
+///
+/// A group is one read section over LIKE ENTITIES: instances of a single
+/// metric family, distinguished from one another by a label (syscall
+/// class, block IO op, TCP direction...), share the sweep that reads them
+/// and so share one group — not one group per instance. Before this, every
+/// `Histogram` bracketed its own read, which reproduced the exact problem
+/// the acquisition-groups design set out to fix for exactly this shape of
+/// sampler: syscall_latency's 16 op-class histograms turned into 16
+/// one-member "groups" (16 acquisitions per tick) instead of the single
+/// sweep the design calls for. See
+/// `docs/journal/2026-08-17-window-sidecar-cost.md`'s addendum (which
+/// names syscall_latency, alongside drivehealth, as the collapse-to-one-
+/// group case) and the `# Granularity rule` section on
+/// [`crate::agent::samplers::ACQUISITION_GROUPS`].
+///
+/// DIFFERENT metric families stay on separate groups even when their BPF
+/// programs read back-to-back in the same sampler's refresh — e.g.
+/// tcp_receive's `srtt` and `jitter` are two distinct measurements, not
+/// label-instances of one family, so each keeps its own single-member
+/// batch; scheduler_runqueue's `runqlat`/`running`/`offcpu` are three
+/// distinct families for the same reason. A single-histogram sampler (e.g.
+/// tcp_packet_latency) is simply a batch of one.
+///
+/// # Windowing
+///
+/// `refresh()` brackets the WHOLE batch's sweep with one
+/// [`AcquisitionGroup`] acquisition: `acquire()` before any member
+/// refreshes, `finish()` after every member has (stamp-last — see
+/// [`AcquisitionGroup::acquire`]). Each member `Histogram::refresh()` sets
+/// its own bucket data plain (windowless); the single window this stamps
+/// covers every histogram in the batch's read, not just the last one —
+/// restamping the group once per histogram (rather than once per batch)
+/// would leave only the LAST member's individual read timing as the
+/// group's window, silently discarding the rest. The bracket is
+/// correspondingly wider than any one member's actual read — the same
+/// honest-upper-bound tradeoff as `counters.rs`'s `Counters`/`CpuCounters`.
+///
+/// # Single-writer contract
+///
+/// One batch owns its group exclusively — the same single-writer contract
+/// [`AcquisitionGroup::acquire`] documents applies to the whole batch, not
+/// per-member: two different `HistogramBatch`es must never be constructed
+/// for the same group. `builder.rs`'s `Builder::histogram` registration
+/// only ever produces one batch per distinct group reference, by
+/// construction (grouped by pointer identity at `build()` time) — see its
+/// doc comment.
+pub struct HistogramBatch<'a> {
+    group: &'static AcquisitionGroup,
+    histograms: Vec<Histogram<'a>>,
+}
+
+impl<'a> HistogramBatch<'a> {
+    pub fn new(group: &'static AcquisitionGroup, histograms: Vec<Histogram<'a>>) -> Self {
+        Self { group, histograms }
+    }
+
+    /// Whether `group` is the SAME declared [`AcquisitionGroup`] this batch
+    /// was created with (pointer identity, not name equality — every
+    /// `AcquisitionGroup` is a distinct `'static`, so this is exact).
+    pub fn shares_group(&self, group: &'static AcquisitionGroup) -> bool {
+        std::ptr::eq(self.group, group)
+    }
+
+    /// Add another histogram to this batch. Used while assembling batches
+    /// from the builder's flat registration list — see
+    /// [`crate::agent::bpf::builder::Builder::histogram`].
+    pub fn push(&mut self, histogram: Histogram<'a>) {
+        self.histograms.push(histogram);
+    }
+
+    pub fn refresh(&mut self) {
+        // Bracket the whole batch's sweep as one acquisition; see the
+        // `# Windowing` section above for why this must be per-batch, not
+        // per-histogram.
+        let acq = self.group.acquire();
+
+        for histogram in self.histograms.iter_mut() {
+            histogram.refresh();
+        }
 
         acq.finish();
     }
