@@ -4,7 +4,7 @@
 //! `docs/journal/2026-07-10-all-sampler-observation-windows.md`.
 
 use metriken::Window;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Wall-clock nanoseconds since the Unix epoch, saturating to 0 before it.
@@ -161,6 +161,10 @@ pub(crate) struct AcquisitionGroup {
     // 0 = unbounded (walk the full backing array's `entries()`); nonzero =
     // the real member-population bound. See `set_member_bound`/`member_bound`.
     member_bound: AtomicUsize,
+    // Init-time flag: true means this group's acquisition IS the exposition
+    // read itself (mmap-direct `PackedCounters`), not a sampler `refresh()`.
+    // See `set_reader_stamped`/`is_reader_stamped`.
+    reader_stamped: AtomicBool,
 }
 
 impl AcquisitionGroup {
@@ -173,6 +177,49 @@ impl AcquisitionGroup {
             name,
             slot: GroupWindowSlot::new(),
             member_bound: AtomicUsize::new(0),
+            reader_stamped: AtomicBool::new(false),
+        }
+    }
+
+    /// Declare a group that is reader-stamped from the moment its `static`
+    /// initializes — before `main` runs, independent of whether the
+    /// specific `PackedCounters` instance that would otherwise call
+    /// `set_reader_stamped()` ever actually constructs.
+    ///
+    /// `PackedCounters::new` ALSO calls `set_reader_stamped()` on its group
+    /// (idempotent, harmless here) — that call alone is not sufficient by
+    /// itself. It only runs once a sampler's `init()` has actually gotten
+    /// far enough to attach a live BPF map, which does not happen when the
+    /// sampler is disabled via config, and does not happen at all outside
+    /// a running agent (unit tests construct snapshots directly, without
+    /// ever calling any sampler's `init()`). A `#[metric]` static's
+    /// registration — and therefore its `acq_group` tag and membership in
+    /// `create`/`create_v3`'s walk — is compile-time and unconditional,
+    /// independent of the sampler's runtime/config state; a group that
+    /// stayed "declared but not yet known reader-stamped" in that gap
+    /// would fall through to the sampler-stamped declared-group path,
+    /// which walks `0..entries()` (or `0..member_bound`) and — since a
+    /// declared group's unpopulated members intentionally emit `None`
+    /// rather than being skipped (see the CounterGroup/GaugeGroup arms'
+    /// doc comments) — pushes one entry per capacity slot. That is a
+    /// bounded, cheap cost for a `CpuCounters`-scale bound (≤`MAX_CPUS` =
+    /// 1024) but was measured to allocate ~4.2M entries and exhaust an
+    /// 8 GB container for `task_cpu_usage` (`MAX_PID` = 4,194,304) when
+    /// this gap was hit in a test that never ran `cpu_usage`'s BPF
+    /// sampler. Declaring the group's statics with this constructor
+    /// instead of `new()` closes the gap entirely, for every packed/sparse
+    /// group regardless of `MAX_PID`/`MAX_CGROUPS` scale.
+    // Only meaningfully reachable via the Linux-only PackedCounters path,
+    // but the const value itself is harmless (and correctly inert) to
+    // construct on any platform — see the read-side note on
+    // `is_reader_stamped`.
+    pub(crate) const fn new_reader_stamped(sampler: &'static str, name: &'static str) -> Self {
+        Self {
+            sampler,
+            name,
+            slot: GroupWindowSlot::new(),
+            member_bound: AtomicUsize::new(0),
+            reader_stamped: AtomicBool::new(true),
         }
     }
 
@@ -207,6 +254,42 @@ impl AcquisitionGroup {
             0 => None,
             n => Some(n),
         }
+    }
+
+    /// Mark this group as reader-stamped: its acquisition window is
+    /// stamped by the snapshot builder's exposition-time read (a
+    /// `PackedCounters` mmap-direct group), not by any sampler's
+    /// `refresh()`. `refresh()` never calls `acquire()`/`finish()` for
+    /// these groups — `PackedCounters::refresh()` is a no-op, since values
+    /// live directly in the attached mmap and are read on demand by
+    /// `create`/`create_v3`. The single writer for a reader-stamped
+    /// group's window slot is therefore the builder task itself (see
+    /// `docs/principles.md` principle 18's single-writer contract, and
+    /// `GroupWindowSlot::store`'s doc comment) — safe because the snapshot
+    /// builder is invoked serially (guarded by a mutex upstream), never
+    /// concurrently with itself.
+    ///
+    /// Expected to be called exactly once per group, at sampler init
+    /// (`PackedCounters::new`) — the same single-init contract as
+    /// `set_member_bound`. Calling it more than once (e.g. two
+    /// `.packed_counters()` calls sharing one like-entities group, or a
+    /// group already declared with [`new_reader_stamped`](Self::new_reader_stamped))
+    /// is idempotent and harmless. Prefer declaring the group with
+    /// `new_reader_stamped` in the first place — see its doc comment for
+    /// why relying on this call alone leaves a gap.
+    // Only called from `PackedCounters::new`, Linux-only; see the note on
+    // `GroupWindowSlot::store`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn set_reader_stamped(&self) {
+        self.reader_stamped.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether this group is reader-stamped (see `set_reader_stamped`).
+    /// Read unconditionally by `create`/`create_v3` on every platform,
+    /// whether or not anything ever set it (mirrors `member_bound`'s
+    /// read-side note above).
+    pub(crate) fn is_reader_stamped(&self) -> bool {
+        self.reader_stamped.load(Ordering::Relaxed)
     }
 
     /// Bracket one read section. Set values between `acquire()` and
@@ -413,6 +496,29 @@ mod tests {
         // `set_member_bound`.
         group.set_member_bound(5);
         assert_eq!(group.member_bound(), Some(5));
+    }
+
+    #[test]
+    fn new_reader_stamped_is_true_from_construction_with_no_setter_call() {
+        // Pins the fix for the gap `set_reader_stamped` alone leaves: a
+        // group must read as reader-stamped from the instant its `static`
+        // initializes, before any `PackedCounters` ever constructs (or
+        // never does, e.g. a disabled sampler, or a snapshot builder test
+        // that never runs sampler init at all).
+        let group = AcquisitionGroup::new_reader_stamped("test_sampler", "reader_stamped_probe");
+        assert!(group.is_reader_stamped());
+    }
+
+    #[test]
+    fn reader_stamped_defaults_false_then_sticks_true() {
+        let group = AcquisitionGroup::new("test_sampler", "reader_stamped_probe");
+        assert!(!group.is_reader_stamped(), "default is sampler-stamped");
+        group.set_reader_stamped();
+        assert!(group.is_reader_stamped());
+        // Idempotent: a second call (e.g. two packed_counters() calls
+        // sharing one like-entities group) is harmless.
+        group.set_reader_stamped();
+        assert!(group.is_reader_stamped());
     }
 
     #[test]

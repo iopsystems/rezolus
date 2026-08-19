@@ -20,6 +20,22 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
+// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// syscall-class breakdown — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`. All 16
+// `CGROUP_SYSCALL_*` counters below share this ONE group: they are all the
+// `cgroup_syscall` metric family (distinguished by the `op` label, backed
+// by 16 separate BPF maps) — the exact like-entities shape principle 18
+// cites `syscall_latency`'s 16 op-class histograms for (see that sampler's
+// stats.rs), applied here to counters instead of histograms.
+pub static CGROUP_COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("syscall_counts"),
+    "syscall_counts_cgroup",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_COUNTERS_ACQ_REG: &'static AcquisitionGroup = &CGROUP_COUNTERS_ACQ;
+
 /*
  * bpf prog stats
  */
@@ -161,111 +177,111 @@ pub static SYSCALL_EVENT: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "other" }
+    metadata = { unit = "syscalls", op = "other", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_OTHER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "read" }
+    metadata = { unit = "syscalls", op = "read", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_READ: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "write" }
+    metadata = { unit = "syscalls", op = "write", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_WRITE: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "poll" }
+    metadata = { unit = "syscalls", op = "poll", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_POLL: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "lock" }
+    metadata = { unit = "syscalls", op = "lock", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_LOCK: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "time" }
+    metadata = { unit = "syscalls", op = "time", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_TIME: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "sleep" }
+    metadata = { unit = "syscalls", op = "sleep", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_SLEEP: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "socket" }
+    metadata = { unit = "syscalls", op = "socket", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_SOCKET: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "yield" }
+    metadata = { unit = "syscalls", op = "yield", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_YIELD: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "filesystem" }
+    metadata = { unit = "syscalls", op = "filesystem", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_FILESYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "memory" }
+    metadata = { unit = "syscalls", op = "memory", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_MEMORY: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "process" }
+    metadata = { unit = "syscalls", op = "process", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_PROCESS: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "query" }
+    metadata = { unit = "syscalls", op = "query", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_QUERY: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "ipc" }
+    metadata = { unit = "syscalls", op = "ipc", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_IPC: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "timer" }
+    metadata = { unit = "syscalls", op = "timer", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_TIMER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_syscall",
     description = "The number of syscalls on a per-cgroup basis",
-    metadata = { unit = "syscalls", op = "event" }
+    metadata = { unit = "syscalls", op = "event", acq_group = "syscall_counts_cgroup" }
 )]
 pub static CGROUP_SYSCALL_EVENT: CounterGroup = CounterGroup::new(MAX_CGROUPS);

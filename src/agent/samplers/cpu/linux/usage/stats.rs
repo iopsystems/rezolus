@@ -23,12 +23,49 @@ pub static SOFTIRQ_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_usage_softirq_time",
 );
 
+// Reader-stamped (mmap-direct `PackedCounters`) groups — see
+// `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+// `PackedCounters::new` marks these; the group's window is bracketed by the
+// snapshot builder's exposition read, not by this sampler's `refresh()`
+// (which never touches them).
+//
+// `CGROUP_CPU_USAGE_USER`/`CGROUP_CPU_USAGE_SYSTEM` share ONE group: both
+// are the `cgroup_cpu_usage` metric family (distinguished by the `state`
+// label), and principle 18's like-entities rule collapses same-family
+// instances into one read section regardless of how many separate BPF maps
+// back them — the same rule that already collapses `scheduler_runqueue`'s
+// `cpu_counters()`-backed softirq breakdown and `syscall_latency`'s 16
+// op-class histograms (each its own map) into one group apiece.
+// `CGROUP_CPU_USAGE_EXITED` is a distinct metric name (a subset quantity,
+// not another state of the same family — see its doc comment in this
+// file) and gets its own group. `TASK_CPU_USAGE` is a third, separate
+// family (per-task, not per-cgroup) with its own group.
+pub static CGROUP_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_usage"),
+    "cpu_usage_cgroup_usage",
+);
+pub static CGROUP_EXITED_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_usage"),
+    "cpu_usage_cgroup_exited",
+);
+pub static TASK_USAGE_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_usage"),
+    "cpu_usage_task",
+);
+
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static CPU_USAGE_ACQ_REG: &'static AcquisitionGroup = &CPU_USAGE_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static SOFTIRQ_ACQ_REG: &'static AcquisitionGroup = &SOFTIRQ_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static SOFTIRQ_TIME_ACQ_REG: &'static AcquisitionGroup = &SOFTIRQ_TIME_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_USAGE_ACQ_REG: &'static AcquisitionGroup = &CGROUP_USAGE_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_EXITED_ACQ_REG: &'static AcquisitionGroup = &CGROUP_EXITED_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static TASK_USAGE_ACQ_REG: &'static AcquisitionGroup = &TASK_USAGE_ACQ;
 
 /*
  * bpf prog stats
@@ -83,21 +120,21 @@ pub static CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "cgroup_cpu_usage",
     description = "The amount of CPU time spent in each state on a per-cgroup basis",
-    metadata = { state = "user", unit = "nanoseconds" }
+    metadata = { state = "user", unit = "nanoseconds", acq_group = "cpu_usage_cgroup_usage" }
 )]
 pub static CGROUP_CPU_USAGE_USER: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_usage",
     description = "The amount of CPU time spent in each state on a per-cgroup basis",
-    metadata = { state = "system", unit = "nanoseconds" }
+    metadata = { state = "system", unit = "nanoseconds", acq_group = "cpu_usage_cgroup_usage" }
 )]
 pub static CGROUP_CPU_USAGE_SYSTEM: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_usage_exited_tasks",
     description = "The amount of CPU time that was consumed by tasks which have since exited, on a per-cgroup basis",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "cpu_usage_cgroup_exited" }
 )]
 pub static CGROUP_CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
@@ -108,7 +145,7 @@ pub static CGROUP_CPU_USAGE_EXITED: CounterGroup = CounterGroup::new(MAX_CGROUPS
 #[metric(
     name = "task_cpu_usage",
     description = "The amount of CPU time used on a per-task basis",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "cpu_usage_task" }
 )]
 pub static TASK_CPU_USAGE: CounterGroup = CounterGroup::new(MAX_PID);
 

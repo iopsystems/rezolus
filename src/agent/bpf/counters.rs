@@ -239,6 +239,18 @@ impl<'a> CpuCounters<'a> {
 /// Represents a set of counters where the BPF map is a dense set of counters,
 /// meaning there is no padding. No aggregation is performed, and the values are
 /// read directly from the memory-mapped BPF map via `attach_external`.
+///
+/// # Windowing
+///
+/// Unlike [`Counters`]/[`CpuCounters`], there is no `refresh()`-time read to
+/// bracket: values are read directly from the attached mmap by the
+/// exposition code (`create`/`create_v3`), not copied out by a sampler task.
+/// The acquisition IS that exposition read, so `new()` marks the group
+/// [reader-stamped](crate::agent::timing::AcquisitionGroup::set_reader_stamped)
+/// instead of ever calling `acquire()`/`finish()` itself — the snapshot
+/// builder brackets the group's window at exposition time (walk-spanning:
+/// acquire at the group's first member touch, finish once its last
+/// member's values have been read), documented on `create`/`create_v3`.
 pub struct PackedCounters<'a> {
     _map: &'a Map<'a>,
     _mmap: MmapMut,
@@ -246,11 +258,20 @@ pub struct PackedCounters<'a> {
 
 impl<'a> PackedCounters<'a> {
     /// Create a new set of counters from the provided BPF map and collection of
-    /// counter metrics.
+    /// counter metrics. `group` is the declared [`AcquisitionGroup`] this
+    /// map's values belong to — marked reader-stamped here (idempotent: two
+    /// `PackedCounters` sharing one like-entities group, e.g. `cgroup_syscall`'s
+    /// 16 op-class maps, both mark the same group harmlessly).
     ///
     /// The map layout is not cacheline padded. The ordering of the dynamic
     /// counters must exactly match the layout in the BPF map.
-    pub fn new(map: &'a Map, counters: &'static CounterGroup) -> Self {
+    pub fn new(
+        map: &'a Map,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
+    ) -> Self {
+        group.set_reader_stamped();
+
         let total_bytes = counters.entries() * std::mem::size_of::<u64>();
 
         let fd = map.as_fd().as_raw_fd();
@@ -287,8 +308,8 @@ impl<'a> PackedCounters<'a> {
     }
 
     /// No-op: values are read directly from the mmap by the exposition code.
-    /// Kept for API compatibility with the sampler refresh loop. These metrics
-    /// fall through to the fleet window (level 4); read-section bracketing is
-    /// deferred to the mmap-direct follow-on (level 3).
+    /// Kept for API compatibility with the sampler refresh loop. This group
+    /// is reader-stamped (see the struct-level doc comment) — its window is
+    /// bracketed by `create`/`create_v3` at exposition time, not here.
     pub fn refresh(&mut self) {}
 }

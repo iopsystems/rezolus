@@ -17,8 +17,24 @@ pub static EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_tlb_flush_events",
 );
 
+// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// tlb_flush breakdown — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`. All five
+// `CGROUP_TLB_FLUSH_*` counters below share this ONE group: they are all
+// the `cgroup_cpu_tlb_flush` metric family (distinguished by the `reason`
+// label, backed by five separate BPF maps) — like-entities collapse per
+// principle 18, the same rule syscall_latency's 16 op-class histograms and
+// this sampler's own per-CPU `TLB_FLUSH_*` breakdown (via `cpu_counters`,
+// `EVENTS_ACQ` above) already apply.
+pub static CGROUP_EVENTS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_tlb_flush"),
+    "cpu_tlb_flush_cgroup",
+);
+
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static EVENTS_ACQ_REG: &'static AcquisitionGroup = &EVENTS_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_EVENTS_ACQ_REG: &'static AcquisitionGroup = &CGROUP_EVENTS_ACQ;
 
 /*
  * bpf prog stats
@@ -91,34 +107,34 @@ pub static TLB_FLUSH_UNKNOWN: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "cgroup_cpu_tlb_flush",
     description = "The number of tlb_flush events on a per-cgroup basis",
-    metadata = { reason = "task_switch" }
+    metadata = { reason = "task_switch", acq_group = "cpu_tlb_flush_cgroup" }
 )]
 pub static CGROUP_TLB_FLUSH_TASK_SWITCH: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_tlb_flush",
     description = "The number of tlb_flush events on a per-cgroup basis",
-    metadata = { reason = "remote_shootdown" }
+    metadata = { reason = "remote_shootdown", acq_group = "cpu_tlb_flush_cgroup" }
 )]
 pub static CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_tlb_flush",
     description = "The number of tlb_flush events on a per-cgroup basis",
-    metadata = { reason = "local_shootdown" }
+    metadata = { reason = "local_shootdown", acq_group = "cpu_tlb_flush_cgroup" }
 )]
 pub static CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_tlb_flush",
     description = "The number of tlb_flush events on a per-cgroup basis",
-    metadata = { reason = "local_mm_shootdown" }
+    metadata = { reason = "local_mm_shootdown", acq_group = "cpu_tlb_flush_cgroup" }
 )]
 pub static CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_tlb_flush",
     description = "The number of tlb_flush events on a per-cgroup basis",
-    metadata = { reason = "remote_send_ipi" }
+    metadata = { reason = "remote_send_ipi", acq_group = "cpu_tlb_flush_cgroup" }
 )]
 pub static CGROUP_TLB_FLUSH_REMOTE_SEND_IPI: CounterGroup = CounterGroup::new(MAX_CGROUPS);

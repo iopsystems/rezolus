@@ -43,6 +43,34 @@ static RUNNING_ACQ_REG: &'static AcquisitionGroup = &RUNNING_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
 
+// Reader-stamped (mmap-direct `PackedCounters`) groups for the per-cgroup
+// breakdown — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+// `CGROUP_SCHEDULER_IVCSW`/`CGROUP_SCHEDULER_VCSW` share ONE group: both
+// are the `cgroup_scheduler_context_switch` family (distinguished by the
+// `kind` label) — like-entities collapse per principle 18.
+// `cgroup_scheduler_runqueue_wait`/`cgroup_scheduler_offcpu` are distinct
+// families and keep their own groups.
+pub static CGROUP_WAIT_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_cgroup_wait",
+);
+pub static CGROUP_OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_cgroup_offcpu",
+);
+pub static CGROUP_CONTEXT_SWITCH_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_cgroup_context_switch",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_WAIT_ACQ_REG: &'static AcquisitionGroup = &CGROUP_WAIT_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_OFFCPU_ACQ_REG: &'static AcquisitionGroup = &CGROUP_OFFCPU_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_CONTEXT_SWITCH_ACQ_REG: &'static AcquisitionGroup = &CGROUP_CONTEXT_SWITCH_ACQ;
+
 /*
  * bpf prog stats
  */
@@ -122,27 +150,27 @@ pub static SCHEDULER_DISCARDED: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "cgroup_scheduler_runqueue_wait",
     description = "Tracks time spent in the runqueue on a per-cgroup basis",
-    metadata = { state = "wait", unit = "nanoseconds" }
+    metadata = { state = "wait", unit = "nanoseconds", acq_group = "scheduler_runqueue_cgroup_wait" }
 )]
 pub static CGROUP_SCHEDULER_RUNQUEUE_WAIT: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_scheduler_offcpu",
     description = "Tracks the time when tasks were off-CPU on a per-cgroup basis",
-    metadata = { state = "offcpu", unit = "nanoseconds" }
+    metadata = { state = "offcpu", unit = "nanoseconds", acq_group = "scheduler_runqueue_cgroup_offcpu" }
 )]
 pub static CGROUP_SCHEDULER_OFFCPU: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_scheduler_context_switch",
     description = "The number of involuntary context switches on a per-cgroup basis, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
-    metadata = { kind = "involuntary" }
+    metadata = { kind = "involuntary", acq_group = "scheduler_runqueue_cgroup_context_switch" }
 )]
 pub static CGROUP_SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_scheduler_context_switch",
     description = "The number of voluntary context switches on a per-cgroup basis, where a task left the CPU because it blocked",
-    metadata = { kind = "voluntary" }
+    metadata = { kind = "voluntary", acq_group = "scheduler_runqueue_cgroup_context_switch" }
 )]
 pub static CGROUP_SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CGROUPS);

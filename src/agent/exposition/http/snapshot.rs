@@ -2,7 +2,7 @@ use crate::agent::config::SnapshotFormat;
 use crate::agent::external_metrics::{
     ExternalMetric, ExternalMetricValue, ExternalMetricsStore, MetricKey,
 };
-use crate::agent::timing::AcquisitionGroup;
+use crate::agent::timing::{AcquisitionGroup, AcquisitionGuard};
 use crate::agent::*;
 
 use metriken::{Value, Window};
@@ -133,6 +133,17 @@ fn metric_metadata(
     (metadata, sampler)
 }
 
+/// # V2 output compatibility for reader-stamped (`PackedCounters`) groups
+///
+/// V2 predates declared acquisition groups and has no registration-
+/// membership concept — every `CounterGroup`/`GaugeGroup` entry, declared or
+/// not, keeps the transitional value-sentinel skip (`== 0`/`== i64::MIN`)
+/// V2 has always used; that is V2's wire-format semantics, not a per-group
+/// choice, and reader-stamped groups do not change it. The ONLY thing wave-2
+/// Part A adds to V2 output for a migrated packed metric is the acquisition
+/// window — previously silently absent (`PackedCounters::refresh()` is a
+/// no-op, so there was nothing to stamp a per-metric window from) — pinned
+/// by `v2_output_is_unchanged_except_windows_for_a_migrated_packed_metric`.
 fn create(
     timestamp: SystemTime,
     duration: Duration,
@@ -188,6 +199,37 @@ fn create(
         .values()
         .map(|group| ((group.sampler, group.name), group.window()))
         .collect();
+
+    // Reader-stamped (`PackedCounters` mmap-direct) groups CANNOT be served
+    // by the resolve-once map above: nothing but the walk below ever stamps
+    // their window slot (see `AcquisitionGroup::set_reader_stamped`), so
+    // reading it up front — before this walk has touched any of the
+    // group's members — would return whatever bracket a PREVIOUS `create()`
+    // call left behind (or `None`, on the very first call), never this
+    // tick's actual read. Track them separately: acquire the bracket at
+    // first touch (below, in the CounterGroup/GaugeGroup arms), then patch
+    // every entry pushed for that group once the bracket finishes, after
+    // the whole per-metric loop completes (see the finalization loop after
+    // it). That "finish once the loop completes" boundary is coarser than
+    // `create_v3`'s per-group emit point — V2's flat, single-pass walk has
+    // no per-group deferred-emit stage to hook a tighter boundary into —
+    // but it is still an honest, safe-direction bracket: acquire() still
+    // happens at each group's own true first touch (a distinct begin_ns
+    // per group), only the finish() point is shared and conservatively
+    // later than the tightest possible, which only widens the window,
+    // never narrows or mis-times it.
+    struct ReaderStampedBracket {
+        group: &'static AcquisitionGroup,
+        guard: Option<AcquisitionGuard<'static>>,
+        counter_positions: Vec<usize>,
+        gauge_positions: Vec<usize>,
+    }
+    let reader_stamped_groups: HashMap<(&str, &str), &'static AcquisitionGroup> = group_registry()
+        .values()
+        .filter(|group| group.is_reader_stamped())
+        .map(|group| ((group.sampler, group.name), *group))
+        .collect();
+    let mut reader_stamped_brackets: HashMap<(&str, &str), ReaderStampedBracket> = HashMap::new();
 
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
         let (value, stored_window) = metric.value_with_window();
@@ -281,6 +323,20 @@ fn create(
             }
         });
 
+        // Reader-stamped groups (see the doc comment above
+        // `reader_stamped_groups`): resolved independently of
+        // `group_window` above, which cannot serve them. Only
+        // `Value::CounterGroup`/`Value::GaugeGroup` ever consult this today
+        // — no scalar `Counter`/`Gauge`/`Histogram` is ever
+        // `PackedCounters`-backed — but it's resolved once here, uniformly,
+        // rather than duplicated inside each arm.
+        let reader_stamped_group: Option<&'static AcquisitionGroup> =
+            metric.metadata().get("acq_group").and_then(|g| {
+                let sampler_attr =
+                    crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
+                reader_stamped_groups.get(&(sampler_attr, g)).copied()
+            });
+
         // V2 has no group concept — `acq_group` only means something to
         // `create_v3`'s routing. Strip it unconditionally (mirroring
         // `create_v3`'s declared-group strip) so a metric migrating to a
@@ -300,60 +356,144 @@ fn create(
                     .with_window(group_window.unwrap_or(stored_window)),
             ),
             Some(Value::CounterGroup(g)) => {
-                for counter_id in 0..g.entries() {
-                    // Atomic pair read: value + window under one lock, so a
-                    // concurrent writer can never pair a fresh value with a
-                    // stale window (drivehealth's async tear surface). For a
-                    // migrated (group-stamped) member, `load_with_window`
-                    // itself only ever returns `None` for the window half —
-                    // `group_window` (resolved once above, outside this
-                    // loop, since it's the same for every member) is what
-                    // actually carries the group's window.
-                    let (value, entry_window) = g.load_with_window(counter_id);
-                    let Some(value) = value else { continue };
-                    if value == 0 {
-                        continue;
-                    }
-                    let mut metadata = metadata.clone();
-
-                    metadata.insert("id".to_string(), counter_id.to_string());
-
-                    if let Some(m) = g.load_metadata(counter_id) {
-                        for (k, v) in m {
-                            metadata.insert(k, v);
+                // Reader-stamped group (`PackedCounters` mmap-direct): the
+                // walk-spanning bracket is acquired at first touch and
+                // finished (with every position pushed below patched to
+                // its window) after the whole per-metric loop — see the
+                // doc comment on `reader_stamped_groups`. V2 OUTPUT
+                // COMPATIBILITY: iteration (`0..g.entries()`) and the
+                // value-sentinel skip below are otherwise UNCHANGED from
+                // the non-reader-stamped path — this only changes which
+                // window ends up attached, never membership or value
+                // semantics, so a migrated packed metric's V2 output is
+                // byte-identical except for windows (pinned by
+                // `v2_output_is_unchanged_except_windows_for_a_migrated_packed_metric`).
+                if let Some(ag) = reader_stamped_group {
+                    let bracket = reader_stamped_brackets
+                        .entry((ag.sampler, ag.name))
+                        .or_insert_with(|| ReaderStampedBracket {
+                            group: ag,
+                            guard: Some(ag.acquire()),
+                            counter_positions: Vec::new(),
+                            gauge_positions: Vec::new(),
+                        });
+                    for counter_id in 0..g.entries() {
+                        let (value, _entry_window) = g.load_with_window(counter_id);
+                        let Some(value) = value else { continue };
+                        if value == 0 {
+                            continue;
                         }
-                    }
+                        let mut metadata = metadata.clone();
 
-                    s.counters.push(
-                        Counter::new(format!("{metric_id}x{counter_id}"), value, metadata)
-                            .with_window(group_window.unwrap_or(entry_window)),
-                    )
+                        metadata.insert("id".to_string(), counter_id.to_string());
+
+                        if let Some(m) = g.load_metadata(counter_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.counters.push(Counter::new(
+                            format!("{metric_id}x{counter_id}"),
+                            value,
+                            metadata,
+                        ));
+                        bracket.counter_positions.push(s.counters.len() - 1);
+                    }
+                } else {
+                    for counter_id in 0..g.entries() {
+                        // Atomic pair read: value + window under one lock, so a
+                        // concurrent writer can never pair a fresh value with a
+                        // stale window (drivehealth's async tear surface). For a
+                        // migrated (group-stamped) member, `load_with_window`
+                        // itself only ever returns `None` for the window half —
+                        // `group_window` (resolved once above, outside this
+                        // loop, since it's the same for every member) is what
+                        // actually carries the group's window.
+                        let (value, entry_window) = g.load_with_window(counter_id);
+                        let Some(value) = value else { continue };
+                        if value == 0 {
+                            continue;
+                        }
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), counter_id.to_string());
+
+                        if let Some(m) = g.load_metadata(counter_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.counters.push(
+                            Counter::new(format!("{metric_id}x{counter_id}"), value, metadata)
+                                .with_window(group_window.unwrap_or(entry_window)),
+                        )
+                    }
                 }
             }
             Some(Value::GaugeGroup(g)) => {
-                for gauge_id in 0..g.entries() {
-                    // Atomic pair read (see CounterGroup arm above); same
-                    // group-window override for a migrated member.
-                    let (value, entry_window) = g.load_with_window(gauge_id);
-                    let Some(value) = value else { continue };
-                    if value == i64::MIN {
-                        continue;
-                    }
-
-                    let mut metadata = metadata.clone();
-
-                    metadata.insert("id".to_string(), gauge_id.to_string());
-
-                    if let Some(m) = g.load_metadata(gauge_id) {
-                        for (k, v) in m {
-                            metadata.insert(k, v);
+                // See the CounterGroup arm above for the reader-stamped
+                // rationale; no `PackedCounters`-style gauge group exists
+                // today, kept symmetric for the first one that does.
+                if let Some(ag) = reader_stamped_group {
+                    let bracket = reader_stamped_brackets
+                        .entry((ag.sampler, ag.name))
+                        .or_insert_with(|| ReaderStampedBracket {
+                            group: ag,
+                            guard: Some(ag.acquire()),
+                            counter_positions: Vec::new(),
+                            gauge_positions: Vec::new(),
+                        });
+                    for gauge_id in 0..g.entries() {
+                        let (value, _entry_window) = g.load_with_window(gauge_id);
+                        let Some(value) = value else { continue };
+                        if value == i64::MIN {
+                            continue;
                         }
-                    }
 
-                    s.gauges.push(
-                        Gauge::new(format!("{metric_id}x{gauge_id}"), value, metadata)
-                            .with_window(group_window.unwrap_or(entry_window)),
-                    )
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), gauge_id.to_string());
+
+                        if let Some(m) = g.load_metadata(gauge_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.gauges.push(Gauge::new(
+                            format!("{metric_id}x{gauge_id}"),
+                            value,
+                            metadata,
+                        ));
+                        bracket.gauge_positions.push(s.gauges.len() - 1);
+                    }
+                } else {
+                    for gauge_id in 0..g.entries() {
+                        // Atomic pair read (see CounterGroup arm above); same
+                        // group-window override for a migrated member.
+                        let (value, entry_window) = g.load_with_window(gauge_id);
+                        let Some(value) = value else { continue };
+                        if value == i64::MIN {
+                            continue;
+                        }
+
+                        let mut metadata = metadata.clone();
+
+                        metadata.insert("id".to_string(), gauge_id.to_string());
+
+                        if let Some(m) = g.load_metadata(gauge_id) {
+                            for (k, v) in m {
+                                metadata.insert(k, v);
+                            }
+                        }
+
+                        s.gauges.push(
+                            Gauge::new(format!("{metric_id}x{gauge_id}"), value, metadata)
+                                .with_window(group_window.unwrap_or(entry_window)),
+                        )
+                    }
                 }
             }
             Some(Value::Histogram(h)) => {
@@ -374,6 +514,25 @@ fn create(
                 }
             }
             _ => {}
+        }
+    }
+
+    // Finish every reader-stamped bracket now that the per-metric loop has
+    // read every member's value (see the doc comment on
+    // `reader_stamped_groups`), then patch the freshly stamped window into
+    // every entry recorded for that group above — `Counter`/`Gauge`'s
+    // `window` field is public exactly so this post-hoc patch is possible
+    // without re-pushing.
+    for (_, bracket) in reader_stamped_brackets {
+        if let Some(guard) = bracket.guard {
+            guard.finish();
+        }
+        let window = bracket.group.window();
+        for idx in bracket.counter_positions {
+            s.counters[idx].window = window;
+        }
+        for idx in bracket.gauge_positions {
+            s.gauges[idx].window = window;
         }
     }
 
@@ -508,9 +667,18 @@ impl SkeletonCache {
 /// Per-group accumulation while walking the metriken registry: the group's
 /// acquisition window (read once, at first touch — see `create_v3`) plus,
 /// per kind, the (descriptor, value) pairs in schema order.
+///
+/// `reader_guard` is only ever `Some` for a
+/// [reader-stamped](AcquisitionGroup::is_reader_stamped) group (a
+/// `PackedCounters` mmap-direct group): its acquisition IS this walk's read
+/// of the group's members, so first touch (the `Entry::Vacant` arm below)
+/// acquires the bracket directly instead of reading a window a sampler
+/// already stamped, and the group-emit loop `finish()`es it once every
+/// member's value has been read — see the doc comment there.
 #[derive(Default)]
 struct GroupBuilder {
     window: Option<Window>,
+    reader_guard: Option<AcquisitionGuard<'static>>,
     counters: Vec<(MetricDesc, Option<u64>)>,
     gauges: Vec<(MetricDesc, Option<i64>)>,
     histograms: Vec<(MetricDesc, Option<histogram::Histogram>)>,
@@ -660,6 +828,38 @@ fn resolve_walk_window(first: Option<Window>, latest: Option<Window>) -> Option<
 /// their own per-metric windows are intentionally dropped here (a
 /// `GroupSnapshot` carries one window for the whole group) and will return
 /// once external sources get real declared groups of their own.
+///
+/// # A third membership mode: reader-stamped (metadata-presence)
+///
+/// [`AcquisitionGroup::is_reader_stamped`] groups (mmap-direct
+/// `PackedCounters` — cgroup and task counters) use neither the unbounded
+/// `0..entries()` walk nor `member_bound`'s dense prefix. Membership is
+/// `load_metadata(idx).is_some()`: an index the sampler's ringbuf handler
+/// has registered metadata for (a live cgroup, a live task) is a member,
+/// walked via `metadata_snapshot()` rather than a `0..N` loop — see the
+/// CounterGroup/GaugeGroup match arms below.
+///
+/// **Walk-cost grounding** (docs/superpowers/plans/2026-08-19-stage3c-wave2.md
+/// Part A asks this explicitly): does today's declared-group walk already
+/// scan `0..entries()` for these groups, and is there a metriken iterator
+/// over populated entries rather than backing-array capacity? Checked
+/// against the pinned metriken rev
+/// (`f601f48cffcfe27d2acc835bf05c90d0e481d1f7`, `metriken/src/group/{counter,metadata}.rs`):
+/// yes to both. Before this mode existed, a packed/sparse `CounterGroup`
+/// declared metric with no `member_bound` fell through to the unbounded
+/// branch above — `0..g.entries()`, i.e. all 4,194,304 `MAX_PID` slots for
+/// `task_cpu_usage`, every tick, in the V3 walk (V2's `create()` still does
+/// this — see its own doc comment). `metadata_snapshot()`
+/// (`CounterGroupMetric`/`GaugeGroupMetric` trait method, implemented by
+/// `GroupMetadata::snapshot()`) is backed by a
+/// `parking_lot::RwLock<HashMap<usize, HashMap<String, String>>>` holding
+/// only populated indices — its cost is O(live population), the same
+/// asymptotic class as `member_bound`'s dense-prefix walk, not a regression
+/// against it. It IS a regression against the near-zero cost of an empty
+/// group (a fresh `RwLock<HashMap>` clone-and-collect even at zero
+/// population isn't free), but that trades a bounded, population-scaled
+/// cost for what was previously an unconditional 4.2M-iteration sweep — a
+/// net win, not a wash.
 fn create_v3(
     timestamp: SystemTime,
     duration: Duration,
@@ -698,12 +898,20 @@ fn create_v3(
         // the full backing-array `entries()`. Resolved alongside routing,
         // before `group_key` is moved into `groups.entry` below.
         let mut member_bound: Option<usize> = None;
+        // Reader-stamped (`PackedCounters` mmap-direct) groups use a THIRD
+        // membership mode instead of `member_bound`'s dense prefix: every
+        // index with metadata registered (`load_metadata(idx).is_some()`,
+        // walked via `metadata_snapshot()`) is a member — see the
+        // CounterGroup/GaugeGroup arms below and the doc comment on
+        // `create_v3` for the walk-cost grounding.
+        let mut reader_stamped = false;
         let group_key = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
                 let key = format!("{sampler}/{acq_group}");
                 if let Some(ag) = group_registry.get(&key) {
                     declared = true;
                     member_bound = ag.member_bound();
+                    reader_stamped = ag.is_reader_stamped();
                     key
                 } else {
                     debug_assert!(
@@ -722,25 +930,47 @@ fn create_v3(
         let group = match groups.entry(group_key) {
             Entry::Occupied(e) => e.into_mut(),
             Entry::Vacant(e) => {
-                // First touch for this group THIS TICK: read its window
-                // now, before any of its members' values accumulate below
-                // — not once per member (redundant seqlock loads, and
-                // walk-order-dependent) and not deferred solely to emit time (see resolve_walk_window)
-                // (unsafe: the walk over the FULL registry, across every
-                // group, can take long enough that a concurrent sampler
-                // tick completes a whole new acquire()/finish() cycle in
-                // the meantime, which would pair window(N+1) with the
-                // values(N) already read here — a confident, wrong claim
-                // that this data is newer than it actually is). Read
-                // before values, mirroring timing.rs's stamp-last rule
-                // from the read side: a stale window paired with
-                // fresh-enough values only under-claims freshness, which
-                // is the safe direction — same "can only lag, never lead"
-                // guarantee `AcquisitionGuard` gives writers, applied here
-                // to the reader.
-                let window = group_registry.get(e.key()).and_then(|ag| ag.window());
+                // First touch for this group THIS TICK.
+                //
+                // Reader-stamped groups (`PackedCounters` mmap-direct — see
+                // `AcquisitionGroup::is_reader_stamped`): this walk's read of
+                // the group's members IS the acquisition, so acquire the
+                // bracket right here, at first touch, instead of reading a
+                // window some sampler already stamped. There is nothing to
+                // read yet — `window` stays `None` until the group-emit loop
+                // below calls `guard.finish()` once every member's value has
+                // been read. Unlike the sampler-stamped case, there is no
+                // racing writer to guard against: the ONLY writer for a
+                // reader-stamped group's slot is this very walk (see
+                // `AcquisitionGroup::set_reader_stamped`'s doc comment on the
+                // single-writer contract), so this acquire()/finish() pair
+                // is honest, not an approximation.
+                //
+                // Sampler-stamped groups keep the original discipline: read
+                // the window now, before any of this group's members'
+                // values accumulate below — not once per member (redundant
+                // seqlock loads, and walk-order-dependent) and not deferred
+                // solely to emit time (see `resolve_walk_window`) (unsafe:
+                // the walk over the FULL registry, across every group, can
+                // take long enough that a concurrent sampler tick completes
+                // a whole new acquire()/finish() cycle in the meantime,
+                // which would pair window(N+1) with the values(N) already
+                // read here — a confident, wrong claim that this data is
+                // newer than it actually is). Read before values, mirroring
+                // timing.rs's stamp-last rule from the read side: a stale
+                // window paired with fresh-enough values only under-claims
+                // freshness, which is the safe direction — same "can only
+                // lag, never lead" guarantee `AcquisitionGuard` gives
+                // writers, applied here to the reader.
+                let ag = group_registry.get(e.key());
+                let (window, reader_guard) = match ag {
+                    Some(ag) if ag.is_reader_stamped() => (None, Some(ag.acquire())),
+                    Some(ag) => (ag.window(), None),
+                    None => (None, None),
+                };
                 e.insert(GroupBuilder {
                     window,
+                    reader_guard,
                     ..Default::default()
                 })
             }
@@ -779,106 +1009,186 @@ fn create_v3(
                 Some(v),
             )),
             Value::CounterGroup(g) => {
-                // Registration membership for a per-CPU (or similar) group
-                // IS the group's real member population — `possible_cpus()`
-                // for a `CpuCounters`-backed group — not the backing
-                // array's `entries()` capacity, which is a fixed
-                // implementation ceiling (`MAX_CPUS`; see docs/principles.md
-                // principle 6, "over-allocates on small machines") sized
-                // for the worst case, not this host. Walking the full
-                // capacity on every declared group would put an ~18-CPU
-                // host's tick at ~19× the entries it actually populated;
-                // walk the bound instead when one is set (clamped to
-                // `entries()` in case a stale/misconfigured bound somehow
-                // exceeds the backing array).
-                let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                for idx in 0..bound {
-                    let v = g.counter_value(idx);
+                if reader_stamped {
+                    // Reader-stamped (mmap-direct `PackedCounters`) group:
+                    // membership is metadata-presence, not `0..bound` — a
+                    // registered index (a live cgroup/task the sampler's
+                    // ringbuf handler attached metadata to) is a member,
+                    // full stop, regardless of the backing array's capacity
+                    // (`MAX_CGROUPS`/`MAX_PID`, sized for the worst case —
+                    // see docs/principles.md principle 6). Walking
+                    // `0..entries()` here would mean sweeping all 4.2M
+                    // `MAX_PID` slots every tick for `task_cpu_usage`
+                    // regardless of how many tasks are actually live; see
+                    // the walk-cost grounding on `create_v3`'s doc comment.
+                    // `metadata_snapshot()`'s cost is O(populated), not
+                    // O(entries()) — it walks metriken's own sparse
+                    // `HashMap<usize, _>` metadata store, not the dense
+                    // value array.
+                    //
+                    // `metadata_snapshot()`'s order follows that HashMap's
+                    // iteration order, which is NOT stable tick-to-tick on
+                    // its own (hashbrown gives no ordering guarantee) even
+                    // when the populated set is unchanged — sort by index
+                    // so a stable member set produces a byte-stable schema
+                    // order (and therefore a `SkeletonCache` hit) across
+                    // ticks, the same determinism concern the external-
+                    // metrics sort below addresses for a different source.
+                    let mut members = g.metadata_snapshot();
+                    members.sort_by_key(|(idx, _)| *idx);
+                    for (idx, m) in members {
+                        // Two separate reads, same torn-recycle caveat as
+                        // the non-reader-stamped arm below — see its
+                        // comment.
+                        let v = g.counter_value(idx);
 
-                    // Transitional V2-style sentinel skip — default groups only. See doc comment.
-                    if !declared {
-                        let Some(v) = v else { continue };
-                        if v == 0 {
-                            continue;
-                        }
-                    }
-
-                    // `counter_value(idx)` above and `load_metadata(idx)`
-                    // here are two SEPARATE reads, not one atomic pair —
-                    // unlike `AcquisitionGroup`'s window (a seqlock), a
-                    // group entry's value and its metadata have no shared
-                    // lock. A slot recycled by a concurrent writer between
-                    // these two reads (e.g. a pid/cgroup id reused mid-tick)
-                    // can pair the NEW occupant's value with the OLD
-                    // occupant's labels, or vice versa, for that one tick.
-                    // This matches V2's `create()`, which has the identical
-                    // two-step read here — not a regression introduced by
-                    // V3. Measured under a deliberate concurrent-recycle
-                    // hammer: ~2-3% of ticks torn; in production today it's
-                    // effectively zero, because sampler writes complete
-                    // synchronously inside `refresh()` rather than racing
-                    // the snapshot builder from another task. Migration
-                    // note: a sampler that calls `insert_metadata` more
-                    // than once per slot per refresh (cpu usage does 4)
-                    // should move to a single atomic metadata update
-                    // (`set_metadata`, one call) when it migrates to a
-                    // declared group, to close this window rather than
-                    // just narrow it.
-                    let mut entry_metadata = metadata.clone();
-                    entry_metadata.insert("id".to_string(), idx.to_string());
-                    if let Some(m) = g.load_metadata(idx) {
+                        let mut entry_metadata = metadata.clone();
+                        entry_metadata.insert("id".to_string(), idx.to_string());
                         for (k, v) in m {
                             entry_metadata.insert(k, v);
                         }
-                    }
 
-                    group.counters.push((
-                        MetricDesc {
-                            name: format!("{metric_id}x{idx}"),
-                            metadata: entry_metadata,
-                        },
-                        v,
-                    ));
+                        group.counters.push((
+                            MetricDesc {
+                                name: format!("{metric_id}x{idx}"),
+                                metadata: entry_metadata,
+                            },
+                            v,
+                        ));
+                    }
+                } else {
+                    // Registration membership for a per-CPU (or similar)
+                    // group IS the group's real member population —
+                    // `possible_cpus()` for a `CpuCounters`-backed group —
+                    // not the backing array's `entries()` capacity, which is
+                    // a fixed implementation ceiling (`MAX_CPUS`; see
+                    // docs/principles.md principle 6, "over-allocates on
+                    // small machines") sized for the worst case, not this
+                    // host. Walking the full capacity on every declared
+                    // group would put an ~18-CPU host's tick at ~19× the
+                    // entries it actually populated; walk the bound instead
+                    // when one is set (clamped to `entries()` in case a
+                    // stale/misconfigured bound somehow exceeds the backing
+                    // array).
+                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                    for idx in 0..bound {
+                        let v = g.counter_value(idx);
+
+                        // Transitional V2-style sentinel skip — default groups only. See doc comment.
+                        if !declared {
+                            let Some(v) = v else { continue };
+                            if v == 0 {
+                                continue;
+                            }
+                        }
+
+                        // `counter_value(idx)` above and `load_metadata(idx)`
+                        // here are two SEPARATE reads, not one atomic pair —
+                        // unlike `AcquisitionGroup`'s window (a seqlock), a
+                        // group entry's value and its metadata have no shared
+                        // lock. A slot recycled by a concurrent writer between
+                        // these two reads (e.g. a pid/cgroup id reused mid-tick)
+                        // can pair the NEW occupant's value with the OLD
+                        // occupant's labels, or vice versa, for that one tick.
+                        // This matches V2's `create()`, which has the identical
+                        // two-step read here — not a regression introduced by
+                        // V3. Measured under a deliberate concurrent-recycle
+                        // hammer: ~2-3% of ticks torn; in production today it's
+                        // effectively zero, because sampler writes complete
+                        // synchronously inside `refresh()` rather than racing
+                        // the snapshot builder from another task. Migration
+                        // note: a sampler that calls `insert_metadata` more
+                        // than once per slot per refresh (cpu usage does 4)
+                        // should move to a single atomic metadata update
+                        // (`set_metadata`, one call) when it migrates to a
+                        // declared group, to close this window rather than
+                        // just narrow it.
+                        let mut entry_metadata = metadata.clone();
+                        entry_metadata.insert("id".to_string(), idx.to_string());
+                        if let Some(m) = g.load_metadata(idx) {
+                            for (k, v) in m {
+                                entry_metadata.insert(k, v);
+                            }
+                        }
+
+                        group.counters.push((
+                            MetricDesc {
+                                name: format!("{metric_id}x{idx}"),
+                                metadata: entry_metadata,
+                            },
+                            v,
+                        ));
+                    }
                 }
             }
             Value::GaugeGroup(g) => {
-                // Same member-population bound as the `CounterGroup` arm
-                // above — see its comment.
-                let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                for idx in 0..bound {
-                    let v = g.gauge_value(idx);
+                if reader_stamped {
+                    // See the identical branch on the CounterGroup arm
+                    // above for the full rationale (walk-cost grounding,
+                    // and why the sort is required for schema stability).
+                    // No `PackedCounters`-style gauge group exists in the
+                    // codebase yet, but this keeps the declared-group
+                    // membership rule symmetric across both group kinds
+                    // rather than leaving a silent gap for the first one
+                    // that does.
+                    let mut members = g.metadata_snapshot();
+                    members.sort_by_key(|(idx, _)| *idx);
+                    for (idx, m) in members {
+                        let v = g.gauge_value(idx);
 
-                    // Transitional V2-style sentinel skip — default groups
-                    // only. See doc comment. Unlike CounterGroup's `== 0`
-                    // (still live below: 0 is a legitimate initialized-
-                    // but-untouched counter value, indistinguishable from
-                    // an explicit 0), there is no `== i64::MIN` check here:
-                    // `GaugeGroup::gauge_value` already maps its internal
-                    // never-set sentinel to `None` before this ever sees
-                    // it (metriken owns that mapping), so `Some(i64::MIN)`
-                    // cannot occur — an explicit re-check here would be
-                    // dead code.
-                    if !declared && v.is_none() {
-                        continue;
-                    }
-
-                    // Separate value/metadata reads, same torn-recycle
-                    // caveat as the CounterGroup arm above.
-                    let mut entry_metadata = metadata.clone();
-                    entry_metadata.insert("id".to_string(), idx.to_string());
-                    if let Some(m) = g.load_metadata(idx) {
+                        let mut entry_metadata = metadata.clone();
+                        entry_metadata.insert("id".to_string(), idx.to_string());
                         for (k, v) in m {
                             entry_metadata.insert(k, v);
                         }
-                    }
 
-                    group.gauges.push((
-                        MetricDesc {
-                            name: format!("{metric_id}x{idx}"),
-                            metadata: entry_metadata,
-                        },
-                        v,
-                    ));
+                        group.gauges.push((
+                            MetricDesc {
+                                name: format!("{metric_id}x{idx}"),
+                                metadata: entry_metadata,
+                            },
+                            v,
+                        ));
+                    }
+                } else {
+                    // Same member-population bound as the `CounterGroup` arm
+                    // above — see its comment.
+                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                    for idx in 0..bound {
+                        let v = g.gauge_value(idx);
+
+                        // Transitional V2-style sentinel skip — default groups
+                        // only. See doc comment. Unlike CounterGroup's `== 0`
+                        // (still live below: 0 is a legitimate initialized-
+                        // but-untouched counter value, indistinguishable from
+                        // an explicit 0), there is no `== i64::MIN` check here:
+                        // `GaugeGroup::gauge_value` already maps its internal
+                        // never-set sentinel to `None` before this ever sees
+                        // it (metriken owns that mapping), so `Some(i64::MIN)`
+                        // cannot occur — an explicit re-check here would be
+                        // dead code.
+                        if !declared && v.is_none() {
+                            continue;
+                        }
+
+                        // Separate value/metadata reads, same torn-recycle
+                        // caveat as the CounterGroup arm above.
+                        let mut entry_metadata = metadata.clone();
+                        entry_metadata.insert("id".to_string(), idx.to_string());
+                        if let Some(m) = g.load_metadata(idx) {
+                            for (k, v) in m {
+                                entry_metadata.insert(k, v);
+                            }
+                        }
+
+                        group.gauges.push((
+                            MetricDesc {
+                                name: format!("{metric_id}x{idx}"),
+                                metadata: entry_metadata,
+                            },
+                            v,
+                        ));
+                    }
                 }
             }
             Value::Histogram(h) => {
@@ -1029,11 +1339,29 @@ fn create_v3(
             continue;
         }
 
-        // Re-read the window here (after this group's values, above) and
-        // reconcile with the first-touch read via `resolve_walk_window` —
-        // see its doc comment for why a second read is necessary.
-        let latest_window = group_registry.get(&group_name).and_then(|ag| ag.window());
-        let window = resolve_walk_window(group.window, latest_window);
+        // Reader-stamped groups (`PackedCounters` mmap-direct): `finish()`
+        // the bracket acquired at first touch, now that every member's
+        // value has been read above (stamp-last, same rule
+        // `AcquisitionGuard` enforces for sampler-stamped groups — see its
+        // doc comment — applied here to the reader instead of a sampler).
+        // No `resolve_walk_window` reconciliation is needed: the ONLY
+        // writer for a reader-stamped group's slot is this walk itself
+        // (see `AcquisitionGroup::set_reader_stamped`'s single-writer
+        // note), so this acquire()/finish() pair is the complete, sole
+        // write for the tick — there is no concurrent background sampler
+        // that could have re-stamped it mid-walk, unlike the sampler-
+        // stamped case `resolve_walk_window` guards against.
+        let window = if let Some(guard) = group.reader_guard {
+            guard.finish();
+            group_registry.get(&group_name).and_then(|ag| ag.window())
+        } else {
+            // Re-read the window here (after this group's values, above)
+            // and reconcile with the first-touch read via
+            // `resolve_walk_window` — see its doc comment for why a second
+            // read is necessary.
+            let latest_window = group_registry.get(&group_name).and_then(|ag| ag.window());
+            resolve_walk_window(group.window, latest_window)
+        };
         let (counter_descs, counter_values): (Vec<MetricDesc>, Vec<Option<u64>>) =
             group.counters.into_iter().unzip();
         let (gauge_descs, gauge_values): (Vec<MetricDesc>, Vec<Option<i64>>) =
@@ -2039,6 +2367,411 @@ mod tests {
         assert_eq!(
             names1, names2,
             "member order is deterministic (sorted), not input-order-dependent"
+        );
+    }
+
+    // --- reader-stamped (PackedCounters) groups --------------------------
+
+    // Dedicated group + metric, touched by no other test. 8 backing
+    // entries; only a handful get metadata, standing in for a packed
+    // cgroup/task map where most of MAX_CGROUPS/MAX_PID is unregistered.
+    static V3_READER_STAMPED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "reader_stamped_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_READER_STAMPED_GROUP_ENTRY: &'static AcquisitionGroup = &V3_READER_STAMPED_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_reader_stamped_counters",
+        metadata = { acq_group = "reader_stamped_probe" }
+    )]
+    static V3_READER_STAMPED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(8);
+
+    #[test]
+    fn reader_stamped_declared_group_carries_a_walk_spanning_window_in_v3() {
+        // Mirrors what `PackedCounters::new` does (mark the group, don't
+        // ever call acquire()/finish() from a sampler side) without needing
+        // a real BPF map.
+        V3_READER_STAMPED_GROUP.set_reader_stamped();
+        V3_READER_STAMPED_COUNTERS
+            .set_metadata(1, [("cgroup".to_string(), "/a".to_string())].into());
+        V3_READER_STAMPED_COUNTERS.add(1, 5);
+
+        let mut cache = SkeletonCache::new();
+        let snap1 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s1) = snap1 else {
+            panic!("expected V3")
+        };
+        let group1 = s1
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/reader_stamped_probe")
+            .expect("reader-stamped group present");
+        assert_eq!(group1.validate(), Ok(()));
+        let window1 = group1
+            .window
+            .expect("reader-stamped group's window is stamped by create_v3 itself, not a sampler");
+        assert!(window1.begin_ns > 0, "wall-clock begin");
+        assert!(
+            window1.end_ns >= window1.begin_ns,
+            "finish() lands at or after acquire() — never leads"
+        );
+
+        // A second, independent tick re-acquires and re-finishes the
+        // bracket from scratch (there is no sampler that could have
+        // stamped it in between — see `set_reader_stamped`'s single-writer
+        // note) — this walk's window must not be the first walk's stale
+        // leftover.
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        let window2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/reader_stamped_probe")
+            .expect("reader-stamped group present on tick 2")
+            .window
+            .expect("stamped again on tick 2");
+        assert!(
+            window2.begin_ns >= window1.begin_ns,
+            "each tick's bracket begins no earlier than the previous tick's — \
+             tick 2: {window2:?}, tick 1: {window1:?}"
+        );
+    }
+
+    // Regression fixture for a real bug caught while building this wave: a
+    // group declared with plain `AcquisitionGroup::new` reads
+    // `is_reader_stamped() == false` until SOMETHING calls
+    // `set_reader_stamped()` — and in production that only happens inside
+    // `PackedCounters::new`, which only runs once a sampler's `init()` has
+    // gotten as far as attaching a live BPF map. That never happens in a
+    // unit test (no sampler `init()` ever runs), and does not happen for a
+    // sampler disabled via config either — yet the `#[metric]` static and
+    // its `acq_group` tag are registered unconditionally at compile time,
+    // so `create_v3` still routes it to a DECLARED group. Before the fix
+    // (`AcquisitionGroup::new_reader_stamped`, set at construction instead
+    // of relying solely on the runtime setter), that meant every declared-
+    // but-not-yet-runtime-flagged packed group fell through to the
+    // sampler-stamped bound-walk (`0..entries()`, no sentinel skip on the
+    // declared path — see the CounterGroup arm's doc comment) — for
+    // `task_cpu_usage`'s real `MAX_PID` = 4,194,304 backing array, that is
+    // 4.2M pushed entries on ANY call to `create_v3` that merely touches
+    // the metriken registry, which is every single test in this file.
+    // Measured: killed (SIGKILL, OOM) an 8 GB container running the full
+    // test suite. `MAX_PID_SCALE_GROUP` below uses the REAL `MAX_PID`
+    // constant, declared with `new_reader_stamped` and never touched by
+    // `set_reader_stamped` at all, to pin that the fix actually closes the
+    // gap rather than merely relying on `PackedCounters::new` having run.
+    static MAX_PID_SCALE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "max_pid_scale_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static MAX_PID_SCALE_GROUP_ENTRY: &'static AcquisitionGroup = &MAX_PID_SCALE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_max_pid_scale_counters",
+        metadata = { acq_group = "max_pid_scale_probe" }
+    )]
+    static MAX_PID_SCALE_COUNTERS: metriken::CounterGroup =
+        metriken::CounterGroup::new(crate::agent::MAX_PID);
+
+    #[test]
+    fn reader_stamped_group_at_max_pid_scale_never_walks_entries_without_set_reader_stamped() {
+        // Populate exactly 2 of MAX_PID entries, and — critically — never
+        // call `MAX_PID_SCALE_GROUP.set_reader_stamped()`. If routing ever
+        // regresses to depending on that call alone, this test allocates
+        // ~4.2M `MetricDesc`/`HashMap` entries and either OOMs the test
+        // process or takes long enough to be obviously wrong; passing
+        // quickly with exactly 2 members is the pin.
+        MAX_PID_SCALE_COUNTERS.set_metadata(7, [("pid".to_string(), "7".to_string())].into());
+        MAX_PID_SCALE_COUNTERS.add(7, 1);
+        MAX_PID_SCALE_COUNTERS.set_metadata(
+            4_000_000,
+            [("pid".to_string(), "4000000".to_string())].into(),
+        );
+        MAX_PID_SCALE_COUNTERS.add(4_000_000, 1);
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/max_pid_scale_probe")
+            .expect("MAX_PID-scale declared group present");
+        let schema = group.schema.as_ref().expect("schema present");
+        assert_eq!(
+            schema.counters.len(),
+            2,
+            "exactly the 2 populated indices out of {} entries — never the full capacity",
+            crate::agent::MAX_PID
+        );
+    }
+
+    // Dedicated group + metric: 1000 backing entries (standing in for
+    // MAX_CGROUPS/MAX_PID's over-allocation), only a few ever populated.
+    static V3_SPARSE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "sparse_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_SPARSE_GROUP_ENTRY: &'static AcquisitionGroup = &V3_SPARSE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_sparse_counters",
+        metadata = { acq_group = "sparse_probe" }
+    )]
+    static V3_SPARSE_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(1000);
+
+    #[test]
+    fn reader_stamped_sparse_group_emits_only_metadata_populated_indices() {
+        // Three populated indices, one deliberately left at value 0 to pin
+        // that reader-stamped groups use honest-zero registration
+        // membership (the "default-group sentinel path gone for migrated
+        // metrics" requirement) — value 0 must NOT be skipped the way the
+        // default/unmigrated group's transitional sentinel skip would.
+        V3_SPARSE_COUNTERS.set_metadata(5, [("cgroup".to_string(), "/a".to_string())].into());
+        V3_SPARSE_COUNTERS.add(5, 3);
+        V3_SPARSE_COUNTERS.set_metadata(500, [("cgroup".to_string(), "/b".to_string())].into());
+        V3_SPARSE_COUNTERS.add(500, 0);
+        V3_SPARSE_COUNTERS.set_metadata(999, [("cgroup".to_string(), "/c".to_string())].into());
+        V3_SPARSE_COUNTERS.add(999, 7);
+
+        let mut cache = SkeletonCache::new();
+        let snap = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+        let group = s
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_probe")
+            .expect("sparse declared group present");
+        assert_eq!(group.validate(), Ok(()));
+        let schema = group.schema.as_ref().expect("schema present");
+        assert_eq!(
+            schema.counters.len(),
+            3,
+            "exactly the 3 metadata-registered indices, not the 1000-entry backing capacity \
+             (never MAX_CGROUPS/MAX_PID's full capacity — see the walk-cost grounding on \
+             create_v3)"
+        );
+        let ids: Vec<&str> = schema
+            .counters
+            .iter()
+            .map(|d| d.metadata.get("id").map(String::as_str).unwrap())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["5", "500", "999"],
+            "sorted by index — stable order regardless of metadata_snapshot()'s HashMap order"
+        );
+        let idx500 = schema
+            .counters
+            .iter()
+            .position(|d| d.metadata.get("id").map(String::as_str) == Some("500"))
+            .unwrap();
+        assert_eq!(
+            group.counters[idx500],
+            Some(0),
+            "index 500's honest zero is present, not sentinel-skipped"
+        );
+
+        // Stability: the same 3 members produce the identical schema hash
+        // on a second tick (no churn from metadata_snapshot()'s
+        // non-deterministic HashMap order). NOT asserting the global
+        // `cache.rebuilds()` counter here — it accumulates across every
+        // group any concurrently running test's own `create_v3` call
+        // touches, not just this group (see the identical caveat on
+        // `skeleton_cache_is_stable_across_ticks`); `schema_hash`, scoped
+        // to this test's own group, is what's actually pinned.
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        let group2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_probe")
+            .expect("sparse declared group present on tick 2");
+        assert_eq!(
+            group.schema_hash, group2.schema_hash,
+            "unchanged membership across ticks does not churn the schema hash"
+        );
+
+        // A member exiting (metadata cleared, simulating a cgroup/task
+        // going away) drops it from the schema and DOES force a rebuild —
+        // schema churn tracks real membership change, not walk noise.
+        V3_SPARSE_COUNTERS.clear_metadata(500);
+        let snap3 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s3) = snap3 else {
+            panic!("expected V3")
+        };
+        let group3 = s3
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_probe")
+            .expect("sparse declared group present on tick 3");
+        let schema3 = group3.schema.as_ref().expect("schema present");
+        assert_eq!(schema3.counters.len(), 2, "the exited member is gone");
+        assert_ne!(
+            group.schema_hash, group3.schema_hash,
+            "real membership change rebuilds the schema hash"
+        );
+    }
+
+    // Dedicated group + metric for the V2 bracket-window test below.
+    static V2_READER_STAMPED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "v2_reader_stamped_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V2_READER_STAMPED_GROUP_ENTRY: &'static AcquisitionGroup = &V2_READER_STAMPED_GROUP;
+
+    #[metric(
+        name = "snapshot_v2_reader_stamped_counters",
+        metadata = { acq_group = "v2_reader_stamped_probe" }
+    )]
+    static V2_READER_STAMPED_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(4);
+
+    #[test]
+    fn v2_output_carries_the_bracket_window_for_a_reader_stamped_group_member() {
+        V2_READER_STAMPED_COUNTERS.add(2, 9);
+
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_reader_stamped_counters")
+                    && c.metadata.get("id").map(String::as_str) == Some("2")
+            })
+            .expect("reader-stamped counter present in V2 output");
+        let window = c.window.expect(
+            "V2's resolve-once map cannot serve a reader-stamped group — \
+                     create() must bracket it itself, not leave it windowless",
+        );
+        assert!(window.begin_ns > 0, "wall-clock begin");
+    }
+
+    // Dedicated pair of groups/metrics: identical shape (4 entries; indices
+    // 0 and 3 get nonzero values, index 2 an explicit honest zero, index 1
+    // untouched — both end up 0 once the backing array lazily initializes
+    // on first write, so V2's sentinel skip drops both 1 and 2 identically
+    // regardless of which reason produced the zero), one plain (no
+    // acq_group — stands in for an unmigrated packed metric, pre-wave-2),
+    // one reader-stamped (post-migration). Pins that migrating a packed
+    // metric to a reader-stamped group changes ONLY the window V2 attaches,
+    // never which entries are emitted or their values.
+    #[metric(name = "snapshot_v2_compat_plain_counters")]
+    static V2_COMPAT_PLAIN_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(4);
+
+    static V2_COMPAT_READER_STAMPED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "v2_compat_reader_stamped");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V2_COMPAT_READER_STAMPED_GROUP_ENTRY: &'static AcquisitionGroup =
+        &V2_COMPAT_READER_STAMPED_GROUP;
+
+    #[metric(
+        name = "snapshot_v2_compat_reader_stamped_counters",
+        metadata = { acq_group = "v2_compat_reader_stamped" }
+    )]
+    static V2_COMPAT_READER_STAMPED_COUNTERS: metriken::CounterGroup =
+        metriken::CounterGroup::new(4);
+
+    #[test]
+    fn v2_output_is_unchanged_except_windows_for_a_migrated_packed_metric() {
+        for g in [
+            &V2_COMPAT_PLAIN_COUNTERS,
+            &V2_COMPAT_READER_STAMPED_COUNTERS,
+        ] {
+            g.add(0, 5);
+            // index 1 left untouched: never-written sentinel, skipped by
+            // BOTH paths identically.
+            g.add(2, 0); // honest zero: V2's transitional sentinel skip drops this on BOTH paths
+            g.add(3, 11);
+        }
+
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+
+        let plain: Vec<(String, u64, Option<Window>)> = s
+            .counters
+            .iter()
+            .filter(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_compat_plain_counters")
+            })
+            .map(|c| (c.metadata.get("id").cloned().unwrap(), c.value, c.window))
+            .collect();
+        let migrated: Vec<(String, u64, Option<Window>)> = s
+            .counters
+            .iter()
+            .filter(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_compat_reader_stamped_counters")
+            })
+            .map(|c| (c.metadata.get("id").cloned().unwrap(), c.value, c.window))
+            .collect();
+
+        let plain_ids: Vec<&str> = plain.iter().map(|(id, _, _)| id.as_str()).collect();
+        let migrated_ids: Vec<&str> = migrated.iter().map(|(id, _, _)| id.as_str()).collect();
+        assert_eq!(
+            plain_ids, migrated_ids,
+            "identical membership (same sentinel skip, same surviving indices)"
+        );
+        let plain_values: Vec<u64> = plain.iter().map(|(_, v, _)| *v).collect();
+        let migrated_values: Vec<u64> = migrated.iter().map(|(_, v, _)| *v).collect();
+        assert_eq!(plain_values, migrated_values, "identical values");
+
+        // The only difference: the migrated (reader-stamped) path carries a
+        // real bracket window; the plain path — never `set_with_window`,
+        // no acq_group — carries none, exactly as it did before wave 2.
+        assert!(
+            plain.iter().all(|(_, _, w)| w.is_none()),
+            "unmigrated packed metric stays windowless in V2, as before"
+        );
+        assert!(
+            migrated.iter().all(|(_, _, w)| w.is_some()),
+            "migrated packed metric gains a window in V2 — the only change"
         );
     }
 

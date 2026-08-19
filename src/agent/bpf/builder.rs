@@ -451,7 +451,11 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static AcquisitionGroup,
     )>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
-    packed_counters: Vec<(&'static str, &'static CounterGroup)>,
+    packed_counters: Vec<(
+        &'static str,
+        &'static CounterGroup,
+        &'static AcquisitionGroup,
+    )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
@@ -815,7 +819,7 @@ where
             let mut packed_counters: Vec<PackedCounters> = self
                 .packed_counters
                 .into_iter()
-                .map(|(name, counters)| PackedCounters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| PackedCounters::new(skel.map(name), counters, group))
                 .collect();
 
             for (name, values) in self.maps.into_iter() {
@@ -1022,19 +1026,40 @@ where
     /// the `counters` are a set of userspace dynamic counters. The BPF map is
     /// expected to be densely packed, meaning there is no padding. The order of
     /// the `counters` must exactly match the order in the BPF map.
-    pub fn packed_counters(mut self, name: &'static str, counters: &'static CounterGroup) -> Self {
-        self.packed_counters.push((name, counters));
+    ///
+    /// `group` is the declared [`AcquisitionGroup`] this map's values belong
+    /// to. Unlike `counters`/`cpu_counters`, `PackedCounters` never calls
+    /// `acquire()`/`finish()` itself — there is no `refresh()`-time read to
+    /// bracket, since values are read directly from the mmap by the
+    /// exposition code. `group` is marked
+    /// [reader-stamped](crate::agent::timing::AcquisitionGroup::set_reader_stamped)
+    /// instead, and `create`/`create_v3` bracket its window at exposition
+    /// time. As with `histogram`, `group` is NOT required to be unique per
+    /// call — several `.packed_counters()` calls naming the same group (the
+    /// like-entities case, e.g. `cgroup_syscall`'s 16 op-class maps) share
+    /// one window, not one each.
+    pub fn packed_counters(
+        mut self,
+        name: &'static str,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
+    ) -> Self {
+        self.packed_counters.push((name, counters, group));
         self
     }
 
     /// Register a set of sparse packed counters. Alias for `packed_counters`
-    /// since metriken's `CounterGroup` uses sparse metadata by default.
+    /// since metriken's `CounterGroup` uses sparse metadata by default —
+    /// both dense (cgroup) and sparse (task) packed groups resolve their
+    /// V3 declared-group membership from registration (metadata presence),
+    /// not from a walked bound; see `create_v3`'s reader-stamped handling.
     pub fn sparse_packed_counters(
         self,
         name: &'static str,
         counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.packed_counters(name, counters)
+        self.packed_counters(name, counters, group)
     }
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {

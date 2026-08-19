@@ -557,10 +557,14 @@ enforces, and that reviewers must protect:
 - Splitting like-entity sweeps into per-entity groups (the 16-acquisition
   syscall_latency shape this design exists to remove).
 
-**Not yet migrated** (windows still per-entry or absent): `PackedCounters`
-(mmap-direct; its acquisition is the exposition read — wave-2 design),
-sparse cgroup/task groups, gpu, memory, cpu/cores, drivehealth. Each
-migration goes through the checklist below.
+**Not yet migrated** (windows still per-entry or absent): gpu, memory,
+cpu/cores, drivehealth. `PackedCounters` (mmap-direct cgroup/task counters —
+its acquisition is the exposition read, bracketed by `create`/`create_v3`
+themselves) migrated in wave-2 Part A; declared reader-stamped groups use
+metadata-presence membership (`load_metadata(idx).is_some()`), never
+`0..entries()`, so a `MAX_PID`-scale group like `task_cpu_usage` never walks
+its full backing capacity. Each remaining migration goes through the
+checklist below.
 
 ## Reviewing or writing a sampler — operational checklist
 

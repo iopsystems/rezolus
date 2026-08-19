@@ -65,10 +65,26 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY, &RUNQLAT_ACQ)
     .histogram("running", &SCHEDULER_RUNNING, &RUNNING_ACQ)
     .histogram("offcpu", &SCHEDULER_OFFCPU, &OFFCPU_ACQ)
-    .packed_counters("cgroup_runq_wait", &CGROUP_SCHEDULER_RUNQUEUE_WAIT)
-    .packed_counters("cgroup_offcpu", &CGROUP_SCHEDULER_OFFCPU)
-    .packed_counters("cgroup_ivcsw", &CGROUP_SCHEDULER_IVCSW)
-    .packed_counters("cgroup_vcsw", &CGROUP_SCHEDULER_VCSW)
+    .packed_counters(
+        "cgroup_runq_wait",
+        &CGROUP_SCHEDULER_RUNQUEUE_WAIT,
+        &CGROUP_WAIT_ACQ,
+    )
+    .packed_counters(
+        "cgroup_offcpu",
+        &CGROUP_SCHEDULER_OFFCPU,
+        &CGROUP_OFFCPU_ACQ,
+    )
+    .packed_counters(
+        "cgroup_ivcsw",
+        &CGROUP_SCHEDULER_IVCSW,
+        &CGROUP_CONTEXT_SWITCH_ACQ,
+    )
+    .packed_counters(
+        "cgroup_vcsw",
+        &CGROUP_SCHEDULER_VCSW,
+        &CGROUP_CONTEXT_SWITCH_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(if kernel_has_btf() {
         &[

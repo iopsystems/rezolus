@@ -19,8 +19,18 @@ pub static MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "cpu_migrations_migrations",
 );
 
+// Reader-stamped (mmap-direct `PackedCounters`) group for the per-cgroup
+// migration count — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+pub static CGROUP_MIGRATIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_migrations"),
+    "cpu_migrations_cgroup",
+);
+
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static MIGRATIONS_ACQ_REG: &'static AcquisitionGroup = &MIGRATIONS_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_MIGRATIONS_ACQ_REG: &'static AcquisitionGroup = &CGROUP_MIGRATIONS_ACQ;
 
 /*
  * bpf prog stats
@@ -60,6 +70,7 @@ pub static CPU_MIGRATIONS_TO: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cgroup_cpu_migrations",
-    description = "The number of times a process in a cgroup migrated from one CPU to another"
+    description = "The number of times a process in a cgroup migrated from one CPU to another",
+    metadata = { acq_group = "cpu_migrations_cgroup" }
 )]
 pub static CGROUP_CPU_MIGRATIONS: CounterGroup = CounterGroup::new(MAX_CGROUPS);

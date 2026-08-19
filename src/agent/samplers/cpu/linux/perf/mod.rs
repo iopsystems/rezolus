@@ -53,8 +53,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES)
     .perf_event("instructions", PerfEvent::instructions(), &CPU_INSTRUCTIONS)
-    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
-    .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
+    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES, &CGROUP_CYCLES_ACQ)
+    .packed_counters(
+        "cgroup_instructions",
+        &CGROUP_CPU_INSTRUCTIONS,
+        &CGROUP_INSTRUCTIONS_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_event)
     .disabled_programs(if kernel_has_btf() {
         &["handle__sched_switch_raw"]

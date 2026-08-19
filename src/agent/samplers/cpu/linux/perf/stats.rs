@@ -1,6 +1,25 @@
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::{MAX_CGROUPS, MAX_CPUS};
+use linkme::distributed_slice;
+
+// Reader-stamped (mmap-direct `PackedCounters`) groups, one per distinct
+// metric family — see `docs/principles.md` principle 18 and
+// `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+pub static CGROUP_CYCLES_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_perf"),
+    "cpu_perf_cgroup_cycles",
+);
+pub static CGROUP_INSTRUCTIONS_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
+    crate::agent::samplers::bpf_sampler_name("cpu_perf"),
+    "cpu_perf_cgroup_instructions",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_CYCLES_ACQ_REG: &'static AcquisitionGroup = &CGROUP_CYCLES_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CGROUP_INSTRUCTIONS_ACQ_REG: &'static AcquisitionGroup = &CGROUP_INSTRUCTIONS_ACQ;
 
 /*
  * bpf prog stats
@@ -45,13 +64,13 @@ pub static CPU_INSTRUCTIONS: CounterGroup = CounterGroup::new(MAX_CPUS);
 #[metric(
     name = "cgroup_cpu_cycles",
     description = "The number of elapsed CPU cycles on a per-cgroup basis",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_perf_cgroup_cycles" }
 )]
 pub static CGROUP_CPU_CYCLES: CounterGroup = CounterGroup::new(MAX_CGROUPS);
 
 #[metric(
     name = "cgroup_cpu_instructions",
     description = "The number of instructions retired on a per-cgroup basis",
-    metadata = { unit = "instructions" }
+    metadata = { unit = "instructions", acq_group = "cpu_perf_cgroup_instructions" }
 )]
 pub static CGROUP_CPU_INSTRUCTIONS: CounterGroup = CounterGroup::new(MAX_CGROUPS);

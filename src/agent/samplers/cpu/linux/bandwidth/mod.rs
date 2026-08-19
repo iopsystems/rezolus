@@ -74,16 +74,30 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .packed_counters("throttled_time", &CGROUP_CPU_THROTTLED_TIME)
-    .packed_counters("throttled_count", &CGROUP_CPU_THROTTLED)
-    .packed_counters("bandwidth_periods", &CGROUP_CPU_BANDWIDTH_PERIODS)
+    .packed_counters(
+        "throttled_time",
+        &CGROUP_CPU_THROTTLED_TIME,
+        &CGROUP_THROTTLED_TIME_ACQ,
+    )
+    .packed_counters(
+        "throttled_count",
+        &CGROUP_CPU_THROTTLED,
+        &CGROUP_THROTTLED_COUNT_ACQ,
+    )
+    .packed_counters(
+        "bandwidth_periods",
+        &CGROUP_CPU_BANDWIDTH_PERIODS,
+        &CGROUP_BANDWIDTH_PERIODS_ACQ,
+    )
     .packed_counters(
         "bandwidth_throttled_periods",
         &CGROUP_CPU_BANDWIDTH_THROTTLED_PERIODS,
+        &CGROUP_BANDWIDTH_THROTTLED_PERIODS_ACQ,
     )
     .packed_counters(
         "bandwidth_throttled_time",
         &CGROUP_CPU_BANDWIDTH_THROTTLED_TIME,
+        &CGROUP_BANDWIDTH_THROTTLED_TIME_ACQ,
     )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
