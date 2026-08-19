@@ -572,19 +572,30 @@ enforces, and that reviewers must protect:
 - Splitting like-entity sweeps into per-entity groups (the 16-acquisition
   syscall_latency shape this design exists to remove).
 
-**Not yet migrated** (windows still per-entry or absent): gpu, memory,
-cpu/cores, drivehealth, and `cpu_bandwidth`'s two ringbuf-populated cgroup
-gauges (`cgroup_cpu_bandwidth_quota`, `cgroup_cpu_bandwidth_period_duration`
-— set via a `ringbuf_handler`, not mmap-attached, so they are not
-`PackedCounters` and wave-2 Part A's reader-stamped migration does not
-cover them; they still fall into their sampler's windowless default
-group). `PackedCounters` (mmap-direct cgroup/task counters — its
+**Not yet migrated** (windows still per-entry or absent): `cpu_bandwidth`'s
+two ringbuf-populated cgroup gauges (`cgroup_cpu_bandwidth_quota`,
+`cgroup_cpu_bandwidth_period_duration` — set via a `ringbuf_handler`, not
+mmap-attached, so they are not `PackedCounters` and wave-2 Part A's
+reader-stamped migration does not cover them; they still fall into their
+sampler's windowless default group), plus external metrics (`record`/
+push-ingested values carried on `ExternalMetric`, which stamps its own
+per-value `Window` from the *source's* observation, not a Rezolus read
+section — structurally outside acquisition-group discipline, not a pending
+migration). `PackedCounters` (mmap-direct cgroup/task counters — its
 acquisition is the exposition read, bracketed by `create`/`create_v3`
 themselves) migrated in wave-2 Part A; declared reader-stamped groups use
 metadata-presence membership (`load_metadata(idx).is_some()`), never
 `0..entries()`, so a `MAX_PID`-scale group like `task_cpu_usage` never walks
-its full backing capacity. Each remaining migration goes through the
-checklist below.
+its full backing capacity. Wave-2 Part B migrated the last refresh-read
+samplers — `memory/meminfo`, `memory/vmstat`, `cpu/cores`, `drivehealth`,
+`gpu/amd` (SMI), `gpu/nvidia` — each to one `AcquisitionGroup` per read
+section (drivehealth and both GPU samplers collapse their whole per-drive/
+per-device sweep into a single group per principle 18's "device sweep"
+read-section shape, matching the like-entities rule; memory/cpu-cores are
+one procfs/sysfs read each). `gpu_amd_pmu` (rocprofiler hardware counters)
+was untouched — it was already a plain, unwindowed `CounterGroup` sampler
+with no per-metric window to migrate away from. Any future remaining
+migration goes through the checklist below.
 
 ## Reviewing or writing a sampler — operational checklist
 
