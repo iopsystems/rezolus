@@ -170,8 +170,43 @@ fn create(
         // `metric_metadata` (the shared prefix) and on `create_v3` itself
         // (the per-kind walk/naming/membership rules below, which are NOT
         // shared and are duplicated independently in each function).
-        let (metadata, _sampler) = metric_metadata(metric, &sampler_mods);
+        let (metadata, sampler) = metric_metadata(metric, &sampler_mods);
         let mut metadata: HashMap<String, String> = metadata.into_iter().collect();
+
+        // Migrated metrics (wave 1+: plain `LazyCounter`/`CounterGroup`/
+        // `RwLockHistogram` stamped by an `AcquisitionGroup` instead of a
+        // per-metric `Windowed*` wrapper) carry `acq_group` in their static
+        // metadata but no per-metric window of their own —
+        // `value_with_window()`/`load_with_window(idx)` fall through to the
+        // trait's windowless default (`None`) for them. Resolve the group
+        // the same way `create_v3` does (same `group_registry()`) and use
+        // ITS window instead, so V2 output doesn't silently go window-blind
+        // for every metric that migrates. A metric with no `acq_group`
+        // keeps its existing per-metric window path untouched below.
+        //
+        // `group_window` is `Option<Option<Window>>`: `None` means "not a
+        // group member, don't override"; `Some(None)` means "is a member of
+        // a group that just hasn't been stamped yet" (still no window, but
+        // deliberately, not by falling through to a stale per-metric
+        // value). `.unwrap_or(stored_window)` therefore does exactly the
+        // right thing in both cases: outer `None` → keep `stored_window`;
+        // outer `Some(w)` → replace it with the group's `w` (which may
+        // itself be `None`).
+        //
+        // The window this attaches is a whole-group ACQUISITION window
+        // (one stamp covering an entire sweep — a per-CPU read, a map
+        // read), not the old per-entry stamp. It is measured ~1.75× wider
+        // than the per-entry windows it replaces (see
+        // docs/journal/2026-08-17-window-sidecar-cost.md proposal 2) — an
+        // accepted, honest widening (an upper bound on the true per-entry
+        // acquisition time, never an underestimate), and now the same
+        // semantic V3 already uses: V2 and V3 consumers see the identical
+        // acquisition-window meaning for a migrated metric.
+        let group_window: Option<Option<Window>> = metric.metadata().get("acq_group").map(|g| {
+            group_registry()
+                .get(&format!("{sampler}/{g}"))
+                .and_then(|group| group.window())
+        });
 
         // V2 has no group concept — `acq_group` only means something to
         // `create_v3`'s routing. Strip it unconditionally (mirroring
@@ -183,18 +218,25 @@ fn create(
         let name = format!("{metric_id}");
 
         match value {
-            Some(Value::Counter(value)) => s
-                .counters
-                .push(Counter::new(name, value, metadata).with_window(stored_window)),
-            Some(Value::Gauge(value)) => s
-                .gauges
-                .push(Gauge::new(name, value, metadata).with_window(stored_window)),
+            Some(Value::Counter(value)) => s.counters.push(
+                Counter::new(name, value, metadata)
+                    .with_window(group_window.unwrap_or(stored_window)),
+            ),
+            Some(Value::Gauge(value)) => s.gauges.push(
+                Gauge::new(name, value, metadata)
+                    .with_window(group_window.unwrap_or(stored_window)),
+            ),
             Some(Value::CounterGroup(g)) => {
                 for counter_id in 0..g.entries() {
                     // Atomic pair read: value + window under one lock, so a
                     // concurrent writer can never pair a fresh value with a
-                    // stale window (drivehealth's async tear surface).
-                    let (value, window) = g.load_with_window(counter_id);
+                    // stale window (drivehealth's async tear surface). For a
+                    // migrated (group-stamped) member, `load_with_window`
+                    // itself only ever returns `None` for the window half —
+                    // `group_window` (resolved once above, outside this
+                    // loop, since it's the same for every member) is what
+                    // actually carries the group's window.
+                    let (value, entry_window) = g.load_with_window(counter_id);
                     let Some(value) = value else { continue };
                     if value == 0 {
                         continue;
@@ -211,14 +253,15 @@ fn create(
 
                     s.counters.push(
                         Counter::new(format!("{metric_id}x{counter_id}"), value, metadata)
-                            .with_window(window),
+                            .with_window(group_window.unwrap_or(entry_window)),
                     )
                 }
             }
             Some(Value::GaugeGroup(g)) => {
                 for gauge_id in 0..g.entries() {
-                    // Atomic pair read (see CounterGroup arm above).
-                    let (value, window) = g.load_with_window(gauge_id);
+                    // Atomic pair read (see CounterGroup arm above); same
+                    // group-window override for a migrated member.
+                    let (value, entry_window) = g.load_with_window(gauge_id);
                     let Some(value) = value else { continue };
                     if value == i64::MIN {
                         continue;
@@ -236,7 +279,7 @@ fn create(
 
                     s.gauges.push(
                         Gauge::new(format!("{metric_id}x{gauge_id}"), value, metadata)
-                            .with_window(window),
+                            .with_window(group_window.unwrap_or(entry_window)),
                     )
                 }
             }
@@ -251,8 +294,10 @@ fn create(
                         h.config().max_value_power().to_string(),
                     );
 
-                    s.histograms
-                        .push(Histogram::new(name, value, metadata).with_window(stored_window))
+                    s.histograms.push(
+                        Histogram::new(name, value, metadata)
+                            .with_window(group_window.unwrap_or(stored_window)),
+                    )
                 }
             }
             _ => {}
@@ -1105,6 +1150,130 @@ mod tests {
         assert!(
             !c.metadata.contains_key("acq_group"),
             "acq_group must be stripped from V2 output, not leaked as a new label"
+        );
+    }
+
+    // --- V2 group-window regression fix ----------------------------------
+    //
+    // Wave 1 switched migrated metrics from `Windowed*` types to plain
+    // `LazyCounter`/`CounterGroup` stamped by an `AcquisitionGroup`. `create`
+    // (V2) used to read a per-metric window off `value_with_window`/
+    // `load_with_window`, which just returns `None` for those types now —
+    // V2 output silently lost acquisition windows for every migrated
+    // sampler. These pin the fix: a declared, stamped group's window is
+    // read off the group registry instead; a declared-but-never-stamped
+    // group stays `None` (not a stale or fabricated window); an unmigrated
+    // `Windowed*` metric's own per-metric window path is untouched.
+
+    // Dedicated group + metric, touched by no other test (same rationale as
+    // `V3_STABILITY_GROUP` above): a shared group could get stamped by
+    // another test's `acquire()`/`finish()` before this one runs.
+    static V2_GROUP_WINDOW_STAMPED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "v2_group_window_stamped_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V2_GROUP_WINDOW_STAMPED_GROUP_ENTRY: &'static AcquisitionGroup =
+        &V2_GROUP_WINDOW_STAMPED_GROUP;
+
+    #[metric(
+        name = "snapshot_v2_group_window_stamped_probe",
+        metadata = { acq_group = "v2_group_window_stamped_probe" }
+    )]
+    static V2_GROUP_WINDOW_STAMPED_PROBE: metriken::Counter = metriken::Counter::new();
+
+    #[test]
+    fn v2_output_carries_the_group_window_for_a_stamped_declared_group_member() {
+        V2_GROUP_WINDOW_STAMPED_PROBE.increment();
+        let guard = V2_GROUP_WINDOW_STAMPED_GROUP.acquire();
+        guard.finish();
+        let group_window = V2_GROUP_WINDOW_STAMPED_GROUP
+            .window()
+            .expect("group was just stamped");
+
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_group_window_stamped_probe")
+            })
+            .expect("stamped probe counter present in V2 output");
+        assert_eq!(
+            c.window,
+            Some(group_window),
+            "V2 output carries the declared group's window, not None"
+        );
+    }
+
+    // Dedicated group, never acquired/finished by any test.
+    static V2_GROUP_WINDOW_UNSTAMPED_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new("unattributed", "v2_group_window_unstamped_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V2_GROUP_WINDOW_UNSTAMPED_GROUP_ENTRY: &'static AcquisitionGroup =
+        &V2_GROUP_WINDOW_UNSTAMPED_GROUP;
+
+    #[metric(
+        name = "snapshot_v2_group_window_unstamped_probe",
+        metadata = { acq_group = "v2_group_window_unstamped_probe" }
+    )]
+    static V2_GROUP_WINDOW_UNSTAMPED_PROBE: metriken::Counter = metriken::Counter::new();
+
+    #[test]
+    fn v2_output_is_windowless_for_a_declared_but_unstamped_group() {
+        V2_GROUP_WINDOW_UNSTAMPED_PROBE.increment();
+
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_group_window_unstamped_probe")
+            })
+            .expect("unstamped probe counter present in V2 output");
+        assert_eq!(
+            c.window, None,
+            "a declared but never-stamped group must not fabricate a window"
+        );
+    }
+
+    // No `acq_group` tag: an ordinary `WindowedLazyCounter`, same as an
+    // unmigrated sampler still uses. Its own per-metric window path (via
+    // `value_with_window`) must be exactly what V2 output carries — the
+    // group-window fix only ever overrides metrics that declare `acq_group`.
+    #[metric(name = "snapshot_v2_unmigrated_windowed_probe")]
+    static V2_UNMIGRATED_WINDOWED_PROBE: metriken::WindowedLazyCounter =
+        metriken::WindowedLazyCounter::new(metriken::Counter::default);
+
+    #[test]
+    fn v2_output_keeps_the_per_metric_window_for_an_unmigrated_windowed_metric() {
+        let win = Window::new(5_000, 9_000);
+        V2_UNMIGRATED_WINDOWED_PROBE.set_with_window(3, win);
+
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v2_unmigrated_windowed_probe")
+            })
+            .expect("unmigrated windowed probe counter present in V2 output");
+        assert_eq!(
+            c.window,
+            Some(win),
+            "unmigrated per-metric window path is untouched by the group-window fix"
         );
     }
 
