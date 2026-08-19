@@ -567,7 +567,7 @@ fn create_v3(
                 // First touch for this group THIS TICK: read its window
                 // now, before any of its members' values accumulate below
                 // — not once per member (redundant seqlock loads, and
-                // walk-order-dependent) and not deferred to emit time
+                // walk-order-dependent) and not deferred solely to emit time (see resolve_walk_window)
                 // (unsafe: the walk over the FULL registry, across every
                 // group, can take long enough that a concurrent sampler
                 // tick completes a whole new acquire()/finish() cycle in
@@ -754,7 +754,7 @@ fn create_v3(
         // (hashbrown makes no ordering guarantee, independent of any TTL
         // eviction/insertion churn). Sort by the identity-derived name
         // assigned below so the group's member order — and therefore the
-        // skeleton cache's name-list comparison — is deterministic
+        // skeleton cache's schema comparison — is deterministic
         // regardless of store iteration order; otherwise the cache would
         // spuriously "miss" (and rebuild/rehash) on every tick whenever the
         // store happened to reorder with no real membership change.

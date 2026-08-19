@@ -232,7 +232,7 @@ impl AcquisitionGroup {
 /// readers see "no new data this tick", which is the honest signal. A group
 /// whose reads keep failing simply stops advancing, visibly, in the data —
 /// missing beats wrong.
-// consumed by the V3 snapshot builder (next task)
+// Only exercised by the V3 snapshot builder's own tests today; real consumers are the per-sampler migrations.
 #[allow(dead_code)]
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
@@ -240,7 +240,7 @@ pub(crate) struct AcquisitionGuard<'a> {
     begin_mono: Instant,
 }
 
-#[allow(dead_code)] // consumed by the V3 snapshot builder (next task)
+#[allow(dead_code)] // Only exercised by the V3 snapshot builder's own tests today; real consumers are the per-sampler migrations.
 impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn begin(slot: &'a GroupWindowSlot) -> Self {
         Self {
@@ -387,6 +387,12 @@ mod tests {
         assert!(
             SLOT.load().is_none(),
             "drop must not stamp: a failed read leaves the slot exactly as it was"
+        );
+        // Explicit discard() is documented as identical to the drop path.
+        AcquisitionGuard::begin(&SLOT).discard();
+        assert!(
+            SLOT.load().is_none(),
+            "discard() must not stamp, same as the drop path"
         );
     }
 }

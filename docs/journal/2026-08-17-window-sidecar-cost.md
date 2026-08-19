@@ -182,6 +182,15 @@ work being self-evident from the loop bound.
 > **Update 2026-08-18:** the gate ran — see
 > [split-table read-cost gate](2026-08-18-split-table-read-cost-gate.md).
 > Queries 0.55–0.68×, archive 0.63× versus the wide layout.
+>
+> **Update 2026-08-18 (later):** the format and agent infrastructure landed.
+> metriken-exposition 0.18.0 ships SnapshotV3 (acquisition-group payloads,
+> one window per group, content-hashed cacheable schemas), and the agent
+> grew the group registry, the `acquire()`/`finish()` timing API, and a
+> config-gated V3 builder: `[general] snapshot_format = "v3"` (default stays
+> `"v2"`). Windows are absent from V3 output until samplers declare groups —
+> that per-sampler migration is the next stage, and both the recorder's
+> native V3 ingest and any default flip are gated on it.
 
 The "Split tables per cohort" rejection above is superseded by the
 acquisition-groups design (spec in the local, untracked
