@@ -5,12 +5,13 @@ use crate::agent::external_metrics::{
 use crate::agent::timing::AcquisitionGroup;
 use crate::agent::*;
 
-use metriken::Value;
+use metriken::{Value, Window};
 use metriken_exposition::{
     Counter, Gauge, GroupSchema, GroupSnapshot, Histogram, MetricDesc, Snapshot, SnapshotV2,
     SnapshotV3,
 };
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
@@ -95,6 +96,43 @@ impl SnapshotBuilder {
     }
 }
 
+/// Metadata common to any exposed entry for one metric: `"metric"` (its
+/// name) plus everything from the metric's own static metadata, plus
+/// `"sampler"` attribution — also returned standalone, since a caller (the
+/// V3 builder) needs the sampler name itself for group routing, beyond
+/// just having it embedded in the map. Shared between `create` (V2) and
+/// `create_v3` so the two builders can't independently drift on what this
+/// prefix does; `create_v3` uses the returned `BTreeMap` directly (its wire
+/// format's native form) while `create` converts to a `HashMap` (V2's).
+///
+/// # KEEP IN SYNC
+///
+/// This helper covers only the shared prefix. Everything after it — the
+/// `log_` skip that gates it (each caller's own, since it's a `continue` at
+/// the caller's loop, not something a shared helper can do), and the
+/// per-kind (Counter/Gauge/CounterGroup/GaugeGroup/Histogram)
+/// walk/naming/membership rules — remains genuinely duplicated between
+/// `create` and `create_v3`: `{id}`/`{id}x{idx}` naming, and the histogram
+/// `grouping_power`/`max_value_power` metadata keys. A change to one must
+/// be checked against the other.
+fn metric_metadata(
+    metric: &metriken::MetricEntry,
+    sampler_mods: &[(&str, &str)],
+) -> (BTreeMap<String, String>, String) {
+    let mut metadata: BTreeMap<String, String> =
+        [("metric".to_string(), metric.name().to_string())].into();
+
+    for (k, v) in metric.metadata().iter() {
+        metadata.insert(k.to_string(), v.to_string());
+    }
+
+    let sampler =
+        crate::agent::samplers::attribute_sampler(metric.module(), sampler_mods).to_string();
+    metadata.insert("sampler".to_string(), sampler.clone());
+
+    (metadata, sampler)
+}
+
 fn create(
     timestamp: SystemTime,
     duration: Duration,
@@ -128,15 +166,12 @@ fn create(
             continue;
         }
 
-        let mut metadata: HashMap<String, String> =
-            [("metric".to_string(), name.to_string())].into();
-
-        for (k, v) in metric.metadata().iter() {
-            metadata.insert(k.to_string(), v.to_string());
-        }
-
-        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
-        metadata.insert("sampler".to_string(), sampler.to_string());
+        // KEEP IN SYNC with create_v3 — see the doc comment on
+        // `metric_metadata` (the shared prefix) and on `create_v3` itself
+        // (the per-kind walk/naming/membership rules below, which are NOT
+        // shared and are duplicated independently in each function).
+        let (metadata, _sampler) = metric_metadata(metric, &sampler_mods);
+        let mut metadata: HashMap<String, String> = metadata.into_iter().collect();
 
         let name = format!("{metric_id}");
 
@@ -345,12 +380,12 @@ impl SkeletonCache {
     }
 }
 
-/// Per-group accumulation while walking the metriken registry: per kind,
-/// the (descriptor, value) pairs in schema order. The group's acquisition
-/// window is deliberately NOT accumulated here — see `create_v3`, which
-/// reads it once per group at emit time instead.
+/// Per-group accumulation while walking the metriken registry: the group's
+/// acquisition window (read once, at first touch — see `create_v3`) plus,
+/// per kind, the (descriptor, value) pairs in schema order.
 #[derive(Default)]
 struct GroupBuilder {
+    window: Option<Window>,
     counters: Vec<(MetricDesc, Option<u64>)>,
     gauges: Vec<(MetricDesc, Option<i64>)>,
     histograms: Vec<(MetricDesc, Option<histogram::Histogram>)>,
@@ -456,25 +491,16 @@ fn create_v3(
             continue;
         }
 
-        let mut metadata: BTreeMap<String, String> =
-            [("metric".to_string(), name.to_string())].into();
-
-        for (k, v) in metric.metadata().iter() {
-            metadata.insert(k.to_string(), v.to_string());
-        }
-
-        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
-        metadata.insert("sampler".to_string(), sampler.to_string());
+        // KEEP IN SYNC with create — see the doc comment on
+        // `metric_metadata` (the shared prefix) and below (the per-kind
+        // walk/naming/membership rules, which are NOT shared and are
+        // duplicated independently in each function).
+        let (metadata, sampler) = metric_metadata(metric, &sampler_mods);
 
         // Route: a declared `acq_group` wins only if it actually resolves
         // against the registry; otherwise fall back to the sampler's
         // default group (and flag the mismatch in debug builds — see the
-        // function-level doc comment). The group's window is deliberately
-        // NOT read here: doing it per-metric would mean an unused seqlock
-        // load for every member after the first (only the read that
-        // happened to create the `GroupBuilder` mattered) and makes the
-        // result depend on walk order for no reason. `create_v3` reads it
-        // once per group at emit time instead, from this same registry.
+        // function-level doc comment).
         let mut declared = false;
         let group_key = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
@@ -496,7 +522,32 @@ fn create_v3(
             None => format!("{sampler}/main"),
         };
 
-        let group = groups.entry(group_key).or_default();
+        let group = match groups.entry(group_key) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                // First touch for this group THIS TICK: read its window
+                // now, before any of its members' values accumulate below
+                // — not once per member (redundant seqlock loads, and
+                // walk-order-dependent) and not deferred to emit time
+                // (unsafe: the walk over the FULL registry, across every
+                // group, can take long enough that a concurrent sampler
+                // tick completes a whole new acquire()/finish() cycle in
+                // the meantime, which would pair window(N+1) with the
+                // values(N) already read here — a confident, wrong claim
+                // that this data is newer than it actually is). Read
+                // before values, mirroring timing.rs's stamp-last rule
+                // from the read side: a stale window paired with
+                // fresh-enough values only under-claims freshness, which
+                // is the safe direction — same "can only lag, never lead"
+                // guarantee `AcquisitionGuard` gives writers, applied here
+                // to the reader.
+                let window = group_registry.get(e.key()).and_then(|ag| ag.window());
+                e.insert(GroupBuilder {
+                    window,
+                    ..Default::default()
+                })
+            }
+        };
 
         let entry_name = format!("{metric_id}");
 
@@ -707,6 +758,7 @@ fn create_v3(
     let mut group_snapshots: Vec<GroupSnapshot> = Vec::with_capacity(groups.len());
 
     for (group_name, group) in groups {
+        let window = group.window;
         let (counter_descs, counter_values): (Vec<MetricDesc>, Vec<Option<u64>>) =
             group.counters.into_iter().unzip();
         let (gauge_descs, gauge_values): (Vec<MetricDesc>, Vec<Option<i64>>) =
@@ -741,13 +793,6 @@ fn create_v3(
                 (schema, hash)
             }
         };
-
-        // Read the group's window ONCE here, from the same registry used
-        // for routing — not accumulated per-member during the walk above
-        // (see the note on `GroupBuilder`). A group not found in the
-        // registry (every default group, `external/main`, and the
-        // fallback group an unmatched `acq_group` lands in) is windowless.
-        let window = group_registry.get(&group_name).and_then(|ag| ag.window());
 
         group_snapshots.push(GroupSnapshot {
             name: group_name,
