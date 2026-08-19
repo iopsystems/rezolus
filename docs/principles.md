@@ -509,11 +509,69 @@ load. `drivehealth` applies this: it reads temperature via pass-through ioctl
 
 ---
 
+### 18. Acquisition groups: one window per read section, stamped last
+
+A metric's acquisition window belongs to the **read section** that produced
+it, not to the metric. A read section is one bracket over one source — a BPF
+map sweep, a batch of like-entity map reads, a device sweep — and every
+metric it fills shares its single window. This replaced per-entry
+`set_with_window` stamping, whose windows encoded sweep position rather than
+observation facts and tripled `.rez` column counts (journal
+`2026-08-17-window-sidecar-cost.md`, proposal 2; measured acceptance in
+`2026-08-19-v3-format-acceptance.md`).
+
+**The machinery.** A sampler declares `AcquisitionGroup` statics (registered
+on `samplers::ACQUISITION_GROUPS`) and brackets each read section with
+`group.acquire()` → set plain values → `guard.finish()`. Rules the bracket
+enforces, and that reviewers must protect:
+
+- **Stamp last.** `finish()` publishes the window after the values, so a
+  racing scrape can pair values with the previous window (lag — honest)
+  but never with a future one (lead — a confident claim about data older
+  than the window says). The bracket therefore spans the member `set()`
+  calls; do not "tighten" it — the width is a deliberate upper bound on
+  the read span, which over-states `rate()` uncertainty, never
+  under-states it.
+- **Error paths discard.** A failed read returns without `finish()` (drop
+  discards; `discard()` says it explicitly). The previous window stands,
+  and consumers see "nothing new" — missing beats wrong.
+- **One writer per group.** The seqlock slot detects torn reads, not torn
+  writers. A sampler with a blocking/async probe task stamps from that
+  task only.
+- **Granularity: like entities collapse, families do not.** Instances
+  distinguished by a label within one metric family (syscall classes,
+  block-op types, per-CPU banks, drives) share their sweep's single group;
+  different metric families keep their own groups even when read
+  back-to-back. `cpu_usage` is three counter families = three groups;
+  `syscall_latency` is sixteen class-instances of one family = one group.
+- **Membership comes from registration, not values.** A declared group's
+  schema is what the sampler registers (bounded by real population — e.g.
+  possible CPUs, never the array capacity); a quiet member reports zero,
+  it does not vanish. Value-sentinel membership is a V2 transitional
+  behavior confined to the un-migrated default groups.
+
+**What we refuse.**
+- Per-entry window stamping in new or migrated samplers.
+- A window published before its values, or stamped on a failed read.
+- One group shared by two read sections, or two writers stamping one group.
+- Splitting like-entity sweeps into per-entity groups (the 16-acquisition
+  syscall_latency shape this design exists to remove).
+
+**Not yet migrated** (windows still per-entry or absent): `PackedCounters`
+(mmap-direct; its acquisition is the exposition read — wave-2 design),
+sparse cgroup/task groups, gpu, memory, cpu/cores, drivehealth. Each
+migration goes through the checklist below.
+
 ## Reviewing or writing a sampler — operational checklist
 
 A short pass an agent or human reviewer can run literally over a sampler
 change. Each item is a yes/no question, or "justify in a comment."
 
+- **Acquisition groups.** Does every read section have exactly one
+  `AcquisitionGroup` bracket, stamped after values, discarded on error
+  paths, with one writer, and grouped by the like-entities rule? Are the
+  member metrics tagged `acq_group` 1:1 with the builder wiring?
+  (Principle 18.)
 - **Data source.** Is the metric reachable from a BPF probe (tracepoint /
   `fentry` / `kprobe`) or a `perf_event_open` counter? If yes, prefer
   that over parsing `/proc` or `/sys` on every refresh. One-time
