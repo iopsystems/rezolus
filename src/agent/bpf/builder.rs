@@ -334,7 +334,11 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         Vec<&'static LazyCounter>,
         &'static AcquisitionGroup,
     )>,
-    histograms: Vec<(&'static str, &'static RwLockHistogram)>,
+    histograms: Vec<(
+        &'static str,
+        &'static RwLockHistogram,
+        &'static AcquisitionGroup,
+    )>,
     maps: Vec<(&'static str, Vec<u64>)>,
     cpu_counters: Vec<(
         &'static str,
@@ -620,7 +624,7 @@ where
             let mut histograms: Vec<Histogram> = self
                 .histograms
                 .into_iter()
-                .map(|(name, histogram)| Histogram::new(skel.map(name), histogram))
+                .map(|(name, histogram, group)| Histogram::new(skel.map(name), histogram, group))
                 .collect();
 
             let mut cpu_counters: Vec<CpuCounters> = self
@@ -829,10 +833,18 @@ where
     /// Register a histogram for this BPF sampler. The `name` is the BPF map
     /// name and the `histogram` is the userspace histogram. The histogram
     /// parameters used in both the BPF and userpsace histograms must match
-    /// exactly. See `Histogram` for more details on the assumptions and
-    /// requirements.
-    pub fn histogram(mut self, name: &'static str, histogram: &'static RwLockHistogram) -> Self {
-        self.histograms.push((name, histogram));
+    /// exactly. `group` is the declared [`AcquisitionGroup`] whose
+    /// acquisition brackets this map's refresh (single writer: the group
+    /// must not be shared with any other read section — including another
+    /// histogram's, since each `Histogram` reads its own map). See
+    /// `Histogram` for more details on the assumptions and requirements.
+    pub fn histogram(
+        mut self,
+        name: &'static str,
+        histogram: &'static RwLockHistogram,
+        group: &'static AcquisitionGroup,
+    ) -> Self {
+        self.histograms.push((name, histogram, group));
         self
     }
 

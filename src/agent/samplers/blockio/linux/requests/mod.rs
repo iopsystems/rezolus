@@ -100,10 +100,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .counters("counters", counters, &COUNTERS_ACQ)
     .counters("errors", errors, &ERRORS_ACQ)
     .counters("requeues", requeues, &REQUEUES_ACQ)
-    .histogram("read_size", &BLOCKIO_READ_SIZE)
-    .histogram("write_size", &BLOCKIO_WRITE_SIZE)
-    .histogram("flush_size", &BLOCKIO_FLUSH_SIZE)
-    .histogram("discard_size", &BLOCKIO_DISCARD_SIZE)
+    .histogram("read_size", &BLOCKIO_READ_SIZE, &READ_SIZE_ACQ)
+    .histogram("write_size", &BLOCKIO_WRITE_SIZE, &WRITE_SIZE_ACQ)
+    .histogram("flush_size", &BLOCKIO_FLUSH_SIZE, &FLUSH_SIZE_ACQ)
+    .histogram("discard_size", &BLOCKIO_DISCARD_SIZE, &DISCARD_SIZE_ACQ)
     .disabled_programs(if kernel_has_btf() {
         &["block_rq_complete_raw", "block_rq_requeue_raw"]
     } else {

@@ -21,6 +21,28 @@ pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
+/// One group per histogram map read (each `Histogram` reads exactly one
+/// BPF map per refresh, so there is no multi-map section to share).
+pub static RUNQLAT_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_runqlat",
+);
+pub static RUNNING_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_running",
+);
+pub static OFFCPU_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_offcpu",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static RUNQLAT_ACQ_REG: &'static AcquisitionGroup = &RUNQLAT_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static RUNNING_ACQ_REG: &'static AcquisitionGroup = &RUNNING_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static OFFCPU_ACQ_REG: &'static AcquisitionGroup = &OFFCPU_ACQ;
+
 /*
  * bpf prog stats
  */
@@ -46,7 +68,7 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "scheduler_runqueue_latency",
     description = "Distribution of the amount of time tasks were waiting in the runqueue",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_runqlat" }
 )]
 pub static SCHEDULER_RUNQUEUE_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
@@ -54,14 +76,14 @@ pub static SCHEDULER_RUNQUEUE_LATENCY: RwLockHistogram =
 #[metric(
     name = "scheduler_running",
     description = "Distribution of the amount of time tasks were on-CPU",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_running" }
 )]
 pub static SCHEDULER_RUNNING: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "scheduler_offcpu",
     description = "Distribution of the amount of time tasks were off-CPU",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_offcpu" }
 )]
 pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 

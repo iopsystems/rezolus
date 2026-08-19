@@ -22,12 +22,37 @@ pub static REQUEUES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     "blockio_requests_requeues",
 );
 
+pub static READ_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("blockio_requests"),
+    "blockio_requests_read_size",
+);
+pub static WRITE_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("blockio_requests"),
+    "blockio_requests_write_size",
+);
+pub static FLUSH_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("blockio_requests"),
+    "blockio_requests_flush_size",
+);
+pub static DISCARD_SIZE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("blockio_requests"),
+    "blockio_requests_discard_size",
+);
+
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static ERRORS_ACQ_REG: &'static AcquisitionGroup = &ERRORS_ACQ;
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static REQUEUES_ACQ_REG: &'static AcquisitionGroup = &REQUEUES_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static READ_SIZE_ACQ_REG: &'static AcquisitionGroup = &READ_SIZE_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static WRITE_SIZE_ACQ_REG: &'static AcquisitionGroup = &WRITE_SIZE_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static FLUSH_SIZE_ACQ_REG: &'static AcquisitionGroup = &FLUSH_SIZE_ACQ;
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static DISCARD_SIZE_ACQ_REG: &'static AcquisitionGroup = &DISCARD_SIZE_ACQ;
 
 /*
  * bpf prog stats
@@ -54,28 +79,28 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
-    metadata = { op = "read", unit = "bytes" }
+    metadata = { op = "read", unit = "bytes", acq_group = "blockio_requests_read_size" }
 )]
 pub static BLOCKIO_READ_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
-    metadata = { op = "write", unit = "bytes" }
+    metadata = { op = "write", unit = "bytes", acq_group = "blockio_requests_write_size" }
 )]
 pub static BLOCKIO_WRITE_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
-    metadata = { op = "flush", unit = "bytes" }
+    metadata = { op = "flush", unit = "bytes", acq_group = "blockio_requests_flush_size" }
 )]
 pub static BLOCKIO_FLUSH_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
 
 #[metric(
     name = "blockio_size",
     description = "Distribution of blockio operation sizes in bytes",
-    metadata = { op = "discard", unit = "bytes" }
+    metadata = { op = "discard", unit = "bytes", acq_group = "blockio_requests_discard_size" }
 )]
 pub static BLOCKIO_DISCARD_SIZE: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);

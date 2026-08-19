@@ -34,8 +34,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .histogram("srtt", &TCP_SRTT)
-    .histogram("jitter", &TCP_JITTER)
+    .histogram("srtt", &TCP_SRTT, &SRTT_ACQ)
+    .histogram("jitter", &TCP_JITTER, &JITTER_ACQ)
     .build()?;
 
     Ok(Some(Box::new(bpf)))
