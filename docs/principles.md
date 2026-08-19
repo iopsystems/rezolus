@@ -558,8 +558,12 @@ enforces, and that reviewers must protect:
   property of when the counter itself last changed — an artifact of how
   the value is exposed, not a staleness claim. It is still an honest,
   deliberate upper bound (marking the end immediately after that group's
-  member reads, not at eventual publish, keeps the width microsecond-scale
-  — the read span — rather than walk-scale).
+  member reads, not at eventual publish, keeps the width to the group's
+  own read span rather than whole-walk time). One exception on magnitude:
+  V2's `task_cpu_usage` span includes its full capacity walk — kept
+  deliberately for ringbuf-loss robustness (see the comment at the V2
+  reader-stamped arm in `snapshot.rs`) — so that one metric's V2 windows
+  are millisecond-scale.
 
 **What we refuse.**
 - Per-entry window stamping in new or migrated samplers.

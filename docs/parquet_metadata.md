@@ -74,8 +74,10 @@ Structural differences from a single parquet file:
   deliberate upper bound on the read span, honest in the same "never
   under-states uncertainty" direction as every other acquisition window,
   and (since the builder marks the window's end immediately after reading
-  a group's members, not at eventual publish time) is itself
-  microsecond-scale, not a claim that the counter is only that fresh.
+  a group's members, not at eventual publish time) reflects the group's
+  own read span rather than whole-walk time — not a claim that the
+  counter is only that fresh. Spans vary by group: sparse task metrics on
+  the v2 format include a capacity walk and read millisecond-scale.
 - **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
   assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
   `.parquet` combine, nothing is quantized, so windows and sampling-jitter

@@ -205,7 +205,9 @@ struct {
  * handle_new_task - Check if task is new/reused and send info to userspace
  * @task: The task_struct to check
  *
- * Returns 0 if new task was detected and info sent, 1 if existing task, -1 on error.
+ * Returns 0 if new task was detected (info sent, or dropped on a full
+ * ringbuf — the seen-marker is left unset so the next event retries),
+ * 1 if existing task, -1 on error.
  */
 static __noinline int handle_new_task(struct task_struct* task) {
     if (!task)
