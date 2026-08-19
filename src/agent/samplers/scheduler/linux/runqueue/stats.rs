@@ -1,7 +1,25 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::{MAX_CGROUPS, MAX_CPUS};
+use linkme::distributed_slice;
+
+// Registered here (not in mod.rs) because this file is also `include!`d
+// directly on non-Linux platforms (see `scheduler/mod.rs`'s
+// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
+// identity stable across platforms, while `mod.rs`'s BPF sampler code is
+// Linux-only.
+//
+/// Brackets the `counters` cpu_counters refresh (single writer: this
+/// sampler's own BPF refresh path).
+pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("scheduler_runqueue"),
+    "scheduler_runqueue_counters",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
 
 /*
  * bpf prog stats
@@ -50,29 +68,30 @@ pub static SCHEDULER_OFFCPU: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GR
 #[metric(
     name = "scheduler_context_switch",
     description = "The number of involuntary context switches, where a runnable task was preempted. Switches away from the idle task are excluded, since nothing was competing for the CPU",
-    metadata = { kind = "involuntary" }
+    metadata = { kind = "involuntary", acq_group = "scheduler_runqueue_counters" }
 )]
-pub static SCHEDULER_IVCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_IVCSW: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_context_switch",
     description = "The number of voluntary context switches, where a task left the CPU because it blocked",
-    metadata = { kind = "voluntary" }
+    metadata = { kind = "voluntary", acq_group = "scheduler_runqueue_counters" }
 )]
-pub static SCHEDULER_VCSW: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_VCSW: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_runqueue_wait",
     description = "Tracks time spent in the runqueue on a per-CPU basis",
-    metadata = { unit = "nanoseconds" }
+    metadata = { unit = "nanoseconds", acq_group = "scheduler_runqueue_counters" }
 )]
-pub static SCHEDULER_RUNQUEUE_WAIT: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_RUNQUEUE_WAIT: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "scheduler_discarded_samples",
-    description = "The number of scheduler timing samples discarded because the two timestamps arrived out of order across CPUs, which would otherwise underflow into the top histogram bucket"
+    description = "The number of scheduler timing samples discarded because the two timestamps arrived out of order across CPUs, which would otherwise underflow into the top histogram bucket",
+    metadata = { acq_group = "scheduler_runqueue_counters" }
 )]
-pub static SCHEDULER_DISCARDED: WindowedCounterGroup = WindowedCounterGroup::new(MAX_CPUS);
+pub static SCHEDULER_DISCARDED: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 /*
  * per-cgroup

@@ -5,9 +5,9 @@ use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
-use metriken::{
-    CounterGroup, LazyCounter, RwLockHistogram, WindowedCounterGroup, WindowedLazyCounter,
-};
+use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
+
+use crate::agent::timing::AcquisitionGroup;
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;
@@ -329,10 +329,18 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
     prog_stats: BpfProgStats,
-    counters: Vec<(&'static str, Vec<&'static WindowedLazyCounter>)>,
+    counters: Vec<(
+        &'static str,
+        Vec<&'static LazyCounter>,
+        &'static AcquisitionGroup,
+    )>,
     histograms: Vec<(&'static str, &'static RwLockHistogram)>,
     maps: Vec<(&'static str, Vec<u64>)>,
-    cpu_counters: Vec<(&'static str, Vec<&'static WindowedCounterGroup>)>,
+    cpu_counters: Vec<(
+        &'static str,
+        Vec<&'static CounterGroup>,
+        &'static AcquisitionGroup,
+    )>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
     packed_counters: Vec<(&'static str, &'static CounterGroup)>,
     #[allow(clippy::type_complexity)]
@@ -606,7 +614,7 @@ where
             let mut counters: Vec<Counters> = self
                 .counters
                 .into_iter()
-                .map(|(name, counters)| Counters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| Counters::new(skel.map(name), counters, group))
                 .collect();
 
             let mut histograms: Vec<Histogram> = self
@@ -618,7 +626,7 @@ where
             let mut cpu_counters: Vec<CpuCounters> = self
                 .cpu_counters
                 .into_iter()
-                .map(|(name, counters)| CpuCounters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| CpuCounters::new(skel.map(name), counters, group))
                 .collect();
 
             debug!(
@@ -803,14 +811,18 @@ where
 
     /// Register a set of counters for this BPF sampler. The `name` is the BPF
     /// map name and the `counters` are a set of userspace lazy counters which
-    /// must match the ordering used in the BPF map. See `Counters` for more
-    /// details on the assumptions and requirements.
+    /// must match the ordering used in the BPF map. `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets this map's refresh
+    /// (single writer: the group must not be shared with any other read
+    /// section). See `Counters` for more details on the assumptions and
+    /// requirements.
     pub fn counters(
         mut self,
         name: &'static str,
-        counters: Vec<&'static WindowedLazyCounter>,
+        counters: Vec<&'static LazyCounter>,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.counters.push((name, counters));
+        self.counters.push((name, counters, group));
         self
     }
 
@@ -833,14 +845,18 @@ where
     }
 
     /// Register a set of counters for this BPF sampler where just the
-    /// individual CPU counters are tracked. See `Counters` for more details on
-    /// the details and assumptions for the BPF map.
+    /// individual CPU counters are tracked. `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets this map's refresh
+    /// (single writer: the group must not be shared with any other read
+    /// section). See `Counters` for more details on the details and
+    /// assumptions for the BPF map.
     pub fn cpu_counters(
         mut self,
         name: &'static str,
-        counters: Vec<&'static WindowedCounterGroup>,
+        counters: Vec<&'static CounterGroup>,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.cpu_counters.push((name, counters));
+        self.cpu_counters.push((name, counters, group));
         self
     }
 

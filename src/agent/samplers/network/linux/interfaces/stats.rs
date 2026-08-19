@@ -1,5 +1,24 @@
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
+use linkme::distributed_slice;
+
+// Registered here (not in mod.rs) because this file is also `include!`d
+// directly on non-Linux platforms (see `network/mod.rs`'s
+// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
+// identity stable across platforms, while `mod.rs`'s BPF sampler code is
+// Linux-only.
+//
+/// Brackets the `counters` map's refresh (single writer: this sampler's
+/// own BPF refresh path).
+pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("network_interfaces"),
+    "network_interfaces_counters",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
+
 /*
  * bpf prog stats
  */
@@ -25,27 +44,27 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 #[metric(
     name = "network_drop",
     description = "Packets dropped anywhere in the network stack due to errors, resource exhaustion, or policy enforcement.",
-    metadata = { unit = "packets" }
+    metadata = { unit = "packets", acq_group = "network_interfaces_counters" }
 )]
-pub static NETWORK_DROP: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static NETWORK_DROP: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_busy",
     description = "Packets encountering retryable device busy status. High rates indicate transmit path backpressure.",
-    metadata = { unit = "packets" }
+    metadata = { unit = "packets", acq_group = "network_interfaces_counters" }
 )]
-pub static NETWORK_TX_BUSY: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static NETWORK_TX_BUSY: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_complete",
     description = "Packets successfully transmitted by the driver. Compare with network_transmit_packets to detect transmission issues.",
-    metadata = { unit = "packets" }
+    metadata = { unit = "packets", acq_group = "network_interfaces_counters" }
 )]
-pub static NETWORK_TX_COMPLETE: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static NETWORK_TX_COMPLETE: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_transmit_timeout",
     description = "Transmit timeout events indicating hardware lockup or severe transmission delays. These are serious issues requiring investigation.",
-    metadata = { unit = "events" }
+    metadata = { unit = "events", acq_group = "network_interfaces_counters" }
 )]
-pub static NETWORK_TX_TIMEOUT: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static NETWORK_TX_TIMEOUT: LazyCounter = LazyCounter::new(Counter::default);

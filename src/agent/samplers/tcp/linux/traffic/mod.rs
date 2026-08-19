@@ -46,7 +46,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters)
+    .counters("counters", counters, &COUNTERS_ACQ)
     .histogram("rx_size", &TCP_RX_SIZE)
     .histogram("tx_size", &TCP_TX_SIZE)
     .build()?;

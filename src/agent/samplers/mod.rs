@@ -46,6 +46,35 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
             .is_some_and(|rest| rest.starts_with("::"))
 }
 
+/// The sampler name that [`attribute_sampler`] will actually resolve a
+/// Linux-only BPF sampler's `stats.rs` module to, on the CURRENT platform.
+///
+/// A BPF sampler's metric statics live in `stats.rs`, which is compiled two
+/// different ways: on Linux, `mod stats;` inside the real sampler's own
+/// `mod.rs` (so the metric's module path is a descendant of the
+/// `SamplerEntry` registered there, and `attribute_sampler` resolves it to
+/// `linux_name`); on every other platform, `stats.rs` is `include!`d
+/// directly under the sampler family's `#[cfg(not(target_os = "linux"))]
+/// mod stats` fallback (to keep metric identity/descriptions stable across
+/// platforms) with no matching `SamplerEntry` anywhere — so
+/// `attribute_sampler` resolves it to `"unattributed"` instead, regardless
+/// of `linux_name`.
+///
+/// An [`crate::agent::timing::AcquisitionGroup`] declared for such a
+/// sampler's metrics must register under whichever of the two this platform
+/// will actually produce, or `create_v3`'s routing (which looks the group
+/// up by the resolved sampler name) can never find it.
+#[cfg(target_os = "linux")]
+pub(crate) const fn bpf_sampler_name(linux_name: &'static str) -> &'static str {
+    linux_name
+}
+
+/// See the `#[cfg(target_os = "linux")]` overload's doc comment.
+#[cfg(not(target_os = "linux"))]
+pub(crate) const fn bpf_sampler_name(_linux_name: &'static str) -> &'static str {
+    "unattributed"
+}
+
 /// Attribute a metric (identified by its definition module path) to the
 /// sampler whose registered module is the longest prefix of that path. Metrics
 /// with no matching sampler fall into the `"unattributed"` bucket.

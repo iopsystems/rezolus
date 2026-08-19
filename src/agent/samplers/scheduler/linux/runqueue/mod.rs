@@ -61,7 +61,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .cpu_counters("counters", counters)
+    .cpu_counters("counters", counters, &COUNTERS_ACQ)
     .histogram("runqlat", &SCHEDULER_RUNQUEUE_LATENCY)
     .histogram("running", &SCHEDULER_RUNNING)
     .histogram("offcpu", &SCHEDULER_OFFCPU)

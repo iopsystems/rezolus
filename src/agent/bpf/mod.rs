@@ -86,6 +86,51 @@ use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::Histogram;
 pub use sync_primitive::SyncPrimitive;
 
+/// Parse the CPU count implied by `/sys/devices/system/cpu/possible`
+/// syntax: a comma-separated list of individual ids and/or `lo-hi` ranges
+/// (e.g. `"0-31"`, `"0"`, `"0-3,8-11"`). The file lists which ids the kernel
+/// considers *possible* (a CPU that could be hot-added), not which are
+/// currently online, so the answer is `max_id + 1` — the number of possible
+/// slots — not a count of the listed ids, which may have gaps. Returns
+/// `None` if the content is empty or doesn't parse as expected, so the
+/// caller can fall back rather than trust a bogus bound.
+fn parse_possible_cpus(contents: &str) -> Option<usize> {
+    let mut max_id: Option<usize> = None;
+
+    for part in contents.trim().split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        let hi = match part.split_once('-') {
+            Some((_, hi)) => hi.parse::<usize>().ok()?,
+            None => part.parse::<usize>().ok()?,
+        };
+
+        max_id = Some(max_id.map_or(hi, |m| m.max(hi)));
+    }
+
+    max_id.map(|m| m + 1)
+}
+
+/// Number of possible CPUs on this host, per
+/// `/sys/devices/system/cpu/possible` — POSSIBLE, deliberately not ONLINE,
+/// so a CPU that comes up mid-recording was already counted and a sweep
+/// bound taken at agent start does not miss it. Parsed once and cached;
+/// falls back to [`crate::agent::MAX_CPUS`] if the file is missing, empty,
+/// or fails to parse, so a sweep bound here degrades to the old fixed bound
+/// rather than to zero.
+pub(crate) fn possible_cpus() -> usize {
+    static CACHE: OnceLock<usize> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::fs::read_to_string("/sys/devices/system/cpu/possible")
+            .ok()
+            .and_then(|s| parse_possible_cpus(&s))
+            .unwrap_or(crate::agent::MAX_CPUS)
+    })
+}
+
 pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn GroupMetadata]) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
@@ -177,5 +222,48 @@ impl Sampler for AsyncBpf {
             .collect();
 
         futures::future::join_all(perf_futures.into_iter()).await;
+    }
+}
+
+#[cfg(test)]
+mod possible_cpus_tests {
+    use super::parse_possible_cpus;
+
+    #[test]
+    fn parses_a_single_range() {
+        assert_eq!(parse_possible_cpus("0-31"), Some(32));
+    }
+
+    #[test]
+    fn parses_a_single_cpu() {
+        assert_eq!(parse_possible_cpus("0"), Some(1));
+    }
+
+    #[test]
+    fn parses_a_trailing_newline() {
+        assert_eq!(parse_possible_cpus("0-31\n"), Some(32));
+    }
+
+    #[test]
+    fn parses_a_list_of_ranges_and_singletons() {
+        assert_eq!(parse_possible_cpus("0-3,8-11"), Some(12));
+    }
+
+    #[test]
+    fn takes_the_max_id_across_unordered_parts() {
+        // Not realistic content for this file, but the parser should not
+        // assume the list arrives sorted.
+        assert_eq!(parse_possible_cpus("8-11,0-3"), Some(12));
+    }
+
+    #[test]
+    fn empty_content_is_unparseable() {
+        assert_eq!(parse_possible_cpus(""), None);
+        assert_eq!(parse_possible_cpus("\n"), None);
+    }
+
+    #[test]
+    fn garbage_content_is_unparseable() {
+        assert_eq!(parse_possible_cpus("not-a-cpu-list"), None);
     }
 }

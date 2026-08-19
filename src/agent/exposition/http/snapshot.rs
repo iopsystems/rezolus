@@ -173,6 +173,13 @@ fn create(
         let (metadata, _sampler) = metric_metadata(metric, &sampler_mods);
         let mut metadata: HashMap<String, String> = metadata.into_iter().collect();
 
+        // V2 has no group concept — `acq_group` only means something to
+        // `create_v3`'s routing. Strip it unconditionally (mirroring
+        // `create_v3`'s declared-group strip) so a metric migrating to a
+        // declared acquisition group does not grow a new label in V2
+        // output; default mode stays byte-stable vs main.
+        metadata.remove("acq_group");
+
         let name = format!("{metric_id}");
 
         match value {
@@ -1023,6 +1030,30 @@ mod tests {
             .find(|c| c.metadata.get("metric").map(String::as_str) == Some("ext_counter"))
             .expect("external counter present");
         assert_eq!(c.window, Some(win), "external window preserved, not fleet");
+    }
+
+    #[test]
+    fn v2_snapshot_strips_acq_group_from_a_tagged_metric() {
+        // V3_PROBE_COUNTER (declared below) carries `acq_group = "probe"` in
+        // its static metadata. V2 has no group concept — that key must not
+        // leak into V2 output as a new label (it would otherwise, since
+        // `create` copies through every static metadata key unfiltered).
+        V3_PROBE_COUNTER.increment();
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+        let c = s
+            .counters
+            .iter()
+            .find(|c| {
+                c.metadata.get("metric").map(String::as_str) == Some("snapshot_v3_probe_counter")
+            })
+            .expect("tagged probe counter present in V2 output");
+        assert!(
+            !c.metadata.contains_key("acq_group"),
+            "acq_group must be stripped from V2 output, not leaked as a new label"
+        );
     }
 
     // --- SnapshotV3 -----------------------------------------------------

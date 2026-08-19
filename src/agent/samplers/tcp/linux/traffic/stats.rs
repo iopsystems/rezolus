@@ -1,19 +1,38 @@
 use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
+use linkme::distributed_slice;
+
+// Registered here (not in mod.rs) because this file is also `include!`d
+// directly on non-Linux platforms (see `tcp/mod.rs`'s
+// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
+// identity stable across platforms, while `mod.rs`'s BPF sampler code is
+// Linux-only.
+//
+/// Brackets the `counters` map's refresh (single writer: this sampler's
+/// own BPF refresh path).
+pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("tcp_traffic"),
+    "tcp_traffic_counters",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static COUNTERS_ACQ_REG: &'static AcquisitionGroup = &COUNTERS_ACQ;
+
 #[metric(
     name = "tcp_bytes",
     description = "The number of bytes transferred over TCP",
-    metadata = { direction = "receive", unit = "bytes" }
+    metadata = { direction = "receive", unit = "bytes", acq_group = "tcp_traffic_counters" }
 )]
-pub static TCP_RX_BYTES: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static TCP_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_packets",
     description = "The number of packets transferred over TCP",
-    metadata = { direction = "receive", unit = "packets" }
+    metadata = { direction = "receive", unit = "packets", acq_group = "tcp_traffic_counters" }
 )]
-pub static TCP_RX_PACKETS: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static TCP_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_size",
@@ -25,16 +44,16 @@ pub static TCP_RX_SIZE: RwLockHistogram = RwLockHistogram::new(HISTOGRAM_GROUPIN
 #[metric(
     name = "tcp_bytes",
     description = "The number of bytes transferred over TCP",
-    metadata = { direction = "transmit", unit = "bytes" }
+    metadata = { direction = "transmit", unit = "bytes", acq_group = "tcp_traffic_counters" }
 )]
-pub static TCP_TX_BYTES: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static TCP_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_packets",
     description = "The number of packets transferred over TCP",
-    metadata = { direction = "transmit", unit = "packets" }
+    metadata = { direction = "transmit", unit = "packets", acq_group = "tcp_traffic_counters" }
 )]
-pub static TCP_TX_PACKETS: WindowedLazyCounter = WindowedLazyCounter::new(Counter::default);
+pub static TCP_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "tcp_size",

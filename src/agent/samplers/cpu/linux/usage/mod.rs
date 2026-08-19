@@ -160,9 +160,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .cpu_counters("cpu_usage", cpu_usage)
-    .cpu_counters("softirq", softirq)
-    .cpu_counters("softirq_time", softirq_time)
+    .cpu_counters("cpu_usage", cpu_usage, &CPU_USAGE_ACQ)
+    .cpu_counters("softirq", softirq, &SOFTIRQ_ACQ)
+    .cpu_counters("softirq_time", softirq_time, &SOFTIRQ_TIME_ACQ)
     .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
     .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
     .packed_counters("cgroup_exited", &CGROUP_CPU_USAGE_EXITED)

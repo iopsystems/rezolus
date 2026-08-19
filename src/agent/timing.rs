@@ -73,10 +73,6 @@ pub(crate) struct GroupWindowSlot {
 }
 
 impl GroupWindowSlot {
-    // Not yet called from production code: the only caller is
-    // `AcquisitionGroup::new()`, itself unreached until a sampler migrates
-    // (see the note there).
-    #[allow(dead_code)]
     pub(crate) const fn new() -> Self {
         Self {
             seq: AtomicU64::new(0),
@@ -110,10 +106,6 @@ impl GroupWindowSlot {
     /// example a drivehealth-style sampler with a blocking probe task
     /// alongside `refresh()`) must stamp the group from that one task only,
     /// never from both.
-    // Not yet called from production code — the only caller is
-    // `AcquisitionGuard::finish()`, unreached until a sampler migrates (see
-    // the note on `AcquisitionGroup::new()`).
-    #[allow(dead_code)]
     pub(crate) fn store(&self, w: Window) {
         let s = self.seq.load(Ordering::Relaxed);
         debug_assert_eq!(
@@ -164,12 +156,9 @@ pub(crate) struct AcquisitionGroup {
 }
 
 impl AcquisitionGroup {
-    // Not yet called from production code: no sampler constructs an
-    // `AcquisitionGroup` until it migrates to a declared group (that's a
-    // per-sampler follow-up, not this task). The V3 snapshot builder only
-    // reads groups that samplers have already registered on
-    // `ACQUISITION_GROUPS`; it never constructs one itself.
-    #[allow(dead_code)]
+    /// Declare a group. The V3 snapshot builder only reads groups that
+    /// samplers have already registered on `ACQUISITION_GROUPS`; it never
+    /// constructs one itself.
     pub(crate) const fn new(sampler: &'static str, name: &'static str) -> Self {
         Self {
             sampler,
@@ -200,10 +189,6 @@ impl AcquisitionGroup {
     /// blocking probe running alongside `refresh()`) must have that one
     /// task own the group and call `acquire()`/`finish()`, not `refresh()`
     /// as well.
-    // Not yet called from production code — see the note on `new()`. Only
-    // exercised by the V3 snapshot builder's own tests today, stamping a
-    // synthetic group to exercise the declared-group path.
-    #[allow(dead_code)]
     pub(crate) fn acquire(&self) -> AcquisitionGuard<'_> {
         AcquisitionGuard::begin(&self.slot)
     }
@@ -232,15 +217,12 @@ impl AcquisitionGroup {
 /// readers see "no new data this tick", which is the honest signal. A group
 /// whose reads keep failing simply stops advancing, visibly, in the data —
 /// missing beats wrong.
-// Only exercised by the V3 snapshot builder's own tests today; real consumers are the per-sampler migrations.
-#[allow(dead_code)]
 pub(crate) struct AcquisitionGuard<'a> {
     slot: &'a GroupWindowSlot,
     begin_ns: u64,
     begin_mono: Instant,
 }
 
-#[allow(dead_code)] // Only exercised by the V3 snapshot builder's own tests today; real consumers are the per-sampler migrations.
 impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn begin(slot: &'a GroupWindowSlot) -> Self {
         Self {
@@ -263,6 +245,12 @@ impl<'a> AcquisitionGuard<'a> {
     /// Consume the guard without stamping. Use on an error path to make the
     /// "no update this tick" intent explicit at the call site; a bare
     /// `?`-return that drops the guard has the identical effect.
+    ///
+    /// No production sampler calls this explicitly today — they all rely on
+    /// the identical bare-drop path instead — but it stays part of the
+    /// documented API (and is exercised by this module's own test) for
+    /// call sites that want the intent spelled out.
+    #[allow(dead_code)]
     pub(crate) fn discard(self) {}
 }
 

@@ -91,7 +91,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .enabled_programs(enabled_programs)
-    .cpu_counters("events", events)
+    .cpu_counters("events", events, &EVENTS_ACQ)
     .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
     .packed_counters(
         "cgroup_remote_shootdown",
