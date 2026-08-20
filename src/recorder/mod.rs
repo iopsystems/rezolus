@@ -246,7 +246,12 @@ async fn probe_endpoint(
                 if *is_prom {
                     return Some((Protocol::Prometheus, candidate_url.clone()));
                 }
-                if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
+                // `from_msgpack`, not a bare `from_slice`: a depth-capped,
+                // trailing-byte-checked decode (see its doc) even for this
+                // throwaway probe — an unauthenticated endpoint offering
+                // hostile bytes at discovery time is exactly where an
+                // unbounded decode is cheapest to abuse.
+                if metriken_exposition::Snapshot::from_msgpack(&body).is_ok() {
                     return Some((Protocol::Msgpack, candidate_url.clone()));
                 }
             }
@@ -1126,8 +1131,22 @@ pub fn run(config: RecordingConfig) {
 
                         // `.rez`: decode once and hand the snapshot straight to
                         // the streaming writer. No spool, no re-serialization.
+                        //
+                        // `Snapshot::from_msgpack`, not a bare `from_slice`:
+                        // this is the exact wire the recorder controls end to
+                        // end for `.rez` mode (single endpoint, msgpack-only,
+                        // never Prometheus), so the depth-capped,
+                        // trailing-byte-checked decode applies uniformly to
+                        // whichever version the agent sends — including the
+                        // V3 groups this build natively ingests. Decoding a
+                        // concrete `SnapshotV3` directly (skipping the
+                        // untagged enum probe entirely) would need to know the
+                        // endpoint's `snapshot_format` ahead of time, which
+                        // the recorder does not: it is agent-side config, not
+                        // negotiated over HTTP, and `.rez` mode serves V1/V2/V3
+                        // endpoints alike from this one call site.
                         if rez_mode {
-                            match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                            match metriken_exposition::Snapshot::from_msgpack(&body) {
                                 Ok(snapshot) => {
                                     let snapshot = inject_provenance(
                                         snapshot,
@@ -1168,9 +1187,14 @@ pub fn run(config: RecordingConfig) {
                                     }
                                 }
                             } else {
-                                // Msgpack: deserialize, inject provenance, re-serialize
-                                match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body)
-                                {
+                                // Msgpack: deserialize, inject provenance,
+                                // re-serialize. `from_msgpack`, not a bare
+                                // `from_slice` — same depth-cap/trailing-byte
+                                // hardening as the `.rez`-mode call site above,
+                                // and just as contained here: this branch is
+                                // unconditionally msgpack (the Prometheus
+                                // sibling branch above never reaches it).
+                                match metriken_exposition::Snapshot::from_msgpack(&body) {
                                     Ok(snapshot) => {
                                         let snapshot = inject_provenance(
                                             snapshot,
