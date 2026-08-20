@@ -1044,7 +1044,11 @@ where
         self.perf_events.push((name, event, counters));
 
         if let Some(existing) = self.perf_group {
-            debug_assert!(
+            // A real assert, not debug_assert: this runs once at sampler init
+            // (not a hot path), and a silent mismatch in release would leave
+            // the second group's window slot permanently unstamped — a
+            // never-advancing window with no diagnostic.
+            assert!(
                 std::ptr::eq(existing, group),
                 "all .perf_event() calls in one BpfBuilder must share the same \
                  AcquisitionGroup: the underlying per-CPU sweep merges them into \
