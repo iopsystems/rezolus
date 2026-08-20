@@ -611,8 +611,48 @@ per-device sweep into a single group per principle 18's "device sweep"
 read-section shape, matching the like-entities rule; memory/cpu-cores are
 one procfs/sysfs read each). `gpu_amd_pmu` (rocprofiler hardware counters)
 was untouched — it was already a plain, unwindowed `CounterGroup` sampler
-with no per-metric window to migrate away from. Any future remaining
-migration goes through the checklist below.
+with no per-metric window to migrate away from.
+
+A gap-closure pass (both waves had missed these; caught by the on-host
+measurement in `2026-08-19-v3-format-acceptance.md`'s wave-2 addendum)
+migrated the perf-event-backed per-CPU counter samplers: `cpu/dtlb`,
+`cpu/l3`, `cpu/frequency`, `cpu/branch`, and `cpu/perf`'s base per-CPU
+`cpu_cycles`/`cpu_instructions` (its cgroup counters were already
+reader-stamped `PackedCounters` from Part A and were left alone). These are
+a **fourth read-machinery shape**, distinct from BPF `Counters`/
+`CpuCounters`/`PackedCounters`: a sampler-owned OS thread (one thread
+sweeping every CPU/domain, or one thread per CPU/domain under `is_virt()`)
+reads `perf_event` counters, synchronized with the async `refresh()` task by
+a trigger/notify handshake (`SyncPrimitive`). The async task never touches a
+metric value itself, but it is still the correct single writer: it uniquely
+spans "before trigger" through "after every thread's `join_all`-confirmed
+completion," which is exactly the bracket principle 18 asks for — `finish()`
+only runs once `join_all` proves every thread's `set()` calls are done, so
+the bracket cannot outrun the values it covers, and the perf thread(s) never
+call `acquire()`/`finish()` themselves. `cpu/dtlb`, `cpu/l3`,
+`cpu/frequency`, and `cpu/branch` each collapse their whole per-CPU sweep
+into ONE group per metric family, matching the "read together, no phase
+boundary" shape already established for `cpu_frequency`'s aperf/mperf/tsc:
+one `read_group()` (a single grouped `perf_event_open` read) per core or L3
+domain covers every member of that sampler's family, with no gap between
+them. `cpu/perf` shares the same shape one level down, through BPF's own
+`.perf_event()` machinery (`PerfCounters`/`CpuPerfCounters` in
+`src/agent/bpf/builder.rs`, bracketed in `AsyncBpf::refresh`, not
+sampler-specific thread code) — its `cpu_cycles`/`cpu_instructions` merge
+into one group because `CpuPerfCounters::refresh` reads both, per CPU, in
+one continuous loop with no phase boundary, the same reasoning, not the
+`cpu_usage` three-separate-BPF-map case. All five get
+`set_member_bound(possible_cpus())`, same rationale as `CpuCounters::new`.
+None of the five has a discard path in steady state: a single core's or
+domain's failed/stalled perf read is individually, normally fallible (see
+`classify_perf_read`), not a bulk sweep failure, so the group unconditionally
+`finish()`es — the same ruling already established for the GPU/drivehealth
+device-sweep archetype.
+
+After this pass, the only remaining unmigrated windows are `cpu_bandwidth`'s
+two ringbuf gauges and external metrics (both described above, both
+structurally outside a read-section bracket rather than pending work). Any
+future remaining migration goes through the checklist below.
 
 ## Reviewing or writing a sampler — operational checklist
 
