@@ -830,10 +830,36 @@ fn identity_fold(mut acc: u128, bytes: &[u8]) -> u128 {
     acc
 }
 
+/// Fold a length-prefixed byte string into `acc`: the byte length as fixed-
+/// width `u64` bytes, then the bytes themselves. Plain concatenation of
+/// variable-length strings is ambiguous at the boundary — folding `"ab"`
+/// then `"cd"` produces the exact same bytes, and therefore the exact same
+/// hash, as folding `"a"` then `"bcd"`. Framing every variable-length input
+/// this way makes the byte stream self-describing, so two DIFFERENT
+/// (key, value, ...) sequences can never fold to the same identity by
+/// boundary-shifting into each other — the property `GroupSchema::hash`
+/// gets for free from msgpack's own framing, needed here too: an
+/// undetected collision here means a stale schema served under a changed
+/// identity, the same failure class the C1 regression fixed for the wire
+/// hash. Fixed-width fields (`metric_id`/`idx`, always exactly 8 bytes via
+/// `to_le_bytes()`) don't need this — their width never varies, so they
+/// can't shift.
+#[inline]
+fn identity_fold_len_prefixed(acc: u128, bytes: &[u8]) -> u128 {
+    let acc = identity_fold(acc, &(bytes.len() as u64).to_le_bytes());
+    identity_fold(acc, bytes)
+}
+
 /// Fold a group member's metadata into `acc` as sorted `(key, value)`
 /// pairs, so the fold is deterministic regardless of the source
 /// `HashMap`'s iteration order (the same non-determinism the sparse-group
-/// arms in `create_v3` already sort around).
+/// arms in `create_v3` already sort around). The pair COUNT is folded
+/// first (fixed-width, so it can't be confused with a key/value), then
+/// each key and value length-prefixed (see `identity_fold_len_prefixed`),
+/// so the whole (count, pairs) sequence is unambiguous regardless of
+/// content — including at the boundary with whatever this member's caller
+/// folds next (a following member's fixed-width `metric_id`/`idx` prefix
+/// can never be mistaken for "one more pair" of this one).
 ///
 /// Sorts on a fixed-size stack array — no heap allocation — for the common
 /// case. Every metadata map a rezolus sampler attaches today has at most a
@@ -852,10 +878,10 @@ fn identity_fold_metadata(acc: u128, metadata: &HashMap<String, String>) -> u128
         }
         let pairs = &mut buf[..n];
         pairs.sort_unstable();
-        let mut h = acc;
+        let mut h = identity_fold(acc, &(pairs.len() as u64).to_le_bytes());
         for (k, v) in pairs.iter() {
-            h = identity_fold(h, k.as_bytes());
-            h = identity_fold(h, v.as_bytes());
+            h = identity_fold_len_prefixed(h, k.as_bytes());
+            h = identity_fold_len_prefixed(h, v.as_bytes());
         }
         h
     } else {
@@ -864,10 +890,10 @@ fn identity_fold_metadata(acc: u128, metadata: &HashMap<String, String>) -> u128
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         pairs.sort_unstable();
-        let mut h = acc;
+        let mut h = identity_fold(acc, &(pairs.len() as u64).to_le_bytes());
         for (k, v) in pairs {
-            h = identity_fold(h, k.as_bytes());
-            h = identity_fold(h, v.as_bytes());
+            h = identity_fold_len_prefixed(h, k.as_bytes());
+            h = identity_fold_len_prefixed(h, v.as_bytes());
         }
         h
     }
@@ -940,6 +966,35 @@ struct GroupDecision {
 /// cgroup population, so they are out of scope for the allocation target
 /// this cache exists to hit; always rebuilding keeps their exact prior
 /// behavior (and test coverage) untouched.
+///
+/// # A wider (still narrow, still accepted) torn-read window for default
+/// groups
+///
+/// A DEFAULT (non-declared) group's membership is value-derived (the
+/// transitional V2-style sentinel skip — see `create_v3`'s doc comment):
+/// whether index `idx` counts as a member depends on reading its CURRENT
+/// value, here AND again in `create_v3`'s own walk. Those are two
+/// SEPARATE, non-atomic reads of the same counter/gauge, same class as the
+/// value/metadata torn-read gap `create_v3`'s CounterGroup arm already
+/// documents and accepts (2-3% torn under a deliberate concurrent-recycle
+/// hammer, effectively zero in production because sampler writes complete
+/// synchronously inside `refresh()` — fully quiesced before `create_v3`
+/// ever runs — rather than racing the snapshot builder from another task).
+/// This pass widens that window from "within one member's two reads" to
+/// "across this whole pre-pass versus the main walk", so a value that
+/// crosses the zero/`None` membership boundary in that window can make a
+/// default group's identity (this pass) and its actual collected
+/// membership (the main walk) disagree for that one tick. The failure mode
+/// is bounded and self-correcting: `GroupSnapshot::validate()` catches the
+/// resulting arity mismatch, a conformant receiver skips that group for
+/// that tick instead of misbinding values to labels, and the next tick's
+/// identity fold reflects reality again. Not eliminated because doing so
+/// would mean re-merging the two passes and losing the hit-path allocation
+/// win this cache exists for; named here so it's a known, accepted
+/// trade-off rather than a surprise a reviewer has to rediscover. Declared
+/// groups have no such window — their membership is registration-derived,
+/// not value-derived, so nothing about this pass or the main walk needs to
+/// agree on a value to agree on membership.
 fn fold_group_identities(
     cache: &SkeletonCache,
     group_registry: &HashMap<String, &'static AcquisitionGroup>,
