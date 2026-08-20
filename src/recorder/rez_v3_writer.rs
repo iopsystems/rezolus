@@ -409,15 +409,19 @@ fn seal_batch(
     let mut observation: Option<(u64, i64)> = None;
     for sampler in batch {
         let rows = db.live_wal(recording_id, &sampler)?;
-        let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+        let Some(last) = rows.last() else {
             // No live rows: nothing to catalog and nothing to prune. The ingest
             // side never seals an empty segment, and a sampler whose rows were
             // already sealed is not an error worth failing the recording over.
             continue;
         };
-        let (first_ts, last_ts, wall_offset, count) =
-            (first.ts, last.ts, last.wall_offset, rows.len() as u64);
-        let Some(bytes) = materialize_wal_tail(&sampler, &rows)
+        // `last_ts`/`wall_offset`: always the raw WAL span's own last row,
+        // for BOTH containers — a V3 group's un-anchored skip (see
+        // `materialize_group_wal_tail`) is always a LEADING run (retention
+        // removes a prefix, never punches a hole), so the last row is never
+        // itself skipped. `first_ts`/`rows` are NOT this simple — see below.
+        let (last_ts, wall_offset) = (last.ts, last.wall_offset);
+        let Some(tail) = materialize_wal_tail(&sampler, &rows)
             .map_err(|e| format!("failed to encode a {sampler} segment: {e}"))?
         else {
             continue;
@@ -434,11 +438,21 @@ fn seal_batch(
             sampler,
             seq: *seq,
             meta: SegmentMeta {
-                rows: count,
-                first_ts,
+                // From `tail`, NOT `rows.len()`/`rows.first().ts`: a V3
+                // group table's leading un-anchored rows (skipped, see
+                // `materialize_group_wal_tail`) are real WAL rows but never
+                // reach the segment, so the raw WAL span would catalog a row
+                // count and start the catalog does not agree with the bytes
+                // being inserted — display-only (`parquet metadata`,
+                // hindsight `/status`, `cadence_ns`), but still wrong data.
+                // `materialize_sampler_wal_tail` never skips, so for a V1/V2
+                // table `tail.rows`/`tail.first_ts` are simply `rows.len()`/
+                // `rows.first().ts` again — this is a no-op there.
+                rows: tail.rows,
+                first_ts: tail.first_ts,
                 last_ts,
             },
-            bytes,
+            bytes: tail.bytes,
         });
         *seq += 1;
     }
@@ -588,10 +602,14 @@ impl WalValue {
 fn materialize_sampler_wal_tail(
     sampler: &str,
     rows: &[WalRow],
-) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+) -> Result<Option<MaterializedTail>, Box<dyn std::error::Error>> {
     if rows.is_empty() {
         return Ok(None);
     }
+    // Never skips a row (unlike the group path, below) — every row in `rows`
+    // ends up in the materialized table, so its extent IS `rows`' own span.
+    let first_ts = rows[0].ts;
+    let row_count = rows.len() as u64;
     let mut builder = TableBuilder::new(sampler.to_string());
     for row in rows {
         // Owned entries, because `Entry` borrows. Built into three vectors —
@@ -649,7 +667,34 @@ fn materialize_sampler_wal_tail(
             .collect();
         builder.push_row(row.ts, row.wall_offset, &entries);
     }
-    Ok(Some(write_table_parquet(&builder.finish())?))
+    Ok(Some(MaterializedTail {
+        bytes: write_table_parquet(&builder.finish())?,
+        rows: row_count,
+        first_ts,
+    }))
+}
+
+/// A materialized segment's bytes plus the actual extent of INPUT rows that
+/// went into it — which can differ from the caller's own `rows` slice for a
+/// V3 group table whose leading rows were skipped as un-anchored (see
+/// `materialize_group_wal_tail`). `materialize_sampler_wal_tail` never
+/// skips, so its `rows`/`first_ts` are always the input slice's own span —
+/// this type exists so both paths report the same two facts uniformly and a
+/// caller (`seal_batch`) never has to know which one ran.
+///
+/// **`last_ts` is deliberately NOT here.** Unlike `first_ts`/`rows`, the
+/// input slice's OWN last row's timestamp is always correct as a segment's
+/// `last_ts` even when leading rows were skipped: a V3 group's un-anchored
+/// run is always a LEADING prefix (retention removes a prefix, never punches
+/// a hole — `RezDb::evict_before`'s doc), so the last input row is never
+/// itself skipped. Callers already have that timestamp from the `WalRow`s
+/// they read; duplicating it here would just be a second place for it to
+/// drift from the one that is actually used.
+#[derive(Debug, PartialEq)]
+pub(crate) struct MaterializedTail {
+    pub bytes: Vec<u8>,
+    pub rows: u64,
+    pub first_ts: u64,
 }
 
 /// True for a V3 acquisition-group table key (`"<sampler>/<group>"`); false
@@ -694,7 +739,7 @@ pub(crate) fn is_group_table_key(table_key: &str) -> bool {
 pub(crate) fn materialize_wal_tail(
     table_key: &str,
     rows: &[WalRow],
-) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+) -> Result<Option<MaterializedTail>, Box<dyn std::error::Error>> {
     if is_group_table_key(table_key) {
         materialize_group_wal_tail(table_key, rows)
     } else {
@@ -772,13 +817,18 @@ pub(crate) fn decode_wal_group_row(bytes: &[u8]) -> Result<WalGroupRow, String> 
 fn materialize_group_wal_tail(
     table_key: &str,
     rows: &[WalRow],
-) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+) -> Result<Option<MaterializedTail>, Box<dyn std::error::Error>> {
     if rows.is_empty() {
         return Ok(None);
     }
     let mut builder = GroupTableBuilder::new(table_key.to_string());
     let mut current: Option<((u64, u64), GroupSchema)> = None;
     let mut warned_unanchored = false;
+    // The ts of the first row actually pushed — `None` until then. This is
+    // what makes a catalog `SegmentMeta::first_ts` correct even when a
+    // leading un-anchored run was skipped: it is NOT `rows[0].ts` (the raw
+    // WAL span's own start) unless nothing was skipped.
+    let mut first_ts: Option<u64> = None;
     for row in rows {
         let decoded = decode_wal_group_row(&row.row)?;
         let schema = match decoded.schema {
@@ -817,11 +867,19 @@ fn materialize_group_wal_tail(
             &decoded.gauges,
             &decoded.histograms,
         )?;
+        first_ts.get_or_insert(row.ts);
     }
-    if builder.rows() == 0 {
+    let row_count = builder.rows() as u64;
+    if row_count == 0 {
         return Ok(None);
     }
-    Ok(Some(write_table_parquet(&builder.finish())?))
+    Ok(Some(MaterializedTail {
+        bytes: write_table_parquet(&builder.finish())?,
+        rows: row_count,
+        // `row_count > 0` implies the loop pushed at least one row, which is
+        // exactly when `first_ts` gets set — never `None` here.
+        first_ts: first_ts.expect("a non-empty materialized table has a first pushed row"),
+    }))
 }
 
 // Encode one sampler's cells for one tick into a `wal.row` BLOB.
@@ -1197,18 +1255,33 @@ impl StreamRecorderV3 {
             // input in practice).
             let schema: Arc<GroupSchema> = match &g.schema {
                 Some(s) => {
-                    let ring = self.schemas.entry(g.name.clone()).or_default();
-                    if ring.iter().any(|(hash, _)| *hash == g.schema_hash) {
-                        self.schema_stats.hits += 1;
-                    } else {
-                        ring.push_back((g.schema_hash, Arc::clone(s)));
-                        // Evict the oldest generation once the ring runs over
-                        // its cap — see `SCHEMA_RING_LEN`'s doc for why 3 is
-                        // enough (the agent itself only ever needs the
-                        // newest).
-                        if ring.len() > SCHEMA_RING_LEN {
-                            ring.pop_front();
+                    // `get_mut` first — a `&str` lookup, no allocation — and
+                    // only fall to `entry`'s owned key (one `String` clone)
+                    // on the genuine first sighting of this group name,
+                    // rather than on every hit-or-miss tick. A schema-bearing
+                    // tick is common (every re-anchor sends one — see
+                    // `StreamRecorderV3::segment_schema` — and today's
+                    // producer always includes it besides), so this was a
+                    // per-tick allocation this arc's own `described`/dedup
+                    // cleanup was supposed to have retired.
+                    if let Some(ring) = self.schemas.get_mut(g.name.as_str()) {
+                        if ring.iter().any(|(hash, _)| *hash == g.schema_hash) {
+                            self.schema_stats.hits += 1;
+                        } else {
+                            ring.push_back((g.schema_hash, Arc::clone(s)));
+                            // Evict the oldest generation once the ring runs
+                            // over its cap — see `SCHEMA_RING_LEN`'s doc for
+                            // why 3 is enough (the agent itself only ever
+                            // needs the newest).
+                            if ring.len() > SCHEMA_RING_LEN {
+                                ring.pop_front();
+                            }
+                            self.schema_stats.misses += 1;
                         }
+                    } else {
+                        let mut ring = SchemaRing::new();
+                        ring.push_back((g.schema_hash, Arc::clone(s)));
+                        self.schemas.insert(g.name.clone(), ring);
                         self.schema_stats.misses += 1;
                     }
                     Arc::clone(s)
@@ -2469,9 +2542,11 @@ mod tests {
             })
             .collect();
         let replayed = materialize_wal_tail(sampler, &rows).unwrap().unwrap();
+        assert_eq!(replayed.rows, 3);
+        assert_eq!(replayed.first_ts, 1_000);
 
         assert_eq!(
-            replayed, buffered,
+            replayed.bytes, buffered,
             "a segment replayed from the WAL must be what buffering would have \
              written, byte for byte"
         );
@@ -2950,12 +3025,26 @@ mod tests {
                 })
                 .unwrap(),
             };
-            let bytes = materialize_wal_tail("cpu_usage/percpu", &[unanchored, anchored])
+            let tail = materialize_wal_tail("cpu_usage/percpu", &[unanchored, anchored])
                 .expect("materialization must not error on an un-anchored leading row")
                 .expect("the anchored row must still materialize");
-            let table =
-                crate::recorder::rez::read_table_parquet("cpu_usage/percpu".to_string(), bytes)
-                    .unwrap();
+            // THE catalog-accuracy fix: before it, a caller (`seal_batch`)
+            // derived `SegmentMeta::rows`/`first_ts` from the raw WAL span
+            // regardless of skips — here that would have been `rows: 2`,
+            // `first_ts: 1_000` for a segment that actually holds ONE row
+            // starting at `ts=2_000`. `MaterializedTail` now reports the
+            // truth: what actually went into `bytes`.
+            assert_eq!(
+                (tail.rows, tail.first_ts),
+                (1, 2_000),
+                "the catalog extent must reflect the ONE row that materialized \
+                 (ts=2_000), not the raw WAL span's rows=2/first_ts=1_000"
+            );
+            let table = crate::recorder::rez::read_table_parquet(
+                "cpu_usage/percpu".to_string(),
+                tail.bytes,
+            )
+            .unwrap();
             assert_eq!(
                 table.timestamps,
                 vec![2_000],
@@ -3058,12 +3147,26 @@ mod tests {
             // reference) would fail seal_batch inside its one transaction,
             // kill the writer thread, and take the whole recording down with
             // it.
-            let bytes = materialize_wal_tail("cpu_usage/percpu", &live)
+            let tail = materialize_wal_tail("cpu_usage/percpu", &live)
                 .expect("materializing a real, evicted-anchor live span must not error")
                 .expect("tick 3's self-anchored row must still materialize");
-            let table =
-                crate::recorder::rez::read_table_parquet("cpu_usage/percpu".to_string(), bytes)
-                    .unwrap();
+            // The catalog-accuracy fix, against the real `live_wal` rows
+            // `seal_batch` would have read: the raw span is `[1_100, 1_200]`
+            // (2 rows), which is what `SegmentMeta` used to catalog
+            // regardless of the skip — `rows: 2, first_ts: 1_100` for a
+            // segment that actually holds ONE row starting at `ts=1_200`.
+            assert_eq!(
+                (tail.rows, tail.first_ts),
+                (1, 1_200),
+                "the catalog extent must reflect the ONE row that materialized \
+                 (ts=1_200, tick 3's self-anchored row), not the raw live_wal \
+                 span's rows=2/first_ts=1_100"
+            );
+            let table = crate::recorder::rez::read_table_parquet(
+                "cpu_usage/percpu".to_string(),
+                tail.bytes,
+            )
+            .unwrap();
             assert_eq!(
                 table.timestamps,
                 vec![1_200],

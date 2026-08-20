@@ -332,7 +332,7 @@ fn table_segments(
         .map(|s| s.bytes)
         .collect();
     if let Some(tail) = materialize_wal_tail(sampler, &db.live_wal(recording_id, sampler)?)? {
-        segments.push(tail);
+        segments.push(tail.bytes);
     }
     Ok(segments)
 }

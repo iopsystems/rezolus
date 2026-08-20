@@ -387,16 +387,26 @@ fn copy_range(
                     if last.ts < start || first.ts > end {
                         continue;
                     }
-                    let meta = SegmentMeta {
-                        rows: tail.len() as u64,
-                        first_ts: first.ts,
-                        last_ts: last.ts,
-                    };
-                    let bytes =
+                    // `first`/`tail.len()` are only for the range check above
+                    // from here on — the catalog's `first_ts`/`rows` come
+                    // from what actually materializes (see
+                    // `MaterializedTail`'s doc): a V3 group's leading
+                    // un-anchored rows are real WAL rows that never reach the
+                    // segment, so the raw tail's own span/length would
+                    // catalog a start and count the inserted bytes don't
+                    // agree with. `last_ts` stays the raw tail's own last
+                    // row — that one is always correct (a skip is always a
+                    // leading run).
+                    let materialized =
                         crate::recorder::rez_v3_writer::materialize_wal_tail(&sampler, &tail)
                             .map_err(|e| format!("failed to seal the {sampler} tail: {e}"))?;
-                    if let Some(bytes) = bytes {
-                        tx.insert_segment(id, &sampler, seq, &meta, &bytes)?;
+                    if let Some(materialized) = materialized {
+                        let meta = SegmentMeta {
+                            rows: materialized.rows,
+                            first_ts: materialized.first_ts,
+                            last_ts: last.ts,
+                        };
+                        tx.insert_segment(id, &sampler, seq, &meta, &materialized.bytes)?;
                     }
                 }
                 // Drift observations are part of the recording's identity and
@@ -884,6 +894,16 @@ mod tests {
         );
 
         // Still true after the buffer is dumped: the dump is the same shape.
+        //
+        // `sync()` here fixes a real, observed intermittent flake: `dump`
+        // opens a SECOND connection (`RezDb::open`), so without this, the
+        // read can race the async writer thread and see the file before the
+        // last `ingest`/`maintain` tick actually committed — exactly what
+        // `RezV3Writer::sync`'s doc warns a second-connection reader must
+        // guard against. Reproduced under heavy parallel-test contention on
+        // a multi-core Linux container (never locally, on a quiet machine),
+        // as `rows >= 6` failing with fewer rows than were ingested.
+        buf.sync().unwrap();
         let dest = dir.path().join("dump.rez");
         assert!(dump(&path, &dest, &TimeRange::default()).unwrap().rows >= 6);
         assert_eq!(detect_rez_format(&dest).unwrap(), RezFormat::V3Sqlite);
