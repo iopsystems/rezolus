@@ -2192,8 +2192,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.10.0"
-source = "git+https://github.com/brayniac/metriken?rev=c7d91ec124b66e3eb99b0190eabe5c990c09352d#c7d91ec124b66e3eb99b0190eabe5c990c09352d"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "674854d8e0c525f2630a859e4bfe6ca5f452d27e38592079950e3d396fa7f358"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2204,8 +2205,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-core"
-version = "0.3.0"
-source = "git+https://github.com/brayniac/metriken?rev=c7d91ec124b66e3eb99b0190eabe5c990c09352d#c7d91ec124b66e3eb99b0190eabe5c990c09352d"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e343d088765ec5ad0ad60fd9faa2480a909afd627662f9bf5546a144362fe83"
 dependencies = [
  "histogram",
  "linkme",
@@ -2217,7 +2219,8 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
-source = "git+https://github.com/brayniac/metriken?rev=c7d91ec124b66e3eb99b0190eabe5c990c09352d#c7d91ec124b66e3eb99b0190eabe5c990c09352d"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba9466276652f7134a720d6d7e004bb5277dfa85a349e63030bb80b9aacf3db5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2227,8 +2230,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.18.0"
-source = "git+https://github.com/brayniac/metriken?rev=c7d91ec124b66e3eb99b0190eabe5c990c09352d#c7d91ec124b66e3eb99b0190eabe5c990c09352d"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27254ab0c2cb71085b17be543db1970d11bde2144b78ed82ccdee0a35001d4eb"
 dependencies = [
  "arrow",
  "chrono",
@@ -2241,8 +2245,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.18.0"
-source = "git+https://github.com/brayniac/metriken?rev=c7d91ec124b66e3eb99b0190eabe5c990c09352d#c7d91ec124b66e3eb99b0190eabe5c990c09352d"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bcbf44acac27965eb5913c8834211c9ed8ac3de906bf720fa8df35a74ef14b4"
 dependencies = [
  "arrow",
  "bytes",

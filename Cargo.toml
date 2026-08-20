@@ -15,11 +15,9 @@ histogram = "1.3.1"
 libc = "0.2.186"
 libloading = "0.8"
 log = "0.4.29"
-# metriken crates track the `acq-groups` branch on the fork while the V3
-# format stabilizes; bump the rev deliberately (see the branch on GitHub).
-metriken = { git = "https://github.com/brayniac/metriken", rev = "c7d91ec124b66e3eb99b0190eabe5c990c09352d" }
-metriken-exposition = { git = "https://github.com/brayniac/metriken", rev = "c7d91ec124b66e3eb99b0190eabe5c990c09352d" }
-metriken-query = { git = "https://github.com/brayniac/metriken", rev = "c7d91ec124b66e3eb99b0190eabe5c990c09352d", default-features = false }
+metriken = "0.10.1"
+metriken-exposition = "0.19.0"
+metriken-query = { version = "0.19.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
