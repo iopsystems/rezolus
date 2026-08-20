@@ -1495,15 +1495,40 @@ impl GroupTableBuilder {
             let col = self.get_or_create(desc, "histogram", RezValues::Histogram(Vec::new()));
             Self::pad(col, row);
             let decoded = match v {
-                Some((gp, mvp, buckets)) => Some(
-                    histogram::Histogram::from_buckets(*gp, *mvp, buckets.clone()).map_err(
-                        |e| {
-                            format!(
-                                "failed to rebuild the {table_name} histogram {member_name}: {e}"
-                            )
-                        },
-                    )?,
-                ),
+                Some((gp, mvp, buckets)) => {
+                    // The H2 config lives on the VALUE (`WalValue::Histogram`
+                    // carries it per cell), not the schema — a V3
+                    // `GroupSchema`'s `MetricDesc` is just a name plus
+                    // caller-supplied labels, unlike a V2 `Entry::Histogram`,
+                    // whose metadata the agent's exposition already stamps
+                    // with `grouping_power`/`max_value_power`
+                    // (`TableBuilder::push_row` gets the config for free from
+                    // that). Stamp it into the COLUMN's metadata on first
+                    // sight instead: both `read_table_parquet` and
+                    // `metriken_query::ParquetReader` require it in the
+                    // parquet FIELD metadata to reconstruct a histogram
+                    // column at all — without this, a group's histogram
+                    // silently drops out of `histogram_names()` the moment
+                    // it's resealed to parquet and reopened (defaults to an
+                    // invalid `Config::new(0, 0)`/gets skipped, not a loud
+                    // error at read time).
+                    col.metadata
+                        .entry("grouping_power".to_string())
+                        .or_insert_with(|| gp.to_string());
+                    col.metadata
+                        .entry("max_value_power".to_string())
+                        .or_insert_with(|| mvp.to_string());
+                    Some(
+                        histogram::Histogram::from_buckets(*gp, *mvp, buckets.clone()).map_err(
+                            |e| {
+                                format!(
+                                    "failed to rebuild the {table_name} histogram \
+                                     {member_name}: {e}"
+                                )
+                            },
+                        )?,
+                    )
+                }
                 None => None,
             };
             if let RezValues::Histogram(vs) = &mut col.values {
@@ -1553,12 +1578,18 @@ impl GroupTableBuilder {
 /// The manifest and filter unit stay the SAMPLER (the part before `/`), even
 /// though the underlying table key is finer-grained.
 ///
-/// Not yet called from production code: `parquet filter`/`annotate`/`combine`
-/// still only rewrite the v2 tar container and report an explicit "not yet
-/// supported" error for a v3 (SQLite) archive (`parquet_tools::filter`,
-/// unchanged by this build) — wiring `--samplers` support for V3 group tables
-/// is future work. Exercised directly by `table_sampler_tests` and by
-/// `rez_v3_writer`'s `table_sampler_selects_a_samplers_group_tables_out_of_a_mixed_recording`
+/// Used by `rez_reader::RezReader` to group a sampler's tables for routing
+/// and same-timeline union (Stage 4 Part C): two group tables sharing a
+/// sampler answer a cross-group query together via a
+/// `metriken_query::UnionMetricsSource`; two DIFFERENT samplers still refuse
+/// a query spanning them.
+///
+/// `parquet filter`/`annotate`/`combine` still only rewrite the v2 tar
+/// container and report an explicit "not yet supported" error for a v3
+/// (SQLite) archive (`parquet_tools::filter`, unchanged by this build) —
+/// wiring `--samplers` support for V3 group tables is future work. Exercised
+/// directly by `table_sampler_tests` and by `rez_v3_writer`'s
+/// `table_sampler_selects_a_samplers_group_tables_out_of_a_mixed_recording`
 /// against a real recording, so the selection rule is proven correct ahead of
 /// that CLI plumbing landing.
 ///
@@ -1568,7 +1599,6 @@ impl GroupTableBuilder {
 /// user-visible unit there is `cpu_usage/percpu`, not the sampler — this
 /// function is exactly what closing that gap would group by, whenever it
 /// lands; not done here to avoid growing this change further.
-#[allow(dead_code)]
 pub fn table_sampler(table_key: &str) -> &str {
     table_key.split('/').next().unwrap_or(table_key)
 }

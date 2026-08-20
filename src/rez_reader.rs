@@ -9,6 +9,38 @@
 //! [`materialize_wal_tail`]. From that point on the two are the same
 //! `Vec<Vec<u8>>` per table and nothing below this file knows which container
 //! it came from.
+//!
+//! **Same-timeline union (Stage 4 Part C).** A V3-native archive tables its
+//! acquisition GROUPS, not its samplers — `cpu_usage/percpu` and
+//! `cpu_usage/softirq` are two physical tables of one sampler, with disjoint
+//! metric sets. `route()` answers a query naming metrics from only one
+//! physical table straight from that table's own (lazy, footer-only)
+//! reader, exactly as it always has. A query naming metrics from more than
+//! one table of the SAME sampler OF THE SAME RECORDING is answered by
+//! composing those tables' already-open readers into one
+//! [`metriken_query::UnionMetricsSource`] (built via its checking
+//! `try_new`, not `new` — the composition set here is derived from archive
+//! bytes, not hand-picked by trusted code, so a producer/archive bug that
+//! put the same metric name in two "disjoint" tables must be a loud error,
+//! not `UnionSource`'s silent first-wins) — a dispatch-by-metric-name union
+//! with no timestamp join and no window reconstruction: each metric keeps
+//! resolving its acquisition window from its own physical table, exactly as
+//! it did before union, and the PromQL engine already aligns two
+//! independently-timestamped series onto its evaluation grid whenever a
+//! query combines them (that's how `a / b` has always worked, even within
+//! one table). Building the union is cheap — it only touches each table's
+//! already-open, footer-level name catalog, no row-group decode — so
+//! `route()` builds one fresh per qualifying query rather than caching. A
+//! query naming metrics from two DIFFERENT samplers still refuses,
+//! unchanged — and so does one spanning the SAME sampler across two
+//! DIFFERENT recordings of a multi-recording `.rez` (an A/B archive): every
+//! recording's tables are flattened into one `tables` vec (see
+//! `from_recordings`), so a metric present in both recordings' `cpu_usage`
+//! table would otherwise look, from `owners()`'s point of view, exactly
+//! like two group tables of one recording — and unioning them would let
+//! `UnionSource`'s first-wins silently answer from ONE recording instead of
+//! refusing. `route()` therefore groups by `(recording, sampler)`, not
+//! `sampler` alone: only tables from the SAME recording ever union.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -16,20 +48,62 @@ use std::sync::Arc;
 
 use metriken_query::{
     BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult,
-    SegmentedParquetReader,
+    SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
 };
 
 use crate::recorder::rez::{self, RecordingBytes};
 use crate::recorder::rez_sqlite::RezDb;
 use crate::recorder::rez_v3_writer::materialize_wal_tail;
 
-/// One opened per-sampler table. A table is one or more parquet segments, so
+/// The two concrete reader shapes a `.rez` table opens as, kept concrete
+/// (not type-erased behind `Box<dyn MetricsSource>`) so a same-timeline
+/// union can borrow each table's raw `DataSource` handle via
+/// `UnionChild::from(&ParquetReader)`/`from(&SegmentedParquetReader)` —
+/// that composition needs the concrete type, not the trait object.
+enum TableReader {
+    Single(ParquetReader),
+    Segmented(SegmentedParquetReader),
+}
+
+impl TableReader {
+    fn as_dyn(&self) -> &dyn MetricsSource {
+        match self {
+            TableReader::Single(r) => r,
+            TableReader::Segmented(r) => r,
+        }
+    }
+
+    fn union_child(&self) -> UnionChild {
+        match self {
+            TableReader::Single(r) => UnionChild::from(r),
+            TableReader::Segmented(r) => UnionChild::from(r),
+        }
+    }
+}
+
+/// One opened per-table reader. A table is one or more parquet segments, so
 /// the backing source is either a plain `ParquetReader` (single segment) or a
 /// `SegmentedParquetReader` (many) — both are `MetricsSource`, and everything
 /// below this point treats them identically.
+///
+/// `sampler` is the table's own key — `<sampler>/<group>` for a V3
+/// acquisition-group table, just `<sampler>` for a V2 (or V3 windowless)
+/// table. `rez::table_sampler` recovers the manifest-level sampler name from
+/// it; this field is never split eagerly because most tables (every V2
+/// table, and any V3 sampler with only one group) don't need it to be.
+///
+/// `recording` is the index (within `from_recordings`'s input) of the
+/// recording this table belongs to — carried so `route()` can tell "two
+/// group tables of one sampler in one recording" (union) apart from "the
+/// same sampler's table in two DIFFERENT recordings" (still a refusal; see
+/// the module docs). An index rather than the recording's `dir` string:
+/// `dir` is a display name derived from labels (`recording_dir_slug`), not a
+/// guaranteed-unique identity — two recordings with the same labels are
+/// entirely legal and would collide on `dir`.
 struct SamplerReader {
+    recording: usize,
     sampler: String,
-    reader: Box<dyn MetricsSource>,
+    reader: TableReader,
 }
 
 /// A `.rez` archive presented as one `MetricsSource`. Phase B: a single
@@ -84,7 +158,7 @@ impl RezReader {
             .map(|r| r.metadata.clone())
             .unwrap_or_default();
         let mut tables = Vec::new();
-        for rec in recordings {
+        for (recording, rec) in recordings.into_iter().enumerate() {
             if !rec.complete {
                 tracing::warn!(
                     "recording {} was not cleanly finalized; it was recovered up to its \
@@ -100,17 +174,21 @@ impl RezReader {
                 // splices raw samples below PromQL evaluation so a `rate()`
                 // window straddling a seal boundary still computes on complete
                 // data. Both open footer-only against the shared pool.
-                let reader: Box<dyn MetricsSource> = match <[Vec<u8>; 1]>::try_from(segments) {
-                    Ok([bytes]) => Box::new(
+                let reader = match <[Vec<u8>; 1]>::try_from(segments) {
+                    Ok([bytes]) => TableReader::Single(
                         ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
                             .map_err(|e| format!("opening table {sampler}: {e}"))?,
                     ),
-                    Err(segments) => Box::new(
+                    Err(segments) => TableReader::Segmented(
                         SegmentedParquetReader::open_bytes_with_pool(segments, Arc::clone(&pool))
                             .map_err(|e| format!("opening table {sampler}: {e}"))?,
                     ),
                 };
-                tables.push(SamplerReader { sampler, reader });
+                tables.push(SamplerReader {
+                    recording,
+                    sampler,
+                    reader,
+                });
             }
         }
         Ok(Self {
@@ -124,32 +202,130 @@ impl RezReader {
     fn owners(&self, query: &str) -> Result<Vec<&SamplerReader>, QueryError> {
         let mut out = Vec::new();
         for t in &self.tables {
-            if !t.reader.columns(query)?.is_empty() {
+            if !t.reader.as_dyn().columns(query)?.is_empty() {
                 out.push(t);
             }
         }
         Ok(out)
     }
 
-    /// Resolve the single sub-reader that owns every metric a query references.
-    /// Errors clearly when a query spans two samplers (cross-timeline alignment
-    /// is a later phase) or references no known metric.
-    fn route(&self, query: &str) -> Result<&SamplerReader, QueryError> {
+    /// Resolve the reader that answers every metric a query references: the
+    /// single owning table directly, or — when every owner shares one
+    /// sampler split across several group tables OF ONE RECORDING — a fresh
+    /// [`UnionMetricsSource`] over exactly those tables. Errors clearly when
+    /// a query spans two DIFFERENT samplers, the SAME sampler across two
+    /// DIFFERENT recordings of a multi-recording archive (cross-cadence /
+    /// cross-recording alignment is out of scope), or references no known
+    /// metric.
+    fn route(&self, query: &str) -> Result<Routed<'_>, QueryError> {
         let owners = self.owners(query)?;
         match owners.as_slice() {
-            [one] => Ok(one),
             [] => Err(QueryError::ParseError(format!(
                 "query references no metric present in this .rez: {query}"
             ))),
+            [one] => Ok(Routed::Direct(&one.reader)),
             many => {
-                let mut samplers: Vec<&str> = many.iter().map(|t| t.sampler.as_str()).collect();
-                samplers.sort();
-                Err(QueryError::ParseError(format!(
-                    "cross-timeline query spans samplers {} — per-sampler alignment \
-                     (interpolate/decimate) is not yet supported; query one sampler at a time",
-                    samplers.join(", ")
-                )))
+                // Group owners by (RECORDING, SAMPLER), not by sampler alone:
+                // two group tables of one sampler are a same-timeline union
+                // ONLY within one recording. `from_recordings` flattens every
+                // recording's tables into one `tables` vec, so a metric
+                // present in every recording of a multi-recording (A/B)
+                // archive — e.g. `cpu_cycles` in each side's `cpu_usage`
+                // table — would otherwise look exactly like two group tables
+                // of one sampler, and unioning them would let
+                // `UnionSource`'s first-wins silently answer from ONE
+                // recording instead of refusing (see the module docs).
+                // `rez::table_sampler` is the identity function for every V2
+                // (or unsplit V3) table, so within one recording this
+                // reduces to today's behavior whenever nothing actually
+                // split.
+                let mut groups: Vec<(usize, &str)> = many
+                    .iter()
+                    .map(|t| (t.recording, rez::table_sampler(&t.sampler)))
+                    .collect();
+                groups.sort();
+                groups.dedup();
+                match groups.as_slice() {
+                    [_] => {
+                        // Building the union only touches each table's
+                        // already-open, footer-level name catalog (no
+                        // row-group decode), so a fresh one per query is
+                        // cheap enough not to need caching.
+                        //
+                        // `try_new`, not `new`: this composition set is
+                        // derived from archive bytes (table schemas plus
+                        // parsed table keys), not hand-picked by trusted
+                        // code, so a producer/archive bug that put the same
+                        // metric name in two "disjoint" group tables of this
+                        // sampler must be a loud error, not `UnionSource`'s
+                        // silent first-wins.
+                        let children: Vec<UnionChild> =
+                            many.iter().map(|t| t.reader.union_child()).collect();
+                        UnionMetricsSource::try_new(children)
+                            .map(Routed::Union)
+                            .map_err(|e| match e {
+                                UnionError::NonDisjoint { duplicates } => {
+                                    QueryError::ParseError(format!(
+                                        "query {query} references metric name(s) present in \
+                                         more than one acquisition-group table of the same \
+                                         sampler — the archive's own tables are not disjoint, \
+                                         which should never happen: {}",
+                                        duplicates.join(", ")
+                                    ))
+                                }
+                                UnionError::Empty => {
+                                    unreachable!("the `many` arm always has at least 2 owners")
+                                }
+                            })
+                    }
+                    _ => {
+                        // Either two different samplers, or the same
+                        // sampler split across two different recordings —
+                        // tell them apart so the error is actually
+                        // actionable.
+                        let mut samplers: Vec<&str> = groups.iter().map(|(_, s)| *s).collect();
+                        samplers.sort();
+                        samplers.dedup();
+                        let mut recordings: Vec<usize> = groups.iter().map(|(r, _)| *r).collect();
+                        recordings.sort();
+                        recordings.dedup();
+                        if samplers.len() == 1 {
+                            Err(QueryError::ParseError(format!(
+                                "query {query} references sampler {} from {} different \
+                                 recordings of this multi-recording .rez — cross-recording \
+                                 queries are not supported; query one recording at a time \
+                                 (see `RezReader::open_recordings`)",
+                                samplers[0],
+                                recordings.len()
+                            )))
+                        } else {
+                            Err(QueryError::ParseError(format!(
+                                "cross-timeline query spans samplers {} — per-sampler alignment \
+                                 (interpolate/decimate) is not yet supported; query one sampler \
+                                 at a time",
+                                samplers.join(", ")
+                            )))
+                        }
+                    }
+                }
             }
+        }
+    }
+}
+
+/// What `route()` resolves a query to: either a borrowed reference straight
+/// into one of `RezReader`'s own tables (the common, zero-allocation case),
+/// or an owned same-timeline union built fresh for this one query.
+enum Routed<'a> {
+    Direct(&'a TableReader),
+    Union(UnionMetricsSource),
+}
+
+impl Routed<'_> {
+    fn as_dyn(&self) -> &dyn MetricsSource {
+        match self {
+            Routed::Direct(r) => r.as_dyn(),
+            Routed::Union(u) => u,
         }
     }
 }
@@ -165,47 +341,55 @@ impl MetricsSource for RezReader {
         opts: &QueryOptions,
     ) -> Result<QueryResult, QueryError> {
         self.route(expr)?
-            .reader
+            .as_dyn()
             .query_range_opts(expr, start_s, end_s, step_s, opts)
     }
     fn query(&self, expr: &str, time: Option<f64>) -> Result<QueryResult, QueryError> {
-        self.route(expr)?.reader.query(expr, time)
+        self.route(expr)?.as_dyn().query(expr, time)
     }
     fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
         // columns() is answerable as the union — it never crosses timelines.
         let mut out = HashSet::new();
         for t in &self.tables {
-            out.extend(t.reader.columns(query)?);
+            out.extend(t.reader.as_dyn().columns(query)?);
         }
         Ok(out)
     }
 
     // ── Union metadata / naming / labels ──
     fn counter_names(&self) -> Vec<String> {
-        union_sorted(self.tables.iter().map(|t| t.reader.counter_names()))
+        union_sorted(
+            self.tables
+                .iter()
+                .map(|t| t.reader.as_dyn().counter_names()),
+        )
     }
     fn gauge_names(&self) -> Vec<String> {
-        union_sorted(self.tables.iter().map(|t| t.reader.gauge_names()))
+        union_sorted(self.tables.iter().map(|t| t.reader.as_dyn().gauge_names()))
     }
     fn histogram_names(&self) -> Vec<String> {
-        union_sorted(self.tables.iter().map(|t| t.reader.histogram_names()))
+        union_sorted(
+            self.tables
+                .iter()
+                .map(|t| t.reader.as_dyn().histogram_names()),
+        )
     }
     fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.counter_labels(name))
+            .flat_map(|t| t.reader.as_dyn().counter_labels(name))
             .collect()
     }
     fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.gauge_labels(name))
+            .flat_map(|t| t.reader.as_dyn().gauge_labels(name))
             .collect()
     }
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.histogram_labels(name))
+            .flat_map(|t| t.reader.as_dyn().histogram_labels(name))
             .collect()
     }
 
@@ -213,20 +397,20 @@ impl MetricsSource for RezReader {
     fn time_range(&self) -> Option<(f64, f64)> {
         self.tables
             .iter()
-            .filter_map(|t| t.reader.time_range())
+            .filter_map(|t| t.reader.as_dyn().time_range())
             .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
     }
     fn time_range_ns(&self) -> Option<(u64, u64)> {
         self.tables
             .iter()
-            .filter_map(|t| t.reader.time_range_ns())
+            .filter_map(|t| t.reader.as_dyn().time_range_ns())
             .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
     }
     fn interval(&self) -> f64 {
         let finest = self
             .tables
             .iter()
-            .map(|t| t.reader.interval())
+            .map(|t| t.reader.as_dyn().interval())
             .filter(|i| *i > 0.0)
             .fold(f64::INFINITY, f64::min);
         if finest.is_finite() {
@@ -671,6 +855,65 @@ mod tests {
         assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
         assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
         assert!(!readers[0].1.counter_names().is_empty());
+    }
+
+    /// C1 regression: `RezReader::open_with_pool` — NOT `open_recordings` —
+    /// is the path a multi-recording archive actually takes in production
+    /// (`parquet combine a.rez b.rez` builds a 2-recording A/B archive, and
+    /// `rezolus mcp query`/the viewer open via `open_with_pool`). Before the
+    /// fix, `route()` grouped owners by SAMPLER alone, so a metric present
+    /// in every recording's `cpu_usage` table (e.g. `cpu_cycles`) looked
+    /// exactly like two group tables of one recording, got unioned, and
+    /// `UnionSource`'s first-wins silently answered from ONE recording
+    /// where the reader used to refuse loudly. This pins the refusal.
+    #[test]
+    fn multi_recording_same_sampler_query_errors_instead_of_silently_dropping_one_recording() {
+        let (_d, p) = two_sampler_rez();
+        let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
+        let rec0 = m.recordings.into_iter().next().unwrap();
+        let bytes0: Vec<Vec<Vec<u8>>> = rb
+            .into_iter()
+            .next()
+            .unwrap()
+            .tables
+            .into_iter()
+            .map(|(_, b)| b)
+            .collect();
+
+        let mut a = rec0.clone();
+        a.dir = "arm0".to_string();
+        a.labels.insert("arm".to_string(), "arm0".to_string());
+        let mut b = rec0.clone();
+        b.dir = "arm1".to_string();
+        b.labels.insert("arm".to_string(), "arm1".to_string());
+
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("two_rec.rez");
+        crate::recorder::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)])
+            .unwrap();
+
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        // The flattening path — NOT open_recordings.
+        let reader = RezReader::open_with_pool(&out, pool).unwrap();
+
+        // `cpu_cycles` lives in the `cpu_usage` table, present in BOTH
+        // recordings — this must refuse, not quietly answer from one side.
+        let err = reader
+            .query_range("rate(cpu_cycles[2s])", 0.0, 10.0, 1.0)
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("cpu_usage"),
+            "the error must name the sampler that spans recordings: {msg}"
+        );
+
+        // Sanity: a single-recording archive of the SAME data must not
+        // error — proves the refusal above is about the recording span,
+        // not some other regression in the fixture.
+        let single = RezReader::open_with_pool(&p, BufferPool::new(64 * 1024 * 1024)).unwrap();
+        assert!(single
+            .query_range("rate(cpu_cycles[2s])", 0.0, 10.0, 1.0)
+            .is_ok());
     }
 
     /// The whole point of the splice design: a segmented table must answer
@@ -1422,6 +1665,51 @@ mod tests {
             }
         }
 
+        /// Gauge-only variant of [`group_schema`] — I4: every cross-group
+        /// union fixture elsewhere in this suite is counter-only, so
+        /// nothing yet exercises a gauge group table through `route()`.
+        fn gauge_group_schema(members: &[&str], sampler: &str) -> GroupSchema {
+            GroupSchema {
+                counters: Vec::new(),
+                gauges: members
+                    .iter()
+                    .map(|m| MetricDesc {
+                        name: m.to_string(),
+                        metadata: [
+                            ("metric".to_string(), m.to_string()),
+                            ("sampler".to_string(), sampler.to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    })
+                    .collect(),
+                histograms: Vec::new(),
+            }
+        }
+
+        /// Histogram-only variant of [`group_schema`] — I4: rezolus is
+        /// histogram-heavy and the motivating cross-group shape is a
+        /// latency histogram in one group and a counter (or gauge) in
+        /// another; nothing in this suite built that shape before.
+        fn histogram_group_schema(members: &[&str], sampler: &str) -> GroupSchema {
+            GroupSchema {
+                counters: Vec::new(),
+                gauges: Vec::new(),
+                histograms: members
+                    .iter()
+                    .map(|m| MetricDesc {
+                        name: m.to_string(),
+                        metadata: [
+                            ("metric".to_string(), m.to_string()),
+                            ("sampler".to_string(), sampler.to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    })
+                    .collect(),
+            }
+        }
+
         /// `n` ticks of one acquisition group (`cpu_usage/percpu`, one member
         /// `cpu_cycles`), one second apart, each with a 50 ms window ending at
         /// the tick — the same shape `fixture_rows` uses for its V2 counter,
@@ -1502,6 +1790,577 @@ mod tests {
             assert!(
                 intervals.iter().any(|iv| iv.is_array()),
                 "at least one point must carry a resolved [lo, hi] band: {json}"
+            );
+        }
+
+        // -------------------------------------------------------------
+        // Same-timeline union (Part C): a query spanning two group tables of
+        // ONE sampler must now succeed.
+        // -------------------------------------------------------------
+
+        /// Two acquisition groups of ONE sampler (`cpu_usage`), both
+        /// advancing every tick (the common case: one `refresh()` reports
+        /// every group it owns) — so their group tables share IDENTICAL row
+        /// timestamps and the union degenerates to a plain per-row join, the
+        /// same shape a V2 table with two counter columns already has.
+        fn two_group_fixture_rows_v3(n: u64) -> Vec<(Snapshot, u64)> {
+            let percpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
+            (0..n)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    let percpu = GroupSnapshot {
+                        name: "cpu_usage/percpu".to_string(),
+                        schema_hash: percpu_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&percpu_schema)),
+                        window: w,
+                        counters: vec![Some(i * 1_000)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let softirq = GroupSnapshot {
+                        name: "cpu_usage/softirq".to_string(),
+                        schema_hash: softirq_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&softirq_schema)),
+                        window: w,
+                        counters: vec![Some(i * 10)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let s = Snapshot::V3(SnapshotV3 {
+                        systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                        duration: std::time::Duration::ZERO,
+                        metadata: HashMap::new(),
+                        groups: vec![percpu, softirq],
+                    });
+                    (s, ts)
+                })
+                .collect()
+        }
+
+        /// The V2 recording of the SAME data `two_group_fixture_rows_v3`
+        /// produces: one sampler, two counters, one row per tick. A V2
+        /// archive has always put both counters in one table, so this is the
+        /// answer the union must reproduce.
+        fn two_group_fixture_rows_v2(n: u64) -> Vec<(Snapshot, u64)> {
+            (0..n)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    (
+                        snap(
+                            ts,
+                            vec![
+                                counter("cpu_cycles", "cpu_usage", i * 1_000, w),
+                                counter("cpu_softirq", "cpu_usage", i * 10, w),
+                            ],
+                            Vec::new(),
+                        ),
+                        ts,
+                    )
+                })
+                .collect()
+        }
+
+        #[test]
+        fn within_sampler_cross_group_query_matches_v2_equivalent() {
+            let v3_rows = two_group_fixture_rows_v3(9);
+            let v2_rows = two_group_fixture_rows_v2(9);
+            let dir = tempfile::tempdir().unwrap();
+            let v2_path = dir.path().join("v2.rez");
+            let v3_path = dir.path().join("v3.rez");
+            write_atomic_rez(&v2_rows, &v2_path);
+            // max_rows=2 also forces each group table into several segments,
+            // so the union is exercised across a segment boundary too.
+            write_v3(&v3_rows, 2, true, &v3_path);
+
+            let counts = sealed_counts(&v3_path);
+            assert!(
+                counts.contains_key("cpu_usage/percpu") && counts.contains_key("cpu_usage/softirq"),
+                "the fixture must actually split into two group tables of one \
+                 sampler, or this proves nothing: {counts:?}"
+            );
+
+            let a = open(&v2_path);
+            let b = open(&v3_path);
+            assert_eq!(a.counter_names(), b.counter_names());
+
+            let (start, end) = a.time_range().unwrap();
+            assert_eq!(b.time_range(), Some((start, end)));
+
+            let same = |expr: &str| {
+                let ra = a.query_range(expr, start, end, 1.0).unwrap();
+                let rb = b.query_range(expr, start, end, 1.0).unwrap();
+                assert_eq!(
+                    serde_json::to_value(&ra).unwrap(),
+                    serde_json::to_value(&rb).unwrap(),
+                    "same-timeline union differs from the V2 equivalent for {expr}"
+                );
+                ra
+            };
+
+            // Before Part C this returned "cross-timeline query spans
+            // samplers cpu_usage" (both operands are cpu_usage, but from
+            // different group tables) — now it must resolve, and resolve to
+            // the same numbers a V2 recording of the same data gives.
+            let summed = same("rate(cpu_cycles[3s]) + rate(cpu_softirq[3s])");
+            let json = serde_json::to_value(&summed).unwrap();
+            let values = json["result"][0]["values"].as_array().unwrap();
+            assert!(
+                values.iter().any(|v| v[1] != "0"),
+                "non-degenerate: the combined rate must produce real values: {json}"
+            );
+            same("rate(cpu_softirq[4s])");
+
+            // Bands survive per metric after combination: each column's
+            // window came from its OWN source group table, not the other
+            // one's.
+            for metric in ["cpu_cycles", "cpu_softirq"] {
+                let r = b
+                    .query_range(&format!("rate({metric}[3s])"), start, end, 1.0)
+                    .unwrap();
+                let json = serde_json::to_value(&r).unwrap();
+                let intervals = json["result"][0]["intervals"]
+                    .as_array()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "rate({metric}[..]) over the same-timeline union must still \
+                         carry bands: {json}"
+                        )
+                    });
+                assert!(
+                    intervals.iter().any(|iv| iv.is_array()),
+                    "{metric}: at least one point must carry a resolved [lo, hi] band: {json}"
+                );
+            }
+        }
+
+        /// I4: a gauge group and a histogram group, alongside the counter
+        /// group every other fixture in this suite uses — the motivating
+        /// cross-group shape (rezolus is histogram-heavy; a latency
+        /// histogram in one group and a counter/gauge in another) had zero
+        /// coverage before this. Segmented (max_rows forces multiple
+        /// segments per table), so a segmented child is exercised for all
+        /// three kinds, not just counters.
+        ///
+        /// One honest limitation this test documents rather than papers
+        /// over: `histogram_mean`/`histogram_irate`/etc. are top-level-only
+        /// in this query engine's grammar (see
+        /// `metriken_query::union::tests::gauge_and_histogram_cross_child_dispatch_is_non_degenerate`
+        /// upstream) — they cannot be embedded in a binary expression the
+        /// way `rate(a) + b` can, so there is no PromQL string that routes
+        /// a histogram query through `route()`'s union arm. What IS proven
+        /// here: a counter+gauge cross-group query still unions correctly
+        /// with a histogram-carrying THIRD table present in the same
+        /// sampler (so `route()`'s `(recording, sampler)` grouping isn't
+        /// disturbed by an unreferenced histogram sibling), and the
+        /// histogram itself resolves correctly — real value, real band —
+        /// through the very same reader.
+        #[test]
+        fn cross_group_query_spans_counter_gauge_and_histogram() {
+            let percpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            let freq_schema = std::sync::Arc::new(gauge_group_schema(&["frequency"], "cpu_usage"));
+            let sched_schema =
+                std::sync::Arc::new(histogram_group_schema(&["latency"], "cpu_usage"));
+            let n = 6u64;
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("mixed_kinds.rez");
+            let mut rec = recorder(&path, 2); // force multiple segments per table
+            for i in 0..n {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                let mut h = ::histogram::Histogram::new(7, 64).unwrap();
+                for _ in 0..=i {
+                    h.increment(1_000).unwrap();
+                }
+                let percpu = GroupSnapshot {
+                    name: "cpu_usage/percpu".to_string(),
+                    schema_hash: percpu_schema.hash(),
+                    schema: Some(std::sync::Arc::clone(&percpu_schema)),
+                    window: w,
+                    counters: vec![Some(i * 1_000)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                };
+                let freq = GroupSnapshot {
+                    name: "cpu_usage/freq".to_string(),
+                    schema_hash: freq_schema.hash(),
+                    schema: Some(std::sync::Arc::clone(&freq_schema)),
+                    window: w,
+                    counters: Vec::new(),
+                    gauges: vec![Some(2_000 + i as i64)],
+                    histograms: Vec::new(),
+                };
+                let sched = GroupSnapshot {
+                    name: "cpu_usage/sched".to_string(),
+                    schema_hash: sched_schema.hash(),
+                    schema: Some(std::sync::Arc::clone(&sched_schema)),
+                    window: w,
+                    counters: Vec::new(),
+                    gauges: Vec::new(),
+                    histograms: vec![Some(h)],
+                };
+                let s = Snapshot::V3(SnapshotV3 {
+                    systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                    duration: std::time::Duration::ZERO,
+                    metadata: HashMap::new(),
+                    groups: vec![percpu, freq, sched],
+                });
+                rec.ingest(&s, ts, 0).unwrap();
+                rec.maybe_seal().unwrap();
+            }
+            rec.finalize((1_000_000_000 * n, 0)).unwrap();
+
+            let counts = sealed_counts(&path);
+            assert!(
+                counts.contains_key("cpu_usage/percpu")
+                    && counts.contains_key("cpu_usage/freq")
+                    && counts.contains_key("cpu_usage/sched"),
+                "the fixture must actually split into three group tables of \
+                 one sampler, or this proves nothing: {counts:?}"
+            );
+            assert!(
+                counts["cpu_usage/sched"] > 1,
+                "the histogram table must be segmented too: {counts:?}"
+            );
+
+            let reader = open(&path);
+            assert_eq!(reader.gauge_names(), vec!["frequency".to_string()]);
+            assert_eq!(reader.histogram_names(), vec!["latency".to_string()]);
+
+            // Solo answers (single-table fast path, no union). The range
+            // starts at 2.0, not 1.0: `rate()` has no lookback sample before
+            // the fixture's first tick, so a query starting at 1.0 would
+            // drop that point from the union expression below (needs a
+            // rate() term) but not from a bare `frequency` selector —
+            // starting at 2.0 keeps both grids identical so the comparison
+            // is about routing, not a `rate()` edge effect.
+            let solo_gauge = reader.query_range("frequency", 2.0, 6.0, 1.0).unwrap();
+            let solo_hist = reader
+                .query_range("histogram_mean(latency)", 2.0, 6.0, 1.0)
+                .unwrap();
+
+            // The gauge, forced through the union by naming the counter
+            // sibling alongside it — with the histogram table present as a
+            // THIRD table of this sampler that this particular query never
+            // references.
+            let gauge_via_union = reader
+                .query_range("frequency + (rate(cpu_cycles[3s]) * 0)", 2.0, 6.0, 1.0)
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&solo_gauge).unwrap()["result"][0]["values"],
+                serde_json::to_value(&gauge_via_union).unwrap()["result"][0]["values"],
+                "the gauge's own values must not change when routed through \
+                 the union alongside its counter sibling"
+            );
+
+            // The histogram, independently — real value, real band — from
+            // the SAME reader that just built a union for its siblings.
+            let hist_json = serde_json::to_value(&solo_hist).unwrap();
+            let hist_values = hist_json["result"][0]["values"].as_array().unwrap();
+            assert!(
+                hist_values.iter().any(|v| v[1] != "0"),
+                "the histogram must produce real values: {hist_json}"
+            );
+            let hist_intervals = hist_json["result"][0]["intervals"].as_array();
+            assert!(
+                hist_intervals.is_some_and(|iv| iv.iter().any(|p| p.is_array())),
+                "the histogram must carry a resolved band: {hist_json}"
+            );
+        }
+
+        /// M5: every fixture elsewhere in this suite gives both groups the
+        /// SAME window width (50ms), so nothing yet proves a group's OWN
+        /// width survives — as opposed to one group's width leaking onto
+        /// the other's band, which is exactly the fidelity claim that
+        /// justified the union design over a materialized merge. `percpu`
+        /// uses 50ms, `softirq` uses 500ms — 10x apart, so a leak would be
+        /// obvious rather than lost in rounding.
+        #[test]
+        fn distinct_group_window_widths_are_preserved_through_the_union() {
+            let percpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
+            let n = 6u64;
+            let rows: Vec<(Snapshot, u64)> = (0..n)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w_fast = Some(Window::new(ts - 50_000_000, ts));
+                    let w_slow = Some(Window::new(ts - 500_000_000, ts));
+                    let percpu = GroupSnapshot {
+                        name: "cpu_usage/percpu".to_string(),
+                        schema_hash: percpu_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&percpu_schema)),
+                        window: w_fast,
+                        counters: vec![Some(i * 1_000)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let softirq = GroupSnapshot {
+                        name: "cpu_usage/softirq".to_string(),
+                        schema_hash: softirq_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&softirq_schema)),
+                        window: w_slow,
+                        counters: vec![Some(i * 10)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let s = Snapshot::V3(SnapshotV3 {
+                        systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                        duration: std::time::Duration::ZERO,
+                        metadata: HashMap::new(),
+                        groups: vec![percpu, softirq],
+                    });
+                    (s, ts)
+                })
+                .collect();
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("widths.rez");
+            write_v3(&rows, 2, true, &path);
+
+            // Non-vacuous: the fixture's OWN sealed tables really do carry
+            // two different window widths.
+            let width_ns = |t: &rez::RezTable| -> Vec<u64> {
+                t.columns[0]
+                    .windows
+                    .iter()
+                    .filter_map(|w| w.map(|win| win.end_ns - win.begin_ns))
+                    .collect()
+            };
+            let percpu_widths: Vec<u64> = decoded_segments(&path, "cpu_usage/percpu")
+                .iter()
+                .flat_map(width_ns)
+                .collect();
+            let softirq_widths: Vec<u64> = decoded_segments(&path, "cpu_usage/softirq")
+                .iter()
+                .flat_map(width_ns)
+                .collect();
+            assert!(
+                percpu_widths.iter().all(|w| *w == 50_000_000),
+                "{percpu_widths:?}"
+            );
+            assert!(
+                softirq_widths.iter().all(|w| *w == 500_000_000),
+                "{softirq_widths:?}"
+            );
+
+            // And the fidelity claim itself: cpu_softirq's own band, read
+            // ALONE (single-table fast path — the reference answer), must
+            // be byte-for-byte identical to its band read through the
+            // union (forced by also naming cpu_cycles) — proving the wider
+            // window wasn't narrowed by, or blended with, its sibling's
+            // narrower one.
+            let reader = open(&path);
+            let solo = reader
+                .query_range("rate(cpu_softirq[9s])", 1.0, 6.0, 1.0)
+                .unwrap();
+            let via_union = reader
+                .query_range(
+                    "rate(cpu_softirq[9s]) + (rate(cpu_cycles[9s]) * 0)",
+                    1.0,
+                    6.0,
+                    1.0,
+                )
+                .unwrap();
+            let solo_json = serde_json::to_value(&solo).unwrap();
+            let union_json = serde_json::to_value(&via_union).unwrap();
+            assert_eq!(
+                solo_json["result"][0]["intervals"], union_json["result"][0]["intervals"],
+                "cpu_softirq's 500ms band must survive union with cpu_cycles' \
+                 50ms sibling unchanged: solo={solo_json} via_union={union_json}"
+            );
+            // And it must actually differ from the 50ms sibling's own band
+            // width, or the identity check above would be vacuous (both
+            // could trivially agree if the reader ignored widths entirely).
+            let cycles_band = reader
+                .query_range("rate(cpu_cycles[9s])", 1.0, 6.0, 1.0)
+                .unwrap();
+            assert_ne!(
+                serde_json::to_value(&solo).unwrap()["result"][0]["intervals"],
+                serde_json::to_value(&cycles_band).unwrap()["result"][0]["intervals"],
+                "the two groups' bands must not be identical, or the width \
+                 distinction this test exists to check would be untested"
+            );
+        }
+
+        /// A group that skips ticks (the window-advance dedup case) must not
+        /// have its gaps papered over by the union: a query touching ONLY
+        /// that metric must answer identically whether it is read from its
+        /// own single-group table or through the same-timeline union path
+        /// (routed there because the query ALSO references a sibling group's
+        /// metric) — the sibling's presence must not change this metric's
+        /// own answer. There is no V2 recording to compare against here: V2
+        /// has no per-metric row-skip within one sampler's table (a window
+        /// advance is decided once for the whole table), so this asymmetric
+        /// cadence is exactly the case V3's per-group split adds meaning
+        /// for, and the sealed-segment counts below establish the gap is
+        /// real rather than assumed.
+        #[test]
+        fn a_group_that_skipped_ticks_is_not_fabricated_across_by_the_union() {
+            let percpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
+            let n = 9u64;
+            let rows: Vec<(Snapshot, u64)> = (0..n)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    // softirq's window advances only every 3rd tick, so it
+                    // dedups (skips) two ticks out of every three.
+                    let slow_end = 1_000_000_000 * (i / 3 + 1);
+                    let slow_w = Some(Window::new(slow_end - 50_000_000, slow_end));
+                    let percpu = GroupSnapshot {
+                        name: "cpu_usage/percpu".to_string(),
+                        schema_hash: percpu_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&percpu_schema)),
+                        window: w,
+                        counters: vec![Some(i * 1_000)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let softirq = GroupSnapshot {
+                        name: "cpu_usage/softirq".to_string(),
+                        schema_hash: softirq_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&softirq_schema)),
+                        window: slow_w,
+                        counters: vec![Some(i / 3)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let s = Snapshot::V3(SnapshotV3 {
+                        systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                        duration: std::time::Duration::ZERO,
+                        metadata: HashMap::new(),
+                        groups: vec![percpu, softirq],
+                    });
+                    (s, ts)
+                })
+                .collect();
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("skips.rez");
+            write_v3(&rows, usize::MAX, true, &path);
+
+            let softirq_seg = decoded_table(&path, "cpu_usage/softirq");
+            assert!(
+                (softirq_seg.timestamps.len() as u64) < n,
+                "the fixture must actually have fewer softirq rows than ticks, \
+                 or this proves nothing: {} rows for {n} ticks",
+                softirq_seg.timestamps.len()
+            );
+
+            let reader = open(&path);
+            // cpu_softirq answered on its OWN: this expression names only
+            // one metric, so `route()` takes the single-table fast path —
+            // no union involved. The reference answer.
+            let solo = reader
+                .query_range("rate(cpu_softirq[9s])", 1.0, 9.0, 1.0)
+                .unwrap();
+            // The identical quantity, forced through the union by also
+            // naming a sibling group's metric in the same expression
+            // (`rate(cpu_cycles[9s]) * 0` is always 0 — percpu is dense, so
+            // it never itself introduces a gap). If merging fabricated a
+            // value at a tick softirq's own table has no row for, or
+            // dropped one it does have, this would disagree with `solo`.
+            let via_union = reader
+                .query_range(
+                    "rate(cpu_softirq[9s]) + (rate(cpu_cycles[9s]) * 0)",
+                    1.0,
+                    9.0,
+                    1.0,
+                )
+                .unwrap();
+            // Compare values/bands only, not the label set: a binary op
+            // between two vectors drops `__name__` per normal PromQL
+            // semantics (Prometheus does the same), which is expected and
+            // unrelated to what this test is checking.
+            let solo_json = serde_json::to_value(&solo).unwrap();
+            let union_json = serde_json::to_value(&via_union).unwrap();
+            assert_eq!(
+                solo_json["result"][0]["values"], union_json["result"][0]["values"],
+                "cpu_softirq's own values must not change when a sibling group's \
+                 metric is unioned alongside it in the same query: solo={solo_json} \
+                 via_union={union_json}"
+            );
+            assert_eq!(
+                solo_json["result"][0]["intervals"], union_json["result"][0]["intervals"],
+                "cpu_softirq's own bands must not change either: solo={solo_json} \
+                 via_union={union_json}"
+            );
+        }
+
+        #[test]
+        fn cross_sampler_query_still_errors_when_one_side_is_a_split_sampler() {
+            // A query spanning a split sampler's group AND a totally
+            // different sampler must still refuse — and must name each
+            // SAMPLER once, not once per physical group table.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("mixed.rez");
+            let mut rec = recorder(&path, usize::MAX);
+            let cpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
+            for i in 0..3u64 {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                let groups = vec![
+                    GroupSnapshot {
+                        name: "cpu_usage/percpu".to_string(),
+                        schema_hash: cpu_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&cpu_schema)),
+                        window: w,
+                        counters: vec![Some(i * 1_000)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    },
+                    GroupSnapshot {
+                        name: "cpu_usage/softirq".to_string(),
+                        schema_hash: softirq_schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&softirq_schema)),
+                        window: w,
+                        counters: vec![Some(i)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    },
+                ];
+                let s = Snapshot::V3(SnapshotV3 {
+                    systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                    duration: std::time::Duration::ZERO,
+                    metadata: HashMap::new(),
+                    groups,
+                });
+                rec.ingest(&s, ts, 0).unwrap();
+                // A totally different, V2-shaped sampler in the SAME
+                // recording — `StreamRecorderV3::ingest` dispatches each call
+                // by its own snapshot's variant, so a V2 tick mixed into an
+                // otherwise-V3 recording lands in the ordinary sampler-keyed
+                // path unchanged.
+                rec.ingest(
+                    &snap(
+                        ts,
+                        vec![counter("reads", "blockio_requests", i, w)],
+                        Vec::new(),
+                    ),
+                    ts,
+                    0,
+                )
+                .unwrap();
+                rec.maybe_seal().unwrap();
+            }
+            rec.finalize((3_000_000_000, 0)).unwrap();
+
+            let reader = open(&path);
+            let err = reader
+                .query_range("cpu_cycles + cpu_softirq + reads", 0.0, 10.0, 1.0)
+                .unwrap_err();
+            let msg = format!("{err:?}");
+            assert!(
+                msg.contains("cpu_usage") && msg.contains("blockio_requests"),
+                "got: {msg}"
+            );
+            assert!(
+                !msg.contains("cpu_usage/percpu") && !msg.contains("cpu_usage/softirq"),
+                "the error must name the SAMPLER once, not each of its group \
+                 tables: {msg}"
             );
         }
     }
