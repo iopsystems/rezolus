@@ -98,12 +98,15 @@ impl SnapshotBuilder {
 
 /// Metadata common to any exposed entry for one metric: `"metric"` (its
 /// name) plus everything from the metric's own static metadata, plus
-/// `"sampler"` attribution — also returned standalone, since a caller (the
-/// V3 builder) needs the sampler name itself for group routing, beyond
-/// just having it embedded in the map. Shared between `create` (V2) and
-/// `create_v3` so the two builders can't independently drift on what this
-/// prefix does; `create_v3` uses the returned `BTreeMap` directly (its wire
-/// format's native form) while `create` converts to a `HashMap` (V2's).
+/// `"sampler"` attribution — also returned standalone for callers that want
+/// the sampler name without building the whole map. Shared between `create`
+/// (V2) and `create_v3` so the two builders can't independently drift on
+/// what this prefix does; `create` uses the returned `BTreeMap` directly
+/// (its wire format's native form, converted to a `HashMap` for V2's).
+/// `create_v3` calls this only on a `SkeletonCache` miss (see
+/// `fold_group_identities` and its own doc comment) — group ROUTING there
+/// uses the cheaper `attribute_sampler` directly instead, since a cache hit
+/// needs no metadata `BTreeMap` at all.
 ///
 /// # KEEP IN SYNC
 ///
@@ -704,49 +707,73 @@ fn create(
 /// Per-group schema cache for [`create_v3`], keyed by group name
 /// (`"<sampler>/<name>"`).
 ///
-/// Each tick, `create_v3` still has to assemble a fresh [`GroupSchema`] for
-/// every group — full metadata included — to know each member's current
-/// state; that assembly always runs, cache hit or miss. What the cache
-/// skips is [`GroupSchema::hash`]: a full canonical msgpack serialization of
-/// the schema followed by an FNV-1a-128 fold, the one per-tick cost that
-/// scales with schema size rather than with "did anything change". When the
-/// freshly assembled schema is `==` the previous tick's cached schema
-/// (`GroupSchema` derives `PartialEq`, comparing every member's name AND
-/// metadata, not just names — see the note on why below), it's discarded in
-/// favor of the cached one and the cached hash is reused verbatim; only a
-/// genuine change pays for a fresh hash.
+/// A cache HIT (this tick's [`GroupSkeleton::identity`] equals last tick's)
+/// skips [`GroupSchema`] assembly entirely: no `MetricDesc`, no `BTreeMap`,
+/// no formatted member name is built for that group this tick — only its
+/// values, which change every tick regardless and must always be read. The
+/// cached `Arc<GroupSchema>` is cloned (a refcount bump) and the cached wire
+/// `schema_hash` is reused verbatim. A MISS (identity differs, or there is
+/// no cached entry yet) assembles the schema exactly as before and pays for
+/// a fresh [`GroupSchema::hash`] — the full canonical msgpack encode + fold
+/// that scales with schema size.
 ///
-/// # Honest cost accounting (this is NOT a net allocation win yet)
+/// # Two hashes, distinct roles
 ///
-/// Despite skipping the hash fold, V3 currently allocates MORE per tick
-/// than V2 on the cache-HIT path — measured 1.2–3.4× V2's allocations, with
-/// the emit-time `cached.schema.clone()` alone accounting for 54% of
-/// allocations at 2k members. The spec's target ("a stable group allocates
-/// ~nothing on a hit") is deferred, not delivered by this cache; reaching
-/// it needs two follow-up changes this commit does not make: (a) folding
-/// member identity + metadata into a rolling hash so the metadata
-/// `BTreeMap`/`MetricDesc` assembly itself moves behind the cache-miss
-/// branch instead of running unconditionally every tick, and (b) removing
-/// the emit-time schema clone, which needs an upstream `metriken-exposition`
-/// change (an `Arc`/`Cow`-backed schema, or serializing `GroupSnapshot` by
-/// reference instead of by value) since `GroupSnapshot::schema` is an owned
-/// `Option<GroupSchema>` today. Both are named follow-up work for the
-/// Stage-3d measurement plan, not implied by anything below.
+/// - **Identity** ([`GroupSkeleton::identity`]) — internal, never
+///   transmitted, cheap to fold: per group per tick, for each kind in fixed
+///   order (counters, gauges, histograms), for each member in the same
+///   order the schema lists them, fold the member's identity (its metric id
+///   and, for a group entry, its index — as raw integer bytes, no
+///   `format!`) then its metadata as sorted key/value pairs (via the
+///   borrowing `with_metadata`/`for_each_metadata` accessors, sorted on a
+///   small inline stack buffer — see `identity_fold_metadata` — no
+///   allocation for the metadata maps rezolus samplers actually produce).
+///   128-bit FNV-1a, same collision reasoning as the wire hash: a collision
+///   here would serve a stale schema — the C1 failure class below.
+/// - **Wire `schema_hash`** ([`GroupSkeleton::hash`]) — unchanged:
+///   [`GroupSchema::hash`], computed only on a miss.
 ///
-/// # Why full-schema equality, not just member names
+/// Deliberately narrower than a full `GroupSchema` fingerprint: identity
+/// omits a group's own static metric-level metadata (the `"metric"`/
+/// `"sampler"` pair `metric_metadata` derives), which is fixed at
+/// registration and never mutates at runtime — `insert_metadata`/
+/// `set_metadata` are only ever called on a `CounterGroup`/`GaugeGroup`'s
+/// PER-INDEX metadata (a task's `comm`, a cgroup's `name`), never on a
+/// `MetricEntry`'s own `metadata()`. That per-index metadata IS what
+/// identity folds, via the same borrowing accessors, so the C1 case below
+/// still forces a miss.
 ///
-/// An earlier version of this cache compared member NAME lists only. That's
-/// unsound: metriken metadata mutates in place at a stable index
-/// (`insert_metadata`/`set_metadata`, e.g. a task's `comm` or a cgroup's
-/// `name`), and the kernel recycles PIDs and cgroup ids — so a slot's
-/// metadata can change while its `"{metric_id}x{idx}"` name stays byte-for-
-/// byte identical. A names-only cache would call that a hit, keep serving
-/// the OLD occupant's metadata under an UNCHANGED `schema_hash`, and a
-/// receiver caching parsed schemas by `(name, schema_hash)` would bind new
-/// values to dead labels indefinitely. Comparing the whole `GroupSchema`
-/// (names AND metadata) closes that hole at the cost of a full struct
-/// comparison instead of a name-list comparison — cheap next to the hash
-/// fold it's still avoiding.
+/// # Delivered: a hit allocates a small, member-count-independent constant
+///
+/// This closes the gap an earlier version of this cache (which compared
+/// full `GroupSchema` equality — assembling it unconditionally, cache hit
+/// or miss, and skipping only the hash) left open: that cache still
+/// allocated MORE per tick than V2 on a hit, measured 1.2–3.4× V2's
+/// allocations, with the emit-time `cached.schema.clone()` alone 54% of
+/// allocations at 2k members. Two upstream changes made the fix possible —
+/// both landed on the pinned metriken rev and both are in active use here:
+/// the borrowing `with_metadata`/`for_each_metadata` accessors (no full-map
+/// clone to decide "did this member's identity change"), and
+/// `GroupSnapshot.schema: Option<Arc<GroupSchema>>` (a hit hands out a
+/// refcount bump, not a deep clone). See
+/// `v3_hit_tick_allocations_are_a_small_constant_not_o_n` for the measured
+/// before/after allocation counts on a 512-member fixture group.
+///
+/// # Why full-schema equality was unsound with names only (still true here)
+///
+/// An earlier version of this cache (before the identity hash existed)
+/// compared member NAME lists only. That's unsound: metriken metadata
+/// mutates in place at a stable index (`insert_metadata`/`set_metadata`,
+/// e.g. a task's `comm` or a cgroup's `name`), and the kernel recycles PIDs
+/// and cgroup ids — so a slot's metadata can change while its
+/// `"{metric_id}x{idx}"` name stays byte-for-byte identical. A names-only
+/// cache would call that a hit, keep serving the OLD occupant's metadata
+/// under an UNCHANGED `schema_hash`, and a receiver caching parsed schemas
+/// by `(name, schema_hash)` would bind new values to dead labels
+/// indefinitely. The identity fold covers names AND per-index metadata for
+/// exactly this reason — see
+/// `declared_group_schema_reflects_metadata_mutated_at_a_stable_index`, the
+/// pinned regression test.
 ///
 /// # No eviction
 ///
@@ -762,6 +789,11 @@ pub(crate) struct SkeletonCache {
 }
 
 struct GroupSkeleton {
+    /// This tick's cheap membership fingerprint, folded by
+    /// [`fold_group_identities`]. Compared against next tick's freshly
+    /// folded identity to decide hit vs. miss BEFORE `create_v3`'s
+    /// value-collecting walk begins — see the `SkeletonCache` doc comment.
+    identity: (u64, u64),
     schema: Arc<GroupSchema>,
     hash: (u64, u64),
 }
@@ -782,9 +814,287 @@ impl SkeletonCache {
     }
 }
 
+/// FNV-1a-128 offset basis and prime — the standard constants, same
+/// algorithm [`GroupSchema::hash`] uses but a completely separate hash
+/// space: this one is an internal cache key that is never transmitted, so
+/// nothing requires (or forbids) sharing constants with the wire hash.
+const IDENTITY_FNV_OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
+const IDENTITY_FNV_PRIME: u128 = 0x0000000001000000000000000000013b;
+
+#[inline]
+fn identity_fold(mut acc: u128, bytes: &[u8]) -> u128 {
+    for &b in bytes {
+        acc ^= b as u128;
+        acc = acc.wrapping_mul(IDENTITY_FNV_PRIME);
+    }
+    acc
+}
+
+/// Fold a group member's metadata into `acc` as sorted `(key, value)`
+/// pairs, so the fold is deterministic regardless of the source
+/// `HashMap`'s iteration order (the same non-determinism the sparse-group
+/// arms in `create_v3` already sort around).
+///
+/// Sorts on a fixed-size stack array — no heap allocation — for the common
+/// case. Every metadata map a rezolus sampler attaches today has at most a
+/// handful of entries (`pid`/`tgid`/`comm`/`cgroup` is the largest, at 4);
+/// `INLINE` is set well above that. A map that somehow exceeds it falls
+/// back to a one-off heap `Vec` rather than silently truncating; that
+/// fallback is not expected to ever trigger in practice.
+fn identity_fold_metadata(acc: u128, metadata: &HashMap<String, String>) -> u128 {
+    const INLINE: usize = 16;
+    if metadata.len() <= INLINE {
+        let mut buf: [(&str, &str); INLINE] = [("", ""); INLINE];
+        let mut n = 0;
+        for (k, v) in metadata {
+            buf[n] = (k.as_str(), v.as_str());
+            n += 1;
+        }
+        let pairs = &mut buf[..n];
+        pairs.sort_unstable();
+        let mut h = acc;
+        for (k, v) in pairs.iter() {
+            h = identity_fold(h, k.as_bytes());
+            h = identity_fold(h, v.as_bytes());
+        }
+        h
+    } else {
+        let mut pairs: Vec<(&str, &str)> = metadata
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        pairs.sort_unstable();
+        let mut h = acc;
+        for (k, v) in pairs {
+            h = identity_fold(h, k.as_bytes());
+            h = identity_fold(h, v.as_bytes());
+        }
+        h
+    }
+}
+
+/// Per-group running identity, one accumulator per kind so the final
+/// identity can fold them in the fixed (counters, gauges, histograms) order
+/// `GroupSchema` lists members in, regardless of the interleaved order the
+/// registry walk actually visits different kinds' registry entries in.
+#[derive(Clone, Copy)]
+struct GroupIdentityAccum {
+    counters: u128,
+    gauges: u128,
+    histograms: u128,
+}
+
+impl Default for GroupIdentityAccum {
+    fn default() -> Self {
+        Self {
+            counters: IDENTITY_FNV_OFFSET,
+            gauges: IDENTITY_FNV_OFFSET,
+            histograms: IDENTITY_FNV_OFFSET,
+        }
+    }
+}
+
+impl GroupIdentityAccum {
+    fn finish(&self) -> (u64, u64) {
+        let mut h = IDENTITY_FNV_OFFSET;
+        h = identity_fold(h, &self.counters.to_le_bytes());
+        h = identity_fold(h, &self.gauges.to_le_bytes());
+        h = identity_fold(h, &self.histograms.to_le_bytes());
+        ((h >> 64) as u64, h as u64)
+    }
+}
+
+/// One group's cache decision for this tick, resolved by
+/// [`fold_group_identities`] before `create_v3`'s real walk begins.
+struct GroupDecision {
+    identity: (u64, u64),
+    /// `true`: this tick's identity differs from `cache`'s (or there is no
+    /// cached entry yet) — `create_v3` must assemble a fresh `GroupSchema`
+    /// for this group. `false`: membership (names + per-member metadata) is
+    /// byte-identical to last tick's — `create_v3` clones the cached
+    /// `Arc<GroupSchema>` instead of touching a single `MetricDesc`.
+    needs_schema: bool,
+}
+
+/// First pass over the metriken registry: fold each group's member
+/// identity — NOT values, NOT windows, see the `SkeletonCache` doc comment
+/// for what "identity" covers and omits — into a cheap running hash without
+/// building a single `MetricDesc`, `BTreeMap`, or formatted name. Compares
+/// each group's freshly folded identity against `cache`'s last-tick
+/// identity to decide, before `create_v3`'s value-collecting walk begins,
+/// which groups can skip schema assembly entirely this tick.
+///
+/// This is a full second walk of `metriken::metrics()` — but the registry
+/// itself is small (bounded by declared metrics, not by live cardinality:
+/// CPUs/tasks/cgroups are members WITHIN one registry entry, walked here
+/// too, but cheaply, with no allocation). What this pass avoids is walking
+/// a STABLE group's members while allocating for each one, which is what
+/// made the previous full-schema-equality cache cost more per tick than V2
+/// even on a hit.
+///
+/// External metrics are not folded here — see `create_v3`'s external-
+/// metrics block, which always assembles a fresh schema for `external/main`
+/// (this pass simply never produces a decision for that key, so
+/// `create_v3` defaults it to `needs_schema: true`). External metrics are
+/// push-ingested and comparatively few, not cardinality-scaled by BPF/task/
+/// cgroup population, so they are out of scope for the allocation target
+/// this cache exists to hit; always rebuilding keeps their exact prior
+/// behavior (and test coverage) untouched.
+fn fold_group_identities(
+    cache: &SkeletonCache,
+    group_registry: &HashMap<String, &'static AcquisitionGroup>,
+    sampler_mods: &[(&str, &str)],
+) -> HashMap<String, GroupDecision> {
+    let mut accums: HashMap<String, GroupIdentityAccum> = HashMap::new();
+    let mut idx_scratch: Vec<usize> = Vec::new();
+
+    for (metric_id, metric) in metriken::metrics().iter().enumerate() {
+        let Some(value) = metric.value() else {
+            continue;
+        };
+
+        let name = metric.name();
+        if name.starts_with("log_") {
+            continue;
+        }
+
+        // Routing mirrors create_v3's (KEEP IN SYNC) but skips building the
+        // metric-level metadata `BTreeMap` entirely: `attribute_sampler`
+        // already returns a borrowed `&str`, and `metric.metadata()` can be
+        // queried directly, so this pass never allocates for routing.
+        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), sampler_mods);
+        let mut declared = false;
+        let mut member_bound: Option<usize> = None;
+        let mut reader_stamped = false;
+        let group_key = match metric.metadata().get("acq_group") {
+            Some(acq_group) => {
+                let key = format!("{sampler}/{acq_group}");
+                if let Some(ag) = group_registry.get(&key) {
+                    declared = true;
+                    member_bound = ag.member_bound();
+                    reader_stamped = ag.is_reader_stamped();
+                    key
+                } else {
+                    format!("{sampler}/main")
+                }
+            }
+            None => format!("{sampler}/main"),
+        };
+
+        let accum = accums.entry(group_key).or_default();
+        let metric_id = metric_id as u64;
+
+        match value {
+            Value::Counter(_) => {
+                accum.counters = identity_fold(accum.counters, &metric_id.to_le_bytes());
+            }
+            Value::Gauge(_) => {
+                accum.gauges = identity_fold(accum.gauges, &metric_id.to_le_bytes());
+            }
+            Value::CounterGroup(g) => {
+                if reader_stamped {
+                    idx_scratch.clear();
+                    g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                    idx_scratch.sort_unstable();
+                    for &idx in idx_scratch.iter() {
+                        let idx64 = idx as u64;
+                        g.with_metadata(idx, &mut |m| {
+                            let mut h = identity_fold(accum.counters, &metric_id.to_le_bytes());
+                            h = identity_fold(h, &idx64.to_le_bytes());
+                            if let Some(m) = m {
+                                h = identity_fold_metadata(h, m);
+                            }
+                            accum.counters = h;
+                        });
+                    }
+                } else {
+                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                    for idx in 0..bound {
+                        if !declared {
+                            let Some(v) = g.counter_value(idx) else {
+                                continue;
+                            };
+                            if v == 0 {
+                                continue;
+                            }
+                        }
+                        let idx64 = idx as u64;
+                        accum.counters = identity_fold(accum.counters, &metric_id.to_le_bytes());
+                        accum.counters = identity_fold(accum.counters, &idx64.to_le_bytes());
+                        g.with_metadata(idx, &mut |m| {
+                            if let Some(m) = m {
+                                accum.counters = identity_fold_metadata(accum.counters, m);
+                            }
+                        });
+                    }
+                }
+            }
+            Value::GaugeGroup(g) => {
+                if reader_stamped {
+                    idx_scratch.clear();
+                    g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                    idx_scratch.sort_unstable();
+                    for &idx in idx_scratch.iter() {
+                        let idx64 = idx as u64;
+                        g.with_metadata(idx, &mut |m| {
+                            let mut h = identity_fold(accum.gauges, &metric_id.to_le_bytes());
+                            h = identity_fold(h, &idx64.to_le_bytes());
+                            if let Some(m) = m {
+                                h = identity_fold_metadata(h, m);
+                            }
+                            accum.gauges = h;
+                        });
+                    }
+                } else {
+                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                    for idx in 0..bound {
+                        if !declared && g.gauge_value(idx).is_none() {
+                            continue;
+                        }
+                        let idx64 = idx as u64;
+                        accum.gauges = identity_fold(accum.gauges, &metric_id.to_le_bytes());
+                        accum.gauges = identity_fold(accum.gauges, &idx64.to_le_bytes());
+                        g.with_metadata(idx, &mut |m| {
+                            if let Some(m) = m {
+                                accum.gauges = identity_fold_metadata(accum.gauges, m);
+                            }
+                        });
+                    }
+                }
+            }
+            // Declared: registration membership, always a member (see
+            // create_v3's declared Histogram arm). Default: membership by
+            // presence — only a member once it has loaded a value.
+            Value::Histogram(h) if declared || h.load().is_some() => {
+                accum.histograms = identity_fold(accum.histograms, &metric_id.to_le_bytes());
+            }
+            _ => {}
+        }
+    }
+
+    accums
+        .into_iter()
+        .map(|(group_name, accum)| {
+            let identity = accum.finish();
+            let needs_schema = match cache.entries.get(&group_name) {
+                Some(cached) => cached.identity != identity,
+                None => true,
+            };
+            (
+                group_name,
+                GroupDecision {
+                    identity,
+                    needs_schema,
+                },
+            )
+        })
+        .collect()
+}
+
 /// Per-group accumulation while walking the metriken registry: the group's
 /// acquisition window (read once, at first touch — see `create_v3`) plus,
-/// per kind, the (descriptor, value) pairs in schema order.
+/// per kind, this tick's values (always collected) and descriptors (only
+/// collected when `needs_schema` — see `GroupDecision`).
 ///
 /// `reader_guard` is only ever `Some` for a
 /// [reader-stamped](AcquisitionGroup::is_reader_stamped) group (a
@@ -793,13 +1103,37 @@ impl SkeletonCache {
 /// acquires the bracket directly instead of reading a window a sampler
 /// already stamped, and the group-emit loop `finish()`es it once every
 /// member's value has been read — see the doc comment there.
-#[derive(Default)]
+///
+/// `Default::default()` sets `needs_schema: true` (a safe "always rebuild"
+/// default): the external-metrics block relies on it via
+/// `HashMap::or_default`, and every other call site sets `needs_schema`
+/// explicitly from `fold_group_identities`'s decision at first touch.
 struct GroupBuilder {
     window: Option<Window>,
     reader_guard: Option<AcquisitionGuard<'static>>,
-    counters: Vec<(MetricDesc, Option<u64>)>,
-    gauges: Vec<(MetricDesc, Option<i64>)>,
-    histograms: Vec<(MetricDesc, Option<histogram::Histogram>)>,
+    needs_schema: bool,
+    counter_descs: Vec<MetricDesc>,
+    counter_values: Vec<Option<u64>>,
+    gauge_descs: Vec<MetricDesc>,
+    gauge_values: Vec<Option<i64>>,
+    histogram_descs: Vec<MetricDesc>,
+    histogram_values: Vec<Option<histogram::Histogram>>,
+}
+
+impl Default for GroupBuilder {
+    fn default() -> Self {
+        Self {
+            window: None,
+            reader_guard: None,
+            needs_schema: true,
+            counter_descs: Vec::new(),
+            counter_values: Vec::new(),
+            gauge_descs: Vec::new(),
+            gauge_values: Vec::new(),
+            histogram_descs: Vec::new(),
+            histogram_values: Vec::new(),
+        }
+    }
 }
 
 /// The `(sampler, name) -> AcquisitionGroup` registry, built once. Sound to
@@ -987,7 +1321,19 @@ fn create_v3(
     let sampler_mods = crate::agent::samplers::sampler_modules();
     let group_registry = group_registry();
 
+    // Pre-pass: decide, per group, hit or miss — see `fold_group_identities`
+    // and the `SkeletonCache` doc comment. Everything below this point
+    // either assembles a schema (miss) or skips straight to values (hit)
+    // based on this map; it never re-derives the decision itself.
+    let group_decisions = fold_group_identities(cache, group_registry, &sampler_mods);
+
     let mut groups: HashMap<String, GroupBuilder> = HashMap::new();
+    // Reused across every reader-stamped group's sparse membership walk
+    // below (both the schema-building and values-only arms) — cleared
+    // per group, never reallocated once it reaches its high-water mark, so
+    // this one scratch buffer is the only heap cost the sparse-membership
+    // walk pays across the whole tick, not one allocation per group.
+    let mut idx_scratch: Vec<usize> = Vec::new();
 
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
         let Some(value) = metric.value() else {
@@ -1000,16 +1346,15 @@ fn create_v3(
             continue;
         }
 
-        // KEEP IN SYNC with create — see the doc comment on
-        // `metric_metadata` (the shared prefix) and below (the per-kind
-        // walk/naming/membership rules, which are NOT shared and are
-        // duplicated independently in each function).
-        let (mut metadata, sampler) = metric_metadata(metric, &sampler_mods);
-
         // Route: a declared `acq_group` wins only if it actually resolves
         // against the registry; otherwise fall back to the sampler's
         // default group (and flag the mismatch in debug builds — see the
-        // function-level doc comment).
+        // function-level doc comment). Mirrors `fold_group_identities`'
+        // routing (KEEP IN SYNC) — deliberately NOT calling `metric_metadata`
+        // here: that builds a `BTreeMap` this walk may not need at all (a
+        // cache hit needs no metadata whatsoever), so it's deferred below,
+        // behind the `needs_schema` check.
+        let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
         let mut declared = false;
         // The member-population bound for a declared, group-typed metric
         // (`CounterGroup`/`GaugeGroup`): `Some(n)` walks `0..n` instead of
@@ -1018,8 +1363,7 @@ fn create_v3(
         let mut member_bound: Option<usize> = None;
         // Reader-stamped (`PackedCounters` mmap-direct) groups use a THIRD
         // membership mode instead of `member_bound`'s dense prefix: every
-        // index with metadata registered (`load_metadata(idx).is_some()`,
-        // walked via `metadata_snapshot()`) is a member — see the
+        // index with metadata registered is a member — see the
         // CounterGroup/GaugeGroup arms below and the doc comment on
         // `create_v3` for the walk-cost grounding.
         let mut reader_stamped = false;
@@ -1093,292 +1437,414 @@ fn create_v3(
                     Some(ag) => (ag.window(), None),
                     None => (None, None),
                 };
-                e.insert(GroupBuilder {
+
+                let needs_schema = group_decisions
+                    .get(e.key())
+                    .map(|d| d.needs_schema)
+                    .unwrap_or(true);
+
+                let mut builder = GroupBuilder {
                     window,
                     reader_guard,
+                    needs_schema,
                     ..Default::default()
-                })
+                };
+
+                // Cache hit: pre-size this tick's value vectors from the
+                // cached schema's member counts, so pushing values below
+                // never reallocates. The only heap allocations a hit group
+                // pays for are these — at most three `Vec::with_capacity`
+                // calls, one per kind, not one per member.
+                if !needs_schema {
+                    if let Some(cached) = cache.entries.get(e.key()) {
+                        builder.counter_values = Vec::with_capacity(cached.schema.counters.len());
+                        builder.gauge_values = Vec::with_capacity(cached.schema.gauges.len());
+                        builder.histogram_values =
+                            Vec::with_capacity(cached.schema.histograms.len());
+                    }
+                }
+
+                e.insert(builder)
             }
         };
 
-        // Strip unconditionally, not just when `declared`. On the declared
-        // path it is redundant with the group's own name (`GroupSnapshot.name`,
-        // `"{sampler}/{acq_group}"`) — left in place it would be one more
-        // copy of the same key/value pair repeated in every member's
-        // `MetricDesc.metadata`, thousands of identical wasted copies for a
-        // large declared group (tasks/cgroups/CPUs). On the unmatched-registry
-        // fallback path (the `debug_assert!` arm above — a typo'd or
-        // renamed group), the metric still carries its stale `acq_group`
-        // value even though it just got routed to the DEFAULT group instead;
-        // leaving it in would leak that value as a phantom label on release
-        // builds, where the `debug_assert!` compiles away and this fallback
-        // runs silently instead of panicking. A metric with no `acq_group`
-        // tag at all has nothing to remove, so this is a no-op there.
-        metadata.remove("acq_group");
+        if group.needs_schema {
+            // MISS path: assemble the schema exactly as before — full
+            // metadata, formatted member names, everything a receiver needs
+            // to parse this group's values.
+            //
+            // KEEP IN SYNC with create — see the doc comment on
+            // `metric_metadata` (the shared prefix) and below (the per-kind
+            // walk/naming/membership rules, which are NOT shared and are
+            // duplicated independently in each function).
+            let (mut metadata, _) = metric_metadata(metric, &sampler_mods);
 
-        let entry_name = format!("{metric_id}");
+            // Strip unconditionally, not just when `declared`. On the
+            // declared path it is redundant with the group's own name
+            // (`GroupSnapshot.name`, `"{sampler}/{acq_group}"`) — left in
+            // place it would be one more copy of the same key/value pair
+            // repeated in every member's `MetricDesc.metadata`, thousands of
+            // identical wasted copies for a large declared group (tasks/
+            // cgroups/CPUs). On the unmatched-registry fallback path (the
+            // `debug_assert!` arm above — a typo'd or renamed group), the
+            // metric still carries its stale `acq_group` value even though
+            // it just got routed to the DEFAULT group instead; leaving it in
+            // would leak that value as a phantom label on release builds,
+            // where the `debug_assert!` compiles away and this fallback runs
+            // silently instead of panicking. A metric with no `acq_group`
+            // tag at all has nothing to remove, so this is a no-op there.
+            metadata.remove("acq_group");
 
-        match value {
-            Value::Counter(v) => group.counters.push((
-                MetricDesc {
-                    name: entry_name,
-                    metadata,
-                },
-                Some(v),
-            )),
-            Value::Gauge(v) => group.gauges.push((
-                MetricDesc {
-                    name: entry_name,
-                    metadata,
-                },
-                Some(v),
-            )),
-            Value::CounterGroup(g) => {
-                if reader_stamped {
-                    // Reader-stamped (mmap-direct `PackedCounters`) group:
-                    // membership is metadata-presence, not `0..bound` — a
-                    // registered index (a live cgroup/task the sampler's
-                    // ringbuf handler attached metadata to) is a member,
-                    // full stop, regardless of the backing array's capacity
-                    // (`MAX_CGROUPS`/`MAX_PID`, sized for the worst case —
-                    // see docs/principles.md principle 6). Walking
-                    // `0..entries()` here would mean sweeping all 4.2M
-                    // `MAX_PID` slots every tick for `task_cpu_usage`
-                    // regardless of how many tasks are actually live; see
-                    // the walk-cost grounding on `create_v3`'s doc comment.
-                    // `metadata_snapshot()`'s cost is O(populated), not
-                    // O(entries()) — it walks metriken's own sparse
-                    // `HashMap<usize, _>` metadata store, not the dense
-                    // value array.
-                    //
-                    // `metadata_snapshot()`'s order follows that HashMap's
-                    // iteration order, which is NOT stable tick-to-tick on
-                    // its own (hashbrown gives no ordering guarantee) even
-                    // when the populated set is unchanged — sort by index
-                    // so a stable member set produces a byte-stable schema
-                    // order (and therefore a `SkeletonCache` hit) across
-                    // ticks, the same determinism concern the external-
-                    // metrics sort below addresses for a different source.
-                    let mut members = g.metadata_snapshot();
-                    members.sort_by_key(|(idx, _)| *idx);
-                    for (idx, m) in members {
-                        // Two separate reads, same torn-recycle caveat as
-                        // the non-reader-stamped arm below — see its
-                        // comment.
-                        let v = g.counter_value(idx);
+            let entry_name = format!("{metric_id}");
 
-                        let mut entry_metadata = metadata.clone();
-                        entry_metadata.insert("id".to_string(), idx.to_string());
-                        for (k, v) in m {
-                            entry_metadata.insert(k, v);
+            match value {
+                Value::Counter(v) => {
+                    group.counter_descs.push(MetricDesc {
+                        name: entry_name,
+                        metadata,
+                    });
+                    group.counter_values.push(Some(v));
+                }
+                Value::Gauge(v) => {
+                    group.gauge_descs.push(MetricDesc {
+                        name: entry_name,
+                        metadata,
+                    });
+                    group.gauge_values.push(Some(v));
+                }
+                Value::CounterGroup(g) => {
+                    if reader_stamped {
+                        // Reader-stamped (mmap-direct `PackedCounters`)
+                        // group: membership is metadata-presence, not
+                        // `0..bound` — a registered index (a live cgroup/
+                        // task the sampler's ringbuf handler attached
+                        // metadata to) is a member, full stop, regardless of
+                        // the backing array's capacity (`MAX_CGROUPS`/
+                        // `MAX_PID`, sized for the worst case — see
+                        // docs/principles.md principle 6). Walking
+                        // `0..entries()` here would mean sweeping all 4.2M
+                        // `MAX_PID` slots every tick for `task_cpu_usage`
+                        // regardless of how many tasks are actually live;
+                        // see the walk-cost grounding on `create_v3`'s doc
+                        // comment. `for_each_metadata`'s cost is
+                        // O(populated), not O(entries()) — it walks
+                        // metriken's own sparse `HashMap<usize, _>` metadata
+                        // store, not the dense value array, and — unlike
+                        // `metadata_snapshot()` — borrows each entry instead
+                        // of cloning it.
+                        //
+                        // Iteration order is NOT stable tick-to-tick on its
+                        // own (hashbrown gives no ordering guarantee) even
+                        // when the populated set is unchanged — collect
+                        // indices only (no metadata read yet) and sort so a
+                        // stable member set produces a byte-stable schema
+                        // order (and therefore an identity match) across
+                        // ticks, the same determinism concern the external-
+                        // metrics sort below addresses for a different
+                        // source.
+                        idx_scratch.clear();
+                        g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                        idx_scratch.sort_unstable();
+                        for &idx in idx_scratch.iter() {
+                            // Same torn-recycle caveat as the non-reader-
+                            // stamped arm below — see its comment: the value
+                            // read and the metadata read are not atomic.
+                            let v = g.counter_value(idx);
+                            g.with_metadata(idx, &mut |m| {
+                                let mut entry_metadata = metadata.clone();
+                                entry_metadata.insert("id".to_string(), idx.to_string());
+                                if let Some(m) = m {
+                                    for (k, v) in m {
+                                        entry_metadata.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                group.counter_descs.push(MetricDesc {
+                                    name: format!("{metric_id}x{idx}"),
+                                    metadata: entry_metadata,
+                                });
+                            });
+                            group.counter_values.push(v);
                         }
+                        // Mark the end HERE — right after this metric's
+                        // member values were actually read — not at emit
+                        // time, when `finish()` runs below after the rest of
+                        // the walk (every other group's schema assembly,
+                        // hashing, etc.) has also happened. See
+                        // `AcquisitionGuard::mark_end`. A group with several
+                        // like-entity members (e.g. `cgroup_syscall`'s 16
+                        // op-class maps) touches this arm once per member;
+                        // each call moves the mark forward, so the LAST
+                        // touch — this group's true last member read — is
+                        // what ends up published, exactly like `finish()`'s
+                        // original stamp-last derivation, just decoupled
+                        // from publish timing.
+                        if let Some(guard) = group.reader_guard.as_mut() {
+                            guard.mark_end();
+                        }
+                    } else {
+                        // Registration membership for a per-CPU (or similar)
+                        // group IS the group's real member population —
+                        // `possible_cpus()` for a `CpuCounters`-backed group
+                        // — not the backing array's `entries()` capacity,
+                        // which is a fixed implementation ceiling
+                        // (`MAX_CPUS`; see docs/principles.md principle 6,
+                        // "over-allocates on small machines") sized for the
+                        // worst case, not this host. Walking the full
+                        // capacity on every declared group would put an
+                        // ~18-CPU host's tick at ~19× the entries it
+                        // actually populated; walk the bound instead when
+                        // one is set (clamped to `entries()` in case a
+                        // stale/misconfigured bound somehow exceeds the
+                        // backing array).
+                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                        for idx in 0..bound {
+                            let v = g.counter_value(idx);
 
-                        group.counters.push((
-                            MetricDesc {
+                            // Transitional V2-style sentinel skip — default
+                            // groups only. See doc comment.
+                            if !declared {
+                                let Some(v) = v else { continue };
+                                if v == 0 {
+                                    continue;
+                                }
+                            }
+
+                            // `counter_value(idx)` above and the metadata
+                            // read below are two SEPARATE reads, not one
+                            // atomic pair — unlike `AcquisitionGroup`'s
+                            // window (a seqlock), a group entry's value and
+                            // its metadata have no shared lock. A slot
+                            // recycled by a concurrent writer between these
+                            // two reads (e.g. a pid/cgroup id reused
+                            // mid-tick) can pair the NEW occupant's value
+                            // with the OLD occupant's labels, or vice versa,
+                            // for that one tick. This matches V2's
+                            // `create()`, which has the identical two-step
+                            // read here — not a regression introduced by
+                            // V3. Measured under a deliberate
+                            // concurrent-recycle hammer: ~2-3% of ticks
+                            // torn; in production today it's effectively
+                            // zero, because sampler writes complete
+                            // synchronously inside `refresh()` rather than
+                            // racing the snapshot builder from another task.
+                            // Migration note: a sampler that calls
+                            // `insert_metadata` more than once per slot per
+                            // refresh (cpu usage does 4) should move to a
+                            // single atomic metadata update (`set_metadata`,
+                            // one call) when it migrates to a declared
+                            // group, to close this window rather than just
+                            // narrow it.
+                            let mut entry_metadata = metadata.clone();
+                            entry_metadata.insert("id".to_string(), idx.to_string());
+                            g.with_metadata(idx, &mut |m| {
+                                if let Some(m) = m {
+                                    for (k, v) in m {
+                                        entry_metadata.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            });
+
+                            group.counter_descs.push(MetricDesc {
                                 name: format!("{metric_id}x{idx}"),
                                 metadata: entry_metadata,
-                            },
-                            v,
-                        ));
+                            });
+                            group.counter_values.push(v);
+                        }
                     }
-                    // Mark the end HERE — right after this metric's member
-                    // values were actually read — not at emit time, when
-                    // `finish()` runs below after the rest of the walk
-                    // (every other group's schema assembly, hashing, etc.)
-                    // has also happened. See `AcquisitionGuard::mark_end`.
-                    // A group with several like-entity members (e.g.
-                    // `cgroup_syscall`'s 16 op-class maps) touches this arm
-                    // once per member; each call moves the mark forward, so
-                    // the LAST touch — this group's true last member read —
-                    // is what ends up published, exactly like `finish()`'s
-                    // original stamp-last derivation, just decoupled from
-                    // publish timing.
-                    if let Some(guard) = group.reader_guard.as_mut() {
-                        guard.mark_end();
-                    }
-                } else {
-                    // Registration membership for a per-CPU (or similar)
-                    // group IS the group's real member population —
-                    // `possible_cpus()` for a `CpuCounters`-backed group —
-                    // not the backing array's `entries()` capacity, which is
-                    // a fixed implementation ceiling (`MAX_CPUS`; see
-                    // docs/principles.md principle 6, "over-allocates on
-                    // small machines") sized for the worst case, not this
-                    // host. Walking the full capacity on every declared
-                    // group would put an ~18-CPU host's tick at ~19× the
-                    // entries it actually populated; walk the bound instead
-                    // when one is set (clamped to `entries()` in case a
-                    // stale/misconfigured bound somehow exceeds the backing
-                    // array).
-                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                    for idx in 0..bound {
-                        let v = g.counter_value(idx);
+                }
+                Value::GaugeGroup(g) => {
+                    if reader_stamped {
+                        // See the identical branch on the CounterGroup arm
+                        // above for the full rationale (walk-cost grounding,
+                        // and why the sort is required for schema
+                        // stability). No `PackedCounters`-style gauge group
+                        // exists in the codebase yet, but this keeps the
+                        // declared-group membership rule symmetric across
+                        // both group kinds rather than leaving a silent gap
+                        // for the first one that does.
+                        idx_scratch.clear();
+                        g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                        idx_scratch.sort_unstable();
+                        for &idx in idx_scratch.iter() {
+                            let v = g.gauge_value(idx);
+                            g.with_metadata(idx, &mut |m| {
+                                let mut entry_metadata = metadata.clone();
+                                entry_metadata.insert("id".to_string(), idx.to_string());
+                                if let Some(m) = m {
+                                    for (k, v) in m {
+                                        entry_metadata.insert(k.clone(), v.clone());
+                                    }
+                                }
+                                group.gauge_descs.push(MetricDesc {
+                                    name: format!("{metric_id}x{idx}"),
+                                    metadata: entry_metadata,
+                                });
+                            });
+                            group.gauge_values.push(v);
+                        }
+                        // See the CounterGroup arm above: mark the end right
+                        // after THIS metric's member values were read, not
+                        // at emit time.
+                        if let Some(guard) = group.reader_guard.as_mut() {
+                            guard.mark_end();
+                        }
+                    } else {
+                        // Same member-population bound as the `CounterGroup`
+                        // arm above — see its comment.
+                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                        for idx in 0..bound {
+                            let v = g.gauge_value(idx);
 
-                        // Transitional V2-style sentinel skip — default groups only. See doc comment.
-                        if !declared {
-                            let Some(v) = v else { continue };
-                            if v == 0 {
+                            // Transitional V2-style sentinel skip — default
+                            // groups only. See doc comment. Unlike
+                            // CounterGroup's `== 0` (still live above: 0 is
+                            // a legitimate initialized-but-untouched counter
+                            // value, indistinguishable from an explicit 0),
+                            // there is no `== i64::MIN` check here:
+                            // `GaugeGroup::gauge_value` already maps its
+                            // internal never-set sentinel to `None` before
+                            // this ever sees it (metriken owns that
+                            // mapping), so `Some(i64::MIN)` cannot occur —
+                            // an explicit re-check here would be dead code.
+                            if !declared && v.is_none() {
                                 continue;
                             }
-                        }
 
-                        // `counter_value(idx)` above and `load_metadata(idx)`
-                        // here are two SEPARATE reads, not one atomic pair —
-                        // unlike `AcquisitionGroup`'s window (a seqlock), a
-                        // group entry's value and its metadata have no shared
-                        // lock. A slot recycled by a concurrent writer between
-                        // these two reads (e.g. a pid/cgroup id reused mid-tick)
-                        // can pair the NEW occupant's value with the OLD
-                        // occupant's labels, or vice versa, for that one tick.
-                        // This matches V2's `create()`, which has the identical
-                        // two-step read here — not a regression introduced by
-                        // V3. Measured under a deliberate concurrent-recycle
-                        // hammer: ~2-3% of ticks torn; in production today it's
-                        // effectively zero, because sampler writes complete
-                        // synchronously inside `refresh()` rather than racing
-                        // the snapshot builder from another task. Migration
-                        // note: a sampler that calls `insert_metadata` more
-                        // than once per slot per refresh (cpu usage does 4)
-                        // should move to a single atomic metadata update
-                        // (`set_metadata`, one call) when it migrates to a
-                        // declared group, to close this window rather than
-                        // just narrow it.
-                        let mut entry_metadata = metadata.clone();
-                        entry_metadata.insert("id".to_string(), idx.to_string());
-                        if let Some(m) = g.load_metadata(idx) {
-                            for (k, v) in m {
-                                entry_metadata.insert(k, v);
+                            // Separate value/metadata reads, same
+                            // torn-recycle caveat as the CounterGroup arm
+                            // above.
+                            let mut entry_metadata = metadata.clone();
+                            entry_metadata.insert("id".to_string(), idx.to_string());
+                            g.with_metadata(idx, &mut |m| {
+                                if let Some(m) = m {
+                                    for (k, v) in m {
+                                        entry_metadata.insert(k.clone(), v.clone());
+                                    }
+                                }
+                            });
+
+                            group.gauge_descs.push(MetricDesc {
+                                name: format!("{metric_id}x{idx}"),
+                                metadata: entry_metadata,
+                            });
+                            group.gauge_values.push(v);
+                        }
+                    }
+                }
+                Value::Histogram(h) => {
+                    // `config()` doesn't require a loaded value, so this is
+                    // always available regardless of what `load()` returns
+                    // below.
+                    let mut entry_metadata = metadata;
+                    entry_metadata.insert(
+                        "grouping_power".to_string(),
+                        h.config().grouping_power().to_string(),
+                    );
+                    entry_metadata.insert(
+                        "max_value_power".to_string(),
+                        h.config().max_value_power().to_string(),
+                    );
+
+                    let hv = h.load();
+                    let desc = MetricDesc {
+                        name: entry_name,
+                        metadata: entry_metadata,
+                    };
+                    if declared {
+                        // Registration membership: this metric IS the
+                        // member, full stop — `None` means "registered but
+                        // no reading yet" (e.g. before its BPF map
+                        // attaches), not "not a member". Omitting it here
+                        // would make membership value-derived on the
+                        // declared path, churning the schema hash on
+                        // exactly the transient event (a histogram that
+                        // hasn't loaded yet) the design commits to NOT
+                        // treating as a membership change.
+                        group.histogram_descs.push(desc);
+                        group.histogram_values.push(hv);
+                    } else if let Some(hv) = hv {
+                        // Default path: unchanged V2-style membership-by-
+                        // presence — an unloaded histogram isn't a member at
+                        // all.
+                        group.histogram_descs.push(desc);
+                        group.histogram_values.push(Some(hv));
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            // HIT path: identity unchanged since last tick (see
+            // `fold_group_identities`) — read this tick's values, in the
+            // SAME order and under the SAME membership rules the schema
+            // arms above use, but build no `MetricDesc`, no `BTreeMap`, no
+            // formatted member name. The cached `Arc<GroupSchema>` is
+            // reused verbatim at emit time below.
+            match value {
+                Value::Counter(v) => group.counter_values.push(Some(v)),
+                Value::Gauge(v) => group.gauge_values.push(Some(v)),
+                Value::CounterGroup(g) => {
+                    if reader_stamped {
+                        idx_scratch.clear();
+                        g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                        idx_scratch.sort_unstable();
+                        for &idx in idx_scratch.iter() {
+                            group.counter_values.push(g.counter_value(idx));
+                        }
+                        if let Some(guard) = group.reader_guard.as_mut() {
+                            guard.mark_end();
+                        }
+                    } else {
+                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                        for idx in 0..bound {
+                            let v = g.counter_value(idx);
+                            if !declared {
+                                let Some(v) = v else { continue };
+                                if v == 0 {
+                                    continue;
+                                }
                             }
+                            group.counter_values.push(v);
                         }
-
-                        group.counters.push((
-                            MetricDesc {
-                                name: format!("{metric_id}x{idx}"),
-                                metadata: entry_metadata,
-                            },
-                            v,
-                        ));
                     }
                 }
-            }
-            Value::GaugeGroup(g) => {
-                if reader_stamped {
-                    // See the identical branch on the CounterGroup arm
-                    // above for the full rationale (walk-cost grounding,
-                    // and why the sort is required for schema stability).
-                    // No `PackedCounters`-style gauge group exists in the
-                    // codebase yet, but this keeps the declared-group
-                    // membership rule symmetric across both group kinds
-                    // rather than leaving a silent gap for the first one
-                    // that does.
-                    let mut members = g.metadata_snapshot();
-                    members.sort_by_key(|(idx, _)| *idx);
-                    for (idx, m) in members {
-                        let v = g.gauge_value(idx);
-
-                        let mut entry_metadata = metadata.clone();
-                        entry_metadata.insert("id".to_string(), idx.to_string());
-                        for (k, v) in m {
-                            entry_metadata.insert(k, v);
+                Value::GaugeGroup(g) => {
+                    if reader_stamped {
+                        idx_scratch.clear();
+                        g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
+                        idx_scratch.sort_unstable();
+                        for &idx in idx_scratch.iter() {
+                            group.gauge_values.push(g.gauge_value(idx));
                         }
-
-                        group.gauges.push((
-                            MetricDesc {
-                                name: format!("{metric_id}x{idx}"),
-                                metadata: entry_metadata,
-                            },
-                            v,
-                        ));
-                    }
-                    // See the CounterGroup arm above: mark the end right
-                    // after THIS metric's member values were read, not at
-                    // emit time.
-                    if let Some(guard) = group.reader_guard.as_mut() {
-                        guard.mark_end();
-                    }
-                } else {
-                    // Same member-population bound as the `CounterGroup` arm
-                    // above — see its comment.
-                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                    for idx in 0..bound {
-                        let v = g.gauge_value(idx);
-
-                        // Transitional V2-style sentinel skip — default groups
-                        // only. See doc comment. Unlike CounterGroup's `== 0`
-                        // (still live below: 0 is a legitimate initialized-
-                        // but-untouched counter value, indistinguishable from
-                        // an explicit 0), there is no `== i64::MIN` check here:
-                        // `GaugeGroup::gauge_value` already maps its internal
-                        // never-set sentinel to `None` before this ever sees
-                        // it (metriken owns that mapping), so `Some(i64::MIN)`
-                        // cannot occur — an explicit re-check here would be
-                        // dead code.
-                        if !declared && v.is_none() {
-                            continue;
+                        if let Some(guard) = group.reader_guard.as_mut() {
+                            guard.mark_end();
                         }
-
-                        // Separate value/metadata reads, same torn-recycle
-                        // caveat as the CounterGroup arm above.
-                        let mut entry_metadata = metadata.clone();
-                        entry_metadata.insert("id".to_string(), idx.to_string());
-                        if let Some(m) = g.load_metadata(idx) {
-                            for (k, v) in m {
-                                entry_metadata.insert(k, v);
+                    } else {
+                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
+                        for idx in 0..bound {
+                            let v = g.gauge_value(idx);
+                            if !declared && v.is_none() {
+                                continue;
                             }
+                            group.gauge_values.push(v);
                         }
-
-                        group.gauges.push((
-                            MetricDesc {
-                                name: format!("{metric_id}x{idx}"),
-                                metadata: entry_metadata,
-                            },
-                            v,
-                        ));
                     }
                 }
-            }
-            Value::Histogram(h) => {
-                // `config()` doesn't require a loaded value, so this is
-                // always available regardless of what `load()` returns
-                // below.
-                let mut entry_metadata = metadata;
-                entry_metadata.insert(
-                    "grouping_power".to_string(),
-                    h.config().grouping_power().to_string(),
-                );
-                entry_metadata.insert(
-                    "max_value_power".to_string(),
-                    h.config().max_value_power().to_string(),
-                );
-
-                let hv = h.load();
-                let desc = MetricDesc {
-                    name: entry_name,
-                    metadata: entry_metadata,
-                };
-                if declared {
-                    // Registration membership: this metric IS the member,
-                    // full stop — `None` means "registered but no reading
-                    // yet" (e.g. before its BPF map attaches), not "not a
-                    // member". Omitting it here would make membership
-                    // value-derived on the declared path, churning the
-                    // schema hash on exactly the transient event (a
-                    // histogram that hasn't loaded yet) the design commits
-                    // to NOT treating as a membership change.
-                    group.histograms.push((desc, hv));
-                } else if let Some(hv) = hv {
-                    // Default path: unchanged V2-style membership-by-
-                    // presence — an unloaded histogram isn't a member at
-                    // all.
-                    group.histograms.push((desc, Some(hv)));
+                Value::Histogram(h) => {
+                    let hv = h.load();
+                    if declared || hv.is_some() {
+                        group.histogram_values.push(hv);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 
     // External metrics: one windowless group, own naming scheme (they are
     // not metriken registry entries, so there is no metric_id to key on).
+    // Always schema-built — see `fold_group_identities`'s doc comment for
+    // why the identity fold skips this group (and so `GroupBuilder::default`
+    // always has `needs_schema: true`, matched here unconditionally).
     if !external_metrics.is_empty() {
         let group = groups.entry("external/main".to_string()).or_default();
 
@@ -1428,22 +1894,18 @@ fn create_v3(
 
             match metric.value {
                 ExternalMetricValue::Counter(v) => {
-                    group.counters.push((
-                        MetricDesc {
-                            name: entry_name,
-                            metadata,
-                        },
-                        Some(v),
-                    ));
+                    group.counter_descs.push(MetricDesc {
+                        name: entry_name,
+                        metadata,
+                    });
+                    group.counter_values.push(Some(v));
                 }
                 ExternalMetricValue::Gauge(v) => {
-                    group.gauges.push((
-                        MetricDesc {
-                            name: entry_name,
-                            metadata,
-                        },
-                        Some(v),
-                    ));
+                    group.gauge_descs.push(MetricDesc {
+                        name: entry_name,
+                        metadata,
+                    });
+                    group.gauge_values.push(Some(v));
                 }
                 ExternalMetricValue::Histogram {
                     grouping_power,
@@ -1455,13 +1917,11 @@ fn create_v3(
                     {
                         metadata.insert("grouping_power".to_string(), grouping_power.to_string());
                         metadata.insert("max_value_power".to_string(), max_value_power.to_string());
-                        group.histograms.push((
-                            MetricDesc {
-                                name: entry_name,
-                                metadata,
-                            },
-                            Some(hv),
-                        ));
+                        group.histogram_descs.push(MetricDesc {
+                            name: entry_name,
+                            metadata,
+                        });
+                        group.histogram_values.push(Some(hv));
                     }
                 }
             }
@@ -1472,7 +1932,7 @@ fn create_v3(
 
     for (group_name, group) in groups {
         // A metric routes to (and so creates) a `GroupBuilder` before its
-        // `Value` is matched below, so a metric whose value kind isn't one
+        // `Value` is matched above, so a metric whose value kind isn't one
         // `create_v3` knows how to expose (falls into the `_ => {}` arm —
         // e.g. a `HistogramGroup`-typed metric, a gap V2's `create` shares)
         // can leave a group with nothing ever pushed into it. An
@@ -1480,7 +1940,10 @@ fn create_v3(
         // can use and would otherwise be hashed and transmitted every
         // tick for nothing — and it contradicts this function's own doc
         // comment, which says a group nothing routes to is absent. Skip it
-        // entirely rather than emit a zero-member group.
+        // entirely rather than emit a zero-member group. Checked against
+        // the VALUE vectors, not the desc vectors — a hit group's desc
+        // vectors are always empty by design (see the HIT arm above), so
+        // checking those here would wrongly drop every hit group.
         //
         // For a reader-stamped group this `continue` also drops
         // `group.reader_guard` WITHOUT calling `finish()` — an explicit
@@ -1497,7 +1960,10 @@ fn create_v3(
         // per registered/populated index) or the metric wasn't a member at
         // all — so an empty reader-stamped group here would mean a routed
         // metric matched no `Value` arm `create_v3` knows how to expose.
-        if group.counters.is_empty() && group.gauges.is_empty() && group.histograms.is_empty() {
+        if group.counter_values.is_empty()
+            && group.gauge_values.is_empty()
+            && group.histogram_values.is_empty()
+        {
             continue;
         }
 
@@ -1528,40 +1994,47 @@ fn create_v3(
             let latest_window = group_registry.get(&group_name).and_then(|ag| ag.window());
             resolve_walk_window(group.window, latest_window)
         };
-        let (counter_descs, counter_values): (Vec<MetricDesc>, Vec<Option<u64>>) =
-            group.counters.into_iter().unzip();
-        let (gauge_descs, gauge_values): (Vec<MetricDesc>, Vec<Option<i64>>) =
-            group.gauges.into_iter().unzip();
-        let (histogram_descs, histogram_values): (
-            Vec<MetricDesc>,
-            Vec<Option<histogram::Histogram>>,
-        ) = group.histograms.into_iter().unzip();
 
-        let schema = GroupSchema {
-            counters: counter_descs,
-            gauges: gauge_descs,
-            histograms: histogram_descs,
-        };
-
-        // Full-schema equality (names AND metadata), not just a name-list
-        // comparison — see the `SkeletonCache` doc comment for why a
-        // names-only cache is unsound (metadata mutates in place at a
-        // stable index when the kernel recycles a pid/cgroup id).
-        let (schema, hash) = match cache.entries.get(&group_name) {
-            Some(cached) if *cached.schema == schema => (cached.schema.clone(), cached.hash),
-            _ => {
-                let hash = schema.hash();
-                let schema = Arc::new(schema);
-                cache.entries.insert(
-                    group_name.clone(),
-                    GroupSkeleton {
-                        schema: schema.clone(),
-                        hash,
-                    },
-                );
-                cache.rebuilds += 1;
-                (schema, hash)
-            }
+        let (schema, hash) = if group.needs_schema {
+            let schema = GroupSchema {
+                counters: group.counter_descs,
+                gauges: group.gauge_descs,
+                histograms: group.histogram_descs,
+            };
+            let hash = schema.hash();
+            let schema = Arc::new(schema);
+            // `fold_group_identities` produces a decision for every group
+            // this walk can route to except `external/main` (see its doc
+            // comment) — default to `(0, 0)` there so an identity collision
+            // with a real fold is astronomically unlikely rather than
+            // panicking; `external/main` rebuilds every tick regardless, so
+            // its stored identity is never actually compared against.
+            let identity = group_decisions
+                .get(&group_name)
+                .map(|d| d.identity)
+                .unwrap_or((0, 0));
+            cache.entries.insert(
+                group_name.clone(),
+                GroupSkeleton {
+                    identity,
+                    schema: schema.clone(),
+                    hash,
+                },
+            );
+            cache.rebuilds += 1;
+            (schema, hash)
+        } else {
+            // Hit: `fold_group_identities` already confirmed this group's
+            // identity matches `cache`'s entry, so it must exist — hand out
+            // another reference to the same schema allocation instead of
+            // touching a single `MetricDesc`.
+            let cached = cache.entries.get(&group_name).unwrap_or_else(|| {
+                panic!(
+                    "group `{group_name}` marked needs_schema=false but has no cache entry — \
+                     fold_group_identities and this loop disagree on cache state"
+                )
+            });
+            (cached.schema.clone(), cached.hash)
         };
 
         group_snapshots.push(GroupSnapshot {
@@ -1569,9 +2042,9 @@ fn create_v3(
             schema_hash: hash,
             schema: Some(schema),
             window,
-            counters: counter_values,
-            gauges: gauge_values,
-            histograms: histogram_values,
+            counters: group.counter_values,
+            gauges: group.gauge_values,
+            histograms: group.histogram_values,
         });
     }
 
@@ -1596,6 +2069,68 @@ mod tests {
     use metriken::metric;
     use metriken::Window;
     use std::time::{Duration, SystemTime};
+
+    // --- allocation-counting global allocator -----------------------------
+    //
+    // Wraps `System`, delegating every call unchanged, and additionally
+    // counts allocation/reallocation calls made while `ALLOC_ENABLED` is set
+    // for the CURRENT thread. `cargo test` runs each test function on its
+    // own OS thread by default, so thread-local counting isolates one
+    // test's count from whatever every other concurrently running test in
+    // this binary allocates — a process-global counter would be hopelessly
+    // noisy under `cargo test`'s default parallelism.
+    //
+    // This has to be the crate's one and only `#[global_allocator]` (Rust
+    // permits exactly one per binary); nothing else in this crate declares
+    // one, and this module only compiles under `#[cfg(test)]`, so it's the
+    // allocator for the whole test binary. Every other test's allocations
+    // still go through it — they're just not counted, since none of them
+    // ever set `ALLOC_ENABLED`.
+    struct CountingAllocator;
+
+    thread_local! {
+        static ALLOC_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static ALLOC_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    unsafe impl std::alloc::GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+            if ALLOC_ENABLED.with(|e| e.get()) {
+                ALLOC_COUNT.with(|c| c.set(c.get() + 1));
+            }
+            unsafe { std::alloc::System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+            unsafe { std::alloc::System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: std::alloc::Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            if ALLOC_ENABLED.with(|e| e.get()) {
+                ALLOC_COUNT.with(|c| c.set(c.get() + 1));
+            }
+            unsafe { std::alloc::System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    /// Run `f`, counting every heap allocation/reallocation `f` makes on
+    /// THIS thread (nested nested calls included). Deallocations are not
+    /// counted — the claim under test is "how much does a hit tick
+    /// allocate", not "how much does it free".
+    fn count_allocations<T>(f: impl FnOnce() -> T) -> (T, usize) {
+        ALLOC_COUNT.with(|c| c.set(0));
+        ALLOC_ENABLED.with(|e| e.set(true));
+        let result = f();
+        ALLOC_ENABLED.with(|e| e.set(false));
+        let count = ALLOC_COUNT.with(|c| c.get());
+        (result, count)
+    }
 
     // --- resolve_walk_window ---------------------------------------------
 
@@ -2322,6 +2857,287 @@ mod tests {
             group1.schema_hash, group2.schema_hash,
             "a metadata-only change at a stable index must change the schema hash \
              (the cache must not reuse the stale schema)"
+        );
+    }
+
+    // Dedicated group + metric, backing capacity for 512 members. Declared,
+    // dense (`member_bound`, not reader-stamped), with per-member metadata
+    // attached — the shape most declared groups use in production
+    // (per-CPU/per-core counters). Grown from `ALLOC_TEST_SMALL_N` to
+    // `ALLOC_TEST_LARGE_N` members mid-test (see the test below) so hit-tick
+    // allocations can be compared AT TWO DIFFERENT MEMBER COUNTS WITHIN ONE
+    // TEST RUN — the direct way to prove "not O(N)" without depending on
+    // knowing this test binary's total registry size (a `create_v3` call
+    // always walks the FULL `metriken` registry, so a hit tick's measured
+    // allocation total is dominated by O(distinct groups) bookkeeping
+    // shared by every other declared group this binary registers, not just
+    // this fixture — an absolute threshold would really be asserting
+    // "roughly how many groups exist today", which is the wrong thing to
+    // pin. Comparing the SAME registry's hit-tick cost at two member counts
+    // for the SAME group cancels that shared baseline out and isolates
+    // exactly the thing under test).
+    const ALLOC_TEST_SMALL_N: usize = 8;
+    const ALLOC_TEST_LARGE_N: usize = 512;
+
+    static V3_ALLOC_GROUP: AcquisitionGroup = AcquisitionGroup::new("unattributed", "alloc_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_ALLOC_GROUP_ENTRY: &'static AcquisitionGroup = &V3_ALLOC_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_alloc_counters",
+        metadata = { acq_group = "alloc_probe" }
+    )]
+    static V3_ALLOC_COUNTERS: metriken::CounterGroup =
+        metriken::CounterGroup::new(ALLOC_TEST_LARGE_N);
+
+    /// Populate `[from, to)` with a value and per-member metadata, set the
+    /// group's member bound to `to`, and re-acquire/finish the bracket so
+    /// the next `create_v3` call sees the new population.
+    fn grow_alloc_probe(from: usize, to: usize) {
+        for idx in from..to {
+            V3_ALLOC_COUNTERS.add(idx, idx as u64 + 1);
+            V3_ALLOC_COUNTERS.set_metadata(idx, [("cpu".to_string(), idx.to_string())].into());
+        }
+        V3_ALLOC_GROUP.set_member_bound(to);
+        let guard = V3_ALLOC_GROUP.acquire();
+        guard.finish();
+    }
+
+    /// Run two ticks against `cache` and return `(snapshot, hit_allocs)` for
+    /// the second — the first just warms the cache (necessarily a miss for
+    /// anything that changed since the LAST call using this `cache`, e.g.
+    /// this fixture right after `grow_alloc_probe` moved its member bound)
+    /// and is not measured.
+    fn warm_then_measure_hit(cache: &mut SkeletonCache) -> (Snapshot, usize) {
+        let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
+        count_allocations(|| create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache))
+    }
+
+    fn alloc_probe_group(snap: &Snapshot) -> &GroupSnapshot {
+        let Snapshot::V3(s) = snap else {
+            panic!("expected V3")
+        };
+        s.groups
+            .iter()
+            .find(|g| g.name == "unattributed/alloc_probe")
+            .expect("alloc-probe group present")
+    }
+
+    #[test]
+    fn v3_hit_tick_allocations_are_a_small_constant_not_o_n() {
+        let mut cache = SkeletonCache::new();
+
+        // Phase 1: SMALL_N members, hit tick measured.
+        grow_alloc_probe(0, ALLOC_TEST_SMALL_N);
+        let (snap_small, small_allocs) = warm_then_measure_hit(&mut cache);
+        let group_small = alloc_probe_group(&snap_small);
+        let schema_small = group_small.schema.as_ref().expect("schema present").clone();
+        assert_eq!(schema_small.counters.len(), ALLOC_TEST_SMALL_N);
+
+        // Phase 2: grow to LARGE_N members — the next tick using `cache`
+        // must be a miss (real membership change), then the tick after
+        // that is a fresh hit at the larger member count.
+        grow_alloc_probe(ALLOC_TEST_SMALL_N, ALLOC_TEST_LARGE_N);
+        let (snap_large, large_allocs) = warm_then_measure_hit(&mut cache);
+        let group_large = alloc_probe_group(&snap_large);
+        let schema_large = group_large.schema.as_ref().expect("schema present");
+        assert_eq!(schema_large.counters.len(), ALLOC_TEST_LARGE_N);
+        assert!(
+            !Arc::ptr_eq(&schema_small, schema_large),
+            "growing membership must NOT reuse the small fixture's cached Arc<GroupSchema>"
+        );
+
+        // The identity-hash claim, pinned directly: a hit tick reuses the
+        // cached `Arc<GroupSchema>` allocation (a refcount bump), not a
+        // freshly-rebuilt-but-content-equal one — checked by re-measuring
+        // the LARGE_N population's hit tick a second time and confirming
+        // the schema `Arc` is the SAME allocation as `snap_large`'s, and the
+        // wire output (values) is unchanged.
+        let (snap_large_again, _) = count_allocations(|| {
+            create_v3(
+                SystemTime::now(),
+                Duration::from_secs(1),
+                vec![],
+                &mut cache,
+            )
+        });
+        let group_large_again = alloc_probe_group(&snap_large_again);
+        assert!(
+            Arc::ptr_eq(
+                schema_large,
+                group_large_again.schema.as_ref().expect("schema present")
+            ),
+            "an unchanged 512-member group must reuse the cached Arc<GroupSchema> on its next hit"
+        );
+        assert_eq!(
+            group_large.schema_hash, group_large_again.schema_hash,
+            "wire schema_hash is stable across a hit"
+        );
+        assert_eq!(
+            group_large.counters, group_large_again.counters,
+            "a hit tick's wire output (values) equals the prior tick's for this unchanged fixture"
+        );
+
+        // The allocation-parity claim: growing this fixture's OWN member
+        // count 64x (SMALL_N=8 -> LARGE_N=512) must not move the hit-tick
+        // allocation total by anywhere close to that factor. Both
+        // measurements walk the SAME process-wide metriken registry (every
+        // other declared group this test binary registers, dozens of them,
+        // contributes the SAME O(distinct groups) bookkeeping cost to
+        // both), so comparing them cancels that shared baseline and
+        // isolates this fixture's own marginal cost.
+        //
+        // Measured on this run (2026-08-19, this worktree, debug build,
+        // `--test-threads=1`): small_allocs and large_allocs came out
+        // IDENTICAL — 1,407 both times — meaning this fixture's growth from
+        // 8 to 512 members added exactly zero additional allocations on a
+        // hit. Under `cargo test`'s default parallelism the two
+        // measurements are NOT taken back-to-back in isolation — other
+        // tests mutate their OWN groups on other threads in between, and
+        // `create_v3` walks the full process-wide registry every time, so
+        // some of that concurrent churn legitimately lands as real misses
+        // (and their real allocations) inside one measurement or the other
+        // — observed delta up to ~40 across repeated full-suite runs, the
+        // same class of cross-test interference documented on
+        // `skeleton_cache_is_stable_across_ticks` and elsewhere in this
+        // file. The margin below (300) comfortably covers that noise while
+        // staying nowhere near what a real per-member regression would add:
+        // before this change, growing 504 more members would have cost a
+        // `MetricDesc` (`String` name + `BTreeMap`) AND an `entry_metadata`
+        // `HashMap` PER MEMBER, on the order of 1,500+ extra allocations —
+        // two orders of magnitude past this margin.
+        let delta = large_allocs.abs_diff(small_allocs);
+        assert!(
+            delta <= 300,
+            "growing this fixture from {ALLOC_TEST_SMALL_N} to {ALLOC_TEST_LARGE_N} members \
+             changed hit-tick allocations by {delta} ({small_allocs} -> {large_allocs}) — \
+             expected ~0 (some slack for concurrent-test noise); a per-member allocation \
+             regression would move this by well over a thousand"
+        );
+    }
+
+    // Dedicated group + metric: reader-stamped (sparse, metadata-presence
+    // membership), 64 backing entries, a handful populated. Complements
+    // `reader_stamped_sparse_group_emits_only_metadata_populated_indices`
+    // (which pins schema_hash stability and real-churn invalidation) by
+    // proving the CACHE MECHANISM directly via `Arc::ptr_eq`: an unchanged
+    // sparse population is a true hit (same allocation reused), and a
+    // member appearing or disappearing is a true miss (a new allocation),
+    // not a coincidentally-equal rebuild either way.
+    static V3_SPARSE_CHURN_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "sparse_churn_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_SPARSE_CHURN_GROUP_ENTRY: &'static AcquisitionGroup = &V3_SPARSE_CHURN_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_sparse_churn_counters",
+        metadata = { acq_group = "sparse_churn_probe" }
+    )]
+    static V3_SPARSE_CHURN_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(64);
+
+    #[test]
+    fn sparse_membership_unchanged_hits_changed_misses() {
+        V3_SPARSE_CHURN_COUNTERS.set_metadata(3, [("cgroup".to_string(), "/a".to_string())].into());
+        V3_SPARSE_CHURN_COUNTERS.add(3, 1);
+        V3_SPARSE_CHURN_COUNTERS
+            .set_metadata(40, [("cgroup".to_string(), "/b".to_string())].into());
+        V3_SPARSE_CHURN_COUNTERS.add(40, 2);
+
+        let mut cache = SkeletonCache::new();
+        let snap1 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s1) = snap1 else {
+            panic!("expected V3")
+        };
+        let group1 = s1
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_churn_probe")
+            .expect("sparse churn group present in tick 1");
+        let schema1 = group1.schema.as_ref().expect("schema present").clone();
+        assert_eq!(schema1.counters.len(), 2);
+
+        // Same population, no churn: a true hit.
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        let group2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_churn_probe")
+            .expect("sparse churn group present in tick 2");
+        assert!(
+            Arc::ptr_eq(&schema1, group2.schema.as_ref().unwrap()),
+            "unchanged sparse population must reuse the cached Arc<GroupSchema>"
+        );
+
+        // A member appears: must be a miss (a new allocation, not the old
+        // one reused, and a new wire hash).
+        V3_SPARSE_CHURN_COUNTERS
+            .set_metadata(50, [("cgroup".to_string(), "/c".to_string())].into());
+        V3_SPARSE_CHURN_COUNTERS.add(50, 3);
+        let snap3 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s3) = snap3 else {
+            panic!("expected V3")
+        };
+        let group3 = s3
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_churn_probe")
+            .expect("sparse churn group present in tick 3");
+        let schema3 = group3.schema.as_ref().expect("schema present");
+        assert_eq!(schema3.counters.len(), 3, "the new member is present");
+        assert!(
+            !Arc::ptr_eq(&schema1, schema3),
+            "a member appearing must NOT reuse the old cached Arc<GroupSchema>"
+        );
+        assert_ne!(
+            group1.schema_hash, group3.schema_hash,
+            "a member appearing must change the wire schema hash"
+        );
+
+        // A member disappears: also a miss.
+        V3_SPARSE_CHURN_COUNTERS.clear_metadata(50);
+        let snap4 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s4) = snap4 else {
+            panic!("expected V3")
+        };
+        let group4 = s4
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/sparse_churn_probe")
+            .expect("sparse churn group present in tick 4");
+        let schema4 = group4.schema.as_ref().expect("schema present");
+        assert_eq!(schema4.counters.len(), 2, "the removed member is gone");
+        assert!(
+            !Arc::ptr_eq(schema3, schema4),
+            "a member disappearing must NOT reuse the previous tick's cached Arc<GroupSchema>"
+        );
+        assert_ne!(
+            group3.schema_hash, group4.schema_hash,
+            "a member disappearing must change the wire schema hash"
         );
     }
 
