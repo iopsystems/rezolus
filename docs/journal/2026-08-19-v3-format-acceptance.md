@@ -327,3 +327,120 @@ wave-1 120-scrape run); entries/tick: median 2,666.0 (was 2,797.5). Both
 groups add only ~33 declared slots combined, and the dominant term is still
 the dynamic `/main` groups' live task/cgroup population, which varies run to
 run with the workload. Same ballpark, no regression.
+
+## Addendum (2026-08-19): wave 2 — full migration measured
+
+Re-ran after wave 2 (packed/sparse reader-stamped groups, memory, `cpu_cores`,
+drivehealth's per-drive sweep, gpu) — branch tip `6f59031`, full rebuild
+(BPF sources changed). Same host, same rules. Captures: 120-scrape v3, plus a
+30-scrape v2 spot check.
+
+**1. Default-group retirement — not complete.** Six `/main` groups remain
+of 53 total:
+
+| group | members | verdict |
+|---|---|---|
+| `cpu_bandwidth/main` | 2 | expected residue (the two ringbuf gauges) |
+| `rezolus_rusage/main` | 9 | expected residue (ambient) |
+| `cpu_dtlb/main` | 32 | **missed migration** |
+| `cpu_frequency/main` | 96 | **missed migration** |
+| `cpu_l3/main` | 64 | **missed migration** |
+| `cpu_perf/main` | 64 | **missed migration** — only `cpu_perf`'s cgroup counters moved (`cpu_perf_cgroup_cycles`/`_instructions`); its base per-CPU cycles/instructions counters are still here |
+
+Only two of the six are the accounted-for residue. `cpu_dtlb`, `cpu_frequency`,
+`cpu_l3`, and `cpu_perf`'s base counters are genuinely unmigrated — the
+"everything" framing for wave 2 does not hold for these four.
+
+**2. Reader-stamped groups — present, windowed, and split into two width
+regimes.** All cgroup-scoped and the one task-scoped group carried a window
+on every one of 120 ticks. Widths separate cleanly from the sub-2 µs
+sampler-stamped groups measured in earlier rounds:
+
+| group | width median | width max | members | schema churn |
+|---|---|---|---|---|
+| `cpu_bandwidth_cgroup_{bandwidth_periods,throttled_periods,throttled_time,throttled_count,cgroup_throttled_time}` (5 groups) | 940–1,320 ns | 2,280–4,450 ns | 1 each | 0.0 |
+| `cpu_migrations_cgroup` | 34.6 µs | 479.0 µs | 21–36 | 0.084 |
+| `cpu_perf_cgroup_cycles` / `_instructions` | 41.1–48.5 µs | 180.2–610.6 µs | 48–65 | 0.101 |
+| `cpu_tlb_flush_cgroup` | 128.0 µs | 480.5 µs | 150–255 | 0.118 |
+| `cpu_usage_cgroup_usage` / `_cgroup_exited` | 24.3–87.1 µs | 120.6–309.2 µs | 26–104 | 0.193 |
+| `scheduler_runqueue_cgroup_{context_switch,offcpu,wait}` | 25.8–55.4 µs | 120.4–213.2 µs | 47–130 | 0.109 |
+| `syscall_counts_cgroup` | 410.0 µs | 1,769.4 µs | 544–960 | 0.168 |
+| `cpu_usage_task` | 718.3 µs | 3,240.7 µs | 398–773 | **1.0** |
+| `cpu_cores_read` | 147.0 µs | 572.0 µs | 1 | 0.0 |
+| `memory_meminfo_read` / `memory_vmstat_read` | 134.5 / 171.0 µs | 543.9 / 650.1 µs | 5 / 6 | 0.0 |
+
+`cpu_bandwidth`'s cgroup groups read fast (sub-2 µs, one-shot ringbuf-style
+reads) while the others sweep a live cgroup or task population and take
+tens to hundreds of µs, scaling with member count — the "µs-scale read span"
+the design predicted, just a wider µs range than the tight sampler-stamped
+groups. All sampler-stamped and histogram-wave groups (blockio, network,
+tcp, `cpu_usage_cpu`/`softirq`/`softirq_time`, `scheduler_runqueue_counters`/
+`runqlat`/`running`/`offcpu`, `syscall_counts_counters`,
+`cpu_migrations_migrations`, `cpu_tlb_flush_events`) sit at **exactly 0.0**
+churn, confirmed again this round.
+
+Cgroup-group churn (8.4–19.3%) is real, not ~0 — plausible for normal cgroup
+lifecycle (services/containers starting and stopping), well below the task
+group's churn. The task group's **1.0 churn (every tick)** is explained by
+measured fork activity on the host: a 10s `/proc/stat` sample showed **~50
+forks/sec** against ~1,060 live processes (`ps -e | wc -l`) — more than
+enough new/exited tasks per 1s scrape to change membership every tick.
+Member counts (398–773) track that same live-process population, order of
+magnitude **hundreds, not the 4.2M PID space**.
+
+**3. `drivehealth` — one sweep window, real drive count.** `drivehealth_sweep`
+carried a single window per tick in 119/120 ticks (tick 0 has none — before
+the sampler's first throttled read completes; expected, not a bug). Median
+width **170.3 ms** (max 171.1 ms) — matches the ~176 ms sweep figure from
+the earlier per-drive-command journal entry. Members = **161** = 23 gauges
+(`drive_temperature`, one per drive) + 138 counters (per-drive threshold/
+throttle counters) — the 23 matches this host's real physical disk count
+(`lsblk` lists 23 `sdX` disks; four `zd*` zvols are not physical drives and
+are excluded). Confirmed **not** the `MAX_DRIVES = 64` array-capacity
+constant (`src/agent/samplers/drivehealth/linux/stats.rs:8`) — that bounds
+storage, not declared membership, and 161 is real-population-scaled (23
+drives × several metrics), not device-count-scaled to 64.
+
+One aside, not part of this check but observed: `gpu_amd_smi_devices` and
+`gpu_nvidia_devices` are migrated (non-`/main`) groups with large declared
+schemas (416/640 gauge slots) but **zero non-null values and no window on
+any tick** — expected on this host, which has no GPU (`gpu_nvidia` fails to
+load `libnvidia-ml.so.1`, as in every prior round); the schema is built to
+a device-count bound but nothing ever populates it here.
+
+**4. Totals.**
+
+| | wave-1 rerun (60 scrapes, 25 groups) | wave-2 (120 scrapes, 53 groups) | ratio |
+|---|---|---|---|
+| groups (migrated + default) | 25 + 14 = 39 | 47 + 6 = 53 | |
+| entries/tick, median | 2,666.0 | **5,158.5** | 1.94× |
+| bytes/tick (v3), median | 335,557 | **640,876** | 1.91× |
+
+Entries and bytes roughly double, as expected from cgroup/task memberships
+now being declared instead of suppressed — bounded by live population
+(hundreds, not millions), not a blow-up.
+
+v2 bytes/tick spot check (30 scrapes): median **314,648** — within ~2% of
+the original wave-1 baseline (321,433.5, 120 scrapes). V2's wire format is
+unaffected by internal migration, as expected.
+
+**5. Agent health — no anomalies.**
+
+| | RSS steady-state | CPU% steady-state |
+|---|---|---|
+| v3 | ~82.6–83.0 MB | 1.8–2.0% |
+| v2 | ~68.9 MB | 3.9–4.4% |
+
+v3/v2 steady-state RSS ratio **~1.20×** — actually *tighter* than wave-1's
+measured ~1.33×. CPU% reads lower for v3 than v2 at steady state again this
+round, consistent with every prior round; still un-repeated `ps`-sampled
+noise, not a claim.
+
+**Verdict: the transitional default-group era is not over.** Reader-stamped
+groups, the drivehealth sweep, and the wave-2 samplers behave exactly as
+designed — windowed, correctly bounded, schema-stable except where real
+churn drives it. But four real samplers (`cpu_dtlb`, `cpu_frequency`,
+`cpu_l3`, and `cpu_perf`'s base per-CPU counters) are still unmigrated
+`/main` groups outside the two accounted-for exceptions
+(`cpu_bandwidth`'s two ringbuf gauges, `rezolus_rusage`) — wave 2 is not
+"everything" yet.
