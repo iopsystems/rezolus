@@ -444,3 +444,15 @@ churn drives it. But four real samplers (`cpu_dtlb`, `cpu_frequency`,
 `/main` groups outside the two accounted-for exceptions
 (`cpu_bandwidth`'s two ringbuf gauges, `rezolus_rusage`) — wave 2 is not
 "everything" yet.
+
+## Addendum (2026-08-19): gap closed
+
+Re-checked at `ed6a447` (perf-event group closure: `cpu_dtlb`/`cpu_l3`/
+`cpu_frequency`/`cpu_branch` sweeps plus `cpu_perf`'s base per-CPU counters).
+Residual `/main` groups: exactly the two structural exceptions —
+`rezolus_rusage/main` (9) present; `cpu_bandwidth/main` (2, event-driven off
+its ringbuf) had no qualifying event in this capture's short window, so it
+simply didn't appear, not a regression. All five new sweep groups are
+windowed with live-CPU-multiple member counts (96/64/96/64/64 = 32 cores ×
+2–3); `cpu_branch_sweep` is windowed but all-null, as its commit predicted
+for a host with no branch PMU.
