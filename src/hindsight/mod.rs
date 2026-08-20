@@ -353,7 +353,14 @@ pub fn run(config: Config) {
                                 wall_ns(),
                             );
 
-                            match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                            // `Snapshot::from_msgpack`, not a bare `from_slice`:
+                            // the same depth-capped, trailing-byte-checked
+                            // decode as the recorder's `.rez`-mode call site —
+                            // hindsight is the same always-on ingest path,
+                            // scraping whatever msgpack endpoint it's pointed
+                            // at, and is the most exposed process of the two
+                            // (it runs unattended, indefinitely).
+                            match metriken_exposition::Snapshot::from_msgpack(&body) {
                                 Ok(snapshot) => {
                                     if let Err(e) =
                                         buffer.ingest(&snapshot, anchored_ns, wall_offset_ns)
