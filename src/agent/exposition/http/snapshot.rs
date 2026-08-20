@@ -115,9 +115,16 @@ impl SnapshotBuilder {
 /// the caller's loop, not something a shared helper can do), and the
 /// per-kind (Counter/Gauge/CounterGroup/GaugeGroup/Histogram)
 /// walk/naming/membership rules — remains genuinely duplicated between
-/// `create` and `create_v3`: `{id}`/`{id}x{idx}` naming, and the histogram
-/// `grouping_power`/`max_value_power` metadata keys. A change to one must
-/// be checked against the other.
+/// THREE places now, not two: `create` (V2), `create_v3`'s schema-building
+/// (miss) arms, and `fold_group_identities`' matching arms (which fold
+/// identity over the SAME membership without building any of this
+/// metadata). `{id}`/`{id}x{idx}` naming, the histogram
+/// `grouping_power`/`max_value_power` metadata keys, and — for
+/// `fold_group_identities` specifically — the value-sentinel skip test for
+/// default groups (it must decide "is this idx a member" the identical way
+/// `create_v3` does, or the two disagree on membership; see the "wider
+/// torn-read window" note on `fold_group_identities`). A change to any one
+/// of the three must be checked against the other two.
 fn metric_metadata(
     metric: &metriken::MetricEntry,
     sampler_mods: &[(&str, &str)],
@@ -180,10 +187,10 @@ fn create(
     //
     // Keyed by `(sampler, name)` — the SAME parts `AcquisitionGroup`
     // itself stores (`group.sampler`/`group.name`, both already
-    // `&'static str`) — rather than `group_registry()`'s own
-    // `"{sampler}/{name}"` joined `String` key, so building this map costs
-    // no allocation at all, and neither does a per-metric lookup below
-    // (a `(&str, &str)` tuple, not a freshly `format!`ed `String`).
+    // `&'static str`, and the same tuple `group_registry()` itself is now
+    // keyed by) — so building this map costs no allocation at all, and
+    // neither does a per-metric lookup below (a `(&str, &str)` tuple, not
+    // a freshly `format!`ed `String`).
     //
     // This also closes an intra-snapshot consistency hole the per-metric
     // version had: every member of a group now sees the SAME window for
@@ -274,10 +281,11 @@ fn create(
             continue;
         }
 
-        // KEEP IN SYNC with create_v3 — see the doc comment on
-        // `metric_metadata` (the shared prefix) and on `create_v3` itself
-        // (the per-kind walk/naming/membership rules below, which are NOT
-        // shared and are duplicated independently in each function).
+        // KEEP IN SYNC with create_v3 AND fold_group_identities — see the
+        // doc comment on `metric_metadata` (the shared prefix) and on
+        // `create_v3` itself (the per-kind walk/naming/membership rules
+        // below, which are NOT shared and are duplicated independently in
+        // each of these three places).
         let (metadata, sampler) = metric_metadata(metric, &sampler_mods);
         let mut metadata: HashMap<String, String> = metadata.into_iter().collect();
 
@@ -899,6 +907,31 @@ fn identity_fold_metadata(acc: u128, metadata: &HashMap<String, String>) -> u128
     }
 }
 
+/// Fold a member's OPTIONAL metadata (`with_metadata`'s result — `None` for
+/// an index with no metadata attached at all, `Some` (possibly an empty
+/// map) for one that does) into `acc`, folding a 1-byte presence flag FIRST
+/// so "absent" and "present-but-empty" can never alias.
+///
+/// Without the flag, "absent" contributes zero bytes and "present, zero
+/// pairs" contributes exactly the 8-byte zero-count prefix
+/// `identity_fold_metadata` folds for an empty map — a real, constructible
+/// collision: a member with `m: None` immediately followed by the NEXT
+/// member's `metric_id`/`idx` prefix folds the exact same bytes as a member
+/// with `m: Some(empty)` (contributing that 8-byte zero count) immediately
+/// followed by a DIFFERENT next member whose `metric_id`/`idx` bytes happen
+/// to fill the gap the same way — reachable in a synthetic registry where a
+/// group's later member's `metric_id` is small enough to overlap. Folding
+/// presence (0 = absent, 1 = present) first means "absent" is now exactly
+/// 1 byte and "present" is at least 9 (1 + the 8-byte count), so the two
+/// can never be confused regardless of what follows.
+#[inline]
+fn identity_fold_metadata_presence(acc: u128, m: Option<&HashMap<String, String>>) -> u128 {
+    match m {
+        Some(m) => identity_fold_metadata(identity_fold(acc, &[1u8]), m),
+        None => identity_fold(acc, &[0u8]),
+    }
+}
+
 /// Per-group running identity, one accumulator per kind so the final
 /// identity can fold them in the fixed (counters, gauges, histograms) order
 /// `GroupSchema` lists members in, regardless of the interleaved order the
@@ -933,12 +966,17 @@ impl GroupIdentityAccum {
 /// One group's cache decision for this tick, resolved by
 /// [`fold_group_identities`] before `create_v3`'s real walk begins.
 struct GroupDecision {
-    identity: (u64, u64),
     /// `true`: this tick's identity differs from `cache`'s (or there is no
     /// cached entry yet) — `create_v3` must assemble a fresh `GroupSchema`
     /// for this group. `false`: membership (names + per-member metadata) is
     /// byte-identical to last tick's — `create_v3` clones the cached
     /// `Arc<GroupSchema>` instead of touching a single `MetricDesc`.
+    ///
+    /// The identity value itself isn't carried past this decision: on a
+    /// miss, `create_v3` derives the identity it STORES from what its own
+    /// walk actually collects (`GroupBuilder::walk_identity`), not from
+    /// this pre-pass's read — see the "miss-tick cache poisoning" note on
+    /// `fold_group_identities` for why that distinction matters.
     needs_schema: bool,
 }
 
@@ -995,12 +1033,12 @@ struct GroupDecision {
 /// groups have no such window — their membership is registration-derived,
 /// not value-derived, so nothing about this pass or the main walk needs to
 /// agree on a value to agree on membership.
-fn fold_group_identities(
+fn fold_group_identities<'a>(
     cache: &SkeletonCache,
-    group_registry: &HashMap<String, &'static AcquisitionGroup>,
-    sampler_mods: &[(&str, &str)],
-) -> HashMap<String, GroupDecision> {
-    let mut accums: HashMap<String, GroupIdentityAccum> = HashMap::new();
+    group_registry: &HashMap<(&'static str, &'static str), &'static AcquisitionGroup>,
+    sampler_mods: &'a [(&'a str, &'a str)],
+) -> HashMap<(&'a str, &'a str), GroupDecision> {
+    let mut accums: HashMap<(&'a str, &'a str), GroupIdentityAccum> = HashMap::new();
     let mut idx_scratch: Vec<usize> = Vec::new();
 
     for (metric_id, metric) in metriken::metrics().iter().enumerate() {
@@ -1013,27 +1051,34 @@ fn fold_group_identities(
             continue;
         }
 
-        // Routing mirrors create_v3's (KEEP IN SYNC) but skips building the
-        // metric-level metadata `BTreeMap` entirely: `attribute_sampler`
-        // already returns a borrowed `&str`, and `metric.metadata()` can be
-        // queried directly, so this pass never allocates for routing.
+        // Routing mirrors create_v3's (KEEP IN SYNC), and mirrors `create`
+        // (V2)'s `group_windows` for the SAME reason: `attribute_sampler`
+        // returns a borrowed `&str` (tied to `sampler_mods`, which outlives
+        // this whole function), and `metric.metadata().get("acq_group")`
+        // is a transient borrowed lookup key, used only against
+        // `group_registry` below — never stored. Once matched, the group's
+        // OWN `&'static str` fields (`ag.sampler`/`ag.name`) become the
+        // key that's actually stored/returned, so this pass never
+        // `format!`s a `String` at all: not for the metric-level metadata
+        // `BTreeMap` (still skipped entirely, as before), and now not for
+        // routing either — the ~334-registry-entry `format!("{sampler}/
+        // {acq_group}")` this used to pay for every tick is gone.
         let sampler = crate::agent::samplers::attribute_sampler(metric.module(), sampler_mods);
         let mut declared = false;
         let mut member_bound: Option<usize> = None;
         let mut reader_stamped = false;
-        let group_key = match metric.metadata().get("acq_group") {
+        let group_key: (&str, &str) = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
-                let key = format!("{sampler}/{acq_group}");
-                if let Some(ag) = group_registry.get(&key) {
+                if let Some(ag) = group_registry.get(&(sampler, acq_group)) {
                     declared = true;
                     member_bound = ag.member_bound();
                     reader_stamped = ag.is_reader_stamped();
-                    key
+                    (ag.sampler, ag.name)
                 } else {
-                    format!("{sampler}/main")
+                    (sampler, "main")
                 }
             }
-            None => format!("{sampler}/main"),
+            None => (sampler, "main"),
         };
 
         let accum = accums.entry(group_key).or_default();
@@ -1056,9 +1101,7 @@ fn fold_group_identities(
                         g.with_metadata(idx, &mut |m| {
                             let mut h = identity_fold(accum.counters, &metric_id.to_le_bytes());
                             h = identity_fold(h, &idx64.to_le_bytes());
-                            if let Some(m) = m {
-                                h = identity_fold_metadata(h, m);
-                            }
+                            h = identity_fold_metadata_presence(h, m);
                             accum.counters = h;
                         });
                     }
@@ -1077,9 +1120,7 @@ fn fold_group_identities(
                         accum.counters = identity_fold(accum.counters, &metric_id.to_le_bytes());
                         accum.counters = identity_fold(accum.counters, &idx64.to_le_bytes());
                         g.with_metadata(idx, &mut |m| {
-                            if let Some(m) = m {
-                                accum.counters = identity_fold_metadata(accum.counters, m);
-                            }
+                            accum.counters = identity_fold_metadata_presence(accum.counters, m);
                         });
                     }
                 }
@@ -1094,9 +1135,7 @@ fn fold_group_identities(
                         g.with_metadata(idx, &mut |m| {
                             let mut h = identity_fold(accum.gauges, &metric_id.to_le_bytes());
                             h = identity_fold(h, &idx64.to_le_bytes());
-                            if let Some(m) = m {
-                                h = identity_fold_metadata(h, m);
-                            }
+                            h = identity_fold_metadata_presence(h, m);
                             accum.gauges = h;
                         });
                     }
@@ -1110,16 +1149,25 @@ fn fold_group_identities(
                         accum.gauges = identity_fold(accum.gauges, &metric_id.to_le_bytes());
                         accum.gauges = identity_fold(accum.gauges, &idx64.to_le_bytes());
                         g.with_metadata(idx, &mut |m| {
-                            if let Some(m) = m {
-                                accum.gauges = identity_fold_metadata(accum.gauges, m);
-                            }
+                            accum.gauges = identity_fold_metadata_presence(accum.gauges, m);
                         });
                     }
                 }
             }
             // Declared: registration membership, always a member (see
             // create_v3's declared Histogram arm). Default: membership by
-            // presence — only a member once it has loaded a value.
+            // presence — only a member once it has loaded a value. Note:
+            // `h.load()` here materializes and allocates the histogram's
+            // bucket snapshot just to check `.is_some()` — wasted on the
+            // `declared` side (short-circuited by `||`, never called) but
+            // NOT on the default side. Every histogram in this codebase is
+            // declared today (grep confirms it), so this is a dead cost in
+            // practice, not a live one — but a genuinely undeclared
+            // histogram falling back to this arm would pay a real
+            // allocation per tick here, on both hit and miss ticks (this
+            // pass always runs). Left as-is rather than adding a
+            // presence-only check metriken doesn't expose, since it isn't
+            // costing anything today.
             Value::Histogram(h) if declared || h.load().is_some() => {
                 accum.histograms = identity_fold(accum.histograms, &metric_id.to_le_bytes());
             }
@@ -1129,19 +1177,20 @@ fn fold_group_identities(
 
     accums
         .into_iter()
-        .map(|(group_name, accum)| {
+        .map(|(group_key, accum)| {
             let identity = accum.finish();
-            let needs_schema = match cache.entries.get(&group_name) {
+            // The cache itself is still keyed by the wire-format
+            // "{sampler}/{name}" `String` (it persists ACROSS ticks, so it
+            // must own its keys regardless) — this `format!` runs once per
+            // DISTINCT GROUP here (bounded by declared-group count, ~tens),
+            // not once per registry entry, so it's not the cost this pass
+            // exists to avoid.
+            let cache_key = format!("{}/{}", group_key.0, group_key.1);
+            let needs_schema = match cache.entries.get(&cache_key) {
                 Some(cached) => cached.identity != identity,
                 None => true,
             };
-            (
-                group_name,
-                GroupDecision {
-                    identity,
-                    needs_schema,
-                },
-            )
+            (group_key, GroupDecision { needs_schema })
         })
         .collect()
 }
@@ -1159,6 +1208,18 @@ fn fold_group_identities(
 /// already stamped, and the group-emit loop `finish()`es it once every
 /// member's value has been read — see the doc comment there.
 ///
+/// `walk_identity` is folded ALONGSIDE `counter_descs`/`gauge_descs`/
+/// `histogram_descs` on the MISS path only (see `create_v3`'s `if
+/// group.needs_schema` arm) — the same `identity_fold`/`identity_fold_metadata`
+/// calls `fold_group_identities` makes, applied to what THIS walk actually
+/// pushes into the schema rather than to the pre-pass's own read. Finalize
+/// stores `walk_identity.finish()`, not the pre-pass's identity, as the
+/// cached identity for a rebuilt group — see the "miss-tick cache
+/// poisoning" note on `fold_group_identities` for why the two can
+/// legitimately differ and why storing the pre-pass's would be wrong. Left
+/// at its `Default` (unfolded) on a hit — nothing needs it there, since a
+/// hit reuses the cached identity verbatim.
+///
 /// `Default::default()` sets `needs_schema: true` (a safe "always rebuild"
 /// default): the external-metrics block relies on it via
 /// `HashMap::or_default`, and every other call site sets `needs_schema`
@@ -1167,6 +1228,7 @@ struct GroupBuilder {
     window: Option<Window>,
     reader_guard: Option<AcquisitionGuard<'static>>,
     needs_schema: bool,
+    walk_identity: GroupIdentityAccum,
     counter_descs: Vec<MetricDesc>,
     counter_values: Vec<Option<u64>>,
     gauge_descs: Vec<MetricDesc>,
@@ -1181,6 +1243,7 @@ impl Default for GroupBuilder {
             window: None,
             reader_guard: None,
             needs_schema: true,
+            walk_identity: GroupIdentityAccum::default(),
             counter_descs: Vec::new(),
             counter_values: Vec::new(),
             gauge_descs: Vec::new(),
@@ -1196,16 +1259,26 @@ impl Default for GroupBuilder {
 /// distributed slice, populated at link time before `main` runs and never
 /// mutated afterward — every entry that will ever exist already does by the
 /// time this first initializes.
-fn group_registry() -> &'static HashMap<String, &'static AcquisitionGroup> {
-    static REGISTRY: OnceLock<HashMap<String, &'static AcquisitionGroup>> = OnceLock::new();
+fn group_registry() -> &'static HashMap<(&'static str, &'static str), &'static AcquisitionGroup> {
+    static REGISTRY: OnceLock<HashMap<(&'static str, &'static str), &'static AcquisitionGroup>> =
+        OnceLock::new();
     REGISTRY.get_or_init(|| {
-        let mut registry: HashMap<String, &'static AcquisitionGroup> = HashMap::new();
+        let mut registry: HashMap<(&'static str, &'static str), &'static AcquisitionGroup> =
+            HashMap::new();
         for group in crate::agent::samplers::ACQUISITION_GROUPS {
-            let key = format!("{}/{}", group.sampler, group.name);
-            let prev = registry.insert(key.clone(), group);
+            // Keyed by `(sampler, name)` directly — the SAME parts
+            // `AcquisitionGroup` itself stores, both already `&'static
+            // str` — rather than a joined `"{sampler}/{name}"` `String`,
+            // so building this map costs no allocation, and neither does
+            // a lookup against it (a `(&str, &str)` tuple, not a freshly
+            // `format!`ed `String`) — see `create`'s `group_windows` for
+            // the same pattern, which this now matches instead of being
+            // the one per-tick format! holdout.
+            let key = (group.sampler, group.name);
+            let prev = registry.insert(key, group);
             debug_assert!(
                 prev.is_none(),
-                "duplicate acquisition-group registry key `{key}` — every registered group's \
+                "duplicate acquisition-group registry key `{}/{}` — every registered group's \
                  (sampler, name) pair must stay globally unique, including on non-Linux builds, \
                  where `samplers::bpf_sampler_name` collapses every BPF sampler's \
                  `attribute_sampler` resolution to the shared \"unattributed\" bucket (stats.rs \
@@ -1213,6 +1286,8 @@ fn group_registry() -> &'static HashMap<String, &'static AcquisitionGroup> {
                  SamplerEntry). Qualify the group's `name` with its sampler, e.g. \
                  `<sampler>_<shortname>` — see the naming rule documented on \
                  `samplers::ACQUISITION_GROUPS`.",
+                group.sampler,
+                group.name,
             );
         }
         registry
@@ -1382,7 +1457,7 @@ fn create_v3(
     // based on this map; it never re-derives the decision itself.
     let group_decisions = fold_group_identities(cache, group_registry, &sampler_mods);
 
-    let mut groups: HashMap<String, GroupBuilder> = HashMap::new();
+    let mut groups: HashMap<(&str, &str), GroupBuilder> = HashMap::new();
     // Reused across every reader-stamped group's sparse membership walk
     // below (both the schema-building and values-only arms) — cleared
     // per group, never reallocated once it reaches its high-water mark, so
@@ -1408,7 +1483,11 @@ fn create_v3(
         // routing (KEEP IN SYNC) — deliberately NOT calling `metric_metadata`
         // here: that builds a `BTreeMap` this walk may not need at all (a
         // cache hit needs no metadata whatsoever), so it's deferred below,
-        // behind the `needs_schema` check.
+        // behind the `needs_schema` check. Also mirrors `create` (V2)'s
+        // `group_windows` lookup: `(&str, &str)` tuple keys throughout, not
+        // a `format!`ed `String` per registry entry — see
+        // `fold_group_identities`'s matching comment for the full
+        // rationale.
         let sampler = crate::agent::samplers::attribute_sampler(metric.module(), &sampler_mods);
         let mut declared = false;
         // The member-population bound for a declared, group-typed metric
@@ -1422,14 +1501,13 @@ fn create_v3(
         // CounterGroup/GaugeGroup arms below and the doc comment on
         // `create_v3` for the walk-cost grounding.
         let mut reader_stamped = false;
-        let group_key = match metric.metadata().get("acq_group") {
+        let group_key: (&str, &str) = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
-                let key = format!("{sampler}/{acq_group}");
-                if let Some(ag) = group_registry.get(&key) {
+                if let Some(ag) = group_registry.get(&(sampler, acq_group)) {
                     declared = true;
                     member_bound = ag.member_bound();
                     reader_stamped = ag.is_reader_stamped();
-                    key
+                    (ag.sampler, ag.name)
                 } else {
                     debug_assert!(
                         false,
@@ -1438,10 +1516,10 @@ fn create_v3(
                          \"{acq_group}\") is registered on ACQUISITION_GROUPS; routing to \
                          the default group instead",
                     );
-                    format!("{sampler}/main")
+                    (sampler, "main")
                 }
             }
-            None => format!("{sampler}/main"),
+            None => (sampler, "main"),
         };
 
         let group = match groups.entry(group_key) {
@@ -1509,9 +1587,14 @@ fn create_v3(
                 // cached schema's member counts, so pushing values below
                 // never reallocates. The only heap allocations a hit group
                 // pays for are these — at most three `Vec::with_capacity`
-                // calls, one per kind, not one per member.
+                // calls, one per kind, not one per member. `cache.entries`
+                // is String-keyed (it persists across ticks, so it must own
+                // its keys) — this `format!` runs once per DISTINCT GROUP
+                // at first touch, not once per registry entry, so it isn't
+                // the cost `fold_group_identities`'s routing avoids.
                 if !needs_schema {
-                    if let Some(cached) = cache.entries.get(e.key()) {
+                    let (sampler, name) = *e.key();
+                    if let Some(cached) = cache.entries.get(&format!("{sampler}/{name}")) {
                         builder.counter_values = Vec::with_capacity(cached.schema.counters.len());
                         builder.gauge_values = Vec::with_capacity(cached.schema.gauges.len());
                         builder.histogram_values =
@@ -1528,10 +1611,11 @@ fn create_v3(
             // metadata, formatted member names, everything a receiver needs
             // to parse this group's values.
             //
-            // KEEP IN SYNC with create — see the doc comment on
-            // `metric_metadata` (the shared prefix) and below (the per-kind
-            // walk/naming/membership rules, which are NOT shared and are
-            // duplicated independently in each function).
+            // KEEP IN SYNC with create AND fold_group_identities — see the
+            // doc comment on `metric_metadata` (the shared prefix) and
+            // below (the per-kind walk/naming/membership rules, which are
+            // NOT shared and are duplicated independently in each of these
+            // three places).
             let (mut metadata, _) = metric_metadata(metric, &sampler_mods);
 
             // Strip unconditionally, not just when `declared`. On the
@@ -1551,9 +1635,17 @@ fn create_v3(
             metadata.remove("acq_group");
 
             let entry_name = format!("{metric_id}");
+            // Reused below wherever a member's identity is folded into
+            // `group.walk_identity` — see fix (a) on the `SkeletonCache`
+            // doc comment / `fold_group_identities`'s "miss-tick cache
+            // poisoning" note for why this walk folds its OWN identity
+            // instead of trusting the pre-pass's.
+            let metric_id_u64 = metric_id as u64;
 
             match value {
                 Value::Counter(v) => {
+                    group.walk_identity.counters =
+                        identity_fold(group.walk_identity.counters, &metric_id_u64.to_le_bytes());
                     group.counter_descs.push(MetricDesc {
                         name: entry_name,
                         metadata,
@@ -1561,6 +1653,8 @@ fn create_v3(
                     group.counter_values.push(Some(v));
                 }
                 Value::Gauge(v) => {
+                    group.walk_identity.gauges =
+                        identity_fold(group.walk_identity.gauges, &metric_id_u64.to_le_bytes());
                     group.gauge_descs.push(MetricDesc {
                         name: entry_name,
                         metadata,
@@ -1605,7 +1699,31 @@ fn create_v3(
                             // stamped arm below — see its comment: the value
                             // read and the metadata read are not atomic.
                             let v = g.counter_value(idx);
+                            let idx64 = idx as u64;
                             g.with_metadata(idx, &mut |m| {
+                                // Fold this member's identity from what
+                                // THIS walk observed — same
+                                // identity_fold/identity_fold_metadata
+                                // calls, same argument order, as
+                                // fold_group_identities' matching arm, so a
+                                // later tick's pre-pass can reproduce this
+                                // exact value on a genuine hit.
+                                group.walk_identity.counters = identity_fold(
+                                    group.walk_identity.counters,
+                                    &metric_id_u64.to_le_bytes(),
+                                );
+                                group.walk_identity.counters = identity_fold(
+                                    group.walk_identity.counters,
+                                    &idx64.to_le_bytes(),
+                                );
+                                // See identity_fold_metadata_presence's doc
+                                // comment for why the presence flag is
+                                // folded regardless of Some/None.
+                                group.walk_identity.counters = identity_fold_metadata_presence(
+                                    group.walk_identity.counters,
+                                    m,
+                                );
+
                                 let mut entry_metadata = metadata.clone();
                                 entry_metadata.insert("id".to_string(), idx.to_string());
                                 if let Some(m) = m {
@@ -1691,7 +1809,22 @@ fn create_v3(
                             // narrow it.
                             let mut entry_metadata = metadata.clone();
                             entry_metadata.insert("id".to_string(), idx.to_string());
+                            let idx64 = idx as u64;
                             g.with_metadata(idx, &mut |m| {
+                                // See the reader-stamped arm above for why
+                                // this folds the SAME bytes, same order.
+                                group.walk_identity.counters = identity_fold(
+                                    group.walk_identity.counters,
+                                    &metric_id_u64.to_le_bytes(),
+                                );
+                                group.walk_identity.counters = identity_fold(
+                                    group.walk_identity.counters,
+                                    &idx64.to_le_bytes(),
+                                );
+                                group.walk_identity.counters = identity_fold_metadata_presence(
+                                    group.walk_identity.counters,
+                                    m,
+                                );
                                 if let Some(m) = m {
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
@@ -1722,7 +1855,17 @@ fn create_v3(
                         idx_scratch.sort_unstable();
                         for &idx in idx_scratch.iter() {
                             let v = g.gauge_value(idx);
+                            let idx64 = idx as u64;
                             g.with_metadata(idx, &mut |m| {
+                                group.walk_identity.gauges = identity_fold(
+                                    group.walk_identity.gauges,
+                                    &metric_id_u64.to_le_bytes(),
+                                );
+                                group.walk_identity.gauges =
+                                    identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
+                                group.walk_identity.gauges =
+                                    identity_fold_metadata_presence(group.walk_identity.gauges, m);
+
                                 let mut entry_metadata = metadata.clone();
                                 entry_metadata.insert("id".to_string(), idx.to_string());
                                 if let Some(m) = m {
@@ -1770,7 +1913,16 @@ fn create_v3(
                             // above.
                             let mut entry_metadata = metadata.clone();
                             entry_metadata.insert("id".to_string(), idx.to_string());
+                            let idx64 = idx as u64;
                             g.with_metadata(idx, &mut |m| {
+                                group.walk_identity.gauges = identity_fold(
+                                    group.walk_identity.gauges,
+                                    &metric_id_u64.to_le_bytes(),
+                                );
+                                group.walk_identity.gauges =
+                                    identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
+                                group.walk_identity.gauges =
+                                    identity_fold_metadata_presence(group.walk_identity.gauges, m);
                                 if let Some(m) = m {
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
@@ -1805,6 +1957,16 @@ fn create_v3(
                         name: entry_name,
                         metadata: entry_metadata,
                     };
+                    // Same membership test as fold_group_identities'
+                    // matching arm (declared || h.load().is_some()) — fold
+                    // only when this member is actually about to be pushed
+                    // below.
+                    if declared || hv.is_some() {
+                        group.walk_identity.histograms = identity_fold(
+                            group.walk_identity.histograms,
+                            &metric_id_u64.to_le_bytes(),
+                        );
+                    }
                     if declared {
                         // Registration membership: this metric IS the
                         // member, full stop — `None` means "registered but
@@ -1901,7 +2063,14 @@ fn create_v3(
     // why the identity fold skips this group (and so `GroupBuilder::default`
     // always has `needs_schema: true`, matched here unconditionally).
     if !external_metrics.is_empty() {
-        let group = groups.entry("external/main".to_string()).or_default();
+        let group = groups.entry(("external", "main")).or_default();
+        debug_assert!(
+            group.needs_schema,
+            "\"external/main\" must always be a fresh GroupBuilder::default() (needs_schema: \
+             true) — fold_group_identities never produces a decision for it, so if this ever \
+             fires, something inserted an entry ahead of this block and left needs_schema \
+             false, which would wrongly skip building its schema below",
+        );
 
         // `get_active()`'s Vec order follows the store's `HashMap<MetricKey,
         // _>` iteration order, which is not a stable contract tick-to-tick
@@ -1985,7 +2154,7 @@ fn create_v3(
 
     let mut group_snapshots: Vec<GroupSnapshot> = Vec::with_capacity(groups.len());
 
-    for (group_name, group) in groups {
+    for (group_key, group) in groups {
         // A metric routes to (and so creates) a `GroupBuilder` before its
         // `Value` is matched above, so a metric whose value kind isn't one
         // `create_v3` knows how to expose (falls into the `_ => {}` arm —
@@ -2022,6 +2191,12 @@ fn create_v3(
             continue;
         }
 
+        // Wire-format name, built once per DISTINCT GROUP here (bounded by
+        // declared-group count, ~tens) — not once per registry entry (the
+        // `format!` this loop used to pay for at ROUTING time, before the
+        // `(&str, &str)` tuple-keyed `groups`/`group_registry` change).
+        let group_name = format!("{}/{}", group_key.0, group_key.1);
+
         // Reader-stamped groups (`PackedCounters` mmap-direct): `finish()`
         // PUBLISHES the bracket acquired at first touch — stamp-last, same
         // rule `AcquisitionGuard` enforces for sampler-stamped groups (see
@@ -2040,13 +2215,13 @@ fn create_v3(
         // stamped case `resolve_walk_window` guards against.
         let window = if let Some(guard) = group.reader_guard {
             guard.finish();
-            group_registry.get(&group_name).and_then(|ag| ag.window())
+            group_registry.get(&group_key).and_then(|ag| ag.window())
         } else {
             // Re-read the window here (after this group's values, above)
             // and reconcile with the first-touch read via
             // `resolve_walk_window` — see its doc comment for why a second
             // read is necessary.
-            let latest_window = group_registry.get(&group_name).and_then(|ag| ag.window());
+            let latest_window = group_registry.get(&group_key).and_then(|ag| ag.window());
             resolve_walk_window(group.window, latest_window)
         };
 
@@ -2058,16 +2233,25 @@ fn create_v3(
             };
             let hash = schema.hash();
             let schema = Arc::new(schema);
-            // `fold_group_identities` produces a decision for every group
-            // this walk can route to except `external/main` (see its doc
-            // comment) — default to `(0, 0)` there so an identity collision
-            // with a real fold is astronomically unlikely rather than
-            // panicking; `external/main` rebuilds every tick regardless, so
-            // its stored identity is never actually compared against.
-            let identity = group_decisions
-                .get(&group_name)
-                .map(|d| d.identity)
-                .unwrap_or((0, 0));
+            // Fix for miss-tick cache poisoning: the identity STORED here
+            // is folded from what THIS WALK actually collected
+            // (`group.walk_identity`, folded alongside every desc pushed
+            // above), NOT from `fold_group_identities`' pre-pass read. For
+            // a default group, those two can legitimately disagree (its
+            // membership is value-derived — see the "wider torn-read
+            // window" note on `fold_group_identities`): the pre-pass might
+            // trigger this rebuild based on a read that doesn't match what
+            // the walk below actually saw. Storing the pre-pass's identity
+            // anyway would bind THIS schema to an identity the walk didn't
+            // produce — if membership later drifts back to what the
+            // pre-pass saw, a future tick would wrongly HIT and ship this
+            // schema against a values vector collected under a DIFFERENT
+            // membership, forever (not self-correcting). Storing the
+            // walk's own identity makes the invariant "stored identity
+            // always describes the stored schema" hold unconditionally, so
+            // only the bounded, self-correcting hit-tick race (handled
+            // below) remains.
+            let identity = group.walk_identity.finish();
             cache.entries.insert(
                 group_name.clone(),
                 GroupSkeleton {
@@ -2079,17 +2263,56 @@ fn create_v3(
             cache.rebuilds += 1;
             (schema, hash)
         } else {
-            // Hit: `fold_group_identities` already confirmed this group's
-            // identity matches `cache`'s entry, so it must exist — hand out
-            // another reference to the same schema allocation instead of
-            // touching a single `MetricDesc`.
-            let cached = cache.entries.get(&group_name).unwrap_or_else(|| {
-                panic!(
-                    "group `{group_name}` marked needs_schema=false but has no cache entry — \
-                     fold_group_identities and this loop disagree on cache state"
-                )
-            });
-            (cached.schema.clone(), cached.hash)
+            // Hit path. `fold_group_identities`' pre-pass read a default
+            // group's value-derived membership separately from this walk
+            // (see its doc comment) — rarely, a value can cross the
+            // membership boundary in between, so the pre-pass's "hit"
+            // call and what THIS walk actually collected can disagree.
+            // Verify arity against the cached schema before trusting it:
+            // a mismatch means the cached schema does not actually
+            // describe this tick's collected values. Evict the entry and
+            // skip emitting this group for this tick rather than shipping
+            // a payload every conformant `GroupSnapshot::validate()` call
+            // would reject anyway — this is the self-correcting half of
+            // the same race; the miss path above closes the
+            // NON-self-correcting (permanent poisoning) half.
+            match cache.entries.get(&group_name) {
+                Some(cached)
+                    if cached.schema.counters.len() == group.counter_values.len()
+                        && cached.schema.gauges.len() == group.gauge_values.len()
+                        && cached.schema.histograms.len() == group.histogram_values.len() =>
+                {
+                    (cached.schema.clone(), cached.hash)
+                }
+                Some(cached) => {
+                    debug!(
+                        "SkeletonCache arity mismatch on a hit tick for group `{group_name}` \
+                         (cached schema counters={}/gauges={}/histograms={}, this tick's \
+                         collected values counters={}/gauges={}/histograms={}) — evicting the \
+                         stale entry and skipping this group for this tick",
+                        cached.schema.counters.len(),
+                        cached.schema.gauges.len(),
+                        cached.schema.histograms.len(),
+                        group.counter_values.len(),
+                        group.gauge_values.len(),
+                        group.histogram_values.len(),
+                    );
+                    cache.entries.remove(&group_name);
+                    continue;
+                }
+                None => {
+                    // Shouldn't happen (fold_group_identities only says
+                    // needs_schema=false when a cache entry exists for
+                    // this exact group), but defensive rather than a
+                    // panic: skip this group for this tick.
+                    debug!(
+                        "SkeletonCache: group `{group_name}` marked needs_schema=false but has \
+                         no cache entry — fold_group_identities and this loop disagree on \
+                         cache state; skipping this group for this tick"
+                    );
+                    continue;
+                }
+            }
         };
 
         group_snapshots.push(GroupSnapshot {
@@ -2764,16 +2987,20 @@ mod tests {
             .find(|g| g.name == "unattributed/stability_probe")
             .expect("group present in tick 1")
             .schema_hash;
-        let hash2 = s2
+        let group2 = s2
             .groups
             .iter()
             .find(|g| g.name == "unattributed/stability_probe")
-            .expect("group present in tick 2")
-            .schema_hash;
+            .expect("group present in tick 2");
         assert_eq!(
-            hash1, hash2,
+            hash1, group2.schema_hash,
             "schema hash is stable across ticks for an unchanged group"
         );
+        // A hit tick's schema/values must still satisfy the wire contract
+        // (arity matches, schema_hash matches the schema) — this is
+        // exactly what the arity check in create_v3's hit path exists to
+        // guarantee before a payload ever reaches this point.
+        assert_eq!(group2.validate(), Ok(()));
     }
 
     #[test]
@@ -3045,9 +3272,12 @@ mod tests {
         //
         // Measured on this run (2026-08-19, this worktree, debug build,
         // `--test-threads=1`): small_allocs and large_allocs came out
-        // IDENTICAL — 1,407 both times — meaning this fixture's growth from
-        // 8 to 512 members added exactly zero additional allocations on a
-        // hit. Under `cargo test`'s default parallelism the two
+        // IDENTICAL — 916 both times (down from 1,407 before the
+        // tuple-keyed routing fix below dropped the remaining
+        // O(registry-entry-count) `format!` cost) — meaning this fixture's
+        // growth from 8 to 512 members added exactly zero additional
+        // allocations on a hit. Under `cargo test`'s default parallelism
+        // the two
         // measurements are NOT taken back-to-back in isolation — other
         // tests mutate their OWN groups on other threads in between, and
         // `create_v3` walks the full process-wide registry every time, so
@@ -3373,6 +3603,92 @@ mod tests {
         );
     }
 
+    // Dedicated metric, no `acq_group` — routes to the shared
+    // "unattributed/main" default group like every other undeclared metric
+    // in this test binary (module-based sampler attribution gives test
+    // fixtures no way to land in a group of their own without declaring
+    // one). That sharing means this test can't cleanly assert "tick 2 IS a
+    // hit" (a concurrently running test could legitimately force a miss on
+    // "unattributed/main" for an unrelated reason — see the same caveat on
+    // `skeleton_cache_is_stable_across_ticks`), but it CAN assert "tick 2
+    // is NOT the same cached schema as tick 1" unconditionally: crossing
+    // zero -> nonzero is a real membership change that this test's own
+    // member forces regardless of what else is running, so non-equality
+    // must hold either way.
+    #[metric(name = "snapshot_v3_default_zero_cross_counter")]
+    static V3_DEFAULT_ZERO_CROSS_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(1);
+
+    #[test]
+    fn default_group_member_crossing_zero_to_nonzero_misses_and_validates() {
+        // Regression guard for the miss-tick cache-poisoning class of bug:
+        // a DEFAULT (non-declared) group's membership is value-derived (the
+        // transitional sentinel skip at zero — see `create_v3`'s doc
+        // comment), so a member crossing from absent (value 0) to present
+        // (nonzero) between two ticks is a REAL membership change. It must
+        // always produce a genuine miss (never get served from a cache
+        // entry that describes the earlier, absent state), and the
+        // resulting snapshot must satisfy `GroupSnapshot::validate()` on
+        // BOTH ticks — exactly the invariant a miss-tick identity/schema
+        // mismatch would violate.
+        V3_DEFAULT_ZERO_CROSS_COUNTERS.set(0, 0);
+
+        let find = |schema: &GroupSchema| {
+            schema.counters.iter().position(|d| {
+                d.metadata.get("metric").map(String::as_str)
+                    == Some("snapshot_v3_default_zero_cross_counter")
+            })
+        };
+
+        let mut cache = SkeletonCache::new();
+        let snap1 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s1) = snap1 else {
+            panic!("expected V3")
+        };
+        let group1 = s1
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/main")
+            .expect("default group present on tick 1");
+        assert_eq!(group1.validate(), Ok(()));
+        let schema1 = group1.schema.as_ref().expect("schema present").clone();
+        assert!(
+            find(&schema1).is_none(),
+            "value-0 member is sentinel-skipped from the default group's schema on tick 1"
+        );
+
+        // Cross zero -> nonzero: a real membership change.
+        V3_DEFAULT_ZERO_CROSS_COUNTERS.set(0, 1);
+        let snap2 = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        );
+        let Snapshot::V3(s2) = snap2 else {
+            panic!("expected V3")
+        };
+        let group2 = s2
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/main")
+            .expect("default group present on tick 2");
+        assert_eq!(group2.validate(), Ok(()));
+        let schema2 = group2.schema.as_ref().expect("schema present");
+        let idx = find(schema2).expect("newly-nonzero member now present in the schema");
+        assert_eq!(group2.counters[idx], Some(1));
+
+        assert!(
+            !Arc::ptr_eq(&schema1, schema2),
+            "a member crossing zero -> nonzero is a real membership change and must MISS \
+             — never reuse the cached Arc<GroupSchema> from before the member existed"
+        );
+    }
+
     // Dedicated group + metric: 8 backing entries, member_bound set to 3.
     // Distinct from `V3_DECLARED_COUNTER_GROUP` above (entries=2, no bound
     // — that test is this one's "unbounded behaves as today" control).
@@ -3569,6 +3885,7 @@ mod tests {
             names1, names2,
             "member order is deterministic (sorted), not input-order-dependent"
         );
+        assert_eq!(group2.validate(), Ok(()));
     }
 
     // --- reader-stamped (PackedCounters) groups --------------------------
@@ -3841,6 +4158,7 @@ mod tests {
             group.schema_hash, group2.schema_hash,
             "unchanged membership across ticks does not churn the schema hash"
         );
+        assert_eq!(group2.validate(), Ok(()));
 
         // A member exiting (metadata cleared, simulating a cgroup/task
         // going away) drops it from the schema and DOES force a rebuild —
