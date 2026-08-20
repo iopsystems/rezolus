@@ -442,6 +442,7 @@ mod tests {
                     windows: vec![None, None],
                 },
             ],
+            table_window: None,
         };
         write_table_parquet(&table).expect("fixture encodes")
     }
@@ -573,6 +574,7 @@ mod tests {
                     ],
                 },
             ],
+            table_window: None,
         };
         let bytes = write_table_parquet(&table).expect("fixture encodes");
 
@@ -643,6 +645,7 @@ mod tests {
                     windows: wa,
                 },
             ],
+            table_window: None,
         };
         let bytes = write_table_parquet(&table).expect("fixture encodes");
 

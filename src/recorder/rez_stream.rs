@@ -988,6 +988,7 @@ mod tests {
                 timestamps: vec![1_000, 2_000],
                 wall_offsets: vec![0],
                 columns: Vec::new(),
+                table_window: None,
             },
         }
     }
