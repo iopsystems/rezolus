@@ -456,3 +456,84 @@ simply didn't appear, not a regression. All five new sweep groups are
 windowed with live-CPU-multiple member counts (96/64/96/64/64 = 32 cores ×
 2–3); `cpu_branch_sweep` is windowed but all-null, as its commit predicted
 for a host with no branch PMU.
+
+## Addendum (2026-08-19): Stage 3d — allocation parity
+
+Closing measurement for this arc, at `6b2e5ce2`. The branch added an
+identity-hash pre-pass over the skeleton cache: on a cache hit, schema
+assembly is skipped entirely rather than rebuilt and compared — the
+`GroupSchema` itself is now `Arc`-shared from the metriken fork's borrowing
+metadata API, so a hit tick clones a handle instead of walking every
+member's descriptor.
+
+**Local allocation counts (not this host — a controlled harness measuring
+the exposition builder in isolation):** hit-tick allocations dropped to
+**916/tick**, and critically **independent of member count** — an 8-member
+group and a 512-member group both measured 916, delta 0. That is down from
+**1,407/tick before this round's tuple-key fix** (a stray per-tick key
+allocation in the cache lookup), and down from the pre-Stage-3d baseline,
+which scaled **O(members)** at roughly **8–10 allocations per member** (a
+512-member group would have cost on the order of 4,000–5,000 allocations
+per tick under the old path). The 916 that remain are believed to be the
+per-tick snapshot scaffolding (systemtime/duration/metadata wrapper, the
+group `Vec` itself, value-vector allocations) rather than schema work —
+consistent with the delta-0 result against member count.
+
+**On-host proxies, v2 vs v3, 300 s at 1 s scrape, same host, sequential (not
+interleaved — noted as a caveat below), all samplers:**
+
+| | wave-1 | wave-2 | **Stage 3d** |
+|---|---|---|---|
+| RSS ratio (v3/v2, steady-state median) | 1.33× | 1.20× | **1.02×** |
+
+| | v3 | v2 |
+|---|---|---|
+| RSS steady-state median (MB) | 74.7 | 73.0 |
+| RSS steady-state max (MB) | 74.9 | 77.0 |
+| CPU% steady-state median (`/proc/<pid>/stat` delta, 5 s cadence) | 0.59% | 1.75% |
+| CPU% steady-state max | 0.79% | 2.14% |
+| scrape wall-time median (30 sequential curls) | **9.60 ms** | 21.65 ms |
+| scrape wall-time p95 | 14.20 ms | 24.48 ms |
+
+RSS parity essentially arrived: **1.02×**, down from 1.33× (wave-1) and
+1.20× (wave-2) — the identity-hash skip shows up directly in resident
+memory, not just in the isolated allocation count. Scrape wall-time is
+**0.44× of v2** (56% faster) — the skipped schema assembly shows up exactly
+where predicted, in the endpoint that used to rebuild it every tick. CPU%
+also reads lower for v3 this round (0.59% vs 1.75%), continuing the pattern
+from every prior round, but now via a proper `/proc/<pid>/stat`-delta method
+at steady state rather than `ps`'s cumulative-since-start average used in
+earlier rounds — the two are not numerically comparable across rounds, only
+within this one.
+
+**Caveat:** the two 300 s arms ran sequentially (v3 first, then v2), not
+interleaved, on a shared host under whatever background workload was
+present at each window — a confound the design doc flagged as a nice-to-have
+before this round, not eliminated here. The RSS and scrape-time gaps are
+large enough (30–56%) that ordinary run-to-run workload variance is an
+unlikely full explanation, but a strict A/B (alternating short windows)
+would close this gap in the evidence if it is ever in question.
+
+**Sanity (v3, 300 ticks):** every tick decoded; group count 48–54 (the
+event-driven groups — `cpu_bandwidth`, gpu — coming and going, as in wave
+2/gap-closure); four spot-checked groups (`cpu_usage_cpu`,
+`blockio_requests_counters`, `cpu_perf_sweep`, `cpu_frequency_sweep`) each
+held **exactly one schema hash across all 300 ticks, zero changes** — the
+cache is doing its job on live hardware, not only under test. bytes/tick
+median 660,829, entries/tick median 5,392 — in the same range as wave 2
+(640,876 / 5,158.5), no regression from the identity-hash change.
+
+**Verdict: V3 has reached RSS parity with V2 on this host (1.02×, down from
+1.33× → 1.20× → 1.02× across three rounds) and now runs a materially
+*faster* scrape path (0.44× v2's wall time) — the allocation-parity work
+closes the headline gap this arc opened with.** It is not exact identity:
+74.7 MB vs 73.0 MB is a real ~1.7 MB difference, and the remaining terms are
+unmeasured here — the 916 residual allocations/tick (snapshot scaffolding,
+not schema) are the standing candidate, plus whatever V3-only state (the
+skeleton cache itself, group registry bookkeeping) V2 never allocates at
+all. Cardinality (entries/tick) was not re-measured against V2 this round
+and remains the earlier, already-explained gap (declared-vs-suppressed
+membership) — untouched by this change and not a target of it. For this
+arc's original question — does the acquisition-groups format hold up under
+measurement — the answer across all five rounds is yes, with the format
+now essentially cost-neutral against the format it replaces.
