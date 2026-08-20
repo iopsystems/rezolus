@@ -1385,6 +1385,13 @@ impl GroupTableBuilder {
         }
     }
 
+    /// Rows pushed so far — lets a caller that skipped some input rows (an
+    /// un-anchored WAL tail) tell "nothing pushed at all" from "pushed a
+    /// partial table" without inspecting the finished `RezTable`.
+    pub(crate) fn rows(&self) -> usize {
+        self.timestamps.len()
+    }
+
     fn col_len(col: &RezColumn) -> usize {
         match &col.values {
             RezValues::Counter(v) => v.len(),
@@ -1540,10 +1547,11 @@ impl GroupTableBuilder {
 
 /// The sampler a `.rez` table key belongs to. V3 acquisition-group tables are
 /// keyed `"<sampler>/<group>"`; a V2 (or windowless/default) sampler table's
-/// key never contains `/` (sampler labels are plain identifiers — see
-/// `group_by_sampler`'s `sampler_of`), so it is its own sampler. The manifest
-/// and filter unit stay the SAMPLER (the part before `/`), even though the
-/// underlying table key is finer-grained.
+/// key never contains `/` for every REGISTERED sampler of this build — see
+/// `group_by_sampler`'s `sampler_of` and
+/// `no_registered_sampler_name_contains_a_slash` — so it is its own sampler.
+/// The manifest and filter unit stay the SAMPLER (the part before `/`), even
+/// though the underlying table key is finer-grained.
 ///
 /// Not yet called from production code: `parquet filter`/`annotate`/`combine`
 /// still only rewrite the v2 tar container and report an explicit "not yet
@@ -1553,6 +1561,13 @@ impl GroupTableBuilder {
 /// `rez_v3_writer`'s `table_sampler_selects_a_samplers_group_tables_out_of_a_mixed_recording`
 /// against a real recording, so the selection rule is proven correct ahead of
 /// that CLI plumbing landing.
+///
+/// `parquet metadata` on a v3-native archive is a known, narrower instance of
+/// the same display gap: it lists one line per GROUP table (`describe_v3_string`
+/// in `parquet_tools::metadata`, driven by `RezDb::all_samplers`), so the
+/// user-visible unit there is `cpu_usage/percpu`, not the sampler — this
+/// function is exactly what closing that gap would group by, whenever it
+/// lands; not done here to avoid growing this change further.
 #[allow(dead_code)]
 pub fn table_sampler(table_key: &str) -> &str {
     table_key.split('/').next().unwrap_or(table_key)

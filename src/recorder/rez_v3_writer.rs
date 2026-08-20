@@ -653,8 +653,13 @@ fn materialize_sampler_wal_tail(
 }
 
 /// True for a V3 acquisition-group table key (`"<sampler>/<group>"`); false
-/// for a V1/V2 sampler table key, which never contains `/` (sampler labels
-/// are plain identifiers — see `group_by_sampler`'s `sampler_of`).
+/// for a V1/V2 sampler table key, which never contains `/` for every
+/// REGISTERED sampler of this build (see `group_by_sampler`'s `sampler_of`
+/// and `no_registered_sampler_name_contains_a_slash`, below). `sampler_of`
+/// itself reads the `"sampler"` metadata key straight off the wire,
+/// unvalidated — a hostile or merely unusual endpoint could in principle
+/// send a value containing `/` — which is exactly why this convention is
+/// backed by more than good naming: see the fail-closed backstop below.
 ///
 /// This is the ONLY discriminator available to [`materialize_wal_tail`]: a
 /// WAL row is an opaque BLOB keyed only by this string (see the WAL-key
@@ -739,11 +744,31 @@ pub(crate) fn decode_wal_group_row(bytes: &[u8]) -> Result<WalGroupRow, String> 
 }
 
 /// Encode a V3 acquisition-group's live WAL rows as one parquet segment —
-/// `None` when there is no tail. See [`WalGroupRow`] for why a decode walk
-/// needs no external schema cache: it carries the current schema forward
-/// across rows, requiring a `schema: Some` row before the first row that
+/// `None` when there is no tail (including a tail every row of which had to
+/// be skipped — see below). See [`WalGroupRow`] for why a decode walk needs
+/// no external schema cache: it carries the current schema forward across
+/// rows, normally requiring a `schema: Some` row before the first row that
 /// needs it (an invariant `StreamRecorderV3::ingest_v3` upholds by always
-/// anchoring a group's very first WAL row).
+/// anchoring a group's very first WAL row) — "normally" because retention
+/// can delete that anchor out from under a still-live span (see below).
+///
+/// **Un-anchored rows degrade, they do not fail the recording.** Hindsight
+/// retention (`RezDb::evict_before`) deletes WAL rows purely by `ts <
+/// cutoff`, with no awareness of which row anchors a group's schema — a
+/// `duration` under the seal policy's `max_age` (300s default) can delete a
+/// group's anchor row while its later, still-live rows survive. Erroring
+/// here on the resulting `schema: None` row with no matching anchor would
+/// propagate through `seal_batch` and kill the writer thread — a live,
+/// still-recording hindsight buffer going instantly and permanently
+/// unreadable over a retention/seal-cadence interaction, not a corrupt
+/// input. V1/V2 has no equivalent failure mode here (a column simply
+/// rebuilds with whatever metadata its own surviving WAL span re-anchors),
+/// so V3 matches that degrade-not-die posture: an un-anchored row — no
+/// current anchor, or a hash that does not match the current one (the same
+/// symptom a multi-anchor eviction gap would produce) — is skipped with a
+/// rate-limited warning rather than erroring, and materialization resumes
+/// from the next row that DOES carry a resolvable schema. A tail with no
+/// resolvable row at all yields `None`, the same as an empty tail.
 fn materialize_group_wal_tail(
     table_key: &str,
     rows: &[WalRow],
@@ -753,6 +778,7 @@ fn materialize_group_wal_tail(
     }
     let mut builder = GroupTableBuilder::new(table_key.to_string());
     let mut current: Option<((u64, u64), GroupSchema)> = None;
+    let mut warned_unanchored = false;
     for row in rows {
         let decoded = decode_wal_group_row(&row.row)?;
         let schema = match decoded.schema {
@@ -762,21 +788,22 @@ fn materialize_group_wal_tail(
             }
             None => match &current {
                 Some((hash, s)) if *hash == decoded.schema_hash => s,
-                Some((hash, _)) => {
-                    return Err(format!(
-                        "group {table_key} WAL tail row at ts={} references schema {:?} but \
-                         the last anchor in this span was {:?}",
-                        row.ts, decoded.schema_hash, hash
-                    )
-                    .into())
-                }
-                None => {
-                    return Err(format!(
-                        "group {table_key} WAL tail row at ts={} references schema {:?} \
-                         before any row in this span anchored it",
-                        row.ts, decoded.schema_hash
-                    )
-                    .into())
+                _ => {
+                    // No schema anchored yet, or the last anchor's hash does
+                    // not match this row's — either way there is nothing to
+                    // decode this row's values against. Skip it (and update
+                    // no state), warning once per materialization so a
+                    // retention-driven gap is visible without spamming.
+                    if !warned_unanchored {
+                        warn!(
+                            "group {table_key} WAL tail row at ts={} has no matching schema \
+                             anchor (likely evicted by retention); skipping until the next \
+                             anchored row (warned once)",
+                            row.ts
+                        );
+                        warned_unanchored = true;
+                    }
+                    continue;
                 }
             },
         };
@@ -790,6 +817,9 @@ fn materialize_group_wal_tail(
             &decoded.gauges,
             &decoded.histograms,
         )?;
+    }
+    if builder.rows() == 0 {
+        return Ok(None);
     }
     Ok(Some(write_table_parquet(&builder.finish())?))
 }
@@ -837,13 +867,27 @@ pub(crate) struct StreamRecorderV3 {
     /// segment's WAL span. Cleared for a sampler when it seals, so each segment
     /// re-anchors its own metadata — see `WalCell::metadata`.
     described: BTreeMap<String, HashSet<String>>,
-    /// V3 group schema cache: `(group_name, schema_hash) -> schema`, for the
-    /// life of the recording (NOT reset on rotation — see `segment_schema`
-    /// for the per-segment concern). Resolves a `schema: None` payload (the
-    /// agent's own cache-hit) and dedups a repeated `schema: Some` payload.
-    /// Only ever gets an entry AFTER `GroupSnapshot::validate()` passes —
-    /// never cache a schema that failed validation.
-    schemas: HashMap<(String, (u64, u64)), Arc<GroupSchema>>,
+    /// V3 group schema cache: `group_name -> ring of its last few
+    /// (schema_hash, schema)` generations, for the life of the recording (NOT
+    /// reset on rotation — see `segment_schema` for the per-segment concern).
+    /// Resolves a `schema: None` payload (the agent's own cache-hit) and
+    /// dedups a repeated `schema: Some` payload. Only ever gets an entry
+    /// AFTER `GroupSnapshot::validate()` passes — never cache a schema that
+    /// failed validation.
+    ///
+    /// **Bounded to [`SCHEMA_RING_LEN`] entries per name, not unbounded.**
+    /// A `HashMap<(name, hash), schema>` that never evicts re-introduces
+    /// exactly the unbounded growth V1/V2's `described` set was fixed to
+    /// avoid — a hash churns on every membership change (a cgroup added or
+    /// removed), each generation retaining a full `Vec<MetricDesc>` with a
+    /// per-metric `BTreeMap`, in the always-on hindsight process, with a
+    /// heavier payload than `described` ever carried. A ring is sufficient
+    /// because the AGENT'S own schema cache holds exactly ONE entry per group
+    /// name (metriken-exposition's producer contract), so a `schema: None`
+    /// payload can only ever reference the newest hash for that name — this
+    /// only needs slack for an in-flight transition (a schema change
+    /// straddling one scrape), not deep history.
+    schemas: HashMap<String, SchemaRing>,
     /// Per V3 group, the schema hash already embedded in a WAL row for the
     /// CURRENT segment's live WAL span. Cleared for a table when it seals
     /// (alongside `described`), so the next row after rotation re-anchors —
@@ -874,6 +918,18 @@ pub(crate) struct SchemaCacheStats {
     pub hits: u64,
     pub misses: u64,
 }
+
+/// Cap on cached schema generations kept PER GROUP NAME in
+/// `StreamRecorderV3::schemas`. The agent's own schema cache holds exactly
+/// one entry per group name, so a `schema: None` payload can only ever
+/// reference the newest hash for that name — 3 is generous headroom over the
+/// 1 the agent itself needs, enough slack for a schema change straddling one
+/// scrape without letting the cache grow with cgroup/task churn.
+const SCHEMA_RING_LEN: usize = 3;
+
+/// One group name's cached schema generations, oldest first — see
+/// `StreamRecorderV3::schemas` and [`SCHEMA_RING_LEN`].
+type SchemaRing = std::collections::VecDeque<((u64, u64), Arc<GroupSchema>)>;
 
 impl StreamRecorderV3 {
     pub(crate) fn new(handle: RezV3Writer) -> Self {
@@ -965,12 +1021,15 @@ impl StreamRecorderV3 {
             // `is_group_table_key` (`materialize_wal_tail`'s dispatch between
             // this sampler-cell path and `ingest_v3`'s group-row path) relies
             // entirely on a V1/V2 sampler key never containing `/` — see its
-            // doc. Sampler labels are code identifiers, not agent/user input
-            // (`group_by_sampler`'s `sampler_of` reads them straight off
-            // registered SAMPLERS entries or the `"unattributed"` fallback),
-            // so this can only fire on a naming drift, not on live data; a
-            // release build has the structural non-aliasing of `WalGroupRow`
-            // vs `Vec<WalCell>` as its backstop if this is ever violated.
+            // doc. This assert guards drift in THIS build's own registered
+            // sampler names (`no_registered_sampler_name_contains_a_slash`
+            // pins that half); it is not a wire-input validator — `sampler_of`
+            // reads the `"sampler"` metadata key straight off the wire,
+            // unvalidated, so a hostile or merely unusual endpoint could still
+            // reach this with `/` in a debug-off (release) build. The
+            // structural non-aliasing of `WalGroupRow` vs `Vec<WalCell>` is
+            // the backstop that actually covers that case: a decode error,
+            // not silent misrouting, either way.
             debug_assert!(
                 !sampler.contains('/'),
                 "sampler key {sampler:?} contains '/', which materialize_wal_tail's \
@@ -1056,6 +1115,25 @@ impl StreamRecorderV3 {
     ) -> Result<(), String> {
         let mut wal_rows = Vec::new();
         let mut accepted: Vec<(&str, u64, usize)> = Vec::new();
+        // Names already accepted THIS TICK. `group_by_sampler`'s V1/V2 path is
+        // structurally immune to a duplicate key — it groups into a
+        // `BTreeMap`, so a repeated sampler label just merges into one
+        // entry's entries — but V3 pushes one `WalRow` per group as it
+        // iterates the payload's own `Vec<GroupSnapshot>`, keyed by
+        // `g.name`. Two groups sharing a name in ONE tick would both pass the
+        // window-advance dedup below (it only compares against the PREVIOUS
+        // tick's key in `last_keys`, which pass 2 has not updated yet) and
+        // both get pushed into `wal_rows` with the same `(sampler, ts)` —
+        // a `wal` primary-key violation that fails the whole tick and kills
+        // the writer thread (`RezDb::insert_wal_rows` is one transaction).
+        // The rezolus agent cannot produce this (acquisition-group names are
+        // unique by construction), but `.rez` mode accepts ANY msgpack
+        // endpoint, and nothing about the WAL's PK-uniqueness reasoning
+        // (a monotonic recorder clock makes `ts` unique) says anything about
+        // a producer-supplied, possibly-duplicated `name`. First occurrence
+        // wins; every later one this tick is skipped with a rate-limited
+        // warning instead of taking the whole tick down.
+        let mut seen_this_tick: HashSet<&str> = HashSet::new();
         for g in groups {
             // The other half of the invariant `is_group_table_key` rests on:
             // a V3 group name is always `"<sampler>/<group>"` — see the
@@ -1069,6 +1147,16 @@ impl StreamRecorderV3 {
                  V1/V2 sampler-cell path",
                 g.name
             );
+            if !seen_this_tick.insert(g.name.as_str()) {
+                if self.warned.insert(format!("{}#duplicate-in-tick", g.name)) {
+                    warn!(
+                        "group {} appears more than once in one tick; keeping the first \
+                         occurrence and skipping the rest (warned once)",
+                        g.name
+                    );
+                }
+                continue;
+            }
             // Dedup FIRST, exactly as the V1/V2 path does (`ingest`, above):
             // a window that has not advanced is the same observation again,
             // so it costs nothing further — no validation, no schema/cache
@@ -1107,22 +1195,30 @@ impl StreamRecorderV3 {
             // truncated payload, not steady state (today's producer always
             // sends the schema, so this path is exercised only by malformed
             // input in practice).
-            let cache_key = (g.name.clone(), g.schema_hash);
             let schema: Arc<GroupSchema> = match &g.schema {
                 Some(s) => {
-                    match self.schemas.entry(cache_key) {
-                        std::collections::hash_map::Entry::Occupied(_) => {
-                            self.schema_stats.hits += 1;
+                    let ring = self.schemas.entry(g.name.clone()).or_default();
+                    if ring.iter().any(|(hash, _)| *hash == g.schema_hash) {
+                        self.schema_stats.hits += 1;
+                    } else {
+                        ring.push_back((g.schema_hash, Arc::clone(s)));
+                        // Evict the oldest generation once the ring runs over
+                        // its cap — see `SCHEMA_RING_LEN`'s doc for why 3 is
+                        // enough (the agent itself only ever needs the
+                        // newest).
+                        if ring.len() > SCHEMA_RING_LEN {
+                            ring.pop_front();
                         }
-                        std::collections::hash_map::Entry::Vacant(v) => {
-                            v.insert(Arc::clone(s));
-                            self.schema_stats.misses += 1;
-                        }
+                        self.schema_stats.misses += 1;
                     }
                     Arc::clone(s)
                 }
-                None => match self.schemas.get(&cache_key) {
-                    Some(s) => {
+                None => match self
+                    .schemas
+                    .get(g.name.as_str())
+                    .and_then(|ring| ring.iter().find(|(hash, _)| *hash == g.schema_hash))
+                {
+                    Some((_, s)) => {
                         self.schema_stats.hits += 1;
                         Arc::clone(s)
                     }
@@ -1130,7 +1226,9 @@ impl StreamRecorderV3 {
                         if self.warned.insert(format!("{}#unknown-schema", g.name)) {
                             warn!(
                                 "group {} sent schema: None for an unresolved schema hash \
-                                 {:?}; skipping (producer bug or truncated payload, warned once)",
+                                 {:?}; skipping (producer bug, a truncated payload, or a \
+                                 generation older than this recorder's schema ring, warned \
+                                 once)",
                                 g.name, g.schema_hash
                             );
                         }
@@ -2810,6 +2908,285 @@ mod tests {
                 .collect();
             selected.sort();
             assert_eq!(selected, vec!["cpu_usage/aggregate", "cpu_usage/percpu"]);
+        }
+
+        // -----------------------------------------------------------------
+        // Un-anchored WAL rows (Important 2): retention can delete a group's
+        // anchor row out from under a still-live span. materialize_wal_tail
+        // must degrade — skip what it cannot decode — not kill the writer.
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn materialize_wal_tail_skips_un_anchored_leading_rows() {
+            let sch = group_schema(&["0"]);
+            // Simulates retention having deleted this group's true anchor
+            // row: the oldest surviving row has `schema: None` and there is
+            // nothing before it in this span to resolve it against.
+            let unanchored = WalRow {
+                sampler: "cpu_usage/percpu".to_string(),
+                ts: 1_000,
+                wall_offset: 0,
+                row: encode_wal_group_row(&WalGroupRow {
+                    schema_hash: sch.hash(),
+                    schema: None,
+                    window: Some((900, 1_000)),
+                    counters: vec![Some(1)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                })
+                .unwrap(),
+            };
+            let anchored = WalRow {
+                sampler: "cpu_usage/percpu".to_string(),
+                ts: 2_000,
+                wall_offset: 0,
+                row: encode_wal_group_row(&WalGroupRow {
+                    schema_hash: sch.hash(),
+                    schema: Some(sch.clone()),
+                    window: Some((1_900, 2_000)),
+                    counters: vec![Some(2)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                })
+                .unwrap(),
+            };
+            let bytes = materialize_wal_tail("cpu_usage/percpu", &[unanchored, anchored])
+                .expect("materialization must not error on an un-anchored leading row")
+                .expect("the anchored row must still materialize");
+            let table =
+                crate::recorder::rez::read_table_parquet("cpu_usage/percpu".to_string(), bytes)
+                    .unwrap();
+            assert_eq!(
+                table.timestamps,
+                vec![2_000],
+                "the un-anchored row is skipped; the remainder materializes"
+            );
+        }
+
+        #[test]
+        fn materialize_wal_tail_of_a_fully_unanchored_span_is_none() {
+            let sch = group_schema(&["0"]);
+            let row = WalRow {
+                sampler: "cpu_usage/percpu".to_string(),
+                ts: 1_000,
+                wall_offset: 0,
+                row: encode_wal_group_row(&WalGroupRow {
+                    schema_hash: sch.hash(),
+                    schema: None,
+                    window: None,
+                    counters: vec![Some(1)],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                })
+                .unwrap(),
+            };
+            assert_eq!(
+                materialize_wal_tail("cpu_usage/percpu", &[row]).unwrap(),
+                None,
+                "a span with nothing resolvable at all is the same as an empty tail"
+            );
+        }
+
+        /// The end-to-end shape Important 2 actually describes: a hindsight
+        /// buffer whose retention deletes an anchor row out from under a
+        /// still-live group must keep sealing and stay readable, not die —
+        /// exercised with a REAL `evict_before` (via `StreamRecorderV3`) and
+        /// the exact rows it leaves behind, not a hand-built fixture.
+        ///
+        /// Three ticks, one schema change: tick 1 anchors schema A, tick 2
+        /// repeats it (relying on tick 1's anchor, `schema: None`), tick 3
+        /// changes to schema B — a fresh, self-carried anchor within the
+        /// SAME (never-sealed) live span, per `ingest_v3`'s per-segment
+        /// re-anchor rule (it fires on any hash change, not only rotation).
+        /// Evicting through tick 1 leaves tick 2 genuinely unresolvable (its
+        /// only anchor is gone) and tick 3 still resolvable (self-anchored)
+        /// — exactly the "skip the leading un-anchored rows, materialize
+        /// from the next anchor onward" shape, not the degenerate
+        /// everything-lost case `materialize_wal_tail_of_a_fully_unanchored_span_is_none`
+        /// covers.
+        #[test]
+        fn eviction_of_an_anchor_row_does_not_kill_the_writer() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.rez");
+            let (mut rec, rid) = recorder(&path, never_seals());
+
+            let sch_a = group_schema(&["0"]);
+            let sch_b = group_schema(&["0", "1"]); // distinct arity -> distinct hash
+
+            let g1 = group_snapshot(
+                "cpu_usage/percpu",
+                &sch_a,
+                vec![Some(1)],
+                Some(Window::new(900, 1_000)),
+                true,
+            );
+            rec.ingest(&v3_snap(1_000, vec![g1]), 1_000, 0).unwrap();
+            let g2 = group_snapshot(
+                "cpu_usage/percpu",
+                &sch_a,
+                vec![Some(2)],
+                Some(Window::new(1_000, 1_100)),
+                false,
+            );
+            rec.ingest(&v3_snap(1_100, vec![g2]), 1_100, 0).unwrap();
+            let g3 = group_snapshot(
+                "cpu_usage/percpu",
+                &sch_b,
+                vec![Some(3), Some(4)],
+                Some(Window::new(1_100, 1_200)),
+                true,
+            );
+            rec.ingest(&v3_snap(1_200, vec![g3]), 1_200, 0).unwrap();
+            rec.sync().unwrap();
+
+            // Evict everything through tick 1 (schema A's ONLY anchor row) —
+            // exactly what a short hindsight `duration` can do.
+            rec.evict_before(1_001).unwrap();
+            rec.sync().unwrap();
+
+            let db = RezDb::open(&path).unwrap();
+            let live = db.live_wal(rid, "cpu_usage/percpu").unwrap();
+            assert_eq!(
+                live.iter().map(|r| r.ts).collect::<Vec<_>>(),
+                vec![1_100, 1_200],
+                "tick 1's anchor row is gone; ticks 2 and 3 are still live"
+            );
+
+            // Materializing this span — exactly what `seal_batch` does with
+            // whatever `live_wal` returns — must not error. The old behavior
+            // (Err from materialize_group_wal_tail on tick 2's now-dangling
+            // reference) would fail seal_batch inside its one transaction,
+            // kill the writer thread, and take the whole recording down with
+            // it.
+            let bytes = materialize_wal_tail("cpu_usage/percpu", &live)
+                .expect("materializing a real, evicted-anchor live span must not error")
+                .expect("tick 3's self-anchored row must still materialize");
+            let table =
+                crate::recorder::rez::read_table_parquet("cpu_usage/percpu".to_string(), bytes)
+                    .unwrap();
+            assert_eq!(
+                table.timestamps,
+                vec![1_200],
+                "tick 2 (unresolvable — its only anchor was evicted) is skipped; \
+                 tick 3 (self-anchored) survives"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Duplicate group names in one tick (Important 4): the recorder
+        // accepts any msgpack endpoint, not just the rezolus agent, so a
+        // producer-supplied duplicate name must degrade, not take the
+        // recording down via a `(recording_id, sampler, ts)` PK violation.
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn duplicate_group_names_in_one_tick_do_not_kill_the_recording() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.rez");
+            let (mut rec, _rid) = recorder(&path, never_seals());
+
+            let sch = group_schema(&["0"]);
+            let w = Some(Window::new(0, 100));
+            let first = group_snapshot("cpu_usage/percpu", &sch, vec![Some(1)], w, true);
+            let second = group_snapshot("cpu_usage/percpu", &sch, vec![Some(2)], w, true);
+            rec.ingest(&v3_snap(1_000, vec![first, second]), 1_000, 0)
+                .unwrap();
+            assert_eq!(
+                rec.open_rows("cpu_usage/percpu"),
+                1,
+                "only the first occurrence of a name repeated in one tick is kept"
+            );
+
+            // Prove the writer is genuinely still alive, not just that this
+            // one hand-off happened to return Ok — the old bug's PK
+            // violation surfaces asynchronously, on a LATER hand-off, not
+            // necessarily this one.
+            for i in 1..=3u64 {
+                let g = group_snapshot(
+                    "cpu_usage/percpu",
+                    &sch,
+                    vec![Some(10 + i)],
+                    Some(Window::new(1_000 + i * 100, 1_000 + i * 100 + 50)),
+                    false,
+                );
+                rec.ingest(&v3_snap(2_000 + i, vec![g]), 2_000 + i, 0)
+                    .unwrap();
+            }
+            rec.sync()
+                .expect("the writer must still be accepting ticks after a duplicate group name");
+            assert_eq!(
+                rec.open_rows("cpu_usage/percpu"),
+                4,
+                "the deduplicated first tick plus the three that followed"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Schema cache bound (Important 1): the cache must not grow without
+        // bound as a group's schema churns (e.g. cgroup add/remove).
+        // -----------------------------------------------------------------
+
+        #[test]
+        fn the_schema_cache_stays_bounded_per_name() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.rez");
+            let (mut rec, _rid) = recorder(&path, never_seals());
+
+            // SCHEMA_RING_LEN + 1 distinct schemas for the SAME group name —
+            // each with a different member count, so each hashes distinctly.
+            let member_names: Vec<String> = (0..(SCHEMA_RING_LEN + 1))
+                .map(|n| format!("m{n}"))
+                .collect();
+            let schemas: Vec<GroupSchema> = (1..=(SCHEMA_RING_LEN + 1))
+                .map(|n| {
+                    group_schema(
+                        &member_names[..n]
+                            .iter()
+                            .map(String::as_str)
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect();
+
+            for (i, sch) in schemas.iter().enumerate() {
+                let counters = vec![Some(1); sch.counters.len()];
+                let g = group_snapshot(
+                    "cpu_usage/percpu",
+                    sch,
+                    counters,
+                    Some(Window::new(i as u64 * 100, i as u64 * 100 + 50)),
+                    true,
+                );
+                rec.ingest(&v3_snap(1_000 + i as u64, vec![g]), 1_000 + i as u64, 0)
+                    .unwrap();
+            }
+            assert_eq!(
+                rec.schema_cache_stats(),
+                SchemaCacheStats {
+                    hits: 0,
+                    misses: (SCHEMA_RING_LEN + 1) as u64
+                },
+                "every schema here is genuinely new"
+            );
+            let rows_before = rec.open_rows("cpu_usage/percpu");
+
+            // The FIRST schema has now aged out of the bounded ring (only
+            // the newest SCHEMA_RING_LEN generations are kept) — a
+            // `schema: None` payload referencing it must be treated as
+            // unresolved, not silently served from an unbounded cache.
+            let stale = group_snapshot(
+                "cpu_usage/percpu",
+                &schemas[0],
+                vec![Some(1); schemas[0].counters.len()],
+                Some(Window::new(9_000, 9_050)),
+                false,
+            );
+            rec.ingest(&v3_snap(2_000, vec![stale]), 2_000, 0).unwrap();
+            assert_eq!(
+                rec.open_rows("cpu_usage/percpu"),
+                rows_before,
+                "a schema evicted from the ring must not produce a row"
+            );
         }
     }
 }
