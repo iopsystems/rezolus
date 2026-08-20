@@ -157,6 +157,12 @@ because coarse-interval recordings are slow.
 - Values differ between arms by construction (sequential runs, live
   workload). Shape, series counts and band structure were compared; value
   equality was never available and was not asserted.
+- The `parquet split-groups` dev subcommand that produced the 2026-08-18
+  gate's prediction was deleted once this measurement landed — its own
+  header said to remove it when the real grouped writer shipped, and the
+  real writer is now measured. The two earlier entries in this arc still
+  reference it; they are a record of what was run at the time, not a
+  pointer to something you can run today.
 - Both arms used one binary at branch head `0e447844`, verified fresh
   before measuring — an earlier attempt in this session came within one
   step of measuring a day-old binary that predated Parts B and C.

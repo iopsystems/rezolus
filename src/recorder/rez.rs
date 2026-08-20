@@ -1610,10 +1610,9 @@ mod table_sampler_tests {
     #[test]
     fn splits_a_group_table_key_at_the_first_slash() {
         assert_eq!(table_sampler("cpu_usage/percpu"), "cpu_usage");
-        // A group name may itself contain further structure (e.g. a
-        // `split_groups.rs`-style `acq_0`), but only the FIRST segment is the
-        // sampler — the manifest/filter unit stays coarse even if a group
-        // name were to contain another `/`.
+        // A group name may itself contain further structure, but only the
+        // FIRST segment is the sampler — the manifest/filter unit stays
+        // coarse even if a group name were to contain another `/`.
         assert_eq!(table_sampler("cpu_usage/acq_0"), "cpu_usage");
     }
 

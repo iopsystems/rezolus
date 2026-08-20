@@ -88,9 +88,11 @@ target/release/rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --d
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
 target/release/rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
 target/release/rezolus parquet filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
-# .rez archives: metadata describes the manifest (recordings, labels, per-sampler tables + cadence);
+# .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
+#   tables appear as <sampler>/<group>);
 # combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);
-# filter file.rez --samplers cpu_usage,scheduler -o slim.rez drops whole per-sampler tables not listed;
+# filter file.rez --samplers cpu_usage,scheduler -o slim.rez drops tables whose sampler is not listed
+#   (v2/tar archives only; a v3/SQLite archive errors clearly);
 # annotate file.rez --queries kpis.json embeds KPIs into each recording's manifest (--queries required for .rez).
 
 # MCP - AI analysis server or CLI commands
@@ -118,7 +120,7 @@ The binary operates in seven modes via subcommands:
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling `.rez` v3 buffer on disk (the streaming v3 writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. The buffer is readable live by the viewer/MCP/`parquet metadata`; a snapshot is a `VACUUM INTO` copy taken without pausing the recording.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison, >2 shows the first two), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series and non-rate queries show none). `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops whole per-sampler tables), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -f raw`). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed — v2/tar archives only), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -f raw`). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
 
 ### Sampler Architecture
 
@@ -155,7 +157,17 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 
 ### `.rez` Archive Format
 
-The `.rez` format (`src/recorder/rez.rs`, `src/rez_reader.rs`) is a tar archive rather than a single parquet file. It holds a top-level `manifest.json` plus one parquet table per sampler under each recording's directory (`<dir>/<sampler>.parquet`). Each sampler records at its own cadence, and every metric carries per-observation acquisition-window columns (`<m>:window_begin`/`<m>:window_width`) that the query engine consumes to compute `rate()`/`irate()` uncertainty bounds. A `.rez` is always `source=rezolus` and requires a rezolus/msgpack endpoint to produce (not Prometheus). The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`); a multi-recording `.rez` (built by `record` and `parquet combine`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels.
+The `.rez` format (`src/recorder/rez.rs`, `src/rez_reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
+
+- **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
+- **v3 (SQLite)** — a SQLite container (`src/recorder/rez_sqlite.rs`, `src/recorder/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
+
+Each sampler records at its own cadence. Table granularity depends on the snapshot format the agent produced:
+
+- From a **SnapshotV2** agent, a table holds a whole sampler and each metric carries its own acquisition-window columns (`<m>:window_begin`/`<m>:window_width`).
+- From a **SnapshotV3** agent, tables are per *acquisition group* and keyed `<sampler>/<group>` (see "Acquisition Groups" in `docs/principles.md`, principle 18). Because a group is by definition one read with one window, the table carries a single table-level window pair — bare `:window_begin`/`:window_width` with no metric id — applying to every metric in it. `table_sampler()` splits a table key at the first `/`, so the sampler stays the manifest/filter unit, and the reader unions a sampler's group tables (dispatch by metric name — no timestamp join, no column concatenation, no null filling).
+
+Either way the query engine consumes the window columns to compute `rate()`/`irate()` uncertainty bounds. A `.rez` is always `source=rezolus` and requires a rezolus/msgpack endpoint to produce (not Prometheus). The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`); a multi-recording `.rez` (built by `record` and `parquet combine`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels.
 
 ### Service Extensions
 
