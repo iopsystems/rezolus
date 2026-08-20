@@ -376,6 +376,14 @@ fn inject_provenance(
             // labeled.
             for group in &mut v3.groups {
                 if let Some(schema) = &mut group.schema {
+                    // `schema` is `Arc<GroupSchema>` — the recorder owns this
+                    // decoded snapshot outright (nothing else holds a
+                    // reference into it yet), so `Arc::make_mut` is a no-op
+                    // clone-on-write here, not a real copy: it rewrites
+                    // labels in place and only allocates if some other
+                    // holder is somehow still attached, which never happens
+                    // on this path.
+                    let schema = Arc::make_mut(schema);
                     for desc in schema
                         .counters
                         .iter_mut()
@@ -1607,7 +1615,7 @@ mod tests {
         let labeled_group = GroupSnapshot {
             name: "cpu_usage/percpu".to_string(),
             schema_hash: schema.hash(),
-            schema: Some(schema),
+            schema: Some(schema.into()),
             window: None,
             counters: vec![Some(42)],
             gauges: Vec::new(),

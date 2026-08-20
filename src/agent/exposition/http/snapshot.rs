@@ -762,7 +762,7 @@ pub(crate) struct SkeletonCache {
 }
 
 struct GroupSkeleton {
-    schema: GroupSchema,
+    schema: Arc<GroupSchema>,
     hash: (u64, u64),
 }
 
@@ -1548,9 +1548,10 @@ fn create_v3(
         // names-only cache is unsound (metadata mutates in place at a
         // stable index when the kernel recycles a pid/cgroup id).
         let (schema, hash) = match cache.entries.get(&group_name) {
-            Some(cached) if cached.schema == schema => (cached.schema.clone(), cached.hash),
+            Some(cached) if *cached.schema == schema => (cached.schema.clone(), cached.hash),
             _ => {
                 let hash = schema.hash();
+                let schema = Arc::new(schema);
                 cache.entries.insert(
                     group_name.clone(),
                     GroupSkeleton {

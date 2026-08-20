@@ -1761,7 +1761,7 @@ mod recorder_tests {
         let group = GroupSnapshot {
             name: "cpu_usage/percpu".to_string(),
             schema_hash: schema.hash(),
-            schema: Some(schema),
+            schema: Some(schema.into()),
             window: None,
             counters: vec![Some(7)],
             gauges: Vec::new(),
