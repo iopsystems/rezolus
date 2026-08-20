@@ -2193,7 +2193,7 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.10.0"
-source = "git+https://github.com/brayniac/metriken?rev=0df015af9c3583430577bbb57dac8e93b417396f#0df015af9c3583430577bbb57dac8e93b417396f"
+source = "git+https://github.com/brayniac/metriken?rev=9236a2195d7050babfcb2a5295d78d9fdfb2c057#9236a2195d7050babfcb2a5295d78d9fdfb2c057"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2205,7 +2205,7 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.3.0"
-source = "git+https://github.com/brayniac/metriken?rev=0df015af9c3583430577bbb57dac8e93b417396f#0df015af9c3583430577bbb57dac8e93b417396f"
+source = "git+https://github.com/brayniac/metriken?rev=9236a2195d7050babfcb2a5295d78d9fdfb2c057#9236a2195d7050babfcb2a5295d78d9fdfb2c057"
 dependencies = [
  "histogram",
  "linkme",
@@ -2217,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
-source = "git+https://github.com/brayniac/metriken?rev=0df015af9c3583430577bbb57dac8e93b417396f#0df015af9c3583430577bbb57dac8e93b417396f"
+source = "git+https://github.com/brayniac/metriken?rev=9236a2195d7050babfcb2a5295d78d9fdfb2c057#9236a2195d7050babfcb2a5295d78d9fdfb2c057"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2228,7 +2228,7 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.18.0"
-source = "git+https://github.com/brayniac/metriken?rev=0df015af9c3583430577bbb57dac8e93b417396f#0df015af9c3583430577bbb57dac8e93b417396f"
+source = "git+https://github.com/brayniac/metriken?rev=9236a2195d7050babfcb2a5295d78d9fdfb2c057#9236a2195d7050babfcb2a5295d78d9fdfb2c057"
 dependencies = [
  "arrow",
  "chrono",
@@ -2242,7 +2242,7 @@ dependencies = [
 [[package]]
 name = "metriken-query"
 version = "0.18.0"
-source = "git+https://github.com/brayniac/metriken?rev=0df015af9c3583430577bbb57dac8e93b417396f#0df015af9c3583430577bbb57dac8e93b417396f"
+source = "git+https://github.com/brayniac/metriken?rev=9236a2195d7050babfcb2a5295d78d9fdfb2c057#9236a2195d7050babfcb2a5295d78d9fdfb2c057"
 dependencies = [
  "arrow",
  "bytes",
