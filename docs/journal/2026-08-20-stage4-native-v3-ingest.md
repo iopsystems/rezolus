@@ -88,6 +88,19 @@ Production cadence is where the design is aimed, so this is the right
 trade. But a coarse-interval recording is measurably slower to query under
 v3, and that belongs on the record rather than in a footnote.
 
+**Keep the absolute numbers in view, though: the whole 1 s spread is
+120–156 ms.** The regression is 16–46 ms on queries that all finish in
+about a seventh of a second — not something a viewer user could perceive.
+These are also whole-process timings (each rep shells out to `mcp query`,
+so binary startup, archive open and manifest parse sit inside that ~120 ms
+floor), which is exactly why a fixed per-table cost dominates at this
+scale: the query work itself is a small slice of the total, and v3 pays
+about twice the open cost against a near-constant baseline. The honest
+statement is not "v3 is slow at 1 Hz" but "at small archive sizes the
+layout difference is swamped by fixed costs, and v3 carries slightly more
+of them." Where the time actually hurts — 260 MB archives, second-plus
+queries — v3 halves it.
+
 ### `rate()` bands are back
 
 The gate's split arm produced no uncertainty bands at all. Both arms now do:
@@ -132,8 +145,12 @@ set.
 
 The honest qualifier: this holds at production cadence. At 1 s the same
 queries are 1.13–1.42× slower under v3, because the fixed cost of opening
-about twice as many tables stops being repaid by narrower reads. Anyone
-recording at coarse intervals should know that before flipping the format.
+about twice as many tables stops being repaid by narrower reads. In
+absolute terms that is 136–156 ms against 110–122 ms — a 16–46 ms
+difference on sub-200 ms queries, invisible in a viewer and not a reason to
+avoid the format. It is recorded because the *direction* reverses, which is
+the part a future reader needs to know when reasoning about layout, not
+because coarse-interval recordings are slow.
 
 ## Notes
 
