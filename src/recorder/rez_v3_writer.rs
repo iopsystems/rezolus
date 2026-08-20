@@ -666,6 +666,13 @@ fn materialize_sampler_wal_tail(
 /// wrong: `decode_wal_group_row`/`decode_wal_row` decode structurally
 /// different msgpack shapes (a `WalGroupRow` struct vs. an array of
 /// `WalCell`s) and error rather than silently misinterpreting the bytes.
+///
+/// The convention itself is enforced at debug build time by a
+/// `debug_assert!` at each end (`ingest`'s V1/V2 loop and `ingest_v3`'s
+/// group loop, both in `StreamRecorderV3`) plus
+/// `no_registered_sampler_name_contains_a_slash` pinning the invariant
+/// against every registered `SAMPLERS` entry; the structural non-aliasing
+/// above is the release-build backstop if that is ever violated anyway.
 pub(crate) fn is_group_table_key(table_key: &str) -> bool {
     table_key.contains('/')
 }
@@ -955,6 +962,21 @@ impl StreamRecorderV3 {
         let mut wal_rows = Vec::new();
         let mut accepted = Vec::new();
         for (sampler, entries) in group_by_sampler(snapshot) {
+            // `is_group_table_key` (`materialize_wal_tail`'s dispatch between
+            // this sampler-cell path and `ingest_v3`'s group-row path) relies
+            // entirely on a V1/V2 sampler key never containing `/` — see its
+            // doc. Sampler labels are code identifiers, not agent/user input
+            // (`group_by_sampler`'s `sampler_of` reads them straight off
+            // registered SAMPLERS entries or the `"unattributed"` fallback),
+            // so this can only fire on a naming drift, not on live data; a
+            // release build has the structural non-aliasing of `WalGroupRow`
+            // vs `Vec<WalCell>` as its backstop if this is ever violated.
+            debug_assert!(
+                !sampler.contains('/'),
+                "sampler key {sampler:?} contains '/', which materialize_wal_tail's \
+                 is_group_table_key reserves for V3 acquisition-group table keys — \
+                 this sampler would be misrouted to the group decode path"
+            );
             let key = dedup_key(&entries, anchored_ts);
             if let Some(&last) = self.last_keys.get(sampler) {
                 if key <= last {
@@ -1035,6 +1057,18 @@ impl StreamRecorderV3 {
         let mut wal_rows = Vec::new();
         let mut accepted: Vec<(&str, u64, usize)> = Vec::new();
         for g in groups {
+            // The other half of the invariant `is_group_table_key` rests on:
+            // a V3 group name is always `"<sampler>/<group>"` — see the
+            // matching assertion (and its rationale) in `ingest`'s V1/V2
+            // loop, above.
+            debug_assert!(
+                g.name.contains('/'),
+                "group name {:?} contains no '/', which materialize_wal_tail's \
+                 is_group_table_key requires to route a V3 acquisition-group table \
+                 to the group decode path — this group would be misrouted to the \
+                 V1/V2 sampler-cell path",
+                g.name
+            );
             // Dedup FIRST, exactly as the V1/V2 path does (`ingest`, above):
             // a window that has not advanced is the same observation again,
             // so it costs nothing further — no validation, no schema/cache

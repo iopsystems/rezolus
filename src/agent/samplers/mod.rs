@@ -303,4 +303,31 @@ mod attribution_tests {
             );
         }
     }
+
+    /// The invariant `.rez`'s V3 native ingest rests on
+    /// (`src/recorder/rez_v3_writer.rs`'s `is_group_table_key`): a V1/V2
+    /// sampler table key is never mistaken for a V3 acquisition-group table
+    /// key (`"<sampler>/<group>"`) because a plain sampler name never
+    /// contains `/`. That discriminator is a naming convention doing
+    /// structural work — this pins it against every name this binary can
+    /// actually produce, the same way
+    /// `acquisition_groups_have_unique_names_and_avoid_the_reserved_main_name`
+    /// pins the acquisition-group naming rule above. A future sampler named
+    /// with a `/` (there is no reason to, but nothing else stops it) would
+    /// silently misroute its `.rez` table to the group decode path; this
+    /// test — plus the `debug_assert!`s at both `StreamRecorderV3::ingest`
+    /// and `ingest_v3`'s per-row loops — turns that into a loud failure
+    /// instead.
+    #[test]
+    fn no_registered_sampler_name_contains_a_slash() {
+        for entry in super::SAMPLERS {
+            assert!(
+                !entry.name.contains('/'),
+                "sampler {:?} (module {}) contains '/', which `.rez`'s \
+                 is_group_table_key reserves for V3 acquisition-group table keys",
+                entry.name,
+                entry.module
+            );
+        }
+    }
 }
