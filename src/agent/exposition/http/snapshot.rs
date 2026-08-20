@@ -1023,10 +1023,18 @@ struct GroupDecision {
 /// crosses the zero/`None` membership boundary in that window can make a
 /// default group's identity (this pass) and its actual collected
 /// membership (the main walk) disagree for that one tick. The failure mode
-/// is bounded and self-correcting: `GroupSnapshot::validate()` catches the
-/// resulting arity mismatch, a conformant receiver skips that group for
-/// that tick instead of misbinding values to labels, and the next tick's
-/// identity fold reflects reality again. Not eliminated because doing so
+/// is bounded and contained at the agent: on a miss the stored identity is
+/// folded from what the walk itself collected (so cache entries are always
+/// self-consistent), and on a hit the emit site compares per-kind value
+/// lengths against the cached schema and, on a mismatch, evicts the entry
+/// and skips emitting that group — nothing invalid reaches the wire, and
+/// the next tick rebuilds. One residual: the length check is a proxy for
+/// identity, so an *equal-arity* membership swap inside the window (one
+/// member drops below the sentinel while another crosses above it) would
+/// pass it and bind this tick's values to the previous schema's labels.
+/// Closing that means re-folding identity on the hit path, which costs the
+/// per-member metadata read the hit path exists to avoid; recorded as an
+/// accepted trade rather than taken. Not eliminated outright because doing so
 /// would mean re-merging the two passes and losing the hit-path allocation
 /// win this cache exists for; named here so it's a known, accepted
 /// trade-off rather than a surprise a reviewer has to rediscover. Declared
@@ -2297,6 +2305,17 @@ fn create_v3(
                         group.gauge_values.len(),
                         group.histogram_values.len(),
                     );
+                    // Note: for a reader-stamped group this `continue`
+                    // runs after `guard.finish()` above, so the window is
+                    // published for a tick whose group we then drop —
+                    // unlike the empty-group skip, which deliberately
+                    // discards its guard. Unreachable today: reader-stamped
+                    // implies declared, whose membership is
+                    // registration-derived and therefore identical in both
+                    // passes, so this arm cannot be reached with a reader
+                    // guard in hand. If a future membership rule breaks
+                    // that implication, move the arity check above the
+                    // window resolution.
                     cache.entries.remove(&group_name);
                     continue;
                 }
