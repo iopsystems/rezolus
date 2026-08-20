@@ -1145,6 +1145,29 @@ pub fn run(config: RecordingConfig) {
                         // the recorder does not: it is agent-side config, not
                         // negotiated over HTTP, and `.rez` mode serves V1/V2/V3
                         // endpoints alike from this one call site.
+                        //
+                        // Correction to this decision's original reasoning
+                        // (recorded here rather than by editing the already-
+                        // committed history): a "try SnapshotV3 first, fall
+                        // back to the untagged decode" scheme was rejected
+                        // partly on the claim that a V2 payload with an empty
+                        // `counters` vec could decode as a spurious
+                        // empty-`groups` SnapshotV3 by reading only 4 of the
+                        // 6 top-level array elements and silently ignoring
+                        // the rest. That claim is wrong:
+                        // metriken-exposition's own
+                        // `trailing_extra_field_errors_not_ignored` test
+                        // shows a too-long positional payload FAILS a
+                        // struct's decode rather than having the extra
+                        // elements silently ignored, so that specific
+                        // landmine does not exist even without a hand-rolled
+                        // trailing-byte check. The rest of the decision
+                        // stands on its own: the recorder still cannot know
+                        // an endpoint's `snapshot_format` ahead of time, so
+                        // there is no reliable way to pick "try V3 first" over
+                        // "try the untagged decode" without guessing wrong on
+                        // most of a V1/V2-heavy fleet — `from_msgpack` is
+                        // still the right-sized, version-agnostic fix here.
                         if rez_mode {
                             match metriken_exposition::Snapshot::from_msgpack(&body) {
                                 Ok(snapshot) => {
