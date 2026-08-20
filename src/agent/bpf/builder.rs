@@ -451,6 +451,9 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static AcquisitionGroup,
     )>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
+    /// The single [`AcquisitionGroup`] shared by every `.perf_event()` call
+    /// in this builder, if any were made. See `perf_event`'s doc comment.
+    perf_group: Option<&'static AcquisitionGroup>,
     packed_counters: Vec<(
         &'static str,
         &'static CounterGroup,
@@ -497,6 +500,7 @@ where
             maps: Vec::new(),
             cpu_counters: Vec::new(),
             perf_events: Vec::new(),
+            perf_group: None,
             packed_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
@@ -768,7 +772,7 @@ where
 
             let mut perf_counters = PerfCounters::new(self.name);
 
-            for (name, event, group) in self.perf_events.into_iter() {
+            for (name, event, target) in self.perf_events.into_iter() {
                 let map = skel.map(name);
 
                 for cpu in 0..cpus {
@@ -797,9 +801,17 @@ where
                             MapFlags::ANY,
                         );
 
-                        perf_counters.push(cpu, counter, group);
+                        perf_counters.push(cpu, counter, target);
                     }
                 }
+            }
+
+            // Boot-fixed population bound, same rationale as
+            // `CpuCounters::new` (principle 18): the real number of per-CPU
+            // slots this sweep will ever populate, not each member
+            // `CounterGroup`'s `MAX_CPUS`-sized backing array.
+            if let Some(group) = self.perf_group {
+                group.set_member_bound(possible_cpus());
             }
 
             perf_counters.spawn(perf_threads_tx.clone(), perf_sync_tx.clone());
@@ -937,6 +949,7 @@ where
             sync: sync2,
             perf_threads,
             perf_sync,
+            perf_group: self.perf_group,
         })
     }
 
@@ -1012,13 +1025,36 @@ where
     }
 
     /// Specify a perf event array name and an associated perf event.
+    /// `counters` is the per-CPU target metric; `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets the perf-thread
+    /// sweep that reads it (see `PerfCounters`/`AsyncBpf::refresh`'s
+    /// bracket). Every `.perf_event()` call in one builder is merged, by
+    /// the underlying `PerfCounters` machinery, into ONE per-CPU sweep
+    /// triggered and joined together each refresh — so `group` must name
+    /// the SAME `&'static AcquisitionGroup` across every call in a
+    /// builder, exactly like several `.histogram()`/`.packed_counters()`
+    /// calls sharing one like-entities group (debug-asserted).
     pub fn perf_event(
         mut self,
         name: &'static str,
         event: PerfEvent,
-        group: &'static CounterGroup,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.perf_events.push((name, event, group));
+        self.perf_events.push((name, event, counters));
+
+        if let Some(existing) = self.perf_group {
+            debug_assert!(
+                std::ptr::eq(existing, group),
+                "all .perf_event() calls in one BpfBuilder must share the same \
+                 AcquisitionGroup: the underlying per-CPU sweep merges them into \
+                 one read section regardless of how many .perf_event() calls \
+                 registered it"
+            );
+        } else {
+            self.perf_group = Some(group);
+        }
+
         self
     }
 

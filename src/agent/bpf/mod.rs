@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use crate::agent::samplers::Sampler;
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::GroupMetadata;
 use crate::*;
 
@@ -244,6 +245,11 @@ pub struct AsyncBpf {
     sync: SyncPrimitive,
     perf_threads: Vec<std::thread::JoinHandle<()>>,
     perf_sync: Vec<SyncPrimitive>,
+    /// The declared [`AcquisitionGroup`] for this sampler's `.perf_event()`
+    /// registrations, if it has any (see `Builder::perf_event`). `None` for
+    /// every BPF sampler that never calls `.perf_event()` — the bracket
+    /// below is then a no-op, same as before this field existed.
+    perf_group: Option<&'static AcquisitionGroup>,
 }
 
 #[async_trait]
@@ -267,6 +273,20 @@ impl Sampler for AsyncBpf {
             }
         }
 
+        // Brackets the perf-thread sweep only (not the BPF map refresh
+        // above, which has its own per-map groups): `acquire()` before
+        // triggering the thread(s), `finish()` only after `join_all`
+        // confirms every thread has notified back — strictly after that
+        // thread's `set()` calls (see `CpuPerfCounters::refresh`), so the
+        // bracket spans the real read span (stamp-last, principle 18). A
+        // single counter's failed/stalled perf read is individually,
+        // normally fallible (see `classify_perf_read`), not a bulk sweep
+        // failure, so there is no discard path here — same ruling as the
+        // sampler-owned perf-thread samplers (`cpu_dtlb`, `cpu_l3`,
+        // `cpu_frequency`, `cpu_branch`). A no-op (`perf_group` is `None`)
+        // for every BPF sampler that never calls `.perf_event()`.
+        let guard = self.perf_group.map(|g| g.acquire());
+
         let perf_futures: Vec<_> = self
             .perf_sync
             .iter()
@@ -277,6 +297,10 @@ impl Sampler for AsyncBpf {
             .collect();
 
         futures::future::join_all(perf_futures.into_iter()).await;
+
+        if let Some(guard) = guard {
+            guard.finish();
+        }
     }
 }
 
