@@ -1393,6 +1393,117 @@ mod tests {
                 "the recording's manifest metadata survives"
             );
         }
+
+        // -------------------------------------------------------------
+        // Native V3 acquisition-group ingest: end-to-end proof that Part A's
+        // table-level window columns and this writer agree — a group table
+        // sealed by `StreamRecorderV3` must answer `rate()` with real
+        // uncertainty bands, the same way a V2 per-metric-sidecar table does.
+        // -------------------------------------------------------------
+
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+
+        fn group_schema(members: &[&str], sampler: &str) -> GroupSchema {
+            GroupSchema {
+                counters: members
+                    .iter()
+                    .map(|m| MetricDesc {
+                        name: m.to_string(),
+                        metadata: [
+                            ("metric".to_string(), m.to_string()),
+                            ("sampler".to_string(), sampler.to_string()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    })
+                    .collect(),
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            }
+        }
+
+        /// `n` ticks of one acquisition group (`cpu_usage/percpu`, one member
+        /// `cpu_cycles`), one second apart, each with a 50 ms window ending at
+        /// the tick — the same shape `fixture_rows` uses for its V2 counter,
+        /// so a `rate()` query narrow enough to span segment boundaries is
+        /// exercised the same way. The schema is sent on every tick: this
+        /// fixture is about proving the write/read path agrees, not about
+        /// exercising the schema-hash cache (see `rez_v3_writer`'s own tests
+        /// for that).
+        fn group_fixture_rows(n: u64) -> Vec<(Snapshot, u64)> {
+            let schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
+            (0..n)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    let w = Some(Window::new(ts - 50_000_000, ts));
+                    let group = GroupSnapshot {
+                        name: "cpu_usage/percpu".to_string(),
+                        schema_hash: schema.hash(),
+                        schema: Some(std::sync::Arc::clone(&schema)),
+                        window: w,
+                        counters: vec![Some(i)],
+                        gauges: Vec::new(),
+                        histograms: Vec::new(),
+                    };
+                    let s = Snapshot::V3(SnapshotV3 {
+                        systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+                        duration: std::time::Duration::ZERO,
+                        metadata: HashMap::new(),
+                        groups: vec![group],
+                    });
+                    (s, ts)
+                })
+                .collect()
+        }
+
+        #[test]
+        fn a_native_v3_group_table_answers_rate_with_uncertainty_bands() {
+            let rows = group_fixture_rows(6);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("groups.rez");
+            // max_rows=2 forces multiple segments, so the splice at segment
+            // boundaries is exercised the same way `v3_and_v2_queries_agree`
+            // exercises it for the sampler-keyed path.
+            write_v3(&rows, 2, true, &path);
+
+            assert_eq!(
+                sealed_counts(&path)["cpu_usage/percpu"],
+                3,
+                "6 rows at max_rows=2 -> 3 segments, so the reader splices \
+                 across a table-level-window segment boundary"
+            );
+
+            let reader = open(&path);
+            assert_eq!(reader.counter_names(), vec!["cpu_cycles".to_string()]);
+
+            let json = serde_json::to_value(
+                reader
+                    .query_range("rate(cpu_cycles[2s])", 1.0, 6.0, 1.0)
+                    .unwrap(),
+            )
+            .unwrap();
+            let values = json["result"][0]["values"].as_array().unwrap();
+            assert!(
+                values.iter().any(|v| v[1] != "0"),
+                "a boundary-spanning rate over the native V3 group table must \
+                 produce non-zero values: {json}"
+            );
+            // `series.intervals` (`metriken_query::QueryResult::Matrix`) is
+            // the acquisition-window uncertainty band `rezolus mcp query`
+            // reports as `[lo, hi]` for rate()/irate(). Its presence here —
+            // resolved with no special-case "this is a group table" logic on
+            // the reader's part — is the proof that Part A's table-level
+            // `:window_begin`/`:window_width` columns and this writer's
+            // group-table layout actually agree end to end: the bare pair
+            // this writer emitted (not a per-metric sidecar) is what fed it.
+            let intervals = json["result"][0]["intervals"]
+                .as_array()
+                .expect("a rate() query over a windowed group table must carry bands");
+            assert!(
+                intervals.iter().any(|iv| iv.is_array()),
+                "at least one point must carry a resolved [lo, hi] band: {json}"
+            );
+        }
     }
 
     #[test]
