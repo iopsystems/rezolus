@@ -234,7 +234,10 @@ rezolus parquet metadata -i out.rez   # reports "not cleanly finalized"
 ```
 
 Pass `--rez-version 2` to write the previous tar container instead, which stages
-at `<output>.partial` and is recoverable only up to its last checkpoint.
+at `<output>.partial` and is recoverable only up to its last checkpoint. There
+is no longer a reason to reach for it: `parquet combine`, `filter` and
+`annotate` all read and rewrite both containers, so the default needs no
+opt-out to stay workable.
 
 ### Viewer
 

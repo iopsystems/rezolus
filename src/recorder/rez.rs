@@ -1000,11 +1000,12 @@ pub fn is_rez_path(path: &Path) -> Result<bool, RezError> {
 /// Which container a `.rez` path holds. v1/v2 are tar archives; v3 is SQLite.
 ///
 /// `RezReader` dispatches on this, and so does every other `.rez` front door
-/// (`mcp`, `viewer`, `parquet metadata/annotate/filter/combine`) — all now
-/// recognize both containers. `parquet annotate`/`filter`/`combine` still
-/// only *rewrite* the v2 tar container (`read_archive_bytes`/
-/// `write_archive_bytes`); on a v3 input they report a clear "not yet
-/// supported" error rather than silently misrouting or half-working.
+/// (`mcp`, `viewer`, `parquet metadata/annotate/filter/combine`) — all
+/// recognize and rewrite both containers. The two rewrite paths are separate
+/// because the containers are: v2 goes through `read_archive_bytes`/
+/// `write_archive_bytes`, v3 copies segment BLOBs between SQLite catalogs
+/// (`recorder::rez_v3_rewrite`). Only *mixing* the two in one `combine`
+/// errors, since that would mean converting a container mid-assembly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RezFormat {
     V3Sqlite,
@@ -1584,14 +1585,13 @@ impl GroupTableBuilder {
 /// `metriken_query::UnionMetricsSource`; two DIFFERENT samplers still refuse
 /// a query spanning them.
 ///
-/// `parquet filter`/`annotate`/`combine` still only rewrite the v2 tar
-/// container and report an explicit "not yet supported" error for a v3
-/// (SQLite) archive (`parquet_tools::filter`, unchanged by this build) —
-/// wiring `--samplers` support for V3 group tables is future work. Exercised
-/// directly by `table_sampler_tests` and by `rez_v3_writer`'s
+/// `parquet filter --samplers` uses this on a v3 archive to drop a sampler's
+/// group tables together — naming `cpu_usage` drops every `cpu_usage/<group>`
+/// table, because the sampler is the unit an operator names. Exercised
+/// directly by `table_sampler_tests`, by `rez_v3_writer`'s
 /// `table_sampler_selects_a_samplers_group_tables_out_of_a_mixed_recording`
-/// against a real recording, so the selection rule is proven correct ahead of
-/// that CLI plumbing landing.
+/// against a real recording, and end to end by
+/// `filter_rez_v3_keeps_only_named_samplers`.
 ///
 /// `parquet metadata` on a v3-native archive is a known, narrower instance of
 /// the same display gap: it lists one line per GROUP table (`describe_v3_string`
@@ -2108,6 +2108,46 @@ pub(crate) mod recorder_tests_support {
             clock_anchor_wall_ns: 1_700_000_000_000_000_000,
         };
         RezV3Writer::create(path, seed).unwrap();
+    }
+
+    /// A finalized v3 `.rez` holding `ticks` rows of one counter per named
+    /// sampler, labelled `arm=<arm>` so a multi-recording assembly can tell
+    /// its inputs apart.
+    ///
+    /// Real rows, not an empty catalog: the rewrite tools copy segments and
+    /// materialize WAL tails, so a fixture with no data would exercise
+    /// neither.
+    pub(crate) fn populated_v3_rez(
+        path: &std::path::Path,
+        arm: &str,
+        samplers: &[&str],
+        ticks: u64,
+    ) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+        let seed = ManifestSeed {
+            labels: [
+                ("source".to_string(), "rezolus".to_string()),
+                ("arm".to_string(), arm.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
+                .into_iter()
+                .collect(),
+            clock_anchor_wall_ns: ANCHOR,
+        };
+        let mut rec = StreamRecorderV3::new(RezV3Writer::create(path, seed).unwrap());
+        for tick in 0..ticks {
+            let ts = ANCHOR + tick * 1_000_000_000;
+            let counters = samplers
+                .iter()
+                .enumerate()
+                .map(|(i, s)| counter(&format!("{i}"), s, tick + 1, None))
+                .collect();
+            rec.ingest(&snap(ts, counters), ts, 0).unwrap();
+        }
+        rec.finalize((ANCHOR + ticks * 1_000_000_000, 0)).unwrap();
     }
 }
 

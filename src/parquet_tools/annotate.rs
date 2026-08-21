@@ -25,13 +25,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
     match dispatch_format(path) {
-        RezFormat::V3Sqlite => {
-            eprintln!(
-                "error: annotating a v3 (SQLite) .rez archive is not yet supported; only v2 tar .rez archives can be annotated in place"
-            );
-            std::process::exit(1);
-        }
-        RezFormat::V2Tar => {
+        format @ (RezFormat::V3Sqlite | RezFormat::V2Tar) => {
             let custom = args.get_one::<PathBuf>("queries").unwrap_or_else(|| {
                 eprintln!("error: annotating a .rez requires --queries <service-extension.json> (a .rez has no service template)");
                 std::process::exit(1);
@@ -45,7 +39,11 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
                 eprintln!("error: invalid service extension JSON: {e}");
                 std::process::exit(1);
             });
-            annotate_rez(path, &content).unwrap_or_else(|e| {
+            let result = match format {
+                RezFormat::V3Sqlite => annotate_rez_v3(path, &content),
+                _ => annotate_rez(path, &content),
+            };
+            result.unwrap_or_else(|e| {
                 eprintln!("error: failed to annotate .rez: {e}");
                 std::process::exit(1);
             });
@@ -268,6 +266,56 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 /// Embed a custom ServiceExtension into every recording of a `.rez`, validated
 /// against that recording's data. Rewrites the archive in place (copying table
 /// bytes verbatim).
+/// Embed KPIs into every recording of a v3 (SQLite) `.rez`.
+///
+/// Unlike `combine` and `filter` this rewrites nothing: the KPI set is a
+/// catalog column, so annotating is an `UPDATE` per recording. No segment is
+/// read or copied, which is why annotating a 4 GB archive costs the same as
+/// annotating a 4 MB one.
+fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez_sqlite::RezDb;
+
+    let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
+    let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+    let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
+
+    let db = RezDb::open(path)?;
+    let recordings = db.read_recordings()?;
+    if recordings.len() != readers.len() {
+        return Err(format!(
+            "{} has {} recording(s) in its catalog but {} readable — refusing to annotate a \
+             partially readable archive",
+            path.display(),
+            recordings.len(),
+            readers.len()
+        )
+        .into());
+    }
+
+    let mut kpis = 0usize;
+    for (rec, (_labels, reader)) in recordings.iter().zip(readers) {
+        let mut ext = base_ext.clone();
+        // Validated per recording, not once: a KPI's query is only meaningful
+        // against the metrics that recording actually holds, and a
+        // multi-recording archive can hold different sets.
+        validate_kpis_source(&reader, &mut ext);
+        kpis = ext.kpis.len();
+        let mut metadata = rec.meta.metadata.clone();
+        metadata.insert(
+            crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
+            serde_json::to_string(&ext)?,
+        );
+        db.update_recording_metadata(rec.id, &metadata)?;
+    }
+    println!(
+        "Annotated {:?}: embedded {} KPIs into {} recording(s)",
+        path,
+        kpis,
+        recordings.len()
+    );
+    Ok(())
+}
+
 fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez;
     let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
@@ -527,7 +575,7 @@ mod tests {
     // tests cover the classification `run()` matches on instead.
 
     /// `dispatch_format` must recognize a v3 (SQLite) `.rez` as `V3Sqlite`
-    /// (routing `run()` to the explicit "not yet supported" error), not
+    /// (routing `run()` to the v3 annotate path), not
     /// `NotRez` (which would route it to the plain-parquet path and fail with
     /// an unrelated "Corrupt footer" error).
     ///
@@ -868,6 +916,47 @@ mod tests {
         let out = dir.path().join("one.rez");
         r.finalize(&out).unwrap();
         (dir, out)
+    }
+
+    /// Annotating a v3 archive writes the KPI set into each recording's
+    /// metadata column, in place, without disturbing the segments.
+    #[test]
+    fn annotate_rez_v3_embeds_service_queries_into_recordings() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 6);
+        let before = std::fs::metadata(&path).unwrap().len();
+
+        let ext_json = r#"{"service_name":"test","kpis":[{"role":"overview","title":"Zero","query":"0","type":"gauge"}]}"#;
+        annotate_rez_v3(&path, ext_json).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        let embedded = recordings[0]
+            .meta
+            .metadata
+            .get(crate::parquet_metadata::KEY_SERVICE_QUERIES)
+            .expect("service queries must be embedded in the recording metadata");
+        assert!(
+            embedded.contains("test"),
+            "the extension's own content must survive"
+        );
+        // Pre-existing metadata is preserved, not replaced wholesale.
+        assert!(
+            recordings[0]
+                .meta
+                .metadata
+                .contains_key("sampling_interval_ms"),
+            "annotating must merge into the recording's metadata, not overwrite it"
+        );
+        // Segments were never rewritten, so the file does not balloon.
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert!(
+            after <= before + 64 * 1024,
+            "annotate must not rewrite segments: {before} -> {after}"
+        );
     }
 
     #[test]
