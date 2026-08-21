@@ -41,10 +41,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
                 .filter(|s| !s.is_empty())
                 .collect();
             let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
-            let result = match format {
-                RezFormat::V3Sqlite => filter_rez_v3(path, &keep, output),
-                _ => filter_rez(path, &keep, output),
-            };
+            let result = filter_rez_any(path, format, &keep, output);
             if let Err(e) = result {
                 eprintln!("error: failed to filter .rez: {e}");
                 std::process::exit(1);
@@ -153,6 +150,33 @@ pub(super) fn filter_parquet_file(
     Ok(())
 }
 
+/// Filter a `.rez` of either container, always producing a v3 one.
+///
+/// A v1/v2 (tar) input is upgraded first, in a staging directory, and the
+/// filter then runs on the upgraded copy. Rewriting an archive is therefore
+/// also how it gets modernized — which is the point: nothing needs to write
+/// the tar container any more, so nothing does.
+fn filter_rez_any(
+    path: &Path,
+    format: RezFormat,
+    keep: &std::collections::BTreeSet<String>,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if format != RezFormat::V2Tar {
+        return filter_rez_v3(path, keep, output);
+    }
+    let staging = tempfile::tempdir()?;
+    let staged = staging.path().join("upgraded.rez");
+    crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
+    println!(
+        "upgraded {:?} from a v1/v2 tar archive to v3 (SQLite)",
+        path
+    );
+    // `output` defaults to the input, so an in-place filter of a tar archive
+    // replaces it with the v3 equivalent.
+    filter_rez_v3(&staged, keep, Some(output.unwrap_or(path)))
+}
+
 /// Drop whole samplers from a v3 (SQLite) `.rez`.
 ///
 /// Filters by *sampler*, not by table key: under V3 one sampler owns several
@@ -183,7 +207,7 @@ fn filter_rez_v3(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez::table_sampler;
     use crate::recorder::rez_sqlite::RezDb;
-    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, mark_copies_complete, CopySpec};
+    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, CopySpec};
 
     let src = RezDb::open(path)?;
 
@@ -240,7 +264,6 @@ fn filter_rez_v3(
             Ok(())
         })
     })?;
-    mark_copies_complete(&mut dst)?;
     for rec in dst.read_recordings()? {
         kept += dst.all_samplers(rec.id)?.len();
     }
@@ -248,68 +271,6 @@ fn filter_rez_v3(
     drop(src);
     std::fs::rename(&staged, dest)?;
 
-    println!(
-        "Filtered {:?}: kept {} of {} sampler tables",
-        dest, kept, total
-    );
-    Ok(())
-}
-
-/// Filter a v2 (tar) `.rez` archive to keep only the named per-sampler tables,
-/// dropping the rest from every recording. Copies kept table bytes verbatim.
-fn filter_rez(
-    path: &Path,
-    keep: &std::collections::BTreeSet<String>,
-    output: Option<&Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez;
-    let (manifest, recordings) = rez::read_archive_bytes(path)?;
-
-    // A typo'd sampler name must not be read as "keep nothing". `dest` defaults
-    // to the INPUT, so an unvalidated `--samplers cpu_usge` overwrote a
-    // long-lived streamed capture in place with an empty manifest that
-    // `RezReader` then opened quite happily, reporting no metrics.
-    let present: BTreeSet<&str> = manifest
-        .recordings
-        .iter()
-        .flat_map(|r| r.tables.iter().map(|t| t.sampler.as_str()))
-        .collect();
-    let unmatched: Vec<&str> = keep
-        .iter()
-        .map(String::as_str)
-        .filter(|s| !present.contains(s))
-        .collect();
-    if !unmatched.is_empty() {
-        return Err(format!(
-            "no sampler table named {} in {}; it holds: {}",
-            unmatched.join(", "),
-            path.display(),
-            present.iter().copied().collect::<Vec<_>>().join(", "),
-        )
-        .into());
-    }
-
-    // Whole tables are dropped or kept; a kept table's segments pass through
-    // byte-identical.
-    let mut out: Vec<rez::RecordingSegments> = Vec::new();
-    let mut kept = 0usize;
-    let mut total = 0usize;
-    for (mut rec, rb) in manifest.recordings.into_iter().zip(recordings) {
-        total += rec.tables.len();
-        let mut new_tables = Vec::new();
-        let mut new_bytes = Vec::new();
-        for (idx, (_sampler, bytes)) in rec.tables.into_iter().zip(rb.tables) {
-            if keep.contains(&idx.sampler) {
-                new_tables.push(idx);
-                new_bytes.push(bytes);
-            }
-        }
-        kept += new_tables.len();
-        rec.tables = new_tables;
-        out.push((rec, new_bytes));
-    }
-    let dest = output.unwrap_or(path);
-    rez::write_archive_bytes(dest, &out)?;
     println!(
         "Filtered {:?}: kept {} of {} sampler tables",
         dest, kept, total
@@ -666,20 +627,36 @@ mod tests {
         assert_eq!(db.all_samplers(recordings[0].id).unwrap().len(), 1);
     }
 
+    /// Filtering a v1/v2 tar archive keeps the named samplers AND upgrades the
+    /// container on the way out, because rewriting an archive is now also how
+    /// it gets modernized.
     #[test]
-    fn filter_rez_keeps_only_named_samplers() {
+    fn filter_rez_upgrades_a_tar_archive_and_keeps_only_named_samplers() {
+        use crate::recorder::rez::{detect_rez_format, RezFormat};
         let (_d, path) = two_sampler_rez();
         let out = _d.path().join("slim.rez");
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        filter_rez(&path, &keep, Some(&out)).unwrap();
-        let (m, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
-        let samplers: Vec<&str> = m.recordings[0]
-            .tables
-            .iter()
-            .map(|t| t.sampler.as_str())
-            .collect();
-        assert_eq!(samplers, vec!["cpu_usage"]);
+        assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
+
+        filter_rez_any(&path, RezFormat::V2Tar, &keep, Some(&out)).unwrap();
+
+        assert_eq!(
+            detect_rez_format(&out).unwrap(),
+            RezFormat::V3Sqlite,
+            "the filtered output is v3 even though the input was a tar archive"
+        );
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        assert_eq!(
+            db.all_samplers(recordings[0].id).unwrap(),
+            vec!["cpu_usage".to_string()]
+        );
+        assert!(
+            db.total_rows(recordings[0].id, "cpu_usage").unwrap() > 0,
+            "the kept sampler must keep its rows across the upgrade"
+        );
     }
 
     // `dest` defaults to the input, so an unmatched `--samplers` name used to
@@ -692,7 +669,7 @@ mod tests {
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usge".to_string()].into_iter().collect();
 
-        let err = filter_rez(&path, &keep, None)
+        let err = filter_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, &keep, None)
             .expect_err("an unmatched sampler name must be an error, not an empty archive");
         let msg = err.to_string();
         assert!(
@@ -708,22 +685,6 @@ mod tests {
     }
 
     /// Every `<dir>/<file>` data entry in the tar, in write order.
-    fn tar_entry_names(path: &Path) -> Vec<String> {
-        let mut names = Vec::new();
-        let mut archive = tar::Archive::new(std::fs::File::open(path).unwrap());
-        for entry in archive.entries().unwrap() {
-            let name = entry
-                .unwrap()
-                .path()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            if name != crate::recorder::rez::REZ_MANIFEST_NAME {
-                names.push(name);
-            }
-        }
-        names
-    }
 
     // Dropping a table from a segmented archive must drop *all* of its segments
     // and keep *all* of the survivor's, and the rewritten manifest must name
@@ -759,31 +720,35 @@ mod tests {
         let out = d.path().join("slim.rez");
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        filter_rez(&path, &keep, Some(&out)).unwrap();
+        filter_rez_any(&path, rez::RezFormat::V2Tar, &keep, Some(&out)).unwrap();
 
-        let (m, mut recordings) = rez::read_archive_bytes(&out).unwrap();
-        let tables = recordings.remove(0).tables;
+        // The output is v3, so the assertions are about its catalog rather
+        // than tar entries — but the property under test is the same one: a
+        // multi-segment table survives the filter with every segment intact
+        // and in order, and the dropped table leaves nothing behind.
         assert_eq!(
-            tables.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
-            vec!["cpu_usage"],
+            rez::detect_rez_format(&out).unwrap(),
+            rez::RezFormat::V3Sqlite
+        );
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(
+            db.all_samplers(recordings[0].id).unwrap(),
+            vec!["cpu_usage".to_string()],
             "the dropped table is gone, segments and all"
         );
-        assert_eq!(tables[0].1, kept_bytes, "all 3 segments, byte-identical");
-
-        // The manifest index names exactly the files that were emitted.
-        let idx = &m.recordings[0].tables[0];
-        let expected: Vec<String> = idx
-            .segment_files()
-            .iter()
-            .map(|f| format!("rezolus/{f}"))
-            .collect();
-        assert_eq!(tar_entry_names(&out), expected);
-        assert_eq!(idx.files.len(), 3);
-        assert!(
-            !tar_entry_names(&out)
-                .iter()
-                .any(|n| n.contains("blockio_requests")),
-            "no orphaned segment bytes from the dropped table"
+        let segments = db.read_segments(recordings[0].id, "cpu_usage").unwrap();
+        assert_eq!(segments.len(), 3, "all 3 segments came across");
+        let got: Vec<Vec<u8>> = segments.iter().map(|s| s.bytes.clone()).collect();
+        assert_eq!(
+            got, kept_bytes,
+            "segment parquet BLOBs are carried verbatim, in order — an upgrade \
+             changes the container, not the data"
+        );
+        assert_eq!(
+            segments.iter().map(|s| s.seq).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "seq is dense and starts at zero so the reader splices in order"
         );
     }
 }

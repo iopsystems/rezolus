@@ -88,9 +88,12 @@ target/release/rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --d
 target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
 target/release/rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
 target/release/rezolus parquet filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
+target/release/rezolus parquet upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
+target/release/rezolus parquet upgrade old.rez -o new.rez            # ...or to a new file
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);
 # combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);
+#   v1/v2 tar inputs are upgraded to v3 on the way in, so containers can be mixed freely;
 # filter file.rez --samplers cpu_usage,scheduler -o slim.rez drops tables whose sampler is not listed
 #   (both containers; on a v3 archive a sampler's group tables are dropped together);
 # annotate file.rez --queries kpis.json embeds KPIs into each recording's manifest (--queries required for .rez).

@@ -487,6 +487,79 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::Set),
                 ),
         )
+        .subcommand(
+            Command::new("upgrade")
+                .about("Upgrade a v1/v2 (tar) .rez archive to the v3 (SQLite) container")
+                .long_about(
+                    "Rewrite a v1 or v2 `.rez` (a tar archive) as a v3 `.rez` (a single\n\
+                     SQLite file), the container the recorder and hindsight write today.\n\n\
+                     Segment parquet BLOBs are carried across byte-for-byte: the container\n\
+                     changes, the data does not. Labels, per-recording metadata and the\n\
+                     `complete` flag come with them, so an archive recovered from a\n\
+                     checkpoint still reads as recovered rather than being laundered into a\n\
+                     clean one.\n\n\
+                     `combine`, `filter` and `annotate` already upgrade a tar input on the\n\
+                     way through. This is for upgrading an archive on its own, without\n\
+                     otherwise changing it.",
+                )
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("The .rez archive to upgrade")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("REZ")
+                        .help("Write here instead of replacing the input in place")
+                        .value_parser(value_parser!(PathBuf)),
+                ),
+        )
+}
+
+/// Rewrite a v1/v2 (tar) `.rez` as a v3 (SQLite) one.
+///
+/// Refuses a v3 input rather than silently copying it: "upgrade" on something
+/// already current is far more likely a mistaken path than a request for a
+/// byte-for-byte duplicate.
+fn upgrade_rez(
+    path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez::{detect_rez_format, RezFormat};
+
+    match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
+        RezFormat::V2Tar => {}
+        RezFormat::V3Sqlite => {
+            return Err(format!(
+                "{} is already a v3 (SQLite) archive; there is nothing to upgrade",
+                path.display()
+            )
+            .into())
+        }
+        RezFormat::NotRez => return Err(format!("{} is not a .rez archive", path.display()).into()),
+    }
+
+    // Staged beside the destination so the rename that publishes it is atomic
+    // and on the same filesystem, and so an in-place upgrade never leaves a
+    // half-written archive where the original was.
+    let dest = output.unwrap_or(path);
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+    let staged = staging.path().join("upgraded.rez");
+
+    let recordings = crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
+    std::fs::rename(&staged, dest)?;
+    println!(
+        "upgraded {:?} to a v3 (SQLite) archive: {} recording(s)",
+        dest, recordings
+    );
+    Ok(())
 }
 
 pub fn run(args: ArgMatches) {
@@ -517,6 +590,11 @@ pub fn run(args: ArgMatches) {
             return;
         }
         Some(("metadata", sub_args)) => metadata::run(sub_args),
+        Some(("upgrade", sub_args)) => {
+            let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
+            let output = sub_args.get_one::<PathBuf>("output").map(|p| p.as_path());
+            upgrade_rez(path, output)
+        }
         _ => unreachable!(),
     };
 
