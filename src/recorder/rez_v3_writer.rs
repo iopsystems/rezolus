@@ -35,7 +35,7 @@ use super::rez::{
     Entry, GroupTableBuilder, TableBuilder,
 };
 use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
-use super::rez_stream::{SealPolicy, SegmentAccount};
+use super::seal_policy::{SealPolicy, SegmentAccount};
 
 /// Everything known when the recording starts. v3 has no manifest and no
 /// per-recording tar directory — a recording IS a row in `recordings` — so the

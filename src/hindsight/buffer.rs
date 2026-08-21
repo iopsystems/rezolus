@@ -29,8 +29,8 @@ use metriken_exposition::Snapshot;
 
 use super::state::TimeRange;
 use crate::recorder::rez_sqlite::RezDb;
-use crate::recorder::rez_stream::SealPolicy;
 use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
+use crate::recorder::seal_policy::SealPolicy;
 
 /// The rolling buffer. One `.rez` recording, fed a row per tick, trimmed to
 /// the configured lookback every tick.

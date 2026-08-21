@@ -626,9 +626,8 @@ mod tests {
     /// Write the same `rows` through the streaming writer with a tiny row cap,
     /// so every table seals into several segments.
     fn write_streamed_rez(rows: &[(Snapshot, u64)], max_rows: usize, out: &std::path::Path) {
-        use crate::recorder::rez_stream::{
-            ManifestSeed, RezWriterHandle, SealPolicy, StreamRecorder,
-        };
+        use crate::recorder::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
+        use crate::recorder::seal_policy::SealPolicy;
 
         let handle = RezWriterHandle::create(
             out,
@@ -718,9 +717,8 @@ mod tests {
     /// multi-segment and `RezReader` opens it with the segment-aware source —
     /// the reader that implements the `__run__` conflict policy.
     fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
-        use crate::recorder::rez_stream::{
-            ManifestSeed, RezWriterHandle, SealPolicy, StreamRecorder,
-        };
+        use crate::recorder::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
+        use crate::recorder::seal_policy::SealPolicy;
         use metriken_exposition::Histogram as ExpHistogram;
 
         let handle = RezWriterHandle::create(
@@ -1065,10 +1063,10 @@ mod tests {
     mod v3 {
         use super::*;
         use crate::recorder::rez_sqlite::WalRow;
-        use crate::recorder::rez_stream::SealPolicy;
         use crate::recorder::rez_v3_writer::{
             encode_wal_row, ManifestSeed, RezV3Writer, StreamRecorderV3, WalCell, WalValue,
         };
+        use crate::recorder::seal_policy::SealPolicy;
         use metriken_exposition::Histogram as ExpHistogram;
 
         const ANCHOR: u64 = 1_700_000_000_000_000_000;

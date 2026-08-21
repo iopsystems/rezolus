@@ -1187,6 +1187,12 @@ impl TableBuilder {
 
     /// Rows appended so far (the row-count seal threshold, and the
     /// "never seal an empty builder" test).
+    /// Rows appended so far.
+    ///
+    /// `#[cfg(test)]` because its only caller is the tar writer, which is
+    /// itself test-only now — the v3 writer rebuilds a table from the WAL at
+    /// seal time and never asks a builder how full it is.
+    #[cfg(test)]
     pub(crate) fn rows(&self) -> usize {
         self.timestamps.len()
     }
