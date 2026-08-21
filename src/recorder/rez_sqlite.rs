@@ -925,6 +925,28 @@ impl RezDb {
         self.transaction(|tx| tx.mark_complete(recording_id))
     }
 
+    /// Every user table in this database, by name — SQLite's own internal
+    /// tables (`sqlite_*`) excluded.
+    ///
+    /// Exists so `rez_v3_rewrite` can assert that its fixed copy list still
+    /// covers the whole schema: a copy carries only what it is told to, so a
+    /// table added here without being handled there would vanish silently
+    /// from every rewritten archive.
+    #[cfg(test)]
+    pub(crate) fn user_table_names(&self) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .map_err(|e| format!("failed to list tables: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("failed to list tables: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to list tables: {e}"))
+    }
+
     /// Replace one recording's metadata map.
     ///
     /// In place rather than through a copy because metadata is a catalog

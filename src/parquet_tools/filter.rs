@@ -159,11 +159,23 @@ pub(super) fn filter_parquet_file(
 /// `<sampler>/<group>` tables, and "drop cpu_usage" has to mean all of its
 /// groups. Kept tables' segment BLOBs are copied verbatim.
 ///
-/// Writing a new file rather than deleting in place is deliberate even though
-/// SQL could `DELETE`: a delete would leave the freed pages inside the
-/// original file, so the archive an operator filtered to make smaller would not
-/// get smaller without a full `VACUUM` afterwards. Copying only what is kept
-/// makes the output's size the point of the operation.
+/// Writing a new archive rather than issuing a `DELETE` is deliberate, but NOT
+/// because a delete would strand the freed pages — these archives are created
+/// `auto_vacuum=INCREMENTAL` and [`RezDb::incremental_vacuum`] hands the pages
+/// back, which is exactly how hindsight retention keeps a buffer bounded. A
+/// delete would shrink the file perfectly well. The reasons are:
+///
+/// 1. `--output` must leave the input untouched, so that mode needs a copy no
+///    matter what — and a delete-based one would have to copy the WHOLE
+///    archive first and then shrink it, writing 5.8 MB to produce 1.6 MB in
+///    the measured case. One path serves both modes, and it is the cheaper
+///    path in the one that dominates.
+/// 2. In place, a copy plus an atomic rename cannot damage the original. A
+///    delete mutates it, so a failure partway through leaves the operator with
+///    neither the archive they had nor the one they asked for.
+/// 3. It reuses hindsight's copy, so the WAL-tail handling — a table's
+///    unsealed rows, and a V3 group's leading un-anchored rows that never
+///    reach a segment — has one implementation rather than two.
 fn filter_rez_v3(
     path: &Path,
     keep: &std::collections::BTreeSet<String>,
