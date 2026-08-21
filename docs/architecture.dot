@@ -73,7 +73,7 @@ digraph rezolus {
     </table>>];
   pqtools [fillcolor="#e3f2fd", color="#1976d2", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
-      <tr><td align="center"><b>rezolus parquet</b></td></tr>
+      <tr><td align="center"><b>rezolus recording</b></td></tr>
       <tr><td align="center"><font point-size="11">inspect · annotate · combine</font></td></tr>
     </table>>];
 
@@ -81,7 +81,7 @@ digraph rezolus {
   recording [shape=cylinder, fillcolor="#ffe0b2", color="#f57c00", group="gRecord", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
       <tr><td align="center"><b>Recording</b></td></tr>
-      <tr><td align="center"><font point-size="11">.parquet file</font></td></tr>
+      <tr><td align="center"><font point-size="11">.parquet or .rez</font></td></tr>
     </table>>];
 
   // ---- Where the value lands -------------------------------------------
