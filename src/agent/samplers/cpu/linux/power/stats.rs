@@ -1,6 +1,41 @@
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
 use crate::agent::{MAX_CPUS, MAX_PACKAGES};
+use linkme::distributed_slice;
+
+// Registered here (not in mod.rs) because this file is also `include!`d
+// directly on non-Linux platforms (see `cpu/mod.rs`'s
+// `#[cfg(not(target_os = "linux"))] pub mod stats` fallback) to keep metric
+// identity stable across platforms, same as `cpu_frequency`'s
+// `CPU_FREQUENCY_ACQ`.
+//
+/// Brackets the RAPL energy sweep. Single writer: only `PowerInner::refresh`
+/// acquires. One group across every energy domain because the sweep reads
+/// them back-to-back in one uninterrupted loop over like entities (RAPL
+/// counters, one `read()` each) with no phase boundary between domains, per
+/// principle 18's like-entity rule. A single domain's failed `read()` is
+/// individually, normally fallible rather than a bulk sweep failure, so there
+/// is no discard path (same ruling as `cpu_l3`/`cpu_dtlb`).
+pub static CPU_POWER_ENERGY_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("cpu_power"),
+    "cpu_power_energy_sweep",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CPU_POWER_ENERGY_ACQ_REG: &'static AcquisitionGroup = &CPU_POWER_ENERGY_ACQ;
+
+/// Brackets the C-state residency sweep. A separate group from the energy
+/// sweep above: idle residency is a different metric family read from
+/// different PMUs (`cstate_core`/`cstate_pkg` rather than `power`), and
+/// principle 18 keeps families apart even when read back-to-back.
+pub static CPU_POWER_CSTATE_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("cpu_power"),
+    "cpu_power_cstate_sweep",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static CPU_POWER_CSTATE_ACQ_REG: &'static AcquisitionGroup = &CPU_POWER_CSTATE_ACQ;
 
 // Each metric is indexed by the logical CPU id that the perf counter was
 // created on, which is the id the PMU's cpumask designated as the reader for
@@ -32,42 +67,42 @@ use crate::agent::{MAX_CPUS, MAX_PACKAGES};
 #[metric(
     name = "cpu_package_energy",
     description = "The cumulative energy consumed by the CPU package, including cores, uncore, and integrated graphics.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_PACKAGE_ENERGY: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "cpu_cores_energy",
     description = "The cumulative energy consumed by all CPU cores in the package.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_CORES_ENERGY: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "cpu_core_energy",
     description = "The cumulative energy consumed by a single CPU core.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_CORE_ENERGY: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "cpu_igpu_energy",
     description = "The cumulative energy consumed by the integrated graphics.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_IGPU_ENERGY: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "cpu_dram_energy",
     description = "The cumulative energy consumed by the DRAM attached to this package.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_DRAM_ENERGY: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "cpu_platform_energy",
     description = "The cumulative energy consumed by the whole platform.",
-    metadata = { unit = "microjoules" }
+    metadata = { unit = "microjoules", acq_group = "cpu_power_energy_sweep" }
 )]
 pub static CPU_PLATFORM_ENERGY: CounterGroup = CounterGroup::new(1);
 
@@ -85,112 +120,112 @@ pub static CPU_PLATFORM_ENERGY: CounterGroup = CounterGroup::new(1);
 #[metric(
     name = "core_c1_residency",
     description = "The cumulative TSC cycles a physical core spent in the C1 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C1: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c2_residency",
     description = "The cumulative TSC cycles a physical core spent in the C2 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C2: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c3_residency",
     description = "The cumulative TSC cycles a physical core spent in the C3 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C3: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c6_residency",
     description = "The cumulative TSC cycles a physical core spent in the C6 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C6: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c7_residency",
     description = "The cumulative TSC cycles a physical core spent in the C7 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C7: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c8_residency",
     description = "The cumulative TSC cycles a physical core spent in the C8 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C8: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c9_residency",
     description = "The cumulative TSC cycles a physical core spent in the C9 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C9: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "core_c10_residency",
     description = "The cumulative TSC cycles a physical core spent in the C10 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_C10: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "package_c1_residency",
     description = "The cumulative TSC cycles a package spent in the C1 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C1: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c2_residency",
     description = "The cumulative TSC cycles a package spent in the C2 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C2: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c3_residency",
     description = "The cumulative TSC cycles a package spent in the C3 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C3: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c6_residency",
     description = "The cumulative TSC cycles a package spent in the C6 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C6: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c7_residency",
     description = "The cumulative TSC cycles a package spent in the C7 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C7: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c8_residency",
     description = "The cumulative TSC cycles a package spent in the C8 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C8: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c9_residency",
     description = "The cumulative TSC cycles a package spent in the C9 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C9: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
 #[metric(
     name = "package_c10_residency",
     description = "The cumulative TSC cycles a package spent in the C10 idle state. Divide by cpu_tsc for a residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static PACKAGE_C10: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 
@@ -203,6 +238,6 @@ pub static PACKAGE_C10: CounterGroup = CounterGroup::new(MAX_PACKAGES);
 #[metric(
     name = "core_cstate_residency",
     description = "The cumulative TSC cycles a physical core spent in any idle C-state, summed across every level the hardware exposes. Divide by cpu_tsc for a total idle residency fraction.",
-    metadata = { unit = "cycles" }
+    metadata = { unit = "cycles", acq_group = "cpu_power_cstate_sweep" }
 )]
 pub static CORE_CSTATE: CounterGroup = CounterGroup::new(MAX_CPUS);
