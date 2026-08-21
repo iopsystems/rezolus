@@ -2653,6 +2653,7 @@ mod tests {
                 timestamps: vec![1_000, 2_000],
                 wall_offsets: Vec::new(),
                 columns: vec![col],
+                table_window: None,
             };
             let d = tempfile::tempdir().unwrap();
             let p = d.path().join("one.rez");

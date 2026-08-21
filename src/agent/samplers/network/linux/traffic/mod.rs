@@ -45,7 +45,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters)
+    .counters("counters", counters, &COUNTERS_ACQ)
     .build()?;
 
     Ok(Some(Box::new(bpf)))

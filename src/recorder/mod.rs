@@ -246,7 +246,12 @@ async fn probe_endpoint(
                 if *is_prom {
                     return Some((Protocol::Prometheus, candidate_url.clone()));
                 }
-                if rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body).is_ok() {
+                // `from_msgpack`, not a bare `from_slice`: a depth-capped,
+                // trailing-byte-checked decode (see its doc) even for this
+                // throwaway probe — an unauthenticated endpoint offering
+                // hostile bytes at discovery time is exactly where an
+                // unbounded decode is cheapest to abuse.
+                if metriken_exposition::Snapshot::from_msgpack(&body).is_ok() {
                     return Some((Protocol::Msgpack, candidate_url.clone()));
                 }
             }
@@ -365,6 +370,39 @@ fn inject_provenance(
                 source,
                 endpoint_url,
             );
+        }
+        metriken_exposition::Snapshot::V3(ref mut v3) => {
+            // V3 metric identity lives in the group schemas; inject provenance
+            // there and recompute each schema_hash so the producer contract
+            // (schema_hash == schema.hash()) holds for the recorded payload.
+            // Groups transmitted without a schema can't be labeled — leave them;
+            // the .rez ingest path skips V3 wholesale anyway (group_by_sampler),
+            // and the raw/parquet passthrough records schema-bearing groups fully
+            // labeled.
+            for group in &mut v3.groups {
+                if let Some(schema) = &mut group.schema {
+                    // `schema` is `Arc<GroupSchema>` — the recorder owns this
+                    // decoded snapshot outright (nothing else holds a
+                    // reference into it yet), so `Arc::make_mut` is a no-op
+                    // clone-on-write here, not a real copy: it rewrites
+                    // labels in place and only allocates if some other
+                    // holder is somehow still attached, which never happens
+                    // on this path.
+                    let schema = Arc::make_mut(schema);
+                    for desc in schema
+                        .counters
+                        .iter_mut()
+                        .chain(schema.gauges.iter_mut())
+                        .chain(schema.histograms.iter_mut())
+                    {
+                        desc.metadata
+                            .insert("source".to_string(), source.to_string());
+                        desc.metadata
+                            .insert("endpoint".to_string(), endpoint_url.to_string());
+                    }
+                    group.schema_hash = schema.hash();
+                }
+            }
         }
     }
     snapshot
@@ -1093,8 +1131,45 @@ pub fn run(config: RecordingConfig) {
 
                         // `.rez`: decode once and hand the snapshot straight to
                         // the streaming writer. No spool, no re-serialization.
+                        //
+                        // `Snapshot::from_msgpack`, not a bare `from_slice`:
+                        // this is the exact wire the recorder controls end to
+                        // end for `.rez` mode (single endpoint, msgpack-only,
+                        // never Prometheus), so the depth-capped,
+                        // trailing-byte-checked decode applies uniformly to
+                        // whichever version the agent sends — including the
+                        // V3 groups this build natively ingests. Decoding a
+                        // concrete `SnapshotV3` directly (skipping the
+                        // untagged enum probe entirely) would need to know the
+                        // endpoint's `snapshot_format` ahead of time, which
+                        // the recorder does not: it is agent-side config, not
+                        // negotiated over HTTP, and `.rez` mode serves V1/V2/V3
+                        // endpoints alike from this one call site.
+                        //
+                        // Correction to this decision's original reasoning
+                        // (recorded here rather than by editing the already-
+                        // committed history): a "try SnapshotV3 first, fall
+                        // back to the untagged decode" scheme was rejected
+                        // partly on the claim that a V2 payload with an empty
+                        // `counters` vec could decode as a spurious
+                        // empty-`groups` SnapshotV3 by reading only 4 of the
+                        // 6 top-level array elements and silently ignoring
+                        // the rest. That claim is wrong:
+                        // metriken-exposition's own
+                        // `trailing_extra_field_errors_not_ignored` test
+                        // shows a too-long positional payload FAILS a
+                        // struct's decode rather than having the extra
+                        // elements silently ignored, so that specific
+                        // landmine does not exist even without a hand-rolled
+                        // trailing-byte check. The rest of the decision
+                        // stands on its own: the recorder still cannot know
+                        // an endpoint's `snapshot_format` ahead of time, so
+                        // there is no reliable way to pick "try V3 first" over
+                        // "try the untagged decode" without guessing wrong on
+                        // most of a V1/V2-heavy fleet — `from_msgpack` is
+                        // still the right-sized, version-agnostic fix here.
                         if rez_mode {
-                            match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body) {
+                            match metriken_exposition::Snapshot::from_msgpack(&body) {
                                 Ok(snapshot) => {
                                     let snapshot = inject_provenance(
                                         snapshot,
@@ -1135,9 +1210,14 @@ pub fn run(config: RecordingConfig) {
                                     }
                                 }
                             } else {
-                                // Msgpack: deserialize, inject provenance, re-serialize
-                                match rmp_serde::from_slice::<metriken_exposition::Snapshot>(&body)
-                                {
+                                // Msgpack: deserialize, inject provenance,
+                                // re-serialize. `from_msgpack`, not a bare
+                                // `from_slice` — same depth-cap/trailing-byte
+                                // hardening as the `.rez`-mode call site above,
+                                // and just as contained here: this branch is
+                                // unconditionally msgpack (the Prometheus
+                                // sibling branch above never reaches it).
+                                match metriken_exposition::Snapshot::from_msgpack(&body) {
                                     Ok(snapshot) => {
                                         let snapshot = inject_provenance(
                                             snapshot,
@@ -1560,6 +1640,82 @@ pub fn run(config: RecordingConfig) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The producer (this recorder) owns the `schema_hash == schema.hash()`
+    // contract for every schema-bearing group it labels. A group without a
+    // schema can't be labeled at all (there's no MetricDesc to write into)
+    // and must be left exactly as received.
+    #[test]
+    fn inject_provenance_labels_v3_group_schemas_and_recomputes_hash() {
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
+        use std::collections::{BTreeMap, HashMap};
+        use std::time::{Duration, SystemTime};
+
+        let schema = GroupSchema {
+            counters: vec![MetricDesc {
+                name: "cpu_usage".to_string(),
+                metadata: BTreeMap::new(),
+            }],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let labeled_group = GroupSnapshot {
+            name: "cpu_usage/percpu".to_string(),
+            schema_hash: schema.hash(),
+            schema: Some(schema.into()),
+            window: None,
+            counters: vec![Some(42)],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        let schemaless_group = GroupSnapshot {
+            name: "cpu_usage/aggregate".to_string(),
+            schema_hash: (0, 0),
+            schema: None,
+            window: None,
+            counters: Vec::new(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+
+        let snapshot = Snapshot::V3(SnapshotV3 {
+            systemtime: SystemTime::now(),
+            duration: Duration::ZERO,
+            metadata: HashMap::new(),
+            groups: vec![labeled_group, schemaless_group],
+        });
+
+        let out = inject_provenance(snapshot, "svc", "http://x");
+        let Snapshot::V3(v3) = out else {
+            panic!("expected V3");
+        };
+
+        let labeled = &v3.groups[0];
+        let schema = labeled.schema.as_ref().expect("schema retained");
+        for desc in schema
+            .counters
+            .iter()
+            .chain(schema.gauges.iter())
+            .chain(schema.histograms.iter())
+        {
+            assert_eq!(desc.metadata.get("source").map(String::as_str), Some("svc"));
+            assert_eq!(
+                desc.metadata.get("endpoint").map(String::as_str),
+                Some("http://x")
+            );
+        }
+        assert_eq!(
+            labeled.validate(),
+            Ok(()),
+            "schema_hash was recomputed to match the labeled schema"
+        );
+
+        let schemaless = &v3.groups[1];
+        assert!(
+            schemaless.schema.is_none(),
+            "a group transmitted without a schema is left untouched"
+        );
+    }
 
     #[test]
     fn command_arg_graph_is_valid() {

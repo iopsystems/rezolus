@@ -509,11 +509,161 @@ load. `drivehealth` applies this: it reads temperature via pass-through ioctl
 
 ---
 
+### 18. Acquisition groups: one window per read section, stamped last
+
+A metric's acquisition window belongs to the **read section** that produced
+it, not to the metric. A read section is one bracket over one source — a BPF
+map sweep, a batch of like-entity map reads, a device sweep — and every
+metric it fills shares its single window. This replaced per-entry
+`set_with_window` stamping, whose windows encoded sweep position rather than
+observation facts and tripled `.rez` column counts (journal
+`2026-08-17-window-sidecar-cost.md`, proposal 2; measured acceptance in
+`2026-08-19-v3-format-acceptance.md`).
+
+**The machinery.** A sampler declares `AcquisitionGroup` statics (registered
+on `samplers::ACQUISITION_GROUPS`) and brackets each read section with
+`group.acquire()` → set plain values → `guard.finish()`. Rules the bracket
+enforces, and that reviewers must protect:
+
+- **Stamp last.** `finish()` publishes the window after the values, so a
+  racing scrape can pair values with the previous window (lag — honest)
+  but never with a future one (lead — a confident claim about data older
+  than the window says). The bracket therefore spans the member `set()`
+  calls; do not "tighten" it — the width is a deliberate upper bound on
+  the read span, which over-states `rate()` uncertainty, never
+  under-states it.
+- **Error paths discard.** A failed read returns without `finish()` (drop
+  discards; `discard()` says it explicitly). The previous window stands,
+  and consumers see "nothing new" — missing beats wrong.
+- **One writer per group.** The seqlock slot detects torn reads, not torn
+  writers. A sampler with a blocking/async probe task stamps from that
+  task only.
+- **Granularity: like entities collapse, families do not.** Instances
+  distinguished by a label within one metric family (syscall classes,
+  block-op types, per-CPU banks, drives) share their sweep's single group;
+  different metric families keep their own groups even when read
+  back-to-back. `cpu_usage` is three counter families = three groups;
+  `syscall_latency` is sixteen class-instances of one family = one group.
+- **Device-visit sweeps** (`gpu_amd_smi`, `gpu_nvidia`): a loop that visits
+  each device once and issues several independently-fallible calls per
+  visit is ONE group, even though those calls span metric families — the
+  read section is device-major by a property of the source itself
+  (per-device handles reached one at a time), and splitting it family-major
+  without restructuring the loop would just emit several groups all
+  wearing one identical whole-loop window: no new information, pure schema
+  bloat. This is a distinct archetype, not a loosening of the family rule
+  above — it applies only when (a) the loop visits like entities, (b) the
+  per-visit calls are independently fallible with no phase boundary between
+  them, and (c) the families genuinely cannot be read family-major without
+  re-visiting every device once per family. Accepted cost: a call that
+  keeps failing for one device retains its stale value under a window that
+  just got freshly stamped by the OTHER calls in that same visit — the same
+  trade `drivehealth` already makes across drives, named explicitly here so
+  it's a known, documented property of the archetype rather than a
+  surprise a reviewer has to rediscover.
+- **Membership comes from registration, not values.** A declared group's
+  schema is what the sampler registers (bounded by real population — e.g.
+  possible CPUs, never the array capacity); a quiet member reports zero,
+  it does not vanish. Value-sentinel membership is a V2 transitional
+  behavior confined to the un-migrated default groups.
+- **Reader-stamped groups: the acquisition is the exposition read.** A
+  mmap-direct `PackedCounters` group has no sampler `refresh()` read to
+  bracket — the snapshot builder's own walk IS the acquisition, so
+  `create`/`create_v3` acquire/mark_end/finish it themselves
+  (`AcquisitionGroup::set_reader_stamped`). The published window therefore
+  describes when the builder READ the value out of the BPF map, not any
+  property of when the counter itself last changed — an artifact of how
+  the value is exposed, not a staleness claim. It is still an honest,
+  deliberate upper bound (marking the end immediately after that group's
+  member reads, not at eventual publish, keeps the width to the group's
+  own read span rather than whole-walk time). One exception on magnitude:
+  V2's `task_cpu_usage` span includes its full capacity walk — kept
+  deliberately for ringbuf-loss robustness (see the comment at the V2
+  reader-stamped arm in `snapshot.rs`) — so that one metric's V2 windows
+  are millisecond-scale.
+
+**What we refuse.**
+- Per-entry window stamping in new or migrated samplers.
+- A window published before its values, or stamped on a failed read.
+- One group shared by two read sections, or two writers stamping one group.
+- Splitting like-entity sweeps into per-entity groups (the 16-acquisition
+  syscall_latency shape this design exists to remove).
+
+**Not yet migrated** (windows still per-entry or absent): `cpu_bandwidth`'s
+two ringbuf-populated cgroup gauges (`cgroup_cpu_bandwidth_quota`,
+`cgroup_cpu_bandwidth_period_duration` — set via a `ringbuf_handler`, not
+mmap-attached, so they are not `PackedCounters` and wave-2 Part A's
+reader-stamped migration does not cover them; they still fall into their
+sampler's windowless default group), plus external metrics (`record`/
+push-ingested values carried on `ExternalMetric`, which stamps its own
+per-value `Window` from the *source's* observation, not a Rezolus read
+section — structurally outside acquisition-group discipline, not a pending
+migration). `PackedCounters` (mmap-direct cgroup/task counters — its
+acquisition is the exposition read, bracketed by `create`/`create_v3`
+themselves) migrated in wave-2 Part A; declared reader-stamped groups use
+metadata-presence membership (`load_metadata(idx).is_some()`), never
+`0..entries()`, so a `MAX_PID`-scale group like `task_cpu_usage` never walks
+its full backing capacity. Wave-2 Part B migrated the last refresh-read
+samplers — `memory/meminfo`, `memory/vmstat`, `cpu/cores`, `drivehealth`,
+`gpu/amd` (SMI), `gpu/nvidia` — each to one `AcquisitionGroup` per read
+section (drivehealth and both GPU samplers collapse their whole per-drive/
+per-device sweep into a single group per principle 18's "device sweep"
+read-section shape, matching the like-entities rule; memory/cpu-cores are
+one procfs/sysfs read each). `gpu_amd_pmu` (rocprofiler hardware counters)
+was untouched — it was already a plain, unwindowed `CounterGroup` sampler
+with no per-metric window to migrate away from.
+
+A gap-closure pass (both waves had missed these; caught by the on-host
+measurement in `2026-08-19-v3-format-acceptance.md`'s wave-2 addendum)
+migrated the perf-event-backed per-CPU counter samplers: `cpu/dtlb`,
+`cpu/l3`, `cpu/frequency`, `cpu/branch`, and `cpu/perf`'s base per-CPU
+`cpu_cycles`/`cpu_instructions` (its cgroup counters were already
+reader-stamped `PackedCounters` from Part A and were left alone). These are
+a **fourth read-machinery shape**, distinct from BPF `Counters`/
+`CpuCounters`/`PackedCounters`: a sampler-owned OS thread (one thread
+sweeping every CPU/domain, or one thread per CPU/domain under `is_virt()`)
+reads `perf_event` counters, synchronized with the async `refresh()` task by
+a trigger/notify handshake (`SyncPrimitive`). The async task never touches a
+metric value itself, but it is still the correct single writer: it uniquely
+spans "before trigger" through "after every thread's `join_all`-confirmed
+completion," which is exactly the bracket principle 18 asks for — `finish()`
+only runs once `join_all` proves every thread's `set()` calls are done, so
+the bracket cannot outrun the values it covers, and the perf thread(s) never
+call `acquire()`/`finish()` themselves. `cpu/dtlb`, `cpu/l3`,
+`cpu/frequency`, and `cpu/branch` each collapse their whole per-CPU sweep
+into ONE group per metric family, matching the "read together, no phase
+boundary" shape already established for `cpu_frequency`'s aperf/mperf/tsc:
+one `read_group()` (a single grouped `perf_event_open` read) per core or L3
+domain covers every member of that sampler's family, with no gap between
+them. `cpu/perf` shares the same shape one level down, through BPF's own
+`.perf_event()` machinery (`PerfCounters`/`CpuPerfCounters` in
+`src/agent/bpf/builder.rs`, bracketed in `AsyncBpf::refresh`, not
+sampler-specific thread code) — its `cpu_cycles`/`cpu_instructions` merge
+into one group because `CpuPerfCounters::refresh` reads both, per CPU, in
+one continuous loop with no phase boundary, the same reasoning, not the
+`cpu_usage` three-separate-BPF-map case. All five get
+`set_member_bound(possible_cpus())`, same rationale as `CpuCounters::new`.
+None of the five has a discard path in steady state: a single core's or
+domain's failed/stalled perf read is individually, normally fallible (see
+`classify_perf_read`), not a bulk sweep failure, so the group unconditionally
+`finish()`es — the same ruling already established for the GPU/drivehealth
+device-sweep archetype.
+
+After this pass, the only remaining unmigrated windows are `cpu_bandwidth`'s
+two ringbuf gauges and external metrics (both described above, both
+structurally outside a read-section bracket rather than pending work). Any
+future remaining migration goes through the checklist below.
+
 ## Reviewing or writing a sampler — operational checklist
 
 A short pass an agent or human reviewer can run literally over a sampler
 change. Each item is a yes/no question, or "justify in a comment."
 
+- **Acquisition groups.** Does every read section have exactly one
+  `AcquisitionGroup` bracket, stamped after values, discarded on error
+  paths, with one writer, and grouped by the like-entities rule? Are the
+  member metrics tagged `acq_group` 1:1 with the builder wiring?
+  (Principle 18.)
 - **Data source.** Is the metric reachable from a BPF probe (tracepoint /
   `fentry` / `kprobe`) or a `perf_event_open` counter? If yes, prefer
   that over parsing `/proc` or `/sys` on every refresh. One-time

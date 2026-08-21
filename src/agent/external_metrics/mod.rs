@@ -6,4 +6,4 @@ mod types;
 
 pub use server::{serve, Protocol, ServerState};
 pub use store::ExternalMetricsStore;
-pub use types::{ExternalMetric, ExternalMetricValue};
+pub use types::{ExternalMetric, ExternalMetricValue, MetricKey};

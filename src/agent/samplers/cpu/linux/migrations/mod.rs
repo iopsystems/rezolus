@@ -49,8 +49,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .cpu_counters("migrations", migrations)
-    .packed_counters("cgroup_cpu_migrations", &CGROUP_CPU_MIGRATIONS)
+    .cpu_counters("migrations", migrations, &MIGRATIONS_ACQ)
+    .packed_counters(
+        "cgroup_cpu_migrations",
+        &CGROUP_CPU_MIGRATIONS,
+        &CGROUP_MIGRATIONS_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(if kernel_has_btf() {
         &["handle__sched_switch_raw"]

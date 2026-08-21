@@ -36,7 +36,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .histogram("latency", &TCP_CONNECT_LATENCY)
+    .histogram("latency", &TCP_CONNECT_LATENCY, &LATENCY_ACQ)
     .build()?;
 
     Ok(Some(Box::new(bpf)))

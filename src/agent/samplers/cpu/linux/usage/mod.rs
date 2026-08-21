@@ -160,13 +160,17 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .cpu_counters("cpu_usage", cpu_usage)
-    .cpu_counters("softirq", softirq)
-    .cpu_counters("softirq_time", softirq_time)
-    .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER)
-    .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM)
-    .packed_counters("cgroup_exited", &CGROUP_CPU_USAGE_EXITED)
-    .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE)
+    .cpu_counters("cpu_usage", cpu_usage, &CPU_USAGE_ACQ)
+    .cpu_counters("softirq", softirq, &SOFTIRQ_ACQ)
+    .cpu_counters("softirq_time", softirq_time, &SOFTIRQ_TIME_ACQ)
+    .packed_counters("cgroup_user", &CGROUP_CPU_USAGE_USER, &CGROUP_USAGE_ACQ)
+    .packed_counters("cgroup_system", &CGROUP_CPU_USAGE_SYSTEM, &CGROUP_USAGE_ACQ)
+    .packed_counters(
+        "cgroup_exited",
+        &CGROUP_CPU_USAGE_EXITED,
+        &CGROUP_EXITED_ACQ,
+    )
+    .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE, &TASK_USAGE_ACQ)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("task_info", handle_task_info)
     .ringbuf_handler("task_exit", handle_task_exit)

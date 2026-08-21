@@ -91,18 +91,32 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .enabled_programs(enabled_programs)
-    .cpu_counters("events", events)
-    .packed_counters("cgroup_task_switch", &CGROUP_TLB_FLUSH_TASK_SWITCH)
+    .cpu_counters("events", events, &EVENTS_ACQ)
+    .packed_counters(
+        "cgroup_task_switch",
+        &CGROUP_TLB_FLUSH_TASK_SWITCH,
+        &CGROUP_EVENTS_ACQ,
+    )
     .packed_counters(
         "cgroup_remote_shootdown",
         &CGROUP_TLB_FLUSH_REMOTE_SHOOTDOWN,
+        &CGROUP_EVENTS_ACQ,
     )
-    .packed_counters("cgroup_local_shootdown", &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN)
+    .packed_counters(
+        "cgroup_local_shootdown",
+        &CGROUP_TLB_FLUSH_LOCAL_SHOOTDOWN,
+        &CGROUP_EVENTS_ACQ,
+    )
     .packed_counters(
         "cgroup_local_mm_shootdown",
         &CGROUP_TLB_FLUSH_LOCAL_MM_SHOOTDOWN,
+        &CGROUP_EVENTS_ACQ,
     )
-    .packed_counters("cgroup_remote_send_ipi", &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI)
+    .packed_counters(
+        "cgroup_remote_send_ipi",
+        &CGROUP_TLB_FLUSH_REMOTE_SEND_IPI,
+        &CGROUP_EVENTS_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .build()?;
 

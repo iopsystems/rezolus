@@ -51,10 +51,24 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .perf_event("cycles", PerfEvent::cpu_cycles(), &CPU_CYCLES)
-    .perf_event("instructions", PerfEvent::instructions(), &CPU_INSTRUCTIONS)
-    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES)
-    .packed_counters("cgroup_instructions", &CGROUP_CPU_INSTRUCTIONS)
+    .perf_event(
+        "cycles",
+        PerfEvent::cpu_cycles(),
+        &CPU_CYCLES,
+        &CPU_PERF_ACQ,
+    )
+    .perf_event(
+        "instructions",
+        PerfEvent::instructions(),
+        &CPU_INSTRUCTIONS,
+        &CPU_PERF_ACQ,
+    )
+    .packed_counters("cgroup_cycles", &CGROUP_CPU_CYCLES, &CGROUP_CYCLES_ACQ)
+    .packed_counters(
+        "cgroup_instructions",
+        &CGROUP_CPU_INSTRUCTIONS,
+        &CGROUP_INSTRUCTIONS_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_event)
     .disabled_programs(if kernel_has_btf() {
         &["handle__sched_switch_raw"]

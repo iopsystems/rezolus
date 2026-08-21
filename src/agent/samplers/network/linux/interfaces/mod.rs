@@ -40,7 +40,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters)
+    .counters("counters", counters, &COUNTERS_ACQ)
     // Per-driver tx_timeout kprobes: only the driver(s) bound to present NICs
     // should attach. Keys are the BPF program (C function) names, which differ
     // from the SEC() kprobe targets for virtio/mlx4/mlx5.

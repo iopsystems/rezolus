@@ -97,26 +97,59 @@ pub fn run(config: Config) {
 
             let start = Instant::now();
 
-            if let Ok(response) = client.get(url.clone()).send().await {
-                if let Ok(body) = response.bytes().await {
-                    let latency = start.elapsed();
+            // This loop ticks once per configured scrape interval (default
+            // 1s, meant to track the Prometheus scrape cadence a few
+            // seconds or more) — slow enough that logging every failure at
+            // `error!` is the right cadence here, not a warn-once: an
+            // operator watching this needs to see exactly how long an
+            // outage lasts, and a single easily-scrolled-past line would
+            // undersell an ongoing blackout. Before this, all three steps
+            // below failed completely silently: against a v3 agent, a
+            // pre-V3 exporter build served HTTP 200 with an empty body on
+            // `/metrics` forever, with nothing in the logs at any level to
+            // say why — an undiagnosable fleet-wide blackout.
+            match client.get(url.clone()).send().await {
+                Ok(response) => match response.bytes().await {
+                    Ok(body) => {
+                        let latency = start.elapsed();
 
-                    debug!("sampling latency: {} us", latency.as_micros());
+                        debug!("sampling latency: {} us", latency.as_micros());
 
-                    let mut reader = std::io::Cursor::new(body.as_ref());
+                        let mut reader = std::io::Cursor::new(body.as_ref());
 
-                    if let Ok(current) =
-                        rmp_serde::from_read::<&mut std::io::Cursor<&[u8]>, Snapshot>(&mut reader)
-                    {
-                        if let Some(previous) = previous.take() {
-                            let snapshot = snapshot(&config, previous, current.clone(), latency);
+                        match rmp_serde::from_read::<&mut std::io::Cursor<&[u8]>, Snapshot>(
+                            &mut reader,
+                        ) {
+                            Ok(current) => {
+                                if let Some(previous) = previous.take() {
+                                    let snapshot =
+                                        snapshot(&config, previous, current.clone(), latency);
 
-                            let mut s = SNAPSHOT.lock();
-                            *s = Some(snapshot);
+                                    let mut s = SNAPSHOT.lock();
+                                    *s = Some(snapshot);
+                                }
+
+                                previous = Some(current);
+                            }
+                            Err(e) => {
+                                error!(
+                                    "failed to decode snapshot from {url}: {e} — agent may be \
+                                     emitting a newer snapshot format than this exporter \
+                                     understands (e.g. snapshot_format = \"v3\" on the agent \
+                                     against an exporter built before SnapshotV3 existed); \
+                                     rebuild the exporter against a compatible \
+                                     metriken-exposition version, or set snapshot_format = \
+                                     \"v2\" on the agent"
+                                );
+                            }
                         }
-
-                        previous = Some(current);
                     }
+                    Err(e) => {
+                        error!("failed to read response body from {url}: {e}");
+                    }
+                },
+                Err(e) => {
+                    error!("failed to reach agent at {url}: {e}");
                 }
             }
         }

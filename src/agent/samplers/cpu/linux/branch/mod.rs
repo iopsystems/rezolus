@@ -70,18 +70,33 @@ impl BranchInner {
     pub fn new() -> Result<Self, std::io::Error> {
         let (perf_threads, perf_sync) = spawn_threads()?;
 
+        // Boot-fixed population bound, same rationale as `CpuCounters::new`
+        // (principle 18): the real number of per-CPU slots this sweep will
+        // ever populate, not each member `CounterGroup`'s `MAX_CPUS`-sized
+        // backing array.
+        CPU_BRANCH_ACQ.set_member_bound(crate::agent::bpf::possible_cpus());
+
         Ok(Self {
             perf_threads,
             perf_sync,
         })
     }
 
+    // Brackets the perf-thread sweep: `acquire()` before triggering the
+    // thread(s), `finish()` only after `join_all` confirms every thread has
+    // notified back — strictly after that thread's `set()` calls (see
+    // `Core::refresh()`), so the bracket spans the real read span
+    // (stamp-last, principle 18). A single core's failed perf read is
+    // individually, normally fallible, not a bulk sweep failure, so there
+    // is no discard path here (same ruling as `cpu_dtlb`).
     pub async fn refresh(&mut self) -> Result<(), std::io::Error> {
         for thread in self.perf_threads.iter() {
             if thread.is_finished() {
                 panic!("{} perf thread exited early", NAME);
             }
         }
+
+        let guard = CPU_BRANCH_ACQ.acquire();
 
         let perf_futures: Vec<_> = self
             .perf_sync
@@ -93,6 +108,8 @@ impl BranchInner {
             .collect();
 
         futures::future::join_all(perf_futures.into_iter()).await;
+
+        guard.finish();
 
         Ok(())
     }

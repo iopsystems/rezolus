@@ -82,13 +82,18 @@ pub async fn ingest_loop(
 
         debug!("sampling latency: {} us", start.elapsed().as_micros());
 
-        let snapshot: metriken_exposition::Snapshot = match rmp_serde::from_slice(&body) {
-            Ok(s) => s,
-            Err(e) => {
-                warn!("failed to deserialize snapshot: {e}");
-                continue;
-            }
-        };
+        // `Snapshot::from_msgpack`, not a bare `from_slice`: depth-capped,
+        // trailing-byte-checked decode for the same reason the recorder's
+        // and hindsight's ingest paths use it — this is an always-on poll of
+        // whatever msgpack endpoint the viewer was pointed at.
+        let snapshot: metriken_exposition::Snapshot =
+            match metriken_exposition::Snapshot::from_msgpack(&body) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("failed to deserialize snapshot: {e}");
+                    continue;
+                }
+            };
 
         store.ingest_snapshot(snapshot);
         sample_count += 1;

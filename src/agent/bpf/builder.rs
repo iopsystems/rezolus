@@ -5,9 +5,9 @@ use tracing::trace;
 
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{MapCore, MapFlags, OpenObject, PrintLevel, RingBuffer, RingBufferBuilder};
-use metriken::{
-    CounterGroup, LazyCounter, RwLockHistogram, WindowedCounterGroup, WindowedLazyCounter,
-};
+use metriken::{CounterGroup, LazyCounter, RwLockHistogram};
+
+use crate::agent::timing::AcquisitionGroup;
 use perf_event::ReadFormat;
 
 use std::collections::HashMap;
@@ -19,6 +19,111 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+/// Group a flat, ordered list of `(item, group)` pairs into batches of
+/// same-group items, by the group's POINTER identity (not any name or
+/// value equality — see [`crate::agent::timing::AcquisitionGroup`], which
+/// has no `PartialEq`; two different `AcquisitionGroup` statics are always
+/// distinct even if they happened to share a `name`). Two pairs land in
+/// the same batch iff they name literally the same `&'static
+/// AcquisitionGroup`, regardless of how far apart they are in `items` —
+/// this is what lets `BpfBuilder::histogram` registrations for a
+/// multi-member family (e.g. syscall_latency's 16 op-class histograms)
+/// merge into one `HistogramBatch` (see `histogram.rs`) even though the
+/// call sites list them as 16 separate `.histogram()` lines, not one
+/// `.histograms(group, vec![...])` call.
+///
+/// Batch order is first-appearance order (the first pair naming a given
+/// group determines where that group's batch sits in the output); within
+/// a batch, member order is registration order. Pure grouping logic, no
+/// I/O — generic over the item type so it's unit-testable without a real
+/// BPF skeleton (see the `tests` module below); `Histogram`/`HistogramBatch`
+/// construction (which DOES need a live skeleton) happens at the call site
+/// in [`Builder::build`], not in here.
+fn batch_by_group<T>(
+    items: Vec<(T, &'static AcquisitionGroup)>,
+) -> Vec<(&'static AcquisitionGroup, Vec<T>)> {
+    let mut batches: Vec<(&'static AcquisitionGroup, Vec<T>)> = Vec::new();
+    for (item, group) in items {
+        match batches
+            .iter_mut()
+            .find(|(batch_group, _)| std::ptr::eq(*batch_group, group))
+        {
+            Some((_, members)) => members.push(item),
+            None => batches.push((group, vec![item])),
+        }
+    }
+    batches
+}
+
+#[cfg(test)]
+mod batch_by_group_tests {
+    use super::*;
+
+    static GROUP_A: AcquisitionGroup = AcquisitionGroup::new("batch_test", "a");
+    static GROUP_B: AcquisitionGroup = AcquisitionGroup::new("batch_test", "b");
+
+    /// Non-consecutive registrations naming the SAME group (by pointer)
+    /// merge into one batch, preserving member order — the exact shape
+    /// `syscall_latency`'s 16 `.histogram()` calls rely on: every call
+    /// names `&LATENCIES_ACQ`, and they must all land in one batch stamped
+    /// once, not 16.
+    #[test]
+    fn non_consecutive_same_group_registrations_merge_preserving_order() {
+        let items = vec![
+            ("one", &GROUP_A),
+            ("two", &GROUP_B),
+            ("three", &GROUP_A),
+            ("four", &GROUP_A),
+        ];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 2, "two distinct groups, two batches");
+
+        let (group, members) = &batches[0];
+        assert!(std::ptr::eq(*group, &GROUP_A), "first batch is GROUP_A");
+        assert_eq!(
+            members,
+            &["one", "three", "four"],
+            "GROUP_A's members merge in registration order, even though \
+             GROUP_B's registration split them"
+        );
+
+        let (group, members) = &batches[1];
+        assert!(std::ptr::eq(*group, &GROUP_B), "second batch is GROUP_B");
+        assert_eq!(members, &["two"]);
+    }
+
+    /// Distinct groups never merge, even a single-member "family of one"
+    /// (e.g. tcp_packet_latency's lone histogram) — each keeps its own
+    /// batch.
+    #[test]
+    fn distinct_groups_do_not_merge() {
+        let items = vec![("a", &GROUP_A), ("b", &GROUP_B)];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].1, &["a"]);
+        assert_eq!(batches[1].1, &["b"]);
+    }
+
+    /// A single group's registrations, even just one, all land in exactly
+    /// one batch — the degenerate "family of one" case every
+    /// single-histogram sampler (tcp_packet_latency, tcp_connect_latency)
+    /// hits.
+    #[test]
+    fn single_group_single_item_is_one_batch_of_one() {
+        let items = vec![("only", &GROUP_A)];
+
+        let batches = batch_by_group(items);
+
+        assert_eq!(batches.len(), 1);
+        assert!(std::ptr::eq(batches[0].0, &GROUP_A));
+        assert_eq!(batches[0].1, &["only"]);
+    }
+}
 
 pub struct BpfProgStats {
     pub run_time: &'static LazyCounter,
@@ -329,12 +434,31 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     name: &'static str,
     skel: fn() -> T,
     prog_stats: BpfProgStats,
-    counters: Vec<(&'static str, Vec<&'static WindowedLazyCounter>)>,
-    histograms: Vec<(&'static str, &'static RwLockHistogram)>,
+    counters: Vec<(
+        &'static str,
+        Vec<&'static LazyCounter>,
+        &'static AcquisitionGroup,
+    )>,
+    histograms: Vec<(
+        &'static str,
+        &'static RwLockHistogram,
+        &'static AcquisitionGroup,
+    )>,
     maps: Vec<(&'static str, Vec<u64>)>,
-    cpu_counters: Vec<(&'static str, Vec<&'static WindowedCounterGroup>)>,
+    cpu_counters: Vec<(
+        &'static str,
+        Vec<&'static CounterGroup>,
+        &'static AcquisitionGroup,
+    )>,
     perf_events: Vec<(&'static str, PerfEvent, &'static CounterGroup)>,
-    packed_counters: Vec<(&'static str, &'static CounterGroup)>,
+    /// The single [`AcquisitionGroup`] shared by every `.perf_event()` call
+    /// in this builder, if any were made. See `perf_event`'s doc comment.
+    perf_group: Option<&'static AcquisitionGroup>,
+    packed_counters: Vec<(
+        &'static str,
+        &'static CounterGroup,
+        &'static AcquisitionGroup,
+    )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
@@ -376,6 +500,7 @@ where
             maps: Vec::new(),
             cpu_counters: Vec::new(),
             perf_events: Vec::new(),
+            perf_group: None,
             packed_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
@@ -606,19 +731,37 @@ where
             let mut counters: Vec<Counters> = self
                 .counters
                 .into_iter()
-                .map(|(name, counters)| Counters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| Counters::new(skel.map(name), counters, group))
                 .collect();
 
-            let mut histograms: Vec<Histogram> = self
-                .histograms
-                .into_iter()
-                .map(|(name, histogram)| Histogram::new(skel.map(name), histogram))
-                .collect();
+            // Batch histogram registrations by their declared group's
+            // pointer identity (NOT registration order or map name): every
+            // `.histogram()` call that named the SAME `&'static
+            // AcquisitionGroup` lands in one `HistogramBatch`, so a
+            // multi-member family (e.g. syscall_latency's 16 op-class
+            // histograms, all registered against one shared group) is read
+            // — and its window stamped — as a single sweep. Calls naming
+            // different groups, including a single-member family's own
+            // group, each get their own one-member batch. See
+            // `HistogramBatch`'s doc comment for the granularity rule this
+            // implements, and `batch_by_group`'s doc comment / tests for
+            // the pure grouping logic itself.
+            let mut histogram_batches: Vec<HistogramBatch> = batch_by_group(
+                self.histograms
+                    .into_iter()
+                    .map(|(name, histogram, group)| {
+                        (Histogram::new(skel.map(name), histogram), group)
+                    })
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(group, histograms)| HistogramBatch::new(group, histograms))
+            .collect();
 
             let mut cpu_counters: Vec<CpuCounters> = self
                 .cpu_counters
                 .into_iter()
-                .map(|(name, counters)| CpuCounters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| CpuCounters::new(skel.map(name), counters, group))
                 .collect();
 
             debug!(
@@ -629,7 +772,7 @@ where
 
             let mut perf_counters = PerfCounters::new(self.name);
 
-            for (name, event, group) in self.perf_events.into_iter() {
+            for (name, event, target) in self.perf_events.into_iter() {
                 let map = skel.map(name);
 
                 for cpu in 0..cpus {
@@ -658,9 +801,17 @@ where
                             MapFlags::ANY,
                         );
 
-                        perf_counters.push(cpu, counter, group);
+                        perf_counters.push(cpu, counter, target);
                     }
                 }
+            }
+
+            // Boot-fixed population bound, same rationale as
+            // `CpuCounters::new` (principle 18): the real number of per-CPU
+            // slots this sweep will ever populate, not each member
+            // `CounterGroup`'s `MAX_CPUS`-sized backing array.
+            if let Some(group) = self.perf_group {
+                group.set_member_bound(possible_cpus());
             }
 
             perf_counters.spawn(perf_threads_tx.clone(), perf_sync_tx.clone());
@@ -680,7 +831,7 @@ where
             let mut packed_counters: Vec<PackedCounters> = self
                 .packed_counters
                 .into_iter()
-                .map(|(name, counters)| PackedCounters::new(skel.map(name), counters))
+                .map(|(name, counters, group)| PackedCounters::new(skel.map(name), counters, group))
                 .collect();
 
             for (name, values) in self.maps.into_iter() {
@@ -720,7 +871,7 @@ where
                     v.refresh();
                 }
 
-                for v in &mut histograms {
+                for v in &mut histogram_batches {
                     v.refresh();
                 }
 
@@ -798,29 +949,54 @@ where
             sync: sync2,
             perf_threads,
             perf_sync,
+            perf_group: self.perf_group,
         })
     }
 
     /// Register a set of counters for this BPF sampler. The `name` is the BPF
     /// map name and the `counters` are a set of userspace lazy counters which
-    /// must match the ordering used in the BPF map. See `Counters` for more
-    /// details on the assumptions and requirements.
+    /// must match the ordering used in the BPF map. `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets this map's refresh
+    /// (single writer: the group must not be shared with any other read
+    /// section). See `Counters` for more details on the assumptions and
+    /// requirements.
     pub fn counters(
         mut self,
         name: &'static str,
-        counters: Vec<&'static WindowedLazyCounter>,
+        counters: Vec<&'static LazyCounter>,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.counters.push((name, counters));
+        self.counters.push((name, counters, group));
         self
     }
 
     /// Register a histogram for this BPF sampler. The `name` is the BPF map
     /// name and the `histogram` is the userspace histogram. The histogram
     /// parameters used in both the BPF and userpsace histograms must match
-    /// exactly. See `Histogram` for more details on the assumptions and
-    /// requirements.
-    pub fn histogram(mut self, name: &'static str, histogram: &'static RwLockHistogram) -> Self {
-        self.histograms.push((name, histogram));
+    /// exactly. `group` is the declared [`AcquisitionGroup`] whose
+    /// acquisition brackets this map's refresh.
+    ///
+    /// Unlike `counters`/`cpu_counters`, `group` here is NOT required to be
+    /// unique per call: registering several histograms against the SAME
+    /// group is how a multi-member metric family (e.g. syscall_latency's 16
+    /// op-class latency histograms) shares one read section instead of
+    /// getting one each — `build()` batches every `.histogram()` call that
+    /// named the same group (by pointer identity) into one
+    /// [`HistogramBatch`], stamped once per refresh. See its doc comment
+    /// for the granularity rule (LIKE
+    /// entities within one family share a group; DIFFERENT families get
+    /// their own, even read back-to-back) and its `# Single-writer
+    /// contract` section for what "not shared with any other read section"
+    /// actually means once histograms can share a group: the group must
+    /// still never be named by a `.counters()`/`.cpu_counters()` call, or
+    /// by a histogram belonging to a conceptually different family.
+    pub fn histogram(
+        mut self,
+        name: &'static str,
+        histogram: &'static RwLockHistogram,
+        group: &'static AcquisitionGroup,
+    ) -> Self {
+        self.histograms.push((name, histogram, group));
         self
     }
 
@@ -833,25 +1009,56 @@ where
     }
 
     /// Register a set of counters for this BPF sampler where just the
-    /// individual CPU counters are tracked. See `Counters` for more details on
-    /// the details and assumptions for the BPF map.
+    /// individual CPU counters are tracked. `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets this map's refresh
+    /// (single writer: the group must not be shared with any other read
+    /// section). See `Counters` for more details on the details and
+    /// assumptions for the BPF map.
     pub fn cpu_counters(
         mut self,
         name: &'static str,
-        counters: Vec<&'static WindowedCounterGroup>,
+        counters: Vec<&'static CounterGroup>,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.cpu_counters.push((name, counters));
+        self.cpu_counters.push((name, counters, group));
         self
     }
 
     /// Specify a perf event array name and an associated perf event.
+    /// `counters` is the per-CPU target metric; `group` is the declared
+    /// [`AcquisitionGroup`] whose acquisition brackets the perf-thread
+    /// sweep that reads it (see `PerfCounters`/`AsyncBpf::refresh`'s
+    /// bracket). Every `.perf_event()` call in one builder is merged, by
+    /// the underlying `PerfCounters` machinery, into ONE per-CPU sweep
+    /// triggered and joined together each refresh — so `group` must name
+    /// the SAME `&'static AcquisitionGroup` across every call in a
+    /// builder, exactly like several `.histogram()`/`.packed_counters()`
+    /// calls sharing one like-entities group (debug-asserted).
     pub fn perf_event(
         mut self,
         name: &'static str,
         event: PerfEvent,
-        group: &'static CounterGroup,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.perf_events.push((name, event, group));
+        self.perf_events.push((name, event, counters));
+
+        if let Some(existing) = self.perf_group {
+            // A real assert, not debug_assert: this runs once at sampler init
+            // (not a hot path), and a silent mismatch in release would leave
+            // the second group's window slot permanently unstamped — a
+            // never-advancing window with no diagnostic.
+            assert!(
+                std::ptr::eq(existing, group),
+                "all .perf_event() calls in one BpfBuilder must share the same \
+                 AcquisitionGroup: the underlying per-CPU sweep merges them into \
+                 one read section regardless of how many .perf_event() calls \
+                 registered it"
+            );
+        } else {
+            self.perf_group = Some(group);
+        }
+
         self
     }
 
@@ -859,19 +1066,40 @@ where
     /// the `counters` are a set of userspace dynamic counters. The BPF map is
     /// expected to be densely packed, meaning there is no padding. The order of
     /// the `counters` must exactly match the order in the BPF map.
-    pub fn packed_counters(mut self, name: &'static str, counters: &'static CounterGroup) -> Self {
-        self.packed_counters.push((name, counters));
+    ///
+    /// `group` is the declared [`AcquisitionGroup`] this map's values belong
+    /// to. Unlike `counters`/`cpu_counters`, `PackedCounters` never calls
+    /// `acquire()`/`finish()` itself — there is no `refresh()`-time read to
+    /// bracket, since values are read directly from the mmap by the
+    /// exposition code. `group` is marked
+    /// [reader-stamped](crate::agent::timing::AcquisitionGroup::set_reader_stamped)
+    /// instead, and `create`/`create_v3` bracket its window at exposition
+    /// time. As with `histogram`, `group` is NOT required to be unique per
+    /// call — several `.packed_counters()` calls naming the same group (the
+    /// like-entities case, e.g. `cgroup_syscall`'s 16 op-class maps) share
+    /// one window, not one each.
+    pub fn packed_counters(
+        mut self,
+        name: &'static str,
+        counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
+    ) -> Self {
+        self.packed_counters.push((name, counters, group));
         self
     }
 
     /// Register a set of sparse packed counters. Alias for `packed_counters`
-    /// since metriken's `CounterGroup` uses sparse metadata by default.
+    /// since metriken's `CounterGroup` uses sparse metadata by default —
+    /// both dense (cgroup) and sparse (task) packed groups resolve their
+    /// V3 declared-group membership from registration (metadata presence),
+    /// not from a walked bound; see `create_v3`'s reader-stamped handling.
     pub fn sparse_packed_counters(
         self,
         name: &'static str,
         counters: &'static CounterGroup,
+        group: &'static AcquisitionGroup,
     ) -> Self {
-        self.packed_counters(name, counters)
+        self.packed_counters(name, counters, group)
     }
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {

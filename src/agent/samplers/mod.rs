@@ -26,6 +26,58 @@ pub struct SamplerEntry {
 #[distributed_slice]
 pub static SAMPLERS: [SamplerEntry] = [..];
 
+/// Declared acquisition groups (design: one per source read section).
+/// Samplers register their groups here; the V3 snapshot builder enumerates
+/// this slice. `(sampler, name)` pairs must be unique and the name `main`
+/// is reserved for the transitional default group.
+///
+/// # Granularity rule
+///
+/// A group is one read section over LIKE ENTITIES: several instances of
+/// ONE metric family, distinguished from one another only by a label
+/// within that family (a syscall class, a block IO op, a TCP direction, a
+/// per-CPU index), share the sweep that reads them and therefore share ONE
+/// group — not one group per instance. `cpu_usage`'s three `cpu_counters`
+/// groups (`cpu`, `softirq`, `softirq_time`) are three separate BPF maps —
+/// three separate read sections — each internally a per-CPU sweep of LIKE
+/// entities (one group per map, not one per CPU). syscall_latency's 16
+/// syscall-class latency histograms are the inverse shape: sixteen BPF
+/// maps, but ONE read section over one conceptual family ("syscall
+/// latency", distinguished by an `op` label) — one group, not sixteen.
+///
+/// DIFFERENT metric families keep separate groups even when their reads
+/// happen back-to-back inside the same sampler's refresh: tcp_receive's
+/// `srtt` and `jitter` are two distinct measurements, not label-instances
+/// of one family, so they stay two groups; scheduler_runqueue's
+/// `runqlat`/`running`/`offcpu` are three distinct families for the same
+/// reason. See `docs/journal/2026-08-17-window-sidecar-cost.md`'s addendum
+/// (which names syscall_latency, alongside drivehealth, as the
+/// collapse-to-one-group case) and `src/agent/bpf/histogram.rs`'s
+/// `HistogramBatch` for where this rule is mechanically enforced for
+/// histograms.
+///
+/// # Naming rule
+///
+/// A group's `name` must be `<sampler>_<shortname>`, where `<sampler>` is
+/// the Linux sampler name (e.g. `"blockio_requests"`) and `<shortname>` is
+/// the map/builder-call it brackets (e.g. `"errors"`), UNLESS `<shortname>`
+/// is identical to `<sampler>` itself — a full duplicate that would stutter
+/// (`cpu_usage_cpu_usage`) — in which case use a short, unambiguous token
+/// instead (`cpu_usage`'s own per-state group is `cpu_usage_cpu`, not
+/// `cpu_usage_cpu_usage`).
+///
+/// This is stricter than "unique within the sampler" because every BPF
+/// sampler's `stats.rs` is ALSO compiled directly on non-Linux platforms
+/// (see `bpf_sampler_name`'s doc comment), where every one of them
+/// attributes to the single shared `"unattributed"` sampler bucket — so two
+/// different samplers both naming a group `"counters"` would collide there
+/// even though they never collide on Linux. Always prefixing with the real
+/// sampler name keeps the group name globally unique across every sampler
+/// EVEN under that collapse. `group_registry()` (in
+/// `agent::exposition::http::snapshot`) `debug_assert!`s this at first use.
+#[distributed_slice]
+pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup] = [..];
+
 /// The (module_path, sampler_name) pairs for every registered sampler.
 pub fn sampler_modules() -> Vec<(&'static str, &'static str)> {
     SAMPLERS.iter().map(|e| (e.module, e.name)).collect()
@@ -37,6 +89,35 @@ fn is_module_prefix(prefix: &str, module: &str) -> bool {
         || module
             .strip_prefix(prefix)
             .is_some_and(|rest| rest.starts_with("::"))
+}
+
+/// The sampler name that [`attribute_sampler`] will actually resolve a
+/// Linux-only BPF sampler's `stats.rs` module to, on the CURRENT platform.
+///
+/// A BPF sampler's metric statics live in `stats.rs`, which is compiled two
+/// different ways: on Linux, `mod stats;` inside the real sampler's own
+/// `mod.rs` (so the metric's module path is a descendant of the
+/// `SamplerEntry` registered there, and `attribute_sampler` resolves it to
+/// `linux_name`); on every other platform, `stats.rs` is `include!`d
+/// directly under the sampler family's `#[cfg(not(target_os = "linux"))]
+/// mod stats` fallback (to keep metric identity/descriptions stable across
+/// platforms) with no matching `SamplerEntry` anywhere — so
+/// `attribute_sampler` resolves it to `"unattributed"` instead, regardless
+/// of `linux_name`.
+///
+/// An [`crate::agent::timing::AcquisitionGroup`] declared for such a
+/// sampler's metrics must register under whichever of the two this platform
+/// will actually produce, or `create_v3`'s routing (which looks the group
+/// up by the resolved sampler name) can never find it.
+#[cfg(target_os = "linux")]
+pub(crate) const fn bpf_sampler_name(linux_name: &'static str) -> &'static str {
+    linux_name
+}
+
+/// See the `#[cfg(target_os = "linux")]` overload's doc comment.
+#[cfg(not(target_os = "linux"))]
+pub(crate) const fn bpf_sampler_name(_linux_name: &'static str) -> &'static str {
+    "unattributed"
 }
 
 /// Attribute a metric (identified by its definition module path) to the
@@ -189,6 +270,63 @@ mod attribution_tests {
                  `{resolved}`; add (\"{name}\", \"{truth}\") to METRIC_SAMPLERS in \
                  src/analysis/extract/context.rs",
                 metric.module(),
+            );
+        }
+    }
+
+    /// No PRODUCTION sampler has migrated to acquisition groups yet, but
+    /// the slice is NOT empty in this test binary: the `snapshot` module's
+    /// own V3-builder tests register fixture `AcquisitionGroup`s via
+    /// `#[distributed_slice(ACQUISITION_GROUPS)]` (`linkme` slices are
+    /// populated crate-wide at link time, cfg(test) included, regardless of
+    /// which test actually runs). Guards future sampler migrations too:
+    /// once real samplers start registering groups, this still catches a
+    /// copy-pasted duplicate `(sampler, name)` pair or an accidental use of
+    /// the reserved `"main"` group name.
+    #[test]
+    fn acquisition_groups_have_unique_names_and_avoid_the_reserved_main_name() {
+        use std::collections::HashSet;
+
+        let mut seen = HashSet::new();
+        for group in super::ACQUISITION_GROUPS {
+            assert_ne!(
+                group.name, "main",
+                "`main` is reserved for the snapshot builder's transitional default group \
+                 (sampler `{}`)",
+                group.sampler
+            );
+            assert!(
+                seen.insert((group.sampler, group.name)),
+                "duplicate acquisition group ({}, {})",
+                group.sampler,
+                group.name
+            );
+        }
+    }
+
+    /// The invariant `.rez`'s V3 native ingest rests on
+    /// (`src/recorder/rez_v3_writer.rs`'s `is_group_table_key`): a V1/V2
+    /// sampler table key is never mistaken for a V3 acquisition-group table
+    /// key (`"<sampler>/<group>"`) because a plain sampler name never
+    /// contains `/`. That discriminator is a naming convention doing
+    /// structural work — this pins it against every name this binary can
+    /// actually produce, the same way
+    /// `acquisition_groups_have_unique_names_and_avoid_the_reserved_main_name`
+    /// pins the acquisition-group naming rule above. A future sampler named
+    /// with a `/` (there is no reason to, but nothing else stops it) would
+    /// silently misroute its `.rez` table to the group decode path; this
+    /// test — plus the `debug_assert!`s at both `StreamRecorderV3::ingest`
+    /// and `ingest_v3`'s per-row loops — turns that into a loud failure
+    /// instead.
+    #[test]
+    fn no_registered_sampler_name_contains_a_slash() {
+        for entry in super::SAMPLERS {
+            assert!(
+                !entry.name.contains('/'),
+                "sampler {:?} (module {}) contains '/', which `.rez`'s \
+                 is_group_table_key reserves for V3 acquisition-group table keys",
+                entry.name,
+                entry.module
             );
         }
     }

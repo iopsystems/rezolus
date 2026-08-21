@@ -205,7 +205,9 @@ struct {
  * handle_new_task - Check if task is new/reused and send info to userspace
  * @task: The task_struct to check
  *
- * Returns 0 if new task was detected and info sent, 1 if existing task, -1 on error.
+ * Returns 0 if new task was detected (info sent, or dropped on a full
+ * ringbuf — the seen-marker is left unset so the next event retries),
+ * 1 if existing task, -1 on error.
  */
 static __noinline int handle_new_task(struct task_struct* task) {
     if (!task)
@@ -231,9 +233,30 @@ static __noinline int handle_new_task(struct task_struct* task) {
     bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
     bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
 
-    bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
-
-    // Populate and send task info (use ringbuf_reserve to avoid stack allocation)
+    // Populate and send task info (use ringbuf_reserve to avoid stack allocation).
+    //
+    // task_start_times — the "seen this task already" marker — is committed
+    // ONLY after a successful submit below, mirroring cgroup.h's
+    // handle_new_cgroup pattern (serial number committed only once the
+    // cgroup_info send actually succeeds; see its doc comment). Committing
+    // it unconditionally, as this used to, would permanently suppress this
+    // task's metadata (comm, tgid, cgroup) the moment one ringbuf reserve
+    // failed: the *counter* (task_cpu_usage) keeps incrementing normally
+    // either way, but with no metadata ever registered for that pid,
+    // metadata-presence membership (docs/principles.md principle 18) would
+    // never surface it in V3 output — a live task gone permanently
+    // invisible, not just briefly stale.
+    //
+    // Tradeoff accepted: under SUSTAINED ringbuf pressure, a task whose
+    // first attempts all fail re-enters this "new task" branch on every
+    // subsequent `cpuacct_account_field` hit until one attempt succeeds,
+    // re-zeroing task_utime/task_stime/task_cpu_usage each time (harmless
+    // for a genuinely new task — already zero; for a PID-reuse case it
+    // discards usage accumulated since the previous retry). That window is
+    // bounded by however long the ringbuf stays full — normally
+    // sub-millisecond, since it drains every snapshot — and self-heals the
+    // moment one attempt succeeds. A strictly better failure mode than the
+    // permanent metadata loss this replaces.
     struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
     if (!info)
         return 0;
@@ -241,6 +264,8 @@ static __noinline int handle_new_task(struct task_struct* task) {
     __builtin_memset(info, 0, sizeof(struct task_info));
     populate_task_info(task, info);
     bpf_ringbuf_submit(info, 0);
+
+    bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
 
     return 0;
 }
@@ -391,6 +416,24 @@ static __always_inline int account__sched_process_exit(u64* ctx) {
     bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
     bpf_map_update_elem(&task_start_times, &pid, &zero, BPF_ANY);
 
+    // Unlike handle_new_task above, there is no cheap retry available here
+    // if the reserve fails: `sched_process_exit` fires exactly once per
+    // task's lifetime, so there is no "next event" for this task to retry
+    // on the way `cpuacct_account_field`'s frequent firing gives
+    // handle_new_task one. A dropped exit event means userspace never
+    // calls clear_metadata(pid) (see handle_task_exit in mod.rs), so the
+    // task's OLD metadata (comm, tgid, cgroup) lingers as a phantom
+    // metadata-presence member after the task is actually gone. The
+    // residual is bounded and self-healing, not unbounded staleness: the
+    // counter itself was already zeroed above (regardless of whether this
+    // send succeeds), and task_start_times is zeroed too, so the moment
+    // this pid is reused by a genuinely new task, handle_new_task sees a
+    // start_time mismatch, retries its own (now-fixed) send, and the stale
+    // metadata gets overwritten with the new task's real labels. Until
+    // that reuse happens, the phantom entry reports an honest, unchanging
+    // 0 (the value stays zeroed, never re-incremented for a pid that no
+    // longer exists) — stale labels attached to a dead value, not a wrong
+    // value.
     struct task_exit* exit_event = bpf_ringbuf_reserve(&task_exit, sizeof(struct task_exit), 0);
     if (exit_event) {
         exit_event->pid = pid;
