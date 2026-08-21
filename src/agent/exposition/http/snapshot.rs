@@ -4329,20 +4329,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn v3_flag_switches_the_builder() {
+    async fn snapshot_format_selects_the_builder() {
         // An empty document defaults `general` via `Default::default()`
         // (empty strings), not the field-level `#[serde(default = ...)]`
         // helpers — those only apply when a `[general]` table is present.
         // Supply an explicit (empty) table so `ttl`/`listen` get their real
         // defaults.
-        let v2_config: Config = toml::from_str("[general]\n").expect("valid config");
+        let default_config: Config = toml::from_str("[general]\n").expect("valid config");
+        let mut default_builder = SnapshotBuilder::new(
+            Arc::new(default_config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        let snap = default_builder.build(Instant::now()).await;
+        assert!(matches!(snap, Snapshot::V3(_)), "the default format is v3");
+
+        // And the escape hatch still reaches the old builder.
+        let v2_config: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v2\"\n").expect("valid config");
         let mut v2_builder = SnapshotBuilder::new(
             Arc::new(v2_config),
             Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
             None,
         );
         let snap = v2_builder.build(Instant::now()).await;
-        assert!(matches!(snap, Snapshot::V2(_)), "default format is v2");
+        assert!(matches!(snap, Snapshot::V2(_)), "v2 is still selectable");
 
         let v3_config: Config =
             toml::from_str("[general]\nsnapshot_format = \"v3\"\n").expect("valid config");

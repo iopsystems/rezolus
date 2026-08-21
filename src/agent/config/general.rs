@@ -1,30 +1,34 @@
 use super::*;
 
 fn default_snapshot_format() -> SnapshotFormat {
-    SnapshotFormat::V2
+    SnapshotFormat::V3
 }
 
 /// The wire format used for metric snapshots served on `/metrics/binary`.
 ///
-/// `V2` is today's flat per-metric format. `V3` emits acquisition-group
-/// snapshots. This is transitional: the default flips to `V3` once samplers
-/// migrate; see docs/journal/2026-08-17-window-sidecar-cost.md.
+/// `V3` (the default) emits acquisition-group snapshots: metrics are grouped
+/// by the read that produced them, and the group carries one acquisition
+/// window rather than every metric carrying its own. `V2` is the older flat
+/// per-metric format, kept as an escape hatch for a fleet whose consumers
+/// have not caught up.
 ///
-/// Before setting this to `V3`, see `config/agent.toml`'s longer comment on
-/// this key for the full operator guidance. Short version: every consumer
-/// (exporter, recorder, viewer, ...) needs a build that understands V3 — an
-/// exporter built before `SnapshotV3` existed cannot decode it (older
-/// builds went dark silently; current builds log the decode failure
-/// loudly instead); acquisition windows are absent from `V3` output for any
-/// metric whose sampler hasn't migrated to a declared group yet (which is
-/// effectively everything today); and `/metrics/json`'s shape changes
-/// wholesale (`groups: [...]` instead of flat `counters`/`gauges`/
-/// `histograms` arrays).
+/// Setting this back to `V2` is for one situation: a consumer that cannot
+/// yet read V3. See `config/agent.toml` for the operator detail. The short
+/// version is that `/metrics/json` changes shape wholesale — a flat
+/// `{counters, gauges, histograms}` becomes `{groups: [...]}` — so anything
+/// parsing that endpoint directly needs updating, and a consumer built
+/// before `SnapshotV3` existed cannot decode `/metrics/binary` at all.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SnapshotFormat {
-    #[default]
     V2,
+    /// Marked `#[default]` so `SnapshotFormat::default()` agrees with
+    /// `default_snapshot_format()`. They are reached by different paths — the
+    /// derive covers a `General` built without deserializing, the function
+    /// covers a config file that omits the key — and a fleet where those two
+    /// disagreed would serve different wire formats depending on how its
+    /// config happened to be loaded.
+    #[default]
     V3,
 }
 
@@ -108,8 +112,28 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_format_defaults_to_v2_when_absent() {
+    fn snapshot_format_defaults_to_v3_when_absent() {
         let g = general("");
+        assert_eq!(g.snapshot_format(), SnapshotFormat::V3);
+    }
+
+    /// The two defaults must agree.
+    ///
+    /// `#[serde(default = "default_snapshot_format")]` covers a config file
+    /// that omits the key; `#[derive(Default)]` on the enum covers a `General`
+    /// built without deserializing at all. They are reached by different paths,
+    /// and a fleet where they disagreed would serve different wire formats
+    /// depending on how its config happened to be loaded.
+    #[test]
+    fn the_serde_default_and_the_derived_default_agree() {
+        assert_eq!(default_snapshot_format(), SnapshotFormat::default());
+    }
+
+    /// v2 stays reachable. It is the escape hatch for a consumer that cannot
+    /// read v3 yet, so it has to keep parsing, not merely keep existing.
+    #[test]
+    fn snapshot_format_v2_is_still_selectable() {
+        let g = general("snapshot_format = \"v2\"\n");
         assert_eq!(g.snapshot_format(), SnapshotFormat::V2);
     }
 
