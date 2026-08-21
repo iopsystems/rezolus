@@ -125,6 +125,14 @@ enabled = true
 # Instruments CPU frequency, instructions, and cycles using perf counters.
 [samplers.cpu_perf]
 
+# Reports CPU energy, power, and idle-state residency via perf. Discovers the
+# `power`, `power_core`, `cstate_core`, and `cstate_pkg` PMUs at runtime and
+# creates counters on the CPUs each PMU's cpumask permits, so no CPU vendor or
+# model detection is needed. Only the domains and C-states the hardware
+# actually implements are reported. Needs CAP_PERFMON; typically unavailable in
+# virtualized environments.
+[samplers.cpu_power]
+
 # BPF sampler that gathers TLB flush event counts by reason.
 [samplers.cpu_tlb_flush]
 

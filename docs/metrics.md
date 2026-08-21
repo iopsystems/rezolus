@@ -17,6 +17,7 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_l3](#cpu_l3)
   - [cpu_migrations](#cpu_migrations)
   - [cpu_perf](#cpu_perf)
+  - [cpu_power](#cpu_power)
   - [cpu_tlb_flush](#cpu_tlb_flush)
   - [cpu_usage](#cpu_usage)
 - [Drive](#drive)
@@ -150,6 +151,81 @@ IPC = Instructions / Cycles
 | `cpu_instructions` | The number of instructions retired | |
 | `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
 | `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
+
+### cpu_power
+
+Reports CPU energy, power, and idle-state residency from the perf PMUs the
+kernel exposes for them. Everything is read through perf; the sampler needs
+`CAP_PERFMON` but not `CAP_SYS_RAWIO`, and does not open `/dev/cpu/*/msr`.
+
+Four PMUs are consulted, each optional and each discovered at runtime from
+`/sys/bus/event_source/devices`:
+
+| PMU | provides |
+|-----|----------|
+| `power` | package-scope RAPL energy (`energy-pkg`, `energy-cores`, `energy-gpu`, `energy-ram`, `energy-psys`) |
+| `power_core` | per-core RAPL energy (`energy-core`) |
+| `cstate_core` | per-core idle residency (`cN-residency`) |
+| `cstate_pkg` | package idle residency (`cN-residency`) |
+
+There is no CPU vendor detection. Which PMUs exist, which events they expose,
+and which CPUs may read them are all published by the kernel, and they vary by
+part as much as by vendor. Only what the hardware actually implements is
+reported, so the metric set differs between machines.
+
+Each PMU's `cpumask` states its counters' scope: a package-scope PMU names one
+CPU per package, a core-scope PMU one CPU per physical core with SMT siblings
+excluded. Core-scope metrics are indexed by that CPU id, so the id identifies a
+core — on hybrid parts this distinguishes P-cores from E-cores, which idle in
+different states. Package-scope metrics are indexed by the package's ordinal
+position in the mask instead, since the mask's CPU ids are sparse (`0,64` on a
+two-socket host) while the ordinal is dense.
+
+Energy is the metric worth keeping: it is a monotonic counter that can be
+aggregated over any window, and power can always be recomputed from it. The
+power gauges are averages over the sampler's last interval, provided for
+convenience.
+
+C-state residency is reported as raw TSC cycles rather than a percentage, so a
+residency fraction is `rate(core_c6_residency) / rate(cpu_tsc)` (`cpu_tsc` comes
+from the `cpu_frequency` sampler). Reporting cycles keeps the ratio exact over
+any window. `core_cstate_residency` sums every core level the part exposes, so
+total idle residency is available without needing to know which levels this
+particular part implements.
+
+Note that `package` energy excludes DRAM, so it is not a whole-system figure.
+These PMUs are typically unavailable in virtualized environments, where the
+sampler disables itself.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `cpu_package_energy` | Cumulative package energy, including cores, uncore, and integrated graphics | id: package ordinal; unit: `microjoules` |
+| `cpu_cores_energy` | Cumulative energy for all cores in the package (Intel PP0) | id: package ordinal; unit: `microjoules` |
+| `cpu_core_energy` | Cumulative energy for a single physical core (AMD) | id: the CPU reading that core; unit: `microjoules` |
+| `cpu_igpu_energy` | Cumulative integrated graphics energy | id: package ordinal; unit: `microjoules` |
+| `cpu_dram_energy` | Cumulative energy for the DRAM attached to the package | id: package ordinal; unit: `microjoules` |
+| `cpu_platform_energy` | Cumulative whole-platform energy (PSys) | id: always `0`; unit: `microjoules` |
+| `cpu_package_power` | Average package power over the last sampling interval | id: package ordinal; unit: `milliwatts` |
+| `cpu_cores_power` | Average power for all cores in the package | id: package ordinal; unit: `milliwatts` |
+| `cpu_core_power` | Average power for a single physical core | id: the CPU reading that core; unit: `milliwatts` |
+| `cpu_igpu_power` | Average integrated graphics power | id: package ordinal; unit: `milliwatts` |
+| `cpu_dram_power` | Average DRAM power | id: package ordinal; unit: `milliwatts` |
+| `cpu_platform_power` | Average whole-platform power | id: always `0`; unit: `milliwatts` |
+| `core_c1_residency` .. `core_c10_residency` | Cumulative TSC cycles a physical core spent in that idle state | id: the CPU reading that core; unit: `cycles` |
+| `core_cstate_residency` | Cumulative TSC cycles a core spent in any idle state, summed across every level exposed | id: the CPU reading that core; unit: `cycles` |
+| `package_c1_residency` .. `package_c10_residency` | Cumulative TSC cycles a package spent in that idle state | id: package ordinal; unit: `cycles` |
+
+Only the domains and C-state levels the hardware implements appear; the rest are
+absent rather than zero. `cpu_cores_energy` (Intel, pre-aggregated per package)
+and `cpu_core_energy` (AMD, per core) measure the same physical quantity at
+different granularities — summing the latter across its ids gives the former.
+
+Prefer the energy counters over the power gauges when accuracy matters. The
+gauges are averaged over the sampler's own refresh interval, so a scrape landing
+mid-interval reports a stale value, and they are integer milliwatts — a domain
+drawing microwatts (an idle iGPU, say) reads `0` even while its energy counter
+advances. Deriving power as `irate(cpu_<domain>_energy) / 1e6` is correct over
+any window.
 
 ### cpu_tlb_flush
 
