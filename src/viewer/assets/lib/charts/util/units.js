@@ -137,6 +137,44 @@ const UNIT_SYSTEMS = {
         }]
     },
 
+    // Power (watts). Dashboard power plots derive watts from the microjoule
+    // energy counters: irate() yields uJ/s (= uW), so the query divides by 1e6.
+    power: {
+        base: 'W',
+        scales: [{
+            threshold: 0,
+            suffix: 'W',
+            divisor: 1
+        }, {
+            threshold: 1000,
+            suffix: 'KW',
+            divisor: 1000
+        }, {
+            threshold: 1000000,
+            suffix: 'MW',
+            divisor: 1000000
+        }]
+    },
+
+    // Energy (joules). Rezolus reports energy in microjoules, so a query must
+    // divide by 1e6 to reach the joule base used here.
+    energy: {
+        base: 'J',
+        scales: [{
+            threshold: 0,
+            suffix: 'J',
+            divisor: 1
+        }, {
+            threshold: 1000,
+            suffix: 'KJ',
+            divisor: 1000
+        }, {
+            threshold: 1000000,
+            suffix: 'MJ',
+            divisor: 1000000
+        }]
+    },
+
     // Count (no units, just numbers with K, M, B suffixes)
     count: {
         base: '',

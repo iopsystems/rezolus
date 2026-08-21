@@ -367,6 +367,7 @@ mod tests {
         "cpu_l3",
         "cpu_migrations",
         "cpu_perf",
+        "cpu_power",
         "cpu_tlb_flush",
         "cpu_usage",
         "drivehealth",

@@ -352,5 +352,155 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
     view.group(tlb);
 
+    // Power and energy from the cpu_power sampler. Which domains exist is
+    // hardware-dependent — Intel exposes `cpu_cores_energy` per package, AMD
+    // exposes `cpu_core_energy` per core, and DRAM/platform/iGPU are present
+    // only on parts that implement them — so every subgroup is gated on the
+    // metric actually appearing in the recording.
+    //
+    // Power is derived from the energy counters rather than read from the
+    // `cpu_*_power` gauges. The gauges are averages over the sampler's own
+    // refresh interval, so a scrape landing mid-interval returns a stale
+    // value; `irate` over the monotonic energy counter is correct for any
+    // window. The counters are microjoules, so irate() gives uJ/s (= uW) and
+    // the /1e6 converts to watts.
+    let mut power = Group::new("Power", "power");
+
+    let domains: &[(&str, &str, &str)] = &[
+        ("cpu_package_energy", "Package", "package"),
+        ("cpu_cores_energy", "Cores", "cores"),
+        ("cpu_core_energy", "Core", "core"),
+        ("cpu_igpu_energy", "Integrated Graphics", "igpu"),
+        ("cpu_dram_energy", "DRAM", "dram"),
+        ("cpu_platform_energy", "Platform", "platform"),
+    ];
+
+    // Each domain gets a half-width aggregate plot, with the per-id breakdown
+    // beside it as a heatmap.
+    //
+    // The per-id plot is only worth emitting when the domain actually has more
+    // than one series. The frontend's resolveStyle() only picks 'heatmap' for a
+    // multi-series result and otherwise falls back to a line, so on a
+    // single-package host a per-id plot would draw the same line as the
+    // aggregate next to it. Package-scope domains have one series per socket,
+    // so they pair up only on multi-socket machines; core-scope domains (AMD's
+    // energy-core) always do.
+    for (metric, label, id) in domains {
+        if !data.has_counter(metric) {
+            continue;
+        }
+
+        let sg = power.subgroup(format!("{label} Power"));
+        sg.describe(format!(
+            "Power drawn by the {} domain, derived from its cumulative energy counter.",
+            label.to_lowercase()
+        ));
+
+        let per_id = metric_unique_label_count(data, metric, "id") > 1;
+
+        sg.plot_promql(
+            PlotOpts::counter(format!("{label} Power"), format!("{id}-power"), Unit::Power),
+            format!("sum(irate({metric}[5m])) / 1000000"),
+        );
+
+        if per_id {
+            sg.plot_promql(
+                PlotOpts::counter(
+                    format!("{label} Power (Per-ID)"),
+                    format!("{id}-power-heatmap"),
+                    Unit::Power,
+                ),
+                format!("sum by (id) (irate({metric}[5m])) / 1000000"),
+            );
+        }
+    }
+
+    if !power.is_empty() {
+        view.group(power);
+    }
+
+    // Idle-state residency from the cstate_core/cstate_pkg PMUs. Counters tick
+    // in TSC cycles, so dividing by cpu_tsc gives the residency fraction. Only
+    // the levels a part implements are recorded, so each is gated.
+    let mut cstate = Group::new("C-State Residency", "cstate");
+
+    if data.has_counter("core_cstate_residency") {
+        let total = cstate.subgroup("Total C-State Residency");
+        total.describe(
+            "Fraction of time cores spent in any idle C-state, summed across every level the hardware exposes.",
+        );
+        total.plot_promql(
+            PlotOpts::counter("Idle %", "cstate-total", Unit::Percentage).percentage_range(),
+            "sum(irate(core_cstate_residency[5m])) / sum(irate(cpu_tsc[5m]))".to_string(),
+        );
+        if metric_unique_label_count(data, "core_cstate_residency", "id") > 1 {
+            total.plot_promql(
+                PlotOpts::counter(
+                    "Idle % (Per-Core)",
+                    "cstate-total-per-core",
+                    Unit::Percentage,
+                )
+                .percentage_range(),
+                "sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m]))"
+                    .to_string(),
+            );
+        }
+    }
+
+    for level in [1u8, 2, 3, 6, 7, 8, 9, 10] {
+        let metric = format!("core_c{level}_residency");
+        if !data.has_counter(&metric) {
+            continue;
+        }
+        let sg = cstate.subgroup(format!("Core C{level}"));
+        sg.describe(format!(
+            "Fraction of time cores spent in the C{level} idle state."
+        ));
+        sg.plot_promql(
+            PlotOpts::counter(
+                format!("C{level} %"),
+                format!("cstate-core-c{level}"),
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            format!("sum(irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
+        );
+        if metric_unique_label_count(data, &metric, "id") > 1 {
+            sg.plot_promql(
+                PlotOpts::counter(
+                    format!("C{level} % (Per-Core)"),
+                    format!("cstate-core-c{level}-per-core"),
+                    Unit::Percentage,
+                )
+                .percentage_range(),
+                format!("sum by (id) (irate({metric}[5m])) / sum by (id) (irate(cpu_tsc[5m]))"),
+            );
+        }
+    }
+
+    for level in [1u8, 2, 3, 6, 7, 8, 9, 10] {
+        let metric = format!("package_c{level}_residency");
+        if !data.has_counter(&metric) {
+            continue;
+        }
+        let sg = cstate.subgroup(format!("Package C{level}"));
+        sg.describe(format!(
+            "Fraction of time the package spent in the C{level} idle state."
+        ));
+        sg.plot_promql_full(
+            PlotOpts::counter(
+                format!("Package C{level} %"),
+                format!("cstate-pkg-c{level}"),
+                Unit::Percentage,
+            )
+            .percentage_range(),
+            format!("sum(irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
+        );
+    }
+
+    if !cstate.is_empty() {
+        view.group(cstate);
+    }
+
     view
 }
