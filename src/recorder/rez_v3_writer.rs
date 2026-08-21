@@ -866,7 +866,7 @@ fn materialize_group_wal_tail(
             &decoded.counters,
             &decoded.gauges,
             &decoded.histograms,
-        )?;
+        );
         first_ts.get_or_insert(row.ts);
     }
     let row_count = builder.rows() as u64;
