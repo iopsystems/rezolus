@@ -675,12 +675,14 @@ pub fn write_archive(path: &Path, recordings: &[RecordingData]) -> Result<(), Re
 /// One recording's manifest entry paired with its table bytes: the outer `Vec`
 /// is parallel to `RezRecording::tables`, the inner one holds that table's
 /// segments in order.
+#[cfg(test)]
 pub type RecordingSegments = (RezRecording, Vec<Vec<Vec<u8>>>);
 
 /// The names a table's `segments` get inside its recording directory. A single
 /// segment keeps the v1 `<sampler>.parquet` shape so v1 binaries can still open
 /// tool output; multiple segments live under `<sampler>/`, zero-padded in
 /// segment order.
+#[cfg(test)]
 fn canonical_segment_names(sampler: &str, segments: usize) -> Vec<String> {
     if segments == 1 {
         vec![format!("{sampler}.parquet")]
@@ -709,6 +711,7 @@ fn canonical_segment_names(sampler: &str, segments: usize) -> Vec<String> {
 /// reader keys tables by `<dir>/<file>`, so either collision would clobber) and
 /// on a table-count/bytes mismatch. All validation runs before the output file
 /// is created. The caller assigns unique dirs.
+#[cfg(test)]
 pub fn write_archive_bytes(path: &Path, recordings: &[RecordingSegments]) -> Result<(), RezError> {
     let mut seen_dirs = std::collections::HashSet::new();
     // The manifest entries as they will be written, with canonical file names.

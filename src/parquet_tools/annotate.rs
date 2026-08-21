@@ -39,10 +39,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
                 eprintln!("error: invalid service extension JSON: {e}");
                 std::process::exit(1);
             });
-            let result = match format {
-                RezFormat::V3Sqlite => annotate_rez_v3(path, &content),
-                _ => annotate_rez(path, &content),
-            };
+            let result = annotate_rez_any(path, format, &content);
             result.unwrap_or_else(|e| {
                 eprintln!("error: failed to annotate .rez: {e}");
                 std::process::exit(1);
@@ -266,6 +263,36 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 /// Embed a custom ServiceExtension into every recording of a `.rez`, validated
 /// against that recording's data. Rewrites the archive in place (copying table
 /// bytes verbatim).
+/// Annotate a `.rez` of either container, always leaving a v3 one behind.
+///
+/// A v1/v2 (tar) archive is upgraded in place first: annotating is a rewrite,
+/// and the tar container is no longer something this binary writes.
+fn annotate_rez_any(
+    path: &Path,
+    format: RezFormat,
+    ext_json: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if format != RezFormat::V2Tar {
+        return annotate_rez_v3(path, ext_json);
+    }
+    let staging = tempfile::tempdir_in(
+        path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new(".")),
+    )?;
+    let staged = staging.path().join("upgraded.rez");
+    crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
+    annotate_rez_v3_at(&staged, path, ext_json)?;
+    // Staged beside the target so this rename is atomic and same-filesystem:
+    // the original survives untouched until the annotated copy is complete.
+    std::fs::rename(&staged, path)?;
+    println!(
+        "upgraded {:?} from a v1/v2 tar archive to v3 (SQLite)",
+        path
+    );
+    Ok(())
+}
+
 /// Embed KPIs into every recording of a v3 (SQLite) `.rez`.
 ///
 /// Unlike `combine` and `filter` this rewrites nothing: the KPI set is a
@@ -273,6 +300,18 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 /// read or copied, which is why annotating a 4 GB archive costs the same as
 /// annotating a 4 MB one.
 fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    annotate_rez_v3_at(path, path, ext_json)
+}
+
+/// `annotate_rez_v3`, with the archive being written and the name to report
+/// separated. They differ when a tar archive is annotated: the work happens on
+/// an upgraded staging copy, but the operator asked about — and will go on
+/// using — the original path, so that is the one worth naming.
+fn annotate_rez_v3_at(
+    path: &Path,
+    display: &Path,
+    ext_json: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez_sqlite::RezDb;
 
     let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
@@ -309,45 +348,9 @@ fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error
     }
     println!(
         "Annotated {:?}: embedded {} KPIs into {} recording(s)",
-        path,
+        display,
         kpis,
         recordings.len()
-    );
-    Ok(())
-}
-
-fn annotate_rez(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::recorder::rez;
-    let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
-    let (manifest, recordings_bytes) = rez::read_archive_bytes(path)?;
-    let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
-    let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
-
-    let mut out: Vec<rez::RecordingSegments> = Vec::new();
-    for ((mut rec, rb), (_labels, reader)) in manifest
-        .recordings
-        .into_iter()
-        .zip(recordings_bytes)
-        .zip(readers)
-    {
-        let mut ext = base_ext.clone();
-        validate_kpis_source(&reader, &mut ext);
-        let annotated = serde_json::to_string(&ext)?;
-        rec.metadata.insert(
-            crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
-            annotated,
-        );
-        // Segments pass through byte-identical; only manifest metadata changes.
-        let bytes: Vec<Vec<Vec<u8>>> = rb.tables.into_iter().map(|(_, b)| b).collect();
-        out.push((rec, bytes));
-    }
-    let n = out.len();
-    rez::write_archive_bytes(path, &out)?;
-    println!(
-        "Annotated {:?}: embedded {} KPIs into {} recording(s)",
-        path,
-        base_ext.kpis.len(),
-        n
     );
     Ok(())
 }
@@ -964,15 +967,23 @@ mod tests {
         let (_d, path) = build_one_recording_rez();
         let ext_json = r#"{"service_name":"test","kpis":[{"role":"overview","title":"Cycles","query":"cpu_cycles","type":"counter"}]}"#;
 
-        annotate_rez(&path, ext_json).unwrap();
+        annotate_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, ext_json).unwrap();
 
-        let (manifest, _rb) = crate::recorder::rez::read_archive_bytes(&path).unwrap();
-        assert!(manifest
-            .recordings
+        // Annotating a tar archive upgrades it in place, so it reads back as
+        // v3 — the KPIs land in the recording's metadata column rather than a
+        // manifest.
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&path).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite
+        );
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert!(recordings
             .iter()
-            .all(|rec| rec.metadata.contains_key(KEY_SERVICE_QUERIES)));
+            .all(|rec| rec.meta.metadata.contains_key(KEY_SERVICE_QUERIES)));
         // The embedded JSON round-trips to a ServiceExtension.
-        let embedded = manifest.recordings[0]
+        let embedded = recordings[0]
+            .meta
             .metadata
             .get(KEY_SERVICE_QUERIES)
             .unwrap();
@@ -1006,19 +1017,23 @@ mod tests {
         // The KPI queries a metric the fixture really has, so `available`
         // resolves through the segmented reader rather than short-circuiting.
         let ext_json = r#"{"service_name":"seg","kpis":[{"role":"overview","title":"Ops","query":"rate(cpu_usage_ops[2s])","type":"counter"}]}"#;
-        annotate_rez(&path, ext_json).unwrap();
+        annotate_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, ext_json).unwrap();
 
-        let (manifest, mut recordings) = rez::read_archive_bytes(&path).unwrap();
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        let segments = db.read_segments(recordings[0].id, "cpu_usage").unwrap();
         assert_eq!(
-            recordings.remove(0).tables,
-            before,
-            "segment bytes pass through byte-identical"
+            segments.iter().map(|s| s.bytes.clone()).collect::<Vec<_>>(),
+            before[0].1,
+            "segment bytes pass through byte-identical — an upgrade changes the \
+             container, not the data"
         );
 
-        let embedded = manifest.recordings[0]
+        let embedded = recordings[0]
+            .meta
             .metadata
             .get(KEY_SERVICE_QUERIES)
-            .expect("the KPI metadata landed in the manifest");
+            .expect("the KPI metadata landed in the recording");
         let ext: ServiceExtension = serde_json::from_str(embedded).unwrap();
         assert_eq!(ext.service_name, "seg");
         assert_eq!(ext.kpis.len(), 1);

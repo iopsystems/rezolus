@@ -446,10 +446,23 @@ mod tests {
         });
 
         barrier.wait();
+        // Read at least MIN_READS times — that floor is the tear detection and
+        // must not shrink — then keep going until the writer has demonstrably
+        // moved. The writer's progress is a scheduling outcome, not a property
+        // of the lock: on a loaded machine it gets starved, and CI has seen 88
+        // distinct stamps across the 5M reads, which says nothing about
+        // tearing. Bounded, so a genuinely stuck writer still fails the
+        // non-vacuity check below rather than spinning forever.
+        const MIN_READS: u64 = 5_000_000;
+        const MIN_ADVANCES: u64 = 100;
+        const MAX_READS: u64 = 100_000_000;
+
+        let mut reads = 0u64;
         let mut observed = 0u64; // Some(_) loads: contention actually exercised
         let mut advanced = 0u64; // distinct begin_ns values: writer made progress
         let mut last_begin = None;
-        for _ in 0..5_000_000 {
+        while reads < MAX_READS && (reads < MIN_READS || advanced <= MIN_ADVANCES) {
+            reads += 1;
             if let Some(w) = slot.load() {
                 assert_eq!(w.end_ns, w.begin_ns + 1, "torn read: {w:?}");
                 observed += 1;
@@ -467,8 +480,8 @@ mod tests {
             "reader saw too few stamps ({observed}) — not exercising contention"
         );
         assert!(
-            advanced > 100,
-            "writer made no visible progress ({advanced}) — vacuous run"
+            advanced > MIN_ADVANCES,
+            "writer made no visible progress ({advanced}) in {reads} reads — vacuous run"
         );
     }
 
