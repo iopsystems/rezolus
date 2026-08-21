@@ -282,7 +282,7 @@ fn annotate_rez_any(
     )?;
     let staged = staging.path().join("upgraded.rez");
     crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
-    annotate_rez_v3(&staged, ext_json)?;
+    annotate_rez_v3_at(&staged, path, ext_json)?;
     // Staged beside the target so this rename is atomic and same-filesystem:
     // the original survives untouched until the annotated copy is complete.
     std::fs::rename(&staged, path)?;
@@ -300,6 +300,18 @@ fn annotate_rez_any(
 /// read or copied, which is why annotating a 4 GB archive costs the same as
 /// annotating a 4 MB one.
 fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
+    annotate_rez_v3_at(path, path, ext_json)
+}
+
+/// `annotate_rez_v3`, with the archive being written and the name to report
+/// separated. They differ when a tar archive is annotated: the work happens on
+/// an upgraded staging copy, but the operator asked about — and will go on
+/// using — the original path, so that is the one worth naming.
+fn annotate_rez_v3_at(
+    path: &Path,
+    display: &Path,
+    ext_json: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez_sqlite::RezDb;
 
     let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
@@ -336,7 +348,7 @@ fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error
     }
     println!(
         "Annotated {:?}: embedded {} KPIs into {} recording(s)",
-        path,
+        display,
         kpis,
         recordings.len()
     );
