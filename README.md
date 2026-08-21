@@ -230,11 +230,11 @@ machine dies the recording is readable where it sits, missing at most one
 sampling interval:
 
 ```bash
-rezolus parquet metadata -i out.rez   # reports "not cleanly finalized"
+rezolus recording metadata -i out.rez   # reports "not cleanly finalized"
 ```
 
 The previous tar container is no longer written. Archives recorded by older
-releases still open everywhere, and `rezolus parquet upgrade old.rez` converts
+releases still open everywhere, and `rezolus recording upgrade old.rez` converts
 one to the current container — as does rewriting it with `combine`, `filter` or
 `annotate`, all of which read either container and emit the current one.
 
@@ -297,11 +297,11 @@ File operations for parquet recordings:
   KPIs, shrinking the recording.
 
 ```bash
-rezolus parquet metadata -i rezolus.parquet
-rezolus parquet annotate rezolus.parquet --queries ext.json
-rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
-rezolus parquet convert rezolus.raw.zst              # writes rezolus.parquet
-rezolus parquet filter rezolus.parquet -o slim.parquet
+rezolus recording metadata -i rezolus.parquet
+rezolus recording annotate rezolus.parquet --queries ext.json
+rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
+rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
+rezolus recording filter rezolus.parquet -o slim.parquet
 ```
 
 `convert` infers the sampling interval from the median gap between snapshot
@@ -434,9 +434,9 @@ target/release/rezolus view rezolus.parquet
 target/release/rezolus view http://localhost:4241
 
 # parquet file operations
-target/release/rezolus parquet metadata -i rezolus.parquet
-target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
-target/release/rezolus parquet convert rezolus.raw.zst
+target/release/rezolus recording metadata -i rezolus.parquet
+target/release/rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
+target/release/rezolus recording convert rezolus.raw.zst
 ```
 
 To rebuild the browser-only static viewer (`site/viewer/`) that ships the PromQL

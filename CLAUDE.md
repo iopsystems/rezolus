@@ -74,22 +74,22 @@ target/release/rezolus view --tui http://localhost:4241             # terminal U
 target/release/rezolus hindsight config/hindsight.toml
 
 # Parquet tools - file operations on parquet recordings
-target/release/rezolus parquet metadata -i file.parquet             # show file/column metadata
-target/release/rezolus parquet metadata -i file.parquet --json      # JSON output
-target/release/rezolus parquet metadata -i file.parquet --field source
-target/release/rezolus parquet annotate file.parquet                # add service extension KPIs
-target/release/rezolus parquet annotate file.parquet --queries ext.json
-target/release/rezolus parquet convert rezolus.raw.zst               # raw msgpack -> parquet (writes rezolus.parquet)
-target/release/rezolus parquet convert rezolus.raw -o out.parquet --interval 250ms
-target/release/rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json
+target/release/rezolus recording metadata -i file.parquet             # show file/column metadata
+target/release/rezolus recording metadata -i file.parquet --json      # JSON output
+target/release/rezolus recording metadata -i file.parquet --field source
+target/release/rezolus recording annotate file.parquet                # add service extension KPIs
+target/release/rezolus recording annotate file.parquet --queries ext.json
+target/release/rezolus recording convert rezolus.raw.zst               # raw msgpack -> parquet (writes rezolus.parquet)
+target/release/rezolus recording convert rezolus.raw -o out.parquet --interval 250ms
+target/release/rezolus recording convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json
 # convert auto-detects zstd by magic bytes; interval is inferred from snapshot
 # timestamps unless --interval is given; -m/--metadata key=value tags the file;
 # --force overwrites an existing output. Raw input only (not .rez, not parquet).
-target/release/rezolus parquet combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
-target/release/rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
-target/release/rezolus parquet filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
-target/release/rezolus parquet upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
-target/release/rezolus parquet upgrade old.rez -o new.rez            # ...or to a new file
+target/release/rezolus recording combine a.parquet b.parquet -o combined.parquet       # row-merge multi-source
+target/release/rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar  # A/B tarball (values are source names)
+target/release/rezolus recording filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
+target/release/rezolus recording upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
+target/release/rezolus recording upgrade old.rez -o new.rez            # ...or to a new file
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);
 # combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);

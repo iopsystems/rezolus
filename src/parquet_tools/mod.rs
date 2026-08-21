@@ -15,18 +15,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub fn command() -> Command {
-    Command::new("parquet")
-        .about("Inspect and transform Rezolus parquet recordings")
+    // `recording` is the name; `parquet` is kept as an alias because it is
+    // what every existing script types. The rename is not cosmetic — these
+    // subcommands stopped being parquet-specific once `.rez` arrived, and
+    // `rezolus parquet upgrade old.rez` describes neither its input nor its
+    // output. A `.rez` holds parquet segments, but the file you hand these
+    // commands is a recording.
+    Command::new("recording")
+        .alias("parquet")
+        .about("Inspect and transform Rezolus recordings (.parquet files and .rez archives)")
         .long_about(
-            "Offline operations on parquet recordings produced by `rezolus record` or\n\
-             `rezolus hindsight`.\n\n\
+            "Offline operations on recordings produced by `rezolus record` or\n\
+             `rezolus hindsight` — both plain `.parquet` files and `.rez` archives.\n\n\
              SUBCOMMANDS:\n    \
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
              combine    Merge multiple files (multi-node / multi-instance) or build an A/B tarball\n    \
              convert    Turn a raw msgpack recording (from `record -f raw`) into parquet\n    \
-             filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n\n\
-             Run `rezolus parquet <subcommand> --help` for per-subcommand examples.",
+             filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
+             upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
+             Run `rezolus recording <subcommand> --help` for per-subcommand examples.\n\n\
+             `rezolus parquet ...` still works and does the same thing.",
         )
         .subcommand_required(true)
         .subcommand(
@@ -560,6 +569,36 @@ fn upgrade_rez(
         dest, recordings
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod command_name_tests {
+    /// `parquet` keeps working as an alias for `recording`.
+    ///
+    /// The rename is the point — these subcommands stopped being
+    /// parquet-specific once `.rez` arrived — but every existing script and
+    /// runbook types `rezolus parquet ...`, and breaking those to make a name
+    /// tidier is not a trade worth making. Both spellings must reach the same
+    /// subcommand, and clap must resolve the alias to the canonical name so
+    /// `main`'s dispatch needs only one arm.
+    #[test]
+    fn parquet_still_reaches_the_recording_subcommand() {
+        let app = clap::Command::new("rezolus").subcommand(super::command());
+
+        for spelling in ["recording", "parquet"] {
+            let m = app
+                .clone()
+                .try_get_matches_from(["rezolus", spelling, "metadata", "-i", "x.parquet"])
+                .unwrap_or_else(|e| panic!("`rezolus {spelling} metadata` must parse: {e}"));
+            let (name, sub) = m.subcommand().expect("a subcommand matched");
+            assert_eq!(
+                name, "recording",
+                "clap must report the canonical name for `{spelling}`, so `main` \
+                 dispatches on one arm rather than two"
+            );
+            assert_eq!(sub.subcommand_name(), Some("metadata"));
+        }
+    }
 }
 
 pub fn run(args: ArgMatches) {
