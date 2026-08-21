@@ -21,6 +21,13 @@ use crate::agent::{MAX_CPUS, MAX_PACKAGES};
 // The perf events report joules via a scale factor. We accumulate microjoules
 // so that the hardware quantum (61.035 uJ on Intel, 15.259 uJ on AMD Zen) is
 // preserved without needing floats in the metric layer.
+//
+// Energy is the only form reported. Power is its derivative and is better
+// computed at query time as `irate(cpu_<domain>_energy) / 1e6`, which is
+// correct over any window. A sampled power gauge would only ever describe the
+// sampler's own refresh interval, so a scrape landing mid-interval reads a
+// stale value, and an integer-milliwatt gauge truncates a microwatt-scale
+// domain (an idle iGPU) to zero while its energy counter still advances.
 
 #[metric(
     name = "cpu_package_energy",
@@ -63,54 +70,6 @@ pub static CPU_DRAM_ENERGY: CounterGroup = CounterGroup::new(MAX_PACKAGES);
     metadata = { unit = "microjoules" }
 )]
 pub static CPU_PLATFORM_ENERGY: CounterGroup = CounterGroup::new(1);
-
-// Power
-//
-// Average power over the most recent sampling interval. A convenience for
-// dashboards and alerting; it carries no information beyond the energy
-// counters above.
-
-#[metric(
-    name = "cpu_package_power",
-    description = "The average power drawn by the CPU package over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_PACKAGE_POWER: GaugeGroup = GaugeGroup::new(MAX_PACKAGES);
-
-#[metric(
-    name = "cpu_cores_power",
-    description = "The average power drawn by all CPU cores in the package over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_CORES_POWER: GaugeGroup = GaugeGroup::new(MAX_PACKAGES);
-
-#[metric(
-    name = "cpu_core_power",
-    description = "The average power drawn by a single CPU core over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_CORE_POWER: GaugeGroup = GaugeGroup::new(MAX_CPUS);
-
-#[metric(
-    name = "cpu_igpu_power",
-    description = "The average power drawn by the integrated graphics over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_IGPU_POWER: GaugeGroup = GaugeGroup::new(MAX_PACKAGES);
-
-#[metric(
-    name = "cpu_dram_power",
-    description = "The average power drawn by the DRAM attached to this package over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_DRAM_POWER: GaugeGroup = GaugeGroup::new(MAX_PACKAGES);
-
-#[metric(
-    name = "cpu_platform_power",
-    description = "The average power drawn by the whole platform over the last sampling interval.",
-    metadata = { unit = "milliwatts" }
-)]
-pub static CPU_PLATFORM_POWER: GaugeGroup = GaugeGroup::new(1);
 
 // C-state residency
 //
