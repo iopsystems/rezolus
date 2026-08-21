@@ -77,6 +77,7 @@ const _: () = assert!(
 const SCHEMA_VERSION: i64 = 3;
 
 /// One recording's identity: everything known when the recording starts.
+#[derive(Clone)]
 pub(crate) struct RecordingMeta {
     pub labels: BTreeMap<String, String>,
     pub metadata: BTreeMap<String, String>,
@@ -922,6 +923,54 @@ impl RezDb {
     /// buffer it came from is still running.
     pub(crate) fn mark_complete(&mut self, recording_id: i64) -> Result<(), String> {
         self.transaction(|tx| tx.mark_complete(recording_id))
+    }
+
+    /// Every user table in this database, by name — SQLite's own internal
+    /// tables (`sqlite_*`) excluded.
+    ///
+    /// Exists so `rez_v3_rewrite` can assert that its fixed copy list still
+    /// covers the whole schema: a copy carries only what it is told to, so a
+    /// table added here without being handled there would vanish silently
+    /// from every rewritten archive.
+    #[cfg(test)]
+    pub(crate) fn user_table_names(&self) -> Result<Vec<String>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .map_err(|e| format!("failed to list tables: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("failed to list tables: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to list tables: {e}"))
+    }
+
+    /// Replace one recording's metadata map.
+    ///
+    /// In place rather than through a copy because metadata is a catalog
+    /// column: `annotate` changes it and nothing else, and rewriting an
+    /// archive's every segment BLOB to edit one JSON string would make a
+    /// cheap operation cost the size of the recording.
+    pub(crate) fn update_recording_metadata(
+        &self,
+        recording_id: i64,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let encoded = serde_json::to_string(metadata)
+            .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
+        let changed = self
+            .conn
+            .execute(
+                "UPDATE recordings SET metadata = ?1 WHERE id = ?2",
+                rusqlite::params![encoded, recording_id],
+            )
+            .map_err(|e| format!("failed to update recording metadata: {e}"))?;
+        if changed == 0 {
+            return Err(format!("no recording with id {recording_id}"));
+        }
+        Ok(())
     }
 
     pub(crate) fn pragma_u32(&self, name: &str) -> Result<u32, String> {

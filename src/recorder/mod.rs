@@ -7,6 +7,7 @@ mod prometheus;
 pub(crate) mod rez;
 pub(crate) mod rez_sqlite;
 pub(crate) mod rez_stream;
+pub(crate) mod rez_v3_rewrite;
 pub(crate) mod rez_v3_writer;
 
 use crate::parquet_metadata;

@@ -28,7 +28,7 @@ use std::time::Duration;
 use metriken_exposition::Snapshot;
 
 use super::state::TimeRange;
-use crate::recorder::rez_sqlite::{RezDb, SegmentMeta};
+use crate::recorder::rez_sqlite::RezDb;
 use crate::recorder::rez_stream::SealPolicy;
 use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
 
@@ -364,58 +364,21 @@ fn copy_range(
     end: u64,
     listed: &dyn Fn(),
 ) -> Result<(), String> {
+    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, CopySpec};
     let mut dst = RezDb::create(staged)?;
     src.read_snapshot(|src| {
-        let recordings = src.read_recordings()?;
+        // Pins the snapshot before a single segment BLOB is copied:
+        // `read_recordings` is the first read, so `BEGIN DEFERRED` takes its
+        // read mark here.
+        let _pinned = src.read_recordings()?;
         listed();
         dst.transaction(|tx| {
-            for rec in &recordings {
-                let id = tx.insert_recording(&rec.meta)?;
-                for sampler in src.all_samplers(rec.id)? {
-                    let mut seq = 0u64;
-                    for segment in src.segments_overlapping(rec.id, &sampler, start, end)? {
-                        tx.insert_segment(id, &sampler, seq, &segment.meta, &segment.bytes)?;
-                        seq += 1;
-                    }
-                    // The tail is the newest data in the buffer and the only
-                    // data a quiet table may have at all, so it is never
-                    // optional — only out of range.
-                    let tail = src.live_wal(rec.id, &sampler)?;
-                    let (Some(first), Some(last)) = (tail.first(), tail.last()) else {
-                        continue;
-                    };
-                    if last.ts < start || first.ts > end {
-                        continue;
-                    }
-                    // `first`/`tail.len()` are only for the range check above
-                    // from here on — the catalog's `first_ts`/`rows` come
-                    // from what actually materializes (see
-                    // `MaterializedTail`'s doc): a V3 group's leading
-                    // un-anchored rows are real WAL rows that never reach the
-                    // segment, so the raw tail's own span/length would
-                    // catalog a start and count the inserted bytes don't
-                    // agree with. `last_ts` stays the raw tail's own last
-                    // row — that one is always correct (a skip is always a
-                    // leading run).
-                    let materialized =
-                        crate::recorder::rez_v3_writer::materialize_wal_tail(&sampler, &tail)
-                            .map_err(|e| format!("failed to seal the {sampler} tail: {e}"))?;
-                    if let Some(materialized) = materialized {
-                        let meta = SegmentMeta {
-                            rows: materialized.rows,
-                            first_ts: materialized.first_ts,
-                            last_ts: last.ts,
-                        };
-                        tx.insert_segment(id, &sampler, seq, &meta, &materialized.bytes)?;
-                    }
-                }
-                // Drift observations are part of the recording's identity and
-                // cost nothing to carry; they are already only a handful of
-                // rows per seal.
-                for (ts, offset) in src.read_clock_offsets(rec.id)? {
-                    tx.insert_clock_offset(id, ts, offset)?;
-                }
-            }
+            let spec = CopySpec {
+                start,
+                end,
+                ..CopySpec::everything()
+            };
+            copy_recordings_into(src, tx, &spec)?;
             Ok(())
         })
     })
@@ -426,7 +389,7 @@ mod tests {
     use super::*;
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use crate::recorder::rez::{detect_rez_format, read_table_parquet, RezFormat};
-    use crate::recorder::rez_sqlite::{Evicted, RecordingMeta};
+    use crate::recorder::rez_sqlite::{Evicted, RecordingMeta, SegmentMeta};
     use metriken::Window;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

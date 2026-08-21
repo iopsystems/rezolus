@@ -204,17 +204,22 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             if !formats.iter().all(|f| *f != RezFormat::NotRez) {
                 return Err("cannot mix .rez and .parquet inputs in combine".into());
             }
-            // `combine_rez` rewrites recordings through `read_archive_bytes`/
-            // `write_archive_bytes`, which only speak the v2 tar container.
-            // Mixing v2 and v3 (or combining all-v3) is a real question this
-            // task leaves out of scope: error clearly rather than silently
-            // mis-assembling or corrupting an archive.
-            if formats.contains(&RezFormat::V3Sqlite) {
+            // Each container has its own assembler: v3 copies segment BLOBs
+            // between SQLite catalogs, v2 rewrites tar members. Mixing the two
+            // would mean converting one container into the other mid-assembly,
+            // which is a real feature rather than a special case here — error
+            // instead of half-doing it.
+            let all_v3 = formats.iter().all(|f| *f == RezFormat::V3Sqlite);
+            let any_v3 = formats.contains(&RezFormat::V3Sqlite);
+            if any_v3 && !all_v3 {
                 return Err(
-                    "combining v3 (SQLite) .rez archives is not yet supported; only v2 tar \
-                     .rez archives can be combined"
+                    "cannot combine v2 (tar) and v3 (SQLite) .rez archives together; \
+                     convert them to one container first"
                         .into(),
                 );
+            }
+            if all_v3 {
+                return combine_rez_v3(&files, output);
             }
             return combine_rez(&files, output);
         }
@@ -305,6 +310,53 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
 
 /// Assemble multiple `.rez` files into one multi-recording `.rez`, copying each
 /// recording verbatim and assigning collision-free `dir`s from labels.
+/// Assemble several v3 (SQLite) `.rez` archives into one multi-recording
+/// archive.
+///
+/// Segment BLOBs are copied verbatim — nothing is decoded, re-encoded or
+/// re-timestamped, so this costs a BLOB copy per segment and nothing else.
+/// Every input's recordings are appended under fresh ids, which is all a
+/// multi-recording archive is; unlike the v2 tar path there are no directory
+/// names to keep unique, because a v3 recording is identified by its row id
+/// and described by its labels.
+///
+/// The whole assembly is one destination transaction: either the output holds
+/// every input or it does not exist.
+fn combine_rez_v3(
+    files: &[PathBuf],
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez_sqlite::RezDb;
+    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, mark_copies_complete, CopySpec};
+
+    let mut dst = RezDb::create(output)?;
+    let mut recordings = 0usize;
+    dst.transaction(|tx| {
+        for file in files {
+            let src = RezDb::open(file)?;
+            // A read snapshot per input: one of them may still be being
+            // written (a live hindsight buffer is a perfectly good input), and
+            // this is what stops retention from deleting a segment out from
+            // under the copy.
+            src.read_snapshot(|src| {
+                recordings += copy_recordings_into(src, tx, &CopySpec::everything())?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    })?;
+    // The inputs may still be recording; this assembly is finished by
+    // definition, so it should not open with a "not cleanly finalized" warning.
+    mark_copies_complete(&mut dst)?;
+    println!(
+        "wrote {} with {} recording(s) from {} input(s)",
+        output.display(),
+        recordings,
+        files.len()
+    );
+    Ok(())
+}
+
 fn combine_rez(
     files: &[PathBuf],
     output: &std::path::Path,
@@ -2800,43 +2852,70 @@ mod tests {
     }
 
     /// `parquet combine` recognizes a v3 (SQLite) `.rez` as a `.rez` input (not
-    /// a bare parquet), but `combine_rez` rewrites recordings through
-    /// `read_archive_bytes`/`write_archive_bytes`, which only speak the v2 tar
-    /// container — so all-v3 inputs get an explicit "not yet supported" error
-    /// rather than being silently treated as plain parquet (and failing with
-    /// an unrelated footer error) or half-combined into a corrupt archive.
+    /// All-v3 inputs assemble into one multi-recording v3 archive, and the
+    /// result must be READABLE — not merely written. The trap a segment copy
+    /// invites is producing a catalog that looks right while the parquet
+    /// BLOBs it points at were reseq'd out of order or attributed to the
+    /// wrong recording, which only a read catches.
     ///
-    /// Mutation check: reverting the front-door classification in `run()` to
-    /// `is_rez_path` makes this fail — `is_rez_path` reports `false` for both
-    /// v3 inputs, so `run()` never takes the `.rez` branch at all and the
-    /// error comes from `load_inputs` trying (and failing) to read the SQLite
-    /// bytes as a parquet footer, which does not mention "v3".
+    /// Mutation check: dropping the `seq` renumbering in
+    /// `copy_recordings_into` leaves this passing only while every input has a
+    /// single segment, which is why the fixture writes several ticks.
     #[test]
-    fn combine_rejects_all_v3_sqlite_rez_inputs() {
+    fn combine_assembles_v3_inputs_into_one_readable_archive() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.rez");
         let b = dir.path().join("b.rez");
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&a);
-        crate::recorder::rez::recorder_tests_support::empty_v3_rez(&b);
-        for f in [&a, &b] {
-            assert_eq!(
-                crate::recorder::rez::detect_rez_format(f).unwrap(),
-                crate::recorder::rez::RezFormat::V3Sqlite,
-                "fixture sanity: must actually be a v3 SQLite archive"
-            );
-        }
+        populated_v3_rez(&a, "baseline", &["cpu_usage", "scheduler"], 6);
+        populated_v3_rez(&b, "experiment", &["cpu_usage", "scheduler"], 6);
         let out = dir.path().join("out.rez");
 
-        let err = run_combine(&[a, b], &out).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("v3"),
-            "expected an explicit v3-not-supported error, got: {msg}"
+        run_combine(&[a, b], &out).unwrap();
+
+        assert_eq!(
+            crate::recorder::rez::detect_rez_format(&out).unwrap(),
+            crate::recorder::rez::RezFormat::V3Sqlite,
+            "a combined v3 archive must still be a v3 archive"
         );
-        assert!(
-            !out.exists(),
-            "must not write a (half-assembled) output on the unsupported path"
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 2, "one recording per input");
+        let arms: Vec<&str> = recordings
+            .iter()
+            .filter_map(|r| r.meta.labels.get("arm").map(String::as_str))
+            .collect();
+        assert_eq!(
+            arms,
+            vec!["baseline", "experiment"],
+            "each input's labels must survive, distinguishing the arms"
         );
+        for rec in &recordings {
+            assert!(
+                rec.complete,
+                "an assembled archive is finished by definition and must not \
+                 open with a 'not cleanly finalized' warning"
+            );
+            let mut tables = db.all_samplers(rec.id).unwrap();
+            tables.sort();
+            assert_eq!(
+                tables,
+                vec!["cpu_usage".to_string(), "scheduler".to_string()]
+            );
+            for table in &tables {
+                assert!(
+                    db.total_rows(rec.id, table).unwrap() > 0,
+                    "table {table} carried no rows across the copy"
+                );
+            }
+        }
+
+        // The point of the whole exercise: the assembled archive answers
+        // queries, per recording.
+        let pool = metriken_query::BufferPool::new(64 * 1024 * 1024);
+        let readers = crate::rez_reader::RezReader::open_recordings(&out, pool).unwrap();
+        assert_eq!(readers.len(), 2, "both recordings must be readable");
     }
 
     /// Mixing a v2 tar input with a v3 SQLite input is deliberately out of

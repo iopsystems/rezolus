@@ -12,13 +12,12 @@ use crate::viewer::{ServiceExtension, TemplateRegistry};
 use super::annotate::extract_metric_selectors;
 
 /// Which branch `run()` takes for `path`. Dispatch is by CONTENT, not
-/// extension, and recognizes both `.rez` containers. `filter_rez` rewrites
-/// through `read_archive_bytes`/`write_archive_bytes`, which only speak the
-/// v2 tar container, so a v3 (SQLite) archive gets an explicit "not yet
-/// supported" error in `run()` rather than silently falling through to the
-/// plain-parquet path or a misleading tar-parse error. Split out from `run()`
-/// so it is testable without triggering `run()`'s `std::process::exit` on the
-/// v3/error arms.
+/// extension, and recognizes both `.rez` containers: each has its own
+/// filter (`filter_rez_v3` copies segment BLOBs between SQLite catalogs,
+/// `filter_rez` rewrites tar members), so a `.rez` never falls through to the
+/// plain-parquet path and fails with a misleading footer or tar-parse error.
+/// Split out from `run()` so it is testable without triggering `run()`'s
+/// `std::process::exit`.
 fn dispatch_format(path: &Path) -> RezFormat {
     crate::recorder::rez::detect_rez_format(path).unwrap_or(RezFormat::NotRez)
 }
@@ -29,13 +28,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     // `.rez` archives: drop whole per-sampler tables by --samplers (the
     // KPI-column filter no-ops on all-rezolus .rez data).
     match dispatch_format(path) {
-        RezFormat::V3Sqlite => {
-            eprintln!(
-                "error: filtering a v3 (SQLite) .rez archive is not yet supported; only v2 tar .rez archives can be filtered in place"
-            );
-            std::process::exit(1);
-        }
-        RezFormat::V2Tar => {
+        format @ (RezFormat::V3Sqlite | RezFormat::V2Tar) => {
             let list = args.get_one::<String>("samplers").unwrap_or_else(|| {
                 eprintln!(
                     "error: filtering a .rez requires --samplers <a,b,...> (samplers to keep)"
@@ -48,7 +41,11 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
                 .filter(|s| !s.is_empty())
                 .collect();
             let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
-            if let Err(e) = filter_rez(path, &keep, output) {
+            let result = match format {
+                RezFormat::V3Sqlite => filter_rez_v3(path, &keep, output),
+                _ => filter_rez(path, &keep, output),
+            };
+            if let Err(e) = result {
                 eprintln!("error: failed to filter .rez: {e}");
                 std::process::exit(1);
             }
@@ -156,8 +153,110 @@ pub(super) fn filter_parquet_file(
     Ok(())
 }
 
-/// Filter a `.rez` archive to keep only the named per-sampler tables, dropping
-/// the rest from every recording. Copies kept table bytes verbatim.
+/// Drop whole samplers from a v3 (SQLite) `.rez`.
+///
+/// Filters by *sampler*, not by table key: under V3 one sampler owns several
+/// `<sampler>/<group>` tables, and "drop cpu_usage" has to mean all of its
+/// groups. Kept tables' segment BLOBs are copied verbatim.
+///
+/// Writing a new archive rather than issuing a `DELETE` is deliberate, but NOT
+/// because a delete would strand the freed pages — these archives are created
+/// `auto_vacuum=INCREMENTAL` and [`RezDb::incremental_vacuum`] hands the pages
+/// back, which is exactly how hindsight retention keeps a buffer bounded. A
+/// delete would shrink the file perfectly well. The reasons are:
+///
+/// 1. `--output` must leave the input untouched, so that mode needs a copy no
+///    matter what — and a delete-based one would have to copy the WHOLE
+///    archive first and then shrink it, writing 5.8 MB to produce 1.6 MB in
+///    the measured case. One path serves both modes, and it is the cheaper
+///    path in the one that dominates.
+/// 2. In place, a copy plus an atomic rename cannot damage the original. A
+///    delete mutates it, so a failure partway through leaves the operator with
+///    neither the archive they had nor the one they asked for.
+/// 3. It reuses hindsight's copy, so the WAL-tail handling — a table's
+///    unsealed rows, and a V3 group's leading un-anchored rows that never
+///    reach a segment — has one implementation rather than two.
+fn filter_rez_v3(
+    path: &Path,
+    keep: &std::collections::BTreeSet<String>,
+    output: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez::table_sampler;
+    use crate::recorder::rez_sqlite::RezDb;
+    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, mark_copies_complete, CopySpec};
+
+    let src = RezDb::open(path)?;
+
+    // The same guard the v2 path carries, and for the same reason: `dest`
+    // defaults to the INPUT, so an unvalidated `--samplers cpu_usge` would
+    // overwrite a long-lived capture with an archive holding nothing.
+    let mut present: BTreeSet<String> = BTreeSet::new();
+    let mut total = 0usize;
+    for rec in src.read_recordings()? {
+        for table in src.all_samplers(rec.id)? {
+            total += 1;
+            present.insert(table_sampler(&table).to_string());
+        }
+    }
+    let unmatched: Vec<&str> = keep
+        .iter()
+        .map(String::as_str)
+        .filter(|s| !present.contains(*s))
+        .collect();
+    if !unmatched.is_empty() {
+        return Err(format!(
+            "no sampler named {} in {}; it holds: {}",
+            unmatched.join(", "),
+            path.display(),
+            present
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+        .into());
+    }
+
+    // Staged beside the destination so the rename that publishes it is atomic
+    // and on the same filesystem — and so an in-place filter never leaves a
+    // half-written archive where the original was.
+    let dest = output.unwrap_or(path);
+    let dir = dest.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+    let staged = staging.path().join("filtered.rez");
+
+    let mut dst = RezDb::create(&staged)?;
+    let mut kept = 0usize;
+    dst.transaction(|tx| {
+        src.read_snapshot(|src| {
+            let spec = CopySpec {
+                keep_samplers: Some(keep),
+                ..CopySpec::everything()
+            };
+            copy_recordings_into(src, tx, &spec)?;
+            Ok(())
+        })
+    })?;
+    mark_copies_complete(&mut dst)?;
+    for rec in dst.read_recordings()? {
+        kept += dst.all_samplers(rec.id)?.len();
+    }
+    drop(dst);
+    drop(src);
+    std::fs::rename(&staged, dest)?;
+
+    println!(
+        "Filtered {:?}: kept {} of {} sampler tables",
+        dest, kept, total
+    );
+    Ok(())
+}
+
+/// Filter a v2 (tar) `.rez` archive to keep only the named per-sampler tables,
+/// dropping the rest from every recording. Copies kept table bytes verbatim.
 fn filter_rez(
     path: &Path,
     keep: &std::collections::BTreeSet<String>,
@@ -392,7 +491,7 @@ mod tests {
     // tests cover the classification `run()` matches on instead.
 
     /// `dispatch_format` must recognize a v3 (SQLite) `.rez` as `V3Sqlite`
-    /// (routing `run()` to the explicit "not yet supported" error), not
+    /// (routing `run()` to the v3 filter path), not
     /// `NotRez` (which would route it to the plain-parquet path and fail with
     /// an unrelated "Corrupt footer" error).
     ///
@@ -510,6 +609,61 @@ mod tests {
         let out = dir.path().join("two.rez");
         r.finalize(&out).unwrap();
         (dir, out)
+    }
+
+    /// Filtering a v3 archive keeps the named samplers and drops the rest —
+    /// and the survivors keep their rows. Dropping a table is easy; dropping
+    /// it without taking a kept table's segments with it is the part worth
+    /// asserting.
+    #[test]
+    fn filter_rez_v3_keeps_only_named_samplers() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage", "scheduler", "network"], 6);
+        let out = dir.path().join("slim.rez");
+
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usage".to_string()].into_iter().collect();
+        filter_rez_v3(&path, &keep, Some(&out)).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        let tables = db.all_samplers(recordings[0].id).unwrap();
+        assert_eq!(
+            tables,
+            vec!["cpu_usage".to_string()],
+            "only the kept sampler survives"
+        );
+        assert!(
+            db.total_rows(recordings[0].id, "cpu_usage").unwrap() > 0,
+            "the kept sampler must keep its rows, not just its name"
+        );
+    }
+
+    /// A typo'd sampler name must not be read as "keep nothing". `--output`
+    /// defaults to the INPUT, so this once overwrote a long-lived capture in
+    /// place with an archive holding no metrics at all.
+    #[test]
+    fn filter_rez_v3_rejects_an_unmatched_sampler_instead_of_emptying_the_archive() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 4);
+
+        let keep: std::collections::BTreeSet<String> =
+            ["cpu_usge".to_string()].into_iter().collect();
+        let err = filter_rez_v3(&path, &keep, None).unwrap_err().to_string();
+        assert!(
+            err.contains("cpu_usge"),
+            "the error must name the typo: {err}"
+        );
+
+        // And the input is untouched.
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(db.all_samplers(recordings[0].id).unwrap().len(), 1);
     }
 
     #[test]
