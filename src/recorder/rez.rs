@@ -110,7 +110,7 @@ impl RezTableIndex {
     }
 }
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, UInt64Array, UInt64Builder};
@@ -1381,12 +1381,17 @@ pub(crate) struct GroupTableBuilder {
     windows: Vec<Option<Window>>,
     order: Vec<String>,
     columns: HashMap<String, RezColumn>,
+    /// Members whose histogram failed to rebuild and have already been
+    /// reported. A malformed cell usually repeats every tick, so without this
+    /// one bad member would log per row for the life of the segment.
+    reported_bad_histograms: HashSet<String>,
 }
 
 impl GroupTableBuilder {
     pub(crate) fn new(name: String) -> Self {
         Self {
             name,
+            reported_bad_histograms: HashSet::new(),
             timestamps: Vec::new(),
             wall_offsets: Vec::new(),
             windows: Vec::new(),
@@ -1479,7 +1484,7 @@ impl GroupTableBuilder {
         // here (rather than importing `rez_v3_writer`'s WAL-row type) so this
         // lower-level format module does not depend on the writer module.
         histograms: &[Option<(u8, u8, Vec<u64>)>],
-    ) -> Result<(), String> {
+    ) {
         let row = self.timestamps.len();
         self.timestamps.push(ts);
         self.wall_offsets.push(wall_offset_ns);
@@ -1502,50 +1507,60 @@ impl GroupTableBuilder {
         let table_name = self.name.clone();
         for (desc, v) in schema.histograms.iter().zip(histograms) {
             let member_name = desc.name.clone();
-            let col = self.get_or_create(desc, "histogram", RezValues::Histogram(Vec::new()));
-            Self::pad(col, row);
+
+            // Decoded BEFORE `get_or_create` borrows the column, because
+            // reporting a bad cell needs `&mut self` too.
             let decoded = match v {
                 Some((gp, mvp, buckets)) => {
-                    // The H2 config lives on the VALUE (`WalValue::Histogram`
-                    // carries it per cell), not the schema — a V3
-                    // `GroupSchema`'s `MetricDesc` is just a name plus
-                    // caller-supplied labels, unlike a V2 `Entry::Histogram`,
-                    // whose metadata the agent's exposition already stamps
-                    // with `grouping_power`/`max_value_power`
-                    // (`TableBuilder::push_row` gets the config for free from
-                    // that). Stamp it into the COLUMN's metadata on first
-                    // sight instead: both `read_table_parquet` and
-                    // `metriken_query::ParquetReader` require it in the
-                    // parquet FIELD metadata to reconstruct a histogram
-                    // column at all — without this, a group's histogram
-                    // silently drops out of `histogram_names()` the moment
-                    // it's resealed to parquet and reopened (defaults to an
-                    // invalid `Config::new(0, 0)`/gets skipped, not a loud
-                    // error at read time).
-                    col.metadata
-                        .entry("grouping_power".to_string())
-                        .or_insert_with(|| gp.to_string());
-                    col.metadata
-                        .entry("max_value_power".to_string())
-                        .or_insert_with(|| mvp.to_string());
-                    Some(
-                        histogram::Histogram::from_buckets(*gp, *mvp, buckets.clone()).map_err(
-                            |e| {
-                                format!(
-                                    "failed to rebuild the {table_name} histogram \
-                                     {member_name}: {e}"
-                                )
-                            },
-                        )?,
-                    )
+                    let rebuilt =
+                        match histogram::Histogram::from_buckets(*gp, *mvp, buckets.clone()) {
+                            Ok(h) => Some(h),
+                            Err(e) => {
+                                // Missing beats wrong, and beats stuck: the
+                                // CELL is dropped, not the row and not the
+                                // table. Reported once per member per segment
+                                // — a malformed cell usually repeats every
+                                // tick, and logging per row would bury it.
+                                if self.reported_bad_histograms.insert(member_name.clone()) {
+                                    warn!(
+                                        "dropping malformed histogram cells for {member_name} \
+                                         in {table_name}: {e}. That metric reads as absent for \
+                                         affected rows; every other metric in the group is \
+                                         unaffected."
+                                    );
+                                }
+                                None
+                            }
+                        };
+                    // Stamped even when the rebuild failed, and that is
+                    // deliberate. Both `read_table_parquet` and
+                    // `metriken_query::ParquetReader` need
+                    // `grouping_power`/`max_value_power` in the parquet FIELD
+                    // metadata to reconstruct a histogram column at all —
+                    // without them the column silently drops out of
+                    // `histogram_names()` once resealed and reopened. If the
+                    // first row a column ever sees is malformed, dropping the
+                    // config with it would lose the whole column's identity,
+                    // not just one cell.
+                    Some((rebuilt, *gp, *mvp))
                 }
                 None => None,
             };
+
+            let col = self.get_or_create(desc, "histogram", RezValues::Histogram(Vec::new()));
+            Self::pad(col, row);
+            if let Some((_, gp, mvp)) = &decoded {
+                col.metadata
+                    .entry("grouping_power".to_string())
+                    .or_insert_with(|| gp.to_string());
+                col.metadata
+                    .entry("max_value_power".to_string())
+                    .or_insert_with(|| mvp.to_string());
+            }
             if let RezValues::Histogram(vs) = &mut col.values {
-                vs.push(decoded);
+                vs.push(decoded.and_then(|(h, _, _)| h));
             }
         }
-        Ok(())
     }
 
     /// Consume the builder into the table the writer will encode. Mirrors
@@ -3491,5 +3506,91 @@ mod label_tests {
             .collect();
         assert_eq!(recording_dir_slug(&labels), "a-b-c");
         assert_eq!(recording_dir_slug(&BTreeMap::new()), "recording");
+    }
+}
+
+/// Regression coverage for #1067: one malformed histogram cell must not be
+/// able to stall a recording.
+#[cfg(test)]
+mod malformed_histogram_tests {
+    use super::{read_table_parquet, write_table_parquet, GroupTableBuilder, RezValues};
+    use metriken_exposition::{GroupSchema, MetricDesc};
+    use std::collections::BTreeMap;
+
+    /// A histogram cell's `(grouping_power, max_value_power, buckets)` comes
+    /// off the WAL as msgpack and is not re-validated by
+    /// `GroupSnapshot::validate`, which only checks arity and the schema hash.
+    /// Rebuilding it through `Histogram::from_buckets` can therefore fail.
+    ///
+    /// That failure used to propagate out of `GroupTableBuilder::push_row` and
+    /// so out of `materialize_wal_tail` — and because the row stayed in the
+    /// WAL, every later attempt failed identically. One bad cell stalled the
+    /// recorder, or a hindsight buffer, permanently.
+    ///
+    /// The blast radius was wider than "sealing" by the time this was fixed:
+    /// `materialize_wal_tail` is also how the reader materializes a live WAL
+    /// tail, and how `copy_recordings_into` carries one across for `combine`,
+    /// `filter`, `upgrade` and hindsight's dump. All of them inherited it.
+    ///
+    /// `push_row` is infallible now, so the wedge is impossible by type rather
+    /// than by promise. Three things are asserted, and the middle one is what
+    /// makes the fix worth more than a `let _ =`: the seal succeeds, the OTHER
+    /// member of the same group keeps every value, and the bad member reads as
+    /// absent rather than as a fabricated histogram.
+    #[test]
+    fn a_malformed_histogram_cell_does_not_wedge_the_seal() {
+        let desc = |name: &str| MetricDesc {
+            name: name.to_string(),
+            metadata: BTreeMap::from([("metric".to_string(), name.to_string())]),
+        };
+        let schema = GroupSchema {
+            counters: vec![desc("good_counter")],
+            gauges: Vec::new(),
+            histograms: vec![desc("bad_histogram")],
+        };
+
+        let mut builder = GroupTableBuilder::new("cpu_usage/sweep".to_string());
+        for row in 0..3u64 {
+            builder.push_row(
+                1_000 + row,
+                0,
+                None,
+                &schema,
+                &[Some(row + 1)],
+                &[],
+                // grouping_power >= max_value_power is rejected by
+                // `from_buckets` — the shape a corrupt or truncated WAL cell
+                // takes.
+                &[Some((9, 3, vec![0, 1, 2, 3]))],
+            );
+        }
+
+        let table = builder.finish();
+        let bytes = write_table_parquet(&table).expect("a malformed cell must not fail the encode");
+        let back = read_table_parquet("cpu_usage/sweep".to_string(), bytes)
+            .expect("and the sealed segment must read back");
+
+        let counter = back
+            .columns
+            .iter()
+            .find(|c| c.name == "good_counter")
+            .expect("the healthy member's column survived");
+        match &counter.values {
+            RezValues::Counter(v) => assert_eq!(
+                v.iter().flatten().count(),
+                3,
+                "every counter row must survive a sibling's malformed histogram"
+            ),
+            other => panic!("expected a counter column, got {other:?}"),
+        }
+
+        if let Some(hist) = back.columns.iter().find(|c| c.name == "bad_histogram") {
+            if let RezValues::Histogram(v) = &hist.values {
+                assert!(
+                    v.iter().all(|h| h.is_none()),
+                    "a cell that failed to rebuild must read as absent, never fabricated"
+                );
+            }
+        }
     }
 }
