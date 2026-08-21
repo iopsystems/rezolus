@@ -525,20 +525,31 @@ mod tests {
         // unrelated work — e.g. `create_v3`'s emit loop processing every
         // OTHER group before reaching this one. Without `mark_end()`, that
         // deferred-publish delay leaks into the reported width.
+        // Asserted RELATIVELY, against the elapsed time this thread actually
+        // observed, rather than against an absolute ceiling on the width. A
+        // `sleep(3ms)` is a floor, not a duration: on a loaded machine — CI
+        // running this test beside the parquet/SQLite fixture tests, say — it
+        // returns after 20ms+, and an absolute bound then fails a mechanism
+        // that worked perfectly. What `mark_end()` promises is that the span
+        // AFTER it is excluded, and that is exactly what `total - width`
+        // measures, however slowly the sleeps themselves run.
         static SLOT: GroupWindowSlot = GroupWindowSlot::new();
+        let started = std::time::Instant::now();
         let mut acq = AcquisitionGuard::begin(&SLOT);
         std::thread::sleep(std::time::Duration::from_millis(3)); // the group's own read span
         acq.mark_end();
         std::thread::sleep(std::time::Duration::from_millis(50)); // unrelated walk work, NOT this group's read
         acq.finish();
+        let total_ns = started.elapsed().as_nanos() as u64;
 
         let w = SLOT.load().expect("finish() stamped the slot");
         assert!(w.begin_ns > 0, "wall-clock begin");
         assert!(
-            w.width_ns() < 20_000_000,
-            "width must reflect the ~3ms read span marked by mark_end(), not the ~50ms \
-             publish delay after it: {}",
-            w.width_ns()
+            total_ns.saturating_sub(w.width_ns()) >= 40_000_000,
+            "the ~50ms between mark_end() and finish() must be EXCLUDED from the width: \
+             total {total_ns}ns, width {}ns, difference {}ns",
+            w.width_ns(),
+            total_ns.saturating_sub(w.width_ns())
         );
         assert!(
             w.width_ns() >= 2_000_000,
