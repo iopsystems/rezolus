@@ -76,76 +76,23 @@ fn spawn_fake_agent() -> u16 {
     port
 }
 
-/// A failed `.rez` finalize must exit non-zero.
+/// A recorder that cannot create its output must exit non-zero.
 ///
-/// Regression: the finalize `Err` arm printed `error saving .rez archive` and
+/// Regression this guards: a failure on the output path printed an error and
 /// returned without setting `recording_failed`, so `run()` fell through to
-/// exit 0. Because the `.partial` design deliberately never touches a
-/// pre-existing output, that also left the PREVIOUS run's `out.rez` in place —
-/// `rezolus record -o out.rez && analyze out.rez` succeeded on stale data.
+/// exit 0 — and `rezolus record -o out.rez && analyze out.rez` then succeeded
+/// on whatever was already at that path.
 ///
-/// The deterministic failure seam is the final rename: the output path is an
-/// existing directory, so renaming `<output>.partial` onto it cannot succeed
-/// (the same class as an ENOSPC or EACCES at the end of a long capture).
+/// There is no `.partial` any more: the recorder claims the output path with
+/// `O_EXCL` before the first tick, so an unusable path fails at startup rather
+/// than at finalize — and it must fail *loudly*. A supervisor or a
+/// `record && analyze` pipeline can only see the exit code, and exiting 0 here
+/// would hand the next command whatever was already at that path.
 ///
-/// **Pinned to `--rez-version 2`, which is the container this test is about.**
-/// The rename, the `.partial` and the "last checkpoint" recovery artifact are
-/// all v2 mechanisms; v3 has none of them (it writes the output file directly
-/// and finalize is a commit), so under the v3 default the same fixture fails at
-/// *creation* instead — see `v3_cannot_create_its_output_and_exits_nonzero`,
-/// which covers that path. Weakening this test to accommodate v3 would have
-/// stopped it guarding the regression it exists for.
-#[test]
-fn failed_rez_finalize_exits_nonzero() {
-    let port = spawn_fake_agent();
-    let dir = tempfile::tempdir().expect("failed to create a temp dir");
-
-    // The output path exists as a directory: `rename(file, dir)` always fails.
-    let output = dir.path().join("out.rez");
-    std::fs::create_dir(&output).unwrap();
-    // Stand-in for a previous run's archive, to show it survives the failure.
-    std::fs::write(output.join("stale"), b"previous run").unwrap();
-
-    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
-        .arg("record")
-        .arg("--url")
-        .arg(format!("http://127.0.0.1:{port}"))
-        .arg("-o")
-        .arg(&output)
-        .arg("--rez-version")
-        .arg("2")
-        .arg("--interval")
-        .arg("100ms")
-        .arg("--duration")
-        .arg("1s")
-        .output()
-        .expect("failed to run rezolus record");
-
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("error saving .rez archive"),
-        "expected a finalize failure, got stderr:\n{stderr}"
-    );
-    assert!(
-        !out.status.success(),
-        "a failed .rez finalize must not exit 0 (status {:?})\nstderr:\n{stderr}",
-        out.status.code()
-    );
-    // The recovery artifact is left behind rather than discarded.
-    assert!(
-        dir.path().join("out.rez.partial").exists(),
-        "the .partial should survive a failed finalize as the recovery artifact"
-    );
-}
-
-/// A v3 recorder that cannot create its output must exit non-zero.
-///
-/// The v3 counterpart to the test above. v3 has no `.partial`: it claims the
-/// output path with `O_EXCL` before the first tick, so an unusable path fails
-/// at startup rather than at finalize — and it must fail *loudly*. Same class
-/// of regression as the one above: a supervisor or a `record && analyze`
-/// pipeline can only see the exit code, and exiting 0 here would hand the next
-/// command whatever was already at that path.
+/// This replaces a sibling test that drove `--rez-version 2` and exercised the
+/// rename of `<output>.partial` onto an unusable path. That mechanism is gone
+/// with the tar writer; this covers the same regression on the path that
+/// remains.
 #[test]
 fn v3_cannot_create_its_output_and_exits_nonzero() {
     let port = spawn_fake_agent();

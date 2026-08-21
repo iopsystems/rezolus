@@ -15,7 +15,7 @@ miss, then lets you export, record, replay, and analyze it.
 
 ### What you can do with Rezolus
 
-![What you can do with Rezolus: rezolus agent collects from your systems (CPU, GPU, kernel, containers, services). From there you can expose Prometheus metrics with rezolus exporter, watch a live dashboard with rezolus view, or capture a recording with rezolus record or rezolus hindsight. Recordings are .parquet files you can explore in the viewer, analyze with an AI assistant via rezolus mcp, or manage with rezolus parquet.](docs/architecture.svg)
+![What you can do with Rezolus: rezolus agent collects from your systems (CPU, GPU, kernel, containers, services). From there you can expose Prometheus metrics with rezolus exporter, watch a live dashboard with rezolus view, or capture a recording with rezolus record or rezolus hindsight. Recordings are .parquet files or .rez archives you can explore in the viewer, analyze with an AI assistant via rezolus mcp, or manage with rezolus recording.](docs/architecture.svg)
 
 <sub>Every box is the same `rezolus` binary — you just pick the subcommand for the job. Source: [`docs/architecture.dot`](docs/architecture.dot) (regenerate with `dot -Tsvg docs/architecture.dot -o docs/architecture.svg`).</sub>
 
@@ -230,14 +230,13 @@ machine dies the recording is readable where it sits, missing at most one
 sampling interval:
 
 ```bash
-rezolus parquet metadata -i out.rez   # reports "not cleanly finalized"
+rezolus recording metadata -i out.rez   # reports "not cleanly finalized"
 ```
 
-Pass `--rez-version 2` to write the previous tar container instead, which stages
-at `<output>.partial` and is recoverable only up to its last checkpoint. There
-is no longer a reason to reach for it: `parquet combine`, `filter` and
-`annotate` all read and rewrite both containers, so the default needs no
-opt-out to stay workable.
+The previous tar container is no longer written. Archives recorded by older
+releases still open everywhere, and `rezolus recording upgrade old.rez` converts
+one to the current container — as does rewriting it with `combine`, `filter` or
+`annotate`, all of which read either container and emit the current one.
 
 ### Viewer
 
@@ -298,11 +297,11 @@ File operations for parquet recordings:
   KPIs, shrinking the recording.
 
 ```bash
-rezolus parquet metadata -i rezolus.parquet
-rezolus parquet annotate rezolus.parquet --queries ext.json
-rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
-rezolus parquet convert rezolus.raw.zst              # writes rezolus.parquet
-rezolus parquet filter rezolus.parquet -o slim.parquet
+rezolus recording metadata -i rezolus.parquet
+rezolus recording annotate rezolus.parquet --queries ext.json
+rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
+rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
+rezolus recording filter rezolus.parquet -o slim.parquet
 ```
 
 `convert` infers the sampling interval from the median gap between snapshot
@@ -435,9 +434,9 @@ target/release/rezolus view rezolus.parquet
 target/release/rezolus view http://localhost:4241
 
 # parquet file operations
-target/release/rezolus parquet metadata -i rezolus.parquet
-target/release/rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet
-target/release/rezolus parquet convert rezolus.raw.zst
+target/release/rezolus recording metadata -i rezolus.parquet
+target/release/rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
+target/release/rezolus recording convert rezolus.raw.zst
 ```
 
 To rebuild the browser-only static viewer (`site/viewer/`) that ships the PromQL

@@ -6,9 +6,17 @@ mod endpoint;
 mod prometheus;
 pub(crate) mod rez;
 pub(crate) mod rez_sqlite;
+/// The tar (v1/v2) `.rez` writer, kept only so tests can build v1/v2 fixtures.
+///
+/// Nothing ships that writes this container any more: `record` writes v3, and
+/// `combine`/`filter`/`annotate`/`parquet upgrade` convert a tar archive
+/// rather than producing one. Proving that tar archives still READ, though,
+/// requires being able to construct one.
+#[cfg(test)]
 pub(crate) mod rez_stream;
 pub(crate) mod rez_v3_rewrite;
 pub(crate) mod rez_v3_writer;
+pub(crate) mod seal_policy;
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
@@ -132,14 +140,6 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::Set)
                 .default_value("parquet")
                 .value_parser(value_parser!(Format)),
-        )
-        .arg(
-            clap::Arg::new("REZ_VERSION")
-                .long("rez-version")
-                .help("Container version for .rez output: 3 (default, a single SQLite file) or 2 (the legacy tar archive, kept for a release or two)")
-                .action(clap::ArgAction::Set)
-                .default_value("3")
-                .value_parser(value_parser!(u8).range(2..=3)),
         )
         .arg(
             clap::Arg::new("METADATA")
@@ -523,110 +523,76 @@ fn build_rez_labels(
     )
 }
 
-/// The streaming `.rez` recorder the loop feeds, in whichever container the run
-/// selected (`--rez-version`).
+/// The streaming `.rez` recorder the loop feeds.
 ///
-/// The recording loop is identical for both and must stay that way: one clock
-/// anchor, a row per tick stamped on the anchored monotonic timeline, a
-/// `maybe_seal` every tick whether or not anything was scraped, and one
-/// finalize. The container is the only thing that varies, so it varies here and
-/// nowhere else.
-enum RezStream {
-    /// v2: a tar archive staged at `<output>.partial`, renamed into place at
-    /// finalize, recoverable up to its last checkpoint.
-    V2(rez_stream::StreamRecorder),
-    /// v3: a single SQLite file, a valid `.rez` at `<output>` from the moment
-    /// it is created. There is no staging path to unlink and no rename to fail,
-    /// so a v3 recorder that is dropped without finalizing leaves a valid,
-    /// recoverable recording whose `complete` flag is simply still 0.
-    V3(rez_v3_writer::StreamRecorderV3),
-}
+/// A newtype rather than a bare [`rez_v3_writer::StreamRecorderV3`] because
+/// the recording loop needs two things the writer has no opinion about: what
+/// to tell the user after a mid-recording failure, and how to leave nothing
+/// behind when a run captured no samples at all.
+///
+/// This was an enum over containers while the tar writer existed. It is not
+/// one any more — v3 is the only container this binary writes, and old
+/// archives are upgraded by `parquet upgrade` rather than produced.
+struct RezStream(rez_v3_writer::StreamRecorderV3);
 
 impl RezStream {
     /// Append one scraped snapshot.
     ///
-    /// Fallible in v3 and not in v2, and the difference is real: v3 writes the
-    /// tick to the WAL here, where v2 only appended to in-memory builders and
-    /// could not fail until a seal.
+    /// Fallible because the tick is written to the WAL here, rather than
+    /// only appended to an in-memory builder that could not fail until a seal.
     fn ingest(
         &mut self,
         snapshot: &metriken_exposition::Snapshot,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        match self {
-            RezStream::V2(rec) => {
-                rec.ingest(snapshot, anchored_ts, wall_offset_ns);
-                Ok(())
-            }
-            RezStream::V3(rec) => rec.ingest(snapshot, anchored_ts, wall_offset_ns),
-        }
+        self.0.ingest(snapshot, anchored_ts, wall_offset_ns)
     }
 
     fn maybe_seal(&mut self) -> Result<(), String> {
-        match self {
-            RezStream::V2(rec) => rec.maybe_seal(),
-            RezStream::V3(rec) => rec.maybe_seal(),
-        }
+        self.0.maybe_seal()
     }
 
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
-        match self {
-            RezStream::V2(rec) => rec.finalize(clock_offset),
-            RezStream::V3(rec) => rec.finalize(clock_offset),
-        }
+        self.0.finalize(clock_offset)
     }
 
     /// What to tell the user after a mid-recording failure: where the data
-    /// captured so far can still be read from. The two containers keep it in
-    /// different places, and v3's is the output path itself.
+    /// captured so far can still be read from — which for v3 is the output
+    /// path itself, since the file is a valid `.rez` from the moment it is
+    /// created.
     fn recovery_note(&self) -> String {
-        match self {
-            RezStream::V2(rec) => format!(
-                "note: the partial recording is readable at {}",
-                rec.partial_path().display()
-            ),
-            RezStream::V3(rec) => format!(
-                "note: the recording so far is readable at {}",
-                rec.path().display()
-            ),
-        }
+        format!(
+            "note: the recording so far is readable at {}",
+            self.0.path().display()
+        )
     }
 
     /// Stop the writer and leave nothing behind. Only for the paths where the
-    /// recording captured no samples at all — a stub is not a recovery artifact,
-    /// and both containers refuse to overwrite, so leaving one behind would also
-    /// block the retry.
+    /// recording captured no samples at all — a stub is not a recovery
+    /// artifact, and the writer refuses to overwrite, so leaving one behind
+    /// would also block the retry.
     fn discard(self) {
-        match self {
-            // Unlinks `<output>.partial`; the previous run's output, which v2
-            // never touched, stays where it was.
-            RezStream::V2(rec) => rec.abort(),
-            RezStream::V3(rec) => {
-                let path = rec.path().to_path_buf();
-                // Drop first: joining the writer thread is what guarantees
-                // nothing is still appending to the file we are about to
-                // unlink. v3 has no abort — a dropped writer leaves a valid
-                // recording, which is exactly why this path has to remove it
-                // explicitly rather than rely on a staging convention.
-                drop(rec);
-                // Safe to remove: `RezDb::create` claimed this path with
-                // O_EXCL during THIS run, so it cannot be a file that was
-                // already there.
-                if let Err(e) = std::fs::remove_file(&path) {
-                    warn!(
-                        "failed to remove the empty recording at {}: {e}",
-                        path.display()
-                    );
-                }
-            }
+        let path = self.0.path().to_path_buf();
+        // Drop first: joining the writer thread is what guarantees nothing is
+        // still appending to the file we are about to unlink. There is no
+        // abort — a dropped writer leaves a valid recording, which is exactly
+        // why this path has to remove it explicitly rather than rely on a
+        // staging convention.
+        drop(self.0);
+        // Safe to remove: `RezDb::create` claimed this path with O_EXCL during
+        // THIS run, so it cannot be a file that was already there.
+        if let Err(e) = std::fs::remove_file(&path) {
+            warn!(
+                "failed to remove the empty recording at {}: {e}",
+                path.display()
+            );
         }
     }
 }
 
-/// Open the streaming `.rez` writer for a just-activated endpoint and spawn its
-/// writer thread. v3 creates the output file itself; v2 creates
-/// `<output>.partial` and writes an initial manifest.
+/// Open the streaming `.rez` writer for a just-activated endpoint and spawn
+/// its writer thread, creating the output file.
 ///
 /// Both the file creation and the thread spawn can fail, which is why this
 /// happens at activation rather than lazily on the first snapshot.
@@ -637,25 +603,13 @@ fn start_rez_recorder(
 ) -> Result<RezStream, String> {
     let labels = build_rez_labels(config, ep);
     let metadata = build_rez_metadata(config, ep);
-    // Clap constrains `--rez-version` to 2 or 3, so 2 is the only opt-out and
-    // everything else is v3.
-    if config.rez_version == 2 {
-        let seed = rez_stream::ManifestSeed {
-            dir: rez::recording_dir_slug(&labels),
-            labels,
-            metadata,
-            clock_anchor_wall_ns,
-        };
-        return rez_stream::RezWriterHandle::create(&config.output, seed)
-            .map(|h| RezStream::V2(rez_stream::StreamRecorder::new(h)));
-    }
     let seed = rez_v3_writer::ManifestSeed {
         labels,
         metadata,
         clock_anchor_wall_ns,
     };
     rez_v3_writer::RezV3Writer::create(&config.output, seed)
-        .map(|w| RezStream::V3(rez_v3_writer::StreamRecorderV3::new(w)))
+        .map(|w| RezStream(rez_v3_writer::StreamRecorderV3::new(w)))
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
@@ -1811,7 +1765,7 @@ mod tests {
     const TEST_ANCHOR: u64 = 1_700_000_000_000_000_000;
     const TEST_SECOND: u64 = 1_000_000_000;
 
-    fn rez_config(output: &Path, rez_version: u8) -> RecordingConfig {
+    fn rez_config(output: &Path) -> RecordingConfig {
         RecordingConfig {
             interval: humantime::Duration::from(Duration::from_secs(1)),
             duration: None,
@@ -1821,7 +1775,6 @@ mod tests {
             separate: false,
             metadata: Vec::new(),
             labels: vec![("arm".to_string(), "redis".to_string())],
-            rez_version,
             endpoints: Vec::new(),
             command: None,
         }
@@ -1854,13 +1807,14 @@ mod tests {
     }
 
     #[test]
-    fn rez_version_3_writes_a_sqlite_container_that_round_trips_through_rezreader() {
-        // The default. Writing it is only half the wiring — the recording has
-        // to come back out through the same reader every consumer uses, or the
-        // recorder is producing a file nothing can query.
+    fn recording_writes_a_sqlite_container_that_round_trips_through_rezreader() {
+        // The only container this binary writes. Writing it is half the
+        // wiring — the recording has to come back out through the same reader
+        // every consumer uses, or the recorder is producing a file nothing can
+        // query.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
-        let config = rez_config(&path, 3);
+        let config = rez_config(&path);
         let mut rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
 
         // Valid and openable before a single row is written — there is no
@@ -1908,55 +1862,26 @@ mod tests {
     }
 
     #[test]
-    fn rez_version_2_still_writes_the_tar_container() {
-        // The opt-out has to keep working for a release or two, `.partial`
-        // staging and all — this is what makes the flag more than a no-op.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("out.rez");
-        let config = rez_config(&path, 2);
-        let mut rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
-
-        assert!(
-            dir.path().join("out.rez.partial").exists(),
-            "v2 stages at <output>.partial"
-        );
-        assert!(
-            !path.exists(),
-            "and does not touch the output until finalize"
-        );
-
-        record_ticks(&mut rec, 3);
-        rec.finalize((TEST_ANCHOR + 3 * TEST_SECOND, 0)).unwrap();
-
-        assert_eq!(
-            rez::detect_rez_format(&path).unwrap(),
-            rez::RezFormat::V2Tar
-        );
-    }
-
-    #[test]
     fn discarding_a_recording_that_captured_nothing_leaves_no_file_behind() {
         // The "no data was recorded" / "failed to start command" paths: there
-        // is nothing to recover, and both containers refuse to overwrite an
-        // existing output — v2 by staging, v3 because `RezDb::create` claims
-        // the path with O_EXCL — so a stub left behind would block the retry
-        // as well as lying about what was captured.
+        // is nothing to recover, and the writer refuses to overwrite an
+        // existing output (`RezDb::create` claims the path with O_EXCL), so a
+        // stub left behind would block the retry as well as lying about what
+        // was captured.
         let dir = tempfile::tempdir().unwrap();
-        for version in [2u8, 3] {
-            let path = dir.path().join(format!("v{version}.rez"));
-            let config = rez_config(&path, version);
-            let rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
-            rec.discard();
-            assert!(
-                !path.exists() && !dir.path().join(format!("v{version}.rez.partial")).exists(),
-                "v{version}: discard must leave neither the output nor a staging file"
-            );
-            // And the path is free again, which is the property the retry needs.
-            let config = rez_config(&path, version);
-            start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR)
-                .unwrap_or_else(|e| panic!("v{version}: the output path is still claimed: {e}"))
-                .discard();
-        }
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path);
+        let rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+        rec.discard();
+        assert!(
+            !path.exists() && !dir.path().join("out.rez.partial").exists(),
+            "discard must leave neither the output nor a staging file"
+        );
+        // And the path is free again, which is the property the retry needs.
+        let config = rez_config(&path);
+        start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR)
+            .unwrap_or_else(|e| panic!("the output path is still claimed: {e}"))
+            .discard();
     }
 
     #[test]

@@ -82,7 +82,7 @@ fn main() {
              view       Serve a web dashboard for a recording or a live agent.\n    \
              mcp        AI analysis tools (PromQL, anomaly detection, correlation, feature\n\
              \x20              extraction) over a file.\n    \
-             parquet    Inspect and transform parquet recordings (metadata/annotate/combine/filter).\n    \
+             recording  Inspect and transform recordings (metadata/annotate/combine/filter/upgrade).\n    \
              status     Print a running agent's status/sampler health: `rezolus status <endpoint>`.\n\n\
              The agent is the source everything else reads from; start there, then reach for a\n\
              tool. Run `rezolus <mode> --help` for a mode's options and examples.\n\n\
@@ -132,7 +132,8 @@ fn main() {
 
             mcp::run(config)
         }
-        Some(("parquet", args)) => {
+        // Clap resolves the `parquet` alias to this name, so one arm serves both.
+        Some(("recording", args)) => {
             parquet_tools::run(args.clone());
         }
         Some(("record", args)) => {

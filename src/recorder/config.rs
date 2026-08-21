@@ -35,9 +35,6 @@ pub struct RecordingConfig {
     pub metadata: Vec<(String, String)>,
     /// Recording labels for `.rez` output (`--label k=v`); `source`/`host` auto-added.
     pub labels: Vec<(String, String)>,
-    /// `.rez` container version to write: 3 (SQLite, the default) or 2 (tar).
-    /// Only consulted in `.rez` mode; clap rejects anything else.
-    pub rez_version: u8,
     pub endpoints: Vec<EndpointConfig>,
     /// When set, record only while this command runs (perf-record style).
     pub command: Option<Vec<String>>,
@@ -107,11 +104,6 @@ impl RecordingConfig {
             })
             .collect();
 
-        // Clap owns both the default and the range (2..=3), so an out-of-range
-        // value never reaches here — and the fallback below is unreachable
-        // rather than a second place the default lives.
-        let rez_version = args.get_one::<u8>("REZ_VERSION").copied().unwrap_or(3);
-
         let command: Option<Vec<String>> = args
             .get_many::<String>("COMMAND")
             .map(|vals| vals.map(|s| s.to_string()).collect());
@@ -180,7 +172,6 @@ impl RecordingConfig {
                 separate,
                 metadata,
                 labels,
-                rez_version,
                 endpoints: toml_cfg.endpoints,
                 command: command.clone(),
             });
@@ -205,7 +196,6 @@ impl RecordingConfig {
                 separate,
                 metadata,
                 labels,
-                rez_version,
                 endpoints,
                 command: command.clone(),
             });
@@ -244,7 +234,6 @@ impl RecordingConfig {
             separate,
             metadata,
             labels,
-            rez_version,
             endpoints: vec![endpoint],
             command,
         })
@@ -325,30 +314,32 @@ mod tests {
         );
     }
 
-    /// `.rez` output defaults to the v3 (SQLite) container, with v2 reachable
-    /// for a release or two — and nothing else reachable at all, because a
-    /// version this code cannot write must fail at parse time rather than
-    /// silently record in whichever container the wiring happens to pick.
+    /// `--rez-version` is gone, and a script still passing it must FAIL rather
+    /// than be silently ignored.
+    ///
+    /// The flag selected a container this binary no longer writes. Accepting
+    /// and ignoring it would be the worst outcome: someone asking for the tar
+    /// container would get a v3 archive and no indication their request was
+    /// dropped. Old archives are still readable, and `parquet upgrade`
+    /// converts them.
     #[test]
-    fn rez_version_defaults_to_3_and_rejects_anything_but_2_or_3() {
+    fn rez_version_is_rejected_now_that_only_one_container_is_written() {
         let parse = |args: &[&str]| crate::recorder::command().try_get_matches_from(args);
 
-        let m = parse(&["record", "--url", "http://localhost:4241"]).unwrap();
-        assert_eq!(
-            RecordingConfig::from_args(&m).unwrap().rez_version,
-            3,
-            "v3 is the default container"
-        );
+        // The recorder still works without it.
+        assert!(parse(&["record", "--url", "http://localhost:4241"]).is_ok());
 
-        let m = parse(&["record", "--rez-version", "2"]).unwrap();
-        assert_eq!(RecordingConfig::from_args(&m).unwrap().rez_version, 2);
-        let m = parse(&["record", "--rez-version", "3"]).unwrap();
-        assert_eq!(RecordingConfig::from_args(&m).unwrap().rez_version, 3);
-
-        for bad in ["1", "0", "4", "v3", ""] {
+        for v in ["2", "3"] {
             assert!(
-                parse(&["record", "--rez-version", bad]).is_err(),
-                "--rez-version {bad:?} must be rejected"
+                parse(&[
+                    "record",
+                    "--url",
+                    "http://localhost:4241",
+                    "--rez-version",
+                    v
+                ])
+                .is_err(),
+                "--rez-version {v} must be rejected outright, not accepted and ignored"
             );
         }
     }
