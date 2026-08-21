@@ -111,6 +111,21 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    // Membership comes from registration, not values (principle 18): bound
+    // each group by the real number of indices its readers will populate, not
+    // by the metric groups' MAX_CPUS/MAX_PACKAGES array capacity.
+    let bound = |f: fn(&Kind) -> bool| {
+        readers
+            .iter()
+            .filter(|r| f(&r.kind))
+            .map(|r| r.index + 1)
+            .max()
+            .unwrap_or(0)
+    };
+
+    CPU_POWER_ENERGY_ACQ.set_member_bound(bound(|k| matches!(k, Kind::Energy { .. })));
+    CPU_POWER_CSTATE_ACQ.set_member_bound(bound(|k| matches!(k, Kind::Cstate { .. })));
+
     Ok(Some(Box::new(Power {
         inner: PowerInner { readers }.into(),
     })))
@@ -145,7 +160,16 @@ struct PowerInner {
 }
 
 impl PowerInner {
+    // Brackets the two read sections separately (principle 18): the RAPL
+    // energy sweep and the C-state residency sweep are different metric
+    // families read from different PMUs. Both brackets span their member
+    // writes and stamp last via `finish()`. A single counter's failed
+    // `read()` is individually fallible rather than a bulk sweep failure, so
+    // neither path discards -- same ruling as `cpu_l3` and `cpu_dtlb`.
     fn refresh(&mut self) {
+        let energy_guard = CPU_POWER_ENERGY_ACQ.acquire();
+        let cstate_guard = CPU_POWER_CSTATE_ACQ.acquire();
+
         for reader in self.readers.iter_mut() {
             let Ok(raw) = reader.counter.read() else {
                 continue;
@@ -190,6 +214,9 @@ impl PowerInner {
                 }
             }
         }
+
+        energy_guard.finish();
+        cstate_guard.finish();
     }
 }
 
