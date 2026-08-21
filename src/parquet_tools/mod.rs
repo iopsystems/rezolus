@@ -571,36 +571,6 @@ fn upgrade_rez(
     Ok(())
 }
 
-#[cfg(test)]
-mod command_name_tests {
-    /// `parquet` keeps working as an alias for `recording`.
-    ///
-    /// The rename is the point — these subcommands stopped being
-    /// parquet-specific once `.rez` arrived — but every existing script and
-    /// runbook types `rezolus parquet ...`, and breaking those to make a name
-    /// tidier is not a trade worth making. Both spellings must reach the same
-    /// subcommand, and clap must resolve the alias to the canonical name so
-    /// `main`'s dispatch needs only one arm.
-    #[test]
-    fn parquet_still_reaches_the_recording_subcommand() {
-        let app = clap::Command::new("rezolus").subcommand(super::command());
-
-        for spelling in ["recording", "parquet"] {
-            let m = app
-                .clone()
-                .try_get_matches_from(["rezolus", spelling, "metadata", "-i", "x.parquet"])
-                .unwrap_or_else(|e| panic!("`rezolus {spelling} metadata` must parse: {e}"));
-            let (name, sub) = m.subcommand().expect("a subcommand matched");
-            assert_eq!(
-                name, "recording",
-                "clap must report the canonical name for `{spelling}`, so `main` \
-                 dispatches on one arm rather than two"
-            );
-            assert_eq!(sub.subcommand_name(), Some("metadata"));
-        }
-    }
-}
-
 pub fn run(args: ArgMatches) {
     use crate::viewer::load_template_registry;
 
@@ -716,4 +686,34 @@ fn read_parquet_footer(
     let schema = builder.schema().clone();
     let reader = builder.build()?;
     Ok((metadata, schema, reader))
+}
+
+#[cfg(test)]
+mod command_name_tests {
+    /// `parquet` keeps working as an alias for `recording`.
+    ///
+    /// The rename is the point — these subcommands stopped being
+    /// parquet-specific once `.rez` arrived — but every existing script and
+    /// runbook types `rezolus parquet ...`, and breaking those to make a name
+    /// tidier is not a trade worth making. Both spellings must reach the same
+    /// subcommand, and clap must resolve the alias to the canonical name so
+    /// `main`'s dispatch needs only one arm.
+    #[test]
+    fn parquet_still_reaches_the_recording_subcommand() {
+        let app = clap::Command::new("rezolus").subcommand(super::command());
+
+        for spelling in ["recording", "parquet"] {
+            let m = app
+                .clone()
+                .try_get_matches_from(["rezolus", spelling, "metadata", "-i", "x.parquet"])
+                .unwrap_or_else(|e| panic!("`rezolus {spelling} metadata` must parse: {e}"));
+            let (name, sub) = m.subcommand().expect("a subcommand matched");
+            assert_eq!(
+                name, "recording",
+                "clap must report the canonical name for `{spelling}`, so `main` \
+                 dispatches on one arm rather than two"
+            );
+            assert_eq!(sub.subcommand_name(), Some("metadata"));
+        }
+    }
 }
