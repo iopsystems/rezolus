@@ -2,8 +2,9 @@
 //! kernel exposes for them.
 //!
 //! This sampler produces, for each domain the hardware implements:
-//! * `cpu_<domain>_energy` - cumulative energy in microjoules
-//! * `cpu_<domain>_power` - average power in milliwatts over the last interval
+//! * `cpu_<domain>_energy` - cumulative energy in microjoules. Power is its
+//!   derivative, computed at query time as
+//!   `irate(cpu_<domain>_energy) / 1e6`, which is correct over any window.
 //! * `core_cN_residency` / `package_cN_residency` - cumulative TSC cycles in
 //!   each idle C-state, plus `core_cstate_residency` summing every core level
 //!
@@ -58,11 +59,9 @@ const NAME: &str = "cpu_power";
 
 use crate::agent::*;
 
-use metriken::{CounterGroup, GaugeGroup};
+use metriken::CounterGroup;
 use perf_event::events::Dynamic;
 use tokio::sync::Mutex;
-
-use std::time::Instant;
 
 mod stats;
 
@@ -86,7 +85,6 @@ enum Kind {
     Energy {
         scale: f64,
         energy: &'static CounterGroup,
-        power: &'static GaugeGroup,
         /// Accumulated microjoules, kept in floating point so that the
         /// sub-microjoule hardware quantum is not lost to repeated truncation.
         energy_uj: f64,
@@ -114,11 +112,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     }
 
     Ok(Some(Box::new(Power {
-        inner: PowerInner {
-            readers,
-            last_sample: None,
-        }
-        .into(),
+        inner: PowerInner { readers }.into(),
     })))
 }
 
@@ -148,17 +142,10 @@ impl Sampler for Power {
 
 struct PowerInner {
     readers: Vec<Reader>,
-    last_sample: Option<Instant>,
 }
 
 impl PowerInner {
     fn refresh(&mut self) {
-        let now = Instant::now();
-        let elapsed = self
-            .last_sample
-            .map(|t| now.duration_since(t).as_secs_f64());
-        self.last_sample = Some(now);
-
         for reader in self.readers.iter_mut() {
             let Ok(raw) = reader.counter.read() else {
                 continue;
@@ -181,7 +168,6 @@ impl PowerInner {
                 Kind::Energy {
                     scale,
                     energy,
-                    power,
                     energy_uj,
                 } => {
                     let delta_uj = delta as f64 * *scale * 1_000_000.0;
@@ -194,12 +180,6 @@ impl PowerInner {
                     *energy_uj -= whole;
 
                     let _ = energy.add(index, whole as u64);
-
-                    if let Some(secs) = elapsed.filter(|s| *s > 0.0) {
-                        // uJ per second is uW; scale to mW.
-                        let milliwatts = (delta_uj / secs) / 1000.0;
-                        let _ = power.set(index, milliwatts as i64);
-                    }
                 }
                 Kind::Cstate { residency, total } => {
                     let _ = residency.add(index, delta);
@@ -231,51 +211,15 @@ enum Index {
 fn discover() -> Vec<Reader> {
     let mut readers = Vec::new();
 
-    for (pmu, event, index, energy, power) in [
-        (
-            "power",
-            "energy-pkg",
-            Index::Ordinal,
-            &CPU_PACKAGE_ENERGY,
-            &CPU_PACKAGE_POWER,
-        ),
-        (
-            "power",
-            "energy-cores",
-            Index::Ordinal,
-            &CPU_CORES_ENERGY,
-            &CPU_CORES_POWER,
-        ),
-        (
-            "power",
-            "energy-gpu",
-            Index::Ordinal,
-            &CPU_IGPU_ENERGY,
-            &CPU_IGPU_POWER,
-        ),
-        (
-            "power",
-            "energy-ram",
-            Index::Ordinal,
-            &CPU_DRAM_ENERGY,
-            &CPU_DRAM_POWER,
-        ),
-        (
-            "power",
-            "energy-psys",
-            Index::Zero,
-            &CPU_PLATFORM_ENERGY,
-            &CPU_PLATFORM_POWER,
-        ),
-        (
-            "power_core",
-            "energy-core",
-            Index::Cpu,
-            &CPU_CORE_ENERGY,
-            &CPU_CORE_POWER,
-        ),
+    for (pmu, event, index, energy) in [
+        ("power", "energy-pkg", Index::Ordinal, &CPU_PACKAGE_ENERGY),
+        ("power", "energy-cores", Index::Ordinal, &CPU_CORES_ENERGY),
+        ("power", "energy-gpu", Index::Ordinal, &CPU_IGPU_ENERGY),
+        ("power", "energy-ram", Index::Ordinal, &CPU_DRAM_ENERGY),
+        ("power", "energy-psys", Index::Zero, &CPU_PLATFORM_ENERGY),
+        ("power_core", "energy-core", Index::Cpu, &CPU_CORE_ENERGY),
     ] {
-        open_energy(pmu, event, index, energy, power, &mut readers);
+        open_energy(pmu, event, index, energy, &mut readers);
     }
 
     // Core C-states are core-scope and also feed the per-core total; package
@@ -329,7 +273,6 @@ fn open_energy(
     event: &str,
     index: Index,
     energy: &'static CounterGroup,
-    power: &'static GaugeGroup,
     readers: &mut Vec<Reader>,
 ) {
     let Some(scale) = event_scale(pmu, event) else {
@@ -349,7 +292,6 @@ fn open_energy(
             kind: Kind::Energy {
                 scale,
                 energy,
-                power,
                 energy_uj: 0.0,
             },
             previous: None,

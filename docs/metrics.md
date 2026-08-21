@@ -154,8 +154,8 @@ IPC = Instructions / Cycles
 
 ### cpu_power
 
-Reports CPU energy, power, and idle-state residency from the perf PMUs the
-kernel exposes for them. Everything is read through perf; the sampler needs
+Reports CPU energy and idle-state residency from the perf PMUs the kernel
+exposes for them. Everything is read through perf; the sampler needs
 `CAP_PERFMON` but not `CAP_SYS_RAWIO`, and does not open `/dev/cpu/*/msr`.
 
 Four PMUs are consulted, each optional and each discovered at runtime from
@@ -182,9 +182,7 @@ position in the mask instead, since the mask's CPU ids are sparse (`0,64` on a
 two-socket host) while the ordinal is dense.
 
 Energy is the metric worth keeping: it is a monotonic counter that can be
-aggregated over any window, and power can always be recomputed from it. The
-power gauges are averages over the sampler's last interval, provided for
-convenience.
+aggregated over any window, and power can always be recomputed from it.
 
 C-state residency is reported as raw TSC cycles rather than a percentage, so a
 residency fraction is `rate(core_c6_residency) / rate(cpu_tsc)` (`cpu_tsc` comes
@@ -205,12 +203,6 @@ sampler disables itself.
 | `cpu_igpu_energy` | Cumulative integrated graphics energy | id: package ordinal; unit: `microjoules` |
 | `cpu_dram_energy` | Cumulative energy for the DRAM attached to the package | id: package ordinal; unit: `microjoules` |
 | `cpu_platform_energy` | Cumulative whole-platform energy (PSys) | id: always `0`; unit: `microjoules` |
-| `cpu_package_power` | Average package power over the last sampling interval | id: package ordinal; unit: `milliwatts` |
-| `cpu_cores_power` | Average power for all cores in the package | id: package ordinal; unit: `milliwatts` |
-| `cpu_core_power` | Average power for a single physical core | id: the CPU reading that core; unit: `milliwatts` |
-| `cpu_igpu_power` | Average integrated graphics power | id: package ordinal; unit: `milliwatts` |
-| `cpu_dram_power` | Average DRAM power | id: package ordinal; unit: `milliwatts` |
-| `cpu_platform_power` | Average whole-platform power | id: always `0`; unit: `milliwatts` |
 | `core_c1_residency` .. `core_c10_residency` | Cumulative TSC cycles a physical core spent in that idle state | id: the CPU reading that core; unit: `cycles` |
 | `core_cstate_residency` | Cumulative TSC cycles a core spent in any idle state, summed across every level exposed | id: the CPU reading that core; unit: `cycles` |
 | `package_c1_residency` .. `package_c10_residency` | Cumulative TSC cycles a package spent in that idle state | id: package ordinal; unit: `cycles` |
@@ -220,12 +212,19 @@ absent rather than zero. `cpu_cores_energy` (Intel, pre-aggregated per package)
 and `cpu_core_energy` (AMD, per core) measure the same physical quantity at
 different granularities — summing the latter across its ids gives the former.
 
-Prefer the energy counters over the power gauges when accuracy matters. The
-gauges are averaged over the sampler's own refresh interval, so a scrape landing
-mid-interval reports a stale value, and they are integer milliwatts — a domain
-drawing microwatts (an idle iGPU, say) reads `0` even while its energy counter
-advances. Deriving power as `irate(cpu_<domain>_energy) / 1e6` is correct over
-any window.
+Only energy is reported; there is no power metric. Power is the derivative and
+is computed at query time:
+
+```
+irate(cpu_package_energy[5m]) / 1000000
+```
+
+The counters are microjoules, so `irate` yields uJ/s (= uW) and the divisor
+converts to watts. This is correct over any window, which a sampled gauge is
+not: a gauge could only describe the sampler's own refresh interval, so a scrape
+landing mid-interval would read a stale value, and at integer-milliwatt
+resolution a domain drawing microwatts (an idle iGPU) would read `0` while its
+energy counter still advanced.
 
 ### cpu_tlb_flush
 
