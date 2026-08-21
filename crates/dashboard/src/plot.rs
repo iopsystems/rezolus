@@ -142,6 +142,12 @@ impl Group {
         self.subgroups.last_mut().unwrap()
     }
 
+    /// True when no subgroup has been added. Lets a caller skip a group whose
+    /// contents are all gated on hardware-dependent metrics.
+    pub fn is_empty(&self) -> bool {
+        self.subgroups.is_empty()
+    }
+
     /// Open a named subgroup. Returns a mutable reference so the
     /// caller can chain plot calls on it.
     pub fn subgroup<T: Into<String>>(&mut self, name: T) -> &mut SubGroup {
@@ -570,6 +576,8 @@ pub enum Unit {
     Bitrate,
     Percentage,
     Frequency,
+    Power,
+    Energy,
 }
 
 impl std::fmt::Display for Unit {
@@ -583,6 +591,8 @@ impl std::fmt::Display for Unit {
             Self::Bitrate => "bitrate",
             Self::Percentage => "percentage",
             Self::Frequency => "frequency",
+            Self::Power => "power",
+            Self::Energy => "energy",
         };
 
         write!(f, "{s}")
