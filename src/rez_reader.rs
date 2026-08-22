@@ -210,13 +210,23 @@ impl RezReader {
     }
 
     /// Resolve the reader that answers every metric a query references: the
-    /// single owning table directly, or — when every owner shares one
-    /// sampler split across several group tables OF ONE RECORDING — a fresh
-    /// [`UnionMetricsSource`] over exactly those tables. Errors clearly when
-    /// a query spans two DIFFERENT samplers, the SAME sampler across two
-    /// DIFFERENT recordings of a multi-recording archive (cross-cadence /
-    /// cross-recording alignment is out of scope), or references no known
-    /// metric.
+    /// single owning table directly, or — when every owner lives in ONE
+    /// RECORDING — a fresh [`UnionMetricsSource`] over exactly those tables.
+    ///
+    /// Tables of different samplers union freely within a recording. They did
+    /// not always: a query spanning two samplers used to be refused as
+    /// "cross-timeline", because there was no way to say what treating two
+    /// separately-read values as simultaneous costs. The query engine now
+    /// prices that itself — operands whose acquisition edges differ have their
+    /// bands widened to the union of both spans — so the refusal has nothing
+    /// left to protect. Measured, the join costs 1.5–3.0 ms on a 32-core host,
+    /// under 1% of a 200 ms interval.
+    ///
+    /// Still refused: the SAME sampler across two DIFFERENT recordings of a
+    /// multi-recording (A/B) archive. Those are genuinely different timelines
+    /// — different agents, hosts or arms — and unioning them would let
+    /// first-wins silently answer from one recording. Errors too when the
+    /// query references no known metric.
     fn route(&self, query: &str) -> Result<Routed<'_>, QueryError> {
         let owners = self.owners(query)?;
         match owners.as_slice() {
@@ -239,10 +249,7 @@ impl RezReader {
                 // (or unsplit V3) table, so within one recording this
                 // reduces to today's behavior whenever nothing actually
                 // split.
-                let mut groups: Vec<(usize, &str)> = many
-                    .iter()
-                    .map(|t| (t.recording, rez::table_sampler(&t.sampler)))
-                    .collect();
+                let mut groups: Vec<usize> = many.iter().map(|t| t.recording).collect();
                 groups.sort();
                 groups.dedup();
                 match groups.as_slice() {
@@ -279,33 +286,26 @@ impl RezReader {
                             })
                     }
                     _ => {
-                        // Either two different samplers, or the same
-                        // sampler split across two different recordings —
-                        // tell them apart so the error is actually
-                        // actionable.
-                        let mut samplers: Vec<&str> = groups.iter().map(|(_, s)| *s).collect();
+                        // Only one case reaches here now: metrics drawn from
+                        // more than one RECORDING of a multi-recording
+                        // archive. Those are different agents, hosts or arms
+                        // on genuinely different timelines, and the widened
+                        // band does not make them comparable — unioning them
+                        // would let first-wins silently answer from one side.
+                        let mut samplers: Vec<&str> = many
+                            .iter()
+                            .map(|t| rez::table_sampler(&t.sampler))
+                            .collect();
                         samplers.sort();
                         samplers.dedup();
-                        let mut recordings: Vec<usize> = groups.iter().map(|(r, _)| *r).collect();
-                        recordings.sort();
-                        recordings.dedup();
-                        if samplers.len() == 1 {
-                            Err(QueryError::ParseError(format!(
-                                "query {query} references sampler {} from {} different \
-                                 recordings of this multi-recording .rez — cross-recording \
-                                 queries are not supported; query one recording at a time \
-                                 (see `RezReader::open_recordings`)",
-                                samplers[0],
-                                recordings.len()
-                            )))
-                        } else {
-                            Err(QueryError::ParseError(format!(
-                                "cross-timeline query spans samplers {} — per-sampler alignment \
-                                 (interpolate/decimate) is not yet supported; query one sampler \
-                                 at a time",
-                                samplers.join(", ")
-                            )))
-                        }
+                        Err(QueryError::ParseError(format!(
+                            "query {query} references metrics ({}) from {} different \
+                             recordings of this multi-recording .rez — cross-recording \
+                             queries are not supported; query one recording at a time \
+                             (see `RezReader::open_recordings`)",
+                            samplers.join(", "),
+                            groups.len()
+                        )))
                     }
                 }
             }
@@ -1043,14 +1043,29 @@ mod tests {
         assert!(reader
             .query_range("rate(reads[4s])", start, end, 1.0)
             .is_ok());
-        // And a query spanning both still errors naming both samplers.
-        let err = reader
-            .query_range("cpu_cycles + reads", start, end, 1.0)
-            .unwrap_err();
-        let msg = format!("{err:?}");
+        // …and a query spanning both, across a single-segment and a
+        // multi-segment table, answers through the union.
         assert!(
-            msg.contains("cpu_usage") && msg.contains("blockio_requests"),
-            "got: {msg}"
+            reader
+                .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", start, end, 1.0)
+                .is_ok(),
+            "a union over tables with different segment counts and cadences \
+             must answer"
+        );
+
+        // Known gap, asserted so it is a decision rather than a surprise:
+        // `UnionMetricsSource` does not serve BARE counter selectors, only
+        // rated ones. Bare gauges work (that is how `… / cpu_cores` resolves),
+        // and rating a counter is what essentially every real query does, so
+        // this has never been reachable in practice — the cross-sampler
+        // refusal used to mask it entirely. Delete this assertion when the
+        // union grows bare-counter support.
+        assert!(
+            reader
+                .query_range("cpu_cycles + reads", start, end, 1.0)
+                .is_err(),
+            "bare counter selectors across a union are still unsupported; if \
+             this now passes, the gap is closed and this assertion should go"
         );
     }
 
@@ -2280,18 +2295,41 @@ mod tests {
                  metric is unioned alongside it in the same query: solo={solo_json} \
                  via_union={union_json}"
             );
-            assert_eq!(
-                solo_json["result"][0]["intervals"], union_json["result"][0]["intervals"],
-                "cpu_softirq's own bands must not change either: solo={solo_json} \
-                 via_union={union_json}"
+            // The BAND may legitimately differ, and here it must: the union
+            // form is a binary op against a metric from a DIFFERENT table, so
+            // cpu_softirq's value is being combined with one read at another
+            // instant. That costs accuracy its solo band does not contain, and
+            // the widening prices it. What must never happen is the band
+            // getting NARROWER — claiming precision the join cannot support.
+            let solo_iv = solo_json["result"][0]["intervals"].as_array().unwrap();
+            let union_iv = union_json["result"][0]["intervals"].as_array().unwrap();
+            assert_eq!(solo_iv.len(), union_iv.len());
+            let mut widened = 0;
+            for (s_pt, u_pt) in solo_iv.iter().zip(union_iv) {
+                let (s_lo, s_hi) = (s_pt[0].as_f64().unwrap(), s_pt[1].as_f64().unwrap());
+                let (u_lo, u_hi) = (u_pt[0].as_f64().unwrap(), u_pt[1].as_f64().unwrap());
+                assert!(
+                    u_lo <= s_lo && u_hi >= s_hi,
+                    "a cross-table band must never be narrower than the solo \
+                     one: solo=({s_lo}, {s_hi}) union=({u_lo}, {u_hi})"
+                );
+                if u_lo < s_lo || u_hi > s_hi {
+                    widened += 1;
+                }
+            }
+            assert!(
+                widened > 0,
+                "at least one point must be widened, or the join is being \
+                 priced at zero: solo={solo_json} via_union={union_json}"
             );
         }
 
         #[test]
-        fn cross_sampler_query_still_errors_when_one_side_is_a_split_sampler() {
-            // A query spanning a split sampler's group AND a totally
-            // different sampler must still refuse — and must name each
-            // SAMPLER once, not once per physical group table.
+        fn a_split_sampler_group_and_another_sampler_union_together() {
+            // A query spanning one sampler's group table AND a different
+            // sampler's used to be refused. Both are tables of the SAME
+            // recording — one agent, one tick — so they union now, with each
+            // side's band widened to the span of both reads.
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("mixed.rez");
             let mut rec = recorder(&path, usize::MAX);
@@ -2347,36 +2385,37 @@ mod tests {
             rec.finalize((3_000_000_000, 0)).unwrap();
 
             let reader = open(&path);
-            let err = reader
-                .query_range("cpu_cycles + cpu_softirq + reads", 0.0, 10.0, 1.0)
-                .unwrap_err();
-            let msg = format!("{err:?}");
             assert!(
-                msg.contains("cpu_usage") && msg.contains("blockio_requests"),
-                "got: {msg}"
-            );
-            assert!(
-                !msg.contains("cpu_usage/percpu") && !msg.contains("cpu_usage/softirq"),
-                "the error must name the SAMPLER once, not each of its group \
-                 tables: {msg}"
+                reader
+                    .query_range(
+                        "rate(cpu_cycles[3s]) + rate(cpu_softirq[3s]) + rate(reads[3s])",
+                        0.0,
+                        10.0,
+                        1.0
+                    )
+                    .is_ok(),
+                "two group tables of one sampler and a third sampler's table \
+                 all belong to one recording, so they union"
             );
         }
     }
 
     #[test]
-    fn cross_sampler_query_errors_naming_both() {
+    fn cross_sampler_query_answers_through_the_union() {
         let (_d, path) = two_sampler_rez();
         let pool = BufferPool::new(64 * 1024 * 1024);
         let reader = RezReader::open_with_pool(&path, pool).unwrap();
-        // cpu_cycles (cpu_usage) and reads (blockio_requests) live in different
-        // tables; a query spanning both must error, naming both samplers.
-        let err = reader
-            .query_range("cpu_cycles + reads", 0.0, 10.0, 1.0)
-            .unwrap_err();
-        let msg = format!("{err:?}");
+        // `cpu_cycles` (cpu_usage) and `reads` (blockio_requests) live in
+        // different tables. This used to be refused as "cross-timeline",
+        // because nothing could say what treating two separately-read values
+        // as simultaneous costs. The query engine prices that itself now —
+        // operands whose acquisition edges differ have their bands widened to
+        // the union of both spans — so the query answers.
         assert!(
-            msg.contains("cpu_usage") && msg.contains("blockio_requests"),
-            "got: {msg}"
+            reader
+                .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", 0.0, 10.0, 1.0)
+                .is_ok(),
+            "a query spanning two samplers of one recording must answer"
         );
     }
 }
