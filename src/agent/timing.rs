@@ -127,8 +127,15 @@ pub(crate) struct AcquisitionGroup {
     pub sampler: &'static str,
     pub name: &'static str,
     slot: GroupWindowSlot,
-    // 0 = unbounded (walk the full backing array's `entries()`); nonzero =
-    // the real member-population bound. See `set_member_bound`/`member_bound`.
+    // `usize::MAX` = unbounded (walk the full backing array's `entries()`);
+    // anything else is the real member-population bound, INCLUDING ZERO.
+    //
+    // The sentinel is MAX rather than 0 because zero is a legitimate bound: a
+    // device sweep on a host with none of that vendor's hardware has exactly
+    // zero members. With 0 as the sentinel, such a group could not say so —
+    // `set_member_bound(0)` was indistinguishable from never calling it, and
+    // the walk fell back to backing capacity, declaring `MAX_GPUS`-worth of
+    // phantom all-null members. See `set_member_bound`/`member_bound`.
     member_bound: AtomicUsize,
     // Init-time flag: true means this group's acquisition IS the exposition
     // read itself (mmap-direct `PackedCounters`), not a sampler `refresh()`.
@@ -145,7 +152,7 @@ impl AcquisitionGroup {
             sampler,
             name,
             slot: GroupWindowSlot::new(),
-            member_bound: AtomicUsize::new(0),
+            member_bound: AtomicUsize::new(usize::MAX),
             reader_stamped: AtomicBool::new(false),
         }
     }
@@ -187,7 +194,7 @@ impl AcquisitionGroup {
             sampler,
             name,
             slot: GroupWindowSlot::new(),
-            member_bound: AtomicUsize::new(0),
+            member_bound: AtomicUsize::new(usize::MAX),
             reader_stamped: AtomicBool::new(true),
         }
     }
@@ -218,9 +225,14 @@ impl AcquisitionGroup {
 
     /// The group's member-population bound, if one has been set (`None`
     /// means unbounded: walk the full `entries()`).
+    ///
+    /// `Some(0)` is a real answer — "this group has no members" — and is
+    /// distinct from `None`. A GPU sampler on a host without that vendor's
+    /// hardware reports exactly that, and the difference is what keeps a
+    /// phantom all-null table out of every archive.
     pub(crate) fn member_bound(&self) -> Option<usize> {
         match self.member_bound.load(Ordering::Relaxed) {
-            0 => None,
+            usize::MAX => None,
             n => Some(n),
         }
     }
