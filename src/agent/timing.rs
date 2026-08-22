@@ -439,6 +439,45 @@ mod tests {
     // debug build): the pre-fix tear was caught 0/30 runs at 200k
     // iterations, but 5/5 at 5M — and 5M costs ~0.42s on correct code. Do
     // not shrink either the iteration count or drop the arm64 requirement.
+    /// A group must be able to say it has ZERO members, distinctly from
+    /// having said nothing.
+    ///
+    /// The bound used 0 as its "unset" sentinel, so `set_member_bound(0)` was
+    /// indistinguishable from never calling it and the snapshot walk fell back
+    /// to the backing array's full capacity. A GPU vendor sampler on a host
+    /// without that vendor's hardware therefore declared `MAX_GPUS`-worth of
+    /// phantom, all-null members — which put a table into every archive whose
+    /// metric names collided with the other vendor's vendor-neutral ones, and
+    /// made `avg(gpu_utilization)` ambiguous on machines that had no GPU at
+    /// all.
+    ///
+    /// This is the same failure the acquisition-group design exists to avoid,
+    /// one level down: a sentinel colliding with a legitimate value. Zero
+    /// members is a real answer.
+    #[test]
+    fn a_group_can_declare_zero_members_distinctly_from_unset() {
+        static UNSET: AcquisitionGroup = AcquisitionGroup::new("s", "unset");
+        static ZERO: AcquisitionGroup = AcquisitionGroup::new("s", "zero");
+        static SOME: AcquisitionGroup = AcquisitionGroup::new("s", "some");
+
+        assert_eq!(
+            UNSET.member_bound(),
+            None,
+            "a group that never set a bound is unbounded: walk everything"
+        );
+
+        ZERO.set_member_bound(0);
+        assert_eq!(
+            ZERO.member_bound(),
+            Some(0),
+            "zero members must survive as zero, not decay into `unbounded` and \
+             walk the whole backing array"
+        );
+
+        SOME.set_member_bound(7);
+        assert_eq!(SOME.member_bound(), Some(7));
+    }
+
     #[test]
     fn group_slot_is_tear_free_under_contention() {
         // Writer stamps (n, n+1) pairs; readers must never observe a mixed pair.
