@@ -74,20 +74,38 @@ so two metrics from the same table have *no* alignment error between them —
 not a small one, zero. The error is created by crossing a table boundary,
 and nowhere else. That is the whole rule:
 
-1. **Propagate bands through series-op-series.** Today they are dropped: a
-   single `sum(irate(cpu_usage[5m]))` prints `[lo, hi]`, but dividing it by
-   another series prints no band at all. Combining two uncertain values
-   currently makes the uncertainty *vanish* rather than grow, which is the
-   one direction it must never go.
+1. **Propagate bands through series-op-series.** *Already done* — see the
+   correction below. `ZipMergeBinary` combines both operands' bands through
+   `combine_bounds`/`interval_binop`, so a division of two rates already
+   carries one.
 2. **Same table → no alignment term.** Zero, by construction.
 3. **Cross table → widen by the union span** of the two windows.
 4. **Cross cadence stays refused** (a 50 ms sampler against a 60 s
    drivehealth sweep). The term is not small there, the right semantics are
    a separate question, and nothing in the dashboards asks for it.
 
-Note (1) is a fix in its own right. The union path shipped in stage 4
-already answers cross-*group*-within-sampler queries — that is how
-`cpu_usage ÷ softirq` works — and it reports no uncertainty for them today.
+### Correction (2026-08-21, after the entry was merged)
+
+Point (1) as originally written was **wrong**: it claimed series-op-series
+bands were dropped. They are not. Verified against a real `.rez`:
+
+```
+sum(irate(cpu_usage[1m])) / sum(irate(softirq[1m]))
+  First: … = 181140.15364092906  [171273.716427, 191590.779931]
+```
+
+The claim came from reading truncated command output (`head -4` cut the
+`First:` line) plus a stale line in `CLAUDE.md` saying "series-op-series and
+non-rate queries show none". Both are corrected.
+
+This makes the remaining work **smaller and better founded**, not larger.
+The machinery to carry a band through a binary op exists and is tested
+(`interval_binop`, `combine_bounds`). What is missing is precisely the
+alignment term: the band above combines the two rate bands and adds nothing
+for the fact that `cpu_usage/cpu_usage_cpu` and `cpu_usage/cpu_usage_softirq`
+are *different tables*, read at different instants. So today's cross-table
+bands are **too narrow**, which is the one direction they must not be — and
+that is exactly what rule (3) fixes.
 
 ### Why the union span, not begin-to-begin
 
