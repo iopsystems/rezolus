@@ -1,7 +1,8 @@
 # Cross-table uncertainty: widen the band, drop the refusal
 
 - **Opened:** 2026-08-21
-- **Status:** **DESIGN.** Measured, not yet implemented.
+- **Status:** **IMPLEMENTED** (metriken PR #135; rezolus drops the refusal).
+  Two corrections since the entry was merged — see below.
 - **Arc:** closes the loop the acquisition-groups work opened
   ([stage 4](2026-08-20-stage4-native-v3-ingest.md)). Groups made each
   reading's window honest; this makes *combining* two readings honest.
@@ -80,9 +81,9 @@ and nowhere else. That is the whole rule:
    carries one.
 2. **Same table → no alignment term.** Zero, by construction.
 3. **Cross table → widen by the union span** of the two windows.
-4. **Cross cadence stays refused** (a 50 ms sampler against a 60 s
-   drivehealth sweep). The term is not small there, the right semantics are
-   a separate question, and nothing in the dashboards asks for it.
+4. **Cross cadence needs no special case** — see the second correction
+   below. It neither stays refused nor blows the band up; it decimates to the
+   slow side on its own.
 
 ### Correction (2026-08-21, after the entry was merged)
 
@@ -106,6 +107,47 @@ for the fact that `cpu_usage/cpu_usage_cpu` and `cpu_usage/cpu_usage_softirq`
 are *different tables*, read at different instants. So today's cross-table
 bands are **too narrow**, which is the one direction they must not be — and
 that is exactly what rule (3) fixes.
+
+### Correction 2 (2026-08-22): cross-cadence was wrong twice over
+
+The entry said cross-cadence combinations "stay refused" and, in discussion,
+that their band would explode and thereby signal meaninglessness. Both are
+wrong. Measured on a real archive, `cpu_usage` at ~0.199 s against
+`drivehealth` at ~19.6 s:
+
+```
+sum(irate(cpu_usage[5m])) / avg(drive_temperature)
+  → 3 points,  band [28558194, 28801420]   (~0.85% wide)
+sum(irate(cpu_usage[5m]))
+  → 29 points
+```
+
+The result comes out at the **slow side's cadence** — 3 points, not 29 —
+because `ZipMergeBinary` emits only where both sides have a point. Decimation
+is already the behaviour, for free, from timestamp intersection.
+
+And the band stays **tight**, because it reflects the two *acquisition
+windows* (both short — drivehealth's is its ~170 ms sweep), not the 19.6 s
+*interval* between readings. Cadence difference shows up as fewer output
+points; window width shows up as band width. Those are separate axes, and
+conflating them produced both errors.
+
+### The real cross-cadence question is sampling, not alignment
+
+What decimation would still buy is *meaning*, not safety. Rates are computed
+over the evaluation **step**, not the declared range — `rate(x[1s])`,
+`rate(x[30s])` and `irate(x[30s])` return byte-identical values, because
+`GridRate` computes `increase / step_s` and the range only gates whether
+enough samples exist. So the 3 surviving points above are fast-step rates
+sampled at 3 arbitrary instants, not averages over the period the slow reading
+spans.
+
+No band widening addresses that: a band measures acquisition uncertainty, not
+sampling representativeness. Such a result looks precise and is
+unrepresentative. The lever is the step, which is a caller parameter
+(`query_range(query, start, end, step)`) — so choosing it from the slowest
+referenced sampler's cadence is a rezolus-side change, tracked separately
+because it changes VALUES where this entry's rule changes only bands.
 
 ### Why the union span, not begin-to-begin
 
