@@ -272,13 +272,43 @@ impl RezReader {
                             .map(Routed::Union)
                             .map_err(|e| match e {
                                 UnionError::NonDisjoint { duplicates } => {
-                                    QueryError::ParseError(format!(
-                                        "query {query} references metric name(s) present in \
-                                         more than one acquisition-group table of the same \
-                                         sampler — the archive's own tables are not disjoint, \
-                                         which should never happen: {}",
-                                        duplicates.join(", ")
-                                    ))
+                                    // Two very different situations produce
+                                    // this, and conflating them tells the
+                                    // operator their archive is corrupt when
+                                    // it is not. Distinct SAMPLERS sharing a
+                                    // metric name is legitimate and shipped:
+                                    // `gpu_amd_smi` and `gpu_nvidia` both
+                                    // publish the vendor-neutral
+                                    // `gpu_utilization`, `gpu_temperature` and
+                                    // six more, because only one of them ever
+                                    // populates on a given host. Two group
+                                    // tables of ONE sampler sharing a name is
+                                    // a real archive defect.
+                                    let mut samplers: Vec<&str> = many
+                                        .iter()
+                                        .map(|t| rez::table_sampler(&t.sampler))
+                                        .collect();
+                                    samplers.sort();
+                                    samplers.dedup();
+                                    if samplers.len() > 1 {
+                                        QueryError::ParseError(format!(
+                                            "query {query} references metric name(s) published \
+                                             by more than one sampler ({}), so it is ambiguous \
+                                             which is meant: {}. This is not an archive fault — \
+                                             those samplers deliberately share vendor-neutral \
+                                             names. Query one of them at a time.",
+                                            samplers.join(", "),
+                                            duplicates.join(", ")
+                                        ))
+                                    } else {
+                                        QueryError::ParseError(format!(
+                                            "query {query} references metric name(s) present in \
+                                             more than one acquisition-group table of the same \
+                                             sampler — the archive's own tables are not \
+                                             disjoint, which should never happen: {}",
+                                            duplicates.join(", ")
+                                        ))
+                                    }
                                 }
                                 UnionError::Empty => {
                                     unreachable!("the `many` arm always has at least 2 owners")
@@ -667,6 +697,34 @@ mod tests {
     }
 
     /// Build a 2-sampler .rez fixture on disk; return (tempdir, path).
+    /// Two samplers publishing the SAME metric name — the `gpu_amd_smi` /
+    /// `gpu_nvidia` shape, where both vendors declare vendor-neutral names and
+    /// only one populates on any given host.
+    pub(super) fn two_sampler_rez_sharing_a_metric_name() -> (tempfile::TempDir, std::path::PathBuf)
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("shared.rez");
+        let rows: Vec<(Snapshot, u64)> = (0..3u64)
+            .map(|i| {
+                let ts = 1_000_000_000 * (i + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                (
+                    snap(
+                        ts,
+                        vec![
+                            counter("shared_metric", "sampler_a", i * 10, w),
+                            counter("shared_metric", "sampler_b", i * 20, w),
+                        ],
+                        Vec::new(),
+                    ),
+                    ts,
+                )
+            })
+            .collect();
+        write_atomic_rez(&rows, &out);
+        (dir, out)
+    }
+
     pub(super) fn two_sampler_rez() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("two.rez");
@@ -2398,6 +2456,45 @@ mod tests {
                  all belong to one recording, so they union"
             );
         }
+    }
+
+    /// Two samplers publishing the same metric name must not be reported as a
+    /// corrupt archive.
+    ///
+    /// Shipped example: `gpu_amd_smi` and `gpu_nvidia` both publish
+    /// `gpu_utilization`, `gpu_temperature` and six more vendor-neutral names,
+    /// because only one of them ever populates on a given host. The dashboard
+    /// queries `avg(gpu_utilization)` in 16 places.
+    ///
+    /// Unioning across samplers made those queries reach
+    /// `UnionMetricsSource`'s disjointness check, whose message said the names
+    /// were in two group tables "of the same sampler" and that this "should
+    /// never happen". Both halves were false, and it blamed the operator's
+    /// archive for a deliberate design property. The query is still ambiguous
+    /// and still refused — it just has to say so truthfully.
+    #[test]
+    fn two_samplers_sharing_a_metric_name_is_not_reported_as_a_corrupt_archive() {
+        let (_d, path) = two_sampler_rez_sharing_a_metric_name();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+
+        let err = reader
+            .query_range("shared_metric", 0.0, 10.0, 1.0)
+            .unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("more than one sampler"),
+            "the error must name the real cause — two samplers, one name: {msg}"
+        );
+        assert!(
+            !msg.contains("should never happen"),
+            "this DOES happen, by design, and saying otherwise sends the \
+             operator hunting a corrupt archive: {msg}"
+        );
+        assert!(
+            msg.contains("sampler_a") && msg.contains("sampler_b"),
+            "the error must name which samplers collide: {msg}"
+        );
     }
 
     #[test]
