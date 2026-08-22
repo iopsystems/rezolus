@@ -864,8 +864,14 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
     let at_dump = h.wait_until("a partly-filled WAL over sealed segments", |s| {
         s.segments("fake") >= 2 && (1..=2).contains(&s.table("fake").live_wal_rows)
     });
-    let live_at_dump = at_dump.table("fake").live_wal_rows;
+    let live_before = at_dump.table("fake").live_wal_rows;
     h.dump_to(&dest);
+    // Read /status again AFTER the dump so the live-row count at the moment
+    // the snapshot was taken is BRACKETED rather than guessed. The buffer is
+    // still ingesting at 10 Hz, so any fixed tolerance on `live_before` is a
+    // bet on how long the dump takes — and on a loaded CI runner that bet
+    // loses (observed: 1 row before, a 7-row tail).
+    let live_after = h.status().table("fake").live_wal_rows;
 
     let dumped = read_rez(&dest, "fake");
     assert!(
@@ -885,12 +891,18 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
          carry",
         tail.rows
     );
-    assert!(
-        (live_at_dump..=live_at_dump + 3).contains(&tail.rows),
-        "the tail must be the rows that were live in the WAL: /status said \
-         {live_at_dump} live rows, the dump's tail holds {}",
-        tail.rows
-    );
+    // `live_after` can be lower than `live_before` if a seal landed between
+    // the two reads, which resets the WAL — in that case the tail is bounded
+    // by a full segment instead, which the assertion above already covers.
+    if live_after >= live_before {
+        assert!(
+            (live_before..=live_after).contains(&tail.rows),
+            "the tail must be the rows that were live in the WAL when the dump \
+             was taken: /status said {live_before} live rows before the dump and \
+             {live_after} after, so the tail should be in that range — it holds {}",
+            tail.rows
+        );
+    }
     assert_eq!(
         tail.timestamps.len(),
         tail.rows as usize,
