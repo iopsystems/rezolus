@@ -2245,9 +2245,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.19.1"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "693e4599d1ff4ec546d45dff9c827074f70210f29131f1cd92c9c656450267cd"
+checksum = "8595407a3aac63e511dd4b4f6eff1828786ed6f5bd767f0f9cb08967adf65d05"
 dependencies = [
  "arrow",
  "bytes",

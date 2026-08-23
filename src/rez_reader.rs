@@ -47,7 +47,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use metriken_query::{
-    BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult,
+    BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult, RateMode,
     SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
 };
 
@@ -104,6 +104,21 @@ struct SamplerReader {
     recording: usize,
     sampler: String,
     reader: TableReader,
+    /// Row timestamps as the query path indexes them, read once.
+    ///
+    /// Reading them means decoding a whole column, and the cross-cadence
+    /// policy asks for them on every query that spans samplers. A reader's
+    /// view is fixed once it is open — a live archive is re-opened, and the
+    /// WAL tail is materialized at open — so one read is enough, and the
+    /// viewer holds its readers for the life of the process.
+    snapped_timestamps: std::sync::OnceLock<Vec<u64>>,
+}
+
+impl SamplerReader {
+    fn snapped_timestamps(&self) -> &[u64] {
+        self.snapped_timestamps
+            .get_or_init(|| self.reader.as_dyn().snapped_sample_timestamps())
+    }
 }
 
 /// A `.rez` archive presented as one `MetricsSource`. Phase B: a single
@@ -188,6 +203,7 @@ impl RezReader {
                     recording,
                     sampler,
                     reader,
+                    snapped_timestamps: std::sync::OnceLock::new(),
                 });
             }
         }
@@ -360,6 +376,130 @@ impl Routed<'_> {
     }
 }
 
+/// The typical spacing between consecutive rows, or `None` for fewer than two
+/// rows (no gap to measure).
+///
+/// The median, not the mean: a sampler's rows are irregular — 30 s then 60 s
+/// apart on a real recording — and a mean is dragged around by the long gaps
+/// and by any restart-sized hole in the middle of a recording. The median
+/// answers "how often does this table usually produce a row", which is the
+/// question being asked.
+fn typical_gap_ns(timestamps: &[u64]) -> Option<u64> {
+    if timestamps.len() < 2 {
+        return None;
+    }
+    let mut gaps: Vec<u64> = timestamps
+        .windows(2)
+        .map(|w| w[1].saturating_sub(w[0]))
+        .collect();
+    gaps.sort_unstable();
+    Some(gaps[gaps.len() / 2]).filter(|g| *g > 0)
+}
+
+impl RezReader {
+    /// The timestamps a query should be evaluated at, when it spans samplers of
+    /// different cadence — `None` when it does not and the uniform grid is
+    /// right.
+    ///
+    /// The grid walks `start + k·step`. A query combining a fast sampler with a
+    /// slow one therefore produces most of its points where the slow sampler
+    /// has no reading at all: that value is held forward and combined with the fast
+    /// operand as if the two were simultaneous.
+    ///
+    /// The grid cannot be tuned out of this. A slow sampler's rows are not
+    /// evenly spaced — measured on a real recording, one sampler's readings
+    /// fell 30 s apart and then 60 s apart — so no step and no phase puts a
+    /// uniform grid on them. Two earlier attempts are worth recording:
+    /// coarsening the STEP relocated the grid and made the combined band
+    /// explode (0.85% wide before, 6.7x after), and widening only the averaging
+    /// SPAN left the points on the grid, still between the slow sampler's real
+    /// readings.
+    ///
+    /// So hand the engine the slow sampler's own row timestamps. Every point then
+    /// lands where both operands genuinely have data, and each rate averages
+    /// over the gap it actually spans.
+    ///
+    /// Returns `None` unless the query really touches more than one cadence, so
+    /// single-sampler queries — the overwhelming majority — are untouched.
+    ///
+    /// Also `None` under [`RateMode::Raw`], which already answers this question
+    /// its own way: Raw places points at the real, un-snapped sample
+    /// timestamps. Relocating them would contradict that contract, and would
+    /// break the query outright — Raw's counter producer reads sample pairs
+    /// and ignores supplied points, while the gauge producers honour them, so
+    /// a counter-and-gauge expression would have its two sides land on
+    /// different instants and intersect nowhere.
+    fn cross_cadence_eval_timestamps(
+        &self,
+        query: &str,
+        step_s: f64,
+        rate_mode: RateMode,
+    ) -> Option<Arc<[u64]>> {
+        use crate::recorder::rez::table_sampler;
+
+        if matches!(rate_mode, RateMode::Raw) {
+            return None;
+        }
+
+        let owners = self.owners(query).ok()?;
+        if owners.len() < 2 {
+            return None;
+        }
+
+        // Cadence comes from the ROWS, not from `interval()`: that reports the
+        // recording's nominal interval, which every table in an archive shares
+        // — on a real recording a 1 s sampler and a 30 s one both answered 1.0,
+        // so asking it can never detect a cadence difference. And it must be
+        // the SNAPPED rows, because those are the instants the query path
+        // indexes samples by; a raw row at 1.5 s on a 1 s grid is indexed at
+        // 2.0 s, so asking for 1.5 s falls before the series starts and
+        // silently yields nothing.
+        //
+        // Cadence is a property of the SAMPLER, not of a table. Two group
+        // tables of one sampler are read together on one schedule; a group that
+        // dedups or skips ticks is sparse WITHIN that cadence, not a second
+        // cadence, and relocating a query onto its rows would silently change
+        // the answer for a query that merely named a sibling group's metric.
+        //
+        // So a sampler's cadence is the spacing of its DENSEST participating
+        // table — the one that shows the underlying read schedule.
+        let mut by_sampler: BTreeMap<&str, (u64, &[u64])> = BTreeMap::new();
+        for t in &owners {
+            let ts = t.snapped_timestamps();
+            let Some(gap) = typical_gap_ns(ts) else {
+                continue;
+            };
+            by_sampler
+                .entry(table_sampler(&t.sampler))
+                .and_modify(|slot| {
+                    if gap < slot.0 {
+                        *slot = (gap, ts);
+                    }
+                })
+                .or_insert((gap, ts));
+        }
+        if by_sampler.len() < 2 {
+            return None;
+        }
+
+        let fastest = by_sampler.values().map(|(gap, _)| *gap).min()?;
+        let (slowest, timestamps) = by_sampler.into_values().max_by_key(|(gap, _)| *gap)?;
+        // Deliberately a ratio, not equality: gaps measured from real rows are
+        // never exactly equal, so "different cadence" has to mean *materially*
+        // different. A sampler read at least twice as far apart as another is a
+        // different cadence in any sense that matters here.
+        if slowest < fastest.saturating_mul(2) {
+            return None;
+        }
+        // A slow sampler finer than the step is already oversampled by the
+        // grid; moving off it would only lose points.
+        if (slowest as f64) <= step_s * 1e9 {
+            return None;
+        }
+        Some(timestamps.into())
+    }
+}
+
 impl MetricsSource for RezReader {
     // ── Query methods: route to the sub-reader owning the referenced metrics. ──
     fn query_range_opts(
@@ -370,6 +510,17 @@ impl MetricsSource for RezReader {
         step_s: f64,
         opts: &QueryOptions,
     ) -> Result<QueryResult, QueryError> {
+        let aligned;
+        let opts = match self.cross_cadence_eval_timestamps(expr, step_s, opts.rate_mode) {
+            Some(points) => {
+                // Clone and set the one field: `QueryOptions` is
+                // `#[non_exhaustive]`, so it cannot be built by literal from
+                // here — and cloning preserves whatever else the caller set.
+                aligned = opts.clone().with_eval_timestamps(Some(points));
+                &aligned
+            }
+            None => opts,
+        };
         self.route(expr)?
             .as_dyn()
             .query_range_opts(expr, start_s, end_s, step_s, opts)
@@ -2495,6 +2646,175 @@ mod tests {
             msg.contains("sampler_a") && msg.contains("sampler_b"),
             "the error must name which samplers collide: {msg}"
         );
+    }
+
+    /// A `.rez` whose two samplers run at genuinely different cadences, with
+    /// the slow one's rows both IRREGULARLY spaced and off the integer grid.
+    ///
+    /// `cpu_usage` polls every 0.5 s; `blockio_requests` produces a row only at
+    /// 1.5 s, 4.5 s and 10.5 s — gaps of 3 s then 6 s, mirroring the 30 s/60 s
+    /// spacing measured on a real recording. No uniform grid can sit on those
+    /// at any step or phase, which is the entire reason the evaluation
+    /// timestamps have to be passed explicitly.
+    ///
+    /// The query path indexes samples by the timestamp SNAPPED to the nominal
+    /// grid, so these rows are seen at 2 s, 5 s and 11 s — still unevenly
+    /// spaced, which is what matters.
+    fn cross_cadence_rez() -> (tempfile::TempDir, std::path::PathBuf) {
+        const SLOW_POLLS: [u64; 3] = [1, 7, 19]; // → 1.5 s, 4.5 s, 10.5 s
+        let rows: Vec<(Snapshot, u64)> = (0..25u64)
+            .map(|i| {
+                let ts = 1_000_000_000 + i * 500_000_000;
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                let mut counters = vec![counter("cpu_cycles", "cpu_usage", i * 1_000, w)];
+                if SLOW_POLLS.contains(&i) {
+                    counters.push(counter("reads", "blockio_requests", i, w));
+                }
+                (snap(ts, counters, vec![]), ts)
+            })
+            .collect();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("cross_cadence.rez");
+        write_atomic_rez(&rows, &out);
+        (dir, out)
+    }
+
+    /// A query spanning two cadences is evaluated at the SLOW table's own row
+    /// timestamps, not on the uniform grid.
+    ///
+    /// On the grid, every point but a coincidence lands where the slow table
+    /// has no reading; its value is held forward and combined with the fast
+    /// operand as if the two were simultaneous. Here the slow rows are at
+    /// x.5 s and unevenly spaced, so landing on them is only possible by using
+    /// them directly — which is exactly what the assertion checks.
+    #[test]
+    fn a_cross_cadence_query_lands_on_the_slow_tables_real_rows() {
+        let (_d, path) = cross_cadence_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+
+        let result = reader
+            .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", 0.0, 14.0, 1.0)
+            .expect("a cross-cadence query must answer");
+        let QueryResult::Matrix { result } = result else {
+            panic!("expected a matrix, got {result:?}");
+        };
+        let times: Vec<f64> = result
+            .first()
+            .expect("one series expected")
+            .values
+            .iter()
+            .map(|(t, _)| *t)
+            .collect();
+
+        // The slow sampler's three rows, as the query path indexes them (its
+        // raw 1.5/4.5/10.5 s snap to the nominal grid). N rows span N-1 gaps,
+        // so the first yields no rate — nothing precedes it to measure across.
+        assert_eq!(
+            times,
+            vec![5.0, 11.0],
+            "points must sit on the slow sampler's own rows"
+        );
+        // The discriminating property: those two points are 6 s apart, having
+        // followed a 3 s gap. No uniform grid over [0, 14] at step 1 produces
+        // exactly this set — a grid would emit a point every second and hold
+        // the slow operand's value in between.
+        assert_eq!(
+            times.len(),
+            2,
+            "on the grid this same query emits 9 points (3.0..=11.0 s), seven \
+             of them where the slow sampler never read and its value is merely \
+             held forward: {times:?}"
+        );
+    }
+
+    /// Raw mode keeps its own placement: the real, un-snapped sample
+    /// timestamps.
+    ///
+    /// Raw already answers the cross-cadence question its own way, so
+    /// relocating its points would contradict its contract — and would break
+    /// the query outright. Raw's counter producer walks sample PAIRS and
+    /// ignores supplied evaluation points, while the gauge producers honour
+    /// them, so a counter-and-gauge expression would have its two sides land
+    /// on different instants and intersect nowhere, returning an empty series
+    /// rather than a wrong one.
+    #[test]
+    fn raw_mode_keeps_its_own_placement() {
+        let (_d, path) = cross_cadence_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+
+        assert!(
+            reader
+                .cross_cadence_eval_timestamps(
+                    "rate(cpu_cycles[2s]) + rate(reads[4s])",
+                    1.0,
+                    RateMode::Grid,
+                )
+                .is_some(),
+            "the fixture must be one the policy fires on, or this proves nothing"
+        );
+        assert!(
+            reader
+                .cross_cadence_eval_timestamps(
+                    "rate(cpu_cycles[2s]) + rate(reads[4s])",
+                    1.0,
+                    RateMode::Raw,
+                )
+                .is_none(),
+            "Raw must be left alone"
+        );
+    }
+
+    /// The policy is inert when a query touches ONE cadence — the overwhelming
+    /// majority of queries, which must keep their familiar grid placement.
+    #[test]
+    fn a_single_cadence_query_keeps_the_uniform_grid() {
+        let (_d, path) = cross_cadence_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, pool).unwrap();
+
+        let result = reader
+            .query_range("rate(cpu_cycles[2s])", 0.0, 14.0, 1.0)
+            .expect("a single-sampler query must answer");
+        let QueryResult::Matrix { result } = result else {
+            panic!("expected a matrix, got {result:?}");
+        };
+        let times: Vec<f64> = result
+            .first()
+            .expect("one series expected")
+            .values
+            .iter()
+            .map(|(t, _)| *t)
+            .collect();
+
+        assert!(!times.is_empty(), "expected grid points");
+        assert!(
+            times.iter().all(|t| (t - t.round()).abs() < 1e-9),
+            "a single-cadence query must stay on the integer grid: {times:?}"
+        );
+    }
+
+    /// The typical gap is the MEDIAN, so one long hole — a restart, a missed
+    /// poll — does not masquerade as the table's cadence.
+    #[test]
+    fn typical_gap_is_robust_to_a_single_long_hole() {
+        const S: u64 = 1_000_000_000;
+        let steady: Vec<u64> = (0..10).map(|i| i * S).collect();
+        assert_eq!(typical_gap_ns(&steady), Some(S));
+
+        // Same table, with a 100 s hole in the middle.
+        let mut holed = steady.clone();
+        holed.extend((0..10).map(|i| 110 * S + i * S));
+        assert_eq!(
+            typical_gap_ns(&holed),
+            Some(S),
+            "a mean would be dragged upward by the hole; the median must not be"
+        );
+
+        // Fewer than two rows spans no gap at all.
+        assert_eq!(typical_gap_ns(&[]), None);
+        assert_eq!(typical_gap_ns(&[42]), None);
     }
 
     #[test]
