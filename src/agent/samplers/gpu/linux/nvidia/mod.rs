@@ -18,6 +18,14 @@ const MB: i64 = 1024 * KB;
 const MHZ: i64 = 1_000_000;
 
 fn init(config: Arc<Config>) -> SamplerResult {
+    // Zero FIRST — see the equivalent comment in the AMD sampler. Here the
+    // leak is via `?`: `Nvml::init()` failing on a host without the NVIDIA
+    // driver (`libnvidia-ml.so.1` absent) returns before
+    // `NvidiaInner::new` can set the real bound, leaving the group at
+    // backing capacity and putting a phantom all-null `gpu_nvidia` table
+    // into every archive.
+    GPU_NVIDIA_ACQ.set_member_bound(0);
+
     if !config.enabled(NAME) {
         return Ok(None);
     }
