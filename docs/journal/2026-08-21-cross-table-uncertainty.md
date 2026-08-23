@@ -168,6 +168,59 @@ is actually true, and because a band that can be wrong in the narrow
 direction is worse than no band. Widen to contain the nominal, as the
 rate() bands already do.
 
+### Correction 3 (2026-08-23): the lever was not the step
+
+The section above names the step as the lever and calls choosing it from the
+slowest sampler's cadence "a rezolus-side change, tracked separately". That
+prediction was implemented and **measured wrong**, twice, before the third
+attempt worked.
+
+Coarsening the step does smooth, but the step sets the evaluation grid's
+position as well as the averaging window. Widening it moves the grid *off* the
+slow sampler's read times, so that sampler's window gets interpolated across
+the whole gap and the combined band explodes — **0.85% wide before, 6.7x
+after**, a five-hundred-fold regression in this entry's own honesty metric.
+
+The second attempt separated the two roles: a new `rate_span_ns` widened the
+averaging window while leaving the points on the grid. The band stayed tight,
+but the points stayed on the grid too — still *between* the slow sampler's real
+readings, still holding its value forward. Smoothing was never the problem.
+
+The problem is placement, and no grid can fix it. A slow sampler's rows are not
+evenly spaced: measured here, one sampler's readings fell **30 s apart and then
+60 s apart**. No step and no phase puts a uniform grid on those. That killed the
+phase-alignment shortcut and forced the honest answer — evaluate at the slow
+sampler's *own row timestamps*, which is what `QueryOptions::eval_timestamps`
+(metriken-query 0.20.0) now takes. Each rate's averaging window becomes the gap
+to the preceding timestamp, making the uniform grid the special case where every
+gap is equal.
+
+Measured on the same archive, the cross-cadence query goes from 9 grid points
+with a 0.016%-wide band to **4 points on real readings with a 0.00075%-wide
+band** — about 21x tighter, because each point now pairs two values that were
+actually acquired together.
+
+Two facts cost a debugging cycle each and are worth stating plainly:
+
+- **`sample_timestamps()` is not where the engine thinks the data is.** It
+  returns the raw `timestamp` column; the query path snaps every sample to the
+  nominal grid. A row recorded at 1.5 s on a 1 s grid is indexed at 2.0 s, so
+  asking for 1.5 s falls before the series' first sample and the point measuring
+  across from it is dropped *silently* — a missing point is indistinguishable
+  from a gap in the data. `MetricsSource::snapped_sample_timestamps()` exists for
+  this.
+- **Cadence is a property of the sampler, not of a table.** Two group tables of
+  one sampler are read on one schedule; a group that dedups or skips ticks is
+  sparse *within* that cadence. Keying on tables treated it as a second cadence
+  and relocated a query that merely named a sibling group's metric — breaking
+  the guarantee that a metric's own values do not change when unioned alongside
+  one.
+
+The entry's separation of axes (Correction 2) survives intact and is what made
+the third attempt findable: cadence difference shows up as fewer output points,
+window width as band width. What was wrong was assuming the surviving points
+were in the right *places*.
+
 ## What it dissolves
 
 `route()` refuses cross-sampler queries because there was no way to say what
@@ -187,8 +240,11 @@ Prometheus sources.
 - **Does a widened band change any existing dashboard's rendering?** The
   bands are additive information, but a chart that draws them will draw
   wider ones on cross-table plots. Worth looking at before landing.
-- **Cross-cadence semantics** — interpolate, decimate, or nearest-with-a-
-  large-band — remains unanswered and deliberately out of scope here.
+- ~~**Cross-cadence semantics** — interpolate, decimate, or nearest-with-a-
+  large-band — remains unanswered and deliberately out of scope here.~~
+  **Answered** (see Correction 3): evaluate at the slow sampler's own rows.
+  None of the three listed options was right — the answer was to stop using a
+  grid at all when cadences differ.
 - **Prometheus → `.rez`** becomes worth revisiting once this lands. A scrape
   is one HTTP GET at one instant: exactly one group with one real window,
   which would give service metrics acquisition windows they have never had.
