@@ -25,6 +25,22 @@ use rocm_smi::{ClockType, RocmSmi, TempSensor};
 use stats::*;
 
 fn init(config: Arc<Config>) -> SamplerResult {
+    // Zero FIRST, so every exit below leaves the group empty rather than at
+    // backing capacity. An unset bound falls back to `MAX_GPUS` × this
+    // sampler's metrics, and the V3 snapshot walk then declares that many
+    // members — phantom, all-null, and indistinguishable to a reader from a
+    // real GPU that simply had no reading. Those phantoms put a
+    // `gpu_amd_smi` table into every archive on every host, whose metric
+    // names then collide with `gpu_nvidia`'s vendor-neutral ones and make
+    // `avg(gpu_utilization)` ambiguous where it should just work.
+    //
+    // Setting it here rather than on each failure path is deliberate: the
+    // paths out of this function are "disabled", "no devices" and "init
+    // failed", and a future fourth would otherwise reintroduce the bug
+    // silently. `AmdInner::new` raises it to the real device count on
+    // success.
+    GPU_AMD_SMI_ACQ.set_member_bound(0);
+
     if !config.enabled(NAME) {
         return Ok(None);
     }
