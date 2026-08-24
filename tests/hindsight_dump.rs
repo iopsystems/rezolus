@@ -145,9 +145,19 @@ fn http_client() -> reqwest::blocking::Client {
         .expect("failed to build an HTTP client")
 }
 
-/// An ephemeral port to hand the daemon's HTTP listener. Bound and released, so
-/// there is a window in which something else could take it; nothing else in
-/// this suite binds ports it did not ask the kernel for.
+/// An ephemeral port to hand the daemon's HTTP listener.
+///
+/// Bound and released, so between the release and the daemon's own bind there
+/// is a window in which anything on the machine can take it — including
+/// another test in this file, since the tests run in parallel and a released
+/// ephemeral port goes straight back to the kernel's pool. When that happens
+/// the daemon exits instead of serving, which is why [`Hindsight::start`]
+/// retries on a fresh port rather than trusting one reservation.
+/// How many ports to try before giving up. Each attempt is an independent draw
+/// from the ephemeral range, so three is ample for a race that needs a
+/// collision on the same port in the same instant.
+const PORT_ATTEMPTS: usize = 3;
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .expect("failed to reserve a port")
@@ -191,6 +201,30 @@ impl Hindsight {
     /// buffering.
     fn start(segment_rows: usize, width: usize) -> Self {
         let agent = spawn_fake_agent(width);
+        // The port is reserved and released before the daemon binds it (see
+        // `free_port`), so losing the race is expected occasionally rather than
+        // exceptional — observed in CI as "exited before its HTTP endpoint came
+        // up", after the daemon had already logged `buffering`, which is the
+        // step immediately before it binds the listener. A fresh port is a new
+        // draw, so retry rather than fail the run.
+        let mut failures = Vec::new();
+        for _ in 0..PORT_ATTEMPTS {
+            match Self::try_start(agent, segment_rows) {
+                Ok(h) => return h,
+                Err(why) => failures.push(why),
+            }
+        }
+        panic!(
+            "rezolus hindsight failed to come up in {PORT_ATTEMPTS} attempts; \
+             the daemon said:\n{}",
+            failures.join("\n---\n")
+        );
+    }
+
+    /// One attempt at [`start`](Self::start). `Err` carries whatever the daemon
+    /// wrote to stderr, so a failure explains itself instead of just reporting
+    /// that the process is gone.
+    fn try_start(agent: u16, segment_rows: usize) -> Result<Self, String> {
         let port = free_port();
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
         let config = dir.path().join("hindsight.toml");
@@ -229,19 +263,21 @@ impl Hindsight {
         let deadline = Instant::now() + Duration::from_secs(60);
         let buffer = loop {
             let mut line = String::new();
-            assert!(
-                log.read_line(&mut line).unwrap_or(0) > 0,
-                "rezolus hindsight exited during startup"
-            );
+            if log.read_line(&mut line).unwrap_or(0) == 0 {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("exited during startup; last line: {line:?}"));
+            }
             if let Some(rest) = line.split(" in ").nth(1) {
                 if line.contains("buffering") {
                     break PathBuf::from(rest.trim());
                 }
             }
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for rezolus hindsight to start buffering"
-            );
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("timed out waiting for it to start buffering".to_string());
+            }
         };
         // Drain the rest so the daemon can never block on a full stderr pipe,
         // keeping the lines: `capture_via_sighup` reads completion out of them.
@@ -265,8 +301,8 @@ impl Hindsight {
             _dir: dir,
             client: http_client(),
         };
-        h.ready();
-        h
+        h.ready()?;
+        Ok(h)
     }
 
     /// Wait for the HTTP endpoint to answer.
@@ -275,23 +311,39 @@ impl Hindsight {
     /// AFTER logging "buffering": the connection is refused for a short window
     /// on a busy machine, and treating that as a failure made every test in
     /// this file flaky when they all started at once.
-    fn ready(&mut self) {
+    fn ready(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(60);
         while self.try_status().is_none() {
-            assert!(
-                self.child
-                    .try_wait()
-                    .expect("failed to poll the daemon")
-                    .is_none(),
-                "rezolus hindsight exited before its HTTP endpoint came up"
-            );
-            assert!(
-                Instant::now() < deadline,
-                "timed out waiting for the hindsight HTTP endpoint on port {}",
-                self.port
-            );
+            if self
+                .child
+                .try_wait()
+                .expect("failed to poll the daemon")
+                .is_some()
+            {
+                // Overwhelmingly the lost port race, but say what the daemon
+                // actually reported rather than guessing on its behalf.
+                return Err(format!(
+                    "exited before its HTTP endpoint came up on port {}: {}",
+                    self.port,
+                    self.log_text()
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "timed out waiting for its HTTP endpoint on port {}: {}",
+                    self.port,
+                    self.log_text()
+                ));
+            }
             std::thread::sleep(INTERVAL / 4);
         }
+        Ok(())
+    }
+
+    /// Everything the daemon has written to stderr since startup, for failure
+    /// messages.
+    fn log_text(&self) -> String {
+        self.log.lock().unwrap().join("").trim_end().to_string()
     }
 
     /// `/status`, or `None` if the endpoint could not be reached at all. A
