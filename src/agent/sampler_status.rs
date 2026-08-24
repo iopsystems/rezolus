@@ -36,6 +36,19 @@ pub enum SamplerState {
     Failed {
         error: String,
     },
+    /// Running, but only on some CPUs: the PMU reservation left too little on
+    /// the reserved CPUs for this sampler's whole event set, and enough on the
+    /// rest.
+    ///
+    /// A distinct state because partial coverage is neither of the two things
+    /// it could be filed under. Reported as `Active` it reads as full coverage
+    /// and the gap is invisible — which is the failure mode this whole area
+    /// exists to remove. Reported as starved it reads as no data at all, when
+    /// most of the machine has it.
+    PmuLimited {
+        cpus: usize,
+        of: usize,
+    },
     /// Not started because the PMU had too few free counters for its whole
     /// event set.
     ///
@@ -85,6 +98,19 @@ pub fn set_disabled(name: &'static str) {
             name: name.to_string(),
             state: SamplerState::Disabled,
             health: None,
+            programs: Vec::new(),
+        },
+    );
+}
+
+/// Record a sampler as running on only some CPUs, with the coverage.
+pub fn set_pmu_limited(name: &'static str, cpus: usize, of: usize) {
+    registry().lock().unwrap().insert(
+        name,
+        SamplerStatus {
+            name: name.to_string(),
+            state: SamplerState::PmuLimited { cpus, of },
+            health: Some(SamplerHealth::Degraded),
             programs: Vec::new(),
         },
     );

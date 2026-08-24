@@ -1111,6 +1111,49 @@ struct GroupDecision {
 /// groups have no such window — their membership is registration-derived,
 /// not value-derived, so nothing about this pass or the main walk needs to
 /// agree on a value to agree on membership.
+/// The member indices of a declared group-typed metric.
+///
+/// Two shapes, because two things can be known. A `member_bound` says "the
+/// first N indices", which is what a per-CPU sweep over `0..possible_cpus()`
+/// has. An explicit set says exactly which indices are populated, which is what
+/// a sampler allowed only part of the machine has — and that set is rarely a
+/// prefix.
+///
+/// The distinction is not cosmetic. A registered `CounterGroup` slot that is
+/// never written reads as `0`, not as absent, so declaring a prefix that
+/// overstates the population publishes zeros for indices nothing measured — a
+/// wrong value where the honest answer is no value at all.
+enum MemberIter<'a> {
+    Prefix(std::ops::Range<usize>),
+    Set(std::slice::Iter<'a, usize>),
+}
+
+impl Iterator for MemberIter<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            MemberIter::Prefix(range) => range.next(),
+            MemberIter::Set(iter) => iter.next().copied(),
+        }
+    }
+}
+
+/// Resolve a declared group's members: the explicit set when one was declared,
+/// otherwise the dense prefix, clamped to what the backing array actually has.
+fn members<'a>(set: Option<&'a [usize]>, bound: Option<usize>, entries: usize) -> MemberIter<'a> {
+    match set {
+        // An explicit set wins: a caller that knows the exact indices knows
+        // strictly more than a bound. Still clamped — a stale set must not walk
+        // past the backing array.
+        Some(set) => {
+            let end = set.partition_point(|idx| *idx < entries);
+            MemberIter::Set(set[..end].iter())
+        }
+        None => MemberIter::Prefix(0..bound.map_or(entries, |b| b.min(entries))),
+    }
+}
+
 fn fold_group_identities<'a>(
     cache: &SkeletonCache,
     group_registry: &HashMap<(&'static str, &'static str), &'static AcquisitionGroup>,
@@ -1144,12 +1187,14 @@ fn fold_group_identities<'a>(
         let sampler = crate::agent::samplers::attribute_sampler(metric.module(), sampler_mods);
         let mut declared = false;
         let mut member_bound: Option<usize> = None;
+        let mut member_set: Option<&[usize]> = None;
         let mut reader_stamped = false;
         let group_key: (&str, &str) = match metric.metadata().get("acq_group") {
             Some(acq_group) => {
                 if let Some(ag) = group_registry.get(&(sampler, acq_group)) {
                     declared = true;
                     member_bound = ag.member_bound();
+                    member_set = ag.member_set();
                     reader_stamped = ag.is_reader_stamped();
                     (ag.sampler, ag.name)
                 } else {
@@ -1184,8 +1229,7 @@ fn fold_group_identities<'a>(
                         });
                     }
                 } else {
-                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                    for idx in 0..bound {
+                    for idx in members(member_set, member_bound, g.entries()) {
                         if !declared {
                             let Some(v) = g.counter_value(idx) else {
                                 continue;
@@ -1218,8 +1262,7 @@ fn fold_group_identities<'a>(
                         });
                     }
                 } else {
-                    let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                    for idx in 0..bound {
+                    for idx in members(member_set, member_bound, g.entries()) {
                         if !declared && g.gauge_value(idx).is_none() {
                             continue;
                         }
@@ -1573,6 +1616,8 @@ fn create_v3(
         // the full backing-array `entries()`. Resolved alongside routing,
         // before `group_key` is moved into `groups.entry` below.
         let mut member_bound: Option<usize> = None;
+        // Members that are not a dense prefix; see `members`.
+        let mut member_set: Option<&[usize]> = None;
         // Reader-stamped (`PackedCounters` mmap-direct) groups use a THIRD
         // membership mode instead of `member_bound`'s dense prefix: every
         // index with metadata registered is a member — see the
@@ -1584,6 +1629,7 @@ fn create_v3(
                 if let Some(ag) = group_registry.get(&(sampler, acq_group)) {
                     declared = true;
                     member_bound = ag.member_bound();
+                    member_set = ag.member_set();
                     reader_stamped = ag.is_reader_stamped();
                     (ag.sampler, ag.name)
                 } else {
@@ -1847,8 +1893,7 @@ fn create_v3(
                         // one is set (clamped to `entries()` in case a
                         // stale/misconfigured bound somehow exceeds the
                         // backing array).
-                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                        for idx in 0..bound {
+                        for idx in members(member_set, member_bound, g.entries()) {
                             let v = g.counter_value(idx);
 
                             // Transitional V2-style sentinel skip — default
@@ -1967,8 +2012,7 @@ fn create_v3(
                     } else {
                         // Same member-population bound as the `CounterGroup`
                         // arm above — see its comment.
-                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                        for idx in 0..bound {
+                        for idx in members(member_set, member_bound, g.entries()) {
                             let v = g.gauge_value(idx);
 
                             // Transitional V2-style sentinel skip — default
@@ -2089,8 +2133,7 @@ fn create_v3(
                             guard.mark_end();
                         }
                     } else {
-                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                        for idx in 0..bound {
+                        for idx in members(member_set, member_bound, g.entries()) {
                             let v = g.counter_value(idx);
                             if !declared {
                                 let Some(v) = v else { continue };
@@ -2114,8 +2157,7 @@ fn create_v3(
                             guard.mark_end();
                         }
                     } else {
-                        let bound = member_bound.map_or(g.entries(), |b| b.min(g.entries()));
-                        for idx in 0..bound {
+                        for idx in members(member_set, member_bound, g.entries()) {
                             let v = g.gauge_value(idx);
                             if !declared && v.is_none() {
                                 continue;
@@ -4546,6 +4588,64 @@ mod tests {
             third.as_ptr(),
             "past the TTL the snapshot is rebuilt, so its body must be too"
         );
+    }
+
+    /// An explicit member set walks exactly those indices, and a bound still
+    /// walks the prefix.
+    ///
+    /// This is what keeps a partially-allocated sampler honest. A group whose
+    /// members are, say, CPUs 16-31 cannot say so with a bound — a bound means
+    /// "the first N" — so it would have to declare 0..32 and let the CPUs it
+    /// never wrote publish `0`. An unwritten `CounterGroup` slot reads as zero,
+    /// not as absent, so that is a wrong value rather than missing data: a
+    /// consumer summing across the machine would understate it and see nothing
+    /// wrong.
+    #[test]
+    fn an_explicit_member_set_walks_only_its_own_indices() {
+        // A bound: the dense prefix, as before.
+        let prefix: Vec<usize> = members(None, Some(4), 32).collect();
+        assert_eq!(prefix, vec![0, 1, 2, 3]);
+
+        // No bound and no set: everything the backing array has.
+        let all: Vec<usize> = members(None, None, 3).collect();
+        assert_eq!(all, vec![0, 1, 2]);
+
+        // A set that is not a prefix — the case a bound cannot express.
+        let set = [16usize, 17, 18, 31];
+        let sparse: Vec<usize> = members(Some(&set), None, 32).collect();
+        assert_eq!(sparse, vec![16, 17, 18, 31]);
+
+        // The set wins over a bound: a caller that knows the exact indices
+        // knows strictly more than one that knows a count.
+        let both: Vec<usize> = members(Some(&set), Some(2), 32).collect();
+        assert_eq!(both, vec![16, 17, 18, 31]);
+    }
+
+    /// A member set is clamped to the backing array, like a bound is.
+    ///
+    /// A set outliving a resize would otherwise walk past the end of the array
+    /// it describes.
+    #[test]
+    fn a_member_set_never_walks_past_the_backing_array() {
+        let set = [0usize, 1, 2, 99];
+        let walked: Vec<usize> = members(Some(&set), None, 3).collect();
+        assert_eq!(walked, vec![0, 1, 2], "index 99 is not in a 3-entry array");
+
+        let empty: Vec<usize> = members(Some(&set), None, 0).collect();
+        assert!(empty.is_empty());
+    }
+
+    /// `set_member_set` sorts and de-duplicates, so the walk stays in index
+    /// order however the caller discovered them.
+    #[test]
+    fn a_declared_member_set_is_sorted_and_deduplicated() {
+        static G: AcquisitionGroup = AcquisitionGroup::new("t_sparse", "t_sparse_group");
+        G.set_member_set(&[31, 16, 17, 16]);
+        assert_eq!(G.member_set(), Some(&[16usize, 17, 31][..]));
+
+        // Single-init, like the bound: a second call does not race the walk.
+        G.set_member_set(&[0]);
+        assert_eq!(G.member_set(), Some(&[16usize, 17, 31][..]));
     }
 
     #[tokio::test]

@@ -59,6 +59,10 @@ pub struct General {
     // order in which PMU samplers claim counters (see `pmu_priority`)
     #[serde(default)]
     pmu_priority: Vec<String>,
+
+    // CPUs the reservation applies to (see `reserved_pmu_cpus`)
+    #[serde(default)]
+    reserved_pmu_cpus: Option<String>,
 }
 
 impl General {
@@ -66,6 +70,16 @@ impl General {
         if let Err(e) = self.ttl.parse::<humantime::Duration>() {
             eprintln!("ttl couldn't be parsed: {e}");
             std::process::exit(1);
+        }
+
+        if let Some(ref spec) = self.reserved_pmu_cpus {
+            if crate::agent::pmu::parse_cpu_list(spec).is_none() {
+                eprintln!(
+                    "reserved_pmu_cpus couldn't be parsed: {spec:?} (expected a list like \
+                     \"0-3,8,12-15\")"
+                );
+                std::process::exit(1);
+            }
         }
 
         if let Some(ref btf_path) = self.btf_path {
@@ -100,6 +114,18 @@ impl General {
     /// wants `cpu_l3` to outrank `cpu_perf`.
     pub fn pmu_priority(&self) -> &[String] {
         &self.pmu_priority
+    }
+
+    /// The CPUs `reserved_pmu_counters` applies to, as a list like
+    /// `"0-3,8,12-15"`. Unset means every CPU.
+    ///
+    /// Reserving uniformly is usually more than is needed. The consumers a
+    /// reservation protects are rarely spread evenly — guest vCPUs run on some
+    /// cores, an isolated workload lives on specific ones — so holding counters
+    /// back everywhere costs the agent coverage on CPUs where nothing else
+    /// wanted them.
+    pub fn reserved_pmu_cpus(&self) -> Option<&str> {
+        self.reserved_pmu_cpus.as_deref()
     }
 
     pub fn listen(&self) -> SocketAddr {

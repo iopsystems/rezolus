@@ -97,7 +97,11 @@ pub fn run(config: PathBuf) {
     let available = crate::agent::pmu::probe_available();
     let reserved = config.general().reserved_pmu_counters();
     let order = crate::agent::pmu::resolve_order(config.general().pmu_priority());
-    let pmu_plan = crate::agent::pmu::plan(&order, available, reserved);
+    // Which CPUs give up counters. Unset means all of them, which is what the
+    // agent did before the mask existed.
+    let cpu_split = crate::agent::pmu::cpu_split(config.general().reserved_pmu_cpus());
+    let pmu_plan = crate::agent::pmu::plan(&order, available, reserved, &cpu_split);
+    crate::agent::pmu::publish_allocation(&pmu_plan);
 
     // Core counters only: uncore and MSR samplers draw on separate hardware, so
     // counting their events here would report a shortage that does not exist.
@@ -113,6 +117,11 @@ pub fn run(config: PathBuf) {
 
     for entry in SAMPLERS {
         if let Some(grant) = pmu_plan.iter().find(|g| g.sampler == entry.name) {
+            if let Some((cpus, total)) = grant.partial {
+                // Runs, but not everywhere. Recorded before `init` so the
+                // reason survives whatever the sampler reports about itself.
+                crate::agent::sampler_status::set_pmu_limited(entry.name, cpus, total);
+            }
             if !grant.granted {
                 // Skipped, not failed: nothing broke, there were not enough
                 // counters. Reported with the numbers so an operator can see
@@ -228,6 +237,14 @@ fn log_sampler_health_summary() {
             // `unsupported` alongside a missing kernel capability: this one is
             // a resource decision the operator can change, and the numbers are
             // what let them decide.
+            (SamplerState::PmuLimited { cpus, of }, _) => {
+                degraded += 1;
+                info!(
+                    "sampler {}: running on {cpus} of {of} CPUs — PMU counters reserved \
+                     on the rest",
+                    s.name
+                );
+            }
             (SamplerState::PmuStarved { wants, free }, _) => {
                 unsupported += 1;
                 info!(

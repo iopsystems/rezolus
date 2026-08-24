@@ -799,7 +799,13 @@ where
                 .map(|(name, _, _)| skel.map(name))
                 .collect();
 
-            for cpu in 0..cpus {
+            // The CPUs this sampler may claim counters on. With a
+            // `reserved_pmu_cpus` mask the reservation covers only part of the
+            // machine, so the budget can fit on some CPUs and not others;
+            // without one this is every CPU, as before.
+            let allowed = crate::agent::pmu::allowed_cpus(self.name, (0..cpus).collect());
+
+            for &cpu in allowed.iter() {
                 let mut leader: Option<perf_event::Counter> = None;
                 let mut members: Vec<perf_event::Counter> = Vec::new();
                 let mut complete = true;
@@ -874,7 +880,17 @@ where
             // slots this sweep will ever populate, not each member
             // `CounterGroup`'s `MAX_CPUS`-sized backing array.
             if let Some(group) = self.perf_group {
-                group.set_member_bound(possible_cpus());
+                // Declare the members we can actually populate. A bound says
+                // "the first N"; an allowed set is rarely a prefix, and declaring
+                // the prefix anyway would leave the CPUs we skipped registered but
+                // never written — and an unwritten `CounterGroup` slot reads as
+                // `0`, not as absent. Publishing zero cycles for a CPU nothing
+                // measured is a wrong value, not missing data.
+                if allowed.len() == cpus {
+                    group.set_member_bound(possible_cpus());
+                } else {
+                    group.set_member_set(&allowed);
+                }
             }
 
             perf_counters.spawn(perf_threads_tx.clone(), perf_sync_tx.clone());
