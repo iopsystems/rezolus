@@ -31,6 +31,15 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
     for s in samplers {
         match (&s.state, s.health) {
             (SamplerState::Disabled, _) => {} // not counted in the health tally
+            // Not a fault: too few PMU counters for its whole event set. Shown
+            // with the numbers so the trade is visible and re-rankable.
+            (SamplerState::PmuStarved { wants, free }, _) => {
+                unsupported += 1;
+                lines.push_str(&format!(
+                    "  {:<22} {:<12} needs {wants}/cpu, {free} free\n",
+                    s.name, "pmu-starved"
+                ));
+            }
             (SamplerState::Failed { error }, _) => {
                 failed += 1;
                 problem = true;

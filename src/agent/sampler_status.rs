@@ -33,7 +33,22 @@ pub struct AgentStatus {
 pub enum SamplerState {
     Active,
     Disabled,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
+    /// Not started because the PMU had too few free counters for its whole
+    /// event set.
+    ///
+    /// Deliberately not `Failed`: nothing broke, and the health rollup counting
+    /// it as a failure would send an operator looking for a fault that does not
+    /// exist. Deliberately not `Disabled` either — nobody turned it off, and the
+    /// operator may well want it, which is what `pmu_priority` is for. The
+    /// numbers travel with it so the trade being made is visible rather than
+    /// inferred.
+    PmuStarved {
+        wants: usize,
+        free: usize,
+    },
 }
 
 /// Status of a single BPF program within a sampler.
@@ -70,6 +85,22 @@ pub fn set_disabled(name: &'static str) {
             name: name.to_string(),
             state: SamplerState::Disabled,
             health: None,
+            programs: Vec::new(),
+        },
+    );
+}
+
+/// Record a sampler as skipped for want of PMU counters, with the numbers.
+///
+/// Health is `Unsupported` — informational, "this capability is unavailable
+/// here" — for the same reason the state is not `Failed`.
+pub fn set_pmu_starved(name: &'static str, wants: usize, free: usize) {
+    registry().lock().unwrap().insert(
+        name,
+        SamplerStatus {
+            name: name.to_string(),
+            state: SamplerState::PmuStarved { wants, free },
+            health: Some(SamplerHealth::Unsupported),
             programs: Vec::new(),
         },
     );

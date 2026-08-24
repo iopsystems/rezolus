@@ -48,6 +48,44 @@ ttl = "10ms"
 # already written stay readable either way.
 # snapshot_format = "v3"
 
+# PMU hardware counters to leave free for everything else on the machine.
+#
+# The core PMU has a small fixed number of counters — commonly 6 per core — and this
+# agent's hardware samplers together want more than that. Counters are handed
+# out first-come-first-served, so without a reservation the agent takes what it
+# can and whatever else wanted one goes without.
+#
+# That matters most on a hypervisor. KVM backs a guest's virtual PMU with host
+# perf events, so an exhausted host PMU leaves guests with a vPMU that reports
+# itself working and counts nothing: measured, a guest retiring more than 1e9
+# instructions read 395 of them, and from inside the guest a starved counter is
+# indistinguishable from a working one.
+#
+# Default 0 — the agent claims what it can, which is the behaviour that shipped
+# before this knob existed. Raising it trades some of this agent's own hardware
+# metrics for everyone else's. `/samplers` reports which samplers were skipped
+# and how many counters were free when they were considered.
+# reserved_pmu_counters = 0
+
+# The order in which PMU samplers claim counters.
+#
+# A sampler gets its whole event set or none of it, so the order decides who
+# runs when there is not enough for everyone. Left unset, the default is:
+#
+#   cpu_perf, cpu_branch, cpu_dtlb   (core PMU — the contended pool)
+#   cpu_l3                           (uncore PMU — its own counters)
+#   cpu_frequency                    (free-running MSRs — not allocated)
+#
+# Only the core-PMU samplers are budgeted. The others draw on separate hardware
+# and are never refused, so reordering them has no effect today.
+#
+# cpu_perf leads because cycles+instructions is the base IPC signal every other
+# CPU metric is read against. The rest is a judgment call — override it when
+# your investigation disagrees, e.g. someone chasing cache behaviour wanting
+# cpu_l3 to outrank cpu_perf. Samplers omitted from the list keep their default
+# rank behind the ones named, so a partial list cannot silently drop one.
+# pmu_priority = ["cpu_perf", "cpu_branch", "cpu_dtlb", "cpu_l3", "cpu_frequency"]
+
 [scheduler]
 # By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
 # collection happens with minimal delay. Other policies are: `normal` and `fifo`
