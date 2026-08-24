@@ -772,37 +772,100 @@ where
 
             let mut perf_counters = PerfCounters::new(self.name);
 
-            for (name, event, target) in self.perf_events.into_iter() {
-                let map = skel.map(name);
+            // One perf event GROUP per CPU, not one independent event per
+            // (event, CPU).
+            //
+            // The kernel schedules a group all-or-nothing: either every member
+            // gets a counter or none do. Opened independently, a sampler whose
+            // events outnumber the free counters gets some of them placed and
+            // the rest pinned-but-never-scheduled, reading a frozen value
+            // forever. For `cpu_perf` that means `cycles` counts and
+            // `instructions` does not, and the IPC computed downstream is
+            // fabricated rather than missing — a wrong answer where a group
+            // gives no answer. Half a sampler is worse than none.
+            //
+            // This mirrors what `cpu_branch`, `cpu_l3`, `cpu_dtlb` and
+            // `cpu_frequency` already do; those open a leader and attach the
+            // rest with `build_with_group`. The BPF-builder path was the one
+            // that did not. `ReadFormat::GROUP` below reads as if it did — it
+            // only sets the read buffer's layout, and with no leader every
+            // event was its own singleton group.
+            //
+            // Only the leader carries `pinned`/`read_format`: they are group
+            // properties, applied to the whole group through it.
+            let maps: Vec<&libbpf_rs::Map<'_>> = self
+                .perf_events
+                .iter()
+                .map(|(name, _, _)| skel.map(name))
+                .collect();
 
-                for cpu in 0..cpus {
-                    if let Ok(mut counter) = event
-                        .inner
-                        .builder()
+            for cpu in 0..cpus {
+                let mut leader: Option<perf_event::Counter> = None;
+                let mut members: Vec<perf_event::Counter> = Vec::new();
+                let mut complete = true;
+
+                for (_, event, _) in self.perf_events.iter() {
+                    // Bound as an owned local: the setters take `&mut self` and
+                    // return `&mut Self`, so chaining straight off `builder()`
+                    // would borrow a temporary that dies at the end of the
+                    // statement.
+                    let mut builder = event.inner.builder();
+                    builder
                         .one_cpu(cpu)
                         .any_pid()
                         .exclude_hv(false)
-                        .exclude_kernel(false)
-                        .pinned(true)
-                        .read_format(
+                        .exclude_kernel(false);
+                    if leader.is_none() {
+                        builder.pinned(true).read_format(
                             ReadFormat::TOTAL_TIME_ENABLED
                                 | ReadFormat::TOTAL_TIME_RUNNING
                                 | ReadFormat::GROUP,
-                        )
-                        .build()
-                    {
-                        let _ = counter.enable();
-
-                        let fd = counter.as_raw_fd();
-
-                        let _ = map.update(
-                            &((cpu as u32).to_ne_bytes()),
-                            &(fd.to_ne_bytes()),
-                            MapFlags::ANY,
                         );
-
-                        perf_counters.push(cpu, counter, target);
                     }
+
+                    let built = match leader.as_mut() {
+                        Some(leader) => builder.build_with_group(leader),
+                        None => builder.build(),
+                    };
+
+                    match built {
+                        Ok(counter) => {
+                            if leader.is_none() {
+                                leader = Some(counter);
+                            } else {
+                                members.push(counter);
+                            }
+                        }
+                        Err(e) => {
+                            debug!(
+                                "{}: could not open the full perf event group on CPU{cpu}, \
+                                 taking none of it: {e}",
+                                self.name
+                            );
+                            complete = false;
+                            break;
+                        }
+                    }
+                }
+
+                // Anything short of the whole group is dropped rather than
+                // published half-measured; the counters close with the Vec.
+                let Some(mut leader) = leader.filter(|_| complete) else {
+                    continue;
+                };
+
+                let _ = leader.enable_group();
+
+                for (i, counter) in std::iter::once(leader).chain(members).enumerate() {
+                    let fd = counter.as_raw_fd();
+
+                    let _ = maps[i].update(
+                        &((cpu as u32).to_ne_bytes()),
+                        &(fd.to_ne_bytes()),
+                        MapFlags::ANY,
+                    );
+
+                    perf_counters.push(cpu, counter, self.perf_events[i].2);
                 }
             }
 
