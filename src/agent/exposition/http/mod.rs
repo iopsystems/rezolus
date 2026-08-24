@@ -58,22 +58,18 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
         )
 }
 
-async fn msgpack(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> Vec<u8> {
+async fn msgpack(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> bytes::Bytes {
     let now = Instant::now();
 
     let mut snapshot_builder = state.lock().await;
-    let snapshot = snapshot_builder.build(now).await;
-
-    rmp_serde::encode::to_vec(&snapshot).expect("failed to serialize snapshot")
+    snapshot_builder.build_msgpack(now).await
 }
 
 async fn json(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> String {
     let now = Instant::now();
 
     let mut snapshot_builder = state.lock().await;
-    let snapshot = snapshot_builder.build(now).await;
-
-    serde_json::to_string(&snapshot).expect("failed to serialize snapshot")
+    snapshot_builder.build_json(now).await.to_string()
 }
 
 async fn root() -> String {
