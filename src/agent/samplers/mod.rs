@@ -78,6 +78,56 @@ pub static SAMPLERS: [SamplerEntry] = [..];
 #[distributed_slice]
 pub static ACQUISITION_GROUPS: [&'static crate::agent::timing::AcquisitionGroup] = [..];
 
+/// Bound every acquisition group whose sampler did not come up to zero
+/// members, and return how many were bounded.
+///
+/// Membership comes from registration, so a group's members exist as soon as it
+/// is declared — whether or not anything ever writes to them. A sampler that is
+/// disabled, unsupported on this platform, or failed to initialise never runs
+/// the constructor that would call `set_member_bound`, so its groups keep the
+/// unset bound and the snapshot walker falls back to the backing array's
+/// `entries()` ceiling. That ceiling is an implementation maximum
+/// (`MAX_CPUS` = 1024), not a population, so each such group contributes a
+/// thousand-odd `None`s to every snapshot forever.
+///
+/// Measured before this: a macOS agent with 3 healthy samplers served a 3.47 MB
+/// snapshot in which 43,456 of 43,469 scalar members were `None` — 99% phantom.
+/// Every BPF sampler's `stats.rs` is compiled on non-Linux too (to keep metric
+/// identity stable across platforms), where it attributes to `"unattributed"`
+/// and no `SamplerEntry` exists, so *all* of those groups are unbacked at once.
+///
+/// The same shape reaches Linux whenever a sampler fails to load — an
+/// unsupported kernel, a missing probe, a hardware counter that will not open.
+/// #1081 fixed one instance of this by hand (GPUs of an absent vendor call
+/// `set_member_bound(0)` in `init`); this closes the general case, so a newly
+/// failing sampler cannot reintroduce it.
+///
+/// `Some(0)` is a real answer — "this group has no members" — and is what
+/// distinguishes an empty group from an unbounded one. Only unbacked groups are
+/// touched, and their samplers never set a bound, so nothing is overwritten.
+pub fn bound_groups_without_a_live_sampler(
+    live: &std::collections::HashSet<&'static str>,
+) -> usize {
+    bound_unbacked(ACQUISITION_GROUPS.iter().copied(), live)
+}
+
+/// The body of [`bound_groups_without_a_live_sampler`], over an explicit group
+/// list so it can be exercised without mutating the real registered groups —
+/// which are process-global statics that other tests read.
+fn bound_unbacked<'a>(
+    groups: impl Iterator<Item = &'a crate::agent::timing::AcquisitionGroup>,
+    live: &std::collections::HashSet<&'static str>,
+) -> usize {
+    let mut bounded = 0;
+    for group in groups {
+        if !live.contains(group.sampler) {
+            group.set_member_bound(0);
+            bounded += 1;
+        }
+    }
+    bounded
+}
+
 /// The (module_path, sampler_name) pairs for every registered sampler.
 pub fn sampler_modules() -> Vec<(&'static str, &'static str)> {
     SAMPLERS.iter().map(|e| (e.module, e.name)).collect()
@@ -329,5 +379,77 @@ mod attribution_tests {
                 entry.module
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod unbacked_group_tests {
+    use super::*;
+    use crate::agent::timing::AcquisitionGroup;
+    use std::collections::HashSet;
+
+    static BACKED: AcquisitionGroup = AcquisitionGroup::new("live_sampler", "live_sampler_group");
+    static UNBACKED: AcquisitionGroup = AcquisitionGroup::new("dead_sampler", "dead_sampler_group");
+
+    /// A group whose sampler never came up declares NO members, while a group
+    /// whose sampler is live is left completely alone.
+    ///
+    /// The second half is the one that matters: `Some(0)` means "this group has
+    /// no members", so zeroing a live group would silently delete real metrics
+    /// from every snapshot — a far worse failure than the phantom members this
+    /// is fixing.
+    #[test]
+    fn only_groups_without_a_live_sampler_are_bounded() {
+        let live: HashSet<&'static str> = ["live_sampler"].into_iter().collect();
+        let bounded = bound_unbacked([&BACKED, &UNBACKED].into_iter(), &live);
+
+        assert_eq!(bounded, 1, "exactly the unbacked group is bounded");
+        assert_eq!(
+            UNBACKED.member_bound(),
+            Some(0),
+            "a group with no live sampler must declare no members"
+        );
+        assert_eq!(
+            BACKED.member_bound(),
+            None,
+            "a live sampler's group must keep its own bound — zeroing it would \
+             erase real metrics"
+        );
+    }
+
+    /// Every registered acquisition group names either a real sampler or the
+    /// `"unattributed"` bucket — never anything else.
+    ///
+    /// This is the guard on the dangerous direction. Groups are matched to
+    /// samplers by name, so a group naming a sampler that no longer exists —
+    /// a rename, a typo — would be treated as unbacked and silently bounded to
+    /// zero members, deleting its metrics from every snapshot. `Some(0)` is a
+    /// real answer meaning "no members", so that failure would be silent.
+    ///
+    /// `"unattributed"` is deliberately allowed: it is the documented fallback
+    /// [`attribute_sampler`] returns for a metric no `SamplerEntry` claims, and
+    /// what [`bpf_sampler_name`] returns off Linux, so it is never a sampler
+    /// name by design. Groups legitimately land there — including this crate's
+    /// own `#[cfg(test)]` probe fixtures, which register into
+    /// `ACQUISITION_GROUPS` under it and so are visible here but in no release
+    /// binary. Being unbacked is the CORRECT state for that bucket; bounding it
+    /// is the entire point of this mechanism.
+    ///
+    /// Linux only, because off Linux every BPF sampler's `stats.rs` compiles
+    /// with no matching `SamplerEntry`, so the check would say nothing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn every_registered_group_names_a_real_sampler() {
+        let known: HashSet<&'static str> = SAMPLERS.iter().map(|e| e.name).collect();
+        let orphans: Vec<&str> = ACQUISITION_GROUPS
+            .iter()
+            .map(|g| g.sampler)
+            .filter(|s| *s != "unattributed" && !known.contains(s))
+            .collect();
+        assert!(
+            orphans.is_empty(),
+            "these groups name a sampler that does not exist, so they would be \
+             bounded to zero members and their metrics would vanish: {orphans:?}"
+        );
     }
 }
