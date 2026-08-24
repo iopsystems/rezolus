@@ -74,7 +74,18 @@ impl BranchInner {
         // (principle 18): the real number of per-CPU slots this sweep will
         // ever populate, not each member `CounterGroup`'s `MAX_CPUS`-sized
         // backing array.
-        CPU_BRANCH_ACQ.set_member_bound(crate::agent::bpf::possible_cpus());
+        // Declare the members we can actually populate — see the note in
+        // `BpfBuilder::build`. `allowed_cpus` is unrestricted unless a
+        // `reserved_pmu_cpus` mask kept this sampler off part of the machine.
+        let allowed = crate::agent::pmu::allowed_cpus(
+            NAME,
+            (0..crate::agent::bpf::possible_cpus()).collect(),
+        );
+        if allowed.len() == crate::agent::bpf::possible_cpus() {
+            CPU_BRANCH_ACQ.set_member_bound(crate::agent::bpf::possible_cpus());
+        } else {
+            CPU_BRANCH_ACQ.set_member_set(&allowed);
+        }
 
         Ok(Self {
             perf_threads,
@@ -242,7 +253,11 @@ fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io:
 fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using single-threaded perf counter collection");
 
-    let mut logical_cores = logical_cores()?;
+    // Narrowed to the CPUs this sampler may claim counters on: with a
+    // `reserved_pmu_cpus` mask the reservation applies to only part of the
+    // machine, so the budget can fit here and not there. Unrestricted unless a
+    // mask actually excluded this sampler from somewhere.
+    let mut logical_cores = crate::agent::pmu::allowed_cpus(NAME, logical_cores()?);
 
     let mut perf_threads = Vec::new();
     let mut perf_sync = Vec::new();
@@ -283,7 +298,11 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
 fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
     debug!("using multi-threaded perf counter collection");
 
-    let mut logical_cores = logical_cores()?;
+    // Narrowed to the CPUs this sampler may claim counters on: with a
+    // `reserved_pmu_cpus` mask the reservation applies to only part of the
+    // machine, so the budget can fit here and not there. Unrestricted unless a
+    // mask actually excluded this sampler from somewhere.
+    let mut logical_cores = crate::agent::pmu::allowed_cpus(NAME, logical_cores()?);
 
     let pt_pending = Arc::new(AtomicUsize::new(logical_cores.len()));
 

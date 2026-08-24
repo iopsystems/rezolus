@@ -15,6 +15,7 @@
 
 use metriken::Window;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 /// Wall-clock nanoseconds since the Unix epoch, saturating to 0 before it.
@@ -137,6 +138,16 @@ pub(crate) struct AcquisitionGroup {
     // the walk fell back to backing capacity, declaring `MAX_GPUS`-worth of
     // phantom all-null members. See `set_member_bound`/`member_bound`.
     member_bound: AtomicUsize,
+    /// Members that are not a dense prefix, when a prefix cannot describe them.
+    ///
+    /// `member_bound` says "the first N indices"; some groups populate an
+    /// arbitrary subset instead — a sampler allowed only part of the machine
+    /// populates the CPUs it was allowed, which is rarely `0..n`. Declaring the
+    /// prefix anyway would leave the rest registered-but-never-written, and a
+    /// registered `CounterGroup` slot reads as `0`, not as absent. That is a
+    /// wrong value rather than missing data, which is the failure this whole
+    /// area exists to remove.
+    member_set: OnceLock<Vec<usize>>,
     // Init-time flag: true means this group's acquisition IS the exposition
     // read itself (mmap-direct `PackedCounters`), not a sampler `refresh()`.
     // See `set_reader_stamped`/`is_reader_stamped`.
@@ -153,6 +164,7 @@ impl AcquisitionGroup {
             name,
             slot: GroupWindowSlot::new(),
             member_bound: AtomicUsize::new(usize::MAX),
+            member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(false),
         }
     }
@@ -195,6 +207,7 @@ impl AcquisitionGroup {
             name,
             slot: GroupWindowSlot::new(),
             member_bound: AtomicUsize::new(usize::MAX),
+            member_set: OnceLock::new(),
             reader_stamped: AtomicBool::new(true),
         }
     }
@@ -221,6 +234,30 @@ impl AcquisitionGroup {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);
+    }
+
+    /// Declare the group's members explicitly, for a population that is not a
+    /// dense prefix.
+    ///
+    /// Takes precedence over [`set_member_bound`](Self::set_member_bound) — a
+    /// bound describes a prefix, and a caller that knows the exact set knows
+    /// strictly more. Same single-init contract as the bound: called once at
+    /// sampler init, before any snapshot walk reads it. A second call is
+    /// ignored rather than racing, since the population is fixed at init.
+    ///
+    /// Indices are sorted and de-duplicated, so the walk stays in index order
+    /// regardless of the order the caller discovered them in.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) fn set_member_set(&self, members: &[usize]) {
+        let mut members = members.to_vec();
+        members.sort_unstable();
+        members.dedup();
+        let _ = self.member_set.set(members);
+    }
+
+    /// The group's explicit member set, if one was declared.
+    pub(crate) fn member_set(&self) -> Option<&[usize]> {
+        self.member_set.get().map(|v| v.as_slice())
     }
 
     /// The group's member-population bound, if one has been set (`None`

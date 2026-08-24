@@ -33,6 +33,14 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
             (SamplerState::Disabled, _) => {} // not counted in the health tally
             // Not a fault: too few PMU counters for its whole event set. Shown
             // with the numbers so the trade is visible and re-rankable.
+            (SamplerState::PmuLimited { cpus, of }, _) => {
+                degraded += 1;
+                problem = true;
+                lines.push_str(&format!(
+                    "  {:<22} {:<12} {cpus} of {of} cpus\n",
+                    s.name, "pmu-limited"
+                ));
+            }
             (SamplerState::PmuStarved { wants, free }, _) => {
                 unsupported += 1;
                 lines.push_str(&format!(
