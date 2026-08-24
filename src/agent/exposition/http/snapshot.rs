@@ -720,6 +720,28 @@ fn create(
         // Window is Copy so this is free; precedence level 2 (external source stamp).
         let window = metric.window;
 
+        // The entry name is a COLUMN KEY, not a display name — scalars use
+        // `{metric_id}`, grouped metrics `{metric_id}x{counter_id}`, and the
+        // human name travels in `metadata["metric"]`. External metrics used to
+        // pass `String::new()`, so every one of them keyed the same empty
+        // column: `.rez` ingest keys columns by this name, so two active
+        // external metrics of the same type double-pushed into one column
+        // (misaligning values against timestamps from that row on), and two of
+        // different types were silently dropped by the shape-mismatch skip.
+        //
+        // Derive it from (name, labels) via the same hash the store's own
+        // `MetricKey` uses for identity, exactly as `create_v3` does. Identity
+        // rather than position because `get_active()`'s order churns
+        // tick-to-tick: a positional name would silently reattach a metric's
+        // values under a different column, which a name-keyed consumer reads as
+        // a continuous series that isn't one. Name alone is not enough either —
+        // two external metrics may share a name with different labels.
+        //
+        // `/` and `#` cannot appear in the numeric keys above, so an external
+        // metric can never collide with a registry metric's column.
+        let labels_hash = MetricKey::new(&metric.name, &metric.labels).labels_hash;
+        let name = format!("external/{}#{labels_hash:016x}", metric.name);
+
         let mut metadata: HashMap<String, String> = [
             ("metric".to_string(), metric.name.clone()),
             ("source".to_string(), "external".to_string()),
@@ -729,8 +751,6 @@ fn create(
         for (k, v) in metric.labels {
             metadata.insert(k, v);
         }
-
-        let name = String::new();
 
         match metric.value {
             ExternalMetricValue::Counter(value) => {
@@ -3874,6 +3894,114 @@ mod tests {
             schema.counters.len(),
             2,
             "a bound larger than entries() clamps to entries(), never reads past the backing array"
+        );
+    }
+
+    /// V2 gives each external metric its own column key, so two active at once
+    /// do not collide.
+    ///
+    /// The entry name is a column key — `.rez` ingest keys columns by it — and
+    /// V2 used to pass `String::new()` for every external metric. Two of the
+    /// same type then double-pushed into the one empty column, misaligning
+    /// values against timestamps from that row on; two of different types were
+    /// silently dropped by the shape-mismatch skip. Both failures are quiet,
+    /// which is what makes them worth a test rather than a comment.
+    ///
+    /// V3 has always keyed these by identity, and is the default since #1076 —
+    /// but v2 remains a supported escape hatch, and silent value misalignment
+    /// is a bad thing to leave in a supported path.
+    #[test]
+    fn v2_external_metrics_do_not_collide_on_one_column_key() {
+        let labels_a: HashMap<String, String> = [("env".to_string(), "prod".to_string())].into();
+        let labels_b: HashMap<String, String> = [("env".to_string(), "dev".to_string())].into();
+
+        let counter = |labels: HashMap<String, String>, value: u64| ExternalMetric {
+            name: "ext_shared_name".into(),
+            labels,
+            value: ExternalMetricValue::Counter(value),
+            last_updated: std::time::Instant::now(),
+            window: None,
+        };
+        let gauge = |name: &str| ExternalMetric {
+            name: name.into(),
+            labels: Default::default(),
+            value: ExternalMetricValue::Gauge(5),
+            last_updated: std::time::Instant::now(),
+            window: None,
+        };
+
+        let snap = create(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![
+                counter(labels_a.clone(), 1),
+                counter(labels_b.clone(), 2),
+                gauge("ext_gauge"),
+            ],
+        );
+        let Snapshot::V2(s) = snap else {
+            panic!("expected V2")
+        };
+
+        // `create` also emits rezolus's own registry metrics; only the
+        // external ones are under test here.
+        let is_external =
+            |m: &HashMap<String, String>| m.get("source").map(String::as_str) == Some("external");
+        let ext_counters: Vec<_> = s
+            .counters
+            .iter()
+            .filter(|c| is_external(&c.metadata))
+            .collect();
+        let ext_gauges: Vec<_> = s
+            .gauges
+            .iter()
+            .filter(|g| is_external(&g.metadata))
+            .collect();
+        let names: Vec<&str> = ext_counters.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            2,
+            "same name, different labels are two distinct series"
+        );
+        assert_ne!(
+            names[0], names[1],
+            "two external counters must not share a column key: {names:?}"
+        );
+        assert!(
+            ext_counters.iter().all(|c| !c.name.is_empty())
+                && ext_gauges.iter().all(|g| !g.name.is_empty()),
+            "an empty key is the collision this guards against"
+        );
+
+        // Same identity, fresh snapshot: the key must be reproducible, or a
+        // consumer keyed by it sees one series break into several.
+        let again = create(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![counter(labels_a.clone(), 9)],
+        );
+        let Snapshot::V2(again) = again else {
+            panic!("expected V2")
+        };
+        let again_name = again
+            .counters
+            .iter()
+            .find(|c| is_external(&c.metadata))
+            .expect("the external counter is present")
+            .name
+            .clone();
+        assert!(
+            names.contains(&again_name.as_str()),
+            "the same metric must reattach under the same key across ticks"
+        );
+
+        // The real metric name still travels in metadata, unchanged — the key
+        // is an identity, not a rename.
+        assert!(
+            ext_counters
+                .iter()
+                .all(|c| c.metadata.get("metric").map(String::as_str) == Some("ext_shared_name")),
+            "metadata[\"metric\"] carries the human name, as before"
         );
     }
 
