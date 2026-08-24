@@ -39,6 +39,8 @@ use metrics::GroupMetadata;
 #[cfg(target_os = "linux")]
 mod bpf;
 
+pub mod pmu;
+
 #[cfg(target_os = "linux")]
 use bpf::*;
 
@@ -85,10 +87,45 @@ pub fn run(config: PathBuf) {
         .build()
         .expect("failed to launch async runtime");
 
+    // Decide the PMU allocation BEFORE anything opens an event, because a
+    // pinned event that loses the race is not refused — it opens, never gets
+    // scheduled, and reads nothing. Ranking here rather than inside the
+    // samplers is also what makes one budget cover both ways they open events:
+    // `cpu_perf` goes through the BPF builder, the other four call
+    // `perf_event::Builder` directly, and a refused sampler simply never runs
+    // its `init`, so it cannot open anything either way.
+    let available = crate::agent::pmu::probe_available();
+    let reserved = config.general().reserved_pmu_counters();
+    let order = crate::agent::pmu::resolve_order(config.general().pmu_priority());
+    let pmu_plan = crate::agent::pmu::plan(&order, available, reserved);
+
+    // Core counters only: uncore and MSR samplers draw on separate hardware, so
+    // counting their events here would report a shortage that does not exist.
+    let demand = crate::agent::pmu::core_demand(&order);
+    if demand > available.saturating_sub(reserved) {
+        info!(
+            "core PMU budget {available}/cpu ({reserved} reserved), core demand {demand}/cpu — not every PMU sampler can run; see /samplers"
+        );
+    }
+
     let mut samplers = Vec::new();
     let mut live: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
     for entry in SAMPLERS {
+        if let Some(grant) = pmu_plan.iter().find(|g| g.sampler == entry.name) {
+            if !grant.granted {
+                // Skipped, not failed: nothing broke, there were not enough
+                // counters. Reported with the numbers so an operator can see
+                // the trade being made and re-rank if they disagree with it.
+                crate::agent::sampler_status::set_pmu_starved(
+                    entry.name,
+                    grant.wants,
+                    grant.free_at_decision,
+                );
+                continue;
+            }
+        }
+
         match (entry.init)(config.clone()) {
             Ok(Some(s)) => {
                 // BPF samplers already recorded active + per-program detail in
@@ -187,6 +224,18 @@ fn log_sampler_health_summary() {
 
     for s in &statuses {
         match (&s.state, s.health) {
+            // Matched ahead of the health arms so it is never rolled into
+            // `unsupported` alongside a missing kernel capability: this one is
+            // a resource decision the operator can change, and the numbers are
+            // what let them decide.
+            (SamplerState::PmuStarved { wants, free }, _) => {
+                unsupported += 1;
+                info!(
+                    "sampler {}: not started — PMU budget exhausted (needs {wants}/cpu, \
+                     {free} free)",
+                    s.name
+                );
+            }
             (SamplerState::Failed { error }, _) => {
                 failed += 1;
                 error!("sampler {}: failed — {}", s.name, error);

@@ -50,6 +50,15 @@ pub struct General {
     // `SnapshotFormat` for details); transitional, defaults to v2
     #[serde(default = "default_snapshot_format")]
     snapshot_format: SnapshotFormat,
+
+    // PMU hardware counters to leave free for everything else on the machine
+    // (see `reserved_pmu_counters`)
+    #[serde(default)]
+    reserved_pmu_counters: usize,
+
+    // order in which PMU samplers claim counters (see `pmu_priority`)
+    #[serde(default)]
+    pmu_priority: Vec<String>,
 }
 
 impl General {
@@ -65,6 +74,32 @@ impl General {
                 std::process::exit(1);
             }
         }
+    }
+
+    /// Hardware counters to leave free for PMU consumers other than this agent.
+    ///
+    /// Defaults to 0, which is the behaviour that shipped before budgeting
+    /// existed: the agent claims what it can and whatever else wanted counters
+    /// goes without.
+    ///
+    /// Raising it matters most on a hypervisor. KVM backs a guest's virtual PMU
+    /// with host perf events, so an exhausted host PMU leaves guests with a
+    /// vPMU that reports itself working and counts nothing — measured, a guest
+    /// retiring more than 1e9 instructions read 395 of them, and could not tell
+    /// from the inside that anything was wrong. Reserving trades some of this
+    /// agent's own metrics for theirs.
+    pub fn reserved_pmu_counters(&self) -> usize {
+        self.reserved_pmu_counters
+    }
+
+    /// The order in which PMU samplers claim counters; empty means the built-in
+    /// default (see `crate::agent::pmu::DEFAULT_PRIORITY`).
+    ///
+    /// Worth overriding when the default's ranking disagrees with the
+    /// investigation at hand — someone chasing cache behaviour legitimately
+    /// wants `cpu_l3` to outrank `cpu_perf`.
+    pub fn pmu_priority(&self) -> &[String] {
+        &self.pmu_priority
     }
 
     pub fn listen(&self) -> SocketAddr {
