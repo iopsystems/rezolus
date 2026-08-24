@@ -86,6 +86,7 @@ pub fn run(config: PathBuf) {
         .expect("failed to launch async runtime");
 
     let mut samplers = Vec::new();
+    let mut live: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
 
     for entry in SAMPLERS {
         match (entry.init)(config.clone()) {
@@ -93,11 +94,20 @@ pub fn run(config: PathBuf) {
                 // BPF samplers already recorded active + per-program detail in
                 // the builder; this only fills in non-BPF samplers.
                 crate::agent::sampler_status::set_active_if_absent(entry.name);
+                live.insert(entry.name);
                 samplers.push(s);
             }
             Ok(None) => crate::agent::sampler_status::set_disabled(entry.name),
             Err(e) => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
         }
+    }
+
+    // Every sampler has now had its chance to initialise and bound its own
+    // groups, so anything still unbacked never will be. See
+    // `bound_groups_without_a_live_sampler`.
+    let bounded = crate::agent::samplers::bound_groups_without_a_live_sampler(&live);
+    if bounded > 0 {
+        debug!("bounded {bounded} acquisition group(s) with no live sampler to zero members");
     }
 
     log_sampler_health_summary();
