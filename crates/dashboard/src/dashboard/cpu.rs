@@ -487,7 +487,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         sg.describe(format!(
             "Fraction of time the package spent in the C{level} idle state."
         ));
-        sg.plot_promql_full(
+        // Half-width, matching the core C-state plots beside it. The per-id
+        // companion is gated on there actually being more than one package:
+        // resolveStyle() only draws a heatmap for a multi-series result, so on
+        // a single-socket host it would just repeat this line beside itself.
+        sg.plot_promql(
             PlotOpts::counter(
                 format!("Package C{level} %"),
                 format!("cstate-pkg-c{level}"),
@@ -496,6 +500,18 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             .percentage_range(),
             format!("sum(irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
         );
+
+        if metric_unique_label_count(data, &metric, "id") > 1 {
+            sg.plot_promql(
+                PlotOpts::counter(
+                    format!("Package C{level} % (Per-Package)"),
+                    format!("cstate-pkg-c{level}-heatmap"),
+                    Unit::Percentage,
+                )
+                .percentage_range(),
+                format!("sum by (id) (irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
+            );
+        }
     }
 
     if !cstate.is_empty() {
