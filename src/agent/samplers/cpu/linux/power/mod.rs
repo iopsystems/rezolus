@@ -59,6 +59,7 @@ const NAME: &str = "cpu_power";
 
 use crate::agent::*;
 
+use crate::agent::timing::AcquisitionGroup;
 use metriken::CounterGroup;
 use perf_event::events::Dynamic;
 use tokio::sync::Mutex;
@@ -74,6 +75,10 @@ struct Reader {
     /// group. Derived from the CPU the counter was created on via `Index`.
     index: usize,
     kind: Kind,
+    /// The acquisition group this counter belongs to. Held per reader so the
+    /// member set can be built from what actually opened, and so `refresh`
+    /// brackets each entity space separately.
+    acq: &'static AcquisitionGroup,
     /// Previous cumulative value, for differencing. `None` until the first
     /// sample establishes a baseline.
     previous: Option<u64>,
@@ -97,6 +102,16 @@ enum Kind {
     },
 }
 
+/// Every acquisition group this sampler declares, so `init` can build each
+/// one's member set and `refresh` can bracket each independently.
+const ACQ_GROUPS: &[&AcquisitionGroup] = &[
+    &CPU_POWER_PACKAGE_ENERGY_ACQ,
+    &CPU_POWER_CORE_ENERGY_ACQ,
+    &CPU_POWER_PLATFORM_ENERGY_ACQ,
+    &CPU_POWER_CORE_CSTATE_ACQ,
+    &CPU_POWER_PACKAGE_CSTATE_ACQ,
+];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -111,20 +126,29 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // Membership comes from registration, not values (principle 18): bound
-    // each group by the real number of indices its readers will populate, not
-    // by the metric groups' MAX_CPUS/MAX_PACKAGES array capacity.
-    let bound = |f: fn(&Kind) -> bool| {
-        readers
+    // Membership comes from registration, not values (principle 18). Declare
+    // the exact indices rather than a `0..n` prefix: these are genuinely
+    // sparse, and an unwritten CounterGroup slot reads as 0, so a declared
+    // index nothing writes would publish zero joules -- a wrong value on a
+    // metric whose whole purpose is measuring draw, not a missing one.
+    //
+    // Two ways the indices go sparse, one structural and one exceptional:
+    // `Index::Cpu` uses the CPU id, and a hybrid part's core-scope cpumask
+    // skips SMT siblings (`0,2,4,6,8,10,12-15` on a 16-thread host here), so
+    // a prefix would span six ids nothing ever writes; and any single
+    // `open_counter` failure leaves a hole while later indices still succeed.
+    //
+    // The set is built per group from the readers that actually opened, so a
+    // domain whose PMU is absent declares no members at all.
+    for acq in ACQ_GROUPS {
+        let members: Vec<usize> = readers
             .iter()
-            .filter(|r| f(&r.kind))
-            .map(|r| r.index + 1)
-            .max()
-            .unwrap_or(0)
-    };
+            .filter(|r| std::ptr::eq(r.acq, *acq))
+            .map(|r| r.index)
+            .collect();
 
-    CPU_POWER_ENERGY_ACQ.set_member_bound(bound(|k| matches!(k, Kind::Energy { .. })));
-    CPU_POWER_CSTATE_ACQ.set_member_bound(bound(|k| matches!(k, Kind::Cstate { .. })));
+        acq.set_member_set(&members);
+    }
 
     Ok(Some(Box::new(Power {
         inner: PowerInner { readers }.into(),
@@ -160,15 +184,16 @@ struct PowerInner {
 }
 
 impl PowerInner {
-    // Brackets the two read sections separately (principle 18): the RAPL
-    // energy sweep and the C-state residency sweep are different metric
-    // families read from different PMUs. Both brackets span their member
-    // writes and stamp last via `finish()`. A single counter's failed
-    // `read()` is individually fallible rather than a bulk sweep failure, so
-    // neither path discards -- same ruling as `cpu_l3` and `cpu_dtlb`.
+    // Brackets each entity space separately (principle 18). Every bracket
+    // spans its member writes and stamps last via `finish()`. None discard: a
+    // single counter's failed `read()` is individually, normally fallible
+    // rather than a bulk sweep failure -- same ruling as `cpu_l3`/`cpu_dtlb`.
     fn refresh(&mut self) {
-        let energy_guard = CPU_POWER_ENERGY_ACQ.acquire();
-        let cstate_guard = CPU_POWER_CSTATE_ACQ.acquire();
+        // One guard per entity space. All five span the whole sweep because the
+        // readers share a single Vec; principle 18 permits that explicitly --
+        // the width is a deliberate upper bound on the read span, which
+        // over-states rate() uncertainty and never under-states it.
+        let guards: Vec<_> = ACQ_GROUPS.iter().map(|acq| acq.acquire()).collect();
 
         for reader in self.readers.iter_mut() {
             let Ok(raw) = reader.counter.read() else {
@@ -215,8 +240,9 @@ impl PowerInner {
             }
         }
 
-        energy_guard.finish();
-        cstate_guard.finish();
+        for guard in guards {
+            guard.finish();
+        }
     }
 }
 
@@ -238,15 +264,53 @@ enum Index {
 fn discover() -> Vec<Reader> {
     let mut readers = Vec::new();
 
-    for (pmu, event, index, energy) in [
-        ("power", "energy-pkg", Index::Ordinal, &CPU_PACKAGE_ENERGY),
-        ("power", "energy-cores", Index::Ordinal, &CPU_CORES_ENERGY),
-        ("power", "energy-gpu", Index::Ordinal, &CPU_IGPU_ENERGY),
-        ("power", "energy-ram", Index::Ordinal, &CPU_DRAM_ENERGY),
-        ("power", "energy-psys", Index::Zero, &CPU_PLATFORM_ENERGY),
-        ("power_core", "energy-core", Index::Cpu, &CPU_CORE_ENERGY),
+    // The acquisition group tracks the entity space, which is exactly what
+    // `Index` encodes: package ordinal, physical core, or the single host.
+    for (pmu, event, index, energy, acq) in [
+        (
+            "power",
+            "energy-pkg",
+            Index::Ordinal,
+            &CPU_PACKAGE_ENERGY,
+            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+        ),
+        (
+            "power",
+            "energy-cores",
+            Index::Ordinal,
+            &CPU_CORES_ENERGY,
+            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+        ),
+        (
+            "power",
+            "energy-gpu",
+            Index::Ordinal,
+            &CPU_IGPU_ENERGY,
+            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+        ),
+        (
+            "power",
+            "energy-ram",
+            Index::Ordinal,
+            &CPU_DRAM_ENERGY,
+            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+        ),
+        (
+            "power",
+            "energy-psys",
+            Index::Zero,
+            &CPU_PLATFORM_ENERGY,
+            &CPU_POWER_PLATFORM_ENERGY_ACQ,
+        ),
+        (
+            "power_core",
+            "energy-core",
+            Index::Cpu,
+            &CPU_CORE_ENERGY,
+            &CPU_POWER_CORE_ENERGY_ACQ,
+        ),
     ] {
-        open_energy(pmu, event, index, energy, &mut readers);
+        open_energy(pmu, event, index, energy, acq, &mut readers);
     }
 
     // Core C-states are core-scope and also feed the per-core total; package
@@ -256,6 +320,7 @@ fn discover() -> Vec<Reader> {
         Index::Cpu,
         core_cstate_metric,
         Some(&CORE_CSTATE),
+        &CPU_POWER_CORE_CSTATE_ACQ,
         &mut readers,
     );
     open_cstate(
@@ -263,6 +328,7 @@ fn discover() -> Vec<Reader> {
         Index::Ordinal,
         package_cstate_metric,
         None,
+        &CPU_POWER_PACKAGE_CSTATE_ACQ,
         &mut readers,
     );
 
@@ -300,6 +366,7 @@ fn open_energy(
     event: &str,
     index: Index,
     energy: &'static CounterGroup,
+    acq: &'static AcquisitionGroup,
     readers: &mut Vec<Reader>,
 ) {
     let Some(scale) = event_scale(pmu, event) else {
@@ -321,6 +388,7 @@ fn open_energy(
                 energy,
                 energy_uj: 0.0,
             },
+            acq,
             previous: None,
         });
     }
@@ -334,6 +402,7 @@ fn open_cstate(
     index: Index,
     level_metric: fn(u8) -> Option<&'static CounterGroup>,
     total: Option<&'static CounterGroup>,
+    acq: &'static AcquisitionGroup,
     readers: &mut Vec<Reader>,
 ) {
     let cpus = cpumask(pmu);
@@ -359,6 +428,7 @@ fn open_cstate(
                 counter,
                 index: index.resolve(pmu, &event, cpu, ordinal),
                 kind: Kind::Cstate { residency, total },
+                acq,
                 previous: None,
             });
         }
