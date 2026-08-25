@@ -554,37 +554,10 @@ fn cpumask(pmu: &str) -> Vec<usize> {
         return Vec::new();
     };
 
-    parse_cpu_list(&raw)
-}
-
-/// Parse a sysfs CPU list such as `0`, `0-11`, or `0,2,4,12-15`.
-fn parse_cpu_list(raw: &str) -> Vec<usize> {
-    let mut cpus = Vec::new();
-
-    for range in raw.trim().split(',') {
-        if range.is_empty() {
-            continue;
-        }
-
-        let mut parts = range.split('-');
-
-        let Some(start) = parts.next().and_then(|v| v.trim().parse::<usize>().ok()) else {
-            continue;
-        };
-
-        match parts.next() {
-            Some(end) => {
-                if let Ok(end) = end.trim().parse::<usize>() {
-                    for cpu in start..=end {
-                        cpus.push(cpu);
-                    }
-                }
-            }
-            None => cpus.push(start),
-        }
-    }
-
-    cpus.sort_unstable();
-    cpus.dedup();
-    cpus
+    // Shared with the PMU-reservation mask parser rather than hand-rolled
+    // here. That one rejects a malformed list outright instead of returning a
+    // partial set; sysfs never emits one, so the strictness costs nothing, and
+    // an unreadable or unparseable cpumask lands in the same place an absent
+    // PMU does -- no counters for it.
+    crate::agent::pmu::parse_cpu_list(&raw).unwrap_or_default()
 }
