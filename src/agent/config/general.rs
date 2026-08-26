@@ -32,7 +32,7 @@ pub enum SnapshotFormat {
     V3,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 pub struct General {
     #[serde(default = "listen")]
     listen: String,
@@ -63,6 +63,30 @@ pub struct General {
     // CPUs the reservation applies to (see `reserved_pmu_cpus`)
     #[serde(default)]
     reserved_pmu_cpus: Option<String>,
+}
+
+/// Written out rather than derived, because a derived `Default` would ignore
+/// every `#[serde(default = "...")]` above it and hand back empty strings.
+///
+/// That is not academic: serde reaches this impl for a config file that omits
+/// the `[general]` table entirely (the field-level defaults only apply once
+/// the table exists), so `rezolus a-config-without-general.toml` died with
+/// "ttl couldn't be parsed: value was empty" instead of using the documented
+/// defaults. The exporter and hindsight configs already spell theirs out; this
+/// is the same fix, and it keeps the two ways of reaching a default agreeing —
+/// the property `SnapshotFormat`'s `#[default]` was added to preserve.
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            listen: listen(),
+            ttl: ttl(),
+            btf_path: None,
+            snapshot_format: default_snapshot_format(),
+            reserved_pmu_counters: 0,
+            pmu_priority: Vec::new(),
+            reserved_pmu_cpus: None,
+        }
+    }
 }
 
 impl General {
@@ -164,6 +188,44 @@ mod tests {
 
     fn general(toml: &str) -> General {
         toml::from_str(toml).expect("valid config")
+    }
+
+    /// `Default::default()` and "the config file said nothing" must agree.
+    ///
+    /// serde reaches the derived/hand-written `Default` when the whole
+    /// `[general]` table is missing, and the per-field `#[serde(default = …)]`
+    /// functions only when the table exists. While `Default` was derived those
+    /// two paths disagreed: a config without a `[general]` table produced empty
+    /// strings and the agent exited with "ttl couldn't be parsed: value was
+    /// empty" instead of listening on 0.0.0.0:4241.
+    #[test]
+    fn a_config_without_a_general_table_gets_the_documented_defaults() {
+        let absent = General::default();
+        let empty_table = general("");
+
+        assert_eq!(absent.listen, listen(), "listen");
+        assert_eq!(absent.ttl, ttl(), "ttl");
+        assert_eq!(absent.listen, empty_table.listen);
+        assert_eq!(absent.ttl, empty_table.ttl);
+        assert_eq!(absent.snapshot_format(), empty_table.snapshot_format());
+
+        // and they are usable, not merely equal: these parse.
+        assert!(!absent.listen.is_empty());
+        assert!(absent.ttl.parse::<humantime::Duration>().is_ok());
+    }
+
+    /// The same property one level up: a whole config file with no `[general]`
+    /// table at all is what an operator actually writes.
+    #[test]
+    fn a_whole_config_file_may_omit_general() {
+        #[derive(serde::Deserialize)]
+        struct Wrapper {
+            #[serde(default)]
+            general: General,
+        }
+        let w: Wrapper = toml::from_str("[log]\nlevel = \"info\"\n").expect("parses");
+        assert_eq!(w.general.listen, listen());
+        assert_eq!(w.general.ttl, ttl());
     }
 
     #[test]

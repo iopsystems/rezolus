@@ -103,6 +103,11 @@ target/release/rezolus recording upgrade old.rez -o new.rez            # ...or t
 # annotate file.rez --queries kpis.json embeds KPIs into each recording's manifest (--queries required for .rez).
 
 # MCP - AI analysis server or CLI commands
+# Status - agent health check (exits 1 if any sampler is degraded/failed/pmu-limited)
+target/release/rezolus status                       # defaults to http://localhost:4241
+target/release/rezolus status web-01                # bare host/host:port is normalized
+target/release/rezolus status --json
+
 target/release/rezolus mcp                                                    # stdio server
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
