@@ -11,7 +11,7 @@ duration = "15m"
 source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are `.rez` archives
-# (readable by `rezolus view`, `rezolus mcp` and `rezolus parquet metadata`).
+# (readable by `rezolus view`, `rezolus mcp` and `rezolus recording metadata`).
 # The directory holding this file is also where the rolling buffer is kept, so
 # it needs room for the buffer as well as the snapshot.
 output = "/tmp/rezolus.rez"

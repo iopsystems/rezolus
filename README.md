@@ -318,7 +318,7 @@ File operations for parquet recordings:
 - **Combine** — merge a Rezolus parquet with service-level parquet files,
   joining on timestamps to produce a unified multi-source recording, or package
   two captures as an A/B tarball for the viewer's compare mode.
-- **Convert** — turn a raw msgpack recording (from `record -f raw`) into
+- **Convert** — turn a raw msgpack recording (from `record -o out.raw`) into
   parquet. The input may be plain or zstd-compressed; which one it is is
   detected from the file's contents, not its name.
 - **Filter** — drop metric columns not referenced by a file's service extension

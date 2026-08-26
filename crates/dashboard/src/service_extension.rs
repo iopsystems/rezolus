@@ -35,7 +35,7 @@ pub struct Kpi {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percentiles: Option<Vec<f64>>,
     /// Whether the parquet file contains data for this KPI's query.
-    /// Set by `rezolus parquet annotate` during validation.
+    /// Set by `rezolus recording annotate` during validation.
     #[serde(default = "default_available")]
     pub available: bool,
     /// When true, this KPI's query is used as the denominator for
