@@ -106,6 +106,27 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
 pub fn command() -> Command {
     Command::new("status")
         .about("Fetch and display agent status (version, uptime, sampler health)")
+        .long_about(
+            "Ask a running agent how it is doing. Prints one header line — version, uptime\n\
+             and the snapshot TTL — then a tally of samplers by state, and one line for each\n\
+             sampler that is NOT healthy, with the reason.\n\n\
+             States: healthy, degraded (running, but a probe or some CPUs are missing),\n\
+             failed (not running), unsupported (this kernel or machine cannot run it),\n\
+             pmu-limited (running on fewer CPUs than asked, because PMU counters are\n\
+             scarce) and pmu-starved (no counters left for it at all). Disabled samplers\n\
+             are not counted.\n\n\
+             EXIT STATUS: 0 when nothing is wrong, 1 when any sampler is degraded, failed\n\
+             or pmu-limited — so this works as a health check in a script or a readiness\n\
+             probe. A pmu-starved or disabled sampler on its own does not fail the check.\n\
+             A network or parse error also exits non-zero, with the reason on stderr.\n\n\
+             EXAMPLES:\n    \
+             # Is the local agent healthy?\n    \
+             rezolus status http://localhost:4241\n\n    \
+             # Use it as a gate in a script\n    \
+             rezolus status http://localhost:4241 || echo \"agent is unhealthy\"\n\n    \
+             # The raw payload, for a machine to read\n    \
+             rezolus status http://localhost:4241 --json",
+        )
         .arg(
             Arg::new("ENDPOINT")
                 .help("Agent base URL, e.g. http://localhost:4241")

@@ -663,7 +663,8 @@ pub fn command() -> Command {
     Command::new("mcp")
         .about("Run Rezolus MCP server for AI analysis or execute analysis commands")
         .long_about(
-            "AI-assisted analysis of a parquet recording. With no subcommand, runs as a Model\n\
+            "AI-assisted analysis of a recording — a .parquet file or a .rez archive, told\n\
+             apart by content rather than by name. With no subcommand, runs as a Model\n\
              Context Protocol server over stdio for an LLM client. Each subcommand also runs\n\
              one-shot from the CLI, printing the same analysis to stdout.\n\n\
              SUBCOMMANDS:\n    \
@@ -705,7 +706,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to analyze")
+                        .help("Recording to analyze: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -735,7 +736,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to describe")
+                        .help("Recording to describe: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -754,7 +755,7 @@ pub fn command() -> Command {
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to analyze")
+                        .help("Recording to analyze: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -766,11 +767,16 @@ pub fn command() -> Command {
                 .long_about(
                     "Detect anomalies in time series data using MAD, CUSUM, and FFT analysis.\n\n\
                      If QUERY is provided, analyzes that specific metric.\n\
-                     If QUERY is omitted, performs exhaustive analysis on all metrics in the recording."
+                     If QUERY is omitted, performs exhaustive analysis on all metrics in the recording.\n\n\
+                     EXAMPLES:\n    \
+                     # Sweep every metric in the recording\n    \
+                     rezolus mcp detect-anomalies out.rez\n\n    \
+                     # Focus on one metric\n    \
+                     rezolus mcp detect-anomalies out.rez cpu_usage"
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to analyze")
+                        .help("Recording to analyze: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -794,12 +800,20 @@ pub fn command() -> Command {
                      available metrics and common query examples.\n\n\
                      rate()/irate() values print an acquisition-window uncertainty band\n\
                      [lo, hi] next to the value (derived from per-observation acquisition\n\
-                     windows). A scalar op scales the band (e.g. rate(x)*k); series-op-series\n\
-                     and non-rate queries show no band."
+                     windows). A scalar op scales the band (e.g. rate(x)*k), and a\n\
+                     series-op-series combines both operands' bands by interval arithmetic —\n\
+                     widening first to the union span when the two came from different\n\
+                     acquisition tables. Queries with no rate() and no histogram have no band\n\
+                     to show.\n\n\
+                     EXAMPLES:\n    \
+                     # Total cycles per second across all CPUs\n    \
+                     rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'\n\n    \
+                     # A ratio: both operands' bands are combined\n    \
+                     rezolus mcp query out.rez 'sum(irate(cpu_usage[1m])) / cpu_cores'"
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to query")
+                        .help("Recording to query: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -820,11 +834,16 @@ pub fn command() -> Command {
                      regime shifts, acquisition-window uncertainty, correlations, resource \
                      rankings, subsystem coverage) as JSON on stdout. The record is the \
                      input half of a recording assessment. Requires a recording of at \
-                     least 10 seconds.",
+                     least 10 seconds.\n\n\
+                     EXAMPLES:\n    \
+                     # Emit the feature record\n    \
+                     rezolus mcp extract-features out.rez\n\n    \
+                     # Keep it for an assessment step\n    \
+                     rezolus mcp extract-features out.rez > features.json",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Path to a parquet or .rez recording")
+                        .help("Recording to analyze: a .parquet file or a .rez archive")
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),

@@ -49,9 +49,9 @@ pub fn command() -> Command {
                      override with --queries <file.json>. --undo strips a prior annotation.\n\n\
                      A .rez archive is also accepted: --queries embeds a ServiceExtension (KPIs)\n\
                      into each recording's manifest metadata. Since a .rez is source=rezolus with\n\
-                     no built-in template, --queries is required for a .rez. Only v2 (tar) .rez\n\
-                     archives can be annotated in place today; a v3 (SQLite) archive errors\n\
-                     clearly rather than being silently mishandled.\n\n\
+                     no built-in template, --queries is required for a .rez. Either container\n\
+                     works, and what is left behind is always v3 (SQLite): annotating is a\n\
+                     rewrite, so a v1/v2 tar archive is upgraded on the way through and says so.\n\n\
                      EXAMPLES:\n    \
                      # Attach KPIs from the built-in template for this file's source\n    \
                      rezolus recording annotate rezolus.parquet\n\n    \
@@ -178,13 +178,13 @@ pub fn command() -> Command {
                      output should end in `.parquet.ab.tar`, and you map each side with\n\
                      `baseline=<src> experiment=<src>` where <src> is a file's embedded SOURCE\n\
                      NAME (not its filename) — set with `annotate --source`, seen with\n\
-                     `parquet metadata --field source`. In the example below a.parquet's source\n\
+                     `recording metadata --field source`. In the example below a.parquet's source\n\
                      is `redis` and b.parquet's is `valkey`.\n\n\
                      .rez inputs: given single-recording `.rez` archives and a `.rez` output,\n\
                      combine assembles them into one multi-recording `.rez` (for multi-host or\n\
-                     A/B), preserving each recording's labels. Only v2 (tar) .rez archives can be\n\
-                     combined today; a v3 (SQLite) input, or a mix of v2 and v3 inputs, errors\n\
-                     clearly instead of silently mis-assembling.\n\n\
+                     A/B), preserving each recording's labels. Either container works, and\n\
+                     they mix freely: each v1/v2 tar input is upgraded to v3 on the way in, so\n\
+                     the assembled output is always v3 (SQLite).\n\n\
                      EXAMPLES:\n    \
                      # Row-merge a rezolus agent file with a service file\n    \
                      rezolus recording combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
@@ -442,9 +442,14 @@ pub fn command() -> Command {
             Command::new("filter")
                 .about("Shrink a recording to what its KPIs need: parquet columns, or .rez samplers")
                 .long_about(
-                    "Shrink a parquet recording by dropping every metric column not referenced by\n\
-                     its service-extension KPIs. The KPI set is taken from the file's embedded\n\
-                     annotation (or a matching built-in template); override with --queries.\n\n\
+                    "Shrink a recording by dropping what its service-extension KPIs do not need.\n\n\
+                     For a parquet file that means metric COLUMNS: the KPI set comes from the\n\
+                     file's embedded annotation (or a matching built-in template), and --queries\n\
+                     overrides it.\n\n\
+                     For a .rez archive it means whole SAMPLERS instead, listed with --samplers\n\
+                     (which is required there, and ignored for parquet) — a .rez is all-rezolus\n\
+                     data, so there is no KPI column set to filter against. Either container\n\
+                     works and the output is always v3 (SQLite).\n\n\
                      By default the input is rewritten in place; pass -o/--output to write a new\n\
                      file and leave the original untouched.\n\n\
                      EXAMPLES:\n    \
@@ -453,11 +458,13 @@ pub fn command() -> Command {
                      # Write a slimmed copy, keeping the original\n    \
                      rezolus recording filter rezolus.parquet -o slim.parquet\n\n    \
                      # Filter to the columns a custom KPI set needs\n    \
-                     rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet",
+                     rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet\n\n    \
+                     # Keep only two samplers of a .rez, writing a slimmed copy\n    \
+                     rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez",
                 )
                 .arg(
                     clap::Arg::new("FILE")
-                        .help("Parquet file to filter")
+                        .help("Recording to filter: a .parquet file, or a .rez archive (which needs --samplers)")
                         .value_parser(value_parser!(PathBuf))
                         .required(true)
                         .index(1),
@@ -491,7 +498,7 @@ pub fn command() -> Command {
                     clap::Arg::new("samplers")
                         .long("samplers")
                         .value_name("A,B,...")
-                        .help("For .rez archives: comma-separated sampler names to KEEP; all other per-sampler tables are dropped (required for .rez, ignored for parquet). Only v2 (tar) .rez archives can be filtered today; a v3 (SQLite) archive errors clearly.")
+                        .help("For .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (required for .rez, ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. Either container works; the output is always v3 (SQLite)")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 ),
@@ -509,7 +516,14 @@ pub fn command() -> Command {
                      clean one.\n\n\
                      `combine`, `filter` and `annotate` already upgrade a tar input on the\n\
                      way through. This is for upgrading an archive on its own, without\n\
-                     otherwise changing it.",
+                     otherwise changing it. A v3 input is refused rather than copied:\n\
+                     \"upgrade\" on something already current is far more likely a mistaken\n\
+                     path than a request for a duplicate.\n\n\
+                     EXAMPLES:\n    \
+                     # Upgrade in place\n    \
+                     rezolus recording upgrade old.rez\n\n    \
+                     # ...or leave the original alone\n    \
+                     rezolus recording upgrade old.rez -o new.rez",
                 )
                 .arg(
                     clap::Arg::new("FILE")
