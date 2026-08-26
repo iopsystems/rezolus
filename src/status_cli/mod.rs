@@ -264,7 +264,11 @@ mod tests {
     #[test]
     fn an_unsupported_sampler_is_not_a_failure_and_does_not_set_exit_status() {
         let (text, problem) = render_samplers(&[
-            sampler("cpu_usage", SamplerState::Active, Some(SamplerHealth::Healthy)),
+            sampler(
+                "cpu_usage",
+                SamplerState::Active,
+                Some(SamplerHealth::Healthy),
+            ),
             sampler(
                 "cpu_l3",
                 SamplerState::Unsupported {
@@ -280,8 +284,14 @@ mod tests {
         );
         assert!(text.contains("unsupported"), "{text}");
         assert!(text.contains("no L3 cache domains found"), "{text}");
-        assert!(text.contains("1 unsupported"), "counted in the tally:\n{text}");
-        assert!(text.contains("0 failed"), "and not in the failed tally:\n{text}");
+        assert!(
+            text.contains("1 unsupported"),
+            "counted in the tally:\n{text}"
+        );
+        assert!(
+            text.contains("0 failed"),
+            "and not in the failed tally:\n{text}"
+        );
         // The sampler's own line, not the tally line, is what must not say
         // "failed" — the tally always carries the word.
         let line = text
@@ -301,7 +311,10 @@ mod tests {
             },
             Some(SamplerHealth::Failed),
         )]);
-        assert!(problem, "a genuine failure must still exit non-zero:\n{text}");
+        assert!(
+            problem,
+            "a genuine failure must still exit non-zero:\n{text}"
+        );
         assert!(text.contains("failed"), "{text}");
     }
 

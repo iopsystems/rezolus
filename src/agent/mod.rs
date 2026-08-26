@@ -147,9 +147,7 @@ pub fn run(config: PathBuf) {
             // "this machine cannot" is not "this broke". A sampler says so by
             // returning `Unsupported`; everything else is still a failure.
             Err(e) => match e.downcast_ref::<crate::agent::sampler_status::Unsupported>() {
-                Some(u) => {
-                    crate::agent::sampler_status::set_unsupported(entry.name, u.0.clone())
-                }
+                Some(u) => crate::agent::sampler_status::set_unsupported(entry.name, u.0.clone()),
                 None => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
             },
         }
