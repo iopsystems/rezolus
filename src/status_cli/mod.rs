@@ -72,6 +72,17 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
                     s.name, "pmu-limited"
                 ));
             }
+            // Not a fault: the machine or kernel cannot do this. Counted as
+            // unsupported and, crucially, `problem` is left alone — a host
+            // without an L3 cache domain must not fail a readiness probe for
+            // having the hardware it has.
+            (SamplerState::Unsupported { reason }, _) => {
+                unsupported += 1;
+                lines.push_str(&format!(
+                    "  {:<22} {:<12} {reason}\n",
+                    s.name, "unsupported"
+                ));
+            }
             (SamplerState::PmuStarved { wants, free }, _) => {
                 unsupported += 1;
                 lines.push_str(&format!(
