@@ -1,5 +1,139 @@
 ## [Unreleased]
 
+## [5.18.0] - 2026-08-26
+
+### Changed
+
+- Scheduler: runqueue latency no longer counts the idle task, so it measures
+  time real tasks spent waiting instead of time CPUs spent asleep. Reported
+  latency drops, and the spurious outliers in the top histogram bucket — an
+  underflow from a slot shared across CPUs — are gone. Alert thresholds tuned
+  against the old numbers will need revisiting. (#1035)
+- Scheduler: involuntary context switches no longer count a CPU waking from
+  idle as a preemption. On a lightly loaded machine this was most of the count,
+  charged to the root cgroup, so systems appeared to be under preemption
+  pressure that did not exist. (#1046)
+- Scheduler: context switches are now split into voluntary and involuntary.
+  Only involuntary was emitted before, which made "no voluntary switches"
+  indistinguishable from "not measured" — so a blocking handoff between two
+  processes on a pipe looked the same as real preemption, despite pointing at
+  completely different causes. (#1040)
+- CPU: a task's CPU time is no longer lost when it exits. The counter and its
+  labels are now released together, so the series ends cleanly rather than the
+  task's total going missing. Workloads with heavy process churn were
+  undercounted. (#1037)
+- BPF: perf counters that never measured anything are no longer published, so a
+  zero can be trusted. A counter that never got a PMU slot used to be
+  indistinguishable from one that legitimately measured zero, which is common
+  under virtualization where the PMU may not be available at all. Metrics that
+  were previously present-and-zero will now be absent on such hosts. (#1052)
+- Agent: `snapshot_format` defaults to v3, which reshapes `/metrics/json` from a
+  flat `{counters, gauges, histograms}` into `{groups: [...]}`, and changes
+  `/metrics/binary` with it. In exchange, each reading carries the window it was
+  actually acquired over, making `rate()` error bars precise rather than
+  approximated — and scrapes cost roughly half the wall time and a third of the
+  agent CPU. Anything parsing those endpoints directly needs updating; set
+  `[general] snapshot_format = "v2"` to defer. (#1076)
+- Recorder: `rezolus record` writes `rezolus.rez` by default rather than
+  `rezolus.parquet`. The extension picks the format now, so `--format` is rarely
+  needed. Scripts that record with no arguments and then read `rezolus.parquet`
+  will not find it — they fail at the read rather than silently recording the
+  wrong thing. A `--format` contradicting the extension is an error rather than
+  a silent choice between them. (#1097)
+- Recorder: `record --node` and `--instance` are gone. No reader was ever
+  written for either, so they accepted a value and dropped it; anything that
+  looked like it was labelling a recording was not. `--metadata node=NAME` and
+  `--metadata instance=NAME` write the keys `combine` actually reads. Passing
+  the old flags is now an error rather than a silent no-op. (#1097)
+- Recording: the `parquet` subcommand group is now `recording`, since these
+  commands stopped being parquet-specific once `.rez` arrived. `rezolus parquet
+  ...` still works, so existing scripts keep running. (#1075)
+- Recorder: the tar `.rez` container is no longer written. Archives from older
+  releases still open everywhere, and `recording upgrade` converts one. (#1074)
+- Status: `rezolus status` with no arguments asks the agent on this machine, and
+  accepts a bare host or `host:port`. It exits non-zero when any sampler is
+  unhealthy, so it works as a readiness probe or a gate in a script. (#1099)
+- Agent: a cached snapshot is served without re-encoding it. Every request used
+  to rebuild a multi-megabyte body and throw it away; 500 requests against one
+  cached snapshot went from about 2 MB of RSS growth to none. (#1084)
+
+### Added
+
+- Recorder: `.rez` recordings, where each sampler records at its own cadence and
+  carries the window its reading actually covered. That window is what lets
+  `rate()` and `irate()` report uncertainty bounds instead of a bare number, so
+  you can tell a real change from sampling noise. Archives are around a third
+  the size of the equivalent parquet and query about twice as fast. A recording
+  is also valid at every instant: it is readable while still being written,
+  survives a SIGKILL or power loss having lost at most one interval, and stops
+  in the same bounded time whether it ran for a minute or a day. (#1017, #1041,
+  #1060, #1061, #1070)
+- Recording: queries spanning two samplers of a `.rez` are answered instead of
+  refused, so ratios like cycles-per-instruction across samplers work. Where the
+  two cadences differ materially the query is evaluated at the slow sampler's
+  own timestamps, so its values are not silently held forward across points it
+  never measured. (#1080, #1082)
+- Recording: `convert` turns a raw msgpack recording into parquet after the
+  fact, so a long unattended capture can record at the lowest possible overhead
+  and pay the conversion cost later. (#1059)
+- Recording: `upgrade` brings a v1/v2 (tar) `.rez` onto the current container.
+  `combine`, `filter` and `annotate` do it in passing, so older archives keep
+  working without a migration step. (#1073, #1074)
+- Viewer: `--tui` explores a recording or a live agent from the terminal, for
+  looking at a machine over ssh without forwarding a port or opening a browser.
+  (#1019)
+- MCP: `extract-features` summarizes a recording as a deterministic, versioned
+  JSON record, so an agent can assess a capture without reading every series.
+  (#1028, #1029, #1030, #1031, #1032)
+- Agent: PMU hardware counters are budgeted rather than over-subscribed.
+  Excess events used to open successfully, never get scheduled and read nothing,
+  with which samplers won decided by an unspecified link order that could change
+  between builds — and on a hypervisor this reached past the host, leaving
+  guests counting nothing while reporting themselves healthy. Counters are now
+  allocated per-PMU by rank, all-or-nothing, and `rezolus status` names the
+  samplers that lost as pmu-limited or pmu-starved. `reserved_pmu_counters` and
+  `reserved_pmu_cpus` leave headroom for other tooling on the box. (#1093,
+  #1096)
+- Viewer: rate time-alignment modes (Aligned/Raw) (#1023), sampling-jitter
+  visualization for simple-capture parquets (#1014), and a swatch row explaining
+  what each shade means on charts with band fills (#1021).
+
+### Fixed
+
+- Agent: a config file that omits the `[general]` table starts with the
+  documented defaults instead of exiting with "ttl couldn't be parsed: value was
+  empty". (#1099)
+- Agent: `cpu_perf` opens its per-CPU events as one perf event group, so its
+  counters describe the same slice of time and derived ratios are meaningful.
+  (#1091)
+- Agent: a host with no GPU no longer ships GPU tables in every recording. It
+  used to carry 448 phantom AMD members and 672 NVIDIA ones, all null. (#1081)
+- Agent: groups with no live sampler declare no members (#1086), and V2 external
+  metrics get their own column key (#1090).
+- Recorder: a `.rez` recording that cannot start now exits non-zero. It printed
+  an error and exited 0 before, so a `record && analyze` pipeline carried on and
+  analyzed whatever a previous run had left at that path. A usage error also
+  prints one line instead of a panic backtrace. (#1097)
+- Recorder: a malformed histogram cell can no longer wedge a `.rez` recording
+  (#1077), and segment size accounting is corrected so seals are not
+  mistimed (#1050).
+- Exporter: a histogram that cannot be downsampled is dropped rather than
+  panicking, so one bad metric no longer takes the exporter down. (#1088)
+- CLI: six help-text claims that contradicted the code were corrected — three
+  commands said v3 `.rez` archives "error clearly" long after they worked, which
+  told users a working operation was unavailable. A test now fails the build if
+  a help text names a flag its command does not define, or if an example
+  invocation uses one. (#1098)
+- CLI: the published documentation was five weeks behind the binary, listing two
+  flags that now exit non-zero and omitting `status`, `.rez` and `--tui`
+  entirely. (#1100)
+- Analysis: subsystems are inferred from metric names, and absences that cannot
+  be known are never asserted. (#1034)
+- Viewer: restored a missing `boxplot.js` symlink that had taken the deployed
+  viewer down, with a CI guard against recurrence. (#1012)
+- Installer: the apt repository architecture is detected instead of hardcoded to
+  amd64, so arm64 installs work. (#1018)
+
 ## [5.17.0] - 2026-07-16
 
 ### Added
@@ -958,7 +1092,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.17.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.18.0...HEAD
+[5.18.0]: https://github.com/iopsystems/rezolus/compare/v5.17.0...v5.18.0
 [5.17.0]: https://github.com/iopsystems/rezolus/compare/v5.16.2...v5.17.0
 [5.16.2]: https://github.com/iopsystems/rezolus/compare/v5.16.1...v5.16.2
 [5.16.1]: https://github.com/iopsystems/rezolus/compare/v5.16.0...v5.16.1

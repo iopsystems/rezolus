@@ -37,6 +37,13 @@ pub fn parse_rate_mode(s: Option<&str>) -> RateMode {
 
 /// Run a display-mode range query and encode the result. `points` is the point
 /// budget; `band` the inner-band quantiles; `rate_mode` the rate alignment.
+// Eight arguments, and they are the right eight: this is the display-mode
+// query entry point, and every one of them is a distinct axis the caller
+// chooses per request (what to query, over what window, at what resolution,
+// with what band and rate alignment). They are bundled into `DisplayOptions`
+// immediately below; hoisting that struct into the signature would only move
+// the argument list to the call sites, which is where it is least readable.
+#[allow(clippy::too_many_arguments)]
 pub fn display_query(
     source: &dyn MetricsSource,
     query: &str,
