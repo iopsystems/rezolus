@@ -173,9 +173,9 @@ management — see [HTTP Endpoint](#http-endpoint-optional) below.
 
 ### Recorder
 
-Records metrics into a Parquet file for benchmarking, lab tests, or offline
-workload characterization. It auto-detects Rezolus agent vs Prometheus sources
-and supports custom file-level metadata.
+Records metrics to disk for benchmarking, lab tests, or offline workload
+characterization. It auto-detects Rezolus agent vs Prometheus sources and
+supports custom file-level metadata.
 
 Like `perf record`, it can wrap a workload and capture for exactly its lifetime,
 finalizing when the command exits:
@@ -185,17 +185,17 @@ rezolus record -- ./my-benchmark --threads 8
 ```
 
 By default this records the local agent (`http://localhost:4241`) into
-`rezolus.parquet`. Override the endpoint with `--url` and the output with `-o`:
+`rezolus.rez`. Override the endpoint with `--url` and the output with `-o`:
 
 ```bash
-rezolus record --url http://host:4241 -o run.parquet -- ./driver
+rezolus record --url http://host:4241 -o run.rez -- ./driver
 ```
 
 Or record a fixed window instead, until `--duration` elapses or you press
 ctrl-c:
 
 ```bash
-rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o rezolus.parquet
+rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o run.rez
 ```
 
 When wrapping a command, `--duration` also acts as a safety cap: if the command
@@ -203,17 +203,46 @@ outlives it, recording stops and the command — along with any worker processes
 it spawned — is terminated. The positional `<URL> <OUTPUT>` form still works but
 is deprecated in favor of `--url`/`-o`.
 
-#### `.rez` recordings
+#### Output formats
 
-Giving the output a `.rez` extension (or passing `--format rez`) writes a
-per-sampler archive instead of a single parquet file: each sampler gets its own
-table at its own cadence, with per-metric acquisition windows the query engine
-uses to bound `rate()`. It requires a Rezolus (msgpack) endpoint, and
-`--label k=v` tags the recording (`source` and `host` are filled in for you):
+The output path's extension picks the format, so `--format` is rarely needed;
+with no `-o` at all the recording goes to `rezolus.<ext>` for the format in
+play, which by default means `rezolus.rez`.
+
+| Extension | What it is | When |
+| --- | --- | --- |
+| `.rez` | **Default.** A per-sampler archive: one table per sampler, each at its own cadence, carrying the acquisition windows the query engine uses to bound `rate()`. | Recording a Rezolus agent. Prefer it. |
+| `.parquet` | One columnar table on a single uniform clock. | A Prometheus source, several endpoints at once, or other parquet tooling. |
+| `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
+
+Passing a `--format` that contradicts the extension (say `--format parquet` with
+`-o out.rez`) is an error rather than a silent choice between them. And because
+`.rez` needs a single Rezolus (msgpack) endpoint, a run that chose *no* format
+at all — no `--format`, no `-o` — falls back to `rezolus.parquet` and says so
+when the endpoint turns out to be Prometheus or there is more than one of them.
+Pass `--format rez` to make `.rez` a requirement instead.
+
+A `.rez` output path must not already exist — the recorder refuses rather than
+truncate, since the archive is committed as it goes and has no staging file. A
+parquet or raw output is overwritten. There is no `--force`.
+
+When wrapping a command, rezolus passes its stdio straight through and exits
+with the command's own status, so `rezolus record -o bench.rez -- ./bench.sh &&
+analyze bench.rez` gates on the benchmark; the exception is the `--duration`
+cap, which exits 124 if it has to kill the command.
+
+#### Tagging a recording
+
+`-m/--metadata k=v` writes file-level metadata and applies to every format.
+`-l/--label k=v` applies to `.rez` only — it tags the recording inside the
+archive (`source` and `host` are filled in for you), and a two-recording `.rez`
+drives the viewer's A/B comparison, which is what `--label arm=redis` is for:
 
 ```bash
 rezolus record --url http://localhost:4241 -o out.rez --label arm=redis
 ```
+
+#### `.rez` durability
 
 `.rez` recordings are written to disk in segments as they run, so stopping
 costs the same whether the recording ran for a minute or a day. Ctrl-c and
@@ -224,8 +253,7 @@ recording stops just as promptly as a millisecond one, comfortably inside a
 container's stop grace, and never proportional to the recording's length.
 
 A `.rez` is a single SQLite file that is valid at every instant, so there is no
-`.partial` staging file — and the output path must not already exist. Every
-sample is committed as it is taken, so if the recorder is SIGKILLed or the
+`.partial` staging file. Every sample is committed as it is taken, so if the recorder is SIGKILLed or the
 machine dies the recording is readable where it sits, missing at most one
 sampling interval:
 

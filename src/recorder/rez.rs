@@ -1884,8 +1884,8 @@ pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
 
 /// True when the recording should be written as a `.rez` archive: either the
 /// output path ends in `.rez` or `--format rez` was given.
-pub fn wants_rez(output: &Path, format: crate::Format) -> bool {
-    format == crate::Format::Rez || output.extension().and_then(|e| e.to_str()) == Some("rez")
+pub fn wants_rez(format: crate::Format) -> bool {
+    format == crate::Format::Rez
 }
 
 #[cfg(test)]
@@ -3438,14 +3438,17 @@ mod finalize_tests {
 mod selection_tests {
     use super::*;
     use crate::Format;
-    use std::path::Path;
 
+    /// The `.rez` extension is folded into the format by
+    /// `RecordingConfig::resolve_format_and_output`, so by the time the
+    /// recorder asks, the format is the only thing left to consult — an
+    /// extension that disagreed with an explicit `--format` was rejected at
+    /// parse time rather than quietly overriding it here.
     #[test]
-    fn extension_or_format_selects_rez() {
-        assert!(wants_rez(Path::new("out.rez"), Format::Parquet));
-        assert!(wants_rez(Path::new("out.parquet"), Format::Rez));
-        assert!(!wants_rez(Path::new("out.parquet"), Format::Parquet));
-        assert!(!wants_rez(Path::new("out.raw"), Format::Raw));
+    fn format_alone_selects_rez() {
+        assert!(wants_rez(Format::Rez));
+        assert!(!wants_rez(Format::Parquet));
+        assert!(!wants_rez(Format::Raw));
     }
 }
 

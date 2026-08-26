@@ -33,45 +33,108 @@ pub fn command() -> Command {
              endpoint.\n\n\
              WHAT TO RECORD (choose one): --url for a single endpoint (default\n\
              http://localhost:4241), --endpoint (repeatable) for several at once, or --config\n\
-             for a TOML file. Write the result with -o/--output (default rezolus.parquet).\n\
-             (The positional URL and OUTPUT still work but are deprecated; prefer --url / -o.)\n\n\
+             for a TOML file. Exactly one: passing two of them is a parse error, not a\n\
+             merge — and the deprecated positional URL counts as --url for that rule, as\n\
+             positional OUTPUT counts as -o. Prefer the flags.\n\n\
+             --url is shorthand for a single endpoint with no modifiers; reach for a single\n\
+             --endpoint when you need source=, role= or protocol= on it, which is still a\n\
+             one-endpoint recording and still eligible for .rez. --config conflicts only with\n\
+             --url/--endpoint: every other flag still applies alongside it, and -o, --interval\n\
+             and --format override the file\'s [recording] table. There is no duration key —\n\
+             a bounded config-driven run passes --duration on the command line.\n\n\
              HOW LONG TO RECORD (choose one): --duration for a fixed window, nothing to run\n\
              until Ctrl-C, or `-- <command>` to record for exactly the lifetime of a wrapped\n\
              command (perf-record style) — it stops when the command exits.\n\n\
+             A wrapped command keeps this terminal: its stdin/stdout/stderr pass straight\n\
+             through, and rezolus exits with the command\'s own exit status, so\n\
+             `rezolus record -o bench.rez -- ./bench.sh && analyze bench.rez` gates on the\n\
+             benchmark exactly as it would without the wrapper. The one substitution is the\n\
+             --duration cap: if it fires and the command is killed, rezolus exits 124.\n\n\
+             WHAT IT WRITES: the output path is -o/--output, and its extension picks the\n\
+             format, so --format is rarely needed. With no -o at all the recording goes to\n\
+             rezolus.<ext> for the format in play — by default rezolus.rez. (A \"sampler\" below\n\
+             is one metric collector — cpu_usage, scheduler, blockio — and each reads on its\n\
+             own schedule rather than on one global clock.)\n\n    \
+             .rez      (default) A per-sampler archive: one table per sampler, each at its own\n    \
+             \x20         cadence, carrying the window each read covered so PromQL rate()\n    \
+             \x20         queries in `rezolus view` and `rezolus mcp` can report uncertainty\n    \
+             \x20         bounds instead of a bare number. Needs a single rezolus (msgpack)\n    \
+             \x20         endpoint. Prefer it.\n    \
+             .parquet  One columnar table on a single uniform clock. Use it for a Prometheus\n    \
+             \x20         source, for several endpoints at once, or for other parquet tooling.\n    \
+             .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
+             \x20         is converted to snapshots on the way in, so either source works).\n    \
+             \x20         Cheapest thing the recorder can do: it appends and never rewrites.\n    \
+             \x20         Turn it into parquet later with `rezolus recording convert` — which\n    \
+             \x20         you can redo, re-stamping metadata, since the raw input is kept.\n\n\
+             Any other extension (-o capture.dat, or no extension at all) is not an error and\n\
+             not .rez: it means parquet, unless --format says otherwise. A --format that\n\
+             contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
+             rather than a silent choice between them.\n\n\
+             When the format was not chosen at all — no --format, no -o — and the endpoint\n\
+             turns out to be Prometheus, or there is more than one endpoint, the recording\n\
+             falls back to rezolus.parquet and says so on stderr. Pass --format rez (or an\n\
+             -o ending in .rez) to make a .rez archive a requirement instead: then the same\n\
+             situation is an error and nothing is recorded.\n\n\
+             OVERWRITING: a .rez output path must NOT already exist — the recorder refuses\n\
+             rather than truncate, because the archive is committed as it goes and has no\n\
+             staging file. A parquet or raw output IS overwritten. There is no --force; remove\n\
+             the old file or pick a new path.\n\n\
              EXAMPLES:\n    \
+             # Record the local agent until ctrl-c (defaults: localhost:4241 -> rezolus.rez)\n    \
+             rezolus record\n\n    \
              # Record a local agent for 5 minutes\n    \
-             rezolus record --url http://localhost:4241 -o out.parquet --duration 5m\n\n    \
-             # Record a Prometheus endpoint, tagging the source in the file metadata\n    \
-             rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
-             # Record only while a benchmark runs, then stop (defaults: localhost:4241 -> rezolus.parquet)\n    \
-             rezolus record -- ./bench.sh --iters 100\n\n    \
-             # Same, writing to a named file\n    \
-             rezolus record -o bench.parquet -- ./bench.sh\n\n    \
+             rezolus record --url http://localhost:4241 -o out.rez --duration 5m\n\n    \
+             # Record only while a benchmark runs, then stop\n    \
+             rezolus record -o bench.rez -- ./bench.sh --iters 100\n\n    \
+             # Tag a recording as one arm of an A/B comparison\n    \
+             rezolus record -o redis.rez --label arm=redis -- ./bench.sh\n\n    \
              # High-resolution capture: sample every 100ms for 30 seconds\n    \
-             rezolus record --url http://localhost:4241 -o out.parquet --interval 100ms --duration 30s\n\n    \
-             # Record several endpoints into separate per-endpoint files\n    \
-             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o combined.parquet\n\n    \
-             # Write a per-sampler .rez archive (each sampler at its own cadence, with\n    \
-             # per-metric acquisition windows), tagging the recording with labels\n    \
-             rezolus record --url http://localhost:4241 -o out.rez --label arm=redis --label host=node1\n\
-             \n\
-             The .rez format (chosen by a .rez output extension or --format rez) holds one\n\
-             parquet table per sampler, each at its own cadence. It requires a\n\
-             rezolus/msgpack endpoint (not Prometheus). --label k=v (repeatable) tags the\n\
-             recording; source and host are auto-populated.\n\n\
+             rezolus record -o out.rez --interval 100ms --duration 30s\n\n    \
+             # Record a Prometheus endpoint to parquet, tagging the source in the metadata\n    \
+             rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
+             # Record several endpoints into ONE combined parquet file\n    \
+             rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
+             # ...or one file per endpoint: writes run_rezolus.parquet and run_svc.parquet\n    \
+             rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
+             # Capture raw msgpack now, convert later\n    \
+             rezolus record -o run.raw --duration 1m && rezolus recording convert run.raw\n\n    \
+             # Require a .rez: fail rather than quietly fall back to parquet\n    \
+             rezolus record --url http://host:4241 --format rez --duration 5m\n\n    \
+             # Take the endpoints and the output from a file\n    \
+             rezolus record --config rec.toml\n    \
+             #   [recording]\n    \
+             #   output = \"run.parquet\"   # required; its extension picks the format\n    \
+             #   interval = \"1s\"          # optional\n    \
+             #   separate = false         # optional\n    \
+             #   [[endpoints]]\n    \
+             #   url = \"http://localhost:4241\"\n    \
+             #   [[endpoints]]\n    \
+             #   url = \"http://svc:9090/metrics\"\n    \
+             #   source = \"svc\"           # optional, as are role = and protocol =\n\n\
+             TAGGING: -m/--metadata k=v writes file-level metadata and applies to EVERY\n\
+             format. -l/--label k=v applies to .rez only (it is dropped for parquet and raw):\n\
+             it tags the recording inside the archive, source and host are auto-populated,\n\
+             and a two-recording .rez drives the viewer\'s A/B comparison — which is what\n\
+             --label arm=redis is for. The source= on an --endpoint is a third thing again:\n\
+             it names which endpoint a metric came from in a multi-endpoint recording.\n\n\
+             To label a recording for a multi-node or multi-instance `rezolus recording\n\
+             combine`, set the metadata keys it reads: --metadata node=web-01 and\n\
+             --metadata instance=0. (`record --node` / `--instance` were removed: they were\n\
+             never wired to anything, and these are what they were meant to set.)\n\n\
+             ABOUT .rez:\n\n\
              .rez recordings are written to disk as they run, so stopping costs the same\n\
              whether the recording ran for a minute or a day. Ctrl-c and SIGTERM (e.g. a\n\
              docker stop) are clean stops: the signal interrupts the wait between samples\n\
              straight away, so finalizing costs only the write of the still-open segments —\n\
-             at any --interval, comfortably inside a container's stop grace, and never\n\
-             proportional to the recording's length.\n\n\
+             at any --interval, comfortably inside a container\'s stop grace, and never\n\
+             proportional to the recording\'s length.\n\n\
              A .rez is a single SQLite file, valid at every instant. There is no .partial,\n\
              so the output path must not already exist, and every sample is committed as it\n\
              is taken: a SIGKILL or a power loss costs at most one sampling interval, for\n\
-             every sampler. `rezolus parquet metadata -i out.rez` reports an interrupted\n\
+             every sampler. `rezolus recording metadata -i out.rez` reports an interrupted\n\
              recording as \"not cleanly finalized\" and how many samples are still in its\n\
-             write-ahead log. Pass --rez-version 2 to write the previous tar container\n\
-             instead (staged at <output>.partial, recoverable only to its last checkpoint).",
+             write-ahead log.",
         )
         .arg(
             clap::Arg::new("URL")
@@ -105,7 +168,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one parquet file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path (source falls back to host-port, e.g. localhost-4241, when not set via source=)")
+                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port (e.g. svc-9090). For parquet or raw output only — .rez records a single endpoint")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -136,36 +199,23 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: parquet (columnar, queryable), raw (concatenated msgpack snapshots), or rez (per-sampler .rez archive; also selected by a .rez output extension, requires a rezolus/msgpack endpoint)")
+                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez requires a single rezolus/msgpack endpoint")
                 .action(clap::ArgAction::Set)
-                .default_value("parquet")
                 .value_parser(value_parser!(Format)),
         )
         .arg(
             clap::Arg::new("METADATA")
                 .long("metadata")
                 .short('m')
-                .help("Add a file-level metadata tag as key=value (e.g. source=llm-perf); repeat for multiple tags")
+                .help("Add a file-level metadata tag as key=value (e.g. source=llm-perf); repeat for multiple tags. Applies to every output format")
                 .action(clap::ArgAction::Append),
         )
         .arg(
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Used by .rez output.")
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. .rez output ONLY — dropped for parquet and raw, where --metadata is the equivalent")
                 .action(clap::ArgAction::Append),
-        )
-        .arg(
-            clap::Arg::new("NODE")
-                .long("node")
-                .help("Node name for rezolus agent data (written to parquet metadata)")
-                .action(clap::ArgAction::Set),
-        )
-        .arg(
-            clap::Arg::new("INSTANCE")
-                .long("instance")
-                .help("Instance name for service data (written to parquet metadata)")
-                .action(clap::ArgAction::Set),
         )
         .arg(
             clap::Arg::new("URL_FLAG")
@@ -179,7 +229,7 @@ pub fn command() -> Command {
             clap::Arg::new("OUTPUT_FLAG")
                 .long("output")
                 .short('o')
-                .help("Path to the output file (default rezolus.parquet)")
+                .help("Path to the output file; its extension picks the format (.rez, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.rez")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with("OUTPUT"),
@@ -691,10 +741,39 @@ struct EndpointWriter {
 /// correspondingly long stall.
 const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Handle a run that asked for (or defaulted to) `.rez` output that this
+/// endpoint set cannot produce: either rewrite `config` to record parquet and
+/// carry on, or exit non-zero.
+///
+/// The distinction is who chose `.rez`. `--format rez` or an `-o out.rez` is a
+/// request the recorder must not quietly substitute — a pipeline that goes on
+/// to read `out.rez` would find a parquet file, or nothing. But `.rez` is also
+/// what a bare `rezolus record` picks with nothing to go on, and demanding a
+/// flag before it will record a Prometheus endpoint (which worked before `.rez`
+/// became the default) is a regression for no gain: nothing downstream has been
+/// promised a filename yet, so the recorder picks the format that fits.
+///
+/// The refusal exits 1 rather than returning, because a `record && analyze`
+/// pipeline sees only the exit code: this used to print the error and exit 0,
+/// leaving the next command to read whatever `out.rez` a previous run left
+/// behind.
+fn demote_from_rez(config: &mut RecordingConfig, reason: &str) {
+    if !config.format_defaulted {
+        eprintln!("error: {reason}");
+        std::process::exit(1);
+    }
+    config.format = Format::Parquet;
+    config.output = PathBuf::from("rezolus.parquet");
+    eprintln!(
+        "note: {reason}; recording parquet to {} instead (pass --format rez to require a .rez archive)",
+        config.output.display()
+    );
+}
+
 /// Runs the Rezolus `recorder` which pulls metrics from one or more endpoints
 /// and writes them to parquet file(s). Supports Rezolus msgpack and Prometheus
 /// text format endpoints, with auto-detection.
-pub fn run(config: RecordingConfig) {
+pub fn run(mut config: RecordingConfig) {
     let _log_drain = configure_logging(verbosity_to_level(config.verbose));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -735,40 +814,44 @@ pub fn run(config: RecordingConfig) {
         }
     };
 
-    let out_dir = output_dir(&config.output);
-
     let mut endpoints: Vec<EndpointState> = config
         .endpoints
         .iter()
         .map(|ep| EndpointState::new(ep.clone()))
         .collect();
 
-    // `.rez` per-sampler archive mode: selected by a `.rez` output extension or
-    // `--format rez`.
-    let rez_mode = rez::wants_rez(&config.output, config.format);
+    // `.rez` per-sampler archive mode. By this point the output extension has
+    // already been folded into the format, so the format is the whole answer.
+    let mut rez_mode = rez::wants_rez(config.format);
 
     if rez_mode {
         // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus
-        // endpoint yields none, so reject it up front (before probing) rather
-        // than recording an empty archive. Auto-detected prometheus is rejected
-        // right after the probe, below.
-        if let Some(ep) = endpoints
+        // endpoint yields none, so settle it up front (before probing) rather
+        // than recording an empty archive. Auto-detected prometheus is handled
+        // right after the probe, below. Multi-source/A-B `.rez` is deferred, so
+        // more than one endpoint is the other blocker — also checked before
+        // probing, so a misconfiguration costs no network round-trips.
+        let blocker = if let Some(ep) = endpoints
             .iter()
             .find(|e| matches!(e.config.protocol, Some(Protocol::Prometheus)))
         {
-            eprintln!(
-                "error: .rez output requires a rezolus (msgpack) endpoint; {} is configured protocol=prometheus",
+            Some(format!(
+                "{} is configured protocol=prometheus, and .rez requires a rezolus (msgpack) endpoint",
                 ep.config.url
-            );
-            return;
-        }
-        // Multi-source/A-B `.rez` is deferred; require one endpoint. Checked
-        // before probing so a misconfiguration costs no network round-trips.
-        if endpoints.len() > 1 {
-            eprintln!("error: .rez output currently supports a single endpoint");
-            return;
+            ))
+        } else if endpoints.len() > 1 {
+            Some(".rez output currently supports a single endpoint".to_string())
+        } else {
+            None
+        };
+
+        if let Some(reason) = blocker {
+            demote_from_rez(&mut config, &reason);
+            rez_mode = false;
         }
     }
+
+    let out_dir = output_dir(&config.output);
 
     // Probe all endpoints (best-effort startup)
     rt.block_on(async {
@@ -842,17 +925,24 @@ pub fn run(config: RecordingConfig) {
         // `.rez` is single-endpoint (guarded above) and at least one endpoint is
         // active (checked above), so the active endpoint is *the* endpoint. It
         // can therefore never activate later via the Pending path.
-        if let Some(ep) = endpoints
+        let non_msgpack = endpoints
+            .iter()
+            .find(|ep| ep.status == EndpointStatus::Active)
+            .filter(|ep| ep.protocol() != Some(&Protocol::Msgpack))
+            .map(|ep| {
+                format!(
+                    "{} answered as prometheus, and .rez requires a rezolus (msgpack) endpoint",
+                    ep.config.url
+                )
+            });
+
+        if let Some(reason) = non_msgpack {
+            demote_from_rez(&mut config, &reason);
+            rez_mode = false;
+        } else if let Some(ep) = endpoints
             .iter()
             .find(|ep| ep.status == EndpointStatus::Active)
         {
-            if ep.protocol() != Some(&Protocol::Msgpack) {
-                eprintln!(
-                    "error: .rez output requires a rezolus (msgpack) endpoint; {} answered as prometheus",
-                    ep.config.url
-                );
-                return;
-            }
             match start_rez_recorder(&config, ep, clock_anchor_wall_ns) {
                 Ok(rec) => rez_recorder = Some(rec),
                 Err(e) => {
@@ -1690,7 +1780,8 @@ mod tests {
             Some(vec!["echo".to_string(), "hello".to_string()])
         );
         // Defaults apply when no --url/-o are given.
-        assert_eq!(config.output, PathBuf::from("rezolus.parquet"));
+        assert_eq!(config.output, PathBuf::from("rezolus.rez"));
+        assert_eq!(config.format, Format::Rez);
         assert_eq!(config.endpoints.len(), 1);
         assert_eq!(config.endpoints[0].url.as_str(), "http://localhost:4241/");
     }
@@ -1777,6 +1868,7 @@ mod tests {
             labels: vec![("arm".to_string(), "redis".to_string())],
             endpoints: Vec::new(),
             command: None,
+            format_defaulted: false,
         }
     }
 

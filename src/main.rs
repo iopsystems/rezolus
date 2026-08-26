@@ -78,7 +78,8 @@ fn main() {
              \x20              Run with no subcommand: `rezolus <config.toml>`.\n    \
              exporter   Re-expose an agent's metrics on a Prometheus-compatible endpoint.\n    \
              hindsight  Keep an on-disk ring buffer for after-the-fact incident snapshots.\n    \
-             record     Scrape an endpoint to a parquet file (optionally wrapping a command).\n    \
+             record     Scrape an endpoint to a recording on disk — a .rez archive by default,\n\
+             \x20              or parquet (optionally wrapping a command).\n    \
              view       Serve a web dashboard for a recording or a live agent.\n    \
              mcp        AI analysis tools (PromQL, anomaly detection, correlation, feature\n\
              \x20              extraction) over a file.\n    \
@@ -90,8 +91,8 @@ fn main() {
              # Run the agent (needs root for eBPF on Linux)\n    \
              sudo rezolus config/agent.toml\n\n    \
              # Record the local agent for 5 minutes, then view it\n    \
-             rezolus record --duration 5m -o out.parquet\n    \
-             rezolus view out.parquet",
+             rezolus record --duration 5m -o out.rez\n    \
+             rezolus view out.rez",
         )
         .subcommand_negates_reqs(true)
         .arg(
@@ -137,7 +138,16 @@ fn main() {
             parquet_tools::run(args.clone());
         }
         Some(("record", args)) => {
-            let config = recorder::RecordingConfig::from_args(args).expect("failed to configure");
+            // A usage error here is the user's typo, not a bug: `expect` sent
+            // it out as a panic with a backtrace, burying the one line that
+            // says what to fix.
+            let config = match recorder::RecordingConfig::from_args(args) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(2);
+                }
+            };
 
             recorder::run(config)
         }

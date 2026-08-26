@@ -18,7 +18,7 @@ pub fn command() -> Command {
     // `recording` is the name; `parquet` is kept as an alias because it is
     // what every existing script types. The rename is not cosmetic — these
     // subcommands stopped being parquet-specific once `.rez` arrived, and
-    // `rezolus parquet upgrade old.rez` describes neither its input nor its
+    // `rezolus recording upgrade old.rez` describes neither its input nor its
     // output. A `.rez` holds parquet segments, but the file you hand these
     // commands is a recording.
     Command::new("recording")
@@ -31,7 +31,7 @@ pub fn command() -> Command {
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
              combine    Merge multiple files (multi-node / multi-instance) or build an A/B tarball\n    \
-             convert    Turn a raw msgpack recording (from `record -f raw`) into parquet\n    \
+             convert    Turn a raw msgpack recording (from `record -o out.raw`) into parquet\n    \
              filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
              upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
              Run `rezolus recording <subcommand> --help` for per-subcommand examples.\n\n\
@@ -40,7 +40,7 @@ pub fn command() -> Command {
         .subcommand_required(true)
         .subcommand(
             Command::new("annotate")
-                .about("Add service extension metadata to a parquet file")
+                .about("Add service extension KPIs, events or source/node tags to a recording (.parquet or .rez)")
                 .long_about(
                     "Rewrite a parquet recording in place, adding metadata the viewer reads.\n\
                      Use it to attach service-extension KPI dashboards, tag the file's\n\
@@ -54,19 +54,19 @@ pub fn command() -> Command {
                      clearly rather than being silently mishandled.\n\n\
                      EXAMPLES:\n    \
                      # Attach KPIs from the built-in template for this file's source\n    \
-                     rezolus parquet annotate rezolus.parquet\n\n    \
+                     rezolus recording annotate rezolus.parquet\n\n    \
                      # Attach KPIs from a custom service-extension JSON file\n    \
-                     rezolus parquet annotate rezolus.parquet --queries ext.json\n\n    \
+                     rezolus recording annotate rezolus.parquet --queries ext.json\n\n    \
                      # Attach KPIs and also drop columns the KPIs don't need\n    \
-                     rezolus parquet annotate rezolus.parquet --queries ext.json --filter\n\n    \
+                     rezolus recording annotate rezolus.parquet --queries ext.json --filter\n\n    \
                      # Set the source name on a file that has none\n    \
-                     rezolus parquet annotate service.parquet --source vllm\n\n    \
+                     rezolus recording annotate service.parquet --source vllm\n\n    \
                      # Add a single timeline event\n    \
-                     rezolus parquet annotate rezolus.parquet --event 'time=2026-05-12T15:23Z,kind=restart,description=\"deploy\"'\n\n    \
+                     rezolus recording annotate rezolus.parquet --event 'time=2026-05-12T15:23Z,kind=restart,description=\"deploy\"'\n\n    \
                      # Remove a previously added annotation\n    \
-                     rezolus parquet annotate rezolus.parquet --undo\n\n    \
+                     rezolus recording annotate rezolus.parquet --undo\n\n    \
                      # Embed KPIs into each recording of a .rez archive (--queries required)\n    \
-                     rezolus parquet annotate out.rez --queries kpis.json",
+                     rezolus recording annotate out.rez --queries kpis.json",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -166,7 +166,7 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("combine")
-                .about("Combine multiple parquet files (multi-node rezolus and/or multi-instance services)")
+                .about("Combine recordings: multi-node/multi-instance parquet, an A/B tarball, or a multi-recording .rez")
                 .long_about(
                     "Merge two or more parquet recordings into a single file. Requires at least\n\
                      two inputs and an output path (-o).\n\n\
@@ -187,13 +187,13 @@ pub fn command() -> Command {
                      clearly instead of silently mis-assembling.\n\n\
                      EXAMPLES:\n    \
                      # Row-merge a rezolus agent file with a service file\n    \
-                     rezolus parquet combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
+                     rezolus recording combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
                      # Merge several rezolus nodes, pinning which one the viewer shows first\n    \
-                     rezolus parquet combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
+                     rezolus recording combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
                      # Package two captures as an A/B tarball for compare mode\n    \
-                     rezolus parquet combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar\n\n    \
+                     rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar\n\n    \
                      # Assemble two single-recording .rez into one multi-recording .rez\n    \
-                     rezolus parquet combine baseline.rez experiment.rez -o ab.rez",
+                     rezolus recording combine baseline.rez experiment.rez -o ab.rez",
                 )
                 .arg(
                     clap::Arg::new("FILES")
@@ -257,7 +257,7 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("metadata")
-                .about("Display file and column metadata for a parquet file")
+                .about("Display file and column metadata for a recording (.parquet, or a .rez manifest)")
                 .long_about(
                     "Print the metadata of a parquet recording: file-level key/values (source,\n\
                      sampling interval, systeminfo, descriptions, …), the column schema with\n\
@@ -271,13 +271,13 @@ pub fn command() -> Command {
                      --json emits the raw manifest.\n\n\
                      EXAMPLES:\n    \
                      # Everything about a recording\n    \
-                     rezolus parquet metadata -i rezolus.parquet\n\n    \
+                     rezolus recording metadata -i rezolus.parquet\n\n    \
                      # Only file-level metadata, as JSON\n    \
-                     rezolus parquet metadata -i rezolus.parquet --file --json\n\n    \
+                     rezolus recording metadata -i rezolus.parquet --file --json\n\n    \
                      # Just the value of one metadata key\n    \
-                     rezolus parquet metadata -i rezolus.parquet --field source\n\n    \
+                     rezolus recording metadata -i rezolus.parquet --field source\n\n    \
                      # Describe a .rez archive's manifest\n    \
-                     rezolus parquet metadata -i out.rez",
+                     rezolus recording metadata -i out.rez",
                 )
                 .arg(
                     clap::Arg::new("input")
@@ -323,13 +323,13 @@ pub fn command() -> Command {
             Command::new("convert")
                 .about("Convert a raw msgpack recording into parquet")
                 .long_about(
-                    "Convert a recording made with `rezolus record -f raw` (concatenated msgpack\n\
+                    "Convert a recording made with `rezolus record -o out.raw` (concatenated msgpack\n\
                      snapshots, one per sampling tick) into a parquet file that the viewer, the\n\
-                     MCP tools and the rest of `rezolus parquet` can read.\n\n\
+                     MCP tools and the rest of `rezolus recording` can read.\n\n\
                      Raw is the cheapest capture mode: the recorder appends snapshots as they\n\
                      arrive and finalizing is a byte copy rather than a conversion that grows\n\
                      with run length, so long unattended captures record raw and convert\n\
-                     afterwards. Recording straight to parquet (`record -f parquet`) is simpler\n\
+                     afterwards. Recording straight to parquet (`record -o out.parquet`) is simpler\n\
                      for a short supervised run.\n\n\
                      The input may be plain or zstd-compressed; which one it is is detected from\n\
                      the file's contents, not its name. The output path defaults to the input\n\
@@ -350,7 +350,7 @@ pub fn command() -> Command {
                      still queries normally; what you lose is the viewer's hardware panel and the\n\
                      help text beside each metric. Prefer stamping them here in one pass if you\n\
                      saved them -- and if that agent is still running, the same two endpoints can\n\
-                     be curled now, at conversion time, to recover them. Afterwards, `rezolus parquet annotate\n\
+                     be curled now, at conversion time, to recover them. Afterwards, `rezolus recording annotate\n\
                      <file> --systeminfo <path>` can still add the hardware summary, but there is\n\
                      no annotate route for descriptions: those can only be supplied here, which\n\
                      means reconverting the original raw input over the output (--force).\n\n\
@@ -358,26 +358,26 @@ pub fn command() -> Command {
                      cadence and acquisition windows that a raw snapshot stream never carried.\n\n\
                      EXAMPLES:\n    \
                      # The producing side, for reference\n    \
-                     rezolus record -f raw --url http://localhost:4241 -o rezolus.raw\n\n    \
+                     rezolus record --url http://localhost:4241 -o rezolus.raw\n\n    \
                      # Convert a compressed recording (writes rezolus.parquet)\n    \
-                     rezolus parquet convert rezolus.raw.zst\n\n    \
+                     rezolus recording convert rezolus.raw.zst\n\n    \
                      # Choose the output path\n    \
-                     rezolus parquet convert rezolus.raw -o run7.parquet\n\n    \
+                     rezolus recording convert rezolus.raw -o run7.parquet\n\n    \
                      # A recording made at a non-default cadence\n    \
-                     rezolus parquet convert rezolus.raw --interval 250ms\n\n    \
+                     rezolus recording convert rezolus.raw --interval 250ms\n\n    \
                      # Save the two metadata blobs at record time, from the agent being recorded\n    \
                      curl -s http://localhost:4241/systeminfo > sysinfo.json\n    \
                      curl -s http://localhost:4241/metrics/descriptions > help.json\n\n    \
                      # ...then stamp them into the conversion\n    \
-                     rezolus parquet convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
+                     rezolus recording convert rezolus.raw --systeminfo sysinfo.json --descriptions help.json\n\n    \
                      # Or pipe one of them straight in, with - for stdin\n    \
-                     curl -s http://localhost:4241/systeminfo | rezolus parquet convert rezolus.raw --systeminfo -\n\n    \
+                     curl -s http://localhost:4241/systeminfo | rezolus recording convert rezolus.raw --systeminfo -\n\n    \
                      # Tag the recording the way `record --metadata` would\n    \
-                     rezolus parquet convert rezolus.raw -m source=llm-perf -m run=boat-7\n\n    \
+                     rezolus recording convert rezolus.raw -m source=llm-perf -m run=boat-7\n\n    \
                      # Replace an output left by an earlier attempt\n    \
-                     rezolus parquet convert rezolus.raw --force\n\n    \
+                     rezolus recording convert rezolus.raw --force\n\n    \
                      # Descriptions were missed the first time -- reconvert over the old output\n    \
-                     rezolus parquet convert rezolus.raw --descriptions help.json --force",
+                     rezolus recording convert rezolus.raw --descriptions help.json --force",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -440,7 +440,7 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("filter")
-                .about("Filter parquet columns to only those needed by service extension KPIs")
+                .about("Shrink a recording to what its KPIs need: parquet columns, or .rez samplers")
                 .long_about(
                     "Shrink a parquet recording by dropping every metric column not referenced by\n\
                      its service-extension KPIs. The KPI set is taken from the file's embedded\n\
@@ -449,11 +449,11 @@ pub fn command() -> Command {
                      file and leave the original untouched.\n\n\
                      EXAMPLES:\n    \
                      # Filter in place using the file's embedded KPIs\n    \
-                     rezolus parquet filter rezolus.parquet\n\n    \
+                     rezolus recording filter rezolus.parquet\n\n    \
                      # Write a slimmed copy, keeping the original\n    \
-                     rezolus parquet filter rezolus.parquet -o slim.parquet\n\n    \
+                     rezolus recording filter rezolus.parquet -o slim.parquet\n\n    \
                      # Filter to the columns a custom KPI set needs\n    \
-                     rezolus parquet filter rezolus.parquet --queries ext.json -o slim.parquet",
+                     rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -694,7 +694,7 @@ mod command_name_tests {
     ///
     /// The rename is the point — these subcommands stopped being
     /// parquet-specific once `.rez` arrived — but every existing script and
-    /// runbook types `rezolus parquet ...`, and breaking those to make a name
+    /// runbook types `rezolus recording ...`, and breaking those to make a name
     /// tidier is not a trade worth making. Both spellings must reach the same
     /// subcommand, and clap must resolve the alias to the canonical name so
     /// `main`'s dispatch needs only one arm.
