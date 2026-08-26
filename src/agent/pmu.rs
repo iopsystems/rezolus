@@ -365,6 +365,11 @@ pub fn publish_allocation(plan: &[Grant]) {
 /// Absence means unrestricted, which is both the common case and the state
 /// before any allocation is published — so a sampler that runs outside the
 /// agent's normal startup (a test, a tool) behaves exactly as it did before.
+// Every caller lives under `samplers/cpu/linux/`, so on any other target this
+// is unreachable and `dead_code` is correct about it. Scoped to non-Linux
+// rather than allowed outright: on Linux, where it is load-bearing, an unused
+// warning here would be a real finding and must still fire.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn allowed_cpus(sampler: &str, cores: Vec<usize>) -> Vec<usize> {
     let Some(map) = ALLOCATION.get() else {
         return cores;

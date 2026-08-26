@@ -1,5 +1,123 @@
 ## [Unreleased]
 
+## [5.18.0] - 2026-08-26
+
+### Upgrade notes
+
+Two changes in this release alter what you observe without changing any command
+you type. Read these before upgrading a fleet.
+
+- **Scheduler and CPU metrics report different values.** Several correctness
+  fixes changed what is counted, not how it is exposed, so existing dashboards
+  and alert thresholds on these will shift: the idle task is now excluded from
+  runqueue timing (#1035) and from involuntary context switches (#1046), CPU
+  time of exited tasks is conserved rather than lost (#1037), and perf counters
+  that never measured anything are no longer published at all (#1052).
+- **`/metrics/json` changes shape.** The agent now defaults to
+  `snapshot_format = "v3"` (#1076), which replaces the flat
+  `{counters, gauges, histograms}` body with `{groups: [...]}`, and changes
+  `/metrics/binary` correspondingly. Everything in this repo reads v3. A
+  consumer that parses either endpoint directly needs updating, or can set
+  `[general] snapshot_format = "v2"` as a temporary escape hatch.
+
+### Added
+
+- `.rez` recordings: a per-sampler archive where each sampler records at its own
+  cadence and carries the acquisition window of the read that produced it, so
+  `rate()` and `irate()` report uncertainty bounds instead of a bare number.
+  Built on a v3 SQLite container with a real write-ahead log — valid at every
+  instant, readable while being written, and finalized in bounded time
+  regardless of recording length. (#1017, #1041, #1060, #1061, #1070)
+- Queries spanning two samplers of a `.rez` are answered rather than refused,
+  and when the two cadences differ materially the query is evaluated at the slow
+  sampler's own row timestamps instead of a uniform grid. (#1080, #1082)
+- `rezolus recording convert` turns a raw msgpack recording into parquet — the
+  offline complement to `record -o out.raw`. (#1059)
+- `rezolus recording upgrade` rewrites a v1/v2 (tar) `.rez` as the current v3
+  container; `combine`, `filter` and `annotate` upgrade a tar input on the way
+  through. (#1073, #1074)
+- `rezolus view --tui`: a terminal UI over the same dashboard sections, for a
+  recording or a live agent. (#1019)
+- `rezolus mcp extract-features` emits a deterministic, versioned overview
+  record of a recording as JSON, with the schemas and extraction layer behind
+  it. (#1028, #1029, #1030, #1031, #1032)
+- PMU budgeting: hardware counters are allocated per-PMU, ranked, measured and
+  all-or-nothing, with `[general] reserved_pmu_counters` and
+  `reserved_pmu_cpus` to leave headroom for other tooling. Samplers that cannot
+  be fully satisfied report as `pmu-limited` or `pmu-starved` rather than
+  silently competing. (#1093, #1096)
+- Scheduler: voluntary context switches are now counted. (#1040)
+- Viewer: rate time-alignment modes (Aligned/Raw) (#1023), sampling-jitter
+  visualization for simple-capture parquets (#1014), and a shade-meaning swatch
+  row on charts with band fills (#1021).
+
+### Changed
+
+- **`rezolus record` writes `rezolus.rez` by default**, not `rezolus.parquet`.
+  The output extension now picks the format (`.rez`, `.parquet`, `.raw`), so
+  `--format` is rarely needed, and the default filename follows whichever format
+  is in play — `--format raw` no longer writes msgpack into a file named
+  `.parquet`. A `--format` that contradicts the extension is an error rather
+  than a silent choice between them. A run that pinned no format at all falls
+  back to `rezolus.parquet` (with a note) for a Prometheus or multi-endpoint
+  source, since `.rez` needs a single msgpack endpoint. (#1097)
+- The `parquet` subcommand group is now `recording`, since these commands stopped
+  being parquet-specific once `.rez` arrived. `rezolus parquet ...` still works
+  as an alias. (#1075)
+- `rezolus status` defaults to the agent on this machine
+  (`http://localhost:4241`), matching `rezolus record`, and accepts a bare host
+  or `host:port`. (#1099)
+- The tar `.rez` container is no longer written. Archives from older releases
+  still open everywhere. (#1074)
+- Performance: a snapshot body is encoded once per collection rather than once
+  per request (#1084); v3 segments seal from the WAL, cutting dropped ticks by
+  ~20x (#1061); the v3 container lowered recorder RSS ~4.5x (#1060).
+
+### Removed
+
+- `rezolus record --node` and `--instance`. They were added for "labeling at
+  capture time" but no reader was ever written for either, so they accepted a
+  value and dropped it. `--metadata node=NAME` / `--metadata instance=NAME`
+  write the same keys `recording combine` reads, and always did. Passing the old
+  flags is now an error rather than silently doing nothing. (#1097)
+
+### Fixed
+
+- Agent: a config file that omits the `[general]` table starts with the
+  documented defaults instead of exiting with "ttl couldn't be parsed: value was
+  empty". (#1099)
+- Agent: groups with no live sampler declare no members (#1086); V2 external
+  metrics get their own column key (#1090).
+- `cpu_perf` opens its per-CPU events as one perf event group, so its counters
+  are mutually consistent. (#1091)
+- GPU: hosts without a given vendor no longer ship phantom all-null tables.
+  (#1081)
+- `.rez`: a malformed histogram cell can no longer wedge a recording (#1077);
+  `approx_bytes` accounting corrected and the first seal staggered (#1050).
+- Exporter: a histogram that cannot be downsampled is dropped rather than
+  panicking. (#1088)
+- Recorder: `record -o out.rez` against an endpoint `.rez` cannot record now
+  exits non-zero — it previously printed an error and exited 0, so a
+  `record && analyze` pipeline walked on to a stale file. A usage error prints
+  one line instead of panicking with a backtrace. (#1097)
+- Analysis: subsystems are inferred from metric names, and unknowable absences
+  are never asserted. (#1034)
+- Viewer: restored a missing `boxplot.js` symlink that took the deployed viewer
+  down, with a CI guard against recurrence. (#1012)
+- Install: the apt repo architecture is detected instead of hardcoded to amd64.
+  (#1018)
+
+### Documentation
+
+- CLI help is now verified rather than assumed: six false claims were corrected
+  (three commands said v3 `.rez` archives "error clearly" long after they
+  worked), and `tests/help_text.rs` now fails the build if a help text names a
+  flag its command does not define, or if an example invocation uses one.
+  (#1098)
+- The published CLI docs were five weeks behind the binary — documenting two
+  removed flags and missing `status`, `.rez` and `--tui` entirely — and are
+  regenerated from actual `--help` output. (#1100)
+
 ## [5.17.0] - 2026-07-16
 
 ### Added
@@ -958,7 +1076,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.17.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.18.0...HEAD
+[5.18.0]: https://github.com/iopsystems/rezolus/compare/v5.17.0...v5.18.0
 [5.17.0]: https://github.com/iopsystems/rezolus/compare/v5.16.2...v5.17.0
 [5.16.2]: https://github.com/iopsystems/rezolus/compare/v5.16.1...v5.16.2
 [5.16.1]: https://github.com/iopsystems/rezolus/compare/v5.16.0...v5.16.1
