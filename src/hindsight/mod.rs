@@ -23,7 +23,7 @@ pub fn command() -> Command {
              The buffer is an ordinary `.rez` recording with retention: everything older than\n\
              the lookback is evicted every tick, so the file stays bounded. It is readable\n\
              while it is being written — `rezolus view`, the MCP tools and\n\
-             `rezolus parquet metadata` all open it live — and a snapshot is a consistent\n\
+             `rezolus recording metadata` all open it live — and a snapshot is a consistent\n\
              point-in-time copy taken without pausing the recording.\n\n\
              Configuration is a TOML file (the only argument). It sets the sampling interval\n\
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
