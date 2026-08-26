@@ -7,6 +7,37 @@ use crate::agent::sampler_status::{
 use clap::{value_parser, Arg, ArgAction, Command};
 use std::time::Duration;
 
+/// The agent on this machine — the same endpoint `rezolus record --url`
+/// defaults to, so the two agree about what "no endpoint given" means.
+pub const DEFAULT_ENDPOINT: &str = "http://localhost:4241";
+
+/// The agent's default port, supplied when an endpoint names only a host.
+const DEFAULT_PORT: u16 = 4241;
+
+/// Accept the short forms people actually type.
+///
+/// `reqwest` needs an absolute URL, so a bare `web-01` or `web-01:4241` used to
+/// fail with "builder error for url" — which names neither the problem nor the
+/// fix. Anything without a scheme gets `http://`, and a host with no port gets
+/// the agent's. An endpoint that already carries a scheme is left exactly as
+/// given: a caller who wrote `https://` or a path prefix means it.
+pub fn normalize_endpoint(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.contains("://") {
+        return trimmed.to_string();
+    }
+    // A port is a colon followed by digits only — this must not mistake the
+    // colon in a bare IPv6 literal for one.
+    let has_port = trimmed
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+    if has_port {
+        format!("http://{trimmed}")
+    } else {
+        format!("http://{trimmed}:{DEFAULT_PORT}")
+    }
+}
+
 /// Render the one-line agent header: version, humanized uptime, humanized ttl.
 pub fn render_header(status: &AgentStatus) -> String {
     format!(
@@ -107,7 +138,10 @@ pub fn command() -> Command {
     Command::new("status")
         .about("Fetch and display agent status (version, uptime, sampler health)")
         .long_about(
-            "Ask a running agent how it is doing. Prints one header line — version, uptime\n\
+            "Ask a running agent how it is doing. With no argument it asks the agent on\n\
+             this machine (http://localhost:4241), the same endpoint `rezolus record`\n\
+             defaults to.\n\n\
+             Prints one header line — version, uptime\n\
              and the snapshot TTL — then a tally of samplers by state, and one line for each\n\
              sampler that is NOT healthy, with the reason.\n\n\
              States: healthy, degraded (running, but a probe or some CPUs are missing),\n\
@@ -120,17 +154,19 @@ pub fn command() -> Command {
              probe. A pmu-starved or disabled sampler on its own does not fail the check.\n\
              A network or parse error also exits non-zero, with the reason on stderr.\n\n\
              EXAMPLES:\n    \
-             # Is the local agent healthy?\n    \
-             rezolus status http://localhost:4241\n\n    \
+             # Is the agent on this machine healthy?\n    \
+             rezolus status\n\n    \
+             # Another host, written the short way\n    \
+             rezolus status web-01\n\n    \
              # Use it as a gate in a script\n    \
-             rezolus status http://localhost:4241 || echo \"agent is unhealthy\"\n\n    \
+             rezolus status || echo \"agent is unhealthy\"\n\n    \
              # The raw payload, for a machine to read\n    \
-             rezolus status http://localhost:4241 --json",
+             rezolus status --json",
         )
         .arg(
             Arg::new("ENDPOINT")
-                .help("Agent base URL, e.g. http://localhost:4241")
-                .required(true)
+                .help("Agent to ask (default http://localhost:4241). A bare host or host:port is fine — the scheme and the default port are filled in, so `rezolus status web-01` works")
+                .required(false)
                 .index(1)
                 .value_parser(value_parser!(String)),
         )
@@ -143,7 +179,10 @@ pub fn command() -> Command {
 }
 
 pub fn run(args: &clap::ArgMatches) {
-    let endpoint = args.get_one::<String>("ENDPOINT").unwrap();
+    let endpoint = args
+        .get_one::<String>("ENDPOINT")
+        .map(|e| normalize_endpoint(e))
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     let json = args.get_flag("json");
     let url = format!("{}/status", endpoint.trim_end_matches('/'));
 
@@ -194,6 +233,44 @@ mod tests {
             expected: true,
             verdict,
         }
+    }
+
+    /// The short forms people type, and the one case that must NOT be
+    /// treated as a port: a bare IPv6 literal is all colons.
+    #[test]
+    fn normalize_endpoint_fills_in_scheme_and_port() {
+        // host only
+        assert_eq!(normalize_endpoint("localhost"), "http://localhost:4241");
+        assert_eq!(normalize_endpoint("web-01"), "http://web-01:4241");
+        assert_eq!(normalize_endpoint("127.0.0.1"), "http://127.0.0.1:4241");
+        // host:port
+        assert_eq!(
+            normalize_endpoint("localhost:9999"),
+            "http://localhost:9999"
+        );
+        // already absolute — left alone, scheme and path included
+        for already in [
+            "http://localhost:4241",
+            "https://agent.internal:4241",
+            "http://host:4241/prefix",
+        ] {
+            assert_eq!(normalize_endpoint(already), already);
+        }
+        // trailing slash and surrounding space are noise
+        assert_eq!(
+            normalize_endpoint("  localhost:4241/  "),
+            "http://localhost:4241"
+        );
+        // an IPv6 literal's colons are not a port
+        assert_eq!(normalize_endpoint("[::1]"), "http://[::1]:4241");
+        assert_eq!(normalize_endpoint("[::1]:4241"), "http://[::1]:4241");
+    }
+
+    /// The no-argument default and `record`'s must not drift apart: "the agent
+    /// on this machine" has to mean one thing across the binary.
+    #[test]
+    fn default_endpoint_matches_the_recorders() {
+        assert_eq!(DEFAULT_ENDPOINT, "http://localhost:4241");
     }
 
     #[test]
