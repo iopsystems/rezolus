@@ -2,37 +2,6 @@
 
 ## [5.18.0] - 2026-08-26
 
-### Added
-
-- Recorder: `.rez` recordings, a per-sampler archive where each sampler records
-  at its own cadence and carries the acquisition window of the read that
-  produced it, so `rate()` and `irate()` report uncertainty bounds rather than a
-  bare number. The container is SQLite with a real write-ahead log: valid at
-  every instant, readable while it is still being written, and finalized in
-  bounded time however long the recording ran. (#1017, #1041, #1060, #1061,
-  #1070)
-- Recording: queries spanning two samplers of a `.rez` are answered instead of
-  refused. When the two cadences differ materially the query is evaluated at the
-  slow sampler's own row timestamps, so points no longer land where that sampler
-  never read. (#1080, #1082)
-- Recording: `convert` turns a raw msgpack recording into parquet, the offline
-  complement to `record -o out.raw`. (#1059)
-- Recording: `upgrade` rewrites a v1/v2 (tar) `.rez` as the current SQLite
-  container. `combine`, `filter` and `annotate` upgrade a tar input on the way
-  through. (#1073, #1074)
-- Viewer: `--tui` renders the dashboard sections in the terminal, for a
-  recording or a live agent, with no browser and no HTTP server. (#1019)
-- MCP: `extract-features` emits a deterministic, versioned overview record of a
-  recording as JSON, for an agent to assess. (#1028, #1029, #1030, #1031, #1032)
-- Agent: PMU hardware counters are budgeted per-PMU, ranked and allocated
-  all-or-nothing, with `reserved_pmu_counters` and `reserved_pmu_cpus` to leave
-  headroom for other tooling. A sampler that cannot be fully satisfied reports
-  as pmu-limited or pmu-starved instead of silently competing. (#1093, #1096)
-- Scheduler: voluntary context switches are now counted. (#1040)
-- Viewer: rate time-alignment modes (Aligned/Raw) (#1023), sampling-jitter
-  visualization for simple-capture parquets (#1014), and a shade-meaning swatch
-  row on charts with band fills (#1021).
-
 ### Changed
 
 - Scheduler: the idle task is excluded from runqueue timing and from
@@ -70,6 +39,37 @@
   per request (#1084), v3 segments seal from the write-ahead log for roughly 20x
   fewer dropped ticks (#1061), and the v3 container lowered recorder RSS about
   4.5x (#1060).
+
+### Added
+
+- Recorder: `.rez` recordings, a per-sampler archive where each sampler records
+  at its own cadence and carries the acquisition window of the read that
+  produced it, so `rate()` and `irate()` report uncertainty bounds rather than a
+  bare number. The container is SQLite with a real write-ahead log: valid at
+  every instant, readable while it is still being written, and finalized in
+  bounded time however long the recording ran. (#1017, #1041, #1060, #1061,
+  #1070)
+- Recording: queries spanning two samplers of a `.rez` are answered instead of
+  refused. When the two cadences differ materially the query is evaluated at the
+  slow sampler's own row timestamps, so points no longer land where that sampler
+  never read. (#1080, #1082)
+- Recording: `convert` turns a raw msgpack recording into parquet, the offline
+  complement to `record -o out.raw`. (#1059)
+- Recording: `upgrade` rewrites a v1/v2 (tar) `.rez` as the current SQLite
+  container. `combine`, `filter` and `annotate` upgrade a tar input on the way
+  through. (#1073, #1074)
+- Viewer: `--tui` renders the dashboard sections in the terminal, for a
+  recording or a live agent, with no browser and no HTTP server. (#1019)
+- MCP: `extract-features` emits a deterministic, versioned overview record of a
+  recording as JSON, for an agent to assess. (#1028, #1029, #1030, #1031, #1032)
+- Agent: PMU hardware counters are budgeted per-PMU, ranked and allocated
+  all-or-nothing, with `reserved_pmu_counters` and `reserved_pmu_cpus` to leave
+  headroom for other tooling. A sampler that cannot be fully satisfied reports
+  as pmu-limited or pmu-starved instead of silently competing. (#1093, #1096)
+- Scheduler: voluntary context switches are now counted. (#1040)
+- Viewer: rate time-alignment modes (Aligned/Raw) (#1023), sampling-jitter
+  visualization for simple-capture parquets (#1014), and a shade-meaning swatch
+  row on charts with band fills (#1021).
 
 ### Fixed
 
