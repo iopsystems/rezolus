@@ -180,7 +180,8 @@ pub fn generate_section(
         overview::generate(data, ctx.sections.clone(), ctx.throughput_query.as_deref())
     } else if let Some((_, _, generator)) = SECTION_META.iter().find(|(_, r, _)| *r == route) {
         generator(data, ctx.sections.clone())
-    } else if let Some(name) = route.strip_prefix("/service/") {
+    } else {
+        let name = route.strip_prefix("/service/")?;
         // Category route takes precedence when active.
         if let Some((category_name, category_ext)) = &ctx.category {
             if category_name == name && ctx.service_exts.len() == 2 {
@@ -203,8 +204,6 @@ pub fn generate_section(
         } else {
             return None;
         }
-    } else {
-        return None;
     };
 
     Some(view)
