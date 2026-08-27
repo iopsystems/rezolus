@@ -49,7 +49,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         Ok(Some(inner)) => inner,
         Ok(None) => {
             debug!("{NAME}: no AMD GPUs found");
-            return Err(crate::agent::sampler_status::Unsupported("no AMD GPUs found".to_string()).into());
+            return Err(
+                crate::agent::sampler_status::Unsupported("no AMD GPUs found".to_string()).into(),
+            );
         }
         // A real error, not an absence: the AMD stack is here and something
         // about it broke. Reported as `Ok(None)` this became `Disabled` —

@@ -374,6 +374,36 @@ pub fn rollup_health(loaded_ok: bool, verdicts: &[ProbeVerdict]) -> SamplerHealt
 mod tests {
     use super::*;
 
+    /// The marker must survive being carried up through `init`.
+    ///
+    /// `run()` finds it with `downcast_ref`, which searches an `anyhow` error
+    /// AND its context chain — so `.context(..)` is safe. What is not safe is
+    /// `anyhow!("...: {e}")`: that builds a fresh error with the text
+    /// interpolated, the type is gone, and an absent GPU stack silently
+    /// becomes `failed` again. This bit twice while writing the fix, and the
+    /// symptom is a correct-looking message under the wrong state.
+    #[test]
+    fn the_unsupported_marker_survives_context_but_not_reformatting() {
+        let raw: anyhow::Error = Unsupported("no ROCm stack on this host".into()).into();
+        assert!(raw.downcast_ref::<Unsupported>().is_some(), "bare");
+
+        let with_context = raw.context("gpu_amd_smi: failed to initialize");
+        assert!(
+            with_context.downcast_ref::<Unsupported>().is_some(),
+            "context() must preserve the marker"
+        );
+
+        // The trap, asserted so nobody reintroduces it believing otherwise.
+        let reformatted = anyhow::anyhow!(
+            "gpu_amd_smi: failed to initialize: {}",
+            Unsupported("no ROCm stack on this host".to_string())
+        );
+        assert!(
+            reformatted.downcast_ref::<Unsupported>().is_none(),
+            "reformatting DOES destroy the marker — propagate or use context()"
+        );
+    }
+
     #[test]
     fn active_serializes_with_flattened_state_and_programs() {
         let s = SamplerStatus {
