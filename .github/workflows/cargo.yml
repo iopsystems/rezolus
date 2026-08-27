@@ -48,7 +48,10 @@ jobs:
         run: |
           sudo apt update
           sudo apt-get -y install libelf-dev
-      - name: run clippy
+      # Reporting, not gating: this feeds GitHub code scanning, and its exit
+      # status is `sarif-fmt`'s rather than clippy's because of the pipe. Left
+      # `continue-on-error` so a lint never costs us the SARIF upload.
+      - name: run clippy (sarif report)
         run: |
           cargo clippy --all-targets --all-features --message-format json \
             | clippy-sarif \
@@ -60,6 +63,33 @@ jobs:
         with:
           name: clippy-sarif
           path: clippy.sarif
+
+  # The gate, deliberately its own job.
+  #
+  # It cannot live in `clippy`: that job's last step uploads the SARIF, and a
+  # failing step before it skips the upload and the `clippy-upload` job with
+  # it — trading a lint for the loss of code scanning. It also cannot be a flag
+  # on the reporting step, which fails to gate for three separate reasons: no
+  # `-D warnings` (lints stay warnings, clippy exits 0), a pipe through
+  # `clippy-sarif` (the status is `sarif-fmt`'s), and `continue-on-error`.
+  #
+  # Unpiped, denying warnings, allowed to fail. Note `--all-features`: it
+  # enables `developer-mode`, which changes cfg, so a check without it covers
+  # less than this does.
+  clippy-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
+      - name: clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        shell: bash
 
   clippy-upload:
     runs-on: ubuntu-latest
@@ -287,6 +317,7 @@ jobs:
       - check
       - rustfmt
       - clippy
+      - clippy-deny
       - clippy-upload
 
     steps:

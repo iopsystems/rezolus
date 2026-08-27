@@ -98,10 +98,10 @@ impl NvidiaInner {
 
         let mut gpm_supported = vec![false; devices];
 
-        for id in 0..devices {
+        for (id, slot) in gpm_supported.iter_mut().enumerate() {
             if let Ok(device) = nvml.device_by_index(id as _) {
                 if let Ok(supported) = device.gpm_support() {
-                    gpm_supported[id] = supported;
+                    *slot = supported;
                 }
             }
         }
@@ -253,7 +253,7 @@ impl NvidiaInner {
                                 // SAFETY: transmuting &Nvml back to its true lifetime
                                 // for the duration of this call. The reference is valid
                                 // because self.nvml is alive.
-                                unsafe { std::mem::transmute(&self.nvml) },
+                                unsafe { std::mem::transmute::<&Nvml, &Nvml>(&self.nvml) },
                                 prev_sample,
                                 &new_sample,
                                 &[
