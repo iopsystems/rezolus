@@ -274,7 +274,9 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     }
 
     if cores.is_empty() {
-        return Err(std::io::Error::other("no cores available for branch sampling"));
+        return Err(std::io::Error::other(
+            "no cores available for branch sampling",
+        ));
     }
 
     perf_threads.push(std::thread::spawn(move || loop {
@@ -336,7 +338,9 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
     }
 
     if perf_threads.is_empty() {
-        return Err(std::io::Error::other("no cores available for branch sampling"));
+        return Err(std::io::Error::other(
+            "no cores available for branch sampling",
+        ));
     }
 
     debug!("{} waiting for perf threads to launch", NAME);
