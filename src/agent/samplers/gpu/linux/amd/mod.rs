@@ -92,11 +92,11 @@ struct AmdInner {
 }
 
 impl AmdInner {
-    fn new() -> Result<Option<Self>, String> {
+    fn new() -> anyhow::Result<Option<Self>> {
         let rocm = RocmSmi::new()?;
         let devices = rocm
             .num_devices()
-            .map_err(|_| "rsmi_num_monitor_devices failed")?;
+            .map_err(|_| anyhow::anyhow!("rsmi_num_monitor_devices failed"))?;
 
         if devices == 0 {
             return Ok(None);
