@@ -47,10 +47,11 @@
 //!
 //! ## Windows
 //!
-//! One acquisition group covers the whole per-GPU sweep (principle 18): the
-//! grouped perf read and the VRAM ioctl for a device are reached together
-//! through that device's own fds, so they are one read section even though they
-//! span two metric families. See [`stats::GPU_INTEL_PMU_ACQ`].
+//! The per-GPU sweep is one read section (principle 18): the grouped perf read
+//! and the VRAM ioctl for a device are reached together through that device's
+//! own fds. It is bracketed by two acquisition groups rather than one, because
+//! the metrics it fills live in two index spaces — see the groups' doc comment
+//! in [`stats`] for why one shared group published phantom series.
 //!
 //! ## Permissions
 //!
@@ -148,7 +149,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // that many members — phantom, all-null, and indistinguishable to a reader
     // from a real engine that simply had no reading. `Gpu::new` raises it to
     // the real engine set on success.
-    GPU_INTEL_PMU_ACQ.set_member_bound(0);
+    GPU_INTEL_PMU_ENGINE_ACQ.set_member_bound(0);
+    GPU_INTEL_PMU_DEVICE_ACQ.set_member_bound(0);
 
     if !config.enabled(NAME) {
         return Ok(None);
@@ -214,21 +216,24 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    // Real membership, not backing capacity. Engine entries are sparse —
-    // indexed by `engine_index`, so a host with one GPU exposing 4
-    // engines occupies 0..4 and nothing else — and the per-GPU frequency and
-    // VRAM entries are indexed by GPU id. A prefix bound would declare the
-    // gaps; the explicit member set does not.
-    let mut members: Vec<usize> = Vec::new();
+    // Real membership, not backing capacity, and one set per index space (see
+    // the groups' doc comment in `stats`).
+    //
+    // Engine entries are sparse: each GPU owns a `MAX_ENGINES`-wide block and
+    // uses only the leading part of it, so a prefix bound would declare the
+    // gaps as members. The explicit set does not.
+    let mut engine_members: Vec<usize> = Vec::new();
     for gpu in gpus.iter() {
-        members.push(gpu.id);
         for offset in 0..gpu.engines.len() {
-            members.push(engine_index(gpu.id, offset));
+            engine_members.push(engine_index(gpu.id, offset));
         }
     }
-    members.sort_unstable();
-    members.dedup();
-    GPU_INTEL_PMU_ACQ.set_member_set(&members);
+    engine_members.sort_unstable();
+    GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&engine_members);
+
+    // Per-GPU entries are indexed by GPU id, which `init` assigns densely from
+    // 0, so a prefix bound is exactly right here.
+    GPU_INTEL_PMU_DEVICE_ACQ.set_member_bound(gpus.len());
 
     let interval = config
         .sampler_interval(NAME)
@@ -299,13 +304,15 @@ impl Sampler for IntelPmu {
                 // section — that GPU keeps its stale values — so the group
                 // always finishes once the sweep completes; there is no bulk
                 // "read all failed" signal here that would warrant a discard.
-                let guard = GPU_INTEL_PMU_ACQ.acquire();
+                let engines = GPU_INTEL_PMU_ENGINE_ACQ.acquire();
+                let devices = GPU_INTEL_PMU_DEVICE_ACQ.acquire();
 
                 for gpu in gpus.iter_mut() {
                     gpu.refresh();
                 }
 
-                guard.finish();
+                engines.finish();
+                devices.finish();
             }
             reading.store(false, Ordering::Release);
         });
@@ -701,6 +708,43 @@ mod tests {
             discover_engines(&gpu),
             vec!["rcs0", "bcs0", "vcs0", "vcs1", "vecs0", "vecs1", "ccs0"]
         );
+    }
+
+    /// The two index spaces must not be conflated into one member set.
+    ///
+    /// Regression test for phantom series: engine entries are indexed by
+    /// `engine_index`, per-GPU entries by plain GPU id. Unioning them made
+    /// engine indices 2 and 3 of GPU 0 look like GPU ids 2 and 3, and the
+    /// agent published all-zero `gpu_frequency_sample{id="2"}` and `{id="3"}`
+    /// series on a two-GPU host. Observed on hardware.
+    #[test]
+    fn engine_and_device_index_spaces_stay_separate() {
+        // Two GPUs, as on the discrete+integrated host this was caught on.
+        let gpus = [4usize, 7]; // engine counts
+
+        let mut engine_members: Vec<usize> = Vec::new();
+        for (id, engines) in gpus.iter().enumerate() {
+            for offset in 0..*engines {
+                engine_members.push(engine_index(id, offset));
+            }
+        }
+
+        // The device space is a dense prefix of GPU ids, and nothing more.
+        let device_bound = gpus.len();
+        assert_eq!(device_bound, 2);
+
+        // The engine set must contain indices that are NOT valid GPU ids, which
+        // is precisely why it cannot double as the device member set.
+        assert!(engine_members.iter().any(|i| *i >= device_bound));
+
+        // Each GPU's engines stay inside its own block.
+        for (id, engines) in gpus.iter().enumerate() {
+            for offset in 0..*engines {
+                let index = engine_index(id, offset);
+                assert!(index >= id * MAX_ENGINES);
+                assert!(index < (id + 1) * MAX_ENGINES);
+            }
+        }
     }
 
     #[test]

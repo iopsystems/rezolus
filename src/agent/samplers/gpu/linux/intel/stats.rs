@@ -29,23 +29,45 @@ use linkme::distributed_slice;
 
 use super::MAX_GPUS;
 
-/// One acquisition window for the whole per-GPU read pass.
-///
-/// Principle 18's "device sweep" archetype: `refresh()` visits each GPU once
-/// and, per visit, issues a grouped perf `read(2)` and a DRM ioctl. Those span
-/// two metric families (engine occupancy/frequency, and VRAM) but they are one
-/// read section — device-major by a property of the source, since the perf
-/// group fd and the render node belong to that one device and are reached
-/// together. Splitting it family-major would describe a sweep the driver never
-/// performed.
-///
-/// Single writer: the `spawn_blocking` task dispatched from `Sampler::refresh`,
-/// which is guarded against overlapping itself. Nothing else writes these.
-pub static GPU_INTEL_PMU_ACQ: AcquisitionGroup =
+// `refresh()` visits each GPU once and, per visit, issues a grouped perf
+// `read(2)` and a DRM ioctl — one read section by principle 18's "device sweep"
+// archetype, device-major by a property of the source (the perf group fd and
+// the render node belong to that one device and are reached together).
+//
+// That single read section nonetheless needs TWO groups, because the metrics it
+// fills live in two different index spaces:
+//
+//   - per-engine metrics are indexed by `engine_index(gpu, engine)`, a
+//     `MAX_ENGINES`-wide block per GPU;
+//   - per-GPU metrics (frequency, VRAM) are indexed by the plain GPU id.
+//
+// A group's member set is applied verbatim to every metric tagged with it, so
+// one shared group would declare each engine index as a GPU id too. On a
+// two-GPU host that published phantom `gpu_frequency_sample{id="2"}` and
+// `{id="3"}` series — all-zero, and missing the `device`/`type` labels that
+// only real entries carry — which is exactly what the member-set mechanism
+// exists to prevent. Caught on hardware, not in review.
+//
+// Both are stamped from the same bracket, so the two windows are identical and
+// nothing is over-stated by the split.
+//
+// Single writer for both: the `spawn_blocking` task dispatched from
+// `Sampler::refresh`, which is guarded against overlapping itself.
+
+/// Window for the per-engine metrics, whose members are [`super::engine_index`]
+/// values.
+pub static GPU_INTEL_PMU_ENGINE_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(super::NAME, "gpu_intel_pmu_engines");
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static GPU_INTEL_PMU_ENGINE_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_ENGINE_ACQ;
+
+/// Window for the per-device metrics, whose members are GPU ids.
+pub static GPU_INTEL_PMU_DEVICE_ACQ: AcquisitionGroup =
     AcquisitionGroup::new(super::NAME, "gpu_intel_pmu_devices");
 
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
-static GPU_INTEL_PMU_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_ACQ;
+static GPU_INTEL_PMU_DEVICE_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_DEVICE_ACQ;
 
 // ----- Per-engine occupancy -----
 //
@@ -58,7 +80,7 @@ use super::ENGINE_ENTRIES;
 #[metric(
     name = "gpu_engine_busy_time",
     description = "Nanoseconds an engine spent executing work.",
-    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", unit = "nanoseconds" }
+    metadata = { acq_group = "gpu_intel_pmu_engines", vendor = "intel", unit = "nanoseconds" }
 )]
 pub static GPU_ENGINE_BUSY: CounterGroup = CounterGroup::new(ENGINE_ENTRIES);
 

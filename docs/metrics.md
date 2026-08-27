@@ -313,11 +313,21 @@ memory-controller or PCIe counter in this PMU.
 This sampler reads on its own interval (`[samplers.gpu_intel_pmu] interval`,
 default 1s) rather than on the scrape cycle, serving cached values in between.
 A grouped `read(2)` on an i915 perf fd is not an mmap load — it takes a driver
-lock and samples each event (measured: 6.4 us for one event, 12.1 us for a
-26-event group, plus ~5.4 us for the VRAM ioctl) — so driving it at the
-snapshot-TTL rate would burn CPU for values that move on the order of seconds.
-Reads are dispatched via `spawn_blocking`; the on-cycle cost is a time
-comparison.
+lock and samples each event, plus ~5.4 us for the VRAM ioctl — so driving it at
+the snapshot-TTL rate would burn CPU for values that move on the order of
+seconds. Measured end to end on a host with two Intel GPUs (an Arc A770 and an
+integrated GPU, 11 engines and 4 frequency counters between them): 40-66 us per
+sweep in a release build. Reads are dispatched via `spawn_blocking`; the
+on-cycle cost is a time comparison.
+
+The sweep is bracketed by two acquisition groups rather than one
+(`gpu_intel_pmu_engines` and `gpu_intel_pmu_devices`). It is a single read
+section, but its metrics live in two index spaces — per-engine entries are
+indexed by a GPU-major engine index, per-device entries by plain GPU id — and a
+group's member set applies to every metric tagged with it. Sharing one group
+made engine indices look like GPU ids and published phantom all-zero
+`gpu_frequency_sample{id="2"}` series on a two-GPU host. Both groups are stamped
+from the same bracket, so the two windows are identical.
 
 Note that this PMU reports engine **occupancy, not efficiency** — a busy engine
 had work queued, which does not mean its execution units were saturated. Pair
