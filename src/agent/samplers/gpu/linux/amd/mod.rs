@@ -49,12 +49,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         Ok(Some(inner)) => inner,
         Ok(None) => {
             debug!("{NAME}: no AMD GPUs found");
-            return Ok(None);
+            return Err(crate::agent::sampler_status::Unsupported("no AMD GPUs found".to_string()).into());
         }
-        Err(e) => {
-            debug!("{NAME}: failed to initialize: {e}");
-            return Ok(None);
-        }
+        // A real error, not an absence: the AMD stack is here and something
+        // about it broke. Reported as `Ok(None)` this became `Disabled` —
+        // uncounted, indistinguishable from a sampler the operator turned off,
+        // with the reason visible only at debug level.
+        Err(e) => return Err(e.context(format!("{NAME}: failed to initialize"))),
     };
 
     Ok(Some(Box::new(Amd {

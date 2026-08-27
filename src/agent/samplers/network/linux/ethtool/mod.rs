@@ -143,12 +143,14 @@ fn init(config: Arc<Config>) -> SamplerResult {
         Ok(Some(inner)) => inner,
         Ok(None) => {
             debug!("{NAME}: no interfaces with ENA allowance stats found");
-            return Ok(None);
+            return Err(crate::agent::sampler_status::Unsupported(
+                "no interfaces with ENA allowance stats found".to_string(),
+            )
+            .into());
         }
-        Err(e) => {
-            debug!("{NAME}: failed to initialize: {e}");
-            return Ok(None);
-        }
+        // See the equivalent arm in `gpu_amd`: a failure here is a failure,
+        // not a sampler somebody disabled.
+        Err(e) => return Err(e.context(format!("{NAME}: failed to initialize"))),
     };
 
     Ok(Some(Box::new(Ethtool {
