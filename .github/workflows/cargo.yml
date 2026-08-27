@@ -59,22 +59,37 @@ jobs:
             | sarif-fmt
         shell: bash
         continue-on-error: true
-      # The gate. Separate from the report above for three reasons the report
-      # cannot satisfy: it needs `-D warnings` to turn lints into failures, it
-      # must not be piped (the pipeline's status is the last command's), and it
-      # must not `continue-on-error`.
-      #
-      # Worth knowing why this is a NEW step rather than a flag on the old one:
-      # clippy had never gated anything here, so twelve lints had accumulated —
-      # all in Linux-only code, which is also why running the check on a
-      # developer's macOS never saw them.
-      - name: clippy (deny warnings)
-        run: cargo clippy --all-targets --all-features -- -D warnings
-        shell: bash
       - uses: actions/upload-artifact@v5
         with:
           name: clippy-sarif
           path: clippy.sarif
+
+  # The gate, deliberately its own job.
+  #
+  # It cannot live in `clippy`: that job's last step uploads the SARIF, and a
+  # failing step before it skips the upload and the `clippy-upload` job with
+  # it — trading a lint for the loss of code scanning. It also cannot be a flag
+  # on the reporting step, which fails to gate for three separate reasons: no
+  # `-D warnings` (lints stay warnings, clippy exits 0), a pipe through
+  # `clippy-sarif` (the status is `sarif-fmt`'s), and `continue-on-error`.
+  #
+  # Unpiped, denying warnings, allowed to fail. Note `--all-features`: it
+  # enables `developer-mode`, which changes cfg, so a check without it covers
+  # less than this does.
+  clippy-deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+      - uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt update
+          sudo apt-get -y install libelf-dev
+      - name: clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+        shell: bash
 
   clippy-upload:
     runs-on: ubuntu-latest
@@ -302,6 +317,7 @@ jobs:
       - check
       - rustfmt
       - clippy
+      - clippy-deny
       - clippy-upload
 
     steps:
