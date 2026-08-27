@@ -55,7 +55,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         // about it broke. Reported as `Ok(None)` this became `Disabled` —
         // uncounted, indistinguishable from a sampler the operator turned off,
         // with the reason visible only at debug level.
-        Err(e) => return Err(e.context(format!("{NAME}: failed to initialize"))),
+        Err(e) => return Err(anyhow::anyhow!("{NAME}: failed to initialize: {e}")),
     };
 
     Ok(Some(Box::new(Amd {
