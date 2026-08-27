@@ -26,6 +26,12 @@
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Gpu {
     /// Device index as reported by the vendor library.
+    ///
+    /// **Vendor-local, not globally unique.** It matches the `id` label on that
+    /// vendor's GPU metrics, which each sampler numbers from 0 independently, so
+    /// on a host with two vendors' cards two entries can both be `index: 0`.
+    /// Key on `(vendor, index)`; `pci_bus_id` is the stable identifier when one
+    /// is needed.
     pub index: usize,
     /// Vendor identifier: "nvidia", "amd" or "intel".
     pub vendor: String,

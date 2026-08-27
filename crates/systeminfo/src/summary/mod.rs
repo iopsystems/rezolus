@@ -110,6 +110,10 @@ pub struct NicSummary {
 #[serde(default)]
 pub struct GpuSummary {
     /// Device index, matching the `id` label on GPU metrics.
+    ///
+    /// Vendor-local: each vendor's sampler numbers its devices from 0, so this
+    /// is unique only within a `vendor`, not across the list. Pair it with
+    /// `vendor` when joining to metrics.
     pub index: usize,
     /// Device name (e.g., "NVIDIA A100", "Apple M2 Max")
     pub name: Option<String>,
