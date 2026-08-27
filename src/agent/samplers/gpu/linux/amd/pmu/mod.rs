@@ -118,7 +118,8 @@ fn init(config: Arc<Config>) -> SamplerResult {
         }
         // See the equivalent arm in `gpu_amd`: a failure here is a failure,
         // not a sampler somebody disabled.
-        Err(e) => return Err(anyhow::anyhow!("{NAME}: failed to initialize: {e}")),
+        // Propagated unchanged, for the reason given in `gpu_amd`.
+        Err(e) => return Err(anyhow::anyhow!("{e}")),
     };
     debug!("{NAME}: initialized for {} GPU agent(s)", rocp.num_agents());
 

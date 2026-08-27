@@ -55,7 +55,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         // about it broke. Reported as `Ok(None)` this became `Disabled` —
         // uncounted, indistinguishable from a sampler the operator turned off,
         // with the reason visible only at debug level.
-        Err(e) => return Err(anyhow::anyhow!("{NAME}: failed to initialize: {e}")),
+        // Propagated unchanged, NOT wrapped: `anyhow!("...{e}")` would build a
+        // fresh error with the text interpolated, and the `Unsupported` marker
+        // `RocmSmi::new` returns for an absent ROCm stack would stop being
+        // downcastable — turning "this host has no AMD tooling" back into a
+        // failure. The inner messages already say what happened.
+        Err(e) => return Err(e),
     };
 
     Ok(Some(Box::new(Amd {

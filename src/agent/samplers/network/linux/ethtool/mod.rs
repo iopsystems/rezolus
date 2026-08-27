@@ -150,6 +150,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         }
         // See the equivalent arm in `gpu_amd`: a failure here is a failure,
         // not a sampler somebody disabled.
+        // `context` preserves the chain, so a marker further down stays
+        // downcastable; this sampler has none today, but the shape must not
+        // become the trap it is in `gpu_amd`.
         Err(e) => return Err(e.context(format!("{NAME}: failed to initialize"))),
     };
 
