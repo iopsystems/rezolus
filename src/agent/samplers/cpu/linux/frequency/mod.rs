@@ -109,7 +109,7 @@ impl FrequencyInner {
             })
             .collect();
 
-        futures::future::join_all(perf_futures.into_iter()).await;
+        futures::future::join_all(perf_futures).await;
 
         guard.finish();
 

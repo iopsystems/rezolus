@@ -125,7 +125,7 @@ impl DtlbInner {
             })
             .collect();
 
-        futures::future::join_all(perf_futures.into_iter()).await;
+        futures::future::join_all(perf_futures).await;
 
         guard.finish();
 
@@ -347,10 +347,7 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     }
 
     if cores.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "no cores available for DTLB sampling",
-        ));
+        return Err(std::io::Error::other("no cores available for DTLB sampling"));
     }
 
     perf_threads.push(std::thread::spawn(move || loop {
@@ -412,10 +409,7 @@ fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), st
     }
 
     if perf_threads.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "no cores available for DTLB sampling",
-        ));
+        return Err(std::io::Error::other("no cores available for DTLB sampling"));
     }
 
     debug!("{} waiting for perf threads to launch", NAME);
