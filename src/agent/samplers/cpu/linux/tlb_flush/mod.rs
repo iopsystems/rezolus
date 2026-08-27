@@ -78,7 +78,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         debug!("{NAME} sampler is not supported on this architecture");
-        return Ok(None);
+        return Err(crate::agent::sampler_status::Unsupported(
+            "not supported on this CPU architecture".to_string(),
+        )
+        .into());
     }
 
     let bpf = BpfBuilder::new(
