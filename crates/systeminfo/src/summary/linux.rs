@@ -8,7 +8,7 @@ pub fn collect() -> SystemSummary {
     let kernel = read_string("/proc/version").unwrap_or_default();
     let hostname = read_string("/proc/sys/kernel/hostname").ok();
 
-    let (cpu_model, cpu_vendor, cpus, cores, packages, smt) = collect_cpu_info();
+    let cpu = collect_cpu_info();
     let cpu_topology = collect_cpu_topology();
     let memory_total_bytes = collect_memory();
     let numa_nodes = collect_numa_nodes();
@@ -21,12 +21,12 @@ pub fn collect() -> SystemSummary {
         kernel,
         arch: std::env::consts::ARCH.to_string(),
         hostname,
-        cpu_model,
-        cpu_vendor,
-        cpus,
-        cores,
-        packages,
-        smt,
+        cpu_model: cpu.model,
+        cpu_vendor: cpu.vendor,
+        cpus: cpu.cpus,
+        cores: cpu.cores,
+        packages: cpu.packages,
+        smt: cpu.smt,
         memory_total_bytes,
         numa_nodes,
         cpu_topology,
@@ -36,14 +36,21 @@ pub fn collect() -> SystemSummary {
     }
 }
 
-fn collect_cpu_info() -> (
-    Option<String>,
-    Option<String>,
-    usize,
-    Option<usize>,
-    Option<usize>,
-    Option<bool>,
-) {
+/// What `collect_cpu_info` found, named.
+///
+/// This was a six-element tuple of mostly-`Option` — positional, so the call
+/// site had to keep the order in its head and a mis-ordered `Option<usize>`
+/// would have type-checked silently.
+struct CpuInfo {
+    model: Option<String>,
+    vendor: Option<String>,
+    cpus: usize,
+    cores: Option<usize>,
+    packages: Option<usize>,
+    smt: Option<bool>,
+}
+
+fn collect_cpu_info() -> CpuInfo {
     let cpu_ids = read_list("/sys/devices/system/cpu/online").unwrap_or_default();
     let cpus = cpu_ids.len();
 
@@ -79,7 +86,14 @@ fn collect_cpu_info() -> (
 
     let (model, vendor) = read_cpuinfo();
 
-    (model, vendor, cpus, cores, packages, smt)
+    CpuInfo {
+        model,
+        vendor,
+        cpus,
+        cores,
+        packages,
+        smt,
+    }
 }
 
 fn read_cpuinfo() -> (Option<String>, Option<String>) {
@@ -97,17 +111,11 @@ fn read_cpuinfo() -> (Option<String>, Option<String>) {
         if parts.len() != 2 {
             continue;
         }
+        // Guards rather than nested ifs: first value wins for each key, and
+        // /proc/cpuinfo repeats both once per logical CPU.
         match parts[0] {
-            "model name" => {
-                if model.is_none() {
-                    model = Some(parts[1].to_string());
-                }
-            }
-            "vendor_id" => {
-                if vendor.is_none() {
-                    vendor = Some(parts[1].to_string());
-                }
-            }
+            "model name" if model.is_none() => model = Some(parts[1].to_string()),
+            "vendor_id" if vendor.is_none() => vendor = Some(parts[1].to_string()),
             _ => {}
         }
         if model.is_some() && vendor.is_some() {
