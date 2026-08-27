@@ -13,7 +13,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
                   labels_list: &[std::collections::BTreeMap<String, String>]| {
         let mut all_keys = std::collections::HashSet::new();
         for labels in labels_list {
-            for (key, _) in labels.iter() {
+            for key in labels.keys() {
                 if key != "metric" && key != "unit" && key != "metric_type" {
                     all_keys.insert(key.clone());
                 }
