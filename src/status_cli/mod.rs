@@ -72,6 +72,17 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
                     s.name, "pmu-limited"
                 ));
             }
+            // Not a fault: the machine or kernel cannot do this. Counted as
+            // unsupported and, crucially, `problem` is left alone — a host
+            // without an L3 cache domain must not fail a readiness probe for
+            // having the hardware it has.
+            (SamplerState::Unsupported { reason }, _) => {
+                unsupported += 1;
+                lines.push_str(&format!(
+                    "  {:<22} {:<12} {reason}\n",
+                    s.name, "unsupported"
+                ));
+            }
             (SamplerState::PmuStarved { wants, free }, _) => {
                 unsupported += 1;
                 lines.push_str(&format!(
@@ -233,6 +244,78 @@ mod tests {
             expected: true,
             verdict,
         }
+    }
+
+    fn sampler(name: &str, state: SamplerState, health: Option<SamplerHealth>) -> SamplerStatus {
+        SamplerStatus {
+            name: name.into(),
+            state,
+            health,
+            programs: Vec::new(),
+        }
+    }
+
+    /// A capability the machine does not have must not read as a fault.
+    ///
+    /// `cpu_l3` on a CPU with no L3 cache domain reported `failed`, which is
+    /// wrong twice over: it sends an operator looking for a break that does not
+    /// exist, and because a failed sampler exits non-zero it fails a readiness
+    /// probe on a machine working exactly as it can.
+    #[test]
+    fn an_unsupported_sampler_is_not_a_failure_and_does_not_set_exit_status() {
+        let (text, problem) = render_samplers(&[
+            sampler(
+                "cpu_usage",
+                SamplerState::Active,
+                Some(SamplerHealth::Healthy),
+            ),
+            sampler(
+                "cpu_l3",
+                SamplerState::Unsupported {
+                    reason: "no L3 cache domains found".into(),
+                },
+                Some(SamplerHealth::Unsupported),
+            ),
+        ]);
+
+        assert!(
+            !problem,
+            "an unsupported sampler must not make `rezolus status` exit non-zero:\n{text}"
+        );
+        assert!(text.contains("unsupported"), "{text}");
+        assert!(text.contains("no L3 cache domains found"), "{text}");
+        assert!(
+            text.contains("1 unsupported"),
+            "counted in the tally:\n{text}"
+        );
+        assert!(
+            text.contains("0 failed"),
+            "and not in the failed tally:\n{text}"
+        );
+        // The sampler's own line, not the tally line, is what must not say
+        // "failed" — the tally always carries the word.
+        let line = text
+            .lines()
+            .find(|l| l.contains("cpu_l3"))
+            .expect("cpu_l3 is listed");
+        assert!(!line.contains("failed"), "{line}");
+    }
+
+    /// The distinction the fix turns on: a real failure still is one.
+    #[test]
+    fn a_failed_sampler_still_sets_the_exit_status() {
+        let (text, problem) = render_samplers(&[sampler(
+            "cpu_l3",
+            SamplerState::Failed {
+                error: "failed to create L3 cache perf counters".into(),
+            },
+            Some(SamplerHealth::Failed),
+        )]);
+        assert!(
+            problem,
+            "a genuine failure must still exit non-zero:\n{text}"
+        );
+        assert!(text.contains("failed"), "{text}");
     }
 
     /// The short forms people type, and the one case that must NOT be
