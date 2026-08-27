@@ -3669,6 +3669,7 @@ dependencies = [
 name = "systeminfo"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libloading",
  "log",
  "serde",

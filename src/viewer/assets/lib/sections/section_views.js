@@ -105,8 +105,12 @@ const renderSingleNodeInfo = (info, CpuTopology, formatBytes) => {
                 m('table.sysinfo-table', m('tbody',
                     info.gpus.map((gpu) => m('tr', [
                         m('td.sysinfo-label', gpu.name || gpu.vendor),
+                        // An integrated GPU has no device-local memory, so the
+                        // memory figure is absent rather than zero. Say so
+                        // rather than rendering an empty cell next to a GPU
+                        // that is genuinely present.
                         m('td.sysinfo-value', [
-                            gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
+                            gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : 'integrated',
                             gpu.driver ? ` (${gpu.driver})` : '',
                         ].join('')),
                     ])),

@@ -45,6 +45,13 @@
 //! does a time comparison. The counters are cumulative, so a 1s cadence costs
 //! `rate()` nothing.
 //!
+//! ## Windows
+//!
+//! One acquisition group covers the whole per-GPU sweep (principle 18): the
+//! grouped perf read and the VRAM ioctl for a device are reached together
+//! through that device's own fds, so they are one read section even though they
+//! span two metric families. See [`stats::GPU_INTEL_PMU_ACQ`].
+//!
 //! ## Permissions
 //!
 //! Opening these counters needs `CAP_PERFMON` (or `kernel.perf_event_paranoid`
@@ -98,8 +105,18 @@ pub(crate) const MAX_GPUS: usize = 8;
 /// or video engines.
 pub(crate) const MAX_ENGINES: usize = 16;
 
-/// Entry count for the per-engine metric groups, indexed `gpu * MAX_ENGINES + engine`.
+/// Entry count for the per-engine metric groups, indexed by [`engine_index`].
 pub(crate) const ENGINE_ENTRIES: usize = MAX_GPUS * MAX_ENGINES;
+
+/// Index of one GPU's engine within the per-engine metric groups.
+///
+/// Each GPU owns a `MAX_ENGINES`-wide block, so engine indices never collide
+/// across GPUs and a GPU's engines stay contiguous. The blocks are sparse: a
+/// GPU exposing 4 engines leaves the rest of its block unused, which is why the
+/// acquisition group declares an explicit member set rather than a prefix bound.
+fn engine_index(gpu: usize, engine: usize) -> usize {
+    gpu * MAX_ENGINES + engine
+}
 
 /// The per-engine sample types collected, as sysfs name suffixes.
 ///
@@ -108,7 +125,7 @@ pub(crate) const ENGINE_ENTRIES: usize = MAX_GPUS * MAX_ENGINES;
 /// not collected: they describe *why* an engine made no progress, which is a
 /// debugging question, whereas this sampler publishes the occupancy and clock
 /// needed to answer "how loaded is this GPU". Cumulative nanoseconds.
-const ENGINE_SAMPLES: [(&str, &metriken::WindowedCounterGroup, Option<&str>); 1] =
+const ENGINE_SAMPLES: [(&str, &metriken::CounterGroup, Option<&str>); 1] =
     [("busy", &GPU_ENGINE_BUSY, Some("ns"))];
 
 /// The per-GPU global events, as (sysfs name, metric, expected sysfs unit).
@@ -119,21 +136,35 @@ const ENGINE_SAMPLES: [(&str, &metriken::WindowedCounterGroup, Option<&str>); 1]
 /// The PMU also exposes `rc6-residency`, `software-gt-awake-time` and
 /// `interrupts`; they are power-state and IRQ accounting rather than load, and
 /// are not collected.
-const GLOBAL_EVENTS: [(&str, &metriken::WindowedCounterGroup, Option<&str>); 2] = [
+const GLOBAL_EVENTS: [(&str, &metriken::CounterGroup, Option<&str>); 2] = [
     ("actual-frequency", &GPU_FREQUENCY_ACTUAL, Some("M")),
     ("requested-frequency", &GPU_FREQUENCY_REQUESTED, Some("M")),
 ];
 
 fn init(config: Arc<Config>) -> SamplerResult {
+    // Zero FIRST, so every exit below leaves the group empty rather than at
+    // backing capacity. An unset bound falls back to this sampler's backing
+    // arrays (`ENGINE_ENTRIES` = 128), and the snapshot walk would then declare
+    // that many members — phantom, all-null, and indistinguishable to a reader
+    // from a real engine that simply had no reading. `Gpu::new` raises it to
+    // the real engine set on success.
+    GPU_INTEL_PMU_ACQ.set_member_bound(0);
+
     if !config.enabled(NAME) {
         return Ok(None);
     }
 
     let mut pmus = pmu::discover();
 
+    // No Intel GPU on this machine. Not a fault and not a config choice: the
+    // capability is absent, so it is reported as unsupported rather than
+    // disappearing into `Disabled` (which the health tally does not count).
     if pmus.is_empty() {
         debug!("{NAME}: no Intel GPU PMUs found");
-        return Ok(None);
+        return Err(crate::agent::sampler_status::Unsupported(
+            "no Intel GPU i915/xe PMU found".to_string(),
+        )
+        .into());
     }
 
     if pmus.len() > MAX_GPUS {
@@ -170,13 +201,34 @@ fn init(config: Arc<Config>) -> SamplerResult {
         }
     }
 
+    // The GPUs are here but none of their counters would open — almost always
+    // a restrictive `perf_event_paranoid`. The machine cannot support this as
+    // configured, so it is unsupported rather than disabled; the reason names
+    // the fix.
     if gpus.is_empty() {
-        debug!(
-            "{NAME}: no Intel GPU counters could be opened (needs CAP_PERFMON or \
-             kernel.perf_event_paranoid <= 2)"
-        );
-        return Ok(None);
+        return Err(crate::agent::sampler_status::Unsupported(
+            "Intel GPU present but no PMU counters could be opened (needs CAP_PERFMON \
+             or kernel.perf_event_paranoid <= 2)"
+                .to_string(),
+        )
+        .into());
     }
+
+    // Real membership, not backing capacity. Engine entries are sparse —
+    // indexed by `engine_index`, so a host with one GPU exposing 4
+    // engines occupies 0..4 and nothing else — and the per-GPU frequency and
+    // VRAM entries are indexed by GPU id. A prefix bound would declare the
+    // gaps; the explicit member set does not.
+    let mut members: Vec<usize> = Vec::new();
+    for gpu in gpus.iter() {
+        members.push(gpu.id);
+        for offset in 0..gpu.engines.len() {
+            members.push(engine_index(gpu.id, offset));
+        }
+    }
+    members.sort_unstable();
+    members.dedup();
+    GPU_INTEL_PMU_ACQ.set_member_set(&members);
 
     let interval = config
         .sampler_interval(NAME)
@@ -241,9 +293,19 @@ impl Sampler for IntelPmu {
 
         tokio::task::spawn_blocking(move || {
             if let Ok(mut gpus) = gpus.lock() {
+                // Acquisition-group bracket (principle 18): ONE group for the
+                // whole device sweep, not one per GPU or per metric family.
+                // An individual GPU's read can fail without invalidating the
+                // section — that GPU keeps its stale values — so the group
+                // always finishes once the sweep completes; there is no bulk
+                // "read all failed" signal here that would warrant a discard.
+                let guard = GPU_INTEL_PMU_ACQ.acquire();
+
                 for gpu in gpus.iter_mut() {
                     gpu.refresh();
                 }
+
+                guard.finish();
             }
             reading.store(false, Ordering::Release);
         });
@@ -267,8 +329,8 @@ impl Event for RawEvent {
 /// One counter within a GPU's perf group, and where its value is published.
 struct TrackedCounter {
     counter: perf_event::Counter,
-    metric: &'static metriken::WindowedCounterGroup,
-    /// Index into `metric` (a plain GPU id, or `gpu * MAX_ENGINES + engine`).
+    metric: &'static metriken::CounterGroup,
+    /// Index into `metric` (a plain GPU id, or an [`engine_index`]).
     index: usize,
 }
 
@@ -279,7 +341,7 @@ struct Gpu {
     /// The group leader, whose `read_group` returns every counter at once.
     leader: perf_event::Counter,
     /// The metric/index the leader itself publishes to.
-    leader_target: (&'static metriken::WindowedCounterGroup, usize),
+    leader_target: (&'static metriken::CounterGroup, usize),
     /// Group members, in the order they were added.
     members: Vec<TrackedCounter>,
     /// Engine names in index order, for diagnostics.
@@ -296,12 +358,12 @@ impl Gpu {
     fn new(id: usize, pmu: &GpuPmu) -> Result<Self, std::io::Error> {
         // Build the full list of (sysfs event name, metric, index) to open,
         // ordered so the group leader is a counter that always exists.
-        let mut planned: Vec<(String, &'static metriken::WindowedCounterGroup, usize)> = Vec::new();
+        let mut planned: Vec<(String, &'static metriken::CounterGroup, usize)> = Vec::new();
 
         let engines = discover_engines(pmu);
 
-        for (engine_index, engine) in engines.iter().enumerate() {
-            let metric_index = id * MAX_ENGINES + engine_index;
+        for (offset, engine) in engines.iter().enumerate() {
+            let metric_index = engine_index(id, offset);
 
             for (suffix, metric, expected_unit) in ENGINE_SAMPLES {
                 let event_name = format!("{engine}-{suffix}");
@@ -390,8 +452,8 @@ impl Gpu {
 
         // Publish the identity of every entry so the exported series carry the
         // device and engine they belong to, not just an opaque index.
-        for (engine_index, engine) in engines.iter().enumerate() {
-            let metric_index = id * MAX_ENGINES + engine_index;
+        for (offset, engine) in engines.iter().enumerate() {
+            let metric_index = engine_index(id, offset);
             for (_, metric, _) in ENGINE_SAMPLES {
                 metric.insert_metadata(metric_index, "id".to_string(), id.to_string());
                 metric.insert_metadata(metric_index, "device".to_string(), label.clone());
@@ -454,31 +516,32 @@ impl Gpu {
     }
 
     /// Read every counter in the group with one syscall and publish the values.
+    ///
+    /// Values are set plain; the window is stamped once by the caller's
+    /// acquisition bracket after every GPU has been visited (principle 18).
     fn refresh(&mut self) {
-        let acq = crate::agent::timing::Acquisition::begin();
-
         let group = match self.leader.read_group() {
             Ok(group) => group,
             Err(e) => {
+                // A failed read on one GPU leaves that GPU's values stale and
+                // the rest of the sweep intact — this is the normal
+                // partial-telemetry case, not a failure of the read section, so
+                // the caller still finishes the group.
                 debug!("{NAME}: GPU {} ({}) read failed: {e}", self.id, self.label);
                 return;
             }
         };
 
-        let window = acq.window();
-
         // These counters are cumulative, so the raw value is published directly
         // and the viewer differentiates it.
         if let Some(value) = group.get(&self.leader) {
             let (metric, index) = self.leader_target;
-            metric.set_with_window(index, value.value(), window);
+            let _ = metric.set(index, value.value());
         }
 
         for member in self.members.iter() {
             if let Some(value) = group.get(&member.counter) {
-                member
-                    .metric
-                    .set_with_window(member.index, value.value(), window);
+                let _ = member.metric.set(member.index, value.value());
             }
         }
 
@@ -486,9 +549,8 @@ impl Gpu {
         // it is an instantaneous gauge in bytes.
         if let Some(drm) = self.drm.as_ref() {
             if let Some(vram) = drm.vram() {
-                let window = acq.window();
-                GPU_MEMORY_USED.set_with_window(self.id, vram.used_bytes() as i64, window);
-                GPU_MEMORY_FREE.set_with_window(self.id, vram.free_bytes as i64, window);
+                let _ = GPU_MEMORY_USED.set(self.id, vram.used_bytes() as i64);
+                let _ = GPU_MEMORY_FREE.set(self.id, vram.free_bytes as i64);
             }
         }
     }
@@ -646,12 +708,15 @@ mod tests {
         // Entry layout must not let one GPU's engines collide with another's.
         for gpu in 0..MAX_GPUS {
             for engine in 0..MAX_ENGINES {
-                let index = gpu * MAX_ENGINES + engine;
+                let index = engine_index(gpu, engine);
                 assert!(index < ENGINE_ENTRIES);
             }
         }
 
-        assert_eq!(0 * MAX_ENGINES + 0, 0);
-        assert_ne!(MAX_ENGINES - 1, MAX_ENGINES);
+        // GPU 0's first engine sits at index 0, and GPU 1's first engine
+        // starts a fresh block rather than overlapping GPU 0's last.
+        assert_eq!(engine_index(0, 0), 0);
+        assert_eq!(engine_index(1, 0), MAX_ENGINES);
+        assert!(engine_index(0, MAX_ENGINES - 1) < engine_index(1, 0));
     }
 }

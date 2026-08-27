@@ -24,7 +24,28 @@
 
 use metriken::*;
 
+use crate::agent::timing::AcquisitionGroup;
+use linkme::distributed_slice;
+
 use super::MAX_GPUS;
+
+/// One acquisition window for the whole per-GPU read pass.
+///
+/// Principle 18's "device sweep" archetype: `refresh()` visits each GPU once
+/// and, per visit, issues a grouped perf `read(2)` and a DRM ioctl. Those span
+/// two metric families (engine occupancy/frequency, and VRAM) but they are one
+/// read section — device-major by a property of the source, since the perf
+/// group fd and the render node belong to that one device and are reached
+/// together. Splitting it family-major would describe a sweep the driver never
+/// performed.
+///
+/// Single writer: the `spawn_blocking` task dispatched from `Sampler::refresh`,
+/// which is guarded against overlapping itself. Nothing else writes these.
+pub static GPU_INTEL_PMU_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(super::NAME, "gpu_intel_pmu_devices");
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static GPU_INTEL_PMU_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_ACQ;
 
 // ----- Per-engine occupancy -----
 //
@@ -37,9 +58,9 @@ use super::ENGINE_ENTRIES;
 #[metric(
     name = "gpu_engine_busy_time",
     description = "Nanoseconds an engine spent executing work.",
-    metadata = { vendor = "intel", unit = "nanoseconds" }
+    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", unit = "nanoseconds" }
 )]
-pub static GPU_ENGINE_BUSY: WindowedCounterGroup = WindowedCounterGroup::new(ENGINE_ENTRIES);
+pub static GPU_ENGINE_BUSY: CounterGroup = CounterGroup::new(ENGINE_ENTRIES);
 
 // ----- Per-GPU frequency -----
 //
@@ -52,16 +73,16 @@ pub static GPU_ENGINE_BUSY: WindowedCounterGroup = WindowedCounterGroup::new(ENG
 #[metric(
     name = "gpu_frequency_sample",
     description = "Cumulative sum of actual GPU frequency samples in MHz; rate() yields average MHz.",
-    metadata = { vendor = "intel", frequency = "actual", unit = "megahertz" }
+    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", frequency = "actual", unit = "megahertz" }
 )]
-pub static GPU_FREQUENCY_ACTUAL: WindowedCounterGroup = WindowedCounterGroup::new(MAX_GPUS);
+pub static GPU_FREQUENCY_ACTUAL: CounterGroup = CounterGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu_frequency_sample",
     description = "Cumulative sum of requested GPU frequency samples in MHz; rate() yields average MHz.",
-    metadata = { vendor = "intel", frequency = "requested", unit = "megahertz" }
+    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", frequency = "requested", unit = "megahertz" }
 )]
-pub static GPU_FREQUENCY_REQUESTED: WindowedCounterGroup = WindowedCounterGroup::new(MAX_GPUS);
+pub static GPU_FREQUENCY_REQUESTED: CounterGroup = CounterGroup::new(MAX_GPUS);
 
 // ----- VRAM -----
 //
@@ -77,13 +98,13 @@ pub static GPU_FREQUENCY_REQUESTED: WindowedCounterGroup = WindowedCounterGroup:
 #[metric(
     name = "gpu_memory",
     description = "The amount of GPU device memory (VRAM) free.",
-    metadata = { vendor = "intel", state = "free", unit = "bytes" }
+    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", state = "free", unit = "bytes" }
 )]
-pub static GPU_MEMORY_FREE: WindowedGaugeGroup = WindowedGaugeGroup::new(MAX_GPUS);
+pub static GPU_MEMORY_FREE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu_memory",
     description = "The amount of GPU device memory (VRAM) used.",
-    metadata = { vendor = "intel", state = "used", unit = "bytes" }
+    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", state = "used", unit = "bytes" }
 )]
-pub static GPU_MEMORY_USED: WindowedGaugeGroup = WindowedGaugeGroup::new(MAX_GPUS);
+pub static GPU_MEMORY_USED: GaugeGroup = GaugeGroup::new(MAX_GPUS);

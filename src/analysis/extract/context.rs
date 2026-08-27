@@ -68,6 +68,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "gpu_amd_pmu",
     "gpu_amd_smi",
     "gpu_apple",
+    "gpu_intel_pmu",
     "gpu_nvidia",
     "memory_meminfo",
     "memory_vmstat",
@@ -171,6 +172,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("gpmu_wave_cycles", "gpu_amd_pmu"),
     ("gpmu_waves", "gpu_amd_pmu"),
     ("gpu_dram_bandwidth_utilization", "gpu_nvidia"),
+    ("gpu_engine_busy_time", "gpu_intel_pmu"),
+    ("gpu_frequency_sample", "gpu_intel_pmu"),
     ("gpu_pcie_bandwidth", "gpu_nvidia"),
     ("gpu_sm_occupancy", "gpu_nvidia"),
     ("gpu_sm_utilization", "gpu_nvidia"),
@@ -291,10 +294,15 @@ const BPF_SAMPLERS: &[&str] = &[
 /// - `gpu_clock`, `gpu_energy_consumption`, `gpu_power_usage`,
 ///   `gpu_utilization`: shared vocabulary across `gpu_amd_smi`,
 ///   `gpu_apple`, and `gpu_nvidia`.
-/// - `gpu_memory`, `gpu_memory_utilization`, `gpu_pcie_throughput`,
-///   `gpu_temperature`: shared between `gpu_amd_smi` and `gpu_nvidia` only
-///   (no macOS/`gpu_apple` equivalent — `gpu/macos/stats.rs` declares no
-///   metric under these names).
+/// - `gpu_memory`: shared between `gpu_amd_smi`, `gpu_intel_pmu` and
+///   `gpu_nvidia`. The Intel sampler publishes VRAM under the same
+///   vendor-neutral name and labels, so cross-vendor dashboards work
+///   unchanged; it is discrete-only, since an integrated GPU has no
+///   device-local memory region.
+/// - `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_temperature`:
+///   shared between `gpu_amd_smi` and `gpu_nvidia` only (no macOS/`gpu_apple`
+///   equivalent — `gpu/macos/stats.rs` declares no metric under these names;
+///   and the i915/xe PMU exposes no memory-controller or PCIe counter).
 /// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: see [`BPF_SAMPLERS`].
 ///
 /// Sorted alphabetically by name; each candidate list sorted alphabetically
@@ -306,7 +314,10 @@ pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
         "gpu_energy_consumption",
         &["gpu_amd_smi", "gpu_apple", "gpu_nvidia"],
     ),
-    ("gpu_memory", &["gpu_amd_smi", "gpu_nvidia"]),
+    (
+        "gpu_memory",
+        &["gpu_amd_smi", "gpu_intel_pmu", "gpu_nvidia"],
+    ),
     ("gpu_memory_utilization", &["gpu_amd_smi", "gpu_nvidia"]),
     ("gpu_pcie_throughput", &["gpu_amd_smi", "gpu_nvidia"]),
     (

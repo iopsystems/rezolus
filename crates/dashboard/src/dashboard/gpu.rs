@@ -2,6 +2,11 @@ use crate::MetricsSource;
 use crate::plot::*;
 
 /// The metrics we probe for GPU presence / id enumeration.
+///
+/// `gpu_engine_busy_time` and `gpu_frequency_sample` are Intel's — an Intel host
+/// publishes neither `gpu_utilization` nor (on an integrated GPU) `gpu_memory`,
+/// so without them such a host would enumerate no GPUs at all and the per-device
+/// charts and selector would never appear.
 const GPU_PROBE_METRICS: &[&str] = &[
     "gpu_utilization",
     "gpu_memory",
@@ -10,6 +15,8 @@ const GPU_PROBE_METRICS: &[&str] = &[
     "gpu_clock",
     "gpu_memory_utilization",
     "gpmu_clock",
+    "gpu_engine_busy_time",
+    "gpu_frequency_sample",
 ];
 
 /// True iff the recording has more than one GPU. Per-device charts are
@@ -368,6 +375,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     view.group(clocks);
 
     amd_pmu(&mut view);
+    intel_pmu(&mut view, multi_gpu);
 
     view
 }
@@ -533,6 +541,115 @@ fn amd_pmu(view: &mut View) {
         PlotOpts::counter("VRAM Write Requests", "amd-vram-write-req", Unit::Count)
             .with_axis_label("requests/s"),
         "sum(rate(gpmu_vram_write_requests[5m]))".to_string(),
+    );
+
+    view.group(pmu);
+}
+
+/// Intel GPU metrics from the i915/xe PMU (the `gpu_intel_pmu` sampler).
+///
+/// Only populated on Intel hosts; the charts are empty otherwise. See
+/// `docs/metrics.md#gpu_intel_pmu`.
+///
+/// Both PMU families are **cumulative counters**, so everything here is a
+/// `rate()`. Two consequences shape the queries below:
+///
+/// - Engine busy is cumulative nanoseconds, so `rate()` yields nanoseconds of
+///   busy time per second — dividing by 1e9 gives the busy fraction, which is
+///   what the percentage charts plot.
+/// - The frequency events are a running sum of one MHz sample per driver tick,
+///   accumulated only while the GT is awake. `rate()` recovers average MHz over
+///   the interval; a raw reading carries no meaning without its predecessor.
+///   The GT parking while idle is why these drop to zero rather than to an idle
+///   clock.
+///
+/// `gpu_memory` is deliberately absent here: the Intel sampler publishes it
+/// under the same vendor-neutral name and labels the AMD and NVIDIA samplers
+/// use, so it already appears in the shared Memory group above. VRAM is
+/// discrete-only — an integrated GPU has no device-local memory region and
+/// publishes no such series.
+fn intel_pmu(view: &mut View, multi_gpu: bool) {
+    let mut pmu = Group::new("Intel GPU Performance Counters", "intel-pmu");
+
+    // ----- Engine occupancy -----
+    let engines = pmu.subgroup("Engine Busy");
+    engines.describe(
+        "Fraction of wall time each GPU engine spent executing work, from the i915/xe PMU. \
+         This is occupancy, not efficiency: an engine at 100% had work queued, which does not \
+         mean the execution units were saturated — read it alongside the frequency charts.",
+    );
+
+    // Aggregate across engines of a class. Summing the busy time of several
+    // engines can exceed one device-second (they run concurrently), which is
+    // correct and why this is not clamped to 100%.
+    engines.plot_promql(
+        PlotOpts::gauge(
+            "Busy % by Engine Class",
+            "intel-engine-class-pct",
+            Unit::Percentage,
+        )
+        .with_row_label("Class"),
+        "sum by (engine_class) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+    );
+    engines.plot_promql(
+        PlotOpts::gauge("Busy % by Engine", "intel-engine-pct", Unit::Percentage)
+            .with_row_label("Engine"),
+        "sum by (engine) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+    );
+
+    // The engine that carries the compute workload, called out on its own
+    // because it is the one to watch on a GPGPU host. A discrete Arc exposes a
+    // compute engine; an integrated GPU generally does not, and this chart is
+    // then empty while the render one below carries the load.
+    engines.plot_promql(
+        PlotOpts::gauge(
+            "Compute Engine Busy %",
+            "intel-compute-pct",
+            Unit::Percentage,
+        )
+        .percentage_range(),
+        "sum(rate(gpu_engine_busy_time{engine_class=\"compute\"}[5m])) / 1000000000".to_string(),
+    );
+    engines.plot_promql(
+        PlotOpts::gauge("Render Engine Busy %", "intel-render-pct", Unit::Percentage)
+            .percentage_range(),
+        "sum(rate(gpu_engine_busy_time{engine_class=\"render\"}[5m])) / 1000000000".to_string(),
+    );
+
+    if multi_gpu {
+        let per_device = pmu.subgroup("Per-Device Engine Busy");
+        per_device.describe(
+            "Engine busy time broken out by GPU id — on a host with both an integrated GPU and \
+             a discrete Arc card, this is what separates them.",
+        );
+        per_device.plot_promql(
+            PlotOpts::gauge(
+                "Busy % (Per-GPU)",
+                "intel-engine-pct-per-gpu",
+                Unit::Percentage,
+            )
+            .with_row_label("GPU"),
+            "sum by (id) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+        );
+    }
+
+    // ----- Frequency -----
+    let freq = pmu.subgroup("Frequency");
+    freq.describe(
+        "Average GPU frequency over each interval, recovered from the PMU's cumulative sum of \
+         per-tick MHz samples. Requested is what the driver asked for; actual is what the \
+         hardware delivered — a persistent gap between them means the GPU is being held back \
+         (thermal, power or voltage limits). Both fall to zero when the GT parks, because the \
+         driver stops sampling rather than because the clock reached zero.",
+    );
+    freq.plot_promql(
+        PlotOpts::gauge("Actual", "intel-freq-actual", Unit::Frequency),
+        "sum by (id) (rate(gpu_frequency_sample{frequency=\"actual\"}[5m])) * 1000000".to_string(),
+    );
+    freq.plot_promql(
+        PlotOpts::gauge("Requested", "intel-freq-requested", Unit::Frequency),
+        "sum by (id) (rate(gpu_frequency_sample{frequency=\"requested\"}[5m])) * 1000000"
+            .to_string(),
     );
 
     view.group(pmu);
