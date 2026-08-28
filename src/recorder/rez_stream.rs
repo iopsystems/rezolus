@@ -1,4 +1,21 @@
-//! Streaming `.rez` writer thread. See docs/journal/2026-08-11-rez-streaming-writer.md.
+//! Streaming v1/v2 (tar) `.rez` writer thread. See
+//! docs/journal/2026-08-11-rez-streaming-writer.md.
+//!
+//! **No longer on any live path — this is a test fixture builder now.** The v3
+//! SQLite container replaced it for everything Rezolus writes: `record` and
+//! `hindsight` both go through `rez_v3_writer`, and nothing in the binary
+//! constructs a `StreamRecorder` any more.
+//!
+//! It is kept, rather than deleted, because the v1/v2 *read* path is still
+//! shipped and documented — `rezolus recording upgrade` exists to convert a tar
+//! archive to v3, and `combine` upgrades tar inputs on the way in — and this is
+//! the only way to BUILD a tar archive to test those against. Deleting it would
+//! mean either dropping that coverage or checking in binary fixtures that
+//! cannot be regenerated. Five tests depend on it today: the upgrade path
+//! (`rez_v3_rewrite`), `combine`, `filter`, `annotate`, and segmented v2
+//! reading (`rez_reader`).
+//!
+//! Retire it when the v1/v2 read path is retired, and not before.
 //!
 //! Two halves: `RezWriterHandle` owns a dedicated writer thread that encodes
 //! sealed segments to parquet and appends them to the output tar, and

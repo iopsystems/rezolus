@@ -361,6 +361,20 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
   the writer work above, but the two should not drift: finishing that makes
   3+-arm archives easy to produce and still unviewable.
+- **Reopening a table can panic on a live archive** — Open, pre-existing.
+  `SamplerReader::reader` (`src/rez_reader.rs:229-233`) reopens a table's
+  segments with `.expect("segments opened at probe time cannot fail to
+  reopen")`. That holds for a finished archive but not a live one: a `.rez` is
+  readable while it is written, and `table_segments` returns sealed segments
+  plus the materialized WAL tail, so a table that had rows at probe time can
+  have none at reopen. The plausible production sequence is hindsight
+  retention — `evict_before` drops everything older than the cutoff, and a
+  quiet sampler's only rows can go between the two reads — leaving the viewer
+  or MCP panicking rather than erroring. Surfaced while fixing a test that
+  raced the writer; the test's own cause was different (an unjoined writer),
+  but the assumption is unsound for the live-read case the format advertises.
+  *Fix:* return an empty/absent series for a table whose segments have gone,
+  the same way a table with no rows is already handled.
 - **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
   parquet-only, so the static-site viewer silently fails on every streamed
   recording. Pre-existing gap, newly load-bearing now that `.rez` is the

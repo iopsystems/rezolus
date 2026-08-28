@@ -2584,7 +2584,9 @@ mod tests {
                 rec.ingest(&s, ts, 0).unwrap();
                 rec.maybe_seal().unwrap();
             }
-            rec.finalize((1_000_000_000 * n, 0)).unwrap();
+            _archive
+                .finalize_single_rec(rec, (1_000_000_000 * n, 0))
+                .unwrap();
 
             let counts = sealed_counts(&path);
             assert!(
@@ -2943,7 +2945,13 @@ mod tests {
                 .unwrap();
                 rec.maybe_seal().unwrap();
             }
-            rec.finalize((3_000_000_000, 0)).unwrap();
+            // Through the archive: `finalize` only QUEUES the completion,
+            // and it is the writer thread that seals the tails. Reading the
+            // file without joining races that seal, and a table whose
+            // segments have not landed yet reopens with none at all.
+            _archive
+                .finalize_single_rec(rec, (3_000_000_000, 0))
+                .unwrap();
 
             let reader = open(&path);
             assert!(

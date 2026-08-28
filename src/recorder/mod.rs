@@ -21,6 +21,7 @@ pub(crate) mod seal_policy;
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
 use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -584,12 +585,16 @@ fn build_rez_labels(
 /// one any more — v3 is the only container this binary writes, and old
 /// archives are upgraded by `parquet upgrade` rather than produced.
 struct RezStream {
-    rec: rez_v3_writer::StreamRecorderV3,
-    /// **Declared after `rec` deliberately.** Fields drop in declaration order,
-    /// and `RezArchive::drop` joins the writer thread, which only ends once
-    /// every recording handle has released its sender — so dropping the archive
-    /// ahead of `rec` would block forever on the handle inside it.
-    #[allow(dead_code)]
+    /// One recorder per recording, keyed by the endpoint index it serves.
+    ///
+    /// Keyed rather than a `Vec` parallel to `endpoints` because only the
+    /// msgpack endpoints get a recording: a sparse map says which endpoints
+    /// are being archived without a `None` per endpoint that is not.
+    recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
+    /// **Declared after `recs` deliberately.** Fields drop in declaration
+    /// order, and `RezArchive::drop` joins the writer thread, which only ends
+    /// once every recording handle has released its sender — so dropping the
+    /// archive ahead of `recs` would block on the handles inside them.
     archive: rez_v3_writer::RezArchive,
 }
 
@@ -598,17 +603,39 @@ impl RezStream {
     ///
     /// Fallible because the tick is written to the WAL here, rather than
     /// only appended to an in-memory builder that could not fail until a seal.
+    /// Route one endpoint's snapshot to that endpoint's recording.
+    ///
+    /// An endpoint with no recording is silently skipped rather than being an
+    /// error: only msgpack endpoints are archived, and a prometheus one in the
+    /// same run is written by its own parquet writer.
     fn ingest(
         &mut self,
+        endpoint: usize,
         snapshot: &metriken_exposition::Snapshot,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        self.rec.ingest(snapshot, anchored_ts, wall_offset_ns)
+        match self.recs.get_mut(&endpoint) {
+            Some(rec) => rec.ingest(snapshot, anchored_ts, wall_offset_ns),
+            None => Ok(()),
+        }
     }
 
+    /// Run every recording's seal check.
+    ///
+    /// All of them every tick, not just the ones that scraped: a seal decision
+    /// that were ingest-driven would leave an unreachable endpoint's pre-outage
+    /// rows unsealed forever, and the age bound would stop bounding the
+    /// kill-loss window. Reports the first failure but still checks the rest,
+    /// so one broken recording cannot silently stall its neighbours' sealing.
     fn maybe_seal(&mut self) -> Result<(), String> {
-        self.rec.maybe_seal()
+        let mut first_err = None;
+        for rec in self.recs.values_mut() {
+            if let Err(e) = rec.maybe_seal() {
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
     }
 
     /// Mark the recording complete and stop the writer, reporting either
@@ -621,12 +648,21 @@ impl RezStream {
     /// in: without it a failure while sealing the last segments would surface
     /// only as a `Drop` warning and the recording would report success.
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
-        let RezStream { rec, mut archive } = self;
-        let queued = rec.finalize(clock_offset);
-        // Unconditional, and after `rec` has been consumed: the join can only
-        // complete once that handle has released its sender.
+        let RezStream { recs, mut archive } = self;
+        // Every recording is finalized, even if an earlier one failed: they
+        // are independent rows in one archive, and stopping at the first
+        // failure would leave the rest marked incomplete for a fault that was
+        // not theirs.
+        let mut first_err = None;
+        for (_, rec) in recs {
+            if let Err(e) = rec.finalize(clock_offset) {
+                first_err.get_or_insert(e);
+            }
+        }
+        // Unconditional, and after every handle has been consumed: the join can
+        // only complete once they have all released their senders.
         let joined = archive.join();
-        queued.and(joined)
+        first_err.map_or(joined, Err)
     }
 
     /// What to tell the user after a mid-recording failure: where the data
@@ -636,7 +672,7 @@ impl RezStream {
     fn recovery_note(&self) -> String {
         format!(
             "note: the recording so far is readable at {}",
-            self.rec.path().display()
+            self.archive.path().display()
         )
     }
 
@@ -645,13 +681,13 @@ impl RezStream {
     /// artifact, and the writer refuses to overwrite, so leaving one behind
     /// would also block the retry.
     fn discard(self) {
-        let path = self.rec.path().to_path_buf();
+        let path = self.archive.path().to_path_buf();
         // Drop first: joining the writer thread is what guarantees nothing is
         // still appending to the file we are about to unlink. There is no
         // abort — a dropped writer leaves a valid recording, which is exactly
         // why this path has to remove it explicitly rather than rely on a
         // staging convention.
-        drop(self.rec);
+        drop(self.recs);
         drop(self.archive);
         // Safe to remove: `RezDb::create` claimed this path with O_EXCL during
         // THIS run, so it cannot be a file that was already there.
@@ -669,24 +705,55 @@ impl RezStream {
 ///
 /// Both the file creation and the thread spawn can fail, which is why this
 /// happens at activation rather than lazily on the first snapshot.
+/// Open the archive and one recording per endpoint in `eps`.
+///
+/// `eps` carries each endpoint's index alongside it so the returned stream can
+/// route a scrape back to the recording that owns it.
+///
+/// Every recording lands in ONE archive: that is what a multi-recording `.rez`
+/// is, and it is why the arms of an A/B captured this way share a clock anchor
+/// and a load environment rather than differing in both, as two sequential
+/// single-endpoint runs would.
 fn start_rez_recorder(
     config: &RecordingConfig,
-    ep: &EndpointState,
+    eps: &[(usize, &EndpointState)],
     clock_anchor_wall_ns: u64,
 ) -> Result<RezStream, String> {
-    let labels = build_rez_labels(config, ep);
-    let metadata = build_rez_metadata(config, ep);
-    let seed = rez_v3_writer::ManifestSeed {
-        labels,
-        metadata,
-        clock_anchor_wall_ns,
-    };
     let mut archive = rez_v3_writer::RezArchive::create(&config.output)?;
-    let writer = archive.add_recording(seed)?;
-    Ok(RezStream {
-        rec: rez_v3_writer::StreamRecorderV3::new(writer),
-        archive,
-    })
+    let mut recs = BTreeMap::new();
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+
+    for (idx, ep) in eps {
+        let labels = build_rez_labels(config, ep);
+        let metadata = build_rez_metadata(config, ep);
+
+        // Two recordings with identical label sets are indistinguishable to
+        // every consumer — the viewer aliases A/B off `arm`/`host`, and the
+        // seal stagger keys on the label set, so they would also seal in
+        // lockstep. Warn rather than refuse: the recording is still valid and
+        // the operator may not care, but nothing downstream can tell the arms
+        // apart and they should know before the run rather than after.
+        let key = seal_policy::recording_stagger_key(&labels);
+        if let Some(other) = seen.get(&key) {
+            eprintln!(
+                "warning: {} and {} carry identical labels ({key:?}), so nothing downstream \
+                 can tell their recordings apart — pass --label to distinguish them",
+                other, ep.config.url
+            );
+        } else {
+            seen.insert(key, ep.config.url.to_string());
+        }
+
+        let seed = rez_v3_writer::ManifestSeed {
+            labels,
+            metadata,
+            clock_anchor_wall_ns,
+        };
+        let writer = archive.add_recording(seed)?;
+        recs.insert(*idx, rez_v3_writer::StreamRecorderV3::new(writer));
+    }
+
+    Ok(RezStream { recs, archive })
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
@@ -855,22 +922,21 @@ pub fn run(mut config: RecordingConfig) {
         // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus
         // endpoint yields none, so settle it up front (before probing) rather
         // than recording an empty archive. Auto-detected prometheus is handled
-        // right after the probe, below. Multi-source/A-B `.rez` is deferred, so
-        // more than one endpoint is the other blocker — also checked before
-        // probing, so a misconfiguration costs no network round-trips.
-        let blocker = if let Some(ep) = endpoints
+        // right after the probe, below.
+        //
+        // Several endpoints are NOT a blocker any more: each becomes its own
+        // label-tagged recording in one archive, which is what the container's
+        // `recordings` list has always modelled and what `combine` could only
+        // assemble after the fact.
+        let blocker = endpoints
             .iter()
             .find(|e| matches!(e.config.protocol, Some(Protocol::Prometheus)))
-        {
-            Some(format!(
-                "{} is configured protocol=prometheus, and .rez requires a rezolus (msgpack) endpoint",
-                ep.config.url
-            ))
-        } else if endpoints.len() > 1 {
-            Some(".rez output currently supports a single endpoint".to_string())
-        } else {
-            None
-        };
+            .map(|ep| {
+                format!(
+                    "{} is configured protocol=prometheus, and .rez requires a rezolus (msgpack) endpoint",
+                    ep.config.url
+                )
+            });
 
         if let Some(reason) = blocker {
             demote_from_rez(&mut config, &reason);
@@ -949,13 +1015,15 @@ pub fn run(mut config: RecordingConfig) {
     // are both fallible.
     let mut rez_recorder: Option<RezStream> = None;
     if rez_mode {
-        // `.rez` is single-endpoint (guarded above) and at least one endpoint is
-        // active (checked above), so the active endpoint is *the* endpoint. It
-        // can therefore never activate later via the Pending path.
+        // An endpoint that ANSWERED as prometheus still blocks the archive, the
+        // same as a configured one: `.rez` ingest reads msgpack snapshots, and
+        // a prometheus endpoint yields none. Checked across every active
+        // endpoint now that there can be several, and reported by name so a
+        // multi-endpoint run says which one demoted it.
         let non_msgpack = endpoints
             .iter()
-            .find(|ep| ep.status == EndpointStatus::Active)
-            .filter(|ep| ep.protocol() != Some(&Protocol::Msgpack))
+            .filter(|ep| ep.status == EndpointStatus::Active)
+            .find(|ep| ep.protocol() != Some(&Protocol::Msgpack))
             .map(|ep| {
                 format!(
                     "{} answered as prometheus, and .rez requires a rezolus (msgpack) endpoint",
@@ -966,15 +1034,24 @@ pub fn run(mut config: RecordingConfig) {
         if let Some(reason) = non_msgpack {
             demote_from_rez(&mut config, &reason);
             rez_mode = false;
-        } else if let Some(ep) = endpoints
-            .iter()
-            .find(|ep| ep.status == EndpointStatus::Active)
-        {
-            match start_rez_recorder(&config, ep, clock_anchor_wall_ns) {
-                Ok(rec) => rez_recorder = Some(rec),
-                Err(e) => {
-                    eprintln!("error: failed to start the .rez recording: {e}");
-                    std::process::exit(1);
+        } else {
+            // Every active endpoint becomes a recording in ONE archive. Only
+            // the endpoints active at this point: a `.rez` recording is opened
+            // when its writer is, and an endpoint that activates later through
+            // the Pending path has no recording to append to.
+            let active: Vec<(usize, &EndpointState)> = endpoints
+                .iter()
+                .enumerate()
+                .filter(|(_, ep)| ep.status == EndpointStatus::Active)
+                .collect();
+
+            if !active.is_empty() {
+                match start_rez_recorder(&config, &active, clock_anchor_wall_ns) {
+                    Ok(rec) => rez_recorder = Some(rec),
+                    Err(e) => {
+                        eprintln!("error: failed to start the .rez recording: {e}");
+                        std::process::exit(1);
+                    }
                 }
             }
         }
@@ -1250,7 +1327,7 @@ pub fn run(mut config: RecordingConfig) {
                                     );
                                     if let Some(rec) = rez_recorder.as_mut() {
                                         if let Err(e) =
-                                            rec.ingest(&snapshot, anchored_ns, wall_offset_ns)
+                                            rec.ingest(idx, &snapshot, anchored_ns, wall_offset_ns)
                                         {
                                             ingest_failed.get_or_insert(e);
                                         }
@@ -1920,7 +1997,7 @@ mod tests {
                 Some(metriken::Window::new(ts - 500, ts)),
             );
             let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
-            rec.ingest(&snapshot, ts, 0).expect("ingest");
+            rec.ingest(0, &snapshot, ts, 0).expect("ingest");
             rec.maybe_seal().expect("seal");
         }
     }
@@ -1934,7 +2011,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
         let config = rez_config(&path);
-        let mut rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
 
         // Valid and openable before a single row is written — there is no
         // `.partial` standing in for it.
@@ -1990,7 +2067,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.rez");
         let config = rez_config(&path);
-        let rec = start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR).unwrap();
+        let rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
         rec.discard();
         assert!(
             !path.exists() && !dir.path().join("out.rez.partial").exists(),
@@ -1998,7 +2075,7 @@ mod tests {
         );
         // And the path is free again, which is the property the retry needs.
         let config = rez_config(&path);
-        start_rez_recorder(&config, &rez_endpoint(), TEST_ANCHOR)
+        start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR)
             .unwrap_or_else(|e| panic!("the output path is still claimed: {e}"))
             .discard();
     }

@@ -213,6 +213,11 @@ impl RezArchive {
         })
     }
 
+    /// The archive being written — valid and readable while it is written.
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Close the channel and join the writer, returning its stored result.
     /// Idempotent: a second call is a no-op `Ok`.
     ///
@@ -324,6 +329,11 @@ pub(crate) struct RecordingWriter {
 
 impl RecordingWriter {
     /// The archive being written — valid and readable while it is written.
+    ///
+    /// Reachable only through `StreamRecorderV3::path`, which no live caller
+    /// uses: the recorder asks the archive directly. Kept because a recorder
+    /// naming its own output is the obvious thing to want.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
@@ -334,6 +344,7 @@ impl RecordingWriter {
         self.recording_id
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     /// This recording's stagger identity — see `stagger_bucket`.
     pub(crate) fn stagger_key(&self) -> &str {
         &self.stagger_key
@@ -475,17 +486,20 @@ struct Encoded {
 /// exits on the first error so the failure surfaces on the next hand-off
 /// instead of accumulating against a broken recording.
 fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, err_slot: ErrorSlot) -> Result<(), String> {
-    let result = writer_loop(rx, &mut db);
+    // `rx` is BORROWED by the loop, not moved into it, so the receiver outlives
+    // the error store below. That ordering is the whole point: a handle's send
+    // fails the instant the receiver drops, and if the slot were still empty at
+    // that moment the handle would report a generic "writer exited" instead of
+    // the writer's own error. Holding `rx` here means the channel is still open
+    // while the slot is written, so any send that fails afterwards finds it.
+    let result = writer_loop(&rx, &mut db);
     if let Err(ref e) = result {
-        // Store BEFORE returning: a handle's send fails the moment this thread
-        // drops the receiver, which can happen before anyone joins us, and the
-        // handle has no other way to learn what went wrong.
         *err_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.clone());
     }
     result
 }
 
-fn writer_loop(rx: Receiver<Msg>, db: &mut RezDb) -> Result<(), String> {
+fn writer_loop(rx: &Receiver<Msg>, db: &mut RezDb) -> Result<(), String> {
     // Next segment sequence number, per (recording, sampler). Keyed by both
     // because `seq` is scoped to a recording's sampler in the `segments` table:
     // two recordings of the same host have the same sampler names and each
@@ -1267,6 +1281,12 @@ impl StreamRecorderV3 {
     }
 
     /// The recording being written — a valid, readable `.rez` throughout.
+    /// The archive this recording is being written into.
+    ///
+    /// Test-only today: the recorder asks its `RezArchive` directly, since one
+    /// archive now backs several recorders and the path is a property of the
+    /// archive rather than of any one recording.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn path(&self) -> &Path {
         self.handle.path()
     }
