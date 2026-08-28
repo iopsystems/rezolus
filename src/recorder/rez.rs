@@ -2123,7 +2123,7 @@ pub(crate) mod recorder_tests_support {
     /// sampler tables yet) — the cheapest fixture for tests across the crate
     /// that just need `detect_rez_format(path)` to see `V3Sqlite`.
     pub(crate) fn empty_v3_rez(path: &std::path::Path) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer};
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive};
         let seed = ManifestSeed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
@@ -2131,7 +2131,7 @@ pub(crate) mod recorder_tests_support {
             metadata: Default::default(),
             clock_anchor_wall_ns: 1_700_000_000_000_000_000,
         };
-        RezV3Writer::create(path, seed).unwrap();
+        RezArchive::single(path, seed).unwrap();
     }
 
     /// A finalized v3 `.rez` holding `ticks` rows of one counter per named
@@ -2147,7 +2147,7 @@ pub(crate) mod recorder_tests_support {
         samplers: &[&str],
         ticks: u64,
     ) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
         let seed = ManifestSeed {
             labels: [
@@ -2161,7 +2161,8 @@ pub(crate) mod recorder_tests_support {
                 .collect(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let mut rec = StreamRecorderV3::new(RezV3Writer::create(path, seed).unwrap());
+        let (archive, writer) = RezArchive::single(path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
         for tick in 0..ticks {
             let ts = ANCHOR + tick * 1_000_000_000;
             let counters = samplers
@@ -2171,7 +2172,9 @@ pub(crate) mod recorder_tests_support {
                 .collect();
             rec.ingest(&snap(ts, counters), ts, 0).unwrap();
         }
-        rec.finalize((ANCHOR + ticks * 1_000_000_000, 0)).unwrap();
+        archive
+            .finalize_single_rec(rec, (ANCHOR + ticks * 1_000_000_000, 0))
+            .unwrap();
     }
 }
 

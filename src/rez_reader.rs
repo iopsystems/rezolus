@@ -1631,7 +1631,7 @@ mod tests {
         use super::*;
         use crate::recorder::rez_sqlite::WalRow;
         use crate::recorder::rez_v3_writer::{
-            encode_wal_row, ManifestSeed, RezV3Writer, StreamRecorderV3, WalCell, WalValue,
+            encode_wal_row, ManifestSeed, RezArchive, StreamRecorderV3, WalCell, WalValue,
         };
         use crate::recorder::seal_policy::SealPolicy;
         use metriken_exposition::Histogram as ExpHistogram;
@@ -1654,10 +1654,14 @@ mod tests {
             }
         }
 
-        fn recorder(path: &std::path::Path, max_rows: usize) -> StreamRecorderV3 {
-            StreamRecorderV3::with_policy(
-                RezV3Writer::create(path, seed()).unwrap(),
-                policy(max_rows),
+        /// A recorder plus the archive owning its writer thread. The archive
+        /// must outlive the recorder — dropping it stops the writer — and
+        /// joining it is what flushes everything queued to disk.
+        fn recorder(path: &std::path::Path, max_rows: usize) -> (RezArchive, StreamRecorderV3) {
+            let (archive, writer) = RezArchive::single(path, seed()).unwrap();
+            (
+                archive,
+                StreamRecorderV3::with_policy(writer, policy(max_rows)),
             )
         }
 
@@ -1670,7 +1674,7 @@ mod tests {
             finalize: bool,
             out: &std::path::Path,
         ) {
-            let mut rec = recorder(out, max_rows);
+            let (archive, mut rec) = recorder(out, max_rows);
             let mut last_ts = 0;
             for (s, ts) in rows {
                 rec.ingest(s, *ts, 0).unwrap();
@@ -1678,9 +1682,13 @@ mod tests {
                 last_ts = *ts;
             }
             if finalize {
-                rec.finalize((last_ts, 0)).unwrap();
+                archive.finalize_single_rec(rec, (last_ts, 0)).unwrap();
             } else {
+                // Mid-flight: the tail stays live in the WAL. The archive is
+                // still joined, so what WAS committed reaches disk — dropping
+                // the handle alone no longer stops the writer.
                 drop(rec);
+                drop(archive);
             }
         }
 
@@ -1823,7 +1831,7 @@ mod tests {
             // advances every tick and seals twice over 8 ticks; `drivehealth`
             // advances every third tick, so it accumulates 3 rows and never
             // reaches the threshold.
-            let mut rec = recorder(&path, 4);
+            let (archive, mut rec) = recorder(&path, 4);
             for i in 0..8u64 {
                 let ts = 1_000_000_000 * (i + 1);
                 let w = Some(Window::new(ts - 50_000_000, ts));
@@ -1841,6 +1849,7 @@ mod tests {
                 rec.maybe_seal().unwrap();
             }
             drop(rec);
+            drop(archive);
 
             let counts = sealed_counts(&path);
             assert_eq!(counts.get("cpu_usage"), Some(&2), "{counts:?}");
@@ -2531,7 +2540,7 @@ mod tests {
             let n = 6u64;
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("mixed_kinds.rez");
-            let mut rec = recorder(&path, 2); // force multiple segments per table
+            let (_archive, mut rec) = recorder(&path, 2); // force multiple segments per table
             for i in 0..n {
                 let ts = 1_000_000_000 * (i + 1);
                 let w = Some(Window::new(ts - 50_000_000, ts));
@@ -2884,7 +2893,7 @@ mod tests {
             // side's band widened to the span of both reads.
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("mixed.rez");
-            let mut rec = recorder(&path, usize::MAX);
+            let (_archive, mut rec) = recorder(&path, usize::MAX);
             let cpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
             let softirq_schema = std::sync::Arc::new(group_schema(&["cpu_softirq"], "cpu_usage"));
             for i in 0..3u64 {

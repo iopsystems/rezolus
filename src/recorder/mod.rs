@@ -583,7 +583,15 @@ fn build_rez_labels(
 /// This was an enum over containers while the tar writer existed. It is not
 /// one any more — v3 is the only container this binary writes, and old
 /// archives are upgraded by `parquet upgrade` rather than produced.
-struct RezStream(rez_v3_writer::StreamRecorderV3);
+struct RezStream {
+    rec: rez_v3_writer::StreamRecorderV3,
+    /// **Declared after `rec` deliberately.** Fields drop in declaration order,
+    /// and `RezArchive::drop` joins the writer thread, which only ends once
+    /// every recording handle has released its sender — so dropping the archive
+    /// ahead of `rec` would block forever on the handle inside it.
+    #[allow(dead_code)]
+    archive: rez_v3_writer::RezArchive,
+}
 
 impl RezStream {
     /// Append one scraped snapshot.
@@ -596,15 +604,29 @@ impl RezStream {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        self.0.ingest(snapshot, anchored_ts, wall_offset_ns)
+        self.rec.ingest(snapshot, anchored_ts, wall_offset_ns)
     }
 
     fn maybe_seal(&mut self) -> Result<(), String> {
-        self.0.maybe_seal()
+        self.rec.maybe_seal()
     }
 
+    /// Mark the recording complete and stop the writer, reporting either
+    /// failure.
+    ///
+    /// Both halves matter. `RecordingWriter::finalize` only *queues* the
+    /// completion — the writer owns the thread now, so the handle cannot join
+    /// it — and the final seal it triggers runs after that hand-off returns. So
+    /// the archive is joined here, unconditionally, and its result is folded
+    /// in: without it a failure while sealing the last segments would surface
+    /// only as a `Drop` warning and the recording would report success.
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
-        self.0.finalize(clock_offset)
+        let RezStream { rec, mut archive } = self;
+        let queued = rec.finalize(clock_offset);
+        // Unconditional, and after `rec` has been consumed: the join can only
+        // complete once that handle has released its sender.
+        let joined = archive.join();
+        queued.and(joined)
     }
 
     /// What to tell the user after a mid-recording failure: where the data
@@ -614,7 +636,7 @@ impl RezStream {
     fn recovery_note(&self) -> String {
         format!(
             "note: the recording so far is readable at {}",
-            self.0.path().display()
+            self.rec.path().display()
         )
     }
 
@@ -623,13 +645,14 @@ impl RezStream {
     /// artifact, and the writer refuses to overwrite, so leaving one behind
     /// would also block the retry.
     fn discard(self) {
-        let path = self.0.path().to_path_buf();
+        let path = self.rec.path().to_path_buf();
         // Drop first: joining the writer thread is what guarantees nothing is
         // still appending to the file we are about to unlink. There is no
         // abort — a dropped writer leaves a valid recording, which is exactly
         // why this path has to remove it explicitly rather than rely on a
         // staging convention.
-        drop(self.0);
+        drop(self.rec);
+        drop(self.archive);
         // Safe to remove: `RezDb::create` claimed this path with O_EXCL during
         // THIS run, so it cannot be a file that was already there.
         if let Err(e) = std::fs::remove_file(&path) {
@@ -658,8 +681,12 @@ fn start_rez_recorder(
         metadata,
         clock_anchor_wall_ns,
     };
-    rez_v3_writer::RezV3Writer::create(&config.output, seed)
-        .map(|w| RezStream(rez_v3_writer::StreamRecorderV3::new(w)))
+    let mut archive = rez_v3_writer::RezArchive::create(&config.output)?;
+    let writer = archive.add_recording(seed)?;
+    Ok(RezStream {
+        rec: rez_v3_writer::StreamRecorderV3::new(writer),
+        archive,
+    })
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
