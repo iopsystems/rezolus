@@ -1,5 +1,7 @@
 mod logging;
+mod soc;
 pub use logging::{configure_logging, verbosity_to_level, Level, LogConfig, LogDrain};
+pub use soc::is_tegra_soc;
 
 pub static HISTOGRAM_GROUPING_POWER: u8 = 3;
 

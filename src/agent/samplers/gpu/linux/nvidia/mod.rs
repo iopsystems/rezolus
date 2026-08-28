@@ -81,6 +81,10 @@ struct NvidiaInner {
     nvml: Nvml,
     devices: usize,
     gpm_supported: Vec<bool>,
+    /// Whether this host is a Tegra SoC, whose integrated GPU NVML enumerates
+    /// but only partly describes. Probed once at init — the device tree is
+    /// fixed for the life of the process.
+    tegra_soc: bool,
 }
 
 impl NvidiaInner {
@@ -108,11 +112,14 @@ impl NvidiaInner {
 
         let gpm_samples = (0..devices).map(|_| None).collect();
 
+        let tegra_soc = crate::common::is_tegra_soc();
+
         Ok(Self {
             gpm_samples,
             nvml,
             devices,
             gpm_supported,
+            tegra_soc,
         })
     }
 
@@ -177,22 +184,28 @@ impl NvidiaInner {
                     GPU_PCIE_THROUGHPUT_TX.set(id, v);
                 }
 
-                if let Ok(link_width) = device.current_pcie_link_width() {
-                    if let Ok(link_gen) = device.current_pcie_link_gen() {
-                        let v = match link_gen {
-                            1 => 250 * MB,
-                            2 => 500 * MB,
-                            3 => 984 * MB,
-                            4 => 1970 * MB,
-                            5 => 3940 * MB,
-                            6 => 7560 * MB,
-                            7 => 15130 * MB,
-                            _ => 0,
-                        };
+                // A Tegra SoC's integrated GPU sits on the memory fabric, not
+                // a PCIe link to the host. NVML still answers the link
+                // queries, with a placeholder gen/width whose product is a
+                // bandwidth the part does not have, so don't derive one.
+                if !self.tegra_soc {
+                    if let Ok(link_width) = device.current_pcie_link_width() {
+                        if let Ok(link_gen) = device.current_pcie_link_gen() {
+                            let v = match link_gen {
+                                1 => 250 * MB,
+                                2 => 500 * MB,
+                                3 => 984 * MB,
+                                4 => 1970 * MB,
+                                5 => 3940 * MB,
+                                6 => 7560 * MB,
+                                7 => 15130 * MB,
+                                _ => 0,
+                            };
 
-                        if v > 0 {
-                            let v = v * link_width as i64;
-                            GPU_PCIE_BANDWIDTH.set(id, v as _);
+                            if v > 0 {
+                                let v = v * link_width as i64;
+                                GPU_PCIE_BANDWIDTH.set(id, v as _);
+                            }
                         }
                     }
                 }
@@ -230,9 +243,20 @@ impl NvidiaInner {
                  * utilization
                  */
 
-                if let Ok(utilization) = device.utilization_rates() {
-                    GPU_UTILIZATION.set(id, utilization.gpu as i64);
-                    GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);
+                // On a Tegra SoC this call *succeeds* and reports 0/0
+                // unconditionally: the integrated GPU exposes no utilization
+                // counters to NVML, and GPM — which would otherwise supply
+                // `gpu_sm_utilization`/`gpu_dram_bandwidth_utilization` below
+                // — reports itself unsupported there as well. Unlike a failed
+                // read, a successful zero is indistinguishable from a
+                // genuinely idle GPU once it is in a recording, so skip the
+                // read rather than record one. Missing beats wrong
+                // (`docs/principles.md`).
+                if !self.tegra_soc {
+                    if let Ok(utilization) = device.utilization_rates() {
+                        GPU_UTILIZATION.set(id, utilization.gpu as i64);
+                        GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);
+                    }
                 }
 
                 /*
