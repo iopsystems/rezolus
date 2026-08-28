@@ -81,6 +81,10 @@ struct NvidiaInner {
     nvml: Nvml,
     devices: usize,
     gpm_supported: Vec<bool>,
+    /// Whether this host is a Tegra SoC, whose integrated GPU NVML enumerates
+    /// but only partly describes. Probed once at init — the device tree is
+    /// fixed for the life of the process.
+    tegra_soc: bool,
 }
 
 impl NvidiaInner {
@@ -108,11 +112,14 @@ impl NvidiaInner {
 
         let gpm_samples = (0..devices).map(|_| None).collect();
 
+        let tegra_soc = crate::common::is_tegra_soc();
+
         Ok(Self {
             gpm_samples,
             nvml,
             devices,
             gpm_supported,
+            tegra_soc,
         })
     }
 
@@ -163,36 +170,56 @@ impl NvidiaInner {
                  * pcie link
                  */
 
-                if let Ok(v) = device
-                    .pcie_throughput(PcieUtilCounter::Receive)
-                    .map(|v| v as i64 * KB)
-                {
-                    GPU_PCIE_THROUGHPUT_RX.set(id, v);
-                }
+                // A Tegra SoC's integrated GPU sits on the memory fabric,
+                // not a PCIe link to the host, so nothing derived from such a
+                // link is recorded there. That is a fact about the hardware,
+                // not about any particular NVML build: the whole block is
+                // gated on it rather than on which of these calls happens to
+                // fail today.
+                //
+                // It matters because the failure modes differ and are not
+                // stable. On a measured Tegra recording `pcie_throughput()`
+                // returned an error every sample — no `gpu_pcie_throughput`
+                // appears in any of its 3290 snapshots — so `if let Ok(..)`
+                // alone would have sufficed. But the link queries below
+                // *succeeded* on that same host, reporting gen 1 x1, a rate
+                // no real NVIDIA GPU runs at, which the table turns into a
+                // constant, fabricated 250 MiB/s. Relying on an error that
+                // NVML is not contractually obliged to keep returning would
+                // leave the first JetPack that answers `Ok(0)` silently
+                // recording throughput for a link that does not exist.
+                if !self.tegra_soc {
+                    if let Ok(v) = device
+                        .pcie_throughput(PcieUtilCounter::Receive)
+                        .map(|v| v as i64 * KB)
+                    {
+                        GPU_PCIE_THROUGHPUT_RX.set(id, v);
+                    }
 
-                if let Ok(v) = device
-                    .pcie_throughput(PcieUtilCounter::Send)
-                    .map(|v| v as i64 * KB)
-                {
-                    GPU_PCIE_THROUGHPUT_TX.set(id, v);
-                }
+                    if let Ok(v) = device
+                        .pcie_throughput(PcieUtilCounter::Send)
+                        .map(|v| v as i64 * KB)
+                    {
+                        GPU_PCIE_THROUGHPUT_TX.set(id, v);
+                    }
 
-                if let Ok(link_width) = device.current_pcie_link_width() {
-                    if let Ok(link_gen) = device.current_pcie_link_gen() {
-                        let v = match link_gen {
-                            1 => 250 * MB,
-                            2 => 500 * MB,
-                            3 => 984 * MB,
-                            4 => 1970 * MB,
-                            5 => 3940 * MB,
-                            6 => 7560 * MB,
-                            7 => 15130 * MB,
-                            _ => 0,
-                        };
+                    if let Ok(link_width) = device.current_pcie_link_width() {
+                        if let Ok(link_gen) = device.current_pcie_link_gen() {
+                            let v = match link_gen {
+                                1 => 250 * MB,
+                                2 => 500 * MB,
+                                3 => 984 * MB,
+                                4 => 1970 * MB,
+                                5 => 3940 * MB,
+                                6 => 7560 * MB,
+                                7 => 15130 * MB,
+                                _ => 0,
+                            };
 
-                        if v > 0 {
-                            let v = v * link_width as i64;
-                            GPU_PCIE_BANDWIDTH.set(id, v as _);
+                            if v > 0 {
+                                let v = v * link_width as i64;
+                                GPU_PCIE_BANDWIDTH.set(id, v as _);
+                            }
                         }
                     }
                 }
@@ -230,6 +257,23 @@ impl NvidiaInner {
                  * utilization
                  */
 
+                // Both fields are recorded on every host, Tegra included. A
+                // measured Tegra recording shows `.gpu` tracking a workload
+                // cleanly — idle, ramp, a ~91% plateau, decay, idle, peaking
+                // at 97 — so the reading is real there, not a placeholder.
+                //
+                // `.memory` read 0 for that whole run and is deliberately
+                // *not* gated on the strength of it. NVML defines both fields
+                // as duty cycles of *time*, not intensity: `.gpu` is the
+                // percent of time at least one kernel was resident, `.memory`
+                // the percent of time global memory was being read or
+                // written. A compute-bound kernel whose working set stays in
+                // cache or registers pins `.gpu` high while `.memory` rounds
+                // to zero. The same recording bears that out — the GPU drew
+                // *less* power during the 91% plateau (17.3 W) than while
+                // idle (19.0 W), so the plateau was its lightest phase, and a
+                // zero global-memory duty cycle there is the expected reading
+                // rather than a broken counter.
                 if let Ok(utilization) = device.utilization_rates() {
                     GPU_UTILIZATION.set(id, utilization.gpu as i64);
                     GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);

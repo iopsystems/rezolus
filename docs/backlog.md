@@ -410,6 +410,82 @@ Page 0x02 (`nvme.rs`) — no kernel module.
 - **Hotplug discovery** — Open. Phase 1 discovers drives once at startup; drives
   added later are missed. *Reopen:* if hotplug matters.
 
+## Agent — NVIDIA GPU sampler
+
+Source: PR #1108 (Tegra placeholder gating), grounded in a measured Tegra
+recording (single iGPU, 55 min at 1 s).
+
+- **Video engine (NVENC/NVDEC) utilization** — Open, and the highest-value gap.
+  NVML's `utilization_rates().gpu` covers only the SM/graphics engine; NVENC and
+  NVDEC are separate fixed-function blocks it does not count. On a transcode-heavy
+  workload the video engines can be saturated while `gpu_utilization` reads ~0, so
+  the recording cannot explain what the GPU is doing. The measured Tegra recording
+  shows exactly this shape: ~18.6 W drawn and a 49.6 °C → 61.5 °C thermal ramp
+  while `gpu_utilization` is 0, with power *lowest* during the 91% SM plateau. We
+  already record `gpu_clock{clock="video"}` — the engine's clock — but never its
+  utilization. *Add:* `encoder_utilization()` / `decoder_utilization()`
+  (`UtilizationInfo{utilization, sampling_period}`), and probably `encoder_stats()`
+  (`session_count`, `average_fps`, `average_latency`). *Avoid:* `encoder_sessions()`
+  — a per-session `Vec`, unbounded cardinality, wrong for an always-on fleetwide
+  sampler. *Note:* `nvml-wrapper` 0.12.1 has no bindings for
+  `nvmlDeviceGetJpgUtilization`/`GetOfaUtilization`, so NVJPEG and the optical-flow
+  engine need raw FFI or a crate bump. Per principles 13/16/17 this is an NVML
+  library call, not an mmap read: the effort must carry a *measured* per-refresh
+  overhead number and a cadence decision. And per #1108's own lesson, verify on
+  Tegra whether these return real values or placeholders before trusting them.
+- **NVML utilization support is Tegra-generation-dependent** — Open, and the
+  reason the gating in #1108 is deliberately narrow. NVIDIA's stated position is
+  that NVML is not supported on Jetson (users are pointed at `tegrastats`), and
+  there are Orin reports of NVML utilization not working; JetPack 7 / Thor
+  release notes, by contrast, advertise newly-added NVML GPU monitoring. The
+  measured recording behind #1108 shows `utilization_rates().gpu` working, so at
+  least one generation populates it — but that is one host, and `utilization_rates`
+  is documented only for "fully supported devices", a list Tegra iGPUs are not on.
+  Consequence: on a generation where NVML does not populate it, the agent records
+  a constant `0`, indistinguishable from a genuinely idle GPU. Note this is
+  *main's existing behaviour*, not a regression from #1108 — that PR declined to
+  gate `.gpu` rather than introducing the exposure. *Fix:* prefer the nvgpu
+  driver's own load node (`/sys/devices/.../<addr>.gpu/load`, permille — the
+  source `tegrastats` GR3D reads) as the `gpu_utilization` source when
+  `is_tegra_soc()`, which works on every Tegra generation; it is one small sysfs
+  read per tick, so per principles 13/16/17 it needs a *measured* per-refresh
+  number. Failing that, stamp the SoC `compatible` string into snapshot metadata
+  so a consumer can at least tell which generation produced a zero.
+- **`GPU_ENERGY_CONSUMPTION` can publish a fabricated zero** — Open,
+  pre-existing, adjacent to #1108 and the same bug class. It is a `CounterGroup`
+  (`stats.rs`), and metriken's `CounterGroup::value()` has **no** sentinel: it
+  returns `Some(0)` for an unwritten slot as soon as *any* index in that group
+  has been written. So on a mixed multi-GPU host where `total_energy_consumption()`
+  succeeds for device 0 and fails for device 1, device 1 publishes a constant-zero
+  energy counter that reads as a real measurement. Cannot fire on a single-GPU
+  host (the group stays uninitialised and reads `None`), which is why #1108's
+  Tegra target does not hit it. Contrast `GaugeGroup`, which uses an `i64::MIN`
+  sentinel and correctly yields `None`. *Fix:* track written membership
+  explicitly, or move the metric to a gauge-like sentinel representation.
+- **Per-device Tegra discrimination** — Open. `is_tegra_soc()` reads
+  `/proc/device-tree/compatible`, a *host* property, but "no real PCIe link / no
+  utilization counters" is a *device* property. A Tegra board carrying a discrete
+  PCIe GPU (NVIDIA IGX Orin is `nvidia,tegra234`) would have that card's genuine
+  `gpu_pcie_bandwidth` and `gpu_memory_utilization` suppressed. *Fix:* AND the
+  host probe with a per-device discriminator (`Device::bus_type()` or
+  `pci_info()`), stored as a `Vec<bool>` beside `gpm_supported`. *Gated on* access
+  to a Tegra host with a discrete GPU — the discriminator's behaviour on a Tegra
+  iGPU is unverified, and guessing risks breaking the fix on its target platform.
+- **Tegra probe is invisible in containers** — Open. `/sys/firmware` is in runc's
+  default masked-paths list, so a non-privileged container reads the device tree as
+  absent and a genuine Tegra host is treated as not-Tegra (back to recording the
+  placeholders). The documented deployments use `--privileged`, which disables
+  masking, so the shipped path works; a Kubernetes pod granted only
+  `CAP_BPF`/`CAP_PERFMON` does not. Nothing in the recording distinguishes
+  "not Tegra" from "couldn't tell". *Fix:* subsumed by per-device discrimination
+  above; failing that, make the probe three-valued and surface it in snapshot
+  metadata (per the project's surface-errors-not-journald preference).
+- **Gating is invisible to operators** — Open. On a Jetson an operator sees empty
+  `gpu_pcie_bandwidth` / `gpu_memory_utilization` charts and cannot tell
+  "deliberately not read" from "the sampler broke". `SamplerState::Unsupported`
+  (`src/agent/sampler_status.rs`) is whole-sampler only; there is no per-metric
+  equivalent today. *Reopen:* if per-metric status machinery lands.
+
 ## metriken — measurement uncertainty (arc)
 
 Source: [measurement uncertainty](journal/2026-07-08-measurement-uncertainty.md).
