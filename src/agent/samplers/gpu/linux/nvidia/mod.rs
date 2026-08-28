@@ -187,7 +187,17 @@ impl NvidiaInner {
                 // A Tegra SoC's integrated GPU sits on the memory fabric, not
                 // a PCIe link to the host. NVML still answers the link
                 // queries, with a placeholder gen/width whose product is a
-                // bandwidth the part does not have, so don't derive one.
+                // bandwidth the part does not have, so don't derive one. A
+                // measured Tegra recording reports gen 1 x1 for the whole run
+                // — a rate no real NVIDIA GPU runs at — which the table below
+                // turns into a constant, fabricated 250 MiB/s.
+                //
+                // `pcie_throughput()` above is deliberately left ungated: it
+                // sits on the same absent link, but NVML returns an error for
+                // it on Tegra rather than a placeholder, so `if let Ok(..)`
+                // already drops it. The same measured recording carries no
+                // `gpu_pcie_throughput` series at all, confirming the call
+                // failed on every one of its samples.
                 if !self.tegra_soc {
                     if let Ok(link_width) = device.current_pcie_link_width() {
                         if let Ok(link_gen) = device.current_pcie_link_gen() {
@@ -243,18 +253,23 @@ impl NvidiaInner {
                  * utilization
                  */
 
-                // On a Tegra SoC this call *succeeds* and reports 0/0
-                // unconditionally: the integrated GPU exposes no utilization
-                // counters to NVML, and GPM — which would otherwise supply
-                // `gpu_sm_utilization`/`gpu_dram_bandwidth_utilization` below
-                // — reports itself unsupported there as well. Unlike a failed
-                // read, a successful zero is indistinguishable from a
-                // genuinely idle GPU once it is in a recording, so skip the
-                // read rather than record one. Missing beats wrong
+                // `utilization_rates()` returns both fields from one call,
+                // but on a Tegra SoC only one of them is real. A measured
+                // Tegra recording (single iGPU, 55 min at 1s) shows `.gpu`
+                // tracking a workload cleanly — idle, ramp, a ~91% plateau,
+                // decay, idle, peaking at 97 — while `.memory` reads 0 for
+                // every one of the 3290 samples, including throughout that
+                // plateau. A memory-utilization of exactly zero under a
+                // sustained 91% load is not a credible reading; it is an
+                // unpopulated field, and a successful zero is
+                // indistinguishable from a genuinely idle GPU once it is in a
+                // recording. So record `.gpu`, which works, and skip
+                // `.memory`, which does not. Missing beats wrong
                 // (`docs/principles.md`).
-                if !self.tegra_soc {
-                    if let Ok(utilization) = device.utilization_rates() {
-                        GPU_UTILIZATION.set(id, utilization.gpu as i64);
+                if let Ok(utilization) = device.utilization_rates() {
+                    GPU_UTILIZATION.set(id, utilization.gpu as i64);
+
+                    if !self.tegra_soc {
                         GPU_MEMORY_UTILIZATION.set(id, utilization.memory as i64);
                     }
                 }
