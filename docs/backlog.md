@@ -317,12 +317,22 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   agents with identical sampler sets would seal in permanent lockstep — the key
   must widen to the sampler plus the recording's canonical label set (not the
   recording id, which would make segmentation depend on endpoint order).
-- **Prometheus sources inside `.rez`** — By design, not planned. A `.rez` v3
-  table is an acquisition group — one window per read — and a Prometheus scrape
-  has no groups, samplers, or windows. Admitting one means synthesizing all
-  three, fabricating the uncertainty metadata the format exists to keep honest.
-  Recorded so it stops being re-raised as an oversight; use parquet, which
-  row-merges sources by design.
+- **Prometheus sources inside `.rez`** — Open, and it would *improve*
+  measurement honesty rather than compromise it. A scrape is one acquisition —
+  one request, one response — so it models naturally as one acquisition group
+  per target with the window set to the real HTTP round-trip. Today the
+  Prometheus path already emits windows (`prometheus.rs:335`) but they are
+  `Window::new(ns, ns)`, **zero width**: a whole scrape asserted to have been
+  read at an instant, which is exactly what
+  [all-sampler observation windows](journal/2026-07-10-all-sampler-observation-windows.md)
+  calls the lie the arc kills. The writer already ingests `Snapshot::V2` (what
+  `PrometheusConverter` emits) via `group_by_sampler`, so the `.rez` refusal at
+  `src/recorder/mod.rs:836` is a policy check, not a capability limit. *Needs:*
+  the window plumbed from the fetch rather than the sample timestamp, a table
+  key for a source with no `sampler` label, and an honesty review of the
+  caching-exporter case (a round-trip window under-states if the exporter serves
+  stale values — still better than zero width). *Supersedes* an earlier
+  by-design ruling in the multi-endpoint entry, which was wrong.
 - **Viewer shows only the first two recordings** — Open. `src/viewer/mod.rs:581`
   truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
   the writer work above, but the two should not drift: finishing that makes

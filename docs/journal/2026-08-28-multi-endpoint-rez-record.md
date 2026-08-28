@@ -39,13 +39,51 @@ row-merges several sources, and `--separate` splits them per file.
 live, in one `record` invocation. Each endpoint becomes one recording with its
 own label set (`source`/`host` auto-populated, plus `--label`).
 
-**Out:** Prometheus sources inside `.rez`. That is not the same gap and probably
-should not close. A `.rez` v3 table is an *acquisition group* — one window per
-read, `<sampler>/<group>` keyed — and a Prometheus scrape has no groups, no
-samplers, and no acquisition windows. Admitting one means synthesizing all three,
-which fabricates precisely the uncertainty metadata the format exists to keep
-honest. Recorded here as a deliberate boundary so it stops being re-raised as an
-oversight.
+**Out of *this* effort, but a real and tractable gap — see below.** Prometheus
+sources inside `.rez` are deferred here to keep this change to one thing, not
+because the format forbids them.
+
+An earlier draft of this entry claimed the boundary was structural: that a
+Prometheus scrape has no groups, no samplers, and no acquisition windows, so
+admitting one would fabricate the uncertainty metadata the format exists to keep
+honest. **That was wrong on all three counts, and the opposite of the truth on
+the one that matters.** Corrected here rather than quietly dropped, because the
+claim had already been written into `docs/backlog.md` as by-design.
+
+- **Windows already exist.** `sample_window` (`src/recorder/prometheus.rs:335`)
+  sets one on every counter, gauge and histogram the converter emits.
+- **They are zero-width.** It returns `Window::new(ns, ns)` — begin equals end.
+  So today a Prometheus recording asserts that an entire scrape was read at one
+  instant. That is precisely the claim
+  [all-sampler observation windows](2026-07-10-all-sampler-observation-windows.md)
+  identifies as the thing the arc kills: *"a bracket is honest where an instant
+  would claim zero width"*.
+- **The capability is already there.** `RezV3Writer::ingest` handles
+  `Snapshot::V2` through `group_by_sampler`, and `SnapshotV2` is exactly what
+  `PrometheusConverter` produces. The `.rez` refusal in
+  `src/recorder/mod.rs:836` is a policy check on the endpoint's protocol, not a
+  limit of the writer.
+
+So a scrape *is* one acquisition — one request, one response, every metric in it
+read together — and modelling it as **one acquisition group per scrape target,
+with the window set to the real HTTP round-trip `[request_sent,
+response_received]`**, would be strictly more honest than the zero-width instant
+we record now.
+
+One genuine caveat survives, weaker than the original claim and worth stating
+because it is the reason to keep the two efforts separate: the round-trip bounds
+when *we* read the exporter, not when the exporter computed its values. An
+exporter that serves cached values would make even a correct round-trip window
+under-state the true uncertainty, which is the dangerous direction. But that
+is (a) strictly better than the zero width shipped today, and (b) the same class
+of documented property as principle 18's device-sweep archetype, where a failing
+call retains a stale value under a freshly-stamped window. It is a caveat to
+record, not a reason to refuse.
+
+**Filed as its own effort.** It needs the window plumbed from the fetch (the
+converter currently sees only the parsed text and a `fetch_ns`), a decision on
+the table key for a source with no `sampler` label, and its own honesty review of
+the caching case.
 
 **Out:** viewer support beyond two recordings (`src/viewer/mod.rs:581` shows the
 first two and warns). Independent of this, and tracked separately — but note that
@@ -164,7 +202,9 @@ drops ticks.
 
 ## Deferred
 
-- **Prometheus inside `.rez`** — a boundary, not a gap (see Scope).
+- **Prometheus inside `.rez`** — a real gap, and a measurement-honesty
+  *improvement* rather than a compromise (see Scope). Blocked only by a policy
+  check; the writer already ingests what the converter emits.
 - **Viewer beyond two recordings** — `src/viewer/mod.rs:581`.
 - **Hindsight multi-endpoint** — the rolling buffer is single-agent by
   construction today; the writer work here is a prerequisite, nothing more.
