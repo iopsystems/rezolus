@@ -184,6 +184,8 @@ impl RezArchive {
     /// own segment sequences, its own clock-offset series, and its own
     /// `complete` flag.
     pub(crate) fn add_recording(&mut self, seed: ManifestSeed) -> Result<RecordingWriter, String> {
+        // Derived before the seed is sent, since the seed moves.
+        let stagger_key = crate::recorder::seal_policy::recording_stagger_key(&seed.labels);
         let Some(tx) = self.tx.as_ref() else {
             return Err("the .rez writer thread has already been joined".to_string());
         };
@@ -205,6 +207,7 @@ impl RezArchive {
         Ok(RecordingWriter {
             tx: tx.clone(),
             recording_id,
+            stagger_key,
             err: Arc::clone(&self.err),
             path: self.path.clone(),
         })
@@ -308,6 +311,10 @@ impl Drop for RezArchive {
 pub(crate) struct RecordingWriter {
     tx: SyncSender<Msg>,
     recording_id: i64,
+    /// This recording's stagger identity — its canonical label set. Held here
+    /// so the seal policy can desync tables ACROSS recordings as well as
+    /// within one; see `stagger_bucket`.
+    stagger_key: String,
     err: ErrorSlot,
     /// The archive this recording lives in. Carried per handle so a caller
     /// holding only a recording can still name its file — one `PathBuf` per
@@ -325,6 +332,11 @@ impl RecordingWriter {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn recording_id(&self) -> i64 {
         self.recording_id
+    }
+
+    /// This recording's stagger identity — see `stagger_bucket`.
+    pub(crate) fn stagger_key(&self) -> &str {
+        &self.stagger_key
     }
 
     /// Hand one tick's WAL rows to the writer.
@@ -1381,12 +1393,14 @@ impl StreamRecorderV3 {
         // Pass 2: infallible. The accounts and the dedup keys advance together.
         // Only the accounting advances here — the values themselves are in
         // `wal_rows`, committed below.
+        let stagger_key = self.handle.stagger_key().to_string();
         for (sampler, key, entries) in accepted {
             self.last_keys.insert(sampler.to_string(), key);
             let policy = &self.policy;
+            let stagger_key = stagger_key.as_str();
             self.accounts
                 .entry(sampler.to_string())
-                .or_insert_with(|| SegmentAccount::open_first(sampler, policy))
+                .or_insert_with(|| SegmentAccount::open_first(sampler, stagger_key, policy))
                 .add_row(entries_approx_bytes(&entries));
         }
         self.handle.wal(wal_rows)
@@ -1618,12 +1632,14 @@ impl StreamRecorderV3 {
         }
 
         // Pass 2: infallible, same shape as `ingest`'s.
+        let stagger_key = self.handle.stagger_key().to_string();
         for (name, key, bytes) in accepted {
             self.last_keys.insert(name.to_string(), key);
             let policy = &self.policy;
+            let stagger_key = stagger_key.as_str();
             self.accounts
                 .entry(name.to_string())
-                .or_insert_with(|| SegmentAccount::open_first(name, policy))
+                .or_insert_with(|| SegmentAccount::open_first(name, stagger_key, policy))
                 .add_row(bytes);
         }
         self.handle.wal(wal_rows)

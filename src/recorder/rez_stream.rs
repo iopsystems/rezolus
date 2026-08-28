@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use metriken_exposition::Snapshot;
 use tracing::warn;
 
-use super::seal_policy::stagger_bucket;
+use super::seal_policy::{stagger_bucket, SINGLE_RECORDING_KEY};
 use super::seal_policy::{SealPolicy, SegmentAccount};
 
 use super::rez::{
@@ -536,7 +536,12 @@ impl BuilderState {
     pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         Self {
             builder: TableBuilder::new(sampler.to_string()),
-            account: SegmentAccount::open_first(sampler, policy),
+            // The V1/V2 writer holds exactly one recording per archive — a tar
+            // has no `recordings` table to hold a second — so its stagger
+            // identity is constant. Spread across samplers is unchanged; only
+            // the particular bucket each draws differs from before the key
+            // widened, which the stagger does not depend on.
+            account: SegmentAccount::open_first(sampler, SINGLE_RECORDING_KEY, policy),
         }
     }
 
@@ -1485,21 +1490,25 @@ mod tests {
     #[test]
     fn zero_bucket_sampler_still_seals() {
         const MAX_ROWS: usize = 256;
-        assert_eq!(stagger_bucket("gpu_stall"), 0, "chosen for its zero bucket");
+        assert_eq!(
+            stagger_bucket("page_cache", SINGLE_RECORDING_KEY),
+            0,
+            "chosen for its zero bucket"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.rez");
         let handle = RezWriterHandle::create(&out, seed()).unwrap();
         let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
 
-        let (s, ts) = multi_snap(&["gpu_stall"], 0);
+        let (s, ts) = multi_snap(&["page_cache"], 0);
         rec.ingest(&s, ts, 0);
         assert_eq!(
-            rec.open_targets("gpu_stall"),
+            rec.open_targets("page_cache"),
             Some((MAX_ROWS, Duration::from_secs(3600))),
             "bucket 0 means no reduction, i.e. the full policy"
         );
-        let sealed = first_seal_rows(&mut rec, &["gpu_stall"], MAX_ROWS as u64);
+        let sealed = first_seal_rows(&mut rec, &["page_cache"], MAX_ROWS as u64);
         assert_eq!(sealed[0], MAX_ROWS, "it seals at the full target");
         rec.abort();
     }

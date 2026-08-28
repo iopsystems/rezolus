@@ -15,6 +15,18 @@ use std::time::{Duration, Instant};
 /// 50% bounds the startup cost to one short segment per sampler.
 pub(crate) const STAGGER_BUCKETS: u64 = 64;
 
+/// The stagger identity of a writer that can only ever hold one recording.
+///
+/// The V1/V2 tar writer is such a writer: a tar has no `recordings` table, so
+/// there is never a second recording to desync against. Named rather than
+/// spelled `""` at each call site so the reason is attached to the value.
+///
+/// Only reachable from test code today — the v2 writer survives as a fixture
+/// builder for the reader and `parquet_tools` tests, and nothing in the bin's
+/// live path constructs one any more.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const SINGLE_RECORDING_KEY: &str = "";
+
 /// When an open segment is due to be sealed. Byte-first: the byte cap is the
 /// one that bounds both the builder's memory footprint and the encoder's input,
 /// and it is maintained O(1) per entry by `TableBuilder::push_row`.
@@ -102,8 +114,8 @@ impl SegmentAccount {
     /// over the tick budget. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
     /// size and count untouched — `rotate` restores the full policy.
-    pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
-        let bucket = stagger_bucket(sampler);
+    pub(crate) fn open_first(sampler: &str, recording_key: &str, policy: &SealPolicy) -> Self {
+        let bucket = stagger_bucket(sampler, recording_key);
         // Divide before multiplying: `max_rows` is `usize::MAX` in several
         // callers, and `max_rows * bucket` would overflow.
         let row_offset = (policy.max_rows / (2 * STAGGER_BUCKETS as usize)) * bucket as usize;
@@ -161,20 +173,68 @@ impl SegmentAccount {
     }
 }
 
-/// FNV-1a over the sampler name, reduced to a stagger bucket.
+/// FNV-1a over the sampler name AND the recording's identity, reduced to a
+/// stagger bucket.
 ///
 /// Hand-written rather than `DefaultHasher` on purpose: the offset must be
 /// identical across runs, builds and Rust versions, and `DefaultHasher` is
 /// SipHash with an explicitly unstable algorithm and no seed guarantee.
 /// Randomizing the initial deadline would desync just as well, but a stable
 /// offset keeps a recording's segment boundaries reproducible.
-pub(crate) fn stagger_bucket(sampler: &str) -> u64 {
+///
+/// **`recording_key` is why this is not just the sampler name.** An archive can
+/// hold several recordings, and two rezolus agents have *identical* sampler
+/// sets — so keying on the sampler alone would give every table in recording B
+/// the same bucket as its namesake in A. The two recordings would then seal in
+/// permanent lockstep, doubling the co-seal batch size exactly when the archive
+/// holds twice the tables: the stagger still working within a recording and
+/// silently defeated across them.
+///
+/// The key is the recording's canonical label set, not its `recordings` row id.
+/// An autoincrement id would make the bucket — and so where every segment
+/// boundary falls — depend on the order endpoints were listed on the command
+/// line, and the same two agents recorded with the flags swapped would segment
+/// differently for no reason. Labels are stable across runs and across flag
+/// order, and they are what actually distinguishes two arms: `host` separates a
+/// multi-host archive, and an A/B on a *single* host separates only on `arm`,
+/// which a node name alone would miss.
+///
+/// Two recordings with genuinely identical label sets still collide. That is
+/// the degenerate case — the operator gave two endpoints nothing to tell them
+/// apart — and the answer is to warn rather than to fold in the id and
+/// reintroduce order-dependence.
+pub(crate) fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64-bit offset basis
     for b in sampler.as_bytes() {
         h ^= *b as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a 64-bit prime
     }
+    // A separator no label byte can supply, so `a=1,b=2` and `a=1,b=2` reached
+    // from different splits cannot alias.
+    h ^= 0xff;
+    h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    for b in recording_key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
     h % STAGGER_BUCKETS
+}
+
+/// A recording's stagger identity: its label set, canonically rendered.
+///
+/// `BTreeMap` already fixes the order, so this is just a rendering — but it is
+/// done in one place so the writer and any test agree on the exact bytes.
+pub(crate) fn recording_stagger_key(labels: &std::collections::BTreeMap<String, String>) -> String {
+    let mut out = String::new();
+    for (k, v) in labels {
+        if !out.is_empty() {
+            out.push('\u{1}');
+        }
+        out.push_str(k);
+        out.push('=');
+        out.push_str(v);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -187,8 +247,83 @@ mod tests {
     /// segment boundaries move.
     #[test]
     fn stagger_is_deterministic() {
-        assert_eq!(stagger_bucket("cpu_usage"), 29);
-        assert_eq!(stagger_bucket("scheduler"), 58);
-        assert!((0..STAGGER_BUCKETS).contains(&stagger_bucket("anything_at_all")));
+        assert_eq!(stagger_bucket("cpu_usage", SINGLE_RECORDING_KEY), 6);
+        assert_eq!(stagger_bucket("scheduler", SINGLE_RECORDING_KEY), 63);
+        assert!(
+            (0..STAGGER_BUCKETS).contains(&stagger_bucket("anything_at_all", SINGLE_RECORDING_KEY))
+        );
+    }
+
+    /// The reason the key widened past the sampler name.
+    ///
+    /// Two rezolus agents have identical sampler sets. Keyed on the sampler
+    /// alone, every table in one recording drew its namesake's bucket in the
+    /// other, so both sealed in permanent lockstep — doubling the co-seal batch
+    /// exactly when the archive holds twice the tables. This is the assertion
+    /// that fails if the recording key is ever dropped from the hash.
+    #[test]
+    fn two_recordings_do_not_share_a_samplers_bucket() {
+        let a = recording_stagger_key(
+            &[("host".to_string(), "alpha".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let b = recording_stagger_key(
+            &[("host".to_string(), "beta".to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        // Every sampler the two hosts share must land somewhere different.
+        let shared = ["cpu_usage", "scheduler", "blockio_latency", "tcp_traffic"];
+        let collisions = shared
+            .iter()
+            .filter(|s| stagger_bucket(s, &a) == stagger_bucket(s, &b))
+            .count();
+        assert_eq!(
+            collisions, 0,
+            "identical sampler sets must not draw identical buckets across recordings"
+        );
+    }
+
+    /// An A/B on ONE host separates only on `arm` — which is why the key is the
+    /// whole label set and not the node name.
+    #[test]
+    fn same_host_different_arms_still_desync() {
+        let base = |arm: &str| {
+            recording_stagger_key(
+                &[
+                    ("host".to_string(), "alpha".to_string()),
+                    ("arm".to_string(), arm.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        };
+        let (a, b) = (base("redis"), base("valkey"));
+        assert_ne!(a, b, "the arm label must reach the key");
+        assert_ne!(
+            stagger_bucket("cpu_usage", &a),
+            stagger_bucket("cpu_usage", &b)
+        );
+    }
+
+    /// Order-independence: the key is the label SET, so it cannot depend on
+    /// insertion order — which is what rules out the autoincrement recording id.
+    #[test]
+    fn the_key_is_order_independent() {
+        let one: std::collections::BTreeMap<String, String> = [
+            ("host".to_string(), "alpha".to_string()),
+            ("arm".to_string(), "redis".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        let two: std::collections::BTreeMap<String, String> = [
+            ("arm".to_string(), "redis".to_string()),
+            ("host".to_string(), "alpha".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(recording_stagger_key(&one), recording_stagger_key(&two));
     }
 }
