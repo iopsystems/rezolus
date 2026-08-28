@@ -344,6 +344,32 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   replays the whole msgpack spool. *Reopen:* if a client needs `.parquet` output
   with fast stop — likely shape: record to `.rez`, convert offline.
 
+## `.rez` v3 — read path
+
+Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-parquet-read-path.md).
+
+- **Open only the tables a query touches** — Open, highest value. The reader
+  materializes every segment of every table at open (`RecordingBytes.tables`,
+  `src/recorder/rez.rs:817`), so 91% of a query's wall time is opening tables it
+  never reads. Blocker is name resolution: `counter_names()`/`columns()`
+  (`src/rez_reader.rs:531`) ask each table's reader, which needs its footer. Fix
+  by writing a metric→table index into the SQLite catalog (`segments` is already
+  keyed by sampler) and answering resolution from it; archives without the index
+  fall back. Expected 572 → ~70 ms open on the measured archive.
+- **Share the parsed schema across a table's segments** — Open, metriken-query.
+  `SegmentedParquetReader::open_bytes_with_pool` opens each segment and builds
+  four identity indexes per segment per metric kind (~418 footer parses, ~1,670
+  schema passes for one archive). A table's segments have identical schemas, which
+  `schema_hash` already asserts — one pass per table would serve all of them.
+- **Seal larger segments** — Open, tuning, and the only one of the three that
+  moves *bytes*. Segments average 218 KB against the 1.4 MiB the container design
+  was priced at, so per-segment footer overhead is paid ~6× more often than
+  assumed and compression cannot work across boundaries. *Reopen:* re-run the
+  size arm of the benchmark after changing seal thresholds.
+- **Read cost on a live/unsealed archive is unmeasured** — Open. Both benchmark
+  arms were finalized; hindsight reads a buffer with a live WAL tail, which
+  materializes differently. *Reopen:* measure alongside the first fix.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
