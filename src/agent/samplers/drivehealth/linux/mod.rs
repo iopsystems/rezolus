@@ -75,10 +75,27 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .sampler_interval(NAME)
         .unwrap_or(DEFAULT_READ_INTERVAL);
 
-    // Robust to absence: a host with no supported drive (or no privilege for the
-    // ioctl) discovers zero drives / reads nothing and emits no series rather
-    // than failing the agent.
-    Ok(Some(Box::new(DriveHealth::new(interval))))
+    let sampler = DriveHealth::new(interval);
+
+    // A host with no supported drive (or no privilege for the ioctl) is not a
+    // failure — but it is not healthy either, which is what returning the
+    // sampler used to report. `drives` is enumerated once in `new()` and
+    // `refresh()` returns early forever when it is empty, so a sampler with
+    // none will provably never emit a series: say so rather than counting it
+    // among the healthy.
+    //
+    // Drives ARE hotpluggable, unlike most of what this state covers. That
+    // makes no difference today because nothing re-probes after init; if
+    // periodic re-probing lands, this is one of the samplers that should take
+    // it, and `unsupported` becomes "not right now" rather than "not ever".
+    if sampler.drives.is_empty() {
+        return Err(crate::agent::sampler_status::Unsupported(
+            "no NVMe or SATA drives found".to_string(),
+        )
+        .into());
+    }
+
+    Ok(Some(Box::new(sampler)))
 }
 
 #[distributed_slice(SAMPLERS)]

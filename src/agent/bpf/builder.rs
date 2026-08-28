@@ -923,10 +923,11 @@ where
                         .expect("failed to mmap() bpf map")
                 };
 
-                for (index, bytes) in mmap
-                    .chunks_exact_mut(std::mem::size_of::<u64>())
-                    .enumerate()
-                {
+                // `as_chunks_mut` rather than `chunks_exact_mut`: same
+                // chunking, same discarded remainder (it lands in `.1`), but
+                // the width is a const generic so the compiler knows it.
+                let (chunks, _remainder) = mmap.as_chunks_mut::<{ std::mem::size_of::<u64>() }>();
+                for (index, bytes) in chunks.iter_mut().enumerate() {
                     let value = bytes.as_mut_ptr() as *mut u64;
                     unsafe {
                         *value = values[index];

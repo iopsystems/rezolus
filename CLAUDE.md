@@ -54,13 +54,17 @@ sudo target/release/rezolus config/agent.toml
 # Exporter - Prometheus-compatible metrics endpoint
 sudo target/release/rezolus exporter config/exporter.toml
 
-# Recorder - capture metrics to parquet
-target/release/rezolus record http://localhost:4241 output.parquet
-target/release/rezolus record --metadata source=llm-perf http://host:9090/metrics output.parquet
+# Recorder - capture metrics to disk (.rez by default)
+target/release/rezolus record                                                           # localhost:4241 -> rezolus.rez
 target/release/rezolus record --url http://localhost:4241 -o out.rez --label arm=redis  # per-sampler .rez archive
-# Auto-detects Rezolus agent vs Prometheus endpoints. Supports --format {parquet|raw|rez},
-# --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez recording,
-# source/host auto-populated), --interval, --duration. .rez output requires a rezolus/msgpack endpoint.
+target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
+# Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
+# (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
+# the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
+# .rez requires a single rezolus/msgpack endpoint; a run that chose no format at all falls
+# back to rezolus.parquet (with a note) for a Prometheus or multi-endpoint source.
+# Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
+# recording, source/host auto-populated), --interval, --duration.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]
@@ -99,6 +103,11 @@ target/release/rezolus recording upgrade old.rez -o new.rez            # ...or t
 # annotate file.rez --queries kpis.json embeds KPIs into each recording's manifest (--queries required for .rez).
 
 # MCP - AI analysis server or CLI commands
+# Status - agent health check (exits 1 if any sampler is degraded/failed/pmu-limited)
+target/release/rezolus status                       # defaults to http://localhost:4241
+target/release/rezolus status web-01                # bare host/host:port is normalized
+target/release/rezolus status --json
+
 target/release/rezolus mcp                                                    # stdio server
 target/release/rezolus mcp describe-recording file.parquet                    # describe recording
 target/release/rezolus mcp describe-metrics file.parquet                      # list all metrics
@@ -120,11 +129,11 @@ The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to parquet files. Auto-detects Rezolus vs Prometheus sources. Supports `--metadata key=value` and `--format {parquet|raw|rez}`. The `.rez` format (`-o out.rez` or `--format rez`) writes a per-sampler archive (see "`.rez` archive format" below); `--label key=value` tags a `.rez` recording.
+3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.rez` default, `.parquet`, `.raw`); `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.rez` when no `-o` is given, falling back to `rezolus.parquet` for a Prometheus or multi-endpoint source only when nothing pinned the format. Supports `--metadata key=value`; `--label key=value` tags a `.rez` recording (see "`.rez` archive format" below).
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling `.rez` v3 buffer on disk (the streaming v3 writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. The buffer is readable live by the viewer/MCP/`parquet metadata`; a snapshot is a `VACUUM INTO` copy taken without pausing the recording.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison, >2 shows the first two), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -f raw`). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -o out.raw`). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
 
 ### Sampler Architecture
 

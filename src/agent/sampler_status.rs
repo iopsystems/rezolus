@@ -62,7 +62,39 @@ pub enum SamplerState {
         wants: usize,
         free: usize,
     },
+    /// Not started because this machine or kernel cannot support it — no L3
+    /// cache domains, no GPU of that vendor, an architecture the probe does not
+    /// cover.
+    ///
+    /// Deliberately not `Failed`, for the reason `PmuStarved` is not: nothing
+    /// broke. A missing capability reported as a fault sends an operator
+    /// looking for a problem that does not exist, and — because `rezolus
+    /// status` exits non-zero on a failed sampler — fails a readiness probe on
+    /// a machine that is working exactly as it can. Deliberately not `Disabled`
+    /// either: nobody turned it off, and an operator reading `disabled` would
+    /// reasonably go looking for the config that did.
+    Unsupported {
+        reason: String,
+    },
 }
+
+/// Returned from a sampler's `init` to say "this machine cannot do this",
+/// rather than "this broke".
+///
+/// Init returns `anyhow::Result`, and every error out of it used to become
+/// `Failed`. This is the marker that lets the one meaningful distinction
+/// survive that funnel: `run()` downcasts to it and records `Unsupported`
+/// instead.
+#[derive(Debug)]
+pub struct Unsupported(pub String);
+
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unsupported {}
 
 /// Status of a single BPF program within a sampler.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -126,6 +158,22 @@ pub fn set_pmu_starved(name: &'static str, wants: usize, free: usize) {
         SamplerStatus {
             name: name.to_string(),
             state: SamplerState::PmuStarved { wants, free },
+            health: Some(SamplerHealth::Unsupported),
+            programs: Vec::new(),
+        },
+    );
+}
+
+/// Record a sampler as unsupported on this machine, with the reason.
+///
+/// Health is `Unsupported` — informational, "this capability is unavailable
+/// here" — so it does not count against the health rollup or the exit status.
+pub fn set_unsupported(name: &'static str, reason: String) {
+    registry().lock().unwrap().insert(
+        name,
+        SamplerStatus {
+            name: name.to_string(),
+            state: SamplerState::Unsupported { reason },
             health: Some(SamplerHealth::Unsupported),
             programs: Vec::new(),
         },
@@ -325,6 +373,36 @@ pub fn rollup_health(loaded_ok: bool, verdicts: &[ProbeVerdict]) -> SamplerHealt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The marker must survive being carried up through `init`.
+    ///
+    /// `run()` finds it with `downcast_ref`, which searches an `anyhow` error
+    /// AND its context chain — so `.context(..)` is safe. What is not safe is
+    /// `anyhow!("...: {e}")`: that builds a fresh error with the text
+    /// interpolated, the type is gone, and an absent GPU stack silently
+    /// becomes `failed` again. This bit twice while writing the fix, and the
+    /// symptom is a correct-looking message under the wrong state.
+    #[test]
+    fn the_unsupported_marker_survives_context_but_not_reformatting() {
+        let raw: anyhow::Error = Unsupported("no ROCm stack on this host".into()).into();
+        assert!(raw.downcast_ref::<Unsupported>().is_some(), "bare");
+
+        let with_context = raw.context("gpu_amd_smi: failed to initialize");
+        assert!(
+            with_context.downcast_ref::<Unsupported>().is_some(),
+            "context() must preserve the marker"
+        );
+
+        // The trap, asserted so nobody reintroduces it believing otherwise.
+        let reformatted = anyhow::anyhow!(
+            "gpu_amd_smi: failed to initialize: {}",
+            Unsupported("no ROCm stack on this host".to_string())
+        );
+        assert!(
+            reformatted.downcast_ref::<Unsupported>().is_none(),
+            "reformatting DOES destroy the marker — propagate or use context()"
+        );
+    }
 
     #[test]
     fn active_serializes_with_flattened_state_and_programs() {

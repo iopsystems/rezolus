@@ -7,6 +7,37 @@ use crate::agent::sampler_status::{
 use clap::{value_parser, Arg, ArgAction, Command};
 use std::time::Duration;
 
+/// The agent on this machine — the same endpoint `rezolus record --url`
+/// defaults to, so the two agree about what "no endpoint given" means.
+pub const DEFAULT_ENDPOINT: &str = "http://localhost:4241";
+
+/// The agent's default port, supplied when an endpoint names only a host.
+const DEFAULT_PORT: u16 = 4241;
+
+/// Accept the short forms people actually type.
+///
+/// `reqwest` needs an absolute URL, so a bare `web-01` or `web-01:4241` used to
+/// fail with "builder error for url" — which names neither the problem nor the
+/// fix. Anything without a scheme gets `http://`, and a host with no port gets
+/// the agent's. An endpoint that already carries a scheme is left exactly as
+/// given: a caller who wrote `https://` or a path prefix means it.
+pub fn normalize_endpoint(raw: &str) -> String {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.contains("://") {
+        return trimmed.to_string();
+    }
+    // A port is a colon followed by digits only — this must not mistake the
+    // colon in a bare IPv6 literal for one.
+    let has_port = trimmed
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()));
+    if has_port {
+        format!("http://{trimmed}")
+    } else {
+        format!("http://{trimmed}:{DEFAULT_PORT}")
+    }
+}
+
 /// Render the one-line agent header: version, humanized uptime, humanized ttl.
 pub fn render_header(status: &AgentStatus) -> String {
     format!(
@@ -39,6 +70,17 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
                 lines.push_str(&format!(
                     "  {:<22} {:<12} {cpus} of {of} cpus\n",
                     s.name, "pmu-limited"
+                ));
+            }
+            // Not a fault: the machine or kernel cannot do this. Counted as
+            // unsupported and, crucially, `problem` is left alone — a host
+            // without an L3 cache domain must not fail a readiness probe for
+            // having the hardware it has.
+            (SamplerState::Unsupported { reason }, _) => {
+                unsupported += 1;
+                lines.push_str(&format!(
+                    "  {:<22} {:<12} {reason}\n",
+                    s.name, "unsupported"
                 ));
             }
             (SamplerState::PmuStarved { wants, free }, _) => {
@@ -106,10 +148,36 @@ pub fn render_samplers(samplers: &[SamplerStatus]) -> (String, bool) {
 pub fn command() -> Command {
     Command::new("status")
         .about("Fetch and display agent status (version, uptime, sampler health)")
+        .long_about(
+            "Ask a running agent how it is doing. With no argument it asks the agent on\n\
+             this machine (http://localhost:4241), the same endpoint `rezolus record`\n\
+             defaults to.\n\n\
+             Prints one header line — version, uptime\n\
+             and the snapshot TTL — then a tally of samplers by state, and one line for each\n\
+             sampler that is NOT healthy, with the reason.\n\n\
+             States: healthy, degraded (running, but a probe or some CPUs are missing),\n\
+             failed (not running), unsupported (this kernel or machine cannot run it),\n\
+             pmu-limited (running on fewer CPUs than asked, because PMU counters are\n\
+             scarce) and pmu-starved (no counters left for it at all). Disabled samplers\n\
+             are not counted.\n\n\
+             EXIT STATUS: 0 when nothing is wrong, 1 when any sampler is degraded, failed\n\
+             or pmu-limited — so this works as a health check in a script or a readiness\n\
+             probe. A pmu-starved or disabled sampler on its own does not fail the check.\n\
+             A network or parse error also exits non-zero, with the reason on stderr.\n\n\
+             EXAMPLES:\n    \
+             # Is the agent on this machine healthy?\n    \
+             rezolus status\n\n    \
+             # Another host, written the short way\n    \
+             rezolus status web-01\n\n    \
+             # Use it as a gate in a script\n    \
+             rezolus status || echo \"agent is unhealthy\"\n\n    \
+             # The raw payload, for a machine to read\n    \
+             rezolus status --json",
+        )
         .arg(
             Arg::new("ENDPOINT")
-                .help("Agent base URL, e.g. http://localhost:4241")
-                .required(true)
+                .help("Agent to ask (default http://localhost:4241). A bare host or host:port is fine — the scheme and the default port are filled in, so `rezolus status web-01` works")
+                .required(false)
                 .index(1)
                 .value_parser(value_parser!(String)),
         )
@@ -122,7 +190,10 @@ pub fn command() -> Command {
 }
 
 pub fn run(args: &clap::ArgMatches) {
-    let endpoint = args.get_one::<String>("ENDPOINT").unwrap();
+    let endpoint = args
+        .get_one::<String>("ENDPOINT")
+        .map(|e| normalize_endpoint(e))
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string());
     let json = args.get_flag("json");
     let url = format!("{}/status", endpoint.trim_end_matches('/'));
 
@@ -173,6 +244,116 @@ mod tests {
             expected: true,
             verdict,
         }
+    }
+
+    fn sampler(name: &str, state: SamplerState, health: Option<SamplerHealth>) -> SamplerStatus {
+        SamplerStatus {
+            name: name.into(),
+            state,
+            health,
+            programs: Vec::new(),
+        }
+    }
+
+    /// A capability the machine does not have must not read as a fault.
+    ///
+    /// `cpu_l3` on a CPU with no L3 cache domain reported `failed`, which is
+    /// wrong twice over: it sends an operator looking for a break that does not
+    /// exist, and because a failed sampler exits non-zero it fails a readiness
+    /// probe on a machine working exactly as it can.
+    #[test]
+    fn an_unsupported_sampler_is_not_a_failure_and_does_not_set_exit_status() {
+        let (text, problem) = render_samplers(&[
+            sampler(
+                "cpu_usage",
+                SamplerState::Active,
+                Some(SamplerHealth::Healthy),
+            ),
+            sampler(
+                "cpu_l3",
+                SamplerState::Unsupported {
+                    reason: "no L3 cache domains found".into(),
+                },
+                Some(SamplerHealth::Unsupported),
+            ),
+        ]);
+
+        assert!(
+            !problem,
+            "an unsupported sampler must not make `rezolus status` exit non-zero:\n{text}"
+        );
+        assert!(text.contains("unsupported"), "{text}");
+        assert!(text.contains("no L3 cache domains found"), "{text}");
+        assert!(
+            text.contains("1 unsupported"),
+            "counted in the tally:\n{text}"
+        );
+        assert!(
+            text.contains("0 failed"),
+            "and not in the failed tally:\n{text}"
+        );
+        // The sampler's own line, not the tally line, is what must not say
+        // "failed" — the tally always carries the word.
+        let line = text
+            .lines()
+            .find(|l| l.contains("cpu_l3"))
+            .expect("cpu_l3 is listed");
+        assert!(!line.contains("failed"), "{line}");
+    }
+
+    /// The distinction the fix turns on: a real failure still is one.
+    #[test]
+    fn a_failed_sampler_still_sets_the_exit_status() {
+        let (text, problem) = render_samplers(&[sampler(
+            "cpu_l3",
+            SamplerState::Failed {
+                error: "failed to create L3 cache perf counters".into(),
+            },
+            Some(SamplerHealth::Failed),
+        )]);
+        assert!(
+            problem,
+            "a genuine failure must still exit non-zero:\n{text}"
+        );
+        assert!(text.contains("failed"), "{text}");
+    }
+
+    /// The short forms people type, and the one case that must NOT be
+    /// treated as a port: a bare IPv6 literal is all colons.
+    #[test]
+    fn normalize_endpoint_fills_in_scheme_and_port() {
+        // host only
+        assert_eq!(normalize_endpoint("localhost"), "http://localhost:4241");
+        assert_eq!(normalize_endpoint("web-01"), "http://web-01:4241");
+        assert_eq!(normalize_endpoint("127.0.0.1"), "http://127.0.0.1:4241");
+        // host:port
+        assert_eq!(
+            normalize_endpoint("localhost:9999"),
+            "http://localhost:9999"
+        );
+        // already absolute — left alone, scheme and path included
+        for already in [
+            "http://localhost:4241",
+            "https://agent.internal:4241",
+            "http://host:4241/prefix",
+        ] {
+            assert_eq!(normalize_endpoint(already), already);
+        }
+        // trailing slash and surrounding space are noise
+        assert_eq!(
+            normalize_endpoint("  localhost:4241/  "),
+            "http://localhost:4241"
+        );
+        // an IPv6 literal's colons are not a port
+        assert_eq!(normalize_endpoint("[::1]"), "http://[::1]:4241");
+        assert_eq!(normalize_endpoint("[::1]:4241"), "http://[::1]:4241");
+    }
+
+    /// The no-argument default and `record`'s must not drift apart: "the agent
+    /// on this machine" has to mean one thing across the binary.
+    #[test]
+    fn default_endpoint_matches_the_recorders() {
+        assert_eq!(DEFAULT_ENDPOINT, "http://localhost:4241");
     }
 
     #[test]

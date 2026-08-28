@@ -147,7 +147,12 @@ pub fn run(config: PathBuf) {
                 samplers.push(s);
             }
             Ok(None) => crate::agent::sampler_status::set_disabled(entry.name),
-            Err(e) => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
+            // "this machine cannot" is not "this broke". A sampler says so by
+            // returning `Unsupported`; everything else is still a failure.
+            Err(e) => match e.downcast_ref::<crate::agent::sampler_status::Unsupported>() {
+                Some(u) => crate::agent::sampler_status::set_unsupported(entry.name, u.0.clone()),
+                None => crate::agent::sampler_status::set_failed(entry.name, e.to_string()),
+            },
         }
     }
 
@@ -294,6 +299,10 @@ fn log_sampler_health_summary() {
                     })
                     .collect();
                 info!("sampler {}: unsupported — {}", s.name, probes.join(", "));
+            }
+            (SamplerState::Unsupported { reason }, _) => {
+                unsupported += 1;
+                info!("sampler {}: unsupported — {reason}", s.name);
             }
             (_, Some(SamplerHealth::Healthy)) => healthy += 1,
             (SamplerState::Disabled, None) => {}

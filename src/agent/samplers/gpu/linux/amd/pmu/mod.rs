@@ -111,12 +111,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
         Ok(Some(r)) => r,
         Ok(None) => {
             debug!("{NAME}: rocprofiler-sdk / HSA runtime not present");
-            return Ok(None);
+            return Err(crate::agent::sampler_status::Unsupported(
+                "rocprofiler-sdk / HSA runtime not present".to_string(),
+            )
+            .into());
         }
-        Err(e) => {
-            debug!("{NAME}: disabled: {e}");
-            return Ok(None);
-        }
+        // See the equivalent arm in `gpu_amd`: a failure here is a failure,
+        // not a sampler somebody disabled.
+        // Propagated unchanged, for the reason given in `gpu_amd`.
+        Err(e) => return Err(anyhow::anyhow!("{e}")),
     };
     debug!("{NAME}: initialized for {} GPU agent(s)", rocp.num_agents());
 

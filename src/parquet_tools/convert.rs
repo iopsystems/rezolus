@@ -591,7 +591,7 @@ pub(crate) fn run(args: &clap::ArgMatches) {
                 // --descriptions route, so naming it for both would send the
                 // reader after a flag that does not exist.
                 let recovery = if opts.systeminfo.is_none() {
-                    " `rezolus parquet annotate <file> --systeminfo <path>` can add the \
+                    " `rezolus recording annotate <file> --systeminfo <path>` can add the \
                      hardware summary later; descriptions can only be set here."
                 } else {
                     " Descriptions can only be set here, by reconverting with --force."

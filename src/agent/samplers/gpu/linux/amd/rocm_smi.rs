@@ -132,13 +132,21 @@ unsafe fn optional<T>(lib: &Library, name: &[u8]) -> Option<Symbol<'static, T>> 
 
 impl RocmSmi {
     /// Load the library, resolve symbols, and call `rsmi_init(0)`.
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> anyhow::Result<Self> {
         // SAFETY: loading an arbitrary shared library is inherently unsafe;
         // we trust the system-provided ROCm SMI library.
         let lib = unsafe {
+            // The library being absent is this host having no ROCm stack — a
+            // machine without AMD GPU tooling, not a fault. Everything past
+            // this point (a missing symbol, a failing rsmi_init) IS a fault:
+            // the library is here and not behaving.
             Library::new("librocm_smi64.so")
                 .or_else(|_| Library::new("librocm_smi64.so.1"))
-                .map_err(|e| format!("could not load librocm_smi64.so: {e}"))?
+                .map_err(|e| {
+                    crate::agent::sampler_status::Unsupported(format!(
+                        "no ROCm stack on this host (could not load librocm_smi64.so: {e})"
+                    ))
+                })?
         };
         let lib = Box::new(lib);
 
@@ -146,13 +154,13 @@ impl RocmSmi {
         unsafe {
             let init: Symbol<FnInit> = lib
                 .get(b"rsmi_init")
-                .map_err(|e| format!("missing rsmi_init: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("missing rsmi_init: {e}"))?;
             let status = init(0);
             if status != RSMI_STATUS_SUCCESS {
-                return Err(format!("rsmi_init failed: status {status}"));
+                return Err(anyhow::anyhow!("rsmi_init failed: status {status}"));
             }
 
-            let map_err = |e: libloading::Error| format!("missing required symbol: {e}");
+            let map_err = |e: libloading::Error| anyhow::anyhow!("missing required symbol: {e}");
 
             let this = RocmSmi {
                 shut_down: required(&lib, b"rsmi_shut_down").map_err(map_err)?,

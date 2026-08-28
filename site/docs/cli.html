@@ -61,7 +61,7 @@
 <!-- Sidebar -->
 <aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
 <div class="mb-8">
-<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.17.0</div>
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.18.0</div>
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
@@ -123,25 +123,33 @@
 <h3 class="text-base font-bold mb-3">Recorder</h3>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-sm">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] &lt;URL&gt; &lt;OUTPUT&gt;</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] [-- &lt;COMMAND&gt;...]</code></div>
 </div>
 </div>
+<p class="text-xs text-slate-400 mt-2">With no arguments at all this records the local agent (<code>http://localhost:4241</code>) into <code>rezolus.rez</code> until ctrl-c. The output extension picks the format, so <code>--format</code> is rarely needed.</p>
 <div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">    --url</span> &lt;URL&gt;               <span class="text-slate-600">Endpoint to record [default: http://localhost:4241]</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">Output path; .rez | .parquet | .raw picks the format [default: rezolus.rez]</span></div>
 <div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">Collection interval [default: 1s]</span></div>
-<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Collection duration</span></div>
-<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">parquet|raw [default: parquet]</span></div>
+<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">Record for a fixed window, then stop</span></div>
+<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">rez|parquet|raw &mdash; only needed when the path cannot say</span></div>
+<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">Tag a .rez recording (repeatable); source/host auto-filled</span></div>
+<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">File-level metadata, any format (repeatable)</span></div>
 <div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">TOML config for multi-endpoint recording</span></div>
-<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Additional endpoint (repeatable)</span></div>
-<div><span class="text-slate-400">    --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">Custom metadata (repeatable)</span></div>
-<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;             <span class="text-slate-600">Node name attached to rezolus data</span></div>
-<div><span class="text-slate-400">    --instance</span> &lt;NAME&gt;         <span class="text-slate-600">Instance name attached to service data</span></div>
+<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">Endpoint with options (repeatable), url[,source=][,role=][,protocol=]</span></div>
 <div><span class="text-slate-400">    --separate</span>                <span class="text-slate-600">Write per-endpoint files instead of one combined</span></div>
 <div><span class="text-slate-400">-v, --verbose</span>                 <span class="text-slate-600">Increase verbosity (stackable)</span></div>
 </div>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
-<div class="p-5 font-mono text-sm">
-<div class="text-slate-600 text-xs mb-2"># Record 30s at 100ms intervals</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 30s http://localhost:4241 output.parquet</code></div>
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-600 text-xs"># Record the local agent until ctrl-c &rarr; rezolus.rez</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record</code></div>
+<div class="text-slate-600 text-xs mt-3"># Record 30s at 100ms intervals</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.rez -i 100ms -d 30s</code></div>
+<div class="text-slate-600 text-xs mt-3"># Record only while a benchmark runs (perf-record style)</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o bench.rez -- ./bench.sh --iters 100</code></div>
+<div class="text-slate-600 text-xs mt-3"># A Prometheus source needs parquet</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://host:9090/metrics -o svc.parquet -d 5m</code></div>
 </div>
 </div>
 </div>
@@ -157,6 +165,32 @@
 <p class="text-xs text-slate-400 mt-2">Rolling ring buffer. Send SIGHUP to trigger snapshot.</p>
 </div>
 
+<!-- Status -->
+<div>
+<h3 class="text-base font-bold mb-3">Status</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-sm">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status [OPTIONS] [ENDPOINT]</code></div>
+</div>
+</div>
+<p class="text-xs text-slate-400 mt-2">Ask a running agent how it is doing: version, uptime, and a per-sampler health rollup. With no argument it asks the agent on this machine.</p>
+<div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">ENDPOINT</span>                       <span class="text-slate-600">Agent to ask [default: http://localhost:4241]; a bare host or host:port is fine</span></div>
+<div><span class="text-slate-400">    --json</span>                    <span class="text-slate-600">Emit the raw /status JSON</span></div>
+</div>
+<p class="text-xs text-slate-400 mt-3"><span class="font-semibold">Exit status:</span> 0 when nothing is wrong, 1 when any sampler is degraded, failed or pmu-limited &mdash; so it works as a health check or readiness probe.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># Is the agent on this machine healthy?</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status</code></div>
+<div class="text-slate-600 text-xs mt-3"># Another host, written the short way</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status web-01</code></div>
+<div class="text-slate-600 text-xs mt-3"># Use it as a gate in a script</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status || echo "agent is unhealthy"</code></div>
+</div>
+</div>
+</div>
+
 <!-- Viewer -->
 <div>
 <h3 class="text-base font-bold mb-3">Viewer</h3>
@@ -166,13 +200,14 @@
 </div>
 </div>
 <div class="mt-3 space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture (parquet path, agent URL, or alias=parquet)</span></div>
+<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">First capture: parquet, .rez archive, agent URL, or alias=parquet</span></div>
 <div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">Optional second capture for A/B comparison</span></div>
 <div><span class="text-slate-400">-l, --listen</span> &lt;ADDR&gt;           <span class="text-slate-600">Viewer listen address (e.g. 127.0.0.1:8080)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;         <span class="text-slate-600">Directory of service-extension template JSON</span></div>
 <div><span class="text-slate-400">    --category</span> &lt;NAME&gt;         <span class="text-slate-600">Activate category mode (e.g. inference-library)</span></div>
 <div><span class="text-slate-400">    --proxy-allow</span> &lt;PATTERN&gt;  <span class="text-slate-600">Whitelist a host pattern for URL proxy (repeatable)</span></div>
 <div><span class="text-slate-400">    --proxy-allow-any</span>         <span class="text-slate-600">Disable proxy allowlist entirely (trust-everyone mode)</span></div>
+<div><span class="text-slate-400">    --tui</span>                     <span class="text-slate-600">Terminal UI instead of a browser (needs a file or agent URL)</span></div>
 <div><span class="text-slate-400">    --cache-size-mb</span> &lt;MB&gt;     <span class="text-slate-600">Row-group buffer cache size [default: 500]</span></div>
 <div><span class="text-slate-400">-v, --verbose</span>                  <span class="text-slate-600">Increase verbosity</span></div>
 </div>
@@ -180,8 +215,12 @@
 <div class="p-5 font-mono text-sm">
 <div class="text-slate-600 text-xs mb-2"># View a recording</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.parquet</code></div>
+<div class="text-slate-600 text-xs mt-3 mb-2"># View a .rez archive (a 2-recording .rez renders as A/B)</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view out.rez</code></div>
 <div class="text-slate-600 text-xs mt-3 mb-2"># View live agent</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://localhost:4241</code></div>
+<div class="text-slate-600 text-xs mt-3 mb-2"># Explore in the terminal, no browser</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view --tui out.rez</code></div>
 </div>
 </div>
 </div>
@@ -200,18 +239,28 @@
 <div><span class="text-slate-400">describe-metrics</span> &lt;FILE&gt;</div>
 <div><span class="text-slate-400">detect-anomalies</span> &lt;FILE&gt; [QUERY]</div>
 <div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt;</div>
+<div><span class="text-slate-400">extract-features</span> &lt;FILE&gt;</div>
+</div>
+<p class="text-xs text-slate-400 mt-3">Every &lt;FILE&gt; may be a <code>.parquet</code> or a <code>.rez</code>; the format is detected by content. With no subcommand, <code>rezolus mcp</code> runs as a stdio MCP server for an LLM client.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-sm leading-8">
+<div class="text-slate-500 text-xs"># One-shot PromQL against a recording</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'</code></div>
+<div class="text-slate-600 text-xs mt-3"># Sweep every metric for anomalies</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies out.rez</code></div>
+</div>
 </div>
 </div>
 
 <!-- Parquet Tools -->
 <div>
-<h3 class="text-base font-bold mb-3">Parquet Tools</h3>
+<h3 class="text-base font-bold mb-3">Recording Tools</h3>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-sm">
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus parquet &lt;SUBCOMMAND&gt; [OPTIONS]</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording &lt;SUBCOMMAND&gt; [OPTIONS]</code></div>
 </div>
 </div>
-<p class="text-xs text-slate-400 mt-2">File-level operations on rezolus recordings &mdash; inspect metadata, trim columns, embed service KPI definitions, or merge multi-source captures.</p>
+<p class="text-xs text-slate-400 mt-2">Offline operations on recordings &mdash; both <code>.parquet</code> files and <code>.rez</code> archives. Inspect metadata, trim what you do not need, embed service KPI definitions, merge multi-source captures, or convert older formats. <code>rezolus parquet &hellip;</code> still works as an alias.</p>
 
 <div class="mt-6 space-y-6">
 
@@ -220,7 +269,7 @@
 <h4 class="text-sm font-bold mb-2"><code>metadata</code></h4>
 <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Show file-level + column metadata for a recording.</p>
 <div class="space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">Input parquet file</span></div>
+<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">Recording to inspect (.parquet, or a .rez manifest)</span></div>
 <div><span class="text-slate-400">    --schema</span>               <span class="text-slate-600">Show only column-level metadata</span></div>
 <div><span class="text-slate-400">    --file</span>                 <span class="text-slate-600">Show only file-level metadata</span></div>
 <div><span class="text-slate-400">    --geometry</span>             <span class="text-slate-600">Show only table shape + row group layout</span></div>
@@ -238,7 +287,7 @@
 <div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">Custom service-extension JSON (overrides templates)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">Template directory to resolve KPIs from</span></div>
 <div><span class="text-slate-400">    --source</span> &lt;NAME&gt;         <span class="text-slate-600">Source tag to match against template <code>members</code></span></div>
-<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;           <span class="text-slate-600">Node name attached to rezolus columns</span></div>
+<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;           <span class="text-slate-600">Node name, read by <code>combine</code> for multi-node merges</span></div>
 <div><span class="text-slate-400">    --filter</span>                <span class="text-slate-600">Trim columns to only those referenced by KPIs</span></div>
 <div><span class="text-slate-400">    --systeminfo</span> &lt;JSON&gt;     <span class="text-slate-600">Embed/override the recorded systeminfo</span></div>
 <div><span class="text-slate-400">    --add-events</span> &lt;JSON&gt;     <span class="text-slate-600">Append events to the file</span></div>
@@ -254,10 +303,10 @@
 <h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
 <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Merge multiple parquet files into one &mdash; multi-node rezolus, multi-instance services, or compare-mode A/B bundles.</p>
 <div class="space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Parquet inputs to merge</span></div>
+<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">Inputs to merge (parquet, or single-recording .rez)</span></div>
 <div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output parquet path</span></div>
 <div><span class="text-slate-400">    --pinned</span> &lt;NAME&gt;         <span class="text-slate-600">Default rezolus node to display</span></div>
-<div><span class="text-slate-400">    --ab</span> &lt;LABEL=SRC&gt;        <span class="text-slate-600">Bundle as A/B compare tarball (repeatable: <code>baseline=…&nbsp;experiment=…</code>)</span></div>
+<div><span class="text-slate-400">    --ab</span> &lt;B=SRC&gt; &lt;E=SRC&gt;   <span class="text-slate-600">Bundle as A/B compare tarball &mdash; one flag, both values: <code>--ab baseline=…&nbsp;experiment=…</code></span></div>
 <div><span class="text-slate-400">    --category</span> &lt;NAME&gt;       <span class="text-slate-600">Tag the bundle with a category template</span></div>
 <div><span class="text-slate-400">    --bypass-time-check</span>     <span class="text-slate-600">Skip timestamp alignment validation</span></div>
 </div>
@@ -266,25 +315,53 @@
 <!-- filter -->
 <div>
 <h4 class="text-sm font-bold mb-2"><code>filter</code></h4>
-<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Project a recording down to only the columns referenced by its service-extension KPIs &mdash; useful before sharing a focused report.</p>
+<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Shrink a recording to what it needs &mdash; parquet columns referenced by its service-extension KPIs, or whole samplers of a <code>.rez</code>. Useful before sharing a focused report.</p>
 <div class="space-y-1 text-xs text-slate-500 font-mono">
-<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Parquet to filter</span></div>
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Recording to filter (.parquet, or .rez with --samplers)</span></div>
+<div><span class="text-slate-400">    --samplers</span> &lt;A,B,...&gt;    <span class="text-slate-600">For .rez: samplers to KEEP (required there, ignored for parquet)</span></div>
 <div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">Custom KPI JSON (overrides embedded/template)</span></div>
 <div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">Template directory to resolve KPIs from</span></div>
 <div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">Output path (defaults to in-place overwrite)</span></div>
 </div>
 </div>
 
+<!-- convert -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>convert</code></h4>
+<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Turn a raw msgpack recording (from <code>record -o out.raw</code>) into parquet. Plain or zstd input, detected by content.</p>
+<div class="space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">Raw recording to convert</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;         <span class="text-slate-600">Output parquet path (default: input with .parquet)</span></div>
+<div><span class="text-slate-400">    --interval</span> &lt;DURATION&gt;   <span class="text-slate-600">Override the inferred sampling interval</span></div>
+<div><span class="text-slate-400">    --systeminfo</span> &lt;PATH&gt;     <span class="text-slate-600">Stamp in a systeminfo blob the raw stream never carried</span></div>
+<div><span class="text-slate-400">    --descriptions</span> &lt;PATH&gt;   <span class="text-slate-600">Stamp in metric help text (only settable here)</span></div>
+<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;  <span class="text-slate-600">Tag the output (repeatable)</span></div>
+<div><span class="text-slate-400">    --force</span>                 <span class="text-slate-600">Overwrite an existing output</span></div>
+</div>
+</div>
+
+<!-- upgrade -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>upgrade</code></h4>
+<p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Rewrite a v1/v2 (tar) <code>.rez</code> as the current v3 (SQLite) container. Segment data is carried across byte-for-byte. A v3 input is refused rather than copied.</p>
+<div class="space-y-1 text-xs text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">The .rez archive to upgrade</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;REZ&gt;          <span class="text-slate-600">Write here instead of replacing in place</span></div>
+</div>
+</div>
+
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
 <div class="p-5 font-mono text-sm leading-8">
 <div class="text-slate-500 text-xs"># Inspect</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus parquet metadata -i recording.parquet --json</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording metadata -i out.rez</code></div>
 <div class="text-slate-600 text-xs mt-3"># Annotate with KPIs from a template directory</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus parquet annotate recording.parquet --templates ./templates</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording annotate recording.parquet --templates ./templates</code></div>
 <div class="text-slate-600 text-xs mt-3"># Combine two captures as an A/B bundle</div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus parquet combine before.parquet after.parquet \</code></div>
-<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    --ab baseline=before --ab experiment=after \</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine before.parquet after.parquet \</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    --ab baseline=before experiment=after \</code></div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    -o compare.parquet.ab.tar</code></div>
+<div class="text-slate-600 text-xs mt-3"># Assemble two single-recording .rez into one A/B archive</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine baseline.rez experiment.rez -o ab.rez</code></div>
 </div>
 </div>
 </div>

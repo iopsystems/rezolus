@@ -32,7 +32,8 @@ pub fn command() -> Command {
              re-exposes the metrics in Prometheus text format for a Prometheus/VictoriaMetrics\n\
              scraper to collect.\n\n\
              Configuration is a TOML file (the only argument). It sets the agent to read from\n\
-             ([general] source, default 127.0.0.1:4241), the address to serve `/metrics` on\n\
+             ([general] source, default 0.0.0.0:4241 — the shipped config sets\n\
+             127.0.0.1:4241), the address to serve `/metrics` on\n\
              ([general] listen, default 0.0.0.0:4242), and whether to expose full histogram\n\
              buckets vs. summary percentiles ([prometheus]).\n\n\
              Set [general] interval (default 1s) to match your Prometheus scrape interval:\n\

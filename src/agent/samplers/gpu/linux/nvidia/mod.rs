@@ -30,7 +30,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let inner = NvidiaInner::new()?;
+    let inner = NvidiaInner::new().map_err(|e| match e {
+        // No driver on this host: `libnvidia-ml.so.1` absent, the kernel module
+        // not loaded, or NVML's library missing. That is a machine without an
+        // NVIDIA GPU stack, not a fault — reporting it as failed makes every
+        // GPU-less host look broken and, because a failed sampler exits
+        // non-zero, fails `rezolus status` as a readiness probe. Any other NVML
+        // error is a real failure and still reported as one.
+        NvmlError::LibloadingError(_) | NvmlError::DriverNotLoaded | NvmlError::LibraryNotFound => {
+            anyhow::Error::from(crate::agent::sampler_status::Unsupported(format!(
+                "no NVIDIA driver on this host ({e})"
+            )))
+        }
+        other => anyhow::Error::from(other),
+    })?;
 
     Ok(Some(Box::new(Nvidia {
         inner: inner.into(),
@@ -85,10 +98,10 @@ impl NvidiaInner {
 
         let mut gpm_supported = vec![false; devices];
 
-        for id in 0..devices {
+        for (id, slot) in gpm_supported.iter_mut().enumerate() {
             if let Ok(device) = nvml.device_by_index(id as _) {
                 if let Ok(supported) = device.gpm_support() {
-                    gpm_supported[id] = supported;
+                    *slot = supported;
                 }
             }
         }
@@ -240,7 +253,7 @@ impl NvidiaInner {
                                 // SAFETY: transmuting &Nvml back to its true lifetime
                                 // for the duration of this call. The reference is valid
                                 // because self.nvml is alive.
-                                unsafe { std::mem::transmute(&self.nvml) },
+                                unsafe { std::mem::transmute::<&Nvml, &Nvml>(&self.nvml) },
                                 prev_sample,
                                 &new_sample,
                                 &[

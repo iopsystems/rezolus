@@ -19,19 +19,19 @@ data, distinguish recordings, build dashboards, and combine files.
 
 ```bash
 # Human-readable file-level metadata
-target/release/rezolus parquet metadata -i file.parquet --file
+target/release/rezolus recording metadata -i file.parquet --file
 
 # Full JSON (includes nested per-source metadata, parsed)
-target/release/rezolus parquet metadata -i file.parquet --json
+target/release/rezolus recording metadata -i file.parquet --json
 
 # Pull a single key (auto-pretty-prints if the value is JSON)
-target/release/rezolus parquet metadata -i file.parquet --field source
-target/release/rezolus parquet metadata -i file.parquet --field per_source_metadata
+target/release/rezolus recording metadata -i file.parquet --field source
+target/release/rezolus recording metadata -i file.parquet --field per_source_metadata
 
 # .rez: describes the MANIFEST (recordings, labels, per-sampler tables +
 # cadence). --file/--field don't apply — there is no single footer.
-target/release/rezolus parquet metadata -i file.rez
-target/release/rezolus parquet metadata -i file.rez --json   # full manifest JSON
+target/release/rezolus recording metadata -i file.rez
+target/release/rezolus recording metadata -i file.rez --json   # full manifest JSON
 ```
 
 ## `.rez` archives: metadata lives in the manifest
@@ -130,11 +130,11 @@ template.
 ```bash
 # Add a source label to a file that has none (so the bare-annotate
 # template-lookup flow works)
-target/release/rezolus parquet annotate file.parquet --source vllm
+target/release/rezolus recording annotate file.parquet --source vllm
 
 # Replace an existing source — refused without --overwrite to prevent
 # silent mislabelling
-target/release/rezolus parquet annotate file.parquet --source sglang --overwrite
+target/release/rezolus recording annotate file.parquet --source sglang --overwrite
 ```
 
 Setting `--source` is a no-op when the file already has the same value.
@@ -225,11 +225,11 @@ don't lose per-host data.
 
 ```bash
 # From a file
-target/release/rezolus parquet annotate file.parquet --systeminfo sysinfo.json
+target/release/rezolus recording annotate file.parquet --systeminfo sysinfo.json
 
 # Or piped from a live agent
 curl -s http://agent:4241/systeminfo | \
-    target/release/rezolus parquet annotate file.parquet --systeminfo -
+    target/release/rezolus recording annotate file.parquet --systeminfo -
 ```
 
 The value is validated as JSON before being written. Used alone, `--systeminfo`
@@ -269,16 +269,16 @@ carry its own KPI definitions.
 
 ```bash
 # Use the built-in template that matches the file's `source`
-target/release/rezolus parquet annotate file.parquet
+target/release/rezolus recording annotate file.parquet
 
 # Use a custom JSON file
-target/release/rezolus parquet annotate file.parquet --queries my_kpis.json
+target/release/rezolus recording annotate file.parquet --queries my_kpis.json
 
 # Also drop columns the KPIs don't touch (saves space)
-target/release/rezolus parquet annotate file.parquet --filter
+target/release/rezolus recording annotate file.parquet --filter
 
 # Remove the annotation
-target/release/rezolus parquet annotate file.parquet --undo
+target/release/rezolus recording annotate file.parquet --undo
 ```
 
 Annotation validates each KPI by running its PromQL query against the file's
@@ -300,10 +300,10 @@ fallback for rezolus files.
 **Set at record time:**
 
 ```bash
-# Explicit
-target/release/rezolus record --node web01 http://localhost:4241 web01.parquet
+target/release/rezolus record --url http://localhost:4241 -o web01.parquet --metadata node=web01
 
-# Generic key=value form (equivalent)
+# (`record --node` was removed: it was never wired to anything. `--metadata
+# node=NAME` writes the same `node` key, which is what combine reads.)
 target/release/rezolus record --metadata node=web01 http://localhost:4241 web01.parquet
 ```
 
@@ -311,7 +311,7 @@ target/release/rezolus record --metadata node=web01 http://localhost:4241 web01.
 
 ```bash
 # Set or replace the node attribute on a file recorded without one
-target/release/rezolus parquet annotate file.parquet --node web01
+target/release/rezolus recording annotate file.parquet --node web01
 ```
 
 This is useful for service recordings where you want to record which host
@@ -333,8 +333,7 @@ do (combine auto-assigns `"0"`, `"1"`, ... in input order). Mixed is rejected.
 **Set at record time:**
 
 ```bash
-target/release/rezolus record --instance primary http://vllm-host:8000/metrics primary.parquet
-# or: --metadata instance=primary
+target/release/rezolus record --url http://vllm-host:8000/metrics -o primary.parquet --metadata instance=primary
 ```
 
 ### `pinned_node`
@@ -345,7 +344,7 @@ file with multiple nodes. Only meaningful in combined files.
 **Set at combine time:**
 
 ```bash
-target/release/rezolus parquet combine \
+target/release/rezolus recording combine \
     web01.parquet web02.parquet llm-perf.parquet \
     -o combined.parquet \
     --pinned web01
@@ -395,17 +394,17 @@ than a point; `id` is a stable identifier used to dedupe across merges
 **Update with `parquet annotate`:**
 
 ```bash
-target/release/rezolus parquet annotate file.parquet --add-events events.json
+target/release/rezolus recording annotate file.parquet --add-events events.json
 
-cat events.json | target/release/rezolus parquet annotate file.parquet --add-events -
+cat events.json | target/release/rezolus recording annotate file.parquet --add-events -
 
-target/release/rezolus parquet annotate file.parquet \
+target/release/rezolus recording annotate file.parquet \
     --event 'time=2026-05-12T15:23Z,kind=restart,description="vllm restart",node=gpu01' \
     --event 'time=2026-05-12T16:00Z,kind=marker,description="benchmark start",label.run=ci-42'
 
-target/release/rezolus parquet annotate file.parquet --clear-events
+target/release/rezolus recording annotate file.parquet --clear-events
 
-target/release/rezolus parquet annotate file.parquet --clear-events --add-events new.json
+target/release/rezolus recording annotate file.parquet --clear-events --add-events new.json
 ```
 
 - `--add-events FILE` accepts JSON (`{"events":[...]}`), a bare JSON array,
@@ -476,10 +475,10 @@ mutators are:
 
 | Tool | What it can change |
 |------|--------------------|
-| `rezolus record --node`, `--instance`, `--metadata k=v` | Anything written at recording time. The catch-all `--metadata` can set any top-level key. |
-| `rezolus parquet annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`; with `--add-events PATH` / `--event KV` / `--clear-events` appends, inserts, or wipes one-off `events`. |
-| `rezolus parquet combine --pinned` | Sets `pinned_node` on the output. |
-| `rezolus parquet combine` | Merges and re-derives `source`, `descriptions`, `per_source_metadata`, etc. from the inputs. |
+| `rezolus record --metadata k=v` | Anything written at recording time; `--metadata` sets any top-level key, `node` and `instance` included. (The dedicated `--node`/`--instance` flags were removed — they never wrote anything.) |
+| `rezolus recording annotate` | Adds/replaces/removes top-level `service_queries`; with `--node NAME` sets/replaces top-level `node`; with `--source NAME` (`--overwrite` to replace) sets/replaces top-level `source`; with `--systeminfo PATH` (or `-` for stdin) sets/replaces top-level `systeminfo`; with `--add-events PATH` / `--event KV` / `--clear-events` appends, inserts, or wipes one-off `events`. |
+| `rezolus recording combine --pinned` | Sets `pinned_node` on the output. |
+| `rezolus recording combine` | Merges and re-derives `source`, `descriptions`, `per_source_metadata`, etc. from the inputs. |
 
 For anything not covered above, the path is: read the current file with
 `parquet metadata --json`, write a small Rust binary that uses
@@ -497,7 +496,7 @@ vllm service instance — and combine them.
 ### Inputs
 
 **`web01.parquet`** — produced by
-`rezolus record --node web01 http://web01:4241 web01.parquet`:
+`rezolus record --url http://web01:4241 -o web01.parquet --metadata node=web01`:
 
 ```json
 {
@@ -515,8 +514,8 @@ vllm service instance — and combine them.
 `systeminfo`/`per_source_metadata`.
 
 **`vllm.parquet`** — produced by
-`rezolus record --instance primary --metadata role=service http://vllm:8000/metrics vllm.parquet`,
-then annotated with `rezolus parquet annotate vllm.parquet`:
+`rezolus record --url http://vllm:8000/metrics -o vllm.parquet --metadata instance=primary --metadata role=service`,
+then annotated with `rezolus recording annotate vllm.parquet`:
 
 ```json
 {
@@ -533,7 +532,7 @@ then annotated with `rezolus parquet annotate vllm.parquet`:
 ### Command
 
 ```bash
-target/release/rezolus parquet combine \
+target/release/rezolus recording combine \
     web01.parquet web02.parquet vllm.parquet \
     -o combined.parquet \
     --pinned web01
@@ -543,15 +542,15 @@ target/release/rezolus parquet combine \
 
 ```bash
 # Top-level keys only
-target/release/rezolus parquet metadata -i combined.parquet --file
+target/release/rezolus recording metadata -i combined.parquet --file
 
 # Full structured view (parses nested JSON values)
-target/release/rezolus parquet metadata -i combined.parquet --json
+target/release/rezolus recording metadata -i combined.parquet --json
 
 # Drill into a single key
-target/release/rezolus parquet metadata -i combined.parquet --field source
-target/release/rezolus parquet metadata -i combined.parquet --field per_source_metadata
-target/release/rezolus parquet metadata -i combined.parquet --field pinned_node
+target/release/rezolus recording metadata -i combined.parquet --field source
+target/release/rezolus recording metadata -i combined.parquet --field per_source_metadata
+target/release/rezolus recording metadata -i combined.parquet --field pinned_node
 ```
 
 ### Output: `combined.parquet`

@@ -8,7 +8,7 @@ file is persisted.
 
 ## The problem
 
-`rezolus record -f raw` writes concatenated msgpack snapshots. Raw is the right
+`rezolus record -o out.raw` writes concatenated msgpack snapshots. Raw is the right
 choice for a long unattended capture: it costs the recorder nothing at write
 time, and finalization is a byte copy rather than a schema-building conversion
 that scales with run length. Agrippa's `launch_workboat.py` records this way for

@@ -66,7 +66,7 @@ struct CpuL3Inner {
 }
 
 impl CpuL3Inner {
-    pub fn new() -> Result<Self, std::io::Error> {
+    pub fn new() -> anyhow::Result<Self> {
         let (perf_threads, perf_sync) = spawn_threads()?;
 
         // Boot-fixed population bound, same rationale as `CpuCounters::new`
@@ -106,7 +106,7 @@ impl CpuL3Inner {
             })
             .collect();
 
-        futures::future::join_all(perf_futures.into_iter()).await;
+        futures::future::join_all(perf_futures).await;
 
         guard.finish();
 
@@ -265,15 +265,18 @@ fn l3_domains() -> Result<Vec<Vec<usize>>, std::io::Error> {
     Ok(l3_domains)
 }
 
-fn get_l3_caches() -> Result<Vec<L3Cache>, std::io::Error> {
+fn get_l3_caches() -> anyhow::Result<Vec<L3Cache>> {
     let mut l3_domains = l3_domains()?;
 
     if l3_domains.is_empty() {
+        // Not an error: plenty of CPUs have no L3 at all, and reporting that as
+        // a failure makes a healthy machine look broken (and, via `rezolus
+        // status`, fail a readiness probe).
         debug!("no L3 cache domains found");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "no L3 cache domains found",
-        ));
+        return Err(crate::agent::sampler_status::Unsupported(
+            "no L3 cache domains found".to_string(),
+        )
+        .into());
     }
 
     let mut l3_caches = Vec::new();
@@ -286,10 +289,7 @@ fn get_l3_caches() -> Result<Vec<L3Cache>, std::io::Error> {
 
     if l3_caches.is_empty() {
         debug!("failed to create perf counters for any L3 cache domain");
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "failed to create L3 cache perf counters",
-        ));
+        return Err(anyhow::anyhow!("failed to create L3 cache perf counters"));
     }
 
     Ok(l3_caches)
@@ -404,7 +404,7 @@ fn get_events() -> Option<(LowLevelEvent, LowLevelEvent)> {
     }
 }
 
-fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+fn spawn_threads() -> anyhow::Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>)> {
     // on virtualized environments, it is typically better to use multiple
     // threads to read the perf counters to get more consistent snapshot latency
     if is_virt() {
@@ -414,7 +414,7 @@ fn spawn_threads() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io:
     }
 }
 
-fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+fn spawn_threads_single() -> anyhow::Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>)> {
     debug!("using single-threaded perf counter collection");
 
     let mut caches = get_l3_caches()?;
@@ -440,7 +440,7 @@ fn spawn_threads_single() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), s
     Ok((perf_threads, perf_sync))
 }
 
-fn spawn_threads_multi() -> Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>), std::io::Error> {
+fn spawn_threads_multi() -> anyhow::Result<(Vec<JoinHandle<()>>, Vec<SyncPrimitive>)> {
     debug!("using multi-threaded perf counter collection");
 
     let mut caches = get_l3_caches()?;

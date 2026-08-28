@@ -143,12 +143,17 @@ fn init(config: Arc<Config>) -> SamplerResult {
         Ok(Some(inner)) => inner,
         Ok(None) => {
             debug!("{NAME}: no interfaces with ENA allowance stats found");
-            return Ok(None);
+            return Err(crate::agent::sampler_status::Unsupported(
+                "no interfaces with ENA allowance stats found".to_string(),
+            )
+            .into());
         }
-        Err(e) => {
-            debug!("{NAME}: failed to initialize: {e}");
-            return Ok(None);
-        }
+        // See the equivalent arm in `gpu_amd`: a failure here is a failure,
+        // not a sampler somebody disabled.
+        // `context` preserves the chain, so a marker further down stays
+        // downcastable; this sampler has none today, but the shape must not
+        // become the trap it is in `gpu_amd`.
+        Err(e) => return Err(e.context(format!("{NAME}: failed to initialize"))),
     };
 
     Ok(Some(Box::new(Ethtool {
@@ -342,7 +347,7 @@ impl EthtoolInner {
         let total_size = header_size + data_size;
 
         let layout = std::alloc::Layout::from_size_align(total_size, 8)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
         // SAFETY: layout is valid and non-zero sized. We initialize the header
         // fields before use, and the trailing stat values are written by the
