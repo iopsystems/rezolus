@@ -1,11 +1,14 @@
 # `.rez` v3 versus parquet on the read path — the comparison nobody had run
 
 - **Opened:** 2026-08-27
-- **Status:** **MEASURED — REGRESSION.** Against a single parquet file holding
-  the same window, a v3 `.rez` is **2.25× larger and 8.0× slower to query** at a
-  50 ms interval (1.76× / 4.4× at 1 s). The cause is isolated and is **not the
-  layout**: the reader materializes the entire archive at open, so 91% of a
-  query's wall time is spent opening tables the query never reads.
+- **Status:** **MEASURED, THEN FIXED.** The regression was real: a v3 `.rez` was
+  **2.25× larger and 8.0× slower to query** than a single parquet holding the
+  same window (1.76× / 4.4× at 1 s). The cause was never the layout — the reader
+  materialized the entire archive at open, so 91% of a query's wall time went on
+  tables it never read. With the reader made lazy, **`.rez` is
+  faster than parquet on every query in both arms** — 0.61–0.72× at 50 ms and
+  0.70–0.94× at 1 s. The size gap is unchanged and remains open. See
+  *Resolution*.
 - **Arc:** closes the gap left standing by
   [stage 4 native V3 ingest](2026-08-20-stage4-native-v3-ingest.md) and the
   [split-table read-cost gate](2026-08-18-split-table-read-cost-gate.md). Both
@@ -28,9 +31,16 @@ number needed to exist — whichever way it came out.
 
 ## Method
 
-A 32-core Linux host, release build, otherwise-idle. One agent; **two recorders
-running concurrently against it**, so both capture the same window and the same
-counter values rather than two sequential runs that would differ in workload:
+A 32-core Linux host, release build. **The host was NOT idle** — it carries
+other work throughout. That was not established until after these measurements
+were taken, and is corrected here rather than left standing. It is why the
+design below matters more than it looked at the time:
+one agent, **two recorders running concurrently against it**, so both arms
+capture the same window under the same load rather than two sequential runs that
+would differ in both. Query timings likewise interleave the two formats per
+query. Every `.rez`-versus-parquet number here is therefore a paired comparison
+under shared conditions; the absolute milliseconds carry the host's noise, and
+repeat runs of the same configuration have been seen to move ~11%:
 
 ```
 rezolus record --url … -o arm.rez     -i <interval> -d 300s
@@ -162,11 +172,134 @@ Three fixes, in value order. None requires changing the layout.
    assumption. Fewer footers, and compression regains locality — this is the
    lever on the size gap, which fixes 1 and 2 do not touch.
 
+## Resolution — the reader, made lazy
+
+Fix 1 landed, and went further than the plan: the v3 path no longer materializes
+the archive **at all**.
+
+Three changes, each measured separately because the first two were not enough on
+their own:
+
+1. **Route from a name catalog, not from open readers.** `owners` asked every
+   table's reader for the query's columns, which required opening it.
+   `metriken_query::referenced_metrics` (metriken#138) extracts a query's metric
+   names by parse alone, so routing matches against a per-table catalog probed
+   from ONE segment's footer. *629 → 497 ms — almost nothing.*
+2. **Answer `time_range` and `interval` without a reader.** The first fix was
+   defeated one call earlier: `mcp query` asks `time_range()` before evaluating
+   anything, and it fanned out through `reader()`, opening every table regardless.
+   Probing each table's span made the laziness actually hold. *497 → 132 ms.*
+3. **Fetch a table's payload only when it is queried.** `read_v3_recordings`
+   pulled every segment's bytes out of SQLite before the reader existed.
+   `SegmentSource::Db` holds `(path, recording_id, sampler)` and resolves on
+   first use; spans come from `segment_span`, which reads no BLOB. *132 → 56 ms.*
+4. **Parse the remaining probe footers in parallel.** They are independent; the
+   SQLite phase stays serial because a `Connection` is not `Sync`, and is cheap
+   (2.1 ms of catalog queries + 5.4 ms of probe blobs for a 50-table archive).
+   *56 → 49 ms, floor 33 → 23 ms.*
+
+A refuted hypothesis, recorded because it looked obvious: parallelism gave 1.8×
+rather than anything near the core count, which suggested contention on the
+shared `BufferPool` mutex. Rewriting the probes chunked with a private pool per
+worker measured **identical**. Contention was not the limiter. What remains is
+~12 ms of schema parsing that does not scale with cores — plausibly
+allocator-bound, since parsing thousands of columns allocates heavily, but that
+is a hypothesis and this one has already been wrong once. The chunked form was
+kept anyway: it bounds thread count instead of spawning one per table.
+
+The tar path still materializes, and should: tar has no index. Using the index
+is what SQLite was adopted for, and until now only the writer used it.
+
+### Measured, same host and archives as the regression above
+
+| interval | query | `.rez` before | `.rez` after | parquet | before | after |
+|---|---|---|---|---|---|---|
+| 50 ms | per-CPU fan-in rate | 629 ms | **49 ms** | 71 ms | 8.0× | **0.69×** |
+| 50 ms | IPC (cross-group) | 608 ms | **46 ms** | 75 ms | 8.7× | **0.61×** |
+| 50 ms | cross-sampler ratio | 620 ms | **63 ms** | 87 ms | 7.0× | **0.72×** |
+| 50 ms | second sampler counters | 578 ms | **25 ms** | 41 ms | 13.8× | **0.61×** |
+| 1 s | per-CPU fan-in rate | 149 ms | **31 ms** | 44 ms | 4.4× | **0.70×** |
+| 1 s | IPC (cross-group) | 151 ms | **32 ms** | 39 ms | 2.7× | **0.82×** |
+| 1 s | cross-sampler ratio | 155 ms | **34 ms** | 46 ms | 3.0× | **0.74×** |
+| 1 s | second sampler counters | 150 ms | **29 ms** | 31 ms | 4.4× | **0.94×** |
+
+The floor tells the story best: **23 ms on the 88 MB archive against 27 ms on the
+12 MB one.** Open has stopped scaling with archive size — the larger archive is
+now *faster* to open, because what remains is proportional to table count, not
+bytes. Measured across archives filtered to different table counts, that cost is
+**~0.25 ms per table on top of ~12 ms fixed** (down from 0.45 ms/table before the
+probes were parallelized), so a 200-table archive would floor near 50 ms.
+
+Floor overall: **572 → 23 ms, 24.9×.**
+
+### What the tests caught
+
+The first version skipped any sampler with no sealed segments. That is exactly a
+quiet sampler in a live hindsight buffer — rows in the WAL, nothing sealed yet —
+and four tests failed on it, including
+`a_hindsight_buffer_opens_as_an_ordinary_rez`. The probe now falls back to the
+materialized WAL tail, which is what `table_segments` did all along. Worth
+recording because the regression this entry opens with also came from the read
+path quietly doing the wrong thing for a whole class of table.
+
+### Not fixed
+
+**Size is unchanged at 2.25×.** All three changes target open latency; none moves
+bytes. Fix 3 (larger segments) remains the only lever on it, and remains a trade
+rather than a win — `max_rows: 900` was chosen to cut finalize from 1147.6 →
+549.8 ms ([recorder resource footprint](2026-08-13-recorder-resource-footprint.md)),
+so raising it buys size and open at finalize's expense. With query latency now
+ahead of parquet, that trade is harder to justify than it looked.
+
+## Two negative results, and a measurement-quality correction
+
+**Re-evaluating `max_rows` — the answer is still 900.** #1061 rewrote sealing
+after the footprint entry chose 900, and this work removed segment count as a
+driver of whole-archive open, so the trade looked worth re-pricing. Swept at
+900 / 2048 / 4096: finalize **613 / 699 / 1883 ms**. 4096 costs ~3× the finalize
+for the largest tails; 2048 is the only near-neighbour. The size half of the
+argument did **not** reproduce (see below), so the case for moving rests on
+finalize alone, and finalize says stay.
+
+**Parallelizing the seal encode — no.** `seal_batch` encodes each table's tail
+serially, and at finalize the batch is every open table, so the encode looked
+like the place the wall-clock went. Split into serial WAL reads, parallel
+encode, serial fold: **613 → 524 ms at `max_rows=900`, but 699 → 747 and
+1883 → 1956 at 2048 and 4096.** At 4096, where tails are largest and the
+encode's share should be greatest, parallelism bought *nothing* — which is the
+decisive arm. The encode is not the bottleneck; finalize is dominated by the
+transaction (one `insert_segment` per table plus the commit fsync at
+`synchronous=FULL`) and the WAL prune after it. Reverted rather than kept: it
+added a threading structure for no reliable gain.
+
+**Why those two are stated cautiously: the host is not idle.** Repeat runs of
+the *same* configuration moved archive size by 11% (2048: 79.4 vs 88.6 MB) and
+query time by more (floor 28 vs 53 ms). That noise floor swallows the seal-encode
+result entirely and half the `max_rows` argument. It does not touch the headline
+comparison, which is paired — both formats recorded concurrently from one agent,
+and each query timed against both back to back — nor the read-path improvement,
+which is 12.8× against a noise floor nearer 20%. *Reopen:* anything needing
+better than ~20% resolution wants a quiet host.
+
 ## Deferred / reopen
 
-- **The size gap is unaddressed by fixes 1 and 2.** They target open latency.
-  Fix 3 is the only one of the three that moves bytes, and it is untested here.
-  *Reopen:* after fix 3, re-run this benchmark's size arm.
+- **The size gap is unaddressed and now the only open axis.** `.rez` remains
+  2.25× parquet at 50 ms, 1.76× at 1 s. Fix 3 is the only lever and it trades
+  against finalize. *Reopen:* if archive size becomes the binding constraint,
+  price `max_rows` against finalize wall-clock again — the earlier decision was
+  made when open cost was not yet understood.
+- **The coarse-interval reversal recorded in #1070 is untested under this
+  reader.** That entry measured the split layout running 1.13–1.42× *slower* at
+  1 s and attributed it to the fixed cost of opening about twice as many tables.
+  This work removed most of that fixed cost, and the 1 s arm here now beats
+  parquet — but that is `.rez`-versus-parquet, a different comparison from
+  #1070's split-versus-wide, so it does not settle that entry's finding.
+  *Reopen:* re-run #1070's arms under the lazy reader before claiming the scale
+  dependence is gone.
+- **The last fixed cost is ~50 name probes.** One footer per table at open, to
+  build the routing catalog. Caching per-table metric names in the SQLite
+  catalog at write time would remove them, but the format change is no longer
+  needed to be competitive. *Reopen:* if table counts grow well past 50.
 - **No measurement of read cost on a live/unsealed archive.** Both arms here were
   finalized. Hindsight reads a buffer with a live WAL tail, which materializes
   differently. *Reopen:* when fix 1 lands, measure the hindsight read path too.

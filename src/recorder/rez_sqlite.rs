@@ -418,6 +418,69 @@ impl RezDb {
     /// happens to track `seq` in the common case (segments seal in order),
     /// which is exactly the kind of coincidence that makes a missing
     /// `ORDER BY` dangerous rather than obviously wrong.
+    /// Segment metadata for one sampler — `seq`, `rows` and the timestamp
+    /// bounds — WITHOUT the payload.
+    ///
+    /// `read_segments` selects `bytes` too, so calling it to learn a table's
+    /// span reads the whole table off disk. The reader needs the span for every
+    /// table at open (`time_range` is asked before any query runs) and the
+    /// payload for almost none of them, so the two questions get separate
+    /// queries.
+    pub(crate) fn read_segment_meta(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+    ) -> Result<Vec<(u64, SegmentMeta)>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT seq, rows, first_ts, last_ts FROM segments \
+                 WHERE recording_id = ?1 AND sampler = ?2 ORDER BY seq",
+            )
+            .map_err(|e| format!("failed to query segment meta for {sampler}: {e}"))?;
+        let rows = stmt
+            .query_map(rusqlite::params![recording_id, sampler], |r| {
+                Ok((
+                    r.get::<_, i64>(0)? as u64,
+                    SegmentMeta {
+                        rows: r.get::<_, i64>(1)? as u64,
+                        first_ts: r.get::<_, i64>(2)? as u64,
+                        last_ts: r.get::<_, i64>(3)? as u64,
+                    },
+                ))
+            })
+            .map_err(|e| format!("failed to read segment meta for {sampler}: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to read segment meta for {sampler}: {e}"))
+    }
+
+    /// One segment's payload, by sequence number — for the reader's name probe,
+    /// which needs a single segment's schema and none of the rest.
+    pub(crate) fn read_segment_bytes(
+        &self,
+        recording_id: i64,
+        sampler: &str,
+        seq: u64,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT bytes FROM segments \
+                 WHERE recording_id = ?1 AND sampler = ?2 AND seq = ?3",
+            )
+            .map_err(|e| format!("failed to query segment bytes for {sampler}: {e}"))?;
+        let mut rows = stmt
+            .query(rusqlite::params![recording_id, sampler, seq as i64])
+            .map_err(|e| format!("failed to read segment bytes for {sampler}: {e}"))?;
+        match rows.next() {
+            Ok(Some(r)) => Ok(Some(r.get(0).map_err(|e| {
+                format!("failed to read segment bytes for {sampler}: {e}")
+            })?)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(format!("failed to read segment bytes for {sampler}: {e}")),
+        }
+    }
+
     pub(crate) fn read_segments(
         &self,
         recording_id: i64,
