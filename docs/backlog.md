@@ -305,6 +305,28 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
   from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
   close it.
+- **`record` cannot write a multi-recording `.rez`** — Open, **in progress**.
+  Source: [multi-endpoint `.rez`](journal/2026-08-28-multi-endpoint-rez-record.md).
+  Everything else in the stack is multi-recording — the manifest is a
+  `Vec<RezRecording>`, the SQLite schema keys on `(recording_id, sampler, seq)`,
+  the reader enumerates N, and `combine` assembles N offline — but
+  `src/recorder/mod.rs:842` demotes to parquet when `endpoints.len() > 1`. So
+  multi-host and A/B capture are offline-only, and two arms recorded
+  sequentially differ in load as well as in the experiment. *Also fixes:* the
+  seal stagger hashes the sampler name alone (`seal_policy.rs:164`), so two
+  agents with identical sampler sets would seal in permanent lockstep — the key
+  must widen to the sampler plus the recording's canonical label set (not the
+  recording id, which would make segmentation depend on endpoint order).
+- **Prometheus sources inside `.rez`** — By design, not planned. A `.rez` v3
+  table is an acquisition group — one window per read — and a Prometheus scrape
+  has no groups, samplers, or windows. Admitting one means synthesizing all
+  three, fabricating the uncertainty metadata the format exists to keep honest.
+  Recorded so it stops being re-raised as an oversight; use parquet, which
+  row-merges sources by design.
+- **Viewer shows only the first two recordings** — Open. `src/viewer/mod.rs:581`
+  truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
+  the writer work above, but the two should not drift: finishing that makes
+  3+-arm archives easy to produce and still unviewable.
 - **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
   parquet-only, so the static-site viewer silently fails on every streamed
   recording. Pre-existing gap, newly load-bearing now that `.rez` is the
