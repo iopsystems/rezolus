@@ -400,13 +400,18 @@ fn seal_batch(
     // side hands rows and seal requests down one FIFO channel, those are
     // exactly the rows the seal decision was made about. Nothing has to be
     // snapshotted or passed along for that to hold.
-    let mut encoded = Vec::with_capacity(batch.len());
-    // The batch's clock observation: the NEWEST sealed row's
-    // `(timestamp, wall_offset)`, paired with that same table's offset — never
-    // one table's timestamp against another's. Derived from the rows just
-    // sealed, so every entry in the series is a projection of the
-    // `:wall_offset` column it summarizes, exactly as in v2.
-    let mut observation: Option<(u64, i64)> = None;
+    // Three phases, because the loop body mixes two very different costs.
+    //
+    // Reading the WAL is SQLite and must stay serial — `Connection` is not
+    // `Sync`, and the FIFO ordering argument above depends on these reads
+    // happening in batch order. Encoding a tail to parquet is pure CPU and is
+    // independent per table. At finalize the batch is EVERY open table at once
+    // (one per sampler), so the encode is where the wall-clock goes.
+    //
+    // The fold back into `encoded` stays serial and in batch order, which is
+    // what preserves the two order-sensitive bits: `observation`'s "a later
+    // sampler wins a tie", and `next_seq`'s per-sampler counter.
+    let mut to_encode: Vec<(String, Vec<WalRow>, u64, i64)> = Vec::with_capacity(batch.len());
     for sampler in batch {
         let rows = db.live_wal(recording_id, &sampler)?;
         let Some(last) = rows.last() else {
@@ -415,15 +420,67 @@ fn seal_batch(
             // already sealed is not an error worth failing the recording over.
             continue;
         };
+        let (last_ts, wall_offset) = (last.ts, last.wall_offset);
+        to_encode.push((sampler, rows, last_ts, wall_offset));
+    }
+
+    // Phase two: encode in parallel. Chunked rather than one thread per table,
+    // for the same reason as the reader's probes — bounded threads, spawn cost
+    // amortized.
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(to_encode.len().max(1));
+    let chunk = to_encode.len().div_ceil(workers.max(1));
+    let materialized: Vec<Result<Option<MaterializedTail>, String>> = if to_encode.len() < 2 {
+        to_encode
+            .iter()
+            .map(|(sampler, rows, _, _)| {
+                materialize_wal_tail(sampler, rows)
+                    .map_err(|e| format!("failed to encode a {sampler} segment: {e}"))
+            })
+            .collect()
+    } else {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = to_encode
+                .chunks(chunk.max(1))
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|(sampler, rows, _, _)| {
+                                materialize_wal_tail(sampler, rows).map_err(|e| {
+                                    format!("failed to encode a {sampler} segment: {e}")
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| vec![Err("a seal encode panicked".to_string())])
+                })
+                .collect()
+        })
+    };
+
+    let mut encoded = Vec::with_capacity(to_encode.len());
+    // The batch's clock observation: the NEWEST sealed row's
+    // `(timestamp, wall_offset)`, paired with that same table's offset — never
+    // one table's timestamp against another's. Derived from the rows just
+    // sealed, so every entry in the series is a projection of the
+    // `:wall_offset` column it summarizes, exactly as in v2.
+    let mut observation: Option<(u64, i64)> = None;
+    // Phase three: fold, serially and in batch order.
+    for ((sampler, _rows, last_ts, wall_offset), tail) in to_encode.into_iter().zip(materialized) {
         // `last_ts`/`wall_offset`: always the raw WAL span's own last row,
         // for BOTH containers — a V3 group's un-anchored skip (see
         // `materialize_group_wal_tail`) is always a LEADING run (retention
         // removes a prefix, never punches a hole), so the last row is never
         // itself skipped. `first_ts`/`rows` are NOT this simple — see below.
-        let (last_ts, wall_offset) = (last.ts, last.wall_offset);
-        let Some(tail) = materialize_wal_tail(&sampler, &rows)
-            .map_err(|e| format!("failed to encode a {sampler} segment: {e}"))?
-        else {
+        let Some(tail) = tail? else {
             continue;
         };
         // `>=`, so a later sampler wins a tie — same rule as v2's
