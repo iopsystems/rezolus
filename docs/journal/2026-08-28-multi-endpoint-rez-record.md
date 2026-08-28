@@ -70,6 +70,37 @@ with the window set to the real HTTP round-trip `[request_sent,
 response_received]`**, would be strictly more honest than the zero-width instant
 we record now.
 
+**It must be one group, not per-metric windows.** This is the load-bearing
+constraint, and it decides the shape of the work. `write_table_parquet`
+(`src/recorder/rez.rs:305-328`) has two branches: the group branch emits a single
+bare `:window_begin`/`:window_width` pair for the whole table, while the V1/V2
+branch emits `<name>:window_begin` (Int64) and `<name>:window_width` (UInt64)
+**per value column** — three columns per metric. `PrometheusConverter` emits
+`SnapshotV2`, so routing it into `.rez` unchanged would work and triple the
+schema width of every Prometheus table. That is precisely the cost acquisition
+groups were introduced to remove, so the converter has to learn to emit
+`SnapshotV3` with one group per target. "The writer already ingests V2" is true
+and misleading: it would ingest, and blow up the columns.
+
+**And the per-line timestamp cannot be the window source.** Prometheus exposition
+carries an optional trailing timestamp in *milliseconds since epoch*, meant as a
+federation/pushgateway staleness marker. `convert` passes `fetch_ns` to
+`Scrape::parse_at` as the default, so `sample.timestamp` is the embedded value
+when present and the fetch instant otherwise — two different semantics silently
+mixed in one recording. Worse, the embedded value is taken at face value: the
+existing test `embedded_timestamp_becomes_window`
+(`src/recorder/prometheus.rs:355`) asserts that `m_total 3 1000` yields
+`begin_ns == 1_000_000_000` — a window beginning **one second after the Unix
+epoch**, roughly 56 years before the recording that contains it. Any exporter
+that emits timestamps (pushgateway, federation) writes that today. The window
+must come from the recorder's own clock around its own fetch, and the line
+timestamp must be ignored for window purposes.
+
+A zero-width window is the fallback if a round-trip pair is somehow unavailable,
+but it should not be the design: we issue the request, so we have both instants,
+and per principle 18 a bracket that over-states is always preferred to an instant
+that under-states.
+
 One genuine caveat survives, weaker than the original claim and worth stating
 because it is the reason to keep the two efforts separate: the round-trip bounds
 when *we* read the exporter, not when the exporter computed its values. An
@@ -80,10 +111,12 @@ of documented property as principle 18's device-sweep archetype, where a failing
 call retains a stale value under a freshly-stamped window. It is a caveat to
 record, not a reason to refuse.
 
-**Filed as its own effort.** It needs the window plumbed from the fetch (the
-converter currently sees only the parsed text and a `fetch_ns`), a decision on
-the table key for a source with no `sampler` label, and its own honesty review of
-the caching case.
+**Filed as its own effort.** It needs: `PrometheusConverter` emitting
+`SnapshotV3` with one group per target rather than `SnapshotV2`; the round-trip
+pair plumbed in (the converter is handed only parsed text and a single
+`fetch_ns`, so the request instant does not currently reach it); the embedded
+line timestamp dropped as a window source; a table key for a source with no
+`sampler` label; and its own honesty review of the caching-exporter case.
 
 **Out:** viewer support beyond two recordings (`src/viewer/mod.rs:581` shows the
 first two and warns). Independent of this, and tracked separately — but note that
