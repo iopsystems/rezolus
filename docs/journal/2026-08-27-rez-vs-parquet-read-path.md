@@ -31,9 +31,16 @@ number needed to exist — whichever way it came out.
 
 ## Method
 
-A 32-core Linux host, release build, otherwise-idle. One agent; **two recorders
-running concurrently against it**, so both capture the same window and the same
-counter values rather than two sequential runs that would differ in workload:
+A 32-core Linux host, release build. **The host was NOT idle** — it carries
+other work throughout. That was not established until after these measurements
+were taken, and is corrected here rather than left standing. It is why the
+design below matters more than it looked at the time:
+one agent, **two recorders running concurrently against it**, so both arms
+capture the same window under the same load rather than two sequential runs that
+would differ in both. Query timings likewise interleave the two formats per
+query. Every `.rez`-versus-parquet number here is therefore a paired comparison
+under shared conditions; the absolute milliseconds carry the host's noise, and
+repeat runs of the same configuration have been seen to move ~11%:
 
 ```
 rezolus record --url … -o arm.rez     -i <interval> -d 300s
@@ -243,6 +250,36 @@ rather than a win — `max_rows: 900` was chosen to cut finalize from 1147.6 →
 549.8 ms ([recorder resource footprint](2026-08-13-recorder-resource-footprint.md)),
 so raising it buys size and open at finalize's expense. With query latency now
 ahead of parquet, that trade is harder to justify than it looked.
+
+## Two negative results, and a measurement-quality correction
+
+**Re-evaluating `max_rows` — the answer is still 900.** #1061 rewrote sealing
+after the footprint entry chose 900, and this work removed segment count as a
+driver of whole-archive open, so the trade looked worth re-pricing. Swept at
+900 / 2048 / 4096: finalize **613 / 699 / 1883 ms**. 4096 costs ~3× the finalize
+for the largest tails; 2048 is the only near-neighbour. The size half of the
+argument did **not** reproduce (see below), so the case for moving rests on
+finalize alone, and finalize says stay.
+
+**Parallelizing the seal encode — no.** `seal_batch` encodes each table's tail
+serially, and at finalize the batch is every open table, so the encode looked
+like the place the wall-clock went. Split into serial WAL reads, parallel
+encode, serial fold: **613 → 524 ms at `max_rows=900`, but 699 → 747 and
+1883 → 1956 at 2048 and 4096.** At 4096, where tails are largest and the
+encode's share should be greatest, parallelism bought *nothing* — which is the
+decisive arm. The encode is not the bottleneck; finalize is dominated by the
+transaction (one `insert_segment` per table plus the commit fsync at
+`synchronous=FULL`) and the WAL prune after it. Reverted rather than kept: it
+added a threading structure for no reliable gain.
+
+**Why those two are stated cautiously: the host is not idle.** Repeat runs of
+the *same* configuration moved archive size by 11% (2048: 79.4 vs 88.6 MB) and
+query time by more (floor 28 vs 53 ms). That noise floor swallows the seal-encode
+result entirely and half the `max_rows` argument. It does not touch the headline
+comparison, which is paired — both formats recorded concurrently from one agent,
+and each query timed against both back to back — nor the read-path improvement,
+which is 12.8× against a noise floor nearer 20%. *Reopen:* anything needing
+better than ~20% resolution wants a quiet host.
 
 ## Deferred / reopen
 
