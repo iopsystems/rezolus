@@ -65,6 +65,71 @@ enum TableReader {
     Segmented(SegmentedParquetReader),
 }
 
+/// One table awaiting its footer probe: its key, the segment bytes to parse,
+/// and the span the catalog already answered.
+type PendingProbe = (String, Vec<u8>, Option<(u64, u64)>);
+
+/// What a probe yields: the table's key, its metric names, its row spacing and
+/// its span.
+type ProbedTable = (String, TableNames, f64, Option<(u64, u64)>);
+
+/// Where a table's segment payloads come from.
+///
+/// v2 (tar) has no index — the whole archive is already in memory by the time
+/// the reader sees it, so its bytes are handed over directly. v3 (SQLite) is
+/// indexed by `(recording_id, sampler, seq)`, so a table's payload can be
+/// fetched when it is first queried and never before. That is the difference
+/// worth having: at open the reader needs one segment per table for its name
+/// catalog, and the catalog answers everything else.
+enum SegmentSource {
+    Bytes(Vec<Vec<u8>>),
+    Db {
+        path: std::path::PathBuf,
+        recording_id: i64,
+        sampler: String,
+    },
+}
+
+impl SegmentSource {
+    /// Every segment of this table, materialized. Called only when the table
+    /// is actually queried.
+    fn all(&self) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        match self {
+            SegmentSource::Bytes(b) => Ok(b.clone()),
+            SegmentSource::Db {
+                path,
+                recording_id,
+                sampler,
+            } => {
+                let db = RezDb::open(path)?;
+                table_segments(&db, *recording_id, sampler)
+            }
+        }
+    }
+}
+
+/// A table's metric names by kind, probed from one segment's footer.
+///
+/// Kept split rather than merged because `counter_names`/`gauge_names`/
+/// `histogram_names` are distinct questions on `MetricsSource` — a merged set
+/// would answer all three with the same list, which is wrong and would not
+/// have failed loudly.
+#[derive(Default)]
+struct TableNames {
+    counters: std::collections::HashSet<String>,
+    gauges: std::collections::HashSet<String>,
+    histograms: std::collections::HashSet<String>,
+}
+
+impl TableNames {
+    /// Whether this table holds `metric` under any kind — the routing question.
+    fn holds(&self, metric: &str) -> bool {
+        self.counters.contains(metric)
+            || self.gauges.contains(metric)
+            || self.histograms.contains(metric)
+    }
+}
+
 impl TableReader {
     fn as_dyn(&self) -> &dyn MetricsSource {
         match self {
@@ -103,7 +168,36 @@ impl TableReader {
 struct SamplerReader {
     recording: usize,
     sampler: String,
-    reader: TableReader,
+    /// Every metric name this table holds, probed from ONE segment's footer at
+    /// open. A table's segments share a schema — `schema_hash` is what asserts
+    /// it — so one probe answers routing for all of them.
+    ///
+    /// This exists so `owners` can decide whether a query could touch this
+    /// table WITHOUT building its reader. Routing used to ask each table's open
+    /// reader for its columns, which meant every table in the archive was
+    /// opened before any query was parsed: measured at ~1.37 ms per segment
+    /// over 418 segments, of which a typical query needs 11%.
+    names: TableNames,
+    /// The table's row-time span, probed from its FIRST and LAST segment's
+    /// footers at open.
+    ///
+    /// `time_range` is asked on paths that never query — `mcp query` calls it
+    /// before evaluating anything — and answering it from the full readers
+    /// forced every table open, which defeated the whole point of the lazy
+    /// build. Two footers per table answers it instead of all of them.
+    span: Option<(u64, u64)>,
+    /// The table's row spacing, probed from the same first segment.
+    ///
+    /// A table is one sampler's cadence, so any of its segments answers for all
+    /// of them. Like `span`, this is asked on paths that never query
+    /// (`describe-metrics`, `analyze-correlation`) and would otherwise open
+    /// every table to find out.
+    interval: f64,
+    /// Where the full segment set comes from, resolved on first use.
+    segments: SegmentSource,
+    pool: Arc<BufferPool>,
+    /// Built on first access, never at open.
+    reader: std::sync::OnceLock<TableReader>,
     /// Row timestamps as the query path indexes them, read once.
     ///
     /// Reading them means decoding a whole column, and the cross-cadence
@@ -115,9 +209,35 @@ struct SamplerReader {
 }
 
 impl SamplerReader {
+    /// The table's reader, built on first use.
+    ///
+    /// Single-segment tables keep the plain reader — the streaming writer's
+    /// slow samplers and every atomically written archive land there, and there
+    /// is nothing for the splice to do. Multi-segment tables get the
+    /// segment-aware source, which splices raw samples below PromQL evaluation
+    /// so a `rate()` window straddling a seal boundary still computes on
+    /// complete data.
+    fn reader(&self) -> &TableReader {
+        self.reader.get_or_init(|| {
+            let pool = Arc::clone(&self.pool);
+            let segments = self
+                .segments
+                .all()
+                .unwrap_or_else(|e| panic!("fetching segments for {}: {e}", self.sampler));
+            match <[Vec<u8>; 1]>::try_from(segments) {
+                Ok([bytes]) => ParquetReader::open_bytes_with_pool(bytes, pool)
+                    .map(TableReader::Single)
+                    .expect("segment opened at probe time cannot fail to reopen"),
+                Err(segments) => SegmentedParquetReader::open_bytes_with_pool(segments, pool)
+                    .map(TableReader::Segmented)
+                    .expect("segments opened at probe time cannot fail to reopen"),
+            }
+        })
+    }
+
     fn snapped_timestamps(&self) -> &[u64] {
         self.snapped_timestamps
-            .get_or_init(|| self.reader.as_dyn().snapped_sample_timestamps())
+            .get_or_init(|| self.reader().as_dyn().snapped_sample_timestamps())
     }
 }
 
@@ -140,8 +260,25 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let recordings = read_recordings(path)?;
         let filename = path.file_name().map(|s| s.to_string_lossy().into_owned());
+        if rez::detect_rez_format(path)? == rez::RezFormat::V3Sqlite {
+            // Flatten every recording's tables, as the tar path does — this
+            // entry point is the single-source view.
+            let mut tables = Vec::new();
+            let mut metadata = BTreeMap::new();
+            for (i, (_, reader)) in Self::from_v3(path, pool)?.into_iter().enumerate() {
+                if i == 0 {
+                    metadata = reader.metadata;
+                }
+                tables.extend(reader.tables);
+            }
+            return Ok(Self {
+                tables,
+                metadata,
+                filename,
+            });
+        }
+        let recordings = read_recordings(path)?;
         Self::from_recordings(recordings, filename, pool)
     }
 
@@ -152,6 +289,9 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        if rez::detect_rez_format(path)? == rez::RezFormat::V3Sqlite {
+            return Self::from_v3(path, pool);
+        }
         let recordings = read_recordings(path)?;
         let mut out = Vec::with_capacity(recordings.len());
         for rec in recordings {
@@ -159,6 +299,157 @@ impl RezReader {
             let filename = Some(rec.dir.clone());
             let reader = Self::from_recordings(vec![rec], filename, Arc::clone(&pool))?;
             out.push((labels, reader));
+        }
+        Ok(out)
+    }
+
+    /// Build from a v3 (SQLite) archive without materializing it.
+    ///
+    /// The catalog answers spans with no BLOB read (`segment_span`), and one
+    /// segment per table answers the name catalog. Everything else waits until
+    /// a query actually asks for that table. Contrast `from_recordings`, which
+    /// the tar path still uses because tar has no index — its bytes are already
+    /// in memory before the reader is called.
+    fn from_v3(
+        path: &Path,
+        pool: Arc<BufferPool>,
+    ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        let db = RezDb::open(path)?;
+        let mut out = Vec::new();
+
+        for (recording, rec) in db.read_recordings()?.into_iter().enumerate() {
+            if !rec.complete {
+                tracing::warn!(
+                    "recording {} was not cleanly finalized; it was recovered up to its \
+                     last checkpoint and data after that may be missing",
+                    rez::recording_dir_slug(&rec.meta.labels)
+                );
+            }
+            // Two phases on purpose. SQLite is serial (one connection, and
+            // `rusqlite::Connection` is not `Sync`) but cheap; parsing a
+            // segment footer is the expensive half and is independent per
+            // table. Measured at ~0.45 ms per table before splitting them —
+            // linear in TABLE COUNT, not archive bytes, so it is the cost that
+            // grows as samplers and acquisition groups multiply.
+            let mut pending: Vec<PendingProbe> = Vec::new();
+
+            for sampler in db.all_samplers(rec.id)? {
+                let metas = db.read_segment_meta(rec.id, &sampler)?;
+
+                // The probe segment is the first SEALED one — or, when a table
+                // has none, its materialized WAL tail. A quiet sampler in a
+                // live hindsight buffer is exactly that: rows in the WAL, no
+                // seal yet. Skipping it here would make it invisible to the
+                // reader, which the eager path never did because
+                // `table_segments` splices the tail in.
+                let probe_bytes = match metas.first() {
+                    Some((seq, _)) => db.read_segment_bytes(rec.id, &sampler, *seq)?,
+                    None => materialize_wal_tail(&sampler, &db.live_wal(rec.id, &sampler)?)?
+                        .map(|t| t.bytes),
+                };
+                // Nothing sealed and nothing live: the table has no rows at
+                // all, so there is nothing to open. Same skip as the eager path.
+                let Some(bytes) = probe_bytes else {
+                    continue;
+                };
+
+                // Span from the catalog, widened by the live WAL: a hindsight
+                // buffer's newest rows are unsealed, and a span that stopped at
+                // the last seal would report the archive as ending before its
+                // most recent data. No BLOB is read for either.
+                let (_, sealed) = db.segment_span(rec.id, &sampler)?;
+                let wal = db.live_wal_span(rec.id, &sampler)?;
+                let span = match (
+                    sealed.first_ts.into_iter().chain(wal.first_ts).min(),
+                    sealed.last_ts.into_iter().chain(wal.last_ts).max(),
+                ) {
+                    (Some(b), Some(e)) => Some((b, e)),
+                    _ => None,
+                };
+
+                pending.push((sampler, bytes, span));
+            }
+
+            // Phase two: parse the footers in parallel. Each probe is
+            // independent and touches only the shared `BufferPool`, which is
+            // `Mutex`-guarded.
+            // Chunked, and each worker gets its OWN small pool.
+            //
+            // One thread per table spawned 50 threads that then serialized on
+            // the shared pool's mutex — 0.45 ms/table became 0.25 ms, where the
+            // core count says it should have collapsed. A probe reader is
+            // thrown away the moment its names are read, so it has nothing to
+            // gain from the shared pool and everything to lose by contending
+            // for it. Chunking amortizes spawn cost over the same threads.
+            let workers = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .min(pending.len().max(1));
+            let chunk = pending.len().div_ceil(workers.max(1));
+            let probed: Vec<Result<ProbedTable, String>> = std::thread::scope(|scope| {
+                let handles: Vec<_> = pending
+                    .chunks(chunk.max(1))
+                    .map(|batch| {
+                        scope.spawn(move || {
+                            // 8 MiB is ample for footer-only reads and is
+                            // never shared, so it cannot be contended.
+                            let pool = BufferPool::new(8 * 1024 * 1024);
+                            batch
+                                .iter()
+                                .map(|(sampler, bytes, span)| {
+                                    let probe = ParquetReader::open_bytes_with_pool(
+                                        bytes.clone(),
+                                        Arc::clone(&pool),
+                                    )
+                                    .map_err(|e| format!("probing table {sampler}: {e}"))?;
+                                    let names = TableNames {
+                                        counters: probe.counter_names().into_iter().collect(),
+                                        gauges: probe.gauge_names().into_iter().collect(),
+                                        histograms: probe.histogram_names().into_iter().collect(),
+                                    };
+                                    Ok((sampler.clone(), names, probe.interval(), *span))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| {
+                        h.join()
+                            .unwrap_or_else(|_| vec![Err("probe panicked".to_string())])
+                    })
+                    .collect()
+            });
+
+            let mut tables = Vec::new();
+            for probe in probed {
+                let (sampler, names, interval, span) = probe?;
+                tables.push(SamplerReader {
+                    recording,
+                    sampler: sampler.clone(),
+                    names,
+                    span,
+                    interval,
+                    segments: SegmentSource::Db {
+                        path: path.to_path_buf(),
+                        recording_id: rec.id,
+                        sampler,
+                    },
+                    pool: Arc::clone(&pool),
+                    reader: std::sync::OnceLock::new(),
+                    snapped_timestamps: std::sync::OnceLock::new(),
+                });
+            }
+
+            out.push((
+                rec.meta.labels.clone(),
+                Self {
+                    tables,
+                    metadata: rec.meta.metadata,
+                    filename: Some(rez::recording_dir_slug(&rec.meta.labels)),
+                },
+            ));
         }
         Ok(out)
     }
@@ -189,20 +480,53 @@ impl RezReader {
                 // splices raw samples below PromQL evaluation so a `rate()`
                 // window straddling a seal boundary still computes on complete
                 // data. Both open footer-only against the shared pool.
-                let reader = match <[Vec<u8>; 1]>::try_from(segments) {
-                    Ok([bytes]) => TableReader::Single(
-                        ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
-                            .map_err(|e| format!("opening table {sampler}: {e}"))?,
-                    ),
-                    Err(segments) => TableReader::Segmented(
-                        SegmentedParquetReader::open_bytes_with_pool(segments, Arc::clone(&pool))
-                            .map_err(|e| format!("opening table {sampler}: {e}"))?,
-                    ),
+                // Probe ONE segment for the name catalog. A plain
+                // `ParquetReader` is footer-only and skips the four per-segment
+                // identity indexes `SegmentedParquetReader` builds, which is
+                // the bulk of what open used to cost.
+                let probe = segments
+                    .first()
+                    .ok_or_else(|| format!("table {sampler} has no segments"))?;
+                let probe = ParquetReader::open_bytes_with_pool(probe.clone(), Arc::clone(&pool))
+                    .map_err(|e| format!("probing table {sampler}: {e}"))?;
+                let names = TableNames {
+                    counters: probe.counter_names().into_iter().collect(),
+                    gauges: probe.gauge_names().into_iter().collect(),
+                    histograms: probe.histogram_names().into_iter().collect(),
                 };
+                let first_span = probe.time_range_ns();
+                let interval = probe.interval();
+                drop(probe);
+
+                // Segments are in segment order, so the last one carries the
+                // table's end. Skipped when there is only one — it is the probe.
+                let last_span = match segments.len() {
+                    0 | 1 => first_span,
+                    _ => {
+                        let last = ParquetReader::open_bytes_with_pool(
+                            segments[segments.len() - 1].clone(),
+                            Arc::clone(&pool),
+                        )
+                        .map_err(|e| format!("probing table {sampler} tail: {e}"))?;
+                        let s = last.time_range_ns();
+                        drop(last);
+                        s
+                    }
+                };
+                let span = match (first_span, last_span) {
+                    (Some((b, _)), Some((_, e))) => Some((b, e)),
+                    (only, None) | (None, only) => only,
+                };
+
                 tables.push(SamplerReader {
                     recording,
                     sampler,
-                    reader,
+                    names,
+                    span,
+                    interval,
+                    segments: SegmentSource::Bytes(segments),
+                    pool: Arc::clone(&pool),
+                    reader: std::sync::OnceLock::new(),
                     snapped_timestamps: std::sync::OnceLock::new(),
                 });
             }
@@ -214,15 +538,23 @@ impl RezReader {
         })
     }
 
-    /// Sub-readers whose `columns(query)` is non-empty (own ≥1 referenced metric).
+    /// Sub-readers that hold at least one metric the query references.
+    ///
+    /// Answered from each table's name catalog, so a table the query cannot
+    /// touch is never opened. `referenced_metrics` is parse-only — it does not
+    /// need a source, which is exactly why routing can use it and `columns`
+    /// (which expands selectors through the source's column map) cannot.
+    ///
+    /// Label matchers are not consulted: a table holding the metric with no
+    /// matching series answers with an empty result, which is correct, and
+    /// skipping it here would route on data the catalog does not carry.
     fn owners(&self, query: &str) -> Result<Vec<&SamplerReader>, QueryError> {
-        let mut out = Vec::new();
-        for t in &self.tables {
-            if !t.reader.as_dyn().columns(query)?.is_empty() {
-                out.push(t);
-            }
-        }
-        Ok(out)
+        let referenced = metriken_query::referenced_metrics(query)?;
+        Ok(self
+            .tables
+            .iter()
+            .filter(|t| referenced.iter().any(|m| t.names.holds(m)))
+            .collect())
     }
 
     /// Resolve the reader that answers every metric a query references: the
@@ -249,7 +581,7 @@ impl RezReader {
             [] => Err(QueryError::ParseError(format!(
                 "query references no metric present in this .rez: {query}"
             ))),
-            [one] => Ok(Routed::Direct(&one.reader)),
+            [one] => Ok(Routed::Direct(one.reader())),
             many => {
                 // Group owners by (RECORDING, SAMPLER), not by sampler alone:
                 // two group tables of one sampler are a same-timeline union
@@ -283,7 +615,7 @@ impl RezReader {
                         // sampler must be a loud error, not `UnionSource`'s
                         // silent first-wins.
                         let children: Vec<UnionChild> =
-                            many.iter().map(|t| t.reader.union_child()).collect();
+                            many.iter().map(|t| t.reader().union_child()).collect();
                         UnionMetricsSource::try_new(children)
                             .map(Routed::Union)
                             .map_err(|e| match e {
@@ -531,8 +863,8 @@ impl MetricsSource for RezReader {
     fn columns(&self, query: &str) -> Result<HashSet<String>, QueryError> {
         // columns() is answerable as the union — it never crosses timelines.
         let mut out = HashSet::new();
-        for t in &self.tables {
-            out.extend(t.reader.as_dyn().columns(query)?);
+        for t in self.owners(query)? {
+            out.extend(t.reader().as_dyn().columns(query)?);
         }
         Ok(out)
     }
@@ -542,56 +874,67 @@ impl MetricsSource for RezReader {
         union_sorted(
             self.tables
                 .iter()
-                .map(|t| t.reader.as_dyn().counter_names()),
+                .map(|t| t.names.counters.iter().cloned().collect()),
         )
     }
     fn gauge_names(&self) -> Vec<String> {
-        union_sorted(self.tables.iter().map(|t| t.reader.as_dyn().gauge_names()))
+        union_sorted(
+            self.tables
+                .iter()
+                .map(|t| t.names.gauges.iter().cloned().collect()),
+        )
     }
     fn histogram_names(&self) -> Vec<String> {
         union_sorted(
             self.tables
                 .iter()
-                .map(|t| t.reader.as_dyn().histogram_names()),
+                .map(|t| t.names.histograms.iter().cloned().collect()),
         )
     }
     fn counter_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.as_dyn().counter_labels(name))
+            .filter(|t| t.names.counters.contains(name))
+            .flat_map(|t| t.reader().as_dyn().counter_labels(name))
             .collect()
     }
     fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.as_dyn().gauge_labels(name))
+            .filter(|t| t.names.gauges.contains(name))
+            .flat_map(|t| t.reader().as_dyn().gauge_labels(name))
             .collect()
     }
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
-            .flat_map(|t| t.reader.as_dyn().histogram_labels(name))
+            .filter(|t| t.names.histograms.contains(name))
+            .flat_map(|t| t.reader().as_dyn().histogram_labels(name))
             .collect()
     }
 
     // ── Time / interval: union extent, finest interval ──
     fn time_range(&self) -> Option<(f64, f64)> {
-        self.tables
-            .iter()
-            .filter_map(|t| t.reader.as_dyn().time_range())
-            .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
+        // Seconds view of the same probed spans — see `time_range_ns`.
+        self.time_range_ns()
+            .map(|(b, e)| (b as f64 / 1e9, e as f64 / 1e9))
     }
     fn time_range_ns(&self) -> Option<(u64, u64)> {
+        // From the probed spans, not the readers: this is asked before any
+        // query runs, and answering it through `reader()` would open every
+        // table and undo the lazy build.
         self.tables
             .iter()
-            .filter_map(|t| t.reader.as_dyn().time_range_ns())
+            .filter_map(|t| t.span)
             .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
     }
     fn interval(&self) -> f64 {
+        // Probed per table, not read through `reader()` — see `span`. The
+        // finest cadence still wins; only where the number comes from changed.
         let finest = self
             .tables
             .iter()
-            .map(|t| t.reader.as_dyn().interval())
+            .map(|t| t.interval)
             .filter(|i| *i > 0.0)
             .fold(f64::INFINITY, f64::min);
         if finest.is_finite() {
