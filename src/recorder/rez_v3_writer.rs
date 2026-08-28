@@ -2663,6 +2663,31 @@ mod tests {
             }
         }
 
+        fn gauge_group_schema(members: &[&str]) -> GroupSchema {
+            GroupSchema {
+                counters: Vec::new(),
+                gauges: members.iter().map(|n| desc(n)).collect(),
+                histograms: Vec::new(),
+            }
+        }
+
+        fn gauge_group_snapshot(
+            name: &str,
+            schema: &GroupSchema,
+            gauges: Vec<Option<i64>>,
+            window: Option<Window>,
+        ) -> GroupSnapshot {
+            GroupSnapshot {
+                name: name.to_string(),
+                schema_hash: schema.hash(),
+                schema: Some(Arc::new(schema.clone())),
+                window,
+                counters: Vec::new(),
+                gauges,
+                histograms: Vec::new(),
+            }
+        }
+
         fn group_snapshot(
             name: &str,
             schema: &GroupSchema,
@@ -2697,6 +2722,92 @@ mod tests {
         /// bucket (integer division).
         fn seals_immediately() -> SealPolicy {
             policy(1)
+        }
+
+        /// A declared group member that is never written must reach the
+        /// segment as a present, all-null nullable column — never as a
+        /// fabricated `0`, and never silently dropped.
+        ///
+        /// The NVIDIA sampler manufactures exactly this on a Tegra SoC: the
+        /// PCIe-derived gauges are deliberately not `set()`, while their
+        /// siblings in the same acquisition group are. Before this, every V3
+        /// writer test was counter-only (`group_schema` hardcodes
+        /// `gauges: Vec::new()`), so the `Vec<Option<i64>>` -> `Int64Array`
+        /// path was untested despite being on that sampler's live path.
+        #[test]
+        fn v3_group_gauge_member_that_is_never_written_stays_null() {
+            use arrow::array::Array as _;
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.rez");
+            let (mut rec, rid) = recorder(&path, seals_immediately());
+
+            let sch = gauge_group_schema(&["written", "never_written"]);
+            let ts = 1_000_000_000u64;
+            let window = Some(Window::new(ts - 50_000_000, ts));
+            let g = gauge_group_snapshot(
+                "gpu_nvidia/gpu_nvidia_devices",
+                &sch,
+                vec![Some(97), None],
+                window,
+            );
+            rec.ingest(&v3_snap(ts, vec![g]), ts, 7).unwrap();
+            rec.maybe_seal().unwrap();
+            rec.sync().unwrap();
+
+            let db = RezDb::open(&path).unwrap();
+            let segs = db
+                .read_segments(rid, "gpu_nvidia/gpu_nvidia_devices")
+                .unwrap();
+            assert_eq!(segs.len(), 1, "the single tick must have sealed");
+
+            let mut reader =
+                parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                    bytes::Bytes::from(segs[0].bytes.clone()),
+                )
+                .unwrap()
+                .build()
+                .unwrap();
+            let batch = reader.next().unwrap().unwrap();
+
+            // Both members are present as columns; membership comes from
+            // registration, so gating a `set()` must not drop the column.
+            let names: Vec<String> = batch
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "never_written"),
+                "unwritten member must still get a column, got {names:?}"
+            );
+
+            let idx = batch.schema().index_of("never_written").unwrap();
+            let field = batch.schema().field(idx).clone();
+            assert_eq!(field.data_type(), &arrow::datatypes::DataType::Int64);
+            assert!(field.is_nullable(), "the column must be nullable");
+
+            let col = batch
+                .column(idx)
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .expect("Int64 column");
+            assert_eq!(col.len(), 1);
+            assert!(
+                col.is_null(0),
+                "an unwritten gauge member must be null, not a fabricated 0"
+            );
+
+            // ...while its written sibling in the same group is unaffected.
+            let widx = batch.schema().index_of("written").unwrap();
+            let wcol = batch
+                .column(widx)
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .expect("Int64 column");
+            assert!(!wcol.is_null(0));
+            assert_eq!(wcol.value(0), 97);
         }
 
         #[test]

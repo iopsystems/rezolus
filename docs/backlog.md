@@ -433,6 +433,35 @@ recording (single iGPU, 55 min at 1 s).
   library call, not an mmap read: the effort must carry a *measured* per-refresh
   overhead number and a cadence decision. And per #1108's own lesson, verify on
   Tegra whether these return real values or placeholders before trusting them.
+- **NVML utilization support is Tegra-generation-dependent** — Open, and the
+  reason the gating in #1108 is deliberately narrow. NVIDIA's stated position is
+  that NVML is not supported on Jetson (users are pointed at `tegrastats`), and
+  there are Orin reports of NVML utilization not working; JetPack 7 / Thor
+  release notes, by contrast, advertise newly-added NVML GPU monitoring. The
+  measured recording behind #1108 shows `utilization_rates().gpu` working, so at
+  least one generation populates it — but that is one host, and `utilization_rates`
+  is documented only for "fully supported devices", a list Tegra iGPUs are not on.
+  Consequence: on a generation where NVML does not populate it, the agent records
+  a constant `0`, indistinguishable from a genuinely idle GPU. Note this is
+  *main's existing behaviour*, not a regression from #1108 — that PR declined to
+  gate `.gpu` rather than introducing the exposure. *Fix:* prefer the nvgpu
+  driver's own load node (`/sys/devices/.../<addr>.gpu/load`, permille — the
+  source `tegrastats` GR3D reads) as the `gpu_utilization` source when
+  `is_tegra_soc()`, which works on every Tegra generation; it is one small sysfs
+  read per tick, so per principles 13/16/17 it needs a *measured* per-refresh
+  number. Failing that, stamp the SoC `compatible` string into snapshot metadata
+  so a consumer can at least tell which generation produced a zero.
+- **`GPU_ENERGY_CONSUMPTION` can publish a fabricated zero** — Open,
+  pre-existing, adjacent to #1108 and the same bug class. It is a `CounterGroup`
+  (`stats.rs`), and metriken's `CounterGroup::value()` has **no** sentinel: it
+  returns `Some(0)` for an unwritten slot as soon as *any* index in that group
+  has been written. So on a mixed multi-GPU host where `total_energy_consumption()`
+  succeeds for device 0 and fails for device 1, device 1 publishes a constant-zero
+  energy counter that reads as a real measurement. Cannot fire on a single-GPU
+  host (the group stays uninitialised and reads `None`), which is why #1108's
+  Tegra target does not hit it. Contrast `GaugeGroup`, which uses an `i64::MIN`
+  sentinel and correctly yields `None`. *Fix:* track written membership
+  explicitly, or move the metric to a gauge-like sentinel representation.
 - **Per-device Tegra discrimination** — Open. `is_tegra_soc()` reads
   `/proc/device-tree/compatible`, a *host* property, but "no real PCIe link / no
   utilization counters" is a *device* property. A Tegra board carrying a discrete
