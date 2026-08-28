@@ -21,36 +21,83 @@ const GPU_PROBE_METRICS: &[&str] = &[
 
 /// True iff the recording has more than one GPU. Per-device charts are
 /// suppressed when this is false because they degenerate to the aggregate.
+///
+/// Counts distinct `(vendor, id)` pairs, not distinct ids: a host with an
+/// NVIDIA card and an Intel iGPU has two GPUs that are both `id="0"`, and
+/// counting ids alone would call that a single-GPU host and hide the
+/// per-device charts that separate them.
 fn has_multiple_gpus(data: &dyn MetricsSource) -> bool {
-    GPU_PROBE_METRICS
-        .iter()
-        .any(|m| metric_unique_label_count(data, m, "id") > 1)
+    gpu_entries(data).len() > 1
 }
 
-/// The distinct GPU `id` values present in the recording, sorted numerically.
-fn gpu_ids(data: &dyn MetricsSource) -> Vec<i64> {
-    let mut ids: Vec<i64> = GPU_PROBE_METRICS
-        .iter()
-        .flat_map(|m| data.label_values(m, "id"))
-        .filter_map(|v| v.parse::<i64>().ok())
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+/// One GPU present in the recording, as the selector needs to address it.
+///
+/// `id` alone does not identify a GPU. Every vendor's sampler numbers its own
+/// devices from 0 (NVML's device index, ROCm's, and for Intel the PMU discovery
+/// order), so on a host with an NVIDIA card and an Intel iGPU there are two
+/// distinct GPUs both labelled `id="0"`. Selecting on `id` alone matches both.
+struct GpuEntry {
+    id: i64,
+    /// The `vendor` label, absent on samplers that do not set one (the Apple
+    /// GPU sampler declares no vendor). `None` means "match on id alone",
+    /// which is the pre-existing behaviour and correct when nothing else
+    /// disambiguates.
+    vendor: Option<String>,
+}
+
+/// The distinct GPUs present in the recording, sorted by vendor then id so the
+/// selector's order is stable across runs.
+fn gpu_entries(data: &dyn MetricsSource) -> Vec<GpuEntry> {
+    let mut seen: std::collections::BTreeSet<(Option<String>, i64)> =
+        std::collections::BTreeSet::new();
+
+    for metric in GPU_PROBE_METRICS {
+        // Read whole label sets rather than one key at a time: pairing a
+        // vendor with an id requires seeing them on the same series.
+        for labels in data
+            .counter_labels(metric)
+            .into_iter()
+            .chain(data.gauge_labels(metric))
+        {
+            let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
+                continue;
+            };
+            seen.insert((labels.get("vendor").cloned(), id));
+        }
+    }
+
+    seen.into_iter()
+        .map(|(vendor, id)| GpuEntry { id, vendor })
+        .collect()
 }
 
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_gpu = has_multiple_gpus(data);
 
-    // Tell the frontend which GPU ids exist so it can render the GPU selector
-    // (a dropdown to view the non-per-GPU charts for a single GPU or the
+    // Tell the frontend which GPUs exist so it can render the GPU selector
+    // (a picker that filters the non-per-GPU charts to a subset, or the
     // aggregate). Only meaningful with more than one GPU.
-    let ids = gpu_ids(data);
-    if ids.len() > 1 {
+    //
+    // `gpus` carries the (vendor, id) pairs the selector must filter on; `ids`
+    // is kept alongside it for older frontends, which read only that field.
+    let entries = gpu_entries(data);
+    if entries.len() > 1 {
+        let mut ids: Vec<i64> = entries.iter().map(|g| g.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+
+        let gpus: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|g| match &g.vendor {
+                Some(v) => serde_json::json!({ "id": g.id, "vendor": v }),
+                None => serde_json::json!({ "id": g.id }),
+            })
+            .collect();
+
         view.metadata.insert(
             "gpu_selector".to_string(),
-            serde_json::json!({ "enabled": true, "ids": ids }),
+            serde_json::json!({ "enabled": true, "ids": ids, "gpus": gpus }),
         );
     }
 

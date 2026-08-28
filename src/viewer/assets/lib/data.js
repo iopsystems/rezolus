@@ -386,18 +386,73 @@ const applyDisplayToPlot = (plot, decoded) => {
 
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
-let _selectedGpus = [];        // GPU `id`s to filter the GPU section by; [] = all
+// GPUs to filter the GPU section by; [] = all. Each entry is a
+// {vendor, id} pair — see setSelectedGpus.
+let _selectedGpus = [];
 
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
 
 // When non-empty, the GPU section's non-per-GPU charts are filtered to these
-// GPU `id`s. Empty means show the aggregate (avg/sum across all GPUs). Per-GPU
+// GPUs. Empty means show the aggregate (avg/sum across all GPUs). Per-GPU
 // charts (those with `by (id)`) always show all GPUs and ignore this.
-const setSelectedGpus = (ids) => {
-    _selectedGpus = Array.isArray(ids) ? ids.map(String) : [];
+//
+// A GPU is identified by `(vendor, id)`, not `id` alone: every vendor's sampler
+// numbers its own devices from 0, so a host with an NVIDIA card and an Intel
+// iGPU has two different GPUs both labelled `id="0"`. Filtering on the id alone
+// would silently pull in the other vendor's series.
+//
+// Accepts either the {vendor, id} objects the selector passes, or bare ids
+// (older callers, and recordings whose sampler sets no vendor — the Apple GPU
+// sampler declares none). A bare id becomes {id} with no vendor, which filters
+// on the id alone exactly as before.
+const setSelectedGpus = (gpus) => {
+    _selectedGpus = Array.isArray(gpus)
+        ? gpus.map((g) => (g !== null && typeof g === 'object')
+            ? { vendor: g.vendor != null ? String(g.vendor) : null, id: String(g.id) }
+            : { vendor: null, id: String(g) })
+        : [];
 };
 const getSelectedGpus = () => _selectedGpus;
+
+/// Build the label selector for the current GPU selection and apply it to `q`.
+///
+/// Selections within one vendor collapse to a single `id=~"a|b"` matcher. A
+/// selection spanning vendors cannot: `vendor=~"a|b", id=~"0|1"` is a cross
+/// product that would also match (vendor a, id 1) — a GPU the user did not
+/// pick. PromQL has no OR over label matchers, so the query is instead widened
+/// per vendor only when that is exact, and otherwise left to the id matcher
+/// alone (the pre-existing behaviour, which over-matches rather than dropping
+/// data).
+const applyGpuSelection = (q, selected) => {
+    const vendors = new Set(selected.map((g) => g.vendor));
+    const ids = [...new Set(selected.map((g) => g.id))];
+
+    // One vendor (or none recorded): vendor pins the family, ids pick within it.
+    if (vendors.size === 1) {
+        const vendor = [...vendors][0];
+        if (vendor) q = injectLabel(q, 'vendor', vendor);
+        return ids.length === 1
+            ? injectLabel(q, 'id', ids[0])
+            : injectLabelRegex(q, 'id', ids.join('|'));
+    }
+
+    // Spanning vendors. If every selected vendor is fully represented at every
+    // selected id, the cross product is exactly the selection and both matchers
+    // are safe.
+    const known = [...vendors].filter(Boolean);
+    const exact = known.length === vendors.size
+        && known.every((v) => ids.every((id) =>
+            selected.some((g) => g.vendor === v && g.id === id)));
+
+    if (exact) {
+        q = injectLabelRegex(q, 'vendor', known.join('|'));
+    }
+
+    return ids.length === 1
+        ? injectLabel(q, 'id', ids[0])
+        : injectLabelRegex(q, 'id', ids.join('|'));
+};
 
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
@@ -793,12 +848,7 @@ const createDataApi = ({
         // `id`s. Per-GPU charts group `by (id)` to draw one line per GPU and
         // must always show all GPUs, so they are exempt. Empty selection = all.
         if (_selectedGpus.length > 0 && sectionRoute === '/gpu' && !/by\s*\(\s*id\s*\)/.test(q)) {
-            if (_selectedGpus.length === 1) {
-                q = injectLabel(q, 'id', _selectedGpus[0]);
-            } else {
-                // Match any of the selected ids via a regex label selector.
-                q = injectLabelRegex(q, 'id', _selectedGpus.join('|'));
-            }
+            q = applyGpuSelection(q, _selectedGpus);
         }
         if (injectTopologyLabels && serviceName) {
             const inst = _selectedInstances[serviceName];
@@ -1163,6 +1213,7 @@ export {
     getSelectedNode,
     setSelectedGpus,
     getSelectedGpus,
+    applyGpuSelection,
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,

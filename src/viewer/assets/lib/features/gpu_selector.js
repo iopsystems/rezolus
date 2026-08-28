@@ -4,16 +4,35 @@
 // charts always show all GPUs and are unaffected (handled in data.js by
 // skipping queries that group `by (id)`).
 //
+// A GPU is identified by `(vendor, id)`, not `id` alone: every vendor's sampler
+// numbers its own devices from 0, so a host with an NVIDIA card and an Intel
+// iGPU has two distinct GPUs both labelled `id="0"`. The list is keyed on the
+// pair, and the pair is what `onChange` reports.
+//
 // Attrs:
-//   ids: number[]                  — available GPU ids (e.g. [0, 1])
-//   selected: (string|number)[]    — currently selected ids
-//   onChange: (ids: string[]) => void — called when the selection changes
-//   gpus: {index, name, vendor, memory_bytes}[] — System Info GPU details,
+//   gpus: {id, vendor?}[]          — available GPUs, from the section metadata
+//   ids: number[]                  — legacy id-only list, used when `gpus` is absent
+//   selected: {vendor, id}[]       — currently selected GPUs
+//   onChange: (gpus: {vendor, id}[]) => void — called when the selection changes
+//   details: {index, name, vendor, memory_bytes}[] — System Info GPU details,
 //         used to show each GPU's model name next to its id
 
 import globalColorMapper from '../charts/util/colormap.js';
 
-const gpuLabel = (id) => `GPU ${id}`;
+// Set key for one GPU. NUL cannot occur in a label value, so it cannot collide
+// with a vendor or id that merely contains the separator.
+const gpuKey = (g) => `${g.vendor ?? ''}\u0000${g.id}`;
+const parseKey = (key) => {
+    const [vendor, id] = key.split('\u0000');
+    return { vendor: vendor || null, id };
+};
+
+// Two GPUs can share an id, so the id alone is not a label. Name the vendor
+// whenever the recording has more than one.
+const gpuLabel = (key, showVendor) => {
+    const { vendor, id } = parseKey(key);
+    return showVendor && vendor ? `${vendor} GPU ${id}` : `GPU ${id}`;
+};
 
 // Compact byte formatter for the GPU memory shown in the selector (e.g. "32 GB").
 const formatBytes = (bytes) => {
@@ -27,8 +46,9 @@ const formatBytes = (bytes) => {
 
 /** Render one labeled multi-select column with a color swatch per GPU.
  *  Mirrors the cgroup selector's selectList (shift+click range select).
- *  `detailFn(id)` returns the model/details string shown under the id. */
-const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked, detailFn) =>
+ *  Items are GPU keys (see `gpuKey`); `labelFn(key)` renders the display name
+ *  and `detailFn(key)` returns the model/details string shown under it. */
+const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicked, setLastClicked, detailFn, labelFn) =>
     m('div.selector-column', [
         m('h4', title),
         m('ul.cgroup-select', {
@@ -42,7 +62,7 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                     role: 'option',
                     'aria-selected': selectionSet.has(item) ? 'true' : 'false',
                     class: selectionSet.has(item) ? 'selected' : '',
-                    title: detail ? `${gpuLabel(item)} — ${detail}` : gpuLabel(item),
+                    title: detail ? `${labelFn(item)} — ${detail}` : labelFn(item),
                     onclick: (e) => {
                         if (e.shiftKey && lastClicked != null) {
                             const from = items.indexOf(lastClicked);
@@ -59,10 +79,10 @@ const selectList = (title, items, selectionSet, onToggle, emptyLabel, lastClicke
                     },
                 }, [
                     m('span.cgroup-select-swatch', {
-                        style: { background: globalColorMapper.getColorByName(gpuLabel(item)) },
+                        style: { background: globalColorMapper.getColorByName(labelFn(item)) },
                     }),
                     m('span.cgroup-select-name', [
-                        m('span.gpu-select-id', gpuLabel(item)),
+                        m('span.gpu-select-id', labelFn(item)),
                         detail && m('span.gpu-select-detail', detail),
                     ]),
                 ]);
@@ -79,8 +99,14 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
 
 export const GpuSelector = {
     oninit(vnode) {
-        // selectedGpus: the ids on the right (filtered). Seeded from attrs.
-        vnode.state.selectedGpus = new Set((vnode.attrs.selected || []).map(String));
+        // selectedGpus: the GPUs on the right (filtered), held as `gpuKey`
+        // strings so a Set can hold (vendor, id) pairs. Seeded from attrs,
+        // accepting either pairs or bare ids.
+        vnode.state.selectedGpus = new Set(
+            (vnode.attrs.selected || []).map((g) => (g !== null && typeof g === 'object')
+                ? gpuKey({ vendor: g.vendor ?? null, id: String(g.id) })
+                : gpuKey({ vendor: null, id: String(g) })),
+        );
         vnode.state.leftSelected = new Set();  // highlighted-but-not-transferred (left)
         vnode.state.rightSelected = new Set();
         vnode.state.lastClickedLeft = null;
@@ -88,7 +114,8 @@ export const GpuSelector = {
     },
 
     commit(vnode) {
-        vnode.attrs.onChange(Array.from(vnode.state.selectedGpus));
+        // Report {vendor, id} pairs, not the internal key strings.
+        vnode.attrs.onChange(Array.from(vnode.state.selectedGpus).map(parseKey));
     },
 
     transfer(vnode, items, action) {
@@ -104,21 +131,42 @@ export const GpuSelector = {
 
     view(vnode) {
         const st = vnode.state;
-        const all = (vnode.attrs.ids || []).map(String);
-        const available = all.filter((id) => !st.selectedGpus.has(id));
-        const selected = all.filter((id) => st.selectedGpus.has(id));
+
+        // Prefer the (vendor, id) pairs; fall back to the id-only list for a
+        // recording whose metadata predates them.
+        const entries = Array.isArray(vnode.attrs.gpus) && vnode.attrs.gpus.length > 0
+            ? vnode.attrs.gpus.map((g) => ({ vendor: g.vendor ?? null, id: String(g.id) }))
+            : (vnode.attrs.ids || []).map((id) => ({ vendor: null, id: String(id) }));
+
+        // Only qualify names with the vendor when more than one is present;
+        // "intel GPU 0" is noise on a single-vendor host.
+        const showVendor = new Set(entries.map((g) => g.vendor).filter(Boolean)).size > 1;
+        const labelFn = (key) => gpuLabel(key, showVendor);
+
+        const all = entries.map(gpuKey);
+        const available = all.filter((k) => !st.selectedGpus.has(k));
+        const selected = all.filter((k) => st.selectedGpus.has(k));
 
         const toggleMark = (set, item) => {
             if (set.has(item)) set.delete(item);
             else set.add(item);
         };
 
-        // Map GPU id -> details string ("AMD Radeon ... · 32 GB") from System Info.
-        const byIndex = new Map(
-            (vnode.attrs.gpus || []).map((g) => [String(g.index), g]),
+        // Map GPU -> details string ("AMD Radeon ... · 32 GB") from System Info.
+        // Keyed on (vendor, index): System Info's `index` is the same
+        // vendor-local number as the metric `id`, so on a mixed-vendor host the
+        // vendor is what keeps two `index: 0` entries apart. Fall back to a
+        // match on index alone when the entry carries no vendor.
+        const details = vnode.attrs.details || [];
+        const byPair = new Map(
+            details.map((g) => [gpuKey({ vendor: g.vendor ?? null, id: String(g.index) }), g]),
         );
-        const detailFn = (id) => {
-            const g = byIndex.get(String(id));
+        const byIndexOnly = new Map(details.map((g) => [String(g.index), g]));
+        const detailFn = (key) => {
+            const { vendor, id } = parseKey(key);
+            const g = byPair.get(key)
+                || (vendor ? undefined : byIndexOnly.get(id))
+                || byIndexOnly.get(id);
             if (!g) return '';
             const parts = [];
             if (g.name || g.vendor) parts.push(g.name || g.vendor);
@@ -138,6 +186,7 @@ export const GpuSelector = {
                     st.lastClickedLeft,
                     (item) => { st.lastClickedLeft = item; },
                     detailFn,
+                    labelFn,
                 ),
 
                 m('div.selector-controls', [
@@ -164,6 +213,7 @@ export const GpuSelector = {
                     st.lastClickedRight,
                     (item) => { st.lastClickedRight = item; },
                     detailFn,
+                    labelFn,
                 ),
             ]),
             m('div.selector-info', [

@@ -70,7 +70,8 @@ let nodeList = [];
 let nodeVersions = {};
 let selectedNode = null;
 let gpuList = [];          // GPU ids present in the recording (e.g. [0, 1])
-let selectedGpus = [];     // selected GPU ids filtering the GPU section, [] = all
+let selectedGpus = [];     // selected {vendor, id} GPUs filtering the GPU section, [] = all
+let gpuEntries = [];       // available {vendor, id} GPUs, from the section metadata
 let serviceInstances = {};
 let selectedInstances = {};
 let activeCgroupPattern = null;
@@ -325,6 +326,9 @@ const loadSection = async (section) => {
     const gpuSel = data.metadata?.gpu_selector;
     if (gpuSel?.enabled && Array.isArray(gpuSel.ids)) {
         gpuList = gpuSel.ids.slice();
+        // `gpus` carries the (vendor, id) pairs the selector filters on. Older
+        // recordings have only `ids`; the selector falls back to those.
+        gpuEntries = Array.isArray(gpuSel.gpus) ? gpuSel.gpus.slice() : [];
     }
 
     const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
@@ -520,8 +524,8 @@ const changeNode = async (nodeName) => {
     }
 };
 
-const changeGpu = async (gpuIds) => {
-    selectedGpus = Array.isArray(gpuIds) ? gpuIds.slice() : [];
+const changeGpu = async (gpus) => {
+    selectedGpus = Array.isArray(gpus) ? gpus.slice() : [];
     setSelectedGpus(selectedGpus);
     // Only the GPU section's charts depend on this; drop its cached data and
     // reload so the queries re-run with the id filter applied.
@@ -881,13 +885,16 @@ const SectionContent = {
             // filters the non-per-GPU charts to a subset of GPU ids. Shown only
             // when the recording has more than one GPU. Per-GPU charts (queries
             // grouped `by (id)`) always show all GPUs.
-            sectionRoute === '/gpu' && gpuList.length > 1 && m(GpuSelector, {
+            sectionRoute === '/gpu' && (gpuEntries.length > 1 || gpuList.length > 1) && m(GpuSelector, {
+                // The (vendor, id) pairs to choose between; `ids` is the
+                // fallback for a recording whose metadata predates them.
+                gpus: gpuEntries,
                 ids: gpuList,
                 selected: selectedGpus,
                 onChange: changeGpu,
-                // GPU details (name/model, memory) from System Info, keyed by id,
-                // so each entry shows the device model alongside its id.
-                gpus: systemInfoData?.gpus || [],
+                // GPU details (name/model, memory) from System Info, matched on
+                // (vendor, index), so each entry shows the device model.
+                details: systemInfoData?.gpus || [],
             }),
             m('div#groups',
                 attrs.groups.map((group) => m(Group, { ...group, sectionRoute, sectionName, interval })),
