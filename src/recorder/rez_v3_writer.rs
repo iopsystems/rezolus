@@ -1684,7 +1684,7 @@ impl StreamRecorderV3 {
         let now = Instant::now();
         let mut batch = Vec::new();
         for (sampler, account) in self.accounts.iter_mut() {
-            if !account.is_due(&self.policy, now) {
+            if !account.is_due(now) {
                 continue;
             }
             account.rotate(&self.policy, now);

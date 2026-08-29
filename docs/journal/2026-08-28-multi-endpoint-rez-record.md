@@ -1,7 +1,11 @@
 # Multi-endpoint `.rez` — closing the last single-recording seam
 
 - **Opened:** 2026-08-28
-- **Status:** **OPEN — intent landed, not yet built.**
+- **Status:** **SHIPPED, measured.** `record --endpoint a --endpoint b -o out.rez`
+  writes one archive holding a recording per endpoint. Four of the five
+  GO/NO-GO criteria pass with room; the fifth was **mis-specified** and is
+  restated below — but measuring it found a real, pre-existing lockstep bug
+  (the byte cap escaped the seal stagger), which is fixed here. See *Results*.
 - **Arc:** completes the container work begun in
   [the SQLite container](2026-08-12-rez-sqlite-container.md) and
   [stage 4 native V3 ingest](2026-08-20-stage4-native-v3-ingest.md), and removes
@@ -241,3 +245,91 @@ drops ticks.
 - **Viewer beyond two recordings** — `src/viewer/mod.rs:581`.
 - **Hindsight multi-endpoint** — the rolling buffer is single-agent by
   construction today; the writer work here is a prerequisite, nothing more.
+
+## Results
+
+Measured on a 32-core Linux host, release build, against a live agent. **The
+host was not idle** — it carries other work throughout — so both arms were
+captured against the same agent under the same conditions and every figure
+below is a ratio between arms rather than an absolute cost.
+
+Two configurations, 120 s at 1 s for the footprint numbers and 300 s at 50 ms
+for the sealing numbers (50 ms is what makes tables seal repeatedly in steady
+state rather than only at finalize).
+
+Both arms were re-measured on the post-stagger build, since the stagger change
+moves segment boundaries and a pre-change archive is not a valid baseline.
+
+| criterion | bar | measured | verdict |
+|---|---|---|---|
+| Finalize | within 1.3× | **1.17×** (1.42 s → 1.66 s of post-window overhead) | PASS |
+| Recorder RSS | within 1.6× | **1.08×** (101.6 → 110.2 MB) | PASS |
+| Dropped ticks | at the 0.4% floor | **zero** — both recordings 26 tables / 3028 rows, identical to the single-recording baseline | PASS |
+| Byte parity with `combine` | same tables/rows/windows | **1.0008** on total bytes | PASS |
+| Largest seal batch | within 1.25× | 2.00× including finalize, **1.50×** steady-state | see below |
+
+### The seal-batch criterion was mis-specified
+
+It does not separate three different things, and only one of them is a defect:
+
+1. **The finalize batch is inherently N×.** Finalize seals every open tail by
+   definition, so two recordings mean twice the tails: 25 → 50. No stagger can
+   or should avoid that.
+2. **Doubling the table count raises coincidence on its own.** With 52 tables
+   instead of 26 landing in the same number of seal instants, the maximum
+   batch rises from birthday effects even under perfect independence.
+3. **Genuine lockstep**, which is what the criterion was *meant* to catch.
+
+Written as a single ratio it conflates all three. Restated, the criterion should
+be *steady-state* (finalize excluded) and about the **distribution**, not the
+maximum.
+
+### What it caught, which is the point
+
+`SegmentAccount::open_first` staggered `max_rows` and `max_age` but read
+`policy.max_bytes` directly, so **the byte cap was never staggered.** The policy's
+own documentation says the byte cap is what splits the *wide* tables — so
+precisely those tables had no phase offset at all.
+
+Within one recording that was survivable: different samplers fill at different
+rates and drift anyway. Across two recordings of the same agent it is not,
+because the two carry identical data, reach the cap on the same row, and seal
+together forever. Measured, at 50 ms over 300 s:
+
+| sampler | segments | boundaries coincident across the two recordings | max rows |
+|---|---|---|---|
+| `cpu_usage` | 49 | **49** | 99 |
+| `syscall_latency` | 37 | **37** | 131 |
+| `scheduler_runqueue` | 17 | **17** | 296 |
+| `cpu_bandwidth` | 6 | 1 | 900 |
+| `cpu_branch` | 6 | 1 | 900 |
+
+The split is exact: every table sealing *at* 900 rows (row-bound) desynced
+correctly; every table sealing *before* 900 (byte-bound) was in 100% lockstep.
+
+Staggering the byte cap by the same bucket fixes it. Steady-state co-seal
+distribution, finalize excluded:
+
+| | one recording | two, before | two, after |
+|---|---|---|---|
+| max batch | 2 | 4 | 3 |
+| pairs | 23 | 161 | 40 |
+| triples | 0 | 10 | 3 |
+| quads | 0 | 1 | 0 |
+
+Lockstep pairs fell ~4×, and whole-archive boundary coincidence went from
+**157 of 256 to 26 of 231**. What remains is items 1 and 2 above.
+
+This is the value of a number-gated close-out: the criterion was wrong, and
+running it anyway surfaced a latent bug that had been shipping since the
+stagger was written. It was invisible while an archive could hold only one
+recording, and would have become a silent doubling of steady-state seal
+transactions the moment one could hold two.
+
+### Not measured
+
+Query latency across a multi-recording archive. The read path is unchanged by
+this work — `RezReader::from_v3` already enumerated N recordings — and the
+[read-path entry](2026-08-27-rez-vs-parquet-read-path.md) prices open cost per
+table, which is what a second recording adds. Worth a number if multi-recording
+archives become common.

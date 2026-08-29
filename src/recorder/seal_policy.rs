@@ -99,13 +99,24 @@ pub(crate) struct SegmentAccount {
     approx_bytes: usize,
     /// Instant the current segment was opened (the age bound's origin).
     opened_at: Instant,
+    max_bytes: usize,
     max_rows: usize,
     max_age: Duration,
 }
 
 impl SegmentAccount {
-    /// Open a sampler's **first** segment, with row and age targets reduced by
-    /// a deterministic per-sampler fraction of up to 50%.
+    /// Open a sampler's **first** segment, with byte, row and age targets
+    /// reduced by a deterministic per-sampler fraction of up to 50%.
+    ///
+    /// **All three caps, not just rows and age.** The byte cap is the one that
+    /// splits the *wide* tables (see `SealPolicy`), so leaving it unstaggered
+    /// left exactly those tables with no phase offset at all. Within one
+    /// recording that was survivable — different samplers fill at different
+    /// rates, so they drift anyway — but two recordings of the SAME agent
+    /// carry identical data, so a byte-bound table reached the cap on the same
+    /// row in both and they sealed in permanent lockstep. Measured before the
+    /// fix: `cpu_usage` 49/49 segment boundaries coincident across two
+    /// recordings, against 1/6 for the row-bound tables.
     ///
     /// This is a *phase offset*, not a period change. Every row-capped table
     /// otherwise advances exactly one row per tick starting from row 0, so they
@@ -120,10 +131,14 @@ impl SegmentAccount {
         // callers, and `max_rows * bucket` would overflow.
         let row_offset = (policy.max_rows / (2 * STAGGER_BUCKETS as usize)) * bucket as usize;
         let age_offset = (policy.max_age / (2 * STAGGER_BUCKETS as u32)) * bucket as u32;
+        let byte_offset = (policy.max_bytes / (2 * STAGGER_BUCKETS as usize)) * bucket as usize;
         Self {
             rows: 0,
             approx_bytes: 0,
             opened_at: Instant::now(),
+            // `max(1)` for the same reason as the row target: a zero cap would
+            // seal an empty segment every tick forever.
+            max_bytes: policy.max_bytes.saturating_sub(byte_offset).max(1),
             // `max(1)` so a small policy can never yield a zero row target,
             // which would seal a one-row segment every tick forever.
             max_rows: policy.max_rows.saturating_sub(row_offset).max(1),
@@ -144,9 +159,13 @@ impl SegmentAccount {
     /// Row and age targets come from the account, not the policy: the first
     /// segment of each sampler is staggered short. The byte cap is a memory
     /// bound and is never staggered.
-    pub(crate) fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
+    /// Takes no policy: the account carries its own copy of all three caps,
+    /// because all three are staggered on the first segment and `rotate`
+    /// restores them. Reading `policy.max_bytes` here instead is what let the
+    /// byte cap escape the stagger.
+    pub(crate) fn is_due(&self, now: Instant) -> bool {
         self.rows > 0
-            && (self.approx_bytes >= policy.max_bytes
+            && (self.approx_bytes >= self.max_bytes
                 || self.rows >= self.max_rows
                 || now.duration_since(self.opened_at) >= self.max_age)
     }
@@ -157,6 +176,7 @@ impl SegmentAccount {
         self.rows = 0;
         self.approx_bytes = 0;
         self.opened_at = now;
+        self.max_bytes = policy.max_bytes;
         self.max_rows = policy.max_rows;
         self.max_age = policy.max_age;
     }
@@ -170,6 +190,12 @@ impl SegmentAccount {
     #[cfg(test)]
     pub(crate) fn targets(&self) -> (usize, Duration) {
         (self.max_rows, self.max_age)
+    }
+
+    /// This segment's byte cap, after the first-segment stagger.
+    #[cfg(test)]
+    pub(crate) fn byte_target(&self) -> usize {
+        self.max_bytes
     }
 }
 
@@ -284,6 +310,47 @@ mod tests {
             collisions, 0,
             "identical sampler sets must not draw identical buckets across recordings"
         );
+    }
+
+    /// The byte cap must be staggered too, not just rows and age.
+    ///
+    /// This is the one the measurement caught. The byte cap splits the *wide*
+    /// tables, so leaving it on the shared policy left exactly those tables
+    /// with no phase offset: two recordings of one agent carry identical data,
+    /// reach the cap on the same row, and seal together forever. Measured
+    /// before the fix, `cpu_usage` had 49 of 49 segment boundaries coincident
+    /// across two recordings; after, 1 of 5.
+    #[test]
+    fn the_byte_cap_is_staggered_across_recordings() {
+        let policy = SealPolicy {
+            max_bytes: 8 * 1024 * 1024,
+            max_rows: 900,
+            max_age: Duration::from_secs(300),
+        };
+        let key = |host: &str| {
+            recording_stagger_key(
+                &[("host".to_string(), host.to_string())]
+                    .into_iter()
+                    .collect(),
+            )
+        };
+
+        // The same wide sampler in two recordings must not share a byte target.
+        let a = SegmentAccount::open_first("cpu_usage", &key("alpha"), &policy);
+        let b = SegmentAccount::open_first("cpu_usage", &key("beta"), &policy);
+        assert_ne!(
+            a.byte_target(),
+            b.byte_target(),
+            "a byte-bound table would otherwise seal on the same row in both"
+        );
+
+        // And the stagger stays inside its documented bound: at most 50% off,
+        // never zero.
+        for host in ["alpha", "beta", "gamma"] {
+            let acct = SegmentAccount::open_first("cpu_usage", &key(host), &policy);
+            assert!(acct.byte_target() > policy.max_bytes / 2 - 1);
+            assert!(acct.byte_target() <= policy.max_bytes);
+        }
     }
 
     /// An A/B on ONE host separates only on `arm` — which is why the key is the

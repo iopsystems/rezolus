@@ -568,8 +568,8 @@ impl BuilderState {
         self.account.add_row(entries_approx_bytes(entries));
     }
 
-    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
-        self.account.is_due(policy, now)
+    fn is_due(&self, now: Instant) -> bool {
+        self.account.is_due(now)
     }
 
     /// Rotate onto a fresh builder after a seal.
@@ -614,7 +614,7 @@ pub(crate) fn drain_due(
     let now = Instant::now();
     let mut sealed = Vec::new();
     for (sampler, state) in builders.iter_mut() {
-        if !state.is_due(policy, now) {
+        if !state.is_due(now) {
             continue;
         }
         sealed.push((sampler.clone(), state.seal_completed(sampler, policy, now)));

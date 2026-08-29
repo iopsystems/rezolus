@@ -305,7 +305,7 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
   from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
   close it.
-- **`record` cannot write a multi-recording `.rez`** — Open, **in progress**.
+- **`record` cannot write a multi-recording `.rez`** — **DONE** (this PR).
   Source: [multi-endpoint `.rez`](journal/2026-08-28-multi-endpoint-rez-record.md).
   Everything else in the stack is multi-recording — the manifest is a
   `Vec<RezRecording>`, the SQLite schema keys on `(recording_id, sampler, seq)`,
