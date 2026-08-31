@@ -697,3 +697,18 @@ effort); promote one to a journal entry when it's picked up.
   test-only shape. *Why:* a `pub` constructor with no caller is the kind of
   thing a future consumer reaches for by name and then inherits the refusal
   from — the reason `mcp` had to grow an explicit guard at all.
+- **A failed `.rez` creation can leave a file that blocks the retry** — Open,
+  pre-existing, surfaced twice while reviewing #1109. `RezDb::create` claims the
+  output path with `O_EXCL`, and the writer refuses to overwrite an existing
+  `.rez` — which is the right default for a container committed as it goes, but
+  it means anything left behind by a failed start blocks the re-run until the
+  operator removes it by hand. Two windows remain: (a) `RezArchive::create`
+  failing *after* `RezDb::create` succeeded — the pragma steps or the thread
+  spawn — returns `Err` without unlinking; (b) `RezStream::discard` removes the
+  main file but not the `-wal`/`-shm` sidecars, which SQLite normally cleans on
+  a clean close but not after an unclean one. #1109 fixed the third window (a
+  partial `start_rez_recorder`, which now calls `discard()`), so these are what
+  is left of the family. *Fix:* have `RezArchive::create` unlink on its own
+  failure path, and have `discard` remove the sidecars alongside the main file.
+  *Why:* the failure mode is "the retry says the file already exists", which
+  reads as a bug in the retry rather than fallout from the original error.
