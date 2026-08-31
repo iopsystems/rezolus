@@ -241,8 +241,20 @@ pub(crate) fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
     // `host=web-01` and `host=webm01` collided on all of them.
     //
     // Folding the high bits in as their own absorbed value breaks that
-    // identity while leaving the low-bit structure — which measures *better*
-    // than a well-avalanched finalizer here — intact.
+    // identity for bits 6-7 while leaving the low-bit structure — which
+    // measures *better* than a well-avalanched finalizer here — intact.
+    //
+    // It does NOT close bit 5, and the same algebra applies: `x ^ 0x20` is
+    // `x + 32 (mod 64)` and `51 * 32 == 32 (mod 64)`, so flipping bit 5 of an
+    // absorbed byte just XORs 0x20 through the whole chain. Two label sets
+    // differing by an EVEN number of bit-5 flips still share every bucket. In
+    // printable ASCII bit 5 is the case bit, so this needs two recordings
+    // whose labels differ only by capitalisation (`host=Web-01` vs
+    // `host=weB-01`) — which within one `record` run means an operator typing
+    // two `source=` values that differ only in case. Left open rather than
+    // absorbing `b >> 5` as well, because each extra fold costs some of the
+    // low-bit advantage and this class is far narrower than the one closed.
+    // Tracked in docs/backlog.md.
     let absorb = |h: &mut u64, b: u64| {
         *h ^= b;
         *h = h.wrapping_mul(PRIME);
@@ -336,10 +348,13 @@ mod tests {
                 .iter()
                 .filter(|s| stagger_bucket(s, &ka) == stagger_bucket(s, &kb))
                 .count();
-            assert!(
-                collisions < samplers.len(),
-                "{a} and {b} drew the same bucket for all {} samplers — the reduction \
-                 is discarding the bits that separate them",
+            assert_eq!(
+                collisions,
+                0,
+                "{a} and {b} share {collisions} of {} buckets — the reduction is \
+                 discarding the bits that separate them. `collisions < len` would be \
+                 too weak a bar here: 5 of 6 coincident is still the lockstep this \
+                 test exists to catch",
                 samplers.len()
             );
         }
@@ -417,7 +432,13 @@ mod tests {
                 split = Some(row);
                 break;
             }
-            assert!(!a.is_due(now), "the row cap must not be what fires here");
+            // Checked only once they agree, so an unstaggered byte cap falls
+            // through to the `split.is_some()` assertion below with its
+            // accurate message rather than tripping this one first.
+            assert!(
+                row < policy.max_rows,
+                "the byte cap must fire before the row cap, or this tests the wrong cap"
+            );
         }
         assert!(
             split.is_some(),
@@ -456,43 +477,37 @@ mod tests {
         );
     }
 
-    /// The bucket must not depend on the order the endpoints were listed on
-    /// the command line — the property that ruled out keying on the
-    /// autoincrement recording id.
+    /// The bucket follows a recording's labels, not its position.
     ///
-    /// Asserting `key(map) == key(same map)` would prove nothing: a
-    /// `BTreeMap` is already sorted, so both sides are the same value before
-    /// the function is called. What varies in production is which endpoint is
-    /// recording 0, so that is what varies here: the two label sets are built
-    /// in both orders and each must keep its own bucket either way.
+    /// This is deliberately NOT written as "compute the pair in both orders
+    /// and compare". `stagger_bucket` takes two `&str` and no index, and
+    /// `recording_stagger_key` takes a `BTreeMap` that is sorted before it is
+    /// called — so any such assertion reduces to `[f(a), f(b)] == [f(a),
+    /// f(b))]`, two calls to a pure function compared with themselves. It
+    /// cannot fail for any implementation, which is exactly what was wrong
+    /// with the version this replaces.
+    ///
+    /// Order-independence is real, but it is a property of the *layer above*:
+    /// the recording id — the thing that would have made segmentation depend
+    /// on endpoint order — never reaches this function, which is the design
+    /// decision itself. `stagger_key_follows_the_labels_not_the_open_order`
+    /// in `rez_v3_writer` pins it where the id exists. What is left to assert
+    /// here is the content: two arms must land in different buckets.
     #[test]
-    fn buckets_do_not_depend_on_endpoint_order() {
-        let a = [
-            ("host".to_string(), "alpha".to_string()),
-            ("arm".to_string(), "redis".to_string()),
-        ];
-        let b = [
-            ("host".to_string(), "alpha".to_string()),
-            ("arm".to_string(), "valkey".to_string()),
-        ];
-        let key =
-            |pairs: &[(String, String)]| recording_stagger_key(&pairs.iter().cloned().collect());
-        // Listed a-then-b, and b-then-a: each recording's key is a function of
-        // its own labels alone, so the pair of buckets is the same set either
-        // way round.
-        let forward: Vec<u64> = [&a[..], &b[..]]
-            .iter()
-            .map(|p| stagger_bucket("cpu_usage", &key(p)))
-            .collect();
-        let reversed: Vec<u64> = [&b[..], &a[..]]
-            .iter()
-            .map(|p| stagger_bucket("cpu_usage", &key(p)))
-            .collect();
-        assert_eq!(
-            forward,
-            reversed.iter().rev().copied().collect::<Vec<_>>(),
-            "a recording's bucket must follow its labels, not its position"
+    fn the_two_arms_of_an_ab_land_in_different_buckets() {
+        let key = |arm: &str| {
+            recording_stagger_key(
+                &[
+                    ("host".to_string(), "alpha".to_string()),
+                    ("arm".to_string(), arm.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        };
+        assert_ne!(
+            stagger_bucket("cpu_usage", &key("redis")),
+            stagger_bucket("cpu_usage", &key("valkey"))
         );
-        assert_ne!(forward[0], forward[1], "and the two arms must still differ");
     }
 }

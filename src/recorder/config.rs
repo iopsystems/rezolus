@@ -175,8 +175,19 @@ fn resolve_output(
 /// used to write one parquet per endpoint. That case demotes to parquet at
 /// startup instead, the same way a Prometheus endpoint demotes it — see
 /// `demote_from_rez`.
-fn reject_separate_with_rez(separate: bool, format: Format, defaulted: bool) -> Result<(), String> {
-    if separate && format == Format::Rez && !defaulted {
+///
+/// And with ONE endpoint `--separate` is a no-op by definition — there is
+/// nothing to separate — so it is left alone. The old multi-endpoint blocker
+/// never fired on a single-endpoint run either, and a harness that passes
+/// `--separate` unconditionally must not start failing when it happens to be
+/// given one endpoint.
+fn reject_separate_with_rez(
+    separate: bool,
+    format: Format,
+    defaulted: bool,
+    endpoints: usize,
+) -> Result<(), String> {
+    if separate && format == Format::Rez && !defaulted && endpoints > 1 {
         return Err(
             "--separate does not apply to .rez: every endpoint already becomes its \
                     own recording inside the one archive. Drop --separate, or pass \
@@ -276,7 +287,12 @@ impl RecordingConfig {
                 None => PathBuf::from(toml_cfg.recording.output),
             };
             let plan = resolve_format_and_output(config_format, Some(&config_output))?;
-            reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
+            reject_separate_with_rez(
+                separate,
+                plan.format,
+                plan.defaulted,
+                toml_cfg.endpoints.len(),
+            )?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -302,7 +318,7 @@ impl RecordingConfig {
             if endpoints.is_empty() {
                 return Err("at least one --endpoint is required".to_string());
             }
-            reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
+            reject_separate_with_rez(separate, plan.format, plan.defaulted, endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -342,7 +358,8 @@ impl RecordingConfig {
             role: None,
             protocol: None,
         };
-        reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
+        // One endpoint by construction, so `--separate` has nothing to split.
+        reject_separate_with_rez(separate, plan.format, plan.defaulted, 1)?;
 
         Ok(RecordingConfig {
             interval,
@@ -697,7 +714,7 @@ mod tests {
         // here, or a caller scripting out_a.rez/out_b.rez silently gets one
         // out.rez instead.
         assert!(
-            reject_separate_with_rez(true, Format::Rez, false).is_err(),
+            reject_separate_with_rez(true, Format::Rez, false, 2).is_err(),
             "--separate cannot write a file per endpoint from one archive"
         );
         // Caught for a format that came from the extension, not just an
@@ -705,13 +722,31 @@ mod tests {
         let plan = resolve_format_and_output(None, Some(Path::new("out.rez"))).unwrap();
         assert_eq!(plan.format, Format::Rez);
         assert!(!plan.defaulted);
-        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted).is_err());
+        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted, 2).is_err());
 
         // The combinations --separate exists for are untouched.
-        assert!(reject_separate_with_rez(true, Format::Parquet, false).is_ok());
-        assert!(reject_separate_with_rez(true, Format::Raw, false).is_ok());
+        assert!(reject_separate_with_rez(true, Format::Parquet, false, 2).is_ok());
+        assert!(reject_separate_with_rez(true, Format::Raw, false, 2).is_ok());
         // And a .rez without --separate is the ordinary multi-recording case.
-        assert!(reject_separate_with_rez(false, Format::Rez, false).is_ok());
+        assert!(reject_separate_with_rez(false, Format::Rez, false, 2).is_ok());
+    }
+
+    #[test]
+    fn separate_with_one_endpoint_is_left_alone() {
+        // `--separate` has nothing to split with one endpoint, and the
+        // multi-endpoint blocker it replaced never fired on a single-endpoint
+        // run either — so `record --url ... -o out.rez --separate` must keep
+        // recording, not start exiting 1. A harness that passes --separate
+        // unconditionally would otherwise break when handed one endpoint.
+        assert!(
+            reject_separate_with_rez(true, Format::Rez, false, 1).is_ok(),
+            "one endpoint: --separate is a no-op, not an error"
+        );
+        // Including the --config path, where the format is never 'defaulted'
+        // because the TOML output key is mandatory.
+        let plan = resolve_format_and_output(None, Some(Path::new("out.rez"))).unwrap();
+        assert!(!plan.defaulted);
+        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted, 1).is_ok());
     }
 
     #[test]
@@ -724,7 +759,7 @@ mod tests {
         assert_eq!(plan.format, Format::Rez);
         assert!(plan.defaulted, "a bare run defaults the format");
         assert!(
-            reject_separate_with_rez(true, plan.format, plan.defaulted).is_ok(),
+            reject_separate_with_rez(true, plan.format, plan.defaulted, 2).is_ok(),
             "a defaulted .rez must demote for --separate, not error"
         );
     }

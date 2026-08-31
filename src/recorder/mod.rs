@@ -936,9 +936,24 @@ fn demote_from_rez(config: &mut RecordingConfig, reason: &str) {
     }
     config.format = Format::Parquet;
     config.output = PathBuf::from("rezolus.parquet");
+    // `--separate` finalizes through `separate_output_path`, so the run writes
+    // `rezolus_<source>.parquet` per endpoint and never `config.output` itself.
+    // Naming the file it will not write is worse than saying nothing, and the
+    // `--separate` demotion makes this the message that user actually sees.
+    let written = if config.separate {
+        format!(
+            "{}_<source>.parquet per endpoint",
+            config
+                .output
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+        )
+    } else {
+        config.output.display().to_string()
+    };
     eprintln!(
-        "note: {reason}; recording parquet to {} instead (pass --format rez to require a .rez archive)",
-        config.output.display()
+        "note: {reason}; recording parquet to {written} instead (pass --format rez to require a .rez archive)"
     );
 }
 
@@ -1021,7 +1036,10 @@ pub fn run(mut config: RecordingConfig) {
             // demote to the parquet-per-endpoint run the flag asked for
             // rather than erroring on a format nobody chose.
             .or_else(|| {
-                config.separate.then(|| {
+                // Only with several endpoints: with one there is nothing to
+                // separate, and `main`'s multi-endpoint blocker never fired
+                // on a single-endpoint run either.
+                (config.separate && config.endpoints.len() > 1).then(|| {
                     "--separate writes one file per endpoint, which a .rez cannot do (every \
                      endpoint is a recording inside the one archive)"
                         .to_string()
@@ -1556,8 +1574,13 @@ pub fn run(mut config: RecordingConfig) {
                             endpoints[idx].config.source = Some(inferred);
                         }
                     }
+                    // Deliberately says "now reachable", not "starting
+                    // capture": in `.rez` mode the block below may decide this
+                    // endpoint cannot be archived and exclude it, and claiming
+                    // capture had started one line before warning that it will
+                    // not is how the silent-drop bug read in the logs.
                     info!(
-                        "endpoint {} ({}) now available, starting capture",
+                        "endpoint {} ({}) now reachable",
                         endpoints[idx].config.source_label(),
                         endpoints[idx].config.url
                     );
@@ -1613,7 +1636,9 @@ pub fn run(mut config: RecordingConfig) {
                                 &endpoints[idx],
                                 clock_anchor_wall_ns,
                             ) {
-                                late_endpoint_failure = Some(format!(
+                                // First failure wins, as `ingest_failed` does:
+                                // two endpoints can activate in one tick.
+                                late_endpoint_failure.get_or_insert(format!(
                                     "failed to open a .rez recording for {}: {e}",
                                     endpoints[idx].config.url
                                 ));

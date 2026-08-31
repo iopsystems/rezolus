@@ -561,12 +561,6 @@ fn init_file_mode(
     state
 }
 
-/// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
-/// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
-/// recording metadata stands in for the parquet footer (systeminfo, file
-/// metadata). Service extensions and source classification degrade gracefully —
-/// a `.rez` has no parquet footer, so those path-based reads simply yield
-/// nothing, which is correct for a plain agent recording.
 /// Pick the label that actually tells these recordings apart.
 ///
 /// A fixed `arm`-then-`host` precedence breaks on the case `record` now makes
@@ -583,6 +577,15 @@ fn init_file_mode(
 pub(crate) fn discriminating_alias_key(
     recordings: &[std::collections::BTreeMap<String, String>],
 ) -> Option<String> {
+    // Nothing to discriminate against. Without this, one recording makes every
+    // predicate vacuously true and the first merely-PRESENT preferred key wins
+    // — so a hindsight snapshot, whose labels are just `{source: rezolus}`,
+    // would be aliased "rezolus" instead of the positional "baseline". An
+    // empty slice is worse: `[].iter().all(..)` is true, so it would return
+    // `Some("arm")` for no recordings at all.
+    if recordings.len() < 2 {
+        return None;
+    }
     let discriminates = |k: &str| {
         let mut seen = std::collections::HashSet::new();
         recordings
@@ -607,6 +610,12 @@ pub(crate) fn discriminating_alias_key(
         })
 }
 
+/// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
+/// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
+/// recording metadata stands in for the parquet footer (systeminfo, file
+/// metadata). Service extensions and source classification degrade gracefully —
+/// a `.rez` has no parquet footer, so those path-based reads simply yield
+/// nothing, which is correct for a plain agent recording.
 fn init_file_mode_rez(
     config: &Config,
     path: &Path,
@@ -1240,6 +1249,20 @@ mod alias_tests {
             labels(&[("host", "alpha"), ("source", "rezolus")]),
         ];
         assert_eq!(discriminating_alias_key(&recs), None);
+    }
+
+    #[test]
+    fn a_single_recording_gets_no_alias_key() {
+        // With one recording every predicate is vacuously true, so the first
+        // merely-PRESENT preferred key would win. A hindsight snapshot's
+        // labels are just `{source: rezolus}`, so it would be aliased
+        // "rezolus" — strictly worse than the positional "baseline" it used to
+        // get, and not a name at all.
+        let recs = vec![labels(&[("source", "rezolus")])];
+        assert_eq!(discriminating_alias_key(&recs), None);
+        // Empty is worse still: `[].iter().all(..)` is true, so this returned
+        // Some("arm") for no recordings at all.
+        assert_eq!(discriminating_alias_key(&[]), None);
     }
 
     #[test]

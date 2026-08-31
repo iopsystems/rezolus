@@ -2092,6 +2092,83 @@ mod tests {
         );
     }
 
+    /// A recording's stagger bucket must follow its LABELS, not the order its
+    /// endpoint appeared on the command line.
+    ///
+    /// This is the property that ruled out keying the stagger on
+    /// `recordings.id` — an autoincrement rowid, so the same two agents
+    /// recorded with the flags swapped would have segmented differently and a
+    /// capture would not reproduce. It can only be tested here, where the id
+    /// exists: `stagger_bucket` never sees it, so an equivalent assertion down
+    /// in `seal_policy` is a tautology.
+    #[test]
+    fn stagger_key_follows_the_labels_not_the_open_order() {
+        let seed_for = |source: &str| ManifestSeed {
+            labels: [
+                ("host".to_string(), "alpha".to_string()),
+                ("source".to_string(), source.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000,
+        };
+        // Open the same two label sets in both orders, so each is recording 0
+        // once and recording 1 once.
+        let open_both = |first: &str, second: &str| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("out.rez");
+            let mut archive = RezArchive::create(&path).unwrap();
+            let a = archive.add_recording(seed_for(first)).unwrap();
+            let b = archive.add_recording(seed_for(second)).unwrap();
+            let out = [
+                (
+                    first.to_string(),
+                    a.recording_id(),
+                    a.stagger_key().to_string(),
+                ),
+                (
+                    second.to_string(),
+                    b.recording_id(),
+                    b.stagger_key().to_string(),
+                ),
+            ];
+            a.finalize((1_000, 0)).unwrap();
+            b.finalize((1_000, 0)).unwrap();
+            archive.join().unwrap();
+            out
+        };
+
+        let forward = open_both("redis", "valkey");
+        let reversed = open_both("valkey", "redis");
+
+        // The ids DID swap — otherwise this proves nothing about independence
+        // from them.
+        assert_eq!(forward[0].0, "redis");
+        assert_eq!(reversed[1].0, "redis");
+        assert_ne!(
+            forward[0].1, reversed[1].1,
+            "redis must hold a different recording id in the two runs"
+        );
+        // ...and the stagger key did not.
+        let key_of = |runs: &[(String, i64, String); 2], source: &str| {
+            runs.iter()
+                .find(|(s, _, _)| s == source)
+                .map(|(_, _, k)| k.clone())
+                .unwrap()
+        };
+        assert_eq!(
+            key_of(&forward, "redis"),
+            key_of(&reversed, "redis"),
+            "the stagger key must follow the labels, not the open order"
+        );
+        assert_ne!(
+            key_of(&forward, "redis"),
+            key_of(&forward, "valkey"),
+            "and the two arms must still differ from each other"
+        );
+    }
+
     #[test]
     fn one_recordings_observation_does_not_suppress_anothers() {
         // `observed` is keyed by recording, and that keying is load-bearing.

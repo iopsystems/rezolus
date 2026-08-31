@@ -671,3 +671,29 @@ effort); promote one to a journal entry when it's picked up.
   `RezReader::open_recordings`, which already returns one reader per recording
   with its labels. *Why:* multi-host and A/B captures are exactly the ones worth
   analyzing, and the agent-facing tools are where that analysis happens.
+- **The seal stagger still aliases on bit 5 (ASCII case)** — Open, found in the
+  second review pass on #1109. The first pass closed bits 6-7 of every absorbed
+  byte, but the same algebra survives one bit lower: `x ^ 0x20` is
+  `x + 32 (mod 64)` and `51 * 32 == 32 (mod 64)`, so flipping bit 5 XORs 0x20
+  through the whole chain. Two recording keys differing by an **even** number
+  of bit-5 flips share a bucket for *every* sampler — measured 12/12 for
+  `host=Web-01` vs `host=weB-01`, and for `arm=valkey` vs `arm=VALKEY` (6
+  letters); an odd count, like `redis`/`REDIS`, does not collide. In printable
+  ASCII bit 5 is the case bit, so this needs two recordings whose labels differ
+  only in capitalisation — within one `record` run that means an operator
+  typing two `source=` values that differ only in case, which is unlikely but
+  not impossible. *Fix:* absorb `b >> 5` as a third pass, or any XOR-shift
+  finalizer before the reduction. *Why not already:* each extra fold costs some
+  of the low-bit structure that measures better than random here (0.144 vs
+  0.188 for 12 samplers), and this class is far narrower than the one closed —
+  so it is a deliberate trade to revisit with numbers, not an oversight.
+- **`RezReader::open_with_pool` has no production caller** — Open, observed
+  while fixing #1109. The viewer opens recordings individually, and `mcp` now
+  does too, because flattening a multi-recording archive gives every sampler
+  two owners and makes `route` refuse every query. The flattening entry point
+  is now exercised only by the cross-recording regression tests that pin that
+  refusal. *Fix:* either delete it and rewrite those tests against
+  `open_recordings`, or keep it and say in one place that flattening is a
+  test-only shape. *Why:* a `pub` constructor with no caller is the kind of
+  thing a future consumer reaches for by name and then inherits the refusal
+  from — the reason `mcp` had to grow an explicit guard at all.

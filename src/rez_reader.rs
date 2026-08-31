@@ -255,7 +255,27 @@ pub struct RezReader {
 type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
 impl RezReader {
-    /// Open a `.rez` at `path`, opening each per-sampler table against `pool`.
+    /// Whether this recording holds no tables at all.
+    ///
+    /// An arm that produced no rows — an endpoint that was reachable but never
+    /// scraped successfully — still gets a manifest row, so "how many
+    /// recordings" and "how many recordings carry data" are different
+    /// questions. Consumers that can only read one recording care about the
+    /// second one: an empty arm collides with nothing.
+    pub fn is_empty(&self) -> bool {
+        self.tables.is_empty()
+    }
+
+    /// Open a `.rez` at `path`, opening each per-sampler table against `pool`,
+    /// flattening every recording into one view.
+    ///
+    /// **No production caller.** The viewer opens recordings individually, and
+    /// so does `mcp` since flattening a multi-recording archive gives every
+    /// sampler two owners and makes `route` refuse every query. Kept because
+    /// the flattening behaviour — and the refusal it produces — is what the
+    /// cross-recording regression tests pin; a future single-recording
+    /// consumer can use it, but should prefer `open_recordings`.
+    #[allow(dead_code)]
     pub fn open_with_pool(
         path: &Path,
         pool: Arc<BufferPool>,

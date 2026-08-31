@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use metriken_query::{BufferPool, ParquetReader};
+use metriken_query::BufferPool;
 
 /// MCP protocol methods
 #[derive(Debug)]
@@ -555,20 +555,14 @@ impl Server {
             return Err(format!("Parquet file not found: {parquet_file}").into());
         }
 
-        // Dispatch covers both `.rez` containers (v2 tar and v3 SQLite) — by
-        // content, not extension; `RezReader` dispatches on the container
-        // internally.
-        let is_rez = crate::recorder::rez::detect_rez_format(path)
-            .unwrap_or(crate::recorder::rez::RezFormat::NotRez)
-            != crate::recorder::rez::RezFormat::NotRez;
-        let reader: Arc<dyn metriken_query::MetricsSource> = if is_rez {
-            Arc::new(crate::rez_reader::RezReader::open_with_pool(
-                path,
-                Arc::clone(&self.pool),
-            )?)
-        } else {
-            Arc::new(ParquetReader::open_with_pool(path, Arc::clone(&self.pool))?)
-        };
+        // The same open the one-shot CLI uses — including the refusal of a
+        // multi-recording archive. Server mode is what an AI agent actually
+        // drives, so having the CLI refuse and the server quietly answer
+        // "94 metrics, all NoData" over a 2-recording archive was the worse
+        // half of the two to leave unfixed. `open_source_with_pool` also does
+        // the `.rez`-vs-parquet dispatch by content, so it replaces the whole
+        // branch.
+        let reader = crate::mcp::open_source_with_pool(path, Arc::clone(&self.pool))?;
 
         {
             let mut cache = self.reader_cache.write().unwrap();
@@ -737,6 +731,35 @@ mod tests {
         });
         let result = server.execute_query(&args).await;
         assert!(result.is_err());
+    }
+
+    /// Server mode must refuse a multi-recording archive exactly as the
+    /// one-shot CLI does.
+    ///
+    /// This is the half that was missed the first time. `get_reader` had its
+    /// own `detect_rez_format` + `open_with_pool` branch, so the CLI refused
+    /// while the stdio server — the mode an AI agent actually drives —
+    /// answered `extract_features` over a 2-recording archive with every
+    /// metric `NoData`, empty correlations, and a `duration_s` that was the
+    /// union of two unrelated timelines. Both paths now share
+    /// `mcp::open_source_with_pool`.
+    #[tokio::test]
+    async fn get_reader_refuses_a_multi_recording_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let server = Server::new();
+        let err = server
+            .get_reader(path.to_str().unwrap())
+            .await
+            .err()
+            .expect("server mode must refuse it, not answer NoData for every metric")
+            .to_string();
+        assert!(
+            err.contains("2 recordings"),
+            "and must say why, as the CLI does: {err}"
+        );
     }
 
     /// `get_reader` must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
