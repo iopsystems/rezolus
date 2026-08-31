@@ -562,7 +562,13 @@ impl Server {
         // half of the two to leave unfixed. `open_source_with_pool` also does
         // the `.rez`-vs-parquet dispatch by content, so it replaces the whole
         // branch.
-        let reader = crate::mcp::open_source_with_pool(path, Arc::clone(&self.pool))?;
+        // No selector yet: the tool schemas do not carry one, so a
+        // multi-recording archive still comes back as the listing error.
+        let reader = crate::mcp::open_source_with_pool(
+            path,
+            Arc::clone(&self.pool),
+            &crate::mcp::RecordingSelector::default(),
+        )?;
 
         {
             let mut cache = self.reader_cache.write().unwrap();

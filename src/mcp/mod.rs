@@ -4,9 +4,6 @@ use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
 mod recording_selector;
-// RecordingSelector, SelectError, and describe_candidates are all unused
-// until the MCP CLI/server actually pass a selector through to the reader.
-#[allow(unused_imports)]
 pub(crate) use recording_selector::{describe_candidates, RecordingSelector, SelectError};
 
 pub mod anomaly_detection;
@@ -17,79 +14,156 @@ mod server;
 use chrono::{DateTime, Utc};
 use metriken_query::{MetricsSource, QueryResult};
 
-/// Open a recording as a `MetricsSource`, dispatching `.rez` archives to
-/// `RezReader` and everything else to `ParquetReader` (by content, not extension).
-/// Dispatch covers both `.rez` containers (v2 tar and v3 SQLite) — `RezReader`
-/// itself dispatches on the container internally.
-/// Open a recording as a query source, refusing what the analysis tools cannot
-/// read.
+/// Open a recording as a query source, selecting ONE recording out of a
+/// multi-recording `.rez` archive.
+///
+/// Dispatch is by content, not extension: a `.rez` container (v2 tar or v3
+/// SQLite — `RezReader` sorts out which internally) goes to `RezReader`,
+/// anything else to `ParquetReader`.
+///
+/// `selector` must name exactly one recording. None or several is an error,
+/// never a first match and never a default: the analysis tools read one
+/// recording at a time, and quietly answering from one arm of an A/B while
+/// presenting it as the archive's answer is the failure this exists to
+/// prevent.
 ///
 /// `pool` is shared so the stdio server and the one-shot CLI use one budget.
 pub(crate) fn open_source_with_pool(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_query::BufferPool>,
+    selector: &RecordingSelector,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
         == RezFormat::NotRez
     {
+        // Silently ignoring the selector here would be its own wrong answer:
+        // the caller believes it narrowed the data and it did not.
+        if !selector.is_empty() {
+            return Err(format!(
+                "{} is a parquet file and has no recordings to select; drop --recording",
+                file.display()
+            )
+            .into());
+        }
         return Ok(std::sync::Arc::new(
             metriken_query::ParquetReader::open_with_pool(file, pool)?,
         ));
     }
 
-    // Open the recordings ONCE and build the reader from what comes back.
+    // Open the recordings ONCE and build the reader from the one that was
+    // selected.
     //
-    // `open_with_pool` would flatten them into one view, and two recordings of
-    // the same agent then give every sampler two owners, so the reader refuses
-    // each query as cross-recording — deliberately, since silently answering
-    // from one arm of an A/B is the worse failure. But the analysis tools fold
-    // a per-metric query error into `NoData`, so that refusal surfaces as
-    // "analyzed 41 metrics, found anomalies in 0": a clean-looking wrong
-    // answer, on the shape `record --endpoint a --endpoint b -o out.rez` now
-    // produces by default. So refuse here, where the message reaches the
-    // caller.
+    // `open_with_pool` would flatten them into one view instead, and two
+    // recordings of the same agent then give every sampler two owners, so the
+    // reader refuses each query as cross-recording — deliberately, since
+    // silently answering from one arm is the worse failure. But the analysis
+    // tools fold a per-metric query error into `NoData`, so that refusal
+    // surfaces as "analyzed 41 metrics, found anomalies in 0": a clean-looking
+    // wrong answer, on the shape `record --endpoint a --endpoint b -o out.rez`
+    // now produces by default. So the choice is made here, where both the
+    // selection and any failure to select reach the caller.
     //
-    // Counting via a second open cost a measured 2x on every invocation —
+    // Selecting via a second open cost a measured 2x on every invocation —
     // neither container's probe is catalog-only (v3 reads a segment per table,
     // tar reads the whole archive into memory). Consuming the recordings we
     // already have avoids that. The only field this loses versus
     // `open_with_pool` is `filename`, which nothing under `src/mcp/` reads.
     let mut recordings = crate::rez_reader::RezReader::open_recordings(file, pool)?;
-
-    // Count only recordings that actually hold tables. An arm that produced no
-    // rows cannot collide with anything, and the flattened reader answers such
-    // an archive correctly — refusing it would reject exactly the run this
-    // branch's own endpoint-activation fix is about.
-    let with_tables = recordings.iter().filter(|(_, r)| !r.is_empty()).count();
-    if with_tables > 1 {
-        return Err(format!(
-            "{} holds {with_tables} recordings with data (a multi-host or A/B archive), \
-             and the analysis tools read one recording at a time. Re-record the endpoint \
-             you want on its own (`record --endpoint <one> -o one.rez`), or open it in \
-             `rezolus view`, which reads two recordings as a comparison",
-            file.display()
-        )
-        .into());
-    }
-
-    // The one with data, else the first — an all-empty archive still opens, and
-    // reports an empty recording rather than erroring.
-    let idx = recordings
-        .iter()
-        .position(|(_, r)| !r.is_empty())
-        .unwrap_or(0);
-    if idx >= recordings.len() {
+    if recordings.is_empty() {
         return Err(format!("{} holds no recordings", file.display()).into());
     }
-    let (_, reader) = recordings.swap_remove(idx);
+
+    // Only recordings that hold tables are candidates. An arm that produced no
+    // rows cannot be what the caller meant, and excluding it keeps a run where
+    // one endpoint never reported from needing a selector at all.
+    //
+    // The candidate's index into `recordings` is carried alongside its labels
+    // rather than recovered afterwards by matching labels: two recordings may
+    // legitimately share a label set (the recorder warns but permits it), and
+    // if the duplicate is an EMPTY arm it is not a candidate at all, so a
+    // label lookup over the full list could land on it and hand back a reader
+    // with no data. Nothing here removes from `recordings` before the index is
+    // used, so the indices stay valid.
+    //
+    // `candidates` is then BOTH the set `resolve` chooses from and the `all`
+    // that `describe_candidates` computes uniqueness against. That has to stay
+    // one set: a listing built over a wider universe would qualify selectors
+    // against recordings this call would never pick, and one built over a
+    // narrower universe would advertise a selector that resolves as ambiguous
+    // when it is pasted back.
+    let candidate_idx: Vec<usize> = recordings
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, r))| !r.is_empty())
+        .map(|(i, _)| i)
+        .collect();
+    let candidates: Vec<std::collections::BTreeMap<String, String>> = candidate_idx
+        .iter()
+        .map(|&i| recordings[i].0.clone())
+        .collect();
+    if candidates.is_empty() {
+        // Every arm is empty. Opening the first reports an empty recording,
+        // which is a truer answer than an error about selecting between
+        // recordings that all hold nothing.
+        let (_, reader) = recordings.swap_remove(0);
+        return Ok(std::sync::Arc::new(reader));
+    }
+
+    let chosen = match selector.resolve(&candidates) {
+        Ok(i) => candidate_idx[i],
+        Err(SelectError::NoMatch) => {
+            return Err(format!(
+                "no recording in {} matches --recording {selector}. It holds:\n{}",
+                file.display(),
+                describe_candidates(&candidates, &[])
+            )
+            .into())
+        }
+        Err(SelectError::Ambiguous(hits)) => {
+            // `hits` are HIGHLIGHTED, not passed as the candidate list:
+            // uniqueness must be computed against every recording, or the
+            // listing advertises selectors that are unique within the subset
+            // and ambiguous in the archive.
+            let lead = if selector.is_empty() {
+                format!(
+                    "{} holds {} recordings (a multi-host or A/B archive), and the \
+                     analysis tools read one at a time. Pick one:",
+                    file.display(),
+                    hits.len()
+                )
+            } else {
+                format!(
+                    "--recording {selector} matches {} recordings in {}; add labels \
+                     until it names one:",
+                    hits.len(),
+                    file.display()
+                )
+            };
+            return Err(format!("{lead}\n{}", describe_candidates(&candidates, &hits)).into());
+        }
+    };
+
+    let (_, reader) = recordings.swap_remove(chosen);
     Ok(std::sync::Arc::new(reader))
+}
+
+/// Open with a selector and a fresh pool — the one-shot CLI path.
+pub(crate) fn open_source_selected(
+    file: &std::path::Path,
+    selector: &RecordingSelector,
+) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+    open_source_with_pool(
+        file,
+        metriken_query::BufferPool::new(256 * 1024 * 1024),
+        selector,
+    )
 }
 
 pub(crate) fn open_source(
     file: &std::path::Path,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-    open_source_with_pool(file, metriken_query::BufferPool::new(256 * 1024 * 1024))
+    open_source_selected(file, &RecordingSelector::default())
 }
 
 /// Format recording information for display
@@ -1024,10 +1098,25 @@ mod tests {
         let mut recs: Vec<StreamRecorderV3> = Vec::new();
         for source in sources {
             let seed = ManifestSeed {
-                labels: [("source".to_string(), source.to_string())]
+                // `host` is shared across the arms on purpose: with `source`
+                // as the only label, no selector could ever match two
+                // recordings, and the ambiguous path — the one that must not
+                // silently fall through to the first arm — would be
+                // untestable through this helper. A real multi-endpoint
+                // capture of one host's two services looks exactly like this.
+                labels: [
+                    ("source".to_string(), source.to_string()),
+                    ("host".to_string(), "web-01".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                // Mirrors `recorder::build_rez_metadata`, which puts the same
+                // `source` in the per-recording metadata as in the labels.
+                // Tests identify which arm came back by reading it, so a
+                // helper that left it empty would make that check vacuous.
+                metadata: [("source".to_string(), source.to_string())]
                     .into_iter()
                     .collect(),
-                metadata: Default::default(),
                 clock_anchor_wall_ns: 1_000_000_000,
             };
             recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
@@ -1062,6 +1151,10 @@ mod tests {
     /// right call, but `extract-features` and `detect-anomalies` fold a
     /// per-metric query error into `NoData`, so the run would report
     /// "analyzed N metrics, found anomalies in 0" and look clean.
+    ///
+    /// Companion to `no_selector_on_a_multi_recording_archive_lists_them`,
+    /// which pins the listing itself; this one pins the count and the
+    /// suggestions the message must not make.
     #[test]
     fn open_source_refuses_a_multi_recording_archive_with_a_message() {
         let dir = tempfile::tempdir().unwrap();
@@ -1076,13 +1169,17 @@ mod tests {
             msg.contains("2 recordings"),
             "the message must say how many recordings carry data: {msg}"
         );
-        assert!(
-            msg.contains("rezolus view"),
-            "and must point at something that CAN read it: {msg}"
-        );
+        // No longer asserts that the message points at `rezolus view`, and
+        // deliberately so: the fix on offer is now `--recording`, which reads
+        // the arm the caller asked about in the tool they are already in.
+        // Sending them to another tool would be worse advice than the listing.
         assert!(
             !msg.contains("recording filter"),
             "must not suggest `filter`, which cannot split by recording: {msg}"
+        );
+        assert!(
+            !msg.contains("Re-record"),
+            "must not tell the caller to re-record what they can now select: {msg}"
         );
     }
 
@@ -1127,6 +1224,134 @@ mod tests {
             source.is_ok(),
             "open_source must accept a v3 .rez: {:?}",
             source.err()
+        );
+    }
+
+    #[test]
+    fn a_selector_picks_the_named_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let src = open_source_selected(&path, &sel).expect("the selector names one recording");
+        // Asserted by VALUE, not merely "some series came back": both arms
+        // hold `cpu_cycles`, so an assertion that data exists would pass even
+        // if the wrong arm were opened.
+        assert_eq!(src.counter_names(), vec!["cpu_cycles".to_string()]);
+        assert_eq!(
+            src.metadata_get("source").as_deref(),
+            Some("valkey"),
+            "the reader must be the valkey arm, not the first one"
+        );
+    }
+
+    /// With no selector, a multi-recording archive is still refused — but now
+    /// the message lists the recordings and the flag that picks each one,
+    /// rather than telling the caller to re-record.
+    #[test]
+    fn no_selector_on_a_multi_recording_archive_lists_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let msg = match open_source(&path) {
+            Ok(_) => panic!("must not silently pick an arm"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("source=redis"), "{msg}");
+        assert!(msg.contains("source=valkey"), "{msg}");
+        assert!(msg.contains("--recording"), "{msg}");
+    }
+
+    #[test]
+    fn a_selector_matching_nothing_lists_the_candidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("must not fall back to any recording"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("source=nope"),
+            "the error names the selector: {msg}"
+        );
+        assert!(msg.contains("source=redis"), "and lists candidates: {msg}");
+    }
+
+    #[test]
+    fn an_ambiguous_selector_lists_the_ones_it_matched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        // Both arms carry host=web-01, so selecting on it matches two. This
+        // must NOT fall through to the first.
+        let sel = RecordingSelector::parse(["host=web-01".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("an ambiguous selector must not pick an arm"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("matches 2 recordings"), "{msg}");
+        assert!(msg.contains("source=redis"), "{msg}");
+        assert!(msg.contains("source=valkey"), "{msg}");
+    }
+
+    #[test]
+    fn a_selector_against_a_parquet_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let parquet_path = dir.path().join("rec.parquet");
+        let tables = build_recorder().finalize_tables();
+        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
+        std::fs::write(&parquet_path, bytes).unwrap();
+
+        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let msg = match open_source_selected(&parquet_path, &sel) {
+            Ok(_) => panic!("a parquet file has no recordings to select"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("no recordings"), "{msg}");
+        // Distinguishes this from the `.rez` path's own "holds no recordings":
+        // without it the test would still pass if a parquet file were somehow
+        // routed into the archive branch and rejected there for another reason.
+        assert!(
+            msg.contains("parquet file") && msg.contains("--recording"),
+            "must say why and what to drop: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_single_recording_archive_is_unaffected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        build_recorder().finalize(&path).unwrap();
+        assert!(open_source(&path).is_ok(), "no selector needed");
+    }
+
+    /// An empty arm must not shadow the arm that has data, even when the two
+    /// carry IDENTICAL labels.
+    ///
+    /// The recorder only warns about duplicate label sets, so this shape is
+    /// reachable. Selecting among *candidates* (recordings with tables) and
+    /// then locating the chosen one by matching its labels against the FULL
+    /// recording list would find the empty duplicate first and hand back a
+    /// reader with nothing in it — an analysis run reporting "no data" over
+    /// an archive that holds data. Carrying the recording index through the
+    /// selection instead is what prevents it.
+    #[test]
+    fn an_empty_arm_with_the_same_labels_does_not_shadow_the_one_with_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dup.rez");
+        multi_recording_rez(&path, &["redis", "redis"], &[false, true]);
+
+        let src = open_source(&path).expect("only one arm has data, so no selector is needed");
+        assert_eq!(
+            src.counter_names(),
+            vec!["cpu_cycles".to_string()],
+            "the arm with rows must be the one opened"
         );
     }
 }
