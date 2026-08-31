@@ -4,7 +4,9 @@ use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
 mod recording_selector;
-pub(crate) use recording_selector::{describe_candidates, RecordingSelector, SelectError};
+pub(crate) use recording_selector::{
+    describe_candidates, render_labels, RecordingSelector, SelectError,
+};
 
 pub mod anomaly_detection;
 pub mod correlation;
@@ -39,9 +41,16 @@ pub(crate) fn open_source_with_pool(
     {
         // Silently ignoring the selector here would be its own wrong answer:
         // the caller believes it narrowed the data and it did not.
+        //
+        // "not a .rez archive" rather than "is a parquet file": this branch
+        // takes everything `detect_rez_format` calls `NotRez`, which includes
+        // a text file or a truncated download, and asserting parquet would be
+        // a guess. The advice is phrased without naming a flag because the
+        // stdio server reaches this with a JSON object, not `--recording`.
         if !selector.is_empty() {
             return Err(format!(
-                "{} is a parquet file and has no recordings to select; drop --recording",
+                "{} is not a .rez archive and holds no recordings to select between; \
+                 a recording selector applies only to a multi-recording .rez",
                 file.display()
             )
             .into());
@@ -102,45 +111,101 @@ pub(crate) fn open_source_with_pool(
         .iter()
         .map(|&i| recordings[i].0.clone())
         .collect();
-    if candidates.is_empty() {
-        // Every arm is empty. Opening the first reports an empty recording,
-        // which is a truer answer than an error about selecting between
-        // recordings that all hold nothing.
+    let all_empty = candidates.is_empty();
+    if all_empty && selector.is_empty() {
+        // Every arm is empty and the caller named none of them. Opening the
+        // first reports an empty recording, which is a truer answer than an
+        // error about choosing between recordings that all hold nothing.
         let (_, reader) = recordings.swap_remove(0);
         return Ok(std::sync::Arc::new(reader));
     }
 
-    let chosen = match selector.resolve(&candidates) {
-        Ok(i) => candidate_idx[i],
+    // With every arm empty there is nothing to prefer, so the selector is
+    // resolved against ALL of them: a caller that named `source=valkey` gets
+    // the valkey reader — empty, but the one it asked about — instead of the
+    // first arm wearing valkey's name in every downstream report, since
+    // `RezReader` carries the recording's own metadata into
+    // `describe-recording` and `extract-features`. Falling through to
+    // `swap_remove(0)` here would be exactly the "returned a recording the
+    // selector did not name" failure this function refuses everywhere else.
+    let (universe_idx, universe) = if all_empty {
+        (
+            (0..recordings.len()).collect::<Vec<usize>>(),
+            recordings
+                .iter()
+                .map(|(l, _)| l.clone())
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        (candidate_idx, candidates)
+    };
+    // What the listing under an error is a listing OF. Only says "with data"
+    // when that is what was filtered on.
+    let listing_lead = if all_empty {
+        "It holds:"
+    } else {
+        "Recordings with data:"
+    };
+
+    let chosen = match selector.resolve(&universe) {
+        Ok(i) => universe_idx[i],
         Err(SelectError::NoMatch) => {
+            // The named recording may exist and have been excluded for holding
+            // no rows. "No recording matches" would then be false in the way
+            // that matters: an agent reports the endpoint was never captured,
+            // when it was captured and produced nothing — itself the finding.
+            let named_but_empty: Vec<String> = recordings
+                .iter()
+                .enumerate()
+                .filter(|(i, (l, _))| !universe_idx.contains(i) && selector.matches(l))
+                .map(|(_, (l, _))| render_labels(l))
+                .collect();
+            let lead = if named_but_empty.is_empty() {
+                format!(
+                    "no recording in {} matches {}",
+                    file.display(),
+                    selector.as_flags()
+                )
+            } else {
+                format!(
+                    "{} names {} in {}, which was recorded but produced no rows, so it \
+                     holds nothing to analyze",
+                    selector.as_flags(),
+                    named_but_empty.join("; "),
+                    file.display()
+                )
+            };
             return Err(format!(
-                "no recording in {} matches --recording {selector}. It holds:\n{}",
-                file.display(),
-                describe_candidates(&candidates, &[])
+                "{lead}. {listing_lead}\n{}",
+                describe_candidates(&universe, &[])
             )
-            .into())
+            .into());
         }
         Err(SelectError::Ambiguous(hits)) => {
             // `hits` are HIGHLIGHTED, not passed as the candidate list:
-            // uniqueness must be computed against every recording, or the
-            // listing advertises selectors that are unique within the subset
-            // and ambiguous in the archive.
+            // uniqueness must be computed against every candidate, not just
+            // the matched subset, or the listing advertises selectors that are
+            // unique among the ones being shown and ambiguous against the rest.
             let lead = if selector.is_empty() {
+                // Only reachable when some arm has data, so `hits` counts the
+                // recordings WITH DATA — which is not the same as how many the
+                // archive holds, and saying "holds 3 recordings" of a 3-arm
+                // file with one dead arm would be wrong.
                 format!(
-                    "{} holds {} recordings (a multi-host or A/B archive), and the \
-                     analysis tools read one at a time. Pick one:",
+                    "{} holds {} recordings with data (a multi-host or A/B archive), and \
+                     the analysis tools read one at a time. Pick one:",
                     file.display(),
                     hits.len()
                 )
             } else {
                 format!(
-                    "--recording {selector} matches {} recordings in {}; add labels \
-                     until it names one:",
+                    "{} matches {} recordings in {}; add labels until it names one:",
+                    selector.as_flags(),
                     hits.len(),
                     file.display()
                 )
             };
-            return Err(format!("{lead}\n{}", describe_candidates(&candidates, &hits)).into());
+            return Err(format!("{lead}\n{}", describe_candidates(&universe, &hits)).into());
         }
     };
 
@@ -1093,10 +1158,36 @@ mod tests {
         sources: &[&str],
         with_rows: &[bool],
     ) {
+        multi_recording_rez_with_arms(path, sources, &vec![None; sources.len()], with_rows)
+    }
+
+    /// As `multi_recording_rez`, plus an optional `arm` label per recording.
+    ///
+    /// `source` is unique per recording and `host` is shared by all of them,
+    /// so with those two alone every selector either names one recording or
+    /// names them all. An `arm` shared by SOME of the recordings is what makes
+    /// a partial match possible, which is the only way to tell a listing that
+    /// renders the recordings a selector matched from one that renders every
+    /// recording it could have matched.
+    pub(crate) fn multi_recording_rez_with_arms(
+        path: &std::path::Path,
+        sources: &[&str],
+        arms: &[Option<&str>],
+        with_rows: &[bool],
+    ) {
         use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         let mut archive = RezArchive::create(path).unwrap();
         let mut recs: Vec<StreamRecorderV3> = Vec::new();
-        for source in sources {
+        for (i, source) in sources.iter().enumerate() {
+            let mut labels: std::collections::BTreeMap<String, String> = [
+                ("source".to_string(), source.to_string()),
+                ("host".to_string(), "web-01".to_string()),
+            ]
+            .into_iter()
+            .collect();
+            if let Some(arm) = arms.get(i).copied().flatten() {
+                labels.insert("arm".to_string(), arm.to_string());
+            }
             let seed = ManifestSeed {
                 // `host` is shared across the arms on purpose: with `source`
                 // as the only label, no selector could ever match two
@@ -1104,12 +1195,7 @@ mod tests {
                 // silently fall through to the first arm — would be
                 // untestable through this helper. A real multi-endpoint
                 // capture of one host's two services looks exactly like this.
-                labels: [
-                    ("source".to_string(), source.to_string()),
-                    ("host".to_string(), "web-01".to_string()),
-                ]
-                .into_iter()
-                .collect(),
+                labels,
                 // Mirrors `recorder::build_rez_metadata`, which puts the same
                 // `source` in the per-recording metadata as in the labels.
                 // Tests identify which arm came back by reading it, so a
@@ -1166,8 +1252,10 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(
-            msg.contains("2 recordings"),
-            "the message must say how many recordings carry data: {msg}"
+            msg.contains("2 recordings with data"),
+            "the message must say how many recordings carry DATA — the count is of \
+             candidates, not of what the archive holds, and the two differ whenever \
+             an arm produced no rows: {msg}"
         );
         // No longer asserts that the message points at `rezolus view`, and
         // deliberately so: the fix on offer is now `--recording`, which reads
@@ -1314,12 +1402,21 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(msg.contains("no recordings"), "{msg}");
-        // Distinguishes this from the `.rez` path's own "holds no recordings":
-        // without it the test would still pass if a parquet file were somehow
-        // routed into the archive branch and rejected there for another reason.
+        // Says what the file is NOT, rather than asserting it is parquet:
+        // this branch also takes a text file or a truncated download, so
+        // naming the format would be a guess. The check also distinguishes
+        // this from the `.rez` path's own "holds no recordings", which the
+        // test would otherwise accept if a parquet file were somehow routed
+        // into the archive branch and rejected there for another reason.
         assert!(
-            msg.contains("parquet file") && msg.contains("--recording"),
-            "must say why and what to drop: {msg}"
+            msg.contains("not a .rez archive"),
+            "must say why there is nothing to select: {msg}"
+        );
+        // Phrased for both front ends: the stdio server passes a JSON object,
+        // so advice spelled as a CLI flag would be wrong there.
+        assert!(
+            !msg.contains("--recording"),
+            "must not name a CLI flag the server caller never typed: {msg}"
         );
     }
 
@@ -1341,6 +1438,158 @@ mod tests {
     /// reader with nothing in it — an analysis run reporting "no data" over
     /// an archive that holds data. Carrying the recording index through the
     /// selection instead is what prevents it.
+    /// Every arm empty and a selector given: the caller gets the arm it
+    /// named, not the first one.
+    ///
+    /// The reader carries its recording's own metadata into
+    /// `describe-recording` and `extract-features`, so first-matching here
+    /// would not merely return "an empty recording" — it would attribute the
+    /// empty result to the WRONG endpoint, which is the same wrong-arm
+    /// failure the selector exists to prevent, just with no rows to hide it.
+    #[test]
+    fn an_all_empty_archive_still_honors_the_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("both-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+
+        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let src = open_source_selected(&path, &sel).expect("the named arm still opens");
+        assert!(src.counter_names().is_empty(), "it really is empty");
+        assert_eq!(
+            src.metadata_get("source").as_deref(),
+            Some("valkey"),
+            "and it must be the arm that was named, not the first one"
+        );
+    }
+
+    /// ...but with NO selector, an all-empty archive still opens rather than
+    /// erroring: reporting one empty recording beats an error about choosing
+    /// between recordings that all hold nothing.
+    #[test]
+    fn an_all_empty_archive_opens_without_a_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("both-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+
+        let src = open_source(&path).expect("an all-empty archive must still open");
+        assert!(src.counter_names().is_empty());
+    }
+
+    #[test]
+    fn a_selector_matching_nothing_in_an_all_empty_archive_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("both-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+
+        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("must not fall back to an arm the selector did not name"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("source=redis"),
+            "it lists what is there: {msg}"
+        );
+        assert!(
+            !msg.contains("with data"),
+            "and must not claim these recordings hold data: {msg}"
+        );
+    }
+
+    /// Naming a recording that exists but produced no rows must say so, not
+    /// "no recording matches".
+    ///
+    /// The distinction is the whole finding: "that endpoint was never
+    /// captured" and "that endpoint was captured and reported nothing" lead
+    /// an agent to opposite conclusions, and only the second is true here.
+    #[test]
+    fn naming_an_empty_recording_says_it_produced_no_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+
+        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("an empty arm holds nothing to analyze"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("produced no rows"),
+            "must not report a recorded-but-silent endpoint as absent: {msg}"
+        );
+        assert!(
+            msg.contains("source=valkey"),
+            "and must name the recording it found: {msg}"
+        );
+        assert!(
+            msg.contains("source=redis"),
+            "then list what can be analyzed: {msg}"
+        );
+    }
+
+    /// A selector echoed back in an error must be pasteable.
+    ///
+    /// `Display` joins pairs with a comma, but `parse` splits each argument
+    /// on its first `=`, so `--recording host=web-01,source=nope` comes back
+    /// as the single label `host="web-01,source=nope"` and fails as a
+    /// no-match for an invisible reason. An agent told to adjust and retry
+    /// does exactly this paste.
+    #[test]
+    fn an_echoed_selector_is_in_the_repeatable_flag_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let sel = RecordingSelector::parse(["host=web-01".to_string(), "source=nope".to_string()])
+            .unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("no arm matches source=nope"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("--recording host=web-01 --recording source=nope"),
+            "the echo must be the form that round-trips through parse: {msg}"
+        );
+        assert!(
+            !msg.contains("host=web-01,source=nope"),
+            "the comma-joined Display form is not pasteable: {msg}"
+        );
+    }
+
+    /// An ambiguity listing renders the recordings the selector MATCHED, not
+    /// every candidate.
+    ///
+    /// Needs three arms where a selector matches exactly two: with only two
+    /// recordings, every ambiguous selector matches both and a listing that
+    /// ignored `hits` would look identical.
+    #[test]
+    fn an_ambiguity_listing_renders_only_the_matched_recordings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("three.rez");
+        multi_recording_rez_with_arms(
+            &path,
+            &["redis", "valkey", "memcached"],
+            &[Some("a"), Some("a"), Some("b")],
+            &[true, true, true],
+        );
+
+        let sel = RecordingSelector::parse(["arm=a".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("arm=a matches two recordings"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("matches 2 recordings"), "{msg}");
+        assert!(
+            msg.contains("source=redis") && msg.contains("source=valkey"),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("memcached"),
+            "arm=b was never matched, so listing it would send the caller to a \
+             recording their selector excluded: {msg}"
+        );
+    }
+
     #[test]
     fn an_empty_arm_with_the_same_labels_does_not_shadow_the_one_with_data() {
         let dir = tempfile::tempdir().unwrap();

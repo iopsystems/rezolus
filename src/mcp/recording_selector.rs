@@ -93,6 +93,19 @@ impl RecordingSelector {
         self.labels.is_empty()
     }
 
+    /// The selector as the flags a caller would actually type.
+    ///
+    /// NOT `Display`, and the difference matters. `Display` joins with `,`
+    /// because it renders a selector as one readable token, but `parse` splits
+    /// each argument on its FIRST `=` only, so pasting `--recording
+    /// host=b,source=a` back parses as the single label `host` =
+    /// `"b,source=a"`, matches nothing, and fails as `NoMatch` with no hint
+    /// why. Error text that invites the reader to adjust and retry a selector
+    /// must therefore print this form, which round-trips through `parse`.
+    pub(crate) fn as_flags(&self) -> String {
+        flag_form(self.labels.iter().map(|(k, v)| format!("{k}={v}")))
+    }
+
     /// Whether `labels` carries every pair in this selector.
     pub(crate) fn matches(&self, labels: &BTreeMap<String, String>) -> bool {
         self.labels
@@ -135,6 +148,29 @@ impl fmt::Display for RecordingSelector {
     }
 }
 
+/// Render `k=v` pairs as the repeatable flag a caller types.
+///
+/// One spelling for both the listing's "select with" lines and the error
+/// leads that echo a selector back, because the two must agree: the flag is
+/// repeatable and ANDs its pairs, and any other joining (notably `Display`'s
+/// comma) does not survive a round trip through `parse`.
+fn flag_form(pairs: impl IntoIterator<Item = String>) -> String {
+    let pairs: Vec<String> = pairs.into_iter().collect();
+    format!("--recording {}", pairs.join(" --recording "))
+}
+
+/// Render a recording's labels for display: `k=v, k=v` in key order.
+///
+/// Not the flag form — this is prose, naming a recording inside a sentence,
+/// so it must not look like something to paste.
+pub(crate) fn render_labels(labels: &BTreeMap<String, String>) -> String {
+    labels
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Render specific recordings from an archive, each with the flag that picks
 /// it.
 ///
@@ -164,7 +200,7 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
     let mut out = String::new();
     for i in indices {
         let labels = &all[i];
-        let rendered: Vec<String> = labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let rendered = render_labels(labels);
 
         // Two recordings sharing every label are indistinguishable to any
         // selector, and a recording with no labels at all sitting among
@@ -176,10 +212,9 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
             labels.is_empty() || all.iter().enumerate().any(|(j, c)| j != i && c == labels);
         if unselectable {
             out.push_str(&format!(
-                "  - {}\n    cannot be selected by labels — no combination of its labels picks \
-                 it out from every other recording in the archive; re-capture giving each \
-                 --endpoint its own source=NAME\n",
-                rendered.join(", ")
+                "  - {rendered}\n    cannot be selected by labels — no combination of its \
+                 labels picks it out from every other recording in the archive; re-capture \
+                 giving each --endpoint its own source=NAME\n"
             ));
             continue;
         }
@@ -197,14 +232,15 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
                     .count()
                     == 1
             })
-            .map(|(k, v)| format!("{k}={v}"))
+            .map(|(k, v)| vec![format!("{k}={v}")])
             .next();
-        let picker = unique.unwrap_or_else(|| rendered.join(" --recording "));
+        // No single label is unique: fall back to the whole set, which the
+        // repeatable flag ANDs together.
+        let picker = flag_form(
+            unique.unwrap_or_else(|| labels.iter().map(|(k, v)| format!("{k}={v}")).collect()),
+        );
 
-        out.push_str(&format!(
-            "  - {}\n    select with: --recording {picker}\n",
-            rendered.join(", ")
-        ));
+        out.push_str(&format!("  - {rendered}\n    select with: {picker}\n"));
     }
     out
 }
@@ -327,6 +363,31 @@ mod tests {
         // messages that need to be reproducible.
         let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
         assert_eq!(s.to_string(), "host=b,source=a");
+    }
+
+    #[test]
+    fn the_flag_form_round_trips_where_display_does_not() {
+        let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
+        assert_eq!(s.as_flags(), "--recording host=b --recording source=a");
+
+        // The reason `as_flags` exists rather than reusing `Display`: the
+        // comma join reads well but does NOT survive `parse`, which splits on
+        // the first `=` only, so it comes back as one label
+        // `host="b,source=a"` that matches nothing. Error text tells the
+        // caller to adjust and retry a selector, so it must print the form
+        // that round-trips.
+        let pasted = RecordingSelector::parse([s.to_string()]).unwrap();
+        assert_ne!(pasted, s, "Display must not be mistaken for pasteable");
+
+        let round = RecordingSelector::parse(
+            s.as_flags()
+                .strip_prefix("--recording ")
+                .unwrap()
+                .split(" --recording ")
+                .map(str::to_string),
+        )
+        .unwrap();
+        assert_eq!(round, s, "the flag form must round-trip through parse");
     }
 
     #[test]
