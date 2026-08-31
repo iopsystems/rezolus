@@ -93,6 +93,36 @@ sudo rpm -i rezolus-*.rpm
 
 If you need to build Rezolus from source, you can either build the binary directly or create distribution packages.
 
+### Build Prerequisites
+
+Building the eBPF programs needs a C toolchain, clang, and libelf:
+
+```bash
+# Debian/Ubuntu
+sudo apt install -y build-essential pkg-config libelf-dev clang
+
+# Enterprise Linux (Rocky, Alma, RHEL, ...) / Amazon Linux
+sudo dnf install -y gcc elfutils-devel clang
+
+# macOS (no eBPF; CPU usage only)
+xcode-select --install
+```
+
+### One-Command Install from Source
+
+To build and install the latest release without cloning:
+
+```bash
+cargo install --git https://github.com/iopsystems/rezolus --tag v5.19.0 --locked rezolus
+```
+
+Omit `--tag` to build the default branch. This installs the binary to
+`~/.cargo/bin/rezolus`; the configs and systemd units below are not installed,
+so set those up by hand if you want to run Rezolus as a service.
+
+Note that `cargo install rezolus` (from crates.io) is **not** the way to install
+current Rezolus — that registry is stuck on an old version.
+
 ### Building the Binary
 
 To build just the Rezolus binary without packaging:
