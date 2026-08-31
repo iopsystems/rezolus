@@ -1,5 +1,5 @@
-use std::process::Command;
 use anyhow::{bail, Result};
+use std::process::Command;
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
