@@ -901,48 +901,83 @@ fn sealing_continues_through(
 ///
 /// Timed off the buffer's own reported WAL depth rather than off the clock: the
 /// dump is taken when `/status` says 1–2 rows are live, which puts the next
-/// seal several ticks away and makes "the tail is a partial segment" a fact
-/// about observed state rather than a hope about scheduling.
+/// seal several ticks away. That read happens *before* the dump though, and the
+/// buffer keeps ingesting in between, so the phase it establishes can be lost —
+/// whether the tail really is partial is therefore checked against the dump
+/// itself, and a dump that missed is redrawn rather than failed.
 #[test]
 fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
     // Eight-row segments at 10 Hz: a seal every ~800 ms, so catching the buffer
     // with 1-2 live WAL rows leaves ~600 ms before the next one.
     const SEGMENT_ROWS: u64 = 8;
+    // How many dumps to take before giving up on catching a partial tail.
+    //
+    // The WAL depth cycles 0 -> SEGMENT_ROWS every ~800 ms, and `/status` is
+    // read *before* the dump, so a stall between the two requests loses the
+    // phase that read established. Land in the tick where the buffer has just
+    // sealed and the dump's last segment is a full one with nothing live
+    // behind it — roughly one tick in eight, which is what a loaded CI runner
+    // hit. Each dump is an independent draw of that phase and costs
+    // single-digit milliseconds against this one-counter buffer, so redraw
+    // rather than fail the run: the same reasoning as `Hindsight::start`
+    // retrying the lost-port race.
+    const DUMP_ATTEMPTS: usize = 5;
+
     let h = Hindsight::start(SEGMENT_ROWS as usize, 1);
     let dir = tempfile::tempdir().unwrap();
     let dest = dir.path().join("dump.rez");
 
-    // Wait for a buffer that has sealed AND is part-way into its next segment.
-    let at_dump = h.wait_until("a partly-filled WAL over sealed segments", |s| {
-        s.segments("fake") >= 2 && (1..=2).contains(&s.table("fake").live_wal_rows)
-    });
-    let live_before = at_dump.table("fake").live_wal_rows;
-    h.dump_to(&dest);
-    // Read /status again AFTER the dump so the live-row count at the moment
-    // the snapshot was taken is BRACKETED rather than guessed. The buffer is
-    // still ingesting at 10 Hz, so any fixed tolerance on `live_before` is a
-    // bet on how long the dump takes — and on a loaded CI runner that bet
-    // loses (observed: 1 row before, a 7-row tail).
-    let live_after = h.status().table("fake").live_wal_rows;
+    let mut missed = Vec::new();
+    let (dumped, live_before, live_after) = loop {
+        // Wait for a buffer that has sealed AND is part-way into its next
+        // segment.
+        let at_dump = h.wait_until("a partly-filled WAL over sealed segments", |s| {
+            s.segments("fake") >= 2 && (1..=2).contains(&s.table("fake").live_wal_rows)
+        });
+        let live_before = at_dump.table("fake").live_wal_rows;
+        h.dump_to(&dest);
+        // Read /status again AFTER the dump so the live-row count at the moment
+        // the snapshot was taken is BRACKETED rather than guessed. The buffer is
+        // still ingesting at 10 Hz, so any fixed tolerance on `live_before` is a
+        // bet on how long the dump takes — and on a loaded CI runner that bet
+        // loses (observed: 1 row before, a 7-row tail).
+        let live_after = h.status().table("fake").live_wal_rows;
 
-    let dumped = read_rez(&dest, "fake");
-    assert!(
-        dumped.wal.is_empty(),
-        "a ranged dump copies no WAL rows — the tail is materialized into a \
-         segment instead, so that its metrics keep their labels: {:?}",
-        dumped.wal
-    );
+        let dumped = read_rez(&dest, "fake");
+        // True of every dump taken here, not only the one that is kept.
+        assert!(
+            dumped.wal.is_empty(),
+            "a ranged dump copies no WAL rows — the tail is materialized into a \
+             segment instead, so that its metrics keep their labels: {:?}",
+            dumped.wal
+        );
+        let tail_rows = dumped
+            .segments
+            .last()
+            .expect("the dump must hold at least the tail")
+            .rows;
+        // Asked of the dump in hand rather than of the `/status` read that
+        // preceded it. A full last segment means the snapshot landed on a seal
+        // boundary with no live tail to carry, and every claim below would hold
+        // vacuously — so that dump is discarded and the phase drawn again.
+        if tail_rows < SEGMENT_ROWS {
+            break (dumped, live_before, live_after);
+        }
+        missed.push(tail_rows);
+        assert!(
+            missed.len() < DUMP_ATTEMPTS,
+            "fixture: {DUMP_ATTEMPTS} dumps in a row landed on a seal boundary \
+             with no live tail to carry — last segments held {missed:?} rows, a \
+             full {SEGMENT_ROWS} every time. One is the phase race; this many \
+             means the buffer is sealing between the /status read and every \
+             snapshot the test takes"
+        );
+    };
+
     let tail = dumped
         .segments
         .last()
         .expect("the dump must hold at least the tail");
-    assert!(
-        tail.rows < SEGMENT_ROWS,
-        "fixture: the dump's last segment holds {} rows, a full segment — the \
-         dump landed exactly on a seal boundary and there was no live tail to \
-         carry",
-        tail.rows
-    );
     // `live_after` can be lower than `live_before` if a seal landed between
     // the two reads, which resets the WAL — in that case the tail is bounded
     // by a full segment instead, which the assertion above already covers.
