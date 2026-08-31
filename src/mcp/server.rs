@@ -596,7 +596,16 @@ impl Server {
         // shared pool (`describe_recording_output` opens with a pool of its
         // own). It is a metadata read called once or twice a session, so the
         // duplicated open is worth strict parity with the CLI.
-        let output = crate::mcp::describe_recording_output(path, &selector)?;
+        // `Json`: every selector this renders is going back to an MCP client,
+        // which has no `--recording` flag to type — it sends a `recording`
+        // object in the tool call. This tool's schema is what points an agent
+        // here to discover the arms, so CLI syntax would end the discovery
+        // path in an instruction the client cannot follow.
+        let output = crate::mcp::describe_recording_output(
+            path,
+            &selector,
+            crate::mcp::SelectorSyntax::Json,
+        )?;
         Ok(output)
     }
 
@@ -643,8 +652,12 @@ impl Server {
         // 2-recording archive. `open_source_with_pool_labeled` also does the
         // `.rez`-vs-parquet dispatch by content, so it replaces the whole
         // branch.
-        let (labels, reader) =
-            crate::mcp::open_source_with_pool_labeled(path, Arc::clone(&self.pool), selector)?;
+        let (labels, reader) = crate::mcp::open_source_with_pool_labeled(
+            path,
+            Arc::clone(&self.pool),
+            selector,
+            crate::mcp::SelectorSyntax::Json,
+        )?;
         let identity = crate::recorder::seal_policy::recording_stagger_key(&labels);
 
         let mut cache = self.reader_cache.write().unwrap();
@@ -1041,6 +1054,78 @@ mod tests {
         assert!(
             Arc::ptr_eq(&narrow, &wide),
             "two selectors naming one recording must not retain two readers"
+        );
+    }
+
+    /// Every selector the SERVER renders must be in the syntax an MCP client
+    /// can actually send.
+    ///
+    /// The client has no `--recording` flag — its interface is
+    /// `{"recording": {"source": "redis"}}` — so a listing that says
+    /// `select with: --recording source=redis` hands an agent an instruction
+    /// it cannot follow. `describe_recording` is where the schema explicitly
+    /// sends an agent to discover the arms ("Call describe_recording without
+    /// it first to list them"), so that path ending in unusable syntax is a
+    /// dead end from "I can't read this archive" onward.
+    #[tokio::test]
+    async fn server_listings_render_the_json_selector_not_the_cli_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let args = json!({"parquet_file": path.to_str().unwrap()});
+
+        let server = Server::new();
+        let listing = server
+            .describe_recording(&args)
+            .await
+            .expect("no selector lists the arms");
+        assert!(
+            !listing.contains("--recording"),
+            "the MCP client has no flags to type: {listing}"
+        );
+        assert!(
+            listing.contains(r#"recording {"source": "redis"}"#),
+            "it must render the tool argument the client can send: {listing}"
+        );
+    }
+
+    /// ...and so must every error the server returns, not just the listing.
+    #[tokio::test]
+    async fn server_errors_render_the_json_selector_not_the_cli_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let p = path.to_str().unwrap();
+        let server = Server::new();
+
+        // No selector: ambiguous over both arms.
+        let ambiguous = server
+            .get_reader_selected(p, &crate::mcp::RecordingSelector::default())
+            .await
+            .err()
+            .expect("a 2-recording archive must be refused")
+            .to_string();
+        assert!(!ambiguous.contains("--recording"), "{ambiguous}");
+        assert!(
+            ambiguous.contains(r#"recording {"source": "redis"}"#),
+            "{ambiguous}"
+        );
+
+        // A selector that names nothing: the echo of the selector itself must
+        // be in the client's syntax too.
+        let no_match = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse(["source=nope".to_string()]).unwrap(),
+            )
+            .await
+            .err()
+            .expect("source=nope names no arm")
+            .to_string();
+        assert!(!no_match.contains("--recording"), "{no_match}");
+        assert!(
+            no_match.contains(r#"recording {"source": "nope"}"#),
+            "the echoed selector must be pasteable as a tool argument: {no_match}"
         );
     }
 

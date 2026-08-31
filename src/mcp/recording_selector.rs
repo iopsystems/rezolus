@@ -91,7 +91,7 @@ impl RecordingSelector {
         self.labels.is_empty()
     }
 
-    /// The selector as the flags a caller would actually type.
+    /// The selector as the CALLER would actually spell it, in `syntax`.
     ///
     /// NOT `Display`, and the difference matters. `Display` joins with `,`
     /// because it renders a selector as one readable token, but `parse` splits
@@ -99,9 +99,13 @@ impl RecordingSelector {
     /// host=b,source=a` back parses as the single label `host` =
     /// `"b,source=a"`, matches nothing, and fails as `NoMatch` with no hint
     /// why. Error text that invites the reader to adjust and retry a selector
-    /// must therefore print this form, which round-trips through `parse`.
-    pub(crate) fn as_flags(&self) -> String {
-        flag_form(self.labels.iter().map(|(k, v)| format!("{k}={v}")))
+    /// must therefore print a form that round-trips through the front end it
+    /// is being shown to.
+    pub(crate) fn render(&self, syntax: SelectorSyntax) -> String {
+        picker_form(
+            self.labels.iter().map(|(k, v)| (k.clone(), v.clone())),
+            syntax,
+        )
     }
 
     /// Whether `labels` carries every pair in this selector.
@@ -146,15 +150,60 @@ impl fmt::Display for RecordingSelector {
     }
 }
 
-/// Render `k=v` pairs as the repeatable flag a caller types.
+/// How the caller being spoken to spells a recording selector.
+///
+/// The two front ends do not share a syntax: the one-shot CLI takes a
+/// repeatable `--recording k=v` flag, while an MCP client has no flags at all
+/// and sends a `recording` object in the tool call's arguments. Every message
+/// that tells a caller how to name an arm has to be rendered for the front
+/// end that will read it — a listing that hands an agent `--recording
+/// source=redis` is an instruction it cannot follow, and `describe_recording`
+/// (whose schema nominates it as the discovery step) is exactly where that
+/// dead end lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SelectorSyntax {
+    /// `--recording k=v --recording k=v` — the one-shot CLI subcommands.
+    Flags,
+    /// `recording {"k": "v"}` — the stdio server's tool argument.
+    Json,
+}
+
+/// Render `k=v` pairs as the selector a caller of `syntax` would type.
 ///
 /// One spelling for both the listing's "select with" lines and the error
-/// leads that echo a selector back, because the two must agree: the flag is
-/// repeatable and ANDs its pairs, and any other joining (notably `Display`'s
-/// comma) does not survive a round trip through `parse`.
-fn flag_form(pairs: impl IntoIterator<Item = String>) -> String {
-    let pairs: Vec<String> = pairs.into_iter().collect();
-    format!("--recording {}", pairs.join(" --recording "))
+/// leads that echo a selector back, because the two must agree. The flag form
+/// repeats the flag rather than joining with `Display`'s comma, which does
+/// not survive a round trip through `parse`; the JSON form is built through
+/// `serde_json` so a label value containing a quote or a backslash still
+/// pastes back as valid JSON.
+fn picker_form(
+    pairs: impl IntoIterator<Item = (String, String)>,
+    syntax: SelectorSyntax,
+) -> String {
+    let pairs: Vec<(String, String)> = pairs.into_iter().collect();
+    match syntax {
+        SelectorSyntax::Flags => format!(
+            "--recording {}",
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" --recording ")
+        ),
+        SelectorSyntax::Json => format!(
+            "recording {{{}}}",
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{}: {}", json_str(k), json_str(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// One JSON string literal, escaped.
+fn json_str(s: &str) -> String {
+    serde_json::Value::String(s.to_string()).to_string()
 }
 
 /// Render a recording's labels for display: `k=v, k=v` in key order.
@@ -169,8 +218,8 @@ pub(crate) fn render_labels(labels: &BTreeMap<String, String>) -> String {
         .join(", ")
 }
 
-/// Render specific recordings from an archive, each with the flag that picks
-/// it.
+/// Render specific recordings from an archive, each with the selector that
+/// picks it, spelled in `syntax`.
 ///
 /// `all` is every recording's labels; `highlight` is which indices of `all`
 /// to render (an empty slice means "render all of them"). Uniqueness is
@@ -179,7 +228,7 @@ pub(crate) fn render_labels(labels: &BTreeMap<String, String>) -> String {
 /// (e.g. the indices `resolve` returned inside `Ambiguous`) using that
 /// subset as the uniqueness universe would call a label unique because it
 /// only looks that way among the couple of recordings being described, then
-/// hand back a `--recording` that still collides with a THIRD recording
+/// hand back a selector that still collides with a THIRD recording
 /// sitting elsewhere in the archive. Taking `all` separately from
 /// `highlight` makes that mistake impossible to write.
 ///
@@ -188,7 +237,11 @@ pub(crate) fn render_labels(labels: &BTreeMap<String, String>) -> String {
 ///
 /// Deliberately unnumbered — an index would invite `--recording 1`, which is
 /// not a supported selector.
-pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &[usize]) -> String {
+pub(crate) fn describe_candidates(
+    all: &[BTreeMap<String, String>],
+    highlight: &[usize],
+    syntax: SelectorSyntax,
+) -> String {
     let indices: Vec<usize> = if highlight.is_empty() {
         (0..all.len()).collect()
     } else {
@@ -214,7 +267,7 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
 
         out.push_str(&format!(
             "  - {rendered}\n    select with: {}\n",
-            flag_form(pairs)
+            picker_form(pairs, syntax)
         ));
     }
     out
@@ -226,7 +279,7 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
 /// The one place the "is this recording selectable at all" rule lives, so a
 /// listing and any caller asking whether a listing will contain selectors
 /// cannot disagree.
-fn picker_pairs(all: &[BTreeMap<String, String>], i: usize) -> Option<Vec<String>> {
+fn picker_pairs(all: &[BTreeMap<String, String>], i: usize) -> Option<Vec<(String, String)>> {
     let labels = &all[i];
 
     // A recording is unselectable when some OTHER recording's labels are a
@@ -262,8 +315,8 @@ fn picker_pairs(all: &[BTreeMap<String, String>], i: usize) -> Option<Vec<String
     // Any single label unique to this recording (checked against `all`, not
     // just `highlight`) selects it on its own; take the first in key order so
     // the listing is byte-stable across runs. If none exists, fall back to
-    // the whole set, one pair per `--recording` flag (the flag is repeatable
-    // and ANDs its pairs together) — sound here precisely because no other
+    // the whole set, whose pairs the selector ANDs together — sound here
+    // precisely because no other
     // recording is a superset.
     let unique = labels
         .iter()
@@ -273,9 +326,9 @@ fn picker_pairs(all: &[BTreeMap<String, String>], i: usize) -> Option<Vec<String
                 .count()
                 == 1
         })
-        .map(|(k, v)| vec![format!("{k}={v}")])
+        .map(|(k, v)| vec![(k.clone(), v.clone())])
         .next();
-    Some(unique.unwrap_or_else(|| labels.iter().map(|(k, v)| format!("{k}={v}")).collect()))
+    Some(unique.unwrap_or_else(|| labels.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
 }
 
 #[cfg(test)]
@@ -398,12 +451,43 @@ mod tests {
         assert_eq!(s.to_string(), "host=b,source=a");
     }
 
+    /// Read a rendered selector back the way its front end would.
+    ///
+    /// The flag form goes through `parse` (what clap hands over); the JSON
+    /// form through `serde_json` + `from_json` (what an MCP client sends).
+    /// Anything a message prints has to survive this, or the caller is being
+    /// told to type something that does not work.
+    fn reparse(rendered: &str, syntax: SelectorSyntax) -> RecordingSelector {
+        match syntax {
+            SelectorSyntax::Flags => RecordingSelector::parse(
+                rendered
+                    .strip_prefix("--recording ")
+                    .unwrap_or_else(|| panic!("not a flag-form selector: {rendered:?}"))
+                    .split(" --recording ")
+                    .map(str::to_string),
+            )
+            .unwrap_or_else(|e| panic!("unparseable flag selector {rendered:?}: {e}")),
+            SelectorSyntax::Json => {
+                let body = rendered
+                    .strip_prefix("recording ")
+                    .unwrap_or_else(|| panic!("not a JSON-form selector: {rendered:?}"));
+                let v: serde_json::Value = serde_json::from_str(body)
+                    .unwrap_or_else(|e| panic!("invalid JSON selector {body:?}: {e}"));
+                RecordingSelector::from_json(&v)
+                    .unwrap_or_else(|e| panic!("unusable JSON selector {body:?}: {e}"))
+            }
+        }
+    }
+
     #[test]
     fn the_flag_form_round_trips_where_display_does_not() {
         let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
-        assert_eq!(s.as_flags(), "--recording host=b --recording source=a");
+        assert_eq!(
+            s.render(SelectorSyntax::Flags),
+            "--recording host=b --recording source=a"
+        );
 
-        // The reason `as_flags` exists rather than reusing `Display`: the
+        // The reason `render` exists rather than reusing `Display`: the
         // comma join reads well but does NOT survive `parse`, which splits on
         // the first `=` only, so it comes back as one label
         // `host="b,source=a"` that matches nothing. Error text tells the
@@ -412,15 +496,37 @@ mod tests {
         let pasted = RecordingSelector::parse([s.to_string()]).unwrap();
         assert_ne!(pasted, s, "Display must not be mistaken for pasteable");
 
-        let round = RecordingSelector::parse(
-            s.as_flags()
-                .strip_prefix("--recording ")
-                .unwrap()
-                .split(" --recording ")
-                .map(str::to_string),
-        )
-        .unwrap();
-        assert_eq!(round, s, "the flag form must round-trip through parse");
+        assert_eq!(
+            reparse(&s.render(SelectorSyntax::Flags), SelectorSyntax::Flags),
+            s,
+            "the flag form must round-trip through parse"
+        );
+    }
+
+    /// The stdio server's caller has no flags to type: it sends a `recording`
+    /// object in the tool call. A message rendered for it must therefore be
+    /// JSON that survives `from_json`, not CLI syntax.
+    #[test]
+    fn the_json_form_round_trips_through_the_server_parser() {
+        let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
+        let rendered = s.render(SelectorSyntax::Json);
+        assert_eq!(rendered, r#"recording {"host": "b", "source": "a"}"#);
+        assert!(
+            !rendered.contains("--recording"),
+            "an MCP client has no flag to type: {rendered}"
+        );
+        assert_eq!(reparse(&rendered, SelectorSyntax::Json), s);
+    }
+
+    /// A label value carrying a quote or a backslash must still paste back as
+    /// valid JSON — hence rendering through `serde_json` rather than
+    /// `format!`. Label values are free text (a container name, a git
+    /// revision, a command line), so this is not hypothetical.
+    #[test]
+    fn the_json_form_escapes_label_values() {
+        let s = RecordingSelector::parse([r#"cmd=say "hi"\now"#.to_string()]).unwrap();
+        let rendered = s.render(SelectorSyntax::Json);
+        assert_eq!(reparse(&rendered, SelectorSyntax::Json), s);
     }
 
     #[test]
@@ -533,10 +639,15 @@ mod tests {
     /// contain "source=redis", "source=valkey", and "--recording" no matter
     /// what `picker` actually was. Feeding it back through `resolve` is what
     /// catches a selector that looks plausible but doesn't work.
-    fn assert_listing_round_trips(all: &[BTreeMap<String, String>], out: &str, expect: &[usize]) {
+    fn assert_listing_round_trips(
+        all: &[BTreeMap<String, String>],
+        out: &str,
+        expect: &[usize],
+        syntax: SelectorSyntax,
+    ) {
         let pickers: Vec<&str> = out
             .lines()
-            .filter_map(|l| l.trim_start().strip_prefix("select with: --recording "))
+            .filter_map(|l| l.trim_start().strip_prefix("select with: "))
             .collect();
         assert_eq!(
             pickers.len(),
@@ -544,10 +655,7 @@ mod tests {
             "one selector line per rendered recording: {out}"
         );
         for (picker, &i) in pickers.iter().zip(expect) {
-            let pairs: Vec<String> = picker.split(" --recording ").map(str::to_string).collect();
-            let s = RecordingSelector::parse(pairs).unwrap_or_else(|e| {
-                panic!("emitted an unparseable selector for recording {i}: {e} ({picker:?})")
-            });
+            let s = reparse(picker, syntax);
             assert_eq!(
                 s.resolve(all),
                 Ok(i),
@@ -556,13 +664,26 @@ mod tests {
         }
     }
 
+    /// Both front ends' listings must round-trip, not just the CLI's.
+    fn assert_listing_round_trips_both(
+        all: &[BTreeMap<String, String>],
+        highlight: &[usize],
+        expect: &[usize],
+    ) {
+        for syntax in [SelectorSyntax::Flags, SelectorSyntax::Json] {
+            let out = describe_candidates(all, highlight, syntax);
+            assert_listing_round_trips(all, &out, expect, syntax);
+        }
+    }
+
     #[test]
     fn the_candidate_listing_names_every_recording_and_its_selector() {
         let all = two_arms();
-        let out = describe_candidates(&all, &[]);
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flags);
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
-        assert_listing_round_trips(&all, &out, &[0, 1]);
+        assert_listing_round_trips(&all, &out, &[0, 1], SelectorSyntax::Flags);
+        assert_listing_round_trips_both(&all, &[], &[0, 1]);
         // No indices: they invite `--recording 1`, which is not a selector.
         // Checked against a few plausible numbering styles, not just one.
         for pat in ["[1]", "[2]", "(1)", "(2)", "1.", "2.", "#1", "#2"] {
@@ -590,8 +711,7 @@ mod tests {
             Err(SelectError::Ambiguous(vec![0, 1]))
         );
 
-        let out = describe_candidates(&all, &[0, 1]);
-        assert_listing_round_trips(&all, &out, &[0, 1]);
+        assert_listing_round_trips_both(&all, &[0, 1], &[0, 1]);
     }
 
     #[test]
@@ -605,9 +725,9 @@ mod tests {
             labels(&[("host", "web-01"), ("source", "redis")]),
             labels(&[("host", "web-01"), ("source", "redis")]),
         ];
-        let out = describe_candidates(&dup, &[]);
+        let out = describe_candidates(&dup, &[], SelectorSyntax::Flags);
         assert!(
-            !out.contains("select with: --recording"),
+            !out.contains("select with:"),
             "no selector can pick between identical label sets, so none should be offered: {out}"
         );
         assert!(
@@ -644,12 +764,13 @@ mod tests {
             labels(&[("arm", "baseline"), ("host", "h"), ("source", "rezolus")]),
             labels(&[("host", "h"), ("source", "rezolus")]),
         ];
-        let out = describe_candidates(&all, &[]);
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flags);
         // Only recording 0 gets a selector (`arm=baseline`); recording 1 gets
         // the unselectable note. The round trip is what proves it: before the
         // fix, recording 1 was offered `--recording host=h --recording
         // source=rezolus`, which resolves to `Ambiguous([0, 1])`.
-        assert_listing_round_trips(&all, &out, &[0]);
+        assert_listing_round_trips(&all, &out, &[0], SelectorSyntax::Flags);
+        assert_listing_round_trips_both(&all, &[], &[0]);
         assert!(
             out.contains("cannot be selected by labels"),
             "the subset arm must be reported as unselectable: {out}"
@@ -660,7 +781,6 @@ mod tests {
     #[test]
     fn a_superset_recording_makes_its_subset_peer_unselectable() {
         let all = vec![labels(&[("a", "1")]), labels(&[("a", "1"), ("b", "2")])];
-        let out = describe_candidates(&all, &[]);
-        assert_listing_round_trips(&all, &out, &[1]);
+        assert_listing_round_trips_both(&all, &[], &[1]);
     }
 }

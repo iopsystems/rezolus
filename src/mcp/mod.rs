@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 mod recording_selector;
 pub(crate) use recording_selector::{
-    describe_candidates, render_labels, RecordingSelector, SelectError,
+    describe_candidates, render_labels, RecordingSelector, SelectError, SelectorSyntax,
 };
 
 pub mod anomaly_detection;
@@ -36,12 +36,17 @@ type LabeledSource = (
 /// prevent.
 ///
 /// `pool` is shared so the stdio server and the one-shot CLI use one budget.
+///
+/// `syntax` is the front end this call's messages will be read by: the same
+/// selector is `--recording k=v` to the CLI and a `recording` JSON object to
+/// an MCP client, and a message that offers the wrong one cannot be acted on.
 pub(crate) fn open_source_with_pool(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_query::BufferPool>,
     selector: &RecordingSelector,
+    syntax: SelectorSyntax,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-    open_source_with_pool_labeled(file, pool, selector).map(|(_, reader)| reader)
+    open_source_with_pool_labeled(file, pool, selector, syntax).map(|(_, reader)| reader)
 }
 
 /// As `open_source_with_pool`, but also reporting WHICH recording was chosen,
@@ -57,6 +62,7 @@ pub(crate) fn open_source_with_pool_labeled(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_query::BufferPool>,
     selector: &RecordingSelector,
+    syntax: SelectorSyntax,
 ) -> Result<LabeledSource, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
@@ -190,20 +196,20 @@ pub(crate) fn open_source_with_pool_labeled(
                 format!(
                     "no recording in {} matches {}",
                     file.display(),
-                    selector.as_flags()
+                    selector.render(syntax)
                 )
             } else {
                 format!(
                     "{} names {} in {}, which was recorded but produced no rows, so it \
                      holds nothing to analyze",
-                    selector.as_flags(),
+                    selector.render(syntax),
                     named_but_empty.join("; "),
                     file.display()
                 )
             };
             return Err(format!(
                 "{lead}. {listing_lead}\n{}",
-                describe_candidates(&universe, &[])
+                describe_candidates(&universe, &[], syntax)
             )
             .into());
         }
@@ -226,12 +232,14 @@ pub(crate) fn open_source_with_pool_labeled(
             } else {
                 format!(
                     "{} matches {} recordings in {}; add labels until it names one:",
-                    selector.as_flags(),
+                    selector.render(syntax),
                     hits.len(),
                     file.display()
                 )
             };
-            return Err(format!("{lead}\n{}", describe_candidates(&universe, &hits)).into());
+            return Err(
+                format!("{lead}\n{}", describe_candidates(&universe, &hits, syntax)).into(),
+            );
         }
     };
 
@@ -239,7 +247,8 @@ pub(crate) fn open_source_with_pool_labeled(
     Ok((labels, std::sync::Arc::new(reader)))
 }
 
-/// Open with a selector and a fresh pool — the one-shot CLI path.
+/// Open with a selector and a fresh pool — the one-shot CLI path, so every
+/// message it produces is spelled as the `--recording` flag the caller typed.
 pub(crate) fn open_source_selected(
     file: &std::path::Path,
     selector: &RecordingSelector,
@@ -248,6 +257,7 @@ pub(crate) fn open_source_selected(
         file,
         metriken_query::BufferPool::new(256 * 1024 * 1024),
         selector,
+        SelectorSyntax::Flags,
     )
 }
 
@@ -399,6 +409,7 @@ fn run_analyze_correlation(
 pub(crate) fn describe_recording_output(
     file: &std::path::Path,
     selector: &RecordingSelector,
+    syntax: SelectorSyntax,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
 
@@ -431,7 +442,7 @@ pub(crate) fn describe_recording_output(
                  tool with one of the selectors above to analyze that recording.",
                 file.display(),
                 candidates.len(),
-                describe_candidates(&candidates, &[])
+                describe_candidates(&candidates, &[], syntax)
             ));
         }
     }
@@ -444,7 +455,7 @@ pub(crate) fn describe_recording_output(
 }
 
 fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
-    match describe_recording_output(&file, selector) {
+    match describe_recording_output(&file, selector, SelectorSyntax::Flags) {
         Ok(out) => println!("{out}"),
         Err(e) => {
             eprintln!("Failed to load recording: {e}");
@@ -1776,8 +1787,9 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let out = describe_recording_output(&path, &RecordingSelector::default())
-            .expect("listing is not an error — it is the answer");
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("listing is not an error — it is the answer");
         assert!(out.contains("2 recordings"), "{out}");
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
@@ -1787,6 +1799,38 @@ mod tests {
         );
     }
 
+    /// The CLI's own listing stays in flag syntax — the front-end split has
+    /// to cut both ways, or "render for the caller" degrades into "render
+    /// JSON everywhere" and the CLI user is handed a tool-call object.
+    /// Companion to `server_listings_render_the_json_selector_not_the_cli_flag`.
+    #[test]
+    fn cli_listings_render_the_flag_selector_not_the_json_object() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("listing is the answer");
+        assert!(
+            out.contains("select with: --recording source=redis"),
+            "{out}"
+        );
+        assert!(
+            !out.contains(r#"recording {"#),
+            "a shell caller cannot type a JSON tool argument: {out}"
+        );
+
+        // And the error leads, not just the listing.
+        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let msg = match open_source_selected(&path, &sel) {
+            Ok(_) => panic!("source=nope names no arm"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("--recording source=nope"), "{msg}");
+        assert!(!msg.contains(r#"recording {"#), "{msg}");
+    }
+
     #[test]
     fn describe_recording_with_a_selector_describes_that_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -1794,7 +1838,7 @@ mod tests {
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
         let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
-        let out = describe_recording_output(&path, &sel).unwrap();
+        let out = describe_recording_output(&path, &sel, SelectorSyntax::Flags).unwrap();
         assert!(
             out.contains("Recording Information"),
             "a selected recording gets the ordinary single-recording format: {out}"
@@ -1821,8 +1865,9 @@ mod tests {
             &[true, true, false],
         );
 
-        let out = describe_recording_output(&path, &RecordingSelector::default())
-            .expect("two live arms still means \"pick one\", not an error");
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("two live arms still means \"pick one\", not an error");
         assert!(
             out.contains("2 recordings with data"),
             "must count only the arms that hold rows, and say so: {out}"
@@ -1851,8 +1896,9 @@ mod tests {
         let path = dir.path().join("one-live.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
 
-        let out = describe_recording_output(&path, &RecordingSelector::default())
-            .expect("a single live arm resolves without a selector");
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("a single live arm resolves without a selector");
         assert!(
             out.contains("Recording Information"),
             "the ordinary single-recording format, not a listing: {out}"
