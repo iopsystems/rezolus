@@ -5,11 +5,10 @@
 //! because `mod.rs` is already large.
 //!
 //! `resolve`, `matches`, `is_empty`, `Display` and `describe_candidates` are
-//! all driven from `mcp::open_source_with_pool`. The two constructors are
-//! not, yet: `parse` lands with the `--recording` CLI flag and `from_json`
-//! with the stdio server's tool schemas, so each carries its own targeted
-//! `dead_code` allow until then rather than the module-wide one this file
-//! used to have.
+//! all driven from `mcp::open_source_with_pool`, and `parse` from the
+//! `--recording` CLI flag. `from_json` is not driven yet — it lands with the
+//! stdio server's tool schemas — so it carries its own targeted `dead_code`
+//! allow until then rather than the module-wide one this file used to have.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -48,9 +47,6 @@ impl RecordingSelector {
     /// via last-write-wins would be that same failure creeping in one layer
     /// earlier. A value may itself contain `=` (`split_once` splits on the
     /// first one only), which is deliberate: label values are free text.
-    // Called from the tests below and, once it exists, the `--recording`
-    // CLI flag; not yet from production code.
-    #[allow(dead_code)]
     pub(crate) fn parse(pairs: impl IntoIterator<Item = String>) -> Result<Self, String> {
         let mut labels = BTreeMap::new();
         for p in pairs {

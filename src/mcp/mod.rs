@@ -225,6 +225,16 @@ pub(crate) fn open_source_selected(
     )
 }
 
+/// Open with no selector at all — test fixtures and `analysis::extract`'s
+/// golden fixtures, which build single-recording archives.
+///
+/// `#[cfg(test)]` on purpose, now that every CLI path passes the caller's
+/// `--recording` through: production code opening a `.rez` has to say what it
+/// did with the selector, and this signature has nowhere to say it. Reaching
+/// for it from a real code path would silently reintroduce exactly the
+/// "answered from an arm nobody chose" failure the selector exists to
+/// prevent, so the compiler refuses instead.
+#[cfg(test)]
 pub(crate) fn open_source(
     file: &std::path::Path,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
@@ -279,27 +289,30 @@ pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> Strin
 
 /// Run the MCP server or execute MCP commands
 pub fn run(config: Config) {
-    match config.mode {
-        Mode::Server => run_server(config),
+    // Destructured rather than passed whole: `run_server` takes only what it
+    // uses, so no path hands the server a selector it will never consult.
+    let Config {
+        verbose,
+        recording,
+        mode,
+    } = config;
+    match mode {
+        Mode::Server => run_server(verbose),
         Mode::AnalyzeCorrelation {
             file,
             query1,
             query2,
-        } => run_analyze_correlation(file, query1, query2),
-        // Task 5 wires the real `--recording` selector through to this call
-        // site; until then every CLI invocation behaves as it always has.
-        Mode::DescribeRecording { file } => {
-            run_describe_recording(file, &RecordingSelector::default())
-        }
-        Mode::DescribeMetrics { file } => run_describe_metrics(file),
-        Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query),
-        Mode::Query { file, query } => run_query(file, query),
-        Mode::ExtractFeatures { file } => run_extract_features(file),
+        } => run_analyze_correlation(file, query1, query2, &recording),
+        Mode::DescribeRecording { file } => run_describe_recording(file, &recording),
+        Mode::DescribeMetrics { file } => run_describe_metrics(file, &recording),
+        Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query, &recording),
+        Mode::Query { file, query } => run_query(file, query, &recording),
+        Mode::ExtractFeatures { file } => run_extract_features(file, &recording),
     }
 }
 
-fn run_server(config: Config) {
-    let _log_drain = configure_logging(verbosity_to_level(config.verbose));
+fn run_server(verbose: u8) {
+    let _log_drain = configure_logging(verbosity_to_level(verbose));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -321,11 +334,22 @@ fn run_server(config: Config) {
     });
 }
 
-fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
-    let reader = match open_source(&file) {
+fn run_analyze_correlation(
+    file: PathBuf,
+    query1: String,
+    query2: String,
+    selector: &RecordingSelector,
+) {
+    // Both queries are evaluated against the SAME recording: a correlation is
+    // only meaningful within one, so one selector for the pair is the whole
+    // story here — this is not a cross-recording comparison.
+    let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to load parquet file: {e}");
+            // Not "parquet file": the input may well be a .rez archive, and
+            // the errors this prints are mostly ABOUT that archive's
+            // recordings.
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
@@ -403,11 +427,11 @@ fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
     }
 }
 
-fn run_describe_metrics(file: PathBuf) {
-    let reader = match open_source(&file) {
+fn run_describe_metrics(file: PathBuf, selector: &RecordingSelector) {
+    let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to load parquet file: {e}");
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
@@ -416,11 +440,11 @@ fn run_describe_metrics(file: PathBuf) {
     println!("{output}");
 }
 
-fn run_detect_anomalies(file: PathBuf, query: Option<String>) {
-    let reader = match open_source(&file) {
+fn run_detect_anomalies(file: PathBuf, query: Option<String>, selector: &RecordingSelector) {
+    let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to load parquet file: {e}");
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
@@ -634,11 +658,11 @@ fn run_exhaustive_detection(reader: Arc<dyn MetricsSource>) {
     }
 }
 
-fn run_query(file: PathBuf, query: String) {
-    let reader = match open_source(&file) {
+fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
+    let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to load parquet file: {e}");
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
@@ -657,11 +681,11 @@ fn run_query(file: PathBuf, query: String) {
     }
 }
 
-fn run_extract_features(file: PathBuf) {
-    let reader = match open_source(&file) {
+fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
+    let reader = match open_source_selected(&file, selector) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Failed to open recording: {e}");
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
@@ -832,6 +856,17 @@ pub enum Mode {
 /// MCP server configuration
 pub struct Config {
     pub verbose: u8,
+    /// Which recording of a multi-recording `.rez` to read.
+    ///
+    /// On `Config` rather than on each `Mode` variant because it applies to
+    /// every subcommand alike — the same reason `verbose` lives here.
+    ///
+    /// Always empty for `Mode::Server`: the stdio server takes a selector per
+    /// tool call, so `--recording` is declared on the six analysis
+    /// subcommands only and clap refuses it on the bare `rezolus mcp`. That
+    /// refusal is the point — a process-wide selector the server never
+    /// consulted would be accepted and silently do nothing.
+    pub recording: RecordingSelector,
     pub mode: Mode,
 }
 
@@ -840,6 +875,18 @@ impl TryFrom<ArgMatches> for Config {
 
     fn try_from(args: ArgMatches) -> Result<Self, String> {
         let verbose = args.get_count("VERBOSE");
+
+        // Read from the SUBCOMMAND's matches: `--recording` is declared per
+        // subcommand, so the top-level matches never carry it. `None` is
+        // server mode, which has no selector to read (see `Config.recording`).
+        let recording = match args.subcommand() {
+            Some((_, sub)) => RecordingSelector::parse(
+                sub.get_many::<String>("RECORDING")
+                    .unwrap_or_default()
+                    .cloned(),
+            )?,
+            None => RecordingSelector::default(),
+        };
 
         let mode = match args.subcommand() {
             Some(("analyze-correlation", sub_args)) => {
@@ -905,8 +952,42 @@ impl TryFrom<ArgMatches> for Config {
             _ => Mode::Server,
         };
 
-        Ok(Config { verbose, mode })
+        Ok(Config {
+            verbose,
+            recording,
+            mode,
+        })
     }
+}
+
+/// The `--recording` selector, declared identically on every analysis
+/// subcommand.
+///
+/// One definition rather than six copies: this is the flag an agent reads
+/// out of `--help` and types back, so the six must not drift into six
+/// slightly different explanations of the same thing.
+///
+/// Deliberately NOT declared on the top-level `mcp` command. The stdio
+/// server resolves a selector per tool call, so a process-wide one would
+/// apply to nothing; leaving it off makes `rezolus mcp --recording ...` a
+/// clap error instead of an accepted flag that silently does nothing.
+fn recording_arg() -> clap::Arg {
+    clap::Arg::new("RECORDING")
+        .long("recording")
+        .value_name("KEY=VALUE")
+        // Hard-wrapped, and with a self-contained first line: clap is built
+        // here without `wrap_help`, so it prints this verbatim (one endless
+        // line otherwise) and `-h` leads with that first line.
+        .help(
+            "Which recording of a multi-recording .rez to read, as key=value (e.g. --recording source=redis)\n\
+             Repeatable: the pairs are ANDed and must together name exactly one\n\
+             recording. Matching none or several is an error, never a guess.\n\
+             Run `rezolus mcp describe-recording FILE` with no --recording to list\n\
+             an archive's recordings and the selector that picks each one.\n\
+             Not accepted for a .parquet file, which holds one recording and so has\n\
+             nothing to select between.",
+        )
+        .action(clap::ArgAction::Append)
 }
 
 /// Create the MCP subcommand
@@ -973,7 +1054,8 @@ pub fn command() -> Command {
                         .help("Second PromQL query (e.g., 'cgroup_memory_used')")
                         .required(true)
                         .index(3),
-                ),
+                )
+                .arg(recording_arg()),
         )
         .subcommand(
             Command::new("describe-recording")
@@ -991,7 +1073,8 @@ pub fn command() -> Command {
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
-                ),
+                )
+                .arg(recording_arg()),
         )
         .subcommand(
             Command::new("describe-metrics")
@@ -1010,7 +1093,8 @@ pub fn command() -> Command {
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
-                ),
+                )
+                .arg(recording_arg()),
         )
         .subcommand(
             Command::new("detect-anomalies")
@@ -1040,7 +1124,8 @@ pub fn command() -> Command {
                         )
                         .required(false)
                         .index(2),
-                ),
+                )
+                .arg(recording_arg()),
         )
         .subcommand(
             Command::new("query")
@@ -1074,7 +1159,8 @@ pub fn command() -> Command {
                         .help("PromQL query (e.g., 'sum(rate(cpu_cycles[1m]))')")
                         .required(true)
                         .index(2),
-                ),
+                )
+                .arg(recording_arg()),
         )
         .subcommand(
             Command::new("extract-features")
@@ -1098,7 +1184,8 @@ pub fn command() -> Command {
                         .value_parser(clap::value_parser!(PathBuf))
                         .required(true)
                         .index(1),
-                ),
+                )
+                .arg(recording_arg()),
         )
 }
 
@@ -1748,5 +1835,84 @@ mod tests {
             !out.contains("Pick one") && !out.contains("recordings with data"),
             "must not present a choice when there is only one to make: {out}"
         );
+    }
+
+    #[test]
+    fn the_recording_flag_parses_on_every_subcommand() {
+        // Every tool must accept it. The one that does not is the one an
+        // agent will reach for on the archive it cannot read.
+        for (sub, extra) in [
+            ("describe-recording", vec![]),
+            ("describe-metrics", vec![]),
+            ("detect-anomalies", vec![]),
+            ("extract-features", vec![]),
+            ("query", vec!["cpu_cycles"]),
+            ("analyze-correlation", vec!["a", "b"]),
+        ] {
+            let mut argv = vec!["mcp", sub, "f.rez", "--recording", "source=redis"];
+            argv.extend(extra);
+            let m = command()
+                .try_get_matches_from(&argv)
+                .unwrap_or_else(|e| panic!("{sub} must accept --recording: {e}"));
+            let cfg = Config::try_from(m).unwrap();
+            // Compared against the parsed selector rather than rendered text:
+            // `Display` is deliberately not the pasteable form (see
+            // `as_flags`), so asserting on `to_string()` would quietly make a
+            // rendering choice part of this test's contract.
+            assert_eq!(
+                cfg.recording,
+                RecordingSelector::parse(["source=redis".to_string()]).unwrap(),
+                "for {sub}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_recording_flag_without_an_equals_is_rejected() {
+        let m = command()
+            .try_get_matches_from(["mcp", "describe-recording", "f.rez", "--recording", "redis"])
+            .unwrap();
+        assert!(Config::try_from(m).is_err());
+    }
+
+    /// Repeating the flag ANDs the pairs; it does not overwrite.
+    ///
+    /// `parse` refuses a repeated KEY, so an `ArgAction::Set` here would not
+    /// merely lose a pair — it would silently narrow a two-label selector to
+    /// its last label, which can then resolve to a recording the caller never
+    /// named.
+    #[test]
+    fn the_recording_flag_accumulates_when_repeated() {
+        let m = command()
+            .try_get_matches_from([
+                "mcp",
+                "describe-recording",
+                "f.rez",
+                "--recording",
+                "host=web-01",
+                "--recording",
+                "source=redis",
+            ])
+            .unwrap();
+        let cfg = Config::try_from(m).unwrap();
+        assert_eq!(
+            cfg.recording,
+            RecordingSelector::parse(["host=web-01".to_string(), "source=redis".to_string()])
+                .unwrap()
+        );
+    }
+
+    /// Server mode must REJECT the flag, not accept and ignore it.
+    ///
+    /// The stdio server takes a selector per tool call, so a process-wide
+    /// `--recording` would apply to nothing. Clap rejects it today only
+    /// because the flag is declared per subcommand; pinned here so nobody
+    /// hoists it to the top level, where it would parse cleanly and then be
+    /// consulted by no one.
+    #[test]
+    fn the_recording_flag_is_not_accepted_without_a_subcommand() {
+        assert!(command()
+            .try_get_matches_from(["mcp", "--recording", "source=redis"])
+            .is_err());
     }
 }
