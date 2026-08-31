@@ -273,6 +273,17 @@ pub(crate) fn describe_candidates(
     out
 }
 
+/// Whether any recording in `all` can be named by a selector at all.
+///
+/// Asked by a caller that is about to print a listing and needs to know
+/// whether it will contain any "select with:" lines — text inviting the
+/// reader to use one is a lie when every recording is indistinguishable from
+/// a peer. Shares `picker_pairs` with the listing itself rather than
+/// re-deriving the rule, so the two cannot disagree.
+pub(crate) fn any_selectable(all: &[BTreeMap<String, String>]) -> bool {
+    (0..all.len()).any(|i| picker_pairs(all, i).is_some())
+}
+
 /// The `k=v` pairs that pick recording `i` out of `all`, or `None` when no
 /// selector can.
 ///

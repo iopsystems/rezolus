@@ -591,8 +591,10 @@ impl Server {
         //
         // The cost is that this one tool bypasses the reader cache and the
         // shared pool (`describe_recording_output` opens with a pool of its
-        // own). It is a metadata read called once or twice a session, so the
-        // duplicated open is worth strict parity with the CLI.
+        // own). It is a metadata read called once or twice a session, so a
+        // separate open is worth strict parity with the CLI — and it is one
+        // open, not two: the listing decision and the reader now come out of
+        // the same call.
         // `Json`: every selector this renders is going back to an MCP client,
         // which has no `--recording` flag to type — it sends a `recording`
         // object in the tool call. This tool's schema is what points an agent
@@ -654,13 +656,14 @@ impl Server {
         // 2-recording archive. `open_source_with_pool_labeled` also does the
         // `.rez`-vs-parquet dispatch by content, so it replaces the whole
         // branch.
-        let (labels, reader) = crate::mcp::open_source_with_pool_labeled(
+        let opened = crate::mcp::open_source_with_pool_labeled(
             path,
             Arc::clone(&self.pool),
             selector,
             crate::mcp::SelectorSyntax::Json,
         )?;
-        let identity = crate::recorder::seal_policy::recording_stagger_key(&labels);
+        let reader = opened.reader;
+        let identity = crate::recorder::seal_policy::recording_stagger_key(&opened.labels);
 
         let mut cache = self.reader_cache.write().unwrap();
         // Distinct selectors can name the SAME recording (`source=redis` and

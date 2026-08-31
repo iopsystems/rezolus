@@ -16,11 +16,65 @@ mod server;
 use chrono::{DateTime, Utc};
 use metriken_query::{MetricsSource, QueryResult};
 
-/// The chosen recording's own labels, paired with a reader over it.
-type LabeledSource = (
-    std::collections::BTreeMap<String, String>,
-    std::sync::Arc<dyn metriken_query::MetricsSource>,
-);
+/// One opened recording, plus what the opener learned about the archive it
+/// came out of.
+///
+/// More than a reader because two callers need more than a reader and cannot
+/// get it back cheaply: the stdio server keys its reader cache on WHICH
+/// recording a selector resolved to, and `describe-recording` has to describe
+/// the archive rather than the arm when no arm holds data. Both facts are
+/// known during the open; re-deriving either meant opening the archive a
+/// second time.
+pub(crate) struct Opened {
+    /// The chosen recording's own labels (empty for a plain parquet file).
+    pub labels: std::collections::BTreeMap<String, String>,
+    pub reader: std::sync::Arc<dyn metriken_query::MetricsSource>,
+    /// Every recording in the archive, populated ONLY when the reader is the
+    /// first arm handed back by default because the archive holds more than
+    /// one recording, all of them rowless, and no selector was given.
+    ///
+    /// That is the one `Ok` case where the reader misrepresents the file:
+    /// `describe-recording` would otherwise print arm 0's metadata as though
+    /// the archive held a single recording, saying nothing about the other
+    /// arms or about the fact that nothing was captured at all.
+    pub all_empty_recordings: Vec<std::collections::BTreeMap<String, String>>,
+}
+
+/// Why opening a recording did not yield exactly one reader.
+///
+/// A typed error rather than a string because `describe-recording` renders
+/// the "several recordings, pick one" case as its ANSWER, in its own words,
+/// while every analysis tool renders it as a failure. Both need the candidate
+/// list, and it exists only inside the open.
+#[derive(Debug)]
+pub(crate) enum OpenError {
+    /// A multi-recording archive with no selector: the caller must choose.
+    /// Carries the message the analysis tools print AND the candidates, so a
+    /// caller wanting to say something else about them need not reopen the
+    /// archive to find out what they are.
+    NeedsSelection {
+        message: String,
+        candidates: Vec<std::collections::BTreeMap<String, String>>,
+    },
+    Other(Box<dyn std::error::Error>),
+}
+
+impl OpenError {
+    fn other(message: String) -> Self {
+        OpenError::Other(message.into())
+    }
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::NeedsSelection { message, .. } => write!(f, "{message}"),
+            OpenError::Other(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
 
 /// Open a recording as a query source, selecting ONE recording out of a
 /// multi-recording `.rez` archive.
@@ -46,24 +100,26 @@ pub(crate) fn open_source_with_pool(
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
-    open_source_with_pool_labeled(file, pool, selector, syntax).map(|(_, reader)| reader)
+    open_source_with_pool_labeled(file, pool, selector, syntax)
+        .map(|opened| opened.reader)
+        .map_err(Into::into)
 }
 
-/// As `open_source_with_pool`, but also reporting WHICH recording was chosen,
-/// as that recording's own label set (empty for a plain parquet file).
+/// As `open_source_with_pool`, but reporting everything the open learned —
+/// see [`Opened`] and [`OpenError`].
 ///
 /// The stdio server caches readers, and a cache keyed by the selector text
 /// would hold a second copy of the archive for every selector spelling that
 /// names the same arm (`source=redis` and `host=web-01 source=redis` are the
 /// same recording). Only the resolver knows which recording a selector landed
-/// on, so it is the only place that can say — hence the extra return value
+/// on, so it is the only place that can say — hence the richer return value
 /// rather than a second, guessing, resolution at the call site.
 pub(crate) fn open_source_with_pool_labeled(
     file: &std::path::Path,
     pool: std::sync::Arc<metriken_query::BufferPool>,
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
-) -> Result<LabeledSource, Box<dyn std::error::Error>> {
+) -> Result<Opened, OpenError> {
     use crate::recorder::rez::RezFormat;
 
     // Ahead of the open, and HERE rather than in each front end, so a typo'd
@@ -73,7 +129,10 @@ pub(crate) fn open_source_with_pool_labeled(
     // "Failed to load recording: No such file or directory (os error 2)" to a
     // shell caller.
     if !file.exists() {
-        return Err(format!("Recording file not found: {}", file.display()).into());
+        return Err(OpenError::other(format!(
+            "Recording file not found: {}",
+            file.display()
+        )));
     }
 
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
@@ -88,19 +147,21 @@ pub(crate) fn open_source_with_pool_labeled(
         // a guess. The advice is phrased without naming a flag because the
         // stdio server reaches this with a JSON object, not `--recording`.
         if !selector.is_empty() {
-            return Err(format!(
+            return Err(OpenError::other(format!(
                 "{} is not a .rez archive and holds no recordings to select between; \
                  a recording selector applies only to a multi-recording .rez",
                 file.display()
-            )
-            .into());
+            )));
         }
         // No labels: a bare parquet file is one recording with no label set
         // of its own, which is a stable identity for exactly one path.
-        return Ok((
-            std::collections::BTreeMap::new(),
-            std::sync::Arc::new(metriken_query::ParquetReader::open_with_pool(file, pool)?),
-        ));
+        let reader =
+            metriken_query::ParquetReader::open_with_pool(file, pool).map_err(OpenError::Other)?;
+        return Ok(Opened {
+            labels: std::collections::BTreeMap::new(),
+            reader: std::sync::Arc::new(reader),
+            all_empty_recordings: Vec::new(),
+        });
     }
 
     // Open the recordings ONCE and build the reader from the one that was
@@ -121,9 +182,13 @@ pub(crate) fn open_source_with_pool_labeled(
     // tar reads the whole archive into memory). Consuming the recordings we
     // already have avoids that. The only field this loses versus
     // `open_with_pool` is `filename`, which nothing under `src/mcp/` reads.
-    let mut recordings = crate::rez_reader::RezReader::open_recordings(file, pool)?;
+    let mut recordings =
+        crate::rez_reader::RezReader::open_recordings(file, pool).map_err(OpenError::Other)?;
     if recordings.is_empty() {
-        return Err(format!("{} holds no recordings", file.display()).into());
+        return Err(OpenError::other(format!(
+            "{} holds no recordings",
+            file.display()
+        )));
     }
 
     // Only recordings that hold tables are candidates. An arm that produced no
@@ -159,8 +224,22 @@ pub(crate) fn open_source_with_pool_labeled(
         // Every arm is empty and the caller named none of them. Opening the
         // first reports an empty recording, which is a truer answer than an
         // error about choosing between recordings that all hold nothing.
+        //
+        // The other arms' labels ride along (only when there ARE others) so a
+        // caller describing the FILE can say the archive holds several
+        // recordings and none of them captured anything, rather than
+        // reporting arm 0 as if it were the whole recording.
+        let all_empty_recordings = if recordings.len() > 1 {
+            recordings.iter().map(|(l, _)| l.clone()).collect()
+        } else {
+            Vec::new()
+        };
         let (labels, reader) = recordings.swap_remove(0);
-        return Ok((labels, std::sync::Arc::new(reader)));
+        return Ok(Opened {
+            labels,
+            reader: std::sync::Arc::new(reader),
+            all_empty_recordings,
+        });
     }
 
     // With every arm empty there is nothing to prefer, so the selector is
@@ -218,11 +297,10 @@ pub(crate) fn open_source_with_pool_labeled(
                     file.display()
                 )
             };
-            return Err(format!(
+            return Err(OpenError::other(format!(
                 "{lead}. {listing_lead}\n{}",
                 describe_candidates(&universe, &[], syntax)
-            )
-            .into());
+            )));
         }
         Err(SelectError::Ambiguous(hits)) => {
             // `hits` are HIGHLIGHTED, not passed as the candidate list:
@@ -248,14 +326,29 @@ pub(crate) fn open_source_with_pool_labeled(
                     file.display()
                 )
             };
-            return Err(
-                format!("{lead}\n{}", describe_candidates(&universe, &hits, syntax)).into(),
-            );
+            let message = format!("{lead}\n{}", describe_candidates(&universe, &hits, syntax));
+            // Only the NO-SELECTOR case is `NeedsSelection`: it is the one a
+            // caller may legitimately render as something other than a
+            // failure (`describe-recording` answers with the listing). A
+            // selector that was given and still matched several is a failed
+            // request, and every caller reports it as one.
+            return Err(if selector.is_empty() {
+                OpenError::NeedsSelection {
+                    message,
+                    candidates: universe,
+                }
+            } else {
+                OpenError::other(message)
+            });
         }
     };
 
     let (labels, reader) = recordings.swap_remove(chosen);
-    Ok((labels, std::sync::Arc::new(reader)))
+    Ok(Opened {
+        labels,
+        reader: std::sync::Arc::new(reader),
+        all_empty_recordings: Vec::new(),
+    })
 }
 
 /// Open with a selector and a fresh pool — the one-shot CLI path, so every
@@ -269,6 +362,21 @@ pub(crate) fn open_source_selected(
         metriken_query::BufferPool::new(256 * 1024 * 1024),
         selector,
         SelectorSyntax::Flags,
+    )
+}
+
+/// As `open_source_selected`, but keeping everything the open learned — for
+/// the callers that describe the archive rather than just query the reader.
+pub(crate) fn open_selected_labeled(
+    file: &std::path::Path,
+    selector: &RecordingSelector,
+    syntax: SelectorSyntax,
+) -> Result<Opened, OpenError> {
+    open_source_with_pool_labeled(
+        file,
+        metriken_query::BufferPool::new(256 * 1024 * 1024),
+        selector,
+        syntax,
     )
 }
 
@@ -422,47 +530,96 @@ pub(crate) fn describe_recording_output(
     selector: &RecordingSelector,
     syntax: SelectorSyntax,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    use crate::recorder::rez::RezFormat;
-
-    // With no selector, a multi-recording archive is LISTED rather than
-    // refused. `describe-recording` is documented as the place to start, so
-    // making the first tool an agent calls the one that explains what to call
-    // next is the whole point.
-    if selector.is_empty()
-        && crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
-            != RezFormat::NotRez
-    {
-        let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
-        let recordings = crate::rez_reader::RezReader::open_recordings(file, pool)?;
-        let candidates: Vec<std::collections::BTreeMap<String, String>> = recordings
-            .iter()
-            .filter(|(_, r)| !r.is_empty())
-            .map(|(l, _)| l.clone())
-            .collect();
-        if candidates.len() > 1 {
+    // ONE open, and every branch below is decided from what it returned.
+    //
+    // This used to open the archive twice — `detect_rez_format` +
+    // `open_recordings` to decide whether to list, both discarded, then
+    // `open_source_selected` doing the same work again. That cost a measured
+    // ~20% on a 13-table archive and scales with table count (neither
+    // container's probe is catalog-only), the same 2x the opener itself was
+    // written to avoid. Worse, it was a TOCTOU: a `.rez` is readable while a
+    // writer appends to it, so a rowless arm sealing its first segment
+    // between the two opens flipped the candidate count and turned this
+    // summary into a "Pick one" error about an archive the first open had
+    // already resolved.
+    match open_selected_labeled(file, selector, syntax) {
+        Ok(opened) => {
+            // Every arm is empty: report the ARCHIVE. `format_recording_info`
+            // would otherwise print arm 0's metadata as though the file held
+            // one recording, saying nothing about the others or about the
+            // fact that nothing was captured at all.
+            if !opened.all_empty_recordings.is_empty() {
+                return Ok(listing(
+                    format!(
+                        "{} holds {} recordings, none of which produced any rows — nothing was \
+                         captured to analyze. It holds:",
+                        file.display(),
+                        opened.all_empty_recordings.len()
+                    ),
+                    &opened.all_empty_recordings,
+                    syntax,
+                    // No invitation to analyze one: there is nothing in any
+                    // of them to analyze. The selectors are still printed —
+                    // naming an arm is how a caller confirms WHICH endpoint
+                    // reported nothing — but promising an analysis would be
+                    // the same empty promise this listing exists to avoid.
+                    None,
+                ));
+            }
+            Ok(format_recording_info(
+                file.to_str().unwrap_or("<unknown>"),
+                opened.reader.as_ref(),
+            ))
+        }
+        // With no selector, a multi-recording archive is LISTED rather than
+        // refused. `describe-recording` is documented as the place to start,
+        // so making the first tool an agent calls the one that explains what
+        // to call next is the whole point — the analysis tools render this
+        // same case as the failure it is for them.
+        Err(OpenError::NeedsSelection { candidates, .. }) => Ok(listing(
             // "recordings WITH DATA", not bare "recordings". `candidates`
             // already excludes arms that produced no rows, and
             // `open_source_with_pool`'s own NoMatch message names a dead arm
             // as "recorded but produced no rows" rather than pretending it
             // isn't there. Saying bare "N recordings" here would give a count
             // an agent can't reconcile with that later message the moment an
-            // archive has a dead arm — this is the same inconsistency Task 3
-            // settled for the error path, carried over to the listing.
-            return Ok(format!(
-                "{} holds {} recordings with data (a multi-host or A/B archive):\n{}\nRun any \
-                 tool with one of the selectors above to analyze that recording.",
+            // archive has a dead arm.
+            format!(
+                "{} holds {} recordings with data (a multi-host or A/B archive):",
                 file.display(),
-                candidates.len(),
-                describe_candidates(&candidates, &[], syntax)
-            ));
-        }
+                candidates.len()
+            ),
+            &candidates,
+            syntax,
+            Some("Run any tool with one of the selectors above to analyze that recording."),
+        )),
+        Err(e) => Err(e.into()),
     }
+}
 
-    let reader = open_source_selected(file, selector)?;
-    Ok(format_recording_info(
-        file.to_str().unwrap_or("<unknown>"),
-        reader.as_ref(),
-    ))
+/// A lead line, the recordings under it, and the closing line that fits.
+///
+/// The closing line is conditional because `describe_candidates` renders no
+/// selector for a recording no selector can name (identical or subsumed label
+/// sets). An archive where that is true of EVERY recording printed a listing
+/// with zero selectors in it followed by "Run any tool with one of the
+/// selectors above" — pointing at nothing, and exiting 0 while doing it.
+fn listing(
+    lead: String,
+    recordings: &[std::collections::BTreeMap<String, String>],
+    syntax: SelectorSyntax,
+    invite: Option<&str>,
+) -> String {
+    let close = if recording_selector::any_selectable(recordings) {
+        invite
+    } else {
+        Some("No recording in this archive can be selected by labels.")
+    };
+    let body = describe_candidates(recordings, &[], syntax);
+    match close {
+        Some(close) => format!("{lead}\n{body}\n{close}"),
+        None => format!("{lead}\n{body}"),
+    }
 }
 
 fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
@@ -1926,6 +2083,75 @@ mod tests {
         assert!(
             !out.contains("Pick one") && !out.contains("recordings with data"),
             "must not present a choice when there is only one to make: {out}"
+        );
+    }
+
+    /// An archive of several recordings NONE of which produced rows must be
+    /// described as what it is, not as its first arm.
+    ///
+    /// The listing branch only ran when there was more than one candidate,
+    /// and candidates exclude rowless arms — so an all-empty archive fell
+    /// through and printed arm 0's `source`/`version` under
+    /// "Recording Information", with nothing saying the file holds N
+    /// recordings and no data at all. An agent reading that concludes it has
+    /// one (mysteriously empty) recording rather than a capture where every
+    /// endpoint reported nothing.
+    #[test]
+    fn describe_recording_reports_an_archive_whose_arms_are_all_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("both-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
+
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("describing is not an error — the file is readable");
+        assert!(
+            !out.contains("Recording Information"),
+            "must not describe arm 0 as though it were the whole file: {out}"
+        );
+        assert!(out.contains("2 recordings"), "{out}");
+        assert!(
+            out.contains("produced any rows"),
+            "must say why there is nothing to analyze: {out}"
+        );
+        assert!(
+            !out.contains("to analyze that recording"),
+            "and must not invite an analysis of a recording that holds nothing: {out}"
+        );
+        assert!(
+            out.contains("source=redis") && out.contains("source=valkey"),
+            "and name them: {out}"
+        );
+    }
+
+    /// A listing with no selectors in it must not close by telling the caller
+    /// to use one.
+    ///
+    /// Two recordings carrying identical labels are both unselectable, so
+    /// `describe_candidates` emits no "select with:" line at all — and the
+    /// closing sentence ("Run any tool with one of the selectors above")
+    /// then points at nothing. This got MORE reachable once a subset label
+    /// set became unselectable too.
+    #[test]
+    fn a_listing_with_no_selectors_does_not_promise_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dup.rez");
+        multi_recording_rez(&path, &["redis", "redis"], &[true, true]);
+
+        let out =
+            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
+                .expect("a listing, not an error");
+        assert!(
+            !out.contains("select with:"),
+            "identical labels leave nothing to offer: {out}"
+        );
+        assert!(
+            !out.contains("selectors above"),
+            "so it must not tell the caller to use one: {out}"
+        );
+        assert!(
+            out.contains("cannot be selected by labels"),
+            "it must say so plainly instead: {out}"
         );
     }
 
