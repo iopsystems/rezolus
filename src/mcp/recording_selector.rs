@@ -6,8 +6,8 @@
 //!
 //! Nothing here is called from production code yet, only the tests below, so
 //! `dead_code` is silenced module-wide. Both allows (here and on the
-//! `mod.rs` re-export) come off once `resolve` lands and the MCP CLI/server
-//! actually pass a selector through to the reader.
+//! `mod.rs` re-export) come off once the MCP CLI/server actually pass a
+//! selector through to the reader.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -92,6 +92,29 @@ impl RecordingSelector {
             .iter()
             .all(|(k, v)| labels.get(k).is_some_and(|got| got == v))
     }
+
+    /// The index of the single recording this selector names.
+    ///
+    /// An EMPTY selector matches every candidate, so with several recordings
+    /// it resolves to `Ambiguous` — "no selector given" and "an ambiguous
+    /// selector" reach the caller through one path, and there is a single
+    /// place that decides what to say.
+    pub(crate) fn resolve(
+        &self,
+        candidates: &[BTreeMap<String, String>],
+    ) -> Result<usize, SelectError> {
+        let hits: Vec<usize> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| self.matches(l))
+            .map(|(i, _)| i)
+            .collect();
+        match hits.as_slice() {
+            [] => Err(SelectError::NoMatch),
+            [one] => Ok(*one),
+            _ => Err(SelectError::Ambiguous(hits)),
+        }
+    }
 }
 
 impl fmt::Display for RecordingSelector {
@@ -103,6 +126,44 @@ impl fmt::Display for RecordingSelector {
             .collect();
         write!(f, "{}", rendered.join(","))
     }
+}
+
+/// Render the recordings an archive holds, each with the flag that picks it.
+///
+/// Printing the selector rather than only the labels is the point: the
+/// caller's next command is a copy of a line it was just given.
+///
+/// Deliberately unnumbered — an index would invite `--recording 1`, which is
+/// not a supported selector.
+pub(crate) fn describe_candidates(candidates: &[BTreeMap<String, String>]) -> String {
+    let mut out = String::new();
+    for labels in candidates {
+        let rendered: Vec<String> = labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
+        // The most specific single label that would pick this one, if any
+        // exists; otherwise the whole set (each pair its own `--recording`,
+        // since that flag is repeatable and ANDs its pairs together).
+        let unique: Vec<String> = labels
+            .iter()
+            .filter(|(k, v)| {
+                candidates
+                    .iter()
+                    .filter(|c| c.get(*k).is_some_and(|got| got == *v))
+                    .count()
+                    == 1
+            })
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        let picker = if unique.is_empty() {
+            rendered.join(" --recording ")
+        } else {
+            unique[0].clone()
+        };
+        out.push_str(&format!(
+            "  - {}\n    select with: --recording {picker}\n",
+            rendered.join(", ")
+        ));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -245,5 +306,67 @@ mod tests {
         // sees needs to name the offending key.
         let err = RecordingSelector::from_json(&serde_json::json!({"arm": 1})).unwrap_err();
         assert!(err.contains("arm"), "{err}");
+    }
+
+    fn two_arms() -> Vec<BTreeMap<String, String>> {
+        vec![
+            labels(&[("source", "redis"), ("host", "web-01")]),
+            labels(&[("source", "valkey"), ("host", "web-01")]),
+        ]
+    }
+
+    #[test]
+    fn resolves_to_the_one_matching_recording() {
+        let s = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        assert_eq!(s.resolve(&two_arms()), Ok(1));
+    }
+
+    #[test]
+    fn no_match_is_an_error_not_a_default() {
+        let s = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        assert_eq!(s.resolve(&two_arms()), Err(SelectError::NoMatch));
+    }
+
+    #[test]
+    fn several_matches_is_an_error_not_the_first() {
+        // Both arms share host=web-01. Picking the first would silently
+        // analyze one arm of an A/B and present it as the answer.
+        let s = RecordingSelector::parse(["host=web-01".to_string()]).unwrap();
+        assert_eq!(
+            s.resolve(&two_arms()),
+            Err(SelectError::Ambiguous(vec![0, 1]))
+        );
+    }
+
+    #[test]
+    fn an_empty_selector_over_several_recordings_is_ambiguous() {
+        // "No selector given" reaches the caller as ambiguity over all of
+        // them, so there is one code path for "you must choose".
+        let s = RecordingSelector::default();
+        assert_eq!(
+            s.resolve(&two_arms()),
+            Err(SelectError::Ambiguous(vec![0, 1]))
+        );
+    }
+
+    #[test]
+    fn an_empty_selector_over_one_recording_resolves() {
+        let s = RecordingSelector::default();
+        assert_eq!(s.resolve(&two_arms()[..1]), Ok(0));
+    }
+
+    #[test]
+    fn the_candidate_listing_names_every_recording_and_its_selector() {
+        let out = describe_candidates(&two_arms());
+        assert!(out.contains("source=redis"), "{out}");
+        assert!(out.contains("source=valkey"), "{out}");
+        assert!(
+            out.contains("--recording"),
+            "the listing must show the flag that picks one: {out}"
+        );
+        assert!(
+            !out.contains("[1]"),
+            "no indices — they invite `--recording 1`, which is not a selector: {out}"
+        );
     }
 }

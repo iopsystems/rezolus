@@ -4,10 +4,10 @@ use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
 mod recording_selector;
-// RecordingSelector and SelectError are both unused until `resolve` lands and
-// the MCP CLI/server actually pass a selector through to the reader.
+// RecordingSelector, SelectError, and describe_candidates are all unused
+// until the MCP CLI/server actually pass a selector through to the reader.
 #[allow(unused_imports)]
-pub(crate) use recording_selector::{RecordingSelector, SelectError};
+pub(crate) use recording_selector::{describe_candidates, RecordingSelector, SelectError};
 
 pub mod anomaly_detection;
 pub mod correlation;
