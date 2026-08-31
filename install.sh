@@ -74,7 +74,20 @@ if [[ "$OS_TYPE" == "Darwin" ]]; then
     elif command -v cargo &> /dev/null; then
         echo "Homebrew not found, but Cargo is available"
         echo "Installing Rezolus via Cargo..."
-        cargo install rezolus
+        # Not `cargo install rezolus`: the crates.io publish step was dropped
+        # from the release pipeline (#771) and that registry is stuck on 5.4.0,
+        # so it would quietly install a year-old build. Install from the release
+        # tag instead, falling back to the default branch if the tag lookup
+        # fails (no network for the API, rate limit, unexpected payload).
+        LATEST_TAG="$(curl -fsSL https://api.github.com/repos/iopsystems/rezolus/releases/latest 2>/dev/null \
+            | sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -1)"
+        if [[ -n "$LATEST_TAG" ]]; then
+            echo "Building ${LATEST_TAG} from source (this takes a few minutes)..."
+            cargo install --git https://github.com/iopsystems/rezolus --tag "$LATEST_TAG" --locked rezolus
+        else
+            echo "Could not resolve the latest release tag; building the default branch..."
+            cargo install --git https://github.com/iopsystems/rezolus --locked rezolus
+        fi
         echo ""
         echo "Installation completed successfully"
         echo "Run 'rezolus --help' for usage information"
@@ -215,8 +228,13 @@ else
     echo "Error: No supported package manager found" >&2
     echo "This installer requires apt (Debian/Ubuntu) or dnf/yum (Enterprise Linux/Amazon Linux)" >&2
     echo "" >&2
-    echo "To install Rezolus without a package manager, use:" >&2
-    echo "  cargo install rezolus" >&2
+    echo "To install Rezolus without a package manager, build from source:" >&2
+    echo "  cargo install --git https://github.com/iopsystems/rezolus --locked rezolus" >&2
+    echo "" >&2
+    echo "Build prerequisites (a C toolchain, clang, libelf) are listed in" >&2
+    echo "  https://github.com/iopsystems/rezolus/blob/main/docs/installation.md" >&2
+    echo "Prebuilt .deb and .rpm packages are also attached to each release:" >&2
+    echo "  https://github.com/iopsystems/rezolus/releases/latest" >&2
     exit 1
 fi
 
