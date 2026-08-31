@@ -197,7 +197,7 @@ struct SamplerReader {
     segments: SegmentSource,
     pool: Arc<BufferPool>,
     /// Built on first access, never at open.
-    reader: std::sync::OnceLock<TableReader>,
+    reader: std::sync::OnceLock<Option<TableReader>>,
     /// Row timestamps as the query path indexes them, read once.
     ///
     /// Reading them means decoding a whole column, and the cross-cadence
@@ -209,7 +209,8 @@ struct SamplerReader {
 }
 
 impl SamplerReader {
-    /// The table's reader, built on first use.
+    /// The table's reader, built on first use — `None` if its segments have
+    /// gone since the probe.
     ///
     /// Single-segment tables keep the plain reader — the streaming writer's
     /// slow samplers and every atomically written archive land there, and there
@@ -217,27 +218,66 @@ impl SamplerReader {
     /// segment-aware source, which splices raw samples below PromQL evaluation
     /// so a `rate()` window straddling a seal boundary still computes on
     /// complete data.
-    fn reader(&self) -> &TableReader {
-        self.reader.get_or_init(|| {
-            let pool = Arc::clone(&self.pool);
-            let segments = self
-                .segments
-                .all()
-                .unwrap_or_else(|e| panic!("fetching segments for {}: {e}", self.sampler));
-            match <[Vec<u8>; 1]>::try_from(segments) {
-                Ok([bytes]) => ParquetReader::open_bytes_with_pool(bytes, pool)
-                    .map(TableReader::Single)
-                    .expect("segment opened at probe time cannot fail to reopen"),
-                Err(segments) => SegmentedParquetReader::open_bytes_with_pool(segments, pool)
-                    .map(TableReader::Segmented)
-                    .expect("segments opened at probe time cannot fail to reopen"),
-            }
-        })
+    ///
+    /// **Fallible because a `.rez` is readable while it is written.** This used
+    /// to `.expect("segments opened at probe time cannot fail to reopen")`,
+    /// which holds for a finished archive and not for the live one the format
+    /// advertises: `table_segments` returns the sealed segments plus the
+    /// materialized WAL tail, and hindsight's retention deletes as it goes, so
+    /// a quiet sampler's only rows can be evicted between the probe that named
+    /// this table and the query that opens it. That left the viewer and MCP
+    /// panicking on a rolling buffer — the one thing the buffer exists to be
+    /// read as.
+    ///
+    /// A vanished table is reported as absent, which is what a table with no
+    /// rows already is: `from_v3` skips it at open, and a query naming only
+    /// metrics it held gets the ordinary "references no metric present in this
+    /// .rez" error rather than a crash. `OnceLock<Option<_>>` so a table that
+    /// has gone is not re-fetched on every subsequent query.
+    fn reader(&self) -> Option<&TableReader> {
+        self.reader
+            .get_or_init(|| {
+                let pool = Arc::clone(&self.pool);
+                let segments = match self.segments.all() {
+                    Ok(s) if !s.is_empty() => s,
+                    // Empty is the eviction case; an error is a genuine read
+                    // failure. Both mean this table cannot answer, and neither
+                    // is worth taking the process down for.
+                    Ok(_) => {
+                        tracing::warn!(
+                            "table {} had rows at open and none now; it was evicted or \
+                             rotated while being read, and is reported as absent",
+                            self.sampler
+                        );
+                        return None;
+                    }
+                    Err(e) => {
+                        tracing::warn!("fetching segments for {}: {e}", self.sampler);
+                        return None;
+                    }
+                };
+                match <[Vec<u8>; 1]>::try_from(segments) {
+                    Ok([bytes]) => ParquetReader::open_bytes_with_pool(bytes, pool)
+                        .map(TableReader::Single)
+                        .map_err(|e| format!("{e}")),
+                    Err(segments) => SegmentedParquetReader::open_bytes_with_pool(segments, pool)
+                        .map(TableReader::Segmented)
+                        .map_err(|e| format!("{e}")),
+                }
+                .map_err(|e| {
+                    tracing::warn!("reopening table {}: {e}", self.sampler);
+                })
+                .ok()
+            })
+            .as_ref()
     }
 
     fn snapped_timestamps(&self) -> &[u64] {
-        self.snapped_timestamps
-            .get_or_init(|| self.reader().as_dyn().snapped_sample_timestamps())
+        self.snapped_timestamps.get_or_init(|| {
+            self.reader()
+                .map(|r| r.as_dyn().snapped_sample_timestamps())
+                .unwrap_or_default()
+        })
     }
 }
 
@@ -601,7 +641,16 @@ impl RezReader {
             [] => Err(QueryError::ParseError(format!(
                 "query references no metric present in this .rez: {query}"
             ))),
-            [one] => Ok(Routed::Direct(one.reader())),
+            // A table whose segments have gone since the probe is absent, so
+            // its metrics are too: the same error a query naming a metric this
+            // archive never held gets.
+            [one] => one.reader().map(Routed::Direct).ok_or_else(|| {
+                QueryError::ParseError(format!(
+                    "query references {query}, whose table ({}) has been evicted since \
+                     this archive was opened",
+                    one.sampler
+                ))
+            }),
             many => {
                 // Group owners by (RECORDING, SAMPLER), not by sampler alone:
                 // two group tables of one sampler are a same-timeline union
@@ -634,8 +683,19 @@ impl RezReader {
                         // metric name in two "disjoint" group tables of this
                         // sampler must be a loud error, not `UnionSource`'s
                         // silent first-wins.
-                        let children: Vec<UnionChild> =
-                            many.iter().map(|t| t.reader().union_child()).collect();
+                        // `filter_map`, not `map`: on a live archive one of
+                        // several owners can have been evicted between the
+                        // probe and here, and the rest still answer.
+                        let children: Vec<UnionChild> = many
+                            .iter()
+                            .filter_map(|t| t.reader().map(TableReader::union_child))
+                            .collect();
+                        if children.is_empty() {
+                            return Err(QueryError::ParseError(format!(
+                                "query references {query}, whose tables have all been \
+                                 evicted since this archive was opened"
+                            )));
+                        }
                         UnionMetricsSource::try_new(children)
                             .map(Routed::Union)
                             .map_err(|e| match e {
@@ -884,7 +944,10 @@ impl MetricsSource for RezReader {
         // columns() is answerable as the union — it never crosses timelines.
         let mut out = HashSet::new();
         for t in self.owners(query)? {
-            out.extend(t.reader().as_dyn().columns(query)?);
+            let Some(r) = t.reader() else {
+                continue;
+            };
+            out.extend(r.as_dyn().columns(query)?);
         }
         Ok(out)
     }
@@ -915,21 +978,24 @@ impl MetricsSource for RezReader {
         self.tables
             .iter()
             .filter(|t| t.names.counters.contains(name))
-            .flat_map(|t| t.reader().as_dyn().counter_labels(name))
+            .filter_map(|t| t.reader())
+            .flat_map(|r| r.as_dyn().counter_labels(name))
             .collect()
     }
     fn gauge_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
             .filter(|t| t.names.gauges.contains(name))
-            .flat_map(|t| t.reader().as_dyn().gauge_labels(name))
+            .filter_map(|t| t.reader())
+            .flat_map(|r| r.as_dyn().gauge_labels(name))
             .collect()
     }
     fn histogram_labels(&self, name: &str) -> Vec<BTreeMap<String, String>> {
         self.tables
             .iter()
             .filter(|t| t.names.histograms.contains(name))
-            .flat_map(|t| t.reader().as_dyn().histogram_labels(name))
+            .filter_map(|t| t.reader())
+            .flat_map(|r| r.as_dyn().histogram_labels(name))
             .collect()
     }
 
@@ -1714,6 +1780,114 @@ mod tests {
 
         fn open(path: &std::path::Path) -> RezReader {
             RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+        }
+
+        /// A `.rez` is readable while it is being written, and hindsight's
+        /// retention deletes as it goes — so a table that had rows when the
+        /// reader probed it can have none by the time a query opens it.
+        ///
+        /// The reader used to `.expect("segments opened at probe time cannot
+        /// fail to reopen")`, which is true for a finished archive and false
+        /// for the live one the format advertises. The plausible sequence is
+        /// exactly this one: hindsight evicts everything older than the
+        /// cutoff, and a quiet sampler's only rows go with it, so the viewer
+        /// or MCP panics instead of answering.
+        #[test]
+        fn a_table_evicted_between_probe_and_query_does_not_panic() {
+            let rows = fixture_rows(6);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("live.rez");
+            write_v3(&rows, 2, true, &path);
+
+            // Probe: names and spans are read now, readers are not built.
+            let reader = open(&path);
+            assert!(
+                reader.counter_names().contains(&"cpu_cycles".to_string()),
+                "fixture sanity: the metric is present at probe time"
+            );
+
+            // ...and then retention takes every row, as it does on a rolling
+            // buffer whose lookback has passed a quiet sampler by.
+            {
+                let mut db = RezDb::open(&path).unwrap();
+                let rid = db.read_recordings().unwrap()[0].id;
+                // Not `u64::MAX`: `evict` binds the cutoff as `i64`, so
+                // that wraps to -1 and deletes nothing.
+                db.evict_before(rid, i64::MAX as u64).unwrap();
+                assert!(
+                    db.all_samplers(rid)
+                        .unwrap()
+                        .iter()
+                        .all(|s| db.read_segments(rid, s).unwrap().is_empty()),
+                    "fixture sanity: every segment is gone"
+                );
+            }
+
+            // The query must not panic. Erroring is the honest answer — the
+            // data really is gone — and it is what a metric absent at open
+            // already does.
+            let out = reader.query_range("rate(cpu_cycles[2s])", 1.0, 7.0, 1.0);
+            assert!(
+                out.is_err(),
+                "a table whose rows have been evicted must error, not answer"
+            );
+
+            // And the reader stays usable for whatever else the archive holds
+            // rather than being poisoned by the first vanished table.
+            let _ = reader.counter_names();
+        }
+
+        /// One evicted table must not take the surviving ones with it.
+        ///
+        /// This is the case that actually happens on a rolling buffer: a quiet
+        /// sampler ages out of the lookback while a busy one keeps recording.
+        /// The busy one must still answer.
+        #[test]
+        fn evicting_one_table_leaves_the_others_answering() {
+            let rows = fixture_rows(6);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("live.rez");
+            write_v3(&rows, 2, true, &path);
+
+            let reader = open(&path);
+            // Touch neither table yet — the probe named both, the readers are
+            // unbuilt, which is the state a live archive is queried in.
+
+            // Evict only `blockio_requests`, as retention would for the
+            // sampler that stopped producing rows first.
+            {
+                let rid = RezDb::open(&path).unwrap().read_recordings().unwrap()[0].id;
+                // Straight through rusqlite rather than adding a test-only
+                // hook to `RezDb`: retention is per-sampler here, which
+                // `evict_before` (time-based, whole-recording) cannot express.
+                let conn = rusqlite::Connection::open(&path).unwrap();
+                conn.execute(
+                    "DELETE FROM segments WHERE recording_id = ?1 AND sampler = ?2",
+                    rusqlite::params![rid, "blockio_requests"],
+                )
+                .unwrap();
+            }
+
+            // The survivor answers, with real values. The fixture's rows are
+            // at 1s..6s, so this is the whole archive.
+            let out = reader
+                .query_range("rate(cpu_cycles[3s])", 1.0, 7.0, 1.0)
+                .expect("the untouched table must still answer");
+            let QueryResult::Matrix { result } = out else {
+                panic!("a range query over a counter is a matrix");
+            };
+            assert!(
+                result
+                    .iter()
+                    .flat_map(|s| s.values.iter())
+                    .any(|(_, v)| *v > 0.0),
+                "and with real values, not an empty series"
+            );
+
+            // The evicted one is absent rather than fatal.
+            assert!(reader
+                .query_range("rate(reads[3s])", 1.0, 7.0, 1.0)
+                .is_err());
         }
 
         /// `sampler -> sealed segment count` straight from the catalog, so a
