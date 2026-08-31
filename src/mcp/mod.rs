@@ -38,6 +38,24 @@ pub(crate) struct Opened {
     /// the archive held a single recording, saying nothing about the other
     /// arms or about the fact that nothing was captured at all.
     pub all_empty_recordings: Vec<std::collections::BTreeMap<String, String>>,
+    /// Whether the reader is known to be over a rezolus recording — true for
+    /// every recording in a `.rez`, which can only be written from a
+    /// rezolus/msgpack endpoint. Recorded HERE, where the container was just
+    /// identified, because the recording's own `source` metadata cannot
+    /// answer it: that is the endpoint name the caller chose.
+    pub rezolus_native: bool,
+}
+
+impl Opened {
+    /// What the analysis layer should trust this recording's metric names to
+    /// mean. See `analysis::extract::Provenance`.
+    pub(crate) fn provenance(&self) -> crate::analysis::extract::Provenance {
+        if self.rezolus_native {
+            crate::analysis::extract::Provenance::RezolusAgent
+        } else {
+            crate::analysis::extract::Provenance::FromMetadata
+        }
+    }
 }
 
 /// Why opening a recording did not yield exactly one reader.
@@ -161,6 +179,10 @@ pub(crate) fn open_source_with_pool_labeled(
             labels: std::collections::BTreeMap::new(),
             reader: std::sync::Arc::new(reader),
             all_empty_recordings: Vec::new(),
+            // Not a `.rez`: whether this is a rezolus recording is the
+            // `source` metadata's question again, as it has always been for a
+            // plain parquet file.
+            rezolus_native: false,
         });
     }
 
@@ -239,6 +261,7 @@ pub(crate) fn open_source_with_pool_labeled(
             labels,
             reader: std::sync::Arc::new(reader),
             all_empty_recordings,
+            rezolus_native: true,
         });
     }
 
@@ -348,6 +371,7 @@ pub(crate) fn open_source_with_pool_labeled(
         labels,
         reader: std::sync::Arc::new(reader),
         all_empty_recordings: Vec::new(),
+        rezolus_native: true,
     })
 }
 
@@ -887,15 +911,22 @@ fn run_query(file: PathBuf, query: String, selector: &RecordingSelector) {
 }
 
 fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
-    let reader = match open_source_selected(&file, selector) {
-        Ok(r) => r,
+    // The labeled open, for its `rezolus_native`: a recording selected out of
+    // a `.rez` reports the endpoint name the caller chose as its `source`, so
+    // deciding sampler inference from that field alone would leave every
+    // unlabeled metric `unattributed` on exactly the archives this selector
+    // exists to read.
+    let opened = match open_selected_labeled(&file, selector, SelectorSyntax::Flags) {
+        Ok(o) => o,
         Err(e) => {
             eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
     };
+    let provenance = opened.provenance();
+    let reader = opened.reader;
 
-    match crate::analysis::extract::extract(reader.as_ref()) {
+    match crate::analysis::extract::extract(reader.as_ref(), provenance) {
         Ok(record) => match serde_json::to_string_pretty(&record) {
             Ok(json) => println!("{json}"),
             Err(e) => {
@@ -2152,6 +2183,57 @@ mod tests {
         assert!(
             out.contains("cannot be selected by labels"),
             "it must say so plainly instead: {out}"
+        );
+    }
+
+    /// A `.rez` is a rezolus recording whatever an arm is CALLED.
+    ///
+    /// `record --endpoint url,source=redis` puts `source=redis` in the
+    /// recording's metadata, so an analysis that decided "is this rezolus
+    /// data?" from that field alone answered no for a selected arm and
+    /// dropped sampler inference — silently, as `unattributed`. The container
+    /// answers the question: a `.rez` can only be written from a
+    /// rezolus/msgpack endpoint.
+    #[test]
+    fn a_selected_rez_arm_is_known_rezolus_native_whatever_its_source_says() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let opened = open_selected_labeled(&path, &sel, SelectorSyntax::Flags).unwrap();
+        assert_eq!(
+            opened.reader.source(),
+            "redis",
+            "fixture sanity: the arm really does report a non-rezolus source"
+        );
+        assert!(opened.rezolus_native);
+        assert_eq!(
+            opened.provenance(),
+            crate::analysis::extract::Provenance::RezolusAgent
+        );
+    }
+
+    /// ...and a plain parquet file is unchanged: its `source` metadata is
+    /// still the only thing that can answer, exactly as before.
+    #[test]
+    fn a_parquet_file_still_decides_provenance_from_its_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let parquet_path = dir.path().join("rec.parquet");
+        let tables = build_recorder().finalize_tables();
+        let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
+        std::fs::write(&parquet_path, bytes).unwrap();
+
+        let opened = open_selected_labeled(
+            &parquet_path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flags,
+        )
+        .unwrap();
+        assert!(!opened.rezolus_native);
+        assert_eq!(
+            opened.provenance(),
+            crate::analysis::extract::Provenance::FromMetadata
         );
     }
 

@@ -76,6 +76,13 @@ struct CachedReader {
     /// retaining their own copy of the archive.
     identity: String,
     source: Arc<dyn metriken_query::MetricsSource>,
+    /// What the analysis layer may trust this recording's metric names to
+    /// mean, as the OPEN determined it. Cached alongside the reader because
+    /// the reader cannot be asked afterwards: a recording selected out of a
+    /// `.rez` reports the endpoint name the caller chose as its `source`, so
+    /// re-deriving provenance from the reader would answer "foreign" for data
+    /// that is unambiguously the agent's.
+    provenance: crate::analysis::extract::Provenance,
 }
 
 /// MCP server state
@@ -635,11 +642,30 @@ impl Server {
         parquet_file: &str,
         selector: &crate::mcp::RecordingSelector,
     ) -> Result<Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+        self.get_reader_with_provenance(parquet_file, selector)
+            .await
+            .map(|(reader, _)| reader)
+    }
+
+    /// As `get_reader_selected`, also reporting what the open determined
+    /// about the recording's provenance — needed only by `extract_features`,
+    /// whose sampler attribution depends on it.
+    async fn get_reader_with_provenance(
+        &self,
+        parquet_file: &str,
+        selector: &crate::mcp::RecordingSelector,
+    ) -> Result<
+        (
+            Arc<dyn metriken_query::MetricsSource>,
+            crate::analysis::extract::Provenance,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let key = (parquet_file.to_string(), selector.clone());
         {
             let cache = self.reader_cache.read().unwrap();
             if let Some(hit) = cache.get(&key) {
-                return Ok(Arc::clone(&hit.source));
+                return Ok((Arc::clone(&hit.source), hit.provenance));
             }
         }
 
@@ -662,6 +688,7 @@ impl Server {
             selector,
             crate::mcp::SelectorSyntax::Json,
         )?;
+        let provenance = opened.provenance();
         let reader = opened.reader;
         let identity = crate::recorder::seal_policy::recording_stagger_key(&opened.labels);
 
@@ -682,10 +709,11 @@ impl Server {
             CachedReader {
                 identity,
                 source: Arc::clone(&source),
+                provenance,
             },
         );
 
-        Ok(source)
+        Ok((source, provenance))
     }
 
     /// Analyze correlation between two metrics
@@ -793,8 +821,10 @@ impl Server {
             .ok_or("Missing parquet_file")?;
 
         let selector = Self::selector_of(arguments)?;
-        let reader = self.get_reader_selected(parquet_file, &selector).await?;
-        let record = crate::analysis::extract::extract(reader.as_ref())?;
+        let (reader, provenance) = self
+            .get_reader_with_provenance(parquet_file, &selector)
+            .await?;
+        let record = crate::analysis::extract::extract(reader.as_ref(), provenance)?;
         Ok(serde_json::to_string_pretty(&record)?)
     }
 }
