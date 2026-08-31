@@ -200,47 +200,82 @@ pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &
         let labels = &all[i];
         let rendered = render_labels(labels);
 
-        // Two recordings sharing every label are indistinguishable to any
-        // selector, and a recording with no labels at all sitting among
-        // labeled peers is unselectable for the same reason (no combination
-        // of its labels — there are none — can single it out). Echoes the
-        // recorder's own `warn_if_indistinguishable`, so both messages point
-        // at the same fix.
-        let unselectable =
-            labels.is_empty() || all.iter().enumerate().any(|(j, c)| j != i && c == labels);
-        if unselectable {
+        let Some(pairs) = picker_pairs(all, i) else {
             out.push_str(&format!(
                 "  - {rendered}\n    cannot be selected by labels — no combination of its \
-                 labels picks it out from every other recording in the archive; re-capture \
-                 giving each --endpoint its own source=NAME\n"
+                 labels picks it out from every other recording in the archive; give the \
+                 recordings distinct labels before analyzing: re-capture giving each \
+                 --endpoint its own source=NAME, or (for an archive assembled by `rezolus \
+                 recording combine`) re-record its inputs with `record --label \
+                 arm=NAME`\n"
             ));
             continue;
-        }
+        };
 
-        // Any single label unique to this recording (checked against `all`,
-        // not just `highlight`) selects it on its own; take the first in key
-        // order so the listing is byte-stable across runs. If none exists,
-        // fall back to the whole set, one pair per `--recording` flag (the
-        // flag is repeatable and ANDs its pairs together).
-        let unique = labels
-            .iter()
-            .filter(|(k, v)| {
-                all.iter()
-                    .filter(|c| c.get(*k).is_some_and(|got| got == *v))
-                    .count()
-                    == 1
-            })
-            .map(|(k, v)| vec![format!("{k}={v}")])
-            .next();
-        // No single label is unique: fall back to the whole set, which the
-        // repeatable flag ANDs together.
-        let picker = flag_form(
-            unique.unwrap_or_else(|| labels.iter().map(|(k, v)| format!("{k}={v}")).collect()),
-        );
-
-        out.push_str(&format!("  - {rendered}\n    select with: {picker}\n"));
+        out.push_str(&format!(
+            "  - {rendered}\n    select with: {}\n",
+            flag_form(pairs)
+        ));
     }
     out
+}
+
+/// The `k=v` pairs that pick recording `i` out of `all`, or `None` when no
+/// selector can.
+///
+/// The one place the "is this recording selectable at all" rule lives, so a
+/// listing and any caller asking whether a listing will contain selectors
+/// cannot disagree.
+fn picker_pairs(all: &[BTreeMap<String, String>], i: usize) -> Option<Vec<String>> {
+    let labels = &all[i];
+
+    // A recording is unselectable when some OTHER recording's labels are a
+    // SUPERSET of its own, because `matches` is subset semantics: every
+    // selector that matches `L` also matches `L ∪ {extra}`, so nothing
+    // singles out the smaller set. Testing plain equality here (the original
+    // rule) covered only the identical-labels case and let the superset case
+    // fall through to the whole-label-set fallback below, which then printed
+    // a selector resolving to `Ambiguous` — a closed loop, since the caller
+    // is told to add labels and has none left to add. Reached by the
+    // documented A/B workflow (`--label arm=baseline` on one capture, none on
+    // the other, then `recording combine`) and by a single multi-endpoint run
+    // where one endpoint's `/systeminfo` fetch fails, dropping `host` from
+    // that arm alone. Equality is a special case of superset, so this
+    // subsumes the original rule.
+    //
+    // The `is_empty` term is not subsumed: it is the only cover for a LONE
+    // unlabeled recording, where no other recording exists to be a superset
+    // and the fallback would emit a bare `--recording` with no pair at all.
+    // Echoes the recorder's own `warn_if_indistinguishable`, so both messages
+    // point at the same fix.
+    if labels.is_empty()
+        || all.iter().enumerate().any(|(j, c)| {
+            j != i
+                && labels
+                    .iter()
+                    .all(|(k, v)| c.get(k).is_some_and(|got| got == v))
+        })
+    {
+        return None;
+    }
+
+    // Any single label unique to this recording (checked against `all`, not
+    // just `highlight`) selects it on its own; take the first in key order so
+    // the listing is byte-stable across runs. If none exists, fall back to
+    // the whole set, one pair per `--recording` flag (the flag is repeatable
+    // and ANDs its pairs together) — sound here precisely because no other
+    // recording is a superset.
+    let unique = labels
+        .iter()
+        .filter(|(k, v)| {
+            all.iter()
+                .filter(|c| c.get(*k).is_some_and(|got| got == *v))
+                .count()
+                == 1
+        })
+        .map(|(k, v)| vec![format!("{k}={v}")])
+        .next();
+    Some(unique.unwrap_or_else(|| labels.iter().map(|(k, v)| format!("{k}={v}")).collect()))
 }
 
 #[cfg(test)]
@@ -579,5 +614,53 @@ mod tests {
             out.contains("re-capture") && out.contains("source=NAME"),
             "must explain why, echoing the recorder's own warning: {out}"
         );
+        // An archive assembled by `recording combine` holds recordings that
+        // were never `--endpoint`s of one run, so "give each --endpoint its
+        // own source=NAME" is advice its owner cannot act on. The label they
+        // can set is `record --label` on the inputs, before combining.
+        assert!(
+            out.contains("--label") && out.contains("combine"),
+            "must also give the fix for a combined archive, whose recordings \
+             were never endpoints of one run: {out}"
+        );
+    }
+
+    /// A recording whose labels are a SUBSET of another's is just as
+    /// unselectable as one that duplicates them, and this is the shape the
+    /// documented A/B workflow produces: `record --label arm=baseline` on one
+    /// capture and no `--label` on the other, then `recording combine`. The
+    /// arms come out as `{arm, host, source}` and `{host, source}`.
+    ///
+    /// Every selector that matches the smaller set also matches the larger
+    /// one, so `--recording host=H --recording source=rezolus` — the whole-set
+    /// fallback — resolves to `Ambiguous`. Offering it is a closed loop: the
+    /// caller is told to "add labels until it names one" and has no labels
+    /// left to add. Reachable from a single `record --endpoint a --endpoint b`
+    /// run too, when one endpoint's `/systeminfo` fetch fails and only that
+    /// arm loses `host`.
+    #[test]
+    fn a_recording_whose_labels_are_a_subset_of_anothers_is_unselectable() {
+        let all = vec![
+            labels(&[("arm", "baseline"), ("host", "h"), ("source", "rezolus")]),
+            labels(&[("host", "h"), ("source", "rezolus")]),
+        ];
+        let out = describe_candidates(&all, &[]);
+        // Only recording 0 gets a selector (`arm=baseline`); recording 1 gets
+        // the unselectable note. The round trip is what proves it: before the
+        // fix, recording 1 was offered `--recording host=h --recording
+        // source=rezolus`, which resolves to `Ambiguous([0, 1])`.
+        assert_listing_round_trips(&all, &out, &[0]);
+        assert!(
+            out.contains("cannot be selected by labels"),
+            "the subset arm must be reported as unselectable: {out}"
+        );
+    }
+
+    /// The same failure in its smallest form: `{a:1}` against `{a:1, b:2}`.
+    #[test]
+    fn a_superset_recording_makes_its_subset_peer_unselectable() {
+        let all = vec![labels(&[("a", "1")]), labels(&[("a", "1"), ("b", "2")])];
+        let out = describe_candidates(&all, &[]);
+        assert_listing_round_trips(&all, &out, &[1]);
     }
 }
