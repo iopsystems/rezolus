@@ -254,13 +254,21 @@ pub(crate) fn describe_candidates(
         let rendered = render_labels(labels);
 
         let Some(pairs) = picker_pairs(all, i) else {
+            // Wrapped by hand, with the indent interpolated: this lands in
+            // terminal output and in an MCP tool result, neither of which
+            // re-wraps, and one 300-column line is what an agent then quotes
+            // back at a user.
+            const IND: &str = "    ";
             out.push_str(&format!(
-                "  - {rendered}\n    cannot be selected by labels — no combination of its \
-                 labels picks it out from every other recording in the archive; give the \
-                 recordings distinct labels before analyzing: re-capture giving each \
-                 --endpoint its own source=NAME, or (for an archive assembled by `rezolus \
-                 recording combine`) re-record its inputs with `record --label \
-                 arm=NAME`\n"
+                "  - {rendered}\n\
+                 {IND}cannot be selected by labels — every selector that names it also \
+                 names another\n\
+                 {IND}recording in this archive. To tell them apart, give them distinct \
+                 labels: re-capture\n\
+                 {IND}giving each --endpoint its own source=NAME, or — for an archive \
+                 built by `rezolus\n\
+                 {IND}recording combine` — re-record its inputs with `record --label \
+                 arm=NAME`.\n"
             ));
             continue;
         };

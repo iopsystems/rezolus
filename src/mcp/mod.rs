@@ -642,7 +642,9 @@ fn listing(
     let body = describe_candidates(recordings, &[], syntax);
     match close {
         Some(close) => format!("{lead}\n{body}\n{close}"),
-        None => format!("{lead}\n{body}"),
+        // `body` ends in a newline (one entry per line), so trim rather than
+        // close with a dangling blank line.
+        None => format!("{lead}\n{}", body.trim_end()),
     }
 }
 
