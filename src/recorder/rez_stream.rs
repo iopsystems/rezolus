@@ -1508,7 +1508,7 @@ mod tests {
     fn zero_bucket_sampler_still_seals() {
         const MAX_ROWS: usize = 256;
         assert_eq!(
-            stagger_bucket("page_cache", SINGLE_RECORDING_KEY),
+            stagger_bucket("network_interfaces", SINGLE_RECORDING_KEY),
             0,
             "chosen for its zero bucket"
         );
@@ -1518,14 +1518,14 @@ mod tests {
         let handle = RezWriterHandle::create(&out, seed()).unwrap();
         let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
 
-        let (s, ts) = multi_snap(&["page_cache"], 0);
+        let (s, ts) = multi_snap(&["network_interfaces"], 0);
         rec.ingest(&s, ts, 0);
         assert_eq!(
-            rec.open_targets("page_cache"),
+            rec.open_targets("network_interfaces"),
             Some((MAX_ROWS, Duration::from_secs(3600))),
             "bucket 0 means no reduction, i.e. the full policy"
         );
-        let sealed = first_seal_rows(&mut rec, &["page_cache"], MAX_ROWS as u64);
+        let sealed = first_seal_rows(&mut rec, &["network_interfaces"], MAX_ROWS as u64);
         assert_eq!(sealed[0], MAX_ROWS, "it seals at the full target");
         rec.abort();
     }

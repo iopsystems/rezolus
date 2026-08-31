@@ -156,9 +156,6 @@ impl SegmentAccount {
     /// Whether this open segment is past any seal threshold. An empty segment
     /// never is.
     ///
-    /// Row and age targets come from the account, not the policy: the first
-    /// segment of each sampler is staggered short. The byte cap is a memory
-    /// bound and is never staggered.
     /// Takes no policy: the account carries its own copy of all three caps,
     /// because all three are staggered on the first segment and `rotate`
     /// restores them. Reading `policy.max_bytes` here instead is what let the
@@ -230,18 +227,38 @@ impl SegmentAccount {
 /// apart — and the answer is to warn rather than to fold in the id and
 /// reintroduce order-dependence.
 pub(crate) fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01b3; // FNV-1a 64-bit prime
+
+    // Absorb one byte, twice: the byte itself, then the two bits the final
+    // `% STAGGER_BUCKETS` would otherwise discard.
+    //
+    // Plain FNV-1a reduced mod 64 depends only on `byte & 0x3f`, because the
+    // prime is odd and so `x -> ((x ^ b) * PRIME) mod 64` is a bijection on
+    // Z64 keyed on the low six bits. Two keys that agree byte-for-byte modulo
+    // 0x40 therefore draw the SAME bucket for every sampler — total lockstep,
+    // the exact failure this stagger exists to prevent. The aliasing pairs are
+    // ordinary in hostnames: `-` with `m`, `.` with `n`, digits with `p`-`y`.
+    // `host=web-01` and `host=webm01` collided on all of them.
+    //
+    // Folding the high bits in as their own absorbed value breaks that
+    // identity while leaving the low-bit structure — which measures *better*
+    // than a well-avalanched finalizer here — intact.
+    let absorb = |h: &mut u64, b: u64| {
+        *h ^= b;
+        *h = h.wrapping_mul(PRIME);
+        *h ^= b >> 6;
+        *h = h.wrapping_mul(PRIME);
+    };
+
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a 64-bit offset basis
     for b in sampler.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3); // FNV-1a 64-bit prime
+        absorb(&mut h, *b as u64);
     }
     // A separator no label byte can supply, so `a=1,b=2` and `a=1,b=2` reached
     // from different splits cannot alias.
-    h ^= 0xff;
-    h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    absorb(&mut h, 0xff);
     for b in recording_key.as_bytes() {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        absorb(&mut h, *b as u64);
     }
     h % STAGGER_BUCKETS
 }
@@ -273,11 +290,59 @@ mod tests {
     /// segment boundaries move.
     #[test]
     fn stagger_is_deterministic() {
-        assert_eq!(stagger_bucket("cpu_usage", SINGLE_RECORDING_KEY), 6);
-        assert_eq!(stagger_bucket("scheduler", SINGLE_RECORDING_KEY), 63);
+        assert_eq!(stagger_bucket("cpu_usage", SINGLE_RECORDING_KEY), 32);
+        assert_eq!(stagger_bucket("scheduler", SINGLE_RECORDING_KEY), 19);
         assert!(
             (0..STAGGER_BUCKETS).contains(&stagger_bucket("anything_at_all", SINGLE_RECORDING_KEY))
         );
+    }
+
+    /// Keys that differ only in the bits `% STAGGER_BUCKETS` discards must
+    /// still separate.
+    ///
+    /// Plain FNV-1a reduced mod 64 depends only on each byte's low six bits,
+    /// so two hostnames agreeing byte-for-byte modulo 0x40 drew the same
+    /// bucket for EVERY sampler — complete lockstep between two recordings
+    /// that look nothing alike. The pairs are ordinary: `-`/`m`, `.`/`n`,
+    /// digits against `p`-`y`.
+    #[test]
+    fn hosts_that_alias_in_the_low_bits_still_desync() {
+        let key = |host: &str| {
+            recording_stagger_key(
+                &[
+                    ("host".to_string(), host.to_string()),
+                    ("source".to_string(), "rezolus".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        };
+        let samplers = [
+            "cpu_usage",
+            "scheduler",
+            "blockio_latency",
+            "tcp_traffic",
+            "syscall_latency",
+            "cpu_bandwidth",
+        ];
+        // Each pair differs only in bits 6-7 of one byte.
+        for (a, b) in [
+            ("web-01", "webm01"),
+            ("node1", "nodeq"),
+            ("web.01", "webn01"),
+        ] {
+            let (ka, kb) = (key(a), key(b));
+            let collisions = samplers
+                .iter()
+                .filter(|s| stagger_bucket(s, &ka) == stagger_bucket(s, &kb))
+                .count();
+            assert!(
+                collisions < samplers.len(),
+                "{a} and {b} drew the same bucket for all {} samplers — the reduction \
+                 is discarding the bits that separate them",
+                samplers.len()
+            );
+        }
     }
 
     /// The reason the key widened past the sampler name.
@@ -335,13 +400,29 @@ mod tests {
             )
         };
 
-        // The same wide sampler in two recordings must not share a byte target.
-        let a = SegmentAccount::open_first("cpu_usage", &key("alpha"), &policy);
-        let b = SegmentAccount::open_first("cpu_usage", &key("beta"), &policy);
-        assert_ne!(
-            a.byte_target(),
-            b.byte_target(),
-            "a byte-bound table would otherwise seal on the same row in both"
+        // Drive the seal, don't just compare the field. The bug was never a
+        // missing field — it was `is_due` reading `policy.max_bytes` instead
+        // of the account's own copy, which a field comparison cannot see.
+        let mut a = SegmentAccount::open_first("cpu_usage", &key("alpha"), &policy);
+        let mut b = SegmentAccount::open_first("cpu_usage", &key("beta"), &policy);
+        let now = Instant::now();
+        // Rows wide enough that the byte cap is what fires, well before
+        // `max_rows`: 8 MiB / 900 rows is ~9 KiB per row, so 64 KiB rows are
+        // byte-bound by construction.
+        let mut split = None;
+        for row in 1..=policy.max_rows {
+            a.add_row(64 * 1024);
+            b.add_row(64 * 1024);
+            if a.is_due(now) != b.is_due(now) {
+                split = Some(row);
+                break;
+            }
+            assert!(!a.is_due(now), "the row cap must not be what fires here");
+        }
+        assert!(
+            split.is_some(),
+            "both recordings' byte-bound tables sealed on the same row — the byte \
+             cap escaped the stagger"
         );
 
         // And the stagger stays inside its documented bound: at most 50% off,
@@ -375,22 +456,43 @@ mod tests {
         );
     }
 
-    /// Order-independence: the key is the label SET, so it cannot depend on
-    /// insertion order — which is what rules out the autoincrement recording id.
+    /// The bucket must not depend on the order the endpoints were listed on
+    /// the command line — the property that ruled out keying on the
+    /// autoincrement recording id.
+    ///
+    /// Asserting `key(map) == key(same map)` would prove nothing: a
+    /// `BTreeMap` is already sorted, so both sides are the same value before
+    /// the function is called. What varies in production is which endpoint is
+    /// recording 0, so that is what varies here: the two label sets are built
+    /// in both orders and each must keep its own bucket either way.
     #[test]
-    fn the_key_is_order_independent() {
-        let one: std::collections::BTreeMap<String, String> = [
+    fn buckets_do_not_depend_on_endpoint_order() {
+        let a = [
             ("host".to_string(), "alpha".to_string()),
             ("arm".to_string(), "redis".to_string()),
-        ]
-        .into_iter()
-        .collect();
-        let two: std::collections::BTreeMap<String, String> = [
-            ("arm".to_string(), "redis".to_string()),
+        ];
+        let b = [
             ("host".to_string(), "alpha".to_string()),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(recording_stagger_key(&one), recording_stagger_key(&two));
+            ("arm".to_string(), "valkey".to_string()),
+        ];
+        let key =
+            |pairs: &[(String, String)]| recording_stagger_key(&pairs.iter().cloned().collect());
+        // Listed a-then-b, and b-then-a: each recording's key is a function of
+        // its own labels alone, so the pair of buckets is the same set either
+        // way round.
+        let forward: Vec<u64> = [&a[..], &b[..]]
+            .iter()
+            .map(|p| stagger_bucket("cpu_usage", &key(p)))
+            .collect();
+        let reversed: Vec<u64> = [&b[..], &a[..]]
+            .iter()
+            .map(|p| stagger_bucket("cpu_usage", &key(p)))
+            .collect();
+        assert_eq!(
+            forward,
+            reversed.iter().rev().copied().collect::<Vec<_>>(),
+            "a recording's bucket must follow its labels, not its position"
+        );
+        assert_ne!(forward[0], forward[1], "and the two arms must still differ");
     }
 }

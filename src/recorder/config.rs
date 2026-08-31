@@ -160,6 +160,34 @@ fn resolve_output(
     }
 }
 
+/// `--separate` writes one file per endpoint, which a `.rez` has no way to do:
+/// every endpoint is already its own recording inside the one archive.
+///
+/// Rejected rather than ignored, but only when `.rez` was actually ASKED for.
+/// Before `.rez` learned to hold several recordings this combination hit the
+/// multi-endpoint blocker, so silently accepting it now would turn a run that
+/// used to fail loudly into one that writes a single file the caller is not
+/// expecting. Checked against the RESOLVED format, so `-o out.rez` is caught
+/// as well as an explicit `--format rez`.
+///
+/// A *defaulted* format is not an ask: a bare `record --separate --endpoint a
+/// --endpoint b` chose nothing, and erroring on it would regress a run that
+/// used to write one parquet per endpoint. That case demotes to parquet at
+/// startup instead, the same way a Prometheus endpoint demotes it — see
+/// `demote_from_rez`.
+fn reject_separate_with_rez(separate: bool, format: Format, defaulted: bool) -> Result<(), String> {
+    if separate && format == Format::Rez && !defaulted {
+        return Err(
+            "--separate does not apply to .rez: every endpoint already becomes its \
+                    own recording inside the one archive. Drop --separate, or pass \
+                    --format parquet (or -o with a .parquet extension) for a file per \
+                    endpoint"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 impl RecordingConfig {
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
@@ -248,6 +276,7 @@ impl RecordingConfig {
                 None => PathBuf::from(toml_cfg.recording.output),
             };
             let plan = resolve_format_and_output(config_format, Some(&config_output))?;
+            reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -273,6 +302,7 @@ impl RecordingConfig {
             if endpoints.is_empty() {
                 return Err("at least one --endpoint is required".to_string());
             }
+            reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -312,6 +342,7 @@ impl RecordingConfig {
             role: None,
             protocol: None,
         };
+        reject_separate_with_rez(separate, plan.format, plan.defaulted)?;
 
         Ok(RecordingConfig {
             interval,
@@ -656,5 +687,45 @@ mod tests {
     fn test_parse_endpoint_str_unknown_option() {
         let result = parse_endpoint_str("http://host:80,source=x,foo=bar");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn separate_is_rejected_for_rez_however_the_format_was_chosen() {
+        // Before `.rez` could hold several recordings, `--separate` with a
+        // multi-endpoint `.rez` hit the multi-endpoint blocker and exited 1.
+        // Now that the blocker is gone the combination has to be rejected
+        // here, or a caller scripting out_a.rez/out_b.rez silently gets one
+        // out.rez instead.
+        assert!(
+            reject_separate_with_rez(true, Format::Rez, false).is_err(),
+            "--separate cannot write a file per endpoint from one archive"
+        );
+        // Caught for a format that came from the extension, not just an
+        // explicit --format: `-o out.rez --separate` is the likelier typo.
+        let plan = resolve_format_and_output(None, Some(Path::new("out.rez"))).unwrap();
+        assert_eq!(plan.format, Format::Rez);
+        assert!(!plan.defaulted);
+        assert!(reject_separate_with_rez(true, plan.format, plan.defaulted).is_err());
+
+        // The combinations --separate exists for are untouched.
+        assert!(reject_separate_with_rez(true, Format::Parquet, false).is_ok());
+        assert!(reject_separate_with_rez(true, Format::Raw, false).is_ok());
+        // And a .rez without --separate is the ordinary multi-recording case.
+        assert!(reject_separate_with_rez(false, Format::Rez, false).is_ok());
+    }
+
+    #[test]
+    fn separate_with_a_defaulted_rez_is_not_an_error() {
+        // `record --separate --endpoint a --endpoint b` picks no format at
+        // all. Before `.rez` could hold several recordings this demoted to
+        // parquet and wrote a file per endpoint; erroring on it here would
+        // regress that, so the run is left to demote at startup instead.
+        let plan = resolve_format_and_output(None, None).unwrap();
+        assert_eq!(plan.format, Format::Rez);
+        assert!(plan.defaulted, "a bare run defaults the format");
+        assert!(
+            reject_separate_with_rez(true, plan.format, plan.defaulted).is_ok(),
+            "a defaulted .rez must demote for --separate, not error"
+        );
     }
 }

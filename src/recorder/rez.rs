@@ -1861,10 +1861,26 @@ pub fn build_labels(
 /// `source` label (falls back to `"recording"`). The manifest — not the dir —
 /// is authoritative for labels; this is only a human-readable tar path.
 pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
+    // `source` alone is not enough now that one archive routinely holds
+    // several recordings: the documented multi-host capture
+    // (`--endpoint web-01 --endpoint web-02`) leaves both recordings
+    // `source=rezolus`, so both would display as "rezolus" — and unlike the
+    // identical-labels case, that one draws no startup warning because the
+    // label sets genuinely differ. Qualify with whichever of `arm`/`host` is
+    // present.
     let base = labels
         .get("source")
         .map(String::as_str)
         .unwrap_or("recording");
+    let qualifier = labels
+        .get("arm")
+        .or_else(|| labels.get("host"))
+        .map(String::as_str);
+    let base = match qualifier {
+        Some(q) => format!("{base}-{q}"),
+        None => base.to_string(),
+    };
+    let base = base.as_str();
     let slug: String = base
         .chars()
         .map(|c| {

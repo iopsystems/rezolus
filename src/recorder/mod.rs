@@ -607,10 +607,19 @@ struct RezStream {
     /// msgpack endpoints get a recording: a sparse map says which endpoints
     /// are being archived without a `None` per endpoint that is not.
     recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
+    /// Canonical label key -> the endpoint URL that claimed it first, for the
+    /// indistinguishable-labels warning.
+    ///
+    /// Held here rather than locally in `start_rez_recorder` because an
+    /// endpoint that was down at startup opens its recording later, and it
+    /// has to be checked against the recordings already open.
+    seen_labels: BTreeMap<String, String>,
     /// **Declared after `recs` deliberately.** Fields drop in declaration
-    /// order, and `RezArchive::drop` joins the writer thread, which only ends
-    /// once every recording handle has released its sender — so dropping the
-    /// archive ahead of `recs` would block on the handles inside them.
+    /// order, and `RezArchive::drop` joins the writer thread. Dropping the
+    /// archive first would not block — `join` sends `Msg::Shutdown` before
+    /// releasing its own sender, and the writer honours it whoever still holds
+    /// a clone — but it would stop the writer while the recordings could still
+    /// queue their final seals, silently losing them.
     archive: rez_v3_writer::RezArchive,
 }
 
@@ -621,20 +630,56 @@ impl RezStream {
     /// only appended to an in-memory builder that could not fail until a seal.
     /// Route one endpoint's snapshot to that endpoint's recording.
     ///
-    /// An endpoint with no recording is silently skipped rather than being an
-    /// error: only msgpack endpoints are archived, and a prometheus one in the
-    /// same run is written by its own parquet writer.
+    /// A snapshot with no recording to land in is an ERROR, not a skip. In
+    /// `.rez` mode there is no parquet writer to catch it — `writers` is all
+    /// `None` — so returning `Ok` here would decode a scrape, inject its
+    /// provenance and then drop it, every tick, for the whole run, and the
+    /// archive would finalize successfully one recording short. Every endpoint
+    /// that scrapes in this mode opens its recording first, at startup or on
+    /// activation, so reaching this arm means that invariant broke.
     fn ingest(
         &mut self,
         endpoint: usize,
+        url: &Url,
         snapshot: &metriken_exposition::Snapshot,
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
         match self.recs.get_mut(&endpoint) {
             Some(rec) => rec.ingest(snapshot, anchored_ts, wall_offset_ns),
-            None => Ok(()),
+            None => Err(format!(
+                "{url} was scraped with no .rez recording open for it; its samples \
+                 would be discarded"
+            )),
         }
+    }
+
+    /// Open a recording for an endpoint that became reachable after the
+    /// archive was created.
+    ///
+    /// The writer thread is still running and the archive still holds its
+    /// sender, so a recording can join an open archive at any point. The
+    /// endpoint's `systeminfo` must already be fetched — that is what supplies
+    /// the `host` label — which is why the caller does this after the metadata
+    /// fetch rather than at probe time.
+    fn add_endpoint(
+        &mut self,
+        idx: usize,
+        config: &RecordingConfig,
+        ep: &EndpointState,
+        clock_anchor_wall_ns: u64,
+    ) -> Result<(), String> {
+        let labels = build_rez_labels(config, ep);
+        warn_if_indistinguishable(&mut self.seen_labels, &labels, &ep.config.url);
+        let seed = rez_v3_writer::ManifestSeed {
+            labels,
+            metadata: build_rez_metadata(config, ep),
+            clock_anchor_wall_ns,
+        };
+        let writer = self.archive.add_recording(seed)?;
+        self.recs
+            .insert(idx, rez_v3_writer::StreamRecorderV3::new(writer));
+        Ok(())
     }
 
     /// Run every recording's seal check.
@@ -643,7 +688,10 @@ impl RezStream {
     /// that were ingest-driven would leave an unreachable endpoint's pre-outage
     /// rows unsealed forever, and the age bound would stop bounding the
     /// kill-loss window. Reports the first failure but still checks the rest,
-    /// so one broken recording cannot silently stall its neighbours' sealing.
+    /// so a failure is attributed to the recording that caused it rather than
+    /// to whichever happened to be checked first — note this is about
+    /// reporting, not survival: the recordings share one writer thread, and a
+    /// failure in any of its arms tears that writer down for all of them.
     fn maybe_seal(&mut self) -> Result<(), String> {
         let mut first_err = None;
         for rec in self.recs.values_mut() {
@@ -664,7 +712,11 @@ impl RezStream {
     /// in: without it a failure while sealing the last segments would surface
     /// only as a `Drop` warning and the recording would report success.
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
-        let RezStream { recs, mut archive } = self;
+        let RezStream {
+            recs,
+            mut archive,
+            seen_labels: _,
+        } = self;
         // Every recording is finalized, even if an earlier one failed: they
         // are independent rows in one archive, and stopping at the first
         // failure would leave the rest marked incomplete for a fault that was
@@ -735,41 +787,51 @@ fn start_rez_recorder(
     eps: &[(usize, &EndpointState)],
     clock_anchor_wall_ns: u64,
 ) -> Result<RezStream, String> {
-    let mut archive = rez_v3_writer::RezArchive::create(&config.output)?;
-    let mut recs = BTreeMap::new();
-    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+    let archive = rez_v3_writer::RezArchive::create(&config.output)?;
+    let mut stream = RezStream {
+        recs: BTreeMap::new(),
+        seen_labels: BTreeMap::new(),
+        archive,
+    };
 
     for (idx, ep) in eps {
-        let labels = build_rez_labels(config, ep);
-        let metadata = build_rez_metadata(config, ep);
-
-        // Two recordings with identical label sets are indistinguishable to
-        // every consumer — the viewer aliases A/B off `arm`/`host`, and the
-        // seal stagger keys on the label set, so they would also seal in
-        // lockstep. Warn rather than refuse: the recording is still valid and
-        // the operator may not care, but nothing downstream can tell the arms
-        // apart and they should know before the run rather than after.
-        let key = seal_policy::recording_stagger_key(&labels);
-        if let Some(other) = seen.get(&key) {
-            eprintln!(
-                "warning: {} and {} carry identical labels ({key:?}), so nothing downstream \
-                 can tell their recordings apart — pass --label to distinguish them",
-                other, ep.config.url
-            );
-        } else {
-            seen.insert(key, ep.config.url.to_string());
+        if let Err(e) = stream.add_endpoint(*idx, config, ep, clock_anchor_wall_ns) {
+            // `RezArchive::create` claimed the path with O_EXCL moments ago, so
+            // the half-built archive is unambiguously ours to remove. Leaving
+            // it would both look like a recording and block the retry, since
+            // the writer refuses to overwrite an existing path.
+            stream.discard();
+            return Err(e);
         }
-
-        let seed = rez_v3_writer::ManifestSeed {
-            labels,
-            metadata,
-            clock_anchor_wall_ns,
-        };
-        let writer = archive.add_recording(seed)?;
-        recs.insert(*idx, rez_v3_writer::StreamRecorderV3::new(writer));
     }
 
-    Ok(RezStream { recs, archive })
+    Ok(stream)
+}
+
+/// Warn when a recording's labels match one already open.
+///
+/// Two recordings with identical label sets are indistinguishable to every
+/// consumer — the viewer aliases A/B off their labels, and the seal stagger
+/// keys on the label set, so they would also seal in lockstep. Warn rather
+/// than refuse: the recording is still valid and the operator may not care,
+/// but nothing downstream can tell the arms apart and they should know before
+/// the run rather than after.
+fn warn_if_indistinguishable(
+    seen: &mut BTreeMap<String, String>,
+    labels: &BTreeMap<String, String>,
+    url: &Url,
+) {
+    let key = seal_policy::recording_stagger_key(labels);
+    match seen.get(&key) {
+        Some(other) => eprintln!(
+            "warning: {other} and {url} carry identical labels ({key:?}), so nothing \
+             downstream can tell their recordings apart — give each --endpoint its own \
+             source=NAME to distinguish them"
+        ),
+        None => {
+            seen.insert(key, url.to_string());
+        }
+    }
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
@@ -952,6 +1014,18 @@ pub fn run(mut config: RecordingConfig) {
                     "{} is configured protocol=prometheus, and .rez requires a rezolus (msgpack) endpoint",
                     ep.config.url
                 )
+            })
+            // `--separate` writes a file per endpoint, which one archive
+            // cannot do. An explicit `.rez` was already rejected at parse
+            // time; reaching here means the format was merely defaulted, so
+            // demote to the parquet-per-endpoint run the flag asked for
+            // rather than erroring on a format nobody chose.
+            .or_else(|| {
+                config.separate.then(|| {
+                    "--separate writes one file per endpoint, which a .rez cannot do (every \
+                     endpoint is a recording inside the one archive)"
+                        .to_string()
+                })
             });
 
         if let Some(reason) = blocker {
@@ -1030,6 +1104,10 @@ pub fn run(mut config: RecordingConfig) {
     // output (or, in v2, the `<output>.partial`) and spawning the writer thread
     // are both fallible.
     let mut rez_recorder: Option<RezStream> = None;
+    // Endpoints ruled out of a `.rez` run after it started — a late endpoint
+    // that turned out to be prometheus. Kept so they are not re-probed every
+    // tick for the rest of the run.
+    let mut rez_excluded: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if rez_mode {
         // An endpoint that ANSWERED as prometheus still blocks the archive, the
         // same as a configured one: `.rez` ingest reads msgpack snapshots, and
@@ -1257,6 +1335,11 @@ pub fn run(mut config: RecordingConfig) {
             // alongside `maybe_seal`'s — the same class of failure at the same
             // cadence, and the earlier and more specific of the two wins.
             let mut ingest_failed: Option<String> = None;
+            // A `.rez` endpoint that activated mid-run and could not be given a
+            // recording. Surfaced on the same path as an ingest failure, below,
+            // so the partial archive is named and the run exits non-zero rather
+            // than finalizing one recording short.
+            let mut late_endpoint_failure: Option<String> = None;
 
             // Scrape all active endpoints concurrently
             let active_indices: Vec<usize> = endpoints
@@ -1342,9 +1425,13 @@ pub fn run(mut config: RecordingConfig) {
                                         endpoints[idx].config.url.as_str(),
                                     );
                                     if let Some(rec) = rez_recorder.as_mut() {
-                                        if let Err(e) =
-                                            rec.ingest(idx, &snapshot, anchored_ns, wall_offset_ns)
-                                        {
+                                        if let Err(e) = rec.ingest(
+                                            idx,
+                                            &endpoints[idx].config.url,
+                                            &snapshot,
+                                            anchored_ns,
+                                            wall_offset_ns,
+                                        ) {
                                             ingest_failed.get_or_insert(e);
                                         }
                                     }
@@ -1431,7 +1518,7 @@ pub fn run(mut config: RecordingConfig) {
             let pending_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
-                .filter(|(_, ep)| ep.status == EndpointStatus::Pending)
+                .filter(|(i, ep)| ep.status == EndpointStatus::Pending && !rez_excluded.contains(i))
                 .map(|(i, _)| i)
                 .collect();
 
@@ -1485,11 +1572,54 @@ pub fn run(mut config: RecordingConfig) {
                     endpoints[idx].detected_protocol = Some(protocol.clone());
                     endpoints[idx].status = EndpointStatus::Active;
 
-                    // `.rez` never reaches here: it is single-endpoint and that
-                    // endpoint must already be Active (startup exits otherwise),
-                    // and an Active endpoint never returns to Pending. It also
-                    // has no spool, so there is nothing to create.
-                    if !rez_mode {
+                    // `.rez` DOES reach here: startup only exits when no
+                    // endpoint at all was reachable, so a run with one agent up
+                    // and one still starting commits to the archive with a
+                    // recording for the first and reaches this path for the
+                    // second. It has no spool to create — it needs a recording
+                    // opened on the live archive instead, which is what keeps
+                    // the "will retry each tick" warning honest.
+                    if rez_mode {
+                        // A late endpoint that probes as prometheus cannot be
+                        // archived: the run committed to `.rez` at startup,
+                        // where the demotion check could not see this
+                        // endpoint's protocol because a Pending endpoint has
+                        // not been probed yet.
+                        //
+                        // Drop the endpoint rather than the run. Aborting here
+                        // would let a second, misconfigured endpoint destroy
+                        // hours of a healthy first one's capture — and it
+                        // would make the SAME misconfiguration behave two
+                        // ways: a clean pre-flight demotion when the endpoint
+                        // happens to be up at startup, a run-ending abort when
+                        // it happens to be down. The archive stays valid and
+                        // complete for every endpoint it can hold.
+                        if protocol != Protocol::Msgpack {
+                            eprintln!(
+                                "warning: {} answered as prometheus and cannot go into a \
+                                 .rez; it was unreachable at startup, so the archive was \
+                                 already committed. It will not be recorded — re-run with \
+                                 --format parquet to capture it",
+                                endpoints[idx].config.url
+                            );
+                            // Back to Pending and excluded, so it is neither
+                            // scraped into nothing nor re-probed every tick.
+                            endpoints[idx].status = EndpointStatus::Pending;
+                            rez_excluded.insert(idx);
+                        } else if let Some(rec) = rez_recorder.as_mut() {
+                            if let Err(e) = rec.add_endpoint(
+                                idx,
+                                &config,
+                                &endpoints[idx],
+                                clock_anchor_wall_ns,
+                            ) {
+                                late_endpoint_failure = Some(format!(
+                                    "failed to open a .rez recording for {}: {e}",
+                                    endpoints[idx].config.url
+                                ));
+                            }
+                        }
+                    } else {
                         let converter = if protocol == Protocol::Prometheus {
                             Some(prometheus::PrometheusConverter::with_provenance(
                                 endpoints[idx].config.source_label().to_string(),
@@ -1515,7 +1645,11 @@ pub fn run(mut config: RecordingConfig) {
                 Some(rec) => rec.maybe_seal(),
                 None => Ok(()),
             };
-            if let Some(e) = ingest_failed.or_else(|| sealed.err()) {
+            if let Some(e) = late_endpoint_failure
+                .take()
+                .or(ingest_failed)
+                .or_else(|| sealed.err())
+            {
                 eprintln!("error: recording failed: {e}");
                 recording_failed.store(true, Ordering::SeqCst);
                 if let Some(rec) = rez_recorder.take() {
@@ -2001,6 +2135,109 @@ mod tests {
         })
     }
 
+    /// A second endpoint, distinguishable from [`rez_endpoint`] by `source`.
+    fn rez_endpoint_b() -> EndpointState {
+        EndpointState::new(endpoint::EndpointConfig {
+            url: Url::parse("http://localhost:4242").unwrap(),
+            source: Some("valkey".to_string()),
+            role: None,
+            protocol: Some(Protocol::Msgpack),
+        })
+    }
+
+    /// One tick of one counter for `endpoint`.
+    fn tick(rec: &mut RezStream, endpoint: usize, i: u64) -> Result<(), String> {
+        let ts = TEST_ANCHOR + i * TEST_SECOND;
+        let c = rez::recorder_tests_support::counter(
+            "fake_ops",
+            "fake",
+            i,
+            Some(metriken::Window::new(ts - 500, ts)),
+        );
+        let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
+        let url = Url::parse("http://localhost:4241").unwrap();
+        rec.ingest(endpoint, &url, &snapshot, ts, 0)
+    }
+
+    #[test]
+    fn a_scrape_with_no_recording_is_an_error_not_a_silent_drop() {
+        // In `.rez` mode there is no parquet writer to catch an unrouted
+        // snapshot: `writers` is all `None`. So returning Ok here would decode
+        // a scrape and throw it away every tick for the whole run, and the
+        // archive would finalize one recording short with exit 0. That was the
+        // behaviour when an endpoint down at startup activated later.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path);
+        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+
+        assert!(tick(&mut rec, 0, 0).is_ok(), "endpoint 0 has a recording");
+        let err = tick(&mut rec, 1, 0).expect_err("endpoint 1 has none");
+        assert!(
+            err.contains("discarded"),
+            "the error must say the samples would be lost, got: {err}"
+        );
+        assert!(
+            err.contains("http://"),
+            "and must name the endpoint, not its index, got: {err}"
+        );
+        rec.discard();
+    }
+
+    #[test]
+    fn an_endpoint_that_activates_late_still_gets_a_recording() {
+        // Startup only exits when NO endpoint is reachable, so a run with one
+        // agent up and one still starting commits to the archive with a single
+        // recording and must be able to add the second one to the live
+        // archive. Otherwise the second endpoint's scrapes go nowhere.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path);
+        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+
+        tick(&mut rec, 0, 0).expect("the endpoint up at startup records");
+        // ... endpoint 1 comes up mid-run.
+        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR)
+            .expect("a recording can join an open archive");
+        for i in 1..3 {
+            tick(&mut rec, 0, i).expect("ingest a");
+            tick(&mut rec, 1, i).expect("ingest b");
+        }
+        rec.finalize((TEST_ANCHOR + 3 * TEST_SECOND, 0)).unwrap();
+
+        // Both recordings come back out of the reader, tellable apart, and
+        // both carry rows — a manifest entry with no data would pass a
+        // count-only assertion while still having dropped the scrapes.
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &path,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .expect("the archive opens");
+        assert_eq!(
+            readers.len(),
+            2,
+            "the late endpoint must be its own recording"
+        );
+        let mut sources: Vec<&str> = readers
+            .iter()
+            .filter_map(|(labels, _)| labels.get("source").map(String::as_str))
+            .collect();
+        sources.sort_unstable();
+        assert_eq!(
+            sources,
+            vec!["rezolus", "valkey"],
+            "each recording keeps its own source label"
+        );
+        for (labels, reader) in &readers {
+            use metriken_query::MetricsSource;
+            assert_eq!(
+                reader.counter_names(),
+                vec!["fake_ops".to_string()],
+                "recording {labels:?} must hold the rows ingested for it"
+            );
+        }
+    }
+
     /// Drive a recorder the way the loop does — ingest, `maybe_seal` every
     /// tick, then finalize — over `ticks` one-second samples of one counter.
     fn record_ticks(rec: &mut RezStream, ticks: u64) {
@@ -2013,7 +2250,8 @@ mod tests {
                 Some(metriken::Window::new(ts - 500, ts)),
             );
             let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
-            rec.ingest(0, &snapshot, ts, 0).expect("ingest");
+            rec.ingest(0, &rez_endpoint().config.url, &snapshot, ts, 0)
+                .expect("ingest");
             rec.maybe_seal().expect("seal");
         }
     }

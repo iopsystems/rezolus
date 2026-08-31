@@ -981,7 +981,9 @@ mod rez_v3_tests {
 
         let v = v3_json(&read_v3_summary(&path).unwrap());
         assert_eq!(v["version"], 3);
-        assert_eq!(v["recordings"][0]["name"], "rezolus");
+        // Qualified by `arm`: `source` alone collides across recordings in a
+        // multi-recording archive, which is now the ordinary shape.
+        assert_eq!(v["recordings"][0]["name"], "rezolus-baseline");
         assert_eq!(v["recordings"][0]["labels"]["arm"], "baseline");
         assert_eq!(
             v["recordings"][0]["metadata"]["sampling_interval_ms"],

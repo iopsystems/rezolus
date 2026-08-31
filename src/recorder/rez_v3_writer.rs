@@ -221,8 +221,13 @@ impl RezArchive {
     /// Close the channel and join the writer, returning its stored result.
     /// Idempotent: a second call is a no-op `Ok`.
     ///
-    /// Every handle must be dropped first, or this blocks: the writer's loop
-    /// only ends when the channel closes, and a live handle holds a sender.
+    /// Handles should be dropped first — but not because this would otherwise
+    /// block. `Shutdown` is sent below *before* our own sender is released, and
+    /// the writer honours it whoever else still holds a clone, so a wrong order
+    /// is an error (work queued after the stop is dropped), not a hang. That
+    /// distinction is load-bearing: the guarantee lives in `Msg::Shutdown`, not
+    /// in the drop order, and removing it would turn every "must drop first"
+    /// note in this file into a real deadlock.
     pub(crate) fn join(&mut self) -> Result<(), String> {
         // Tell the writer to stop before releasing our own sender. A handle
         // that outlived its archive still holds a clone, so waiting for the
@@ -442,9 +447,13 @@ impl RecordingWriter {
     /// something to write, and a recording whose writer died would go on
     /// reporting success for every empty tick in between.
     fn check_alive(&mut self) -> Result<(), String> {
-        // A disconnected channel is the only signal available here: the thread
-        // belongs to the archive, so this cannot ask whether it has finished.
-        // `send` on a closed channel fails, which is what the probe relies on.
+        // The shared error slot is the only signal available here: the thread
+        // belongs to the archive, so this cannot ask whether it has finished,
+        // and it deliberately does not send — a probe message would be a write
+        // on a path whose whole point is that it has nothing to write. A
+        // writer that exited *cleanly* while this handle is live is therefore
+        // invisible here, which cannot happen today because the only clean
+        // exit is `Shutdown`, sent last.
         match self.err.lock() {
             Ok(guard) if guard.is_some() => Err(guard.clone().unwrap_or_default()),
             _ => Ok(()),
@@ -2080,6 +2089,45 @@ mod tests {
             db.read_clock_offsets(rid).unwrap(),
             vec![(1_000, 7)],
             "one observation per timestamp, and the sealed row's wins"
+        );
+    }
+
+    #[test]
+    fn one_recordings_observation_does_not_suppress_anothers() {
+        // `observed` is keyed by recording, and that keying is load-bearing.
+        // Every recording finalizes with the SAME clock offset, because the
+        // recorder passes one `last_clock` to all of them. So if `observed`
+        // were a single archive-wide set, recording A sealing a row at T would
+        // mark T seen, and recording B — whose endpoint went dark and has no
+        // row at T — would have its finalize observation dropped as a
+        // duplicate. B would lose the only clock observation it has, the one
+        // anchoring its whole series.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut a = archive.add_recording(seed()).unwrap();
+        let b = archive.add_recording(seed()).unwrap();
+        let (rid_a, rid_b) = (a.recording_id(), b.recording_id());
+
+        // A seals a row at T, so T is observed for A.
+        commit_wal(&mut a, "cpu_usage", &[1_000], 7);
+        a.seal(vec!["cpu_usage".to_string()]).unwrap();
+        // B has no rows at all — its endpoint went dark.
+        a.finalize((1_000, -11)).unwrap();
+        b.finalize((1_000, -11)).unwrap();
+        archive.join().unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_clock_offsets(rid_a).unwrap(),
+            vec![(1_000, 7)],
+            "A keeps the sealed row's offset, not the finalize one"
+        );
+        assert_eq!(
+            db.read_clock_offsets(rid_b).unwrap(),
+            vec![(1_000, -11)],
+            "B must still get its finalize observation — A's identical \
+             timestamp must not suppress it"
         );
     }
 

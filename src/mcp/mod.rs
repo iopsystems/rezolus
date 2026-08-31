@@ -23,6 +23,30 @@ pub(crate) fn open_source(
         != RezFormat::NotRez
     {
         let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+        // Refuse a multi-recording archive HERE, where the message reaches the
+        // caller, rather than letting every query fail one at a time.
+        //
+        // `open_with_pool` flattens the recordings into one view, so two
+        // recordings of the same agent give every sampler two owners and the
+        // reader refuses each query as cross-recording — deliberately, since
+        // silently answering from one arm of an A/B is the worse failure. But
+        // the analysis tools fold a per-metric query error into `NoData`, so
+        // that refusal would surface as "analyzed 41 metrics, found anomalies
+        // in 0" — a clean-looking wrong answer. `record --endpoint a
+        // --endpoint b -o out.rez` now produces exactly this shape by default.
+        let recordings =
+            crate::rez_reader::RezReader::open_recordings(file, std::sync::Arc::clone(&pool))?
+                .len();
+        if recordings > 1 {
+            return Err(format!(
+                "{} holds {recordings} recordings (a multi-host or A/B archive), and the \
+                 analysis tools read one recording at a time. Split it first — \
+                 `rezolus recording filter` or a per-endpoint recording — or open it in \
+                 `rezolus view`, which reads two recordings as a comparison",
+                file.display()
+            )
+            .into());
+        }
         Ok(std::sync::Arc::new(
             crate::rez_reader::RezReader::open_with_pool(file, pool)?,
         ))
@@ -951,6 +975,49 @@ mod tests {
         assert!(
             open_source(&parquet_path).is_ok(),
             "bare parquet should open as a MetricsSource"
+        );
+    }
+
+    /// A multi-recording archive must be refused HERE, with a message, rather
+    /// than opening into a reader that answers nothing.
+    ///
+    /// `record --endpoint a --endpoint b -o out.rez` now produces this shape
+    /// by default. `open_with_pool` flattens the recordings, so every sampler
+    /// has two owners and the reader refuses each query as cross-recording —
+    /// which is the right call, but `extract-features` and `detect-anomalies`
+    /// fold a per-metric query error into `NoData`, so the run would report
+    /// "analyzed N metrics, found anomalies in 0" and look clean.
+    #[test]
+    fn open_source_refuses_a_multi_recording_archive_with_a_message() {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+
+        let seed = |source: &str| ManifestSeed {
+            labels: [("source".to_string(), source.to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let mut archive = RezArchive::create(&path).unwrap();
+        for source in ["redis", "valkey"] {
+            let w = archive.add_recording(seed(source)).unwrap();
+            w.finalize((1_000_000_000, 0)).unwrap();
+        }
+        archive.join().unwrap();
+
+        let msg = match open_source(&path) {
+            Ok(_) => panic!("a 2-recording archive must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("2 recordings"),
+            "the message must say how many recordings there are: {msg}"
+        );
+        assert!(
+            msg.contains("rezolus view"),
+            "and must point at something that CAN read it: {msg}"
         );
     }
 

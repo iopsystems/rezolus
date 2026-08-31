@@ -38,11 +38,12 @@ pub struct HindsightBuffer {
     rec: StreamRecorderV3,
     /// The archive `rec` writes into.
     ///
-    /// **Declared after `rec`, and that ordering is load-bearing.** Fields drop
-    /// in declaration order, and `RezArchive::drop` joins the writer thread,
-    /// which only ends once every recording handle has released its sender. A
-    /// buffer that dropped the archive first would block forever waiting on the
-    /// handle still held inside `rec`.
+    /// **Declared after `rec` deliberately.** Fields drop in declaration order,
+    /// and `RezArchive::drop` joins the writer thread. Dropping the archive
+    /// first would not hang — `join` sends `Msg::Shutdown` before releasing its
+    /// own sender, so the writer stops whoever still holds a clone — but it
+    /// would stop the writer while `rec` could still queue a final seal, and
+    /// that work would be dropped.
     ///
     /// Hindsight opens exactly one recording; the archive can hold several, and
     /// does for a multi-endpoint `record` run.
