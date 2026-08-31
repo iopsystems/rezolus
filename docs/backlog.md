@@ -340,8 +340,9 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   caching-exporter case (a round-trip window under-states if the exporter serves
   stale values — still better than zero width). *Supersedes* an earlier
   by-design ruling in the multi-endpoint entry, which was wrong.
-- **Prometheus embedded timestamps become epoch-anchored windows** — Open, a
-  live correctness bug on the shipping parquet path, not just a `.rez` concern.
+- **Prometheus embedded timestamps become epoch-anchored windows** — **DONE**.
+  Was a live correctness bug on the shipping parquet path, not just a `.rez`
+  concern.
   Prometheus exposition allows an optional trailing timestamp in *milliseconds
   since epoch*, intended as a federation/pushgateway staleness marker.
   `convert` passes `fetch_ns` to `Scrape::parse_at` as the default, so
@@ -354,9 +355,14 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   epoch** — decades before the recording holding it. Any exporter that emits
   timestamps (pushgateway, federation) writes that today, and the window offset
   is stored relative to the row timestamp, so the resulting `rate()` uncertainty
-  band is nonsense rather than merely wide. *Fix:* derive the window from the
-  recorder's own clock around its own fetch and ignore the line timestamp for
-  window purposes; keep it, if wanted, as a separate staleness field.
+  band is nonsense rather than merely wide. Fixed by deriving the window from `fetch_ns` — the recorder's own
+  clock for the tick — and ignoring `sample.timestamp` entirely, which also
+  ends the two-semantics mixing. Still zero-width, which understates: the
+  honest bracket is the real round-trip `[request_sent, response_received]`,
+  and the converter is handed only parsed text and a single instant, so the
+  request instant does not reach it. That widening is tracked with the
+  Prometheus-in-`.rez` entry above — it moves this window's edges, not its
+  anchor.
 - **Viewer shows only the first two recordings** — Open. `src/viewer/mod.rs:581`
   truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
   the writer work above, but the two should not drift: finishing that makes

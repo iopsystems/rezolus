@@ -90,8 +90,11 @@ impl PrometheusConverter {
         let mut gauges = Vec::new();
         let mut histograms = Vec::new();
 
+        // One window for the whole scrape: every sample in it was read by the
+        // same request/response, so they share an acquisition instant.
+        let window = sample_window(fetch_ns);
+
         for sample in scrape.samples {
-            let window = sample_window(sample.timestamp);
             let mut labels: Vec<(String, String)> = sample
                 .labels
                 .iter()
@@ -332,9 +335,30 @@ fn sanitize_metric_names(text: &str) -> String {
     result
 }
 
-fn sample_window(ts: chrono::DateTime<chrono::Utc>) -> Option<metriken::Window> {
-    let ns = ts.timestamp_nanos_opt().unwrap_or(0).max(0) as u64;
-    Some(metriken::Window::new(ns, ns))
+/// The acquisition window for every sample in one scrape.
+///
+/// Derived from `fetch_ns` — the recorder's own clock for this tick — and
+/// deliberately NOT from `sample.timestamp`.
+///
+/// Prometheus exposition allows an optional trailing timestamp in milliseconds
+/// since epoch, meant as a federation/pushgateway staleness marker.
+/// `Scrape::parse_at` puts that value in `sample.timestamp` when present and
+/// the fetch instant otherwise, so using it meant one recording silently
+/// carried two different semantics — and, worse, took the exporter's claim at
+/// face value: `m_total 3 1000` yielded a window beginning one second after
+/// the Unix epoch, decades before the row holding it. The window offset is
+/// stored relative to the row timestamp, so that is not a merely-wide bound
+/// but a ~56-year error in the operand `rate()` prices its uncertainty from.
+/// Any exporter that emits timestamps (pushgateway, federation) wrote that.
+///
+/// Still zero-width, which understates: a scrape is one request and one
+/// response, so the honest bracket is the real round-trip
+/// `[request_sent, response_received]`. The converter is handed only parsed
+/// text and a single instant, so the request instant does not reach it — that
+/// is tracked with the Prometheus-in-`.rez` work, and is a widening of this
+/// window rather than a change of its anchor.
+fn sample_window(fetch_ns: u64) -> Option<metriken::Window> {
+    Some(metriken::Window::new(fetch_ns, fetch_ns))
 }
 
 fn empty_snapshot() -> Snapshot {
@@ -352,8 +376,22 @@ fn empty_snapshot() -> Snapshot {
 mod tests {
     use super::*;
 
+    /// An exporter's own trailing timestamp must NOT become the acquisition
+    /// window.
+    ///
+    /// Prometheus exposition allows an optional trailing timestamp in
+    /// milliseconds since epoch, meant as a federation/pushgateway staleness
+    /// marker. Taking it at face value made the window say when the *exporter*
+    /// claims the value was computed — on a scale where `m_total 3 1000` means
+    /// one second after the Unix epoch, decades before the recording holding
+    /// it. This test asserted exactly that until it was corrected.
+    ///
+    /// The window has to come from OUR clock around OUR fetch, because that is
+    /// the only interval we actually observed. It is also what makes one
+    /// recording carry one semantics: before this, a scrape with timestamps
+    /// and a scrape without silently mixed two.
     #[test]
-    fn embedded_timestamp_becomes_window() {
+    fn an_embedded_timestamp_is_not_the_window() {
         let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
         let fetch_ns = 5_000_000_000u64;
         let text = "m_total 3 1000\n";
@@ -361,7 +399,31 @@ mod tests {
             panic!()
         };
         let w = s.counters[0].window.expect("window set");
-        assert_eq!(w.begin_ns, 1_000_000_000, "embedded ts (1000 ms) in ns");
+        assert_eq!(
+            w.begin_ns, fetch_ns,
+            "the window is our fetch, not the exporter's 1000 ms epoch stamp"
+        );
+        assert_eq!(w.end_ns, fetch_ns);
+    }
+
+    /// The offset is stored relative to the row timestamp, so an epoch-anchored
+    /// window is not merely wide — it is a ~56-year error in the operand
+    /// `rate()` prices its uncertainty from.
+    #[test]
+    fn an_embedded_timestamp_cannot_predate_the_row_it_describes() {
+        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        // A realistic recording clock: 2026-ish, not 1970.
+        let fetch_ns = 1_780_000_000_000_000_000u64;
+        let Snapshot::V2(s) = conv.convert("m_total 3 1000\n", fetch_ns) else {
+            panic!()
+        };
+        let w = s.counters[0].window.expect("window set");
+        assert!(
+            w.begin_ns >= fetch_ns.saturating_sub(1),
+            "a window beginning {} against a row at {fetch_ns} would be decades of \
+             fabricated uncertainty",
+            w.begin_ns
+        );
     }
 
     #[test]
