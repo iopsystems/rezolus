@@ -722,3 +722,19 @@ effort); promote one to a journal entry when it's picked up.
   failure path, and have `discard` remove the sidecars alongside the main file.
   *Why:* the failure mode is "the retry says the file already exists", which
   reads as a bug in the retry rather than fallout from the original error.
+- **Selector output is not shell-escaped, and the cache identity can alias** —
+  Open, found reviewing MCP recording selection (#1117). Two narrow holes, both
+  needing an operator-chosen label value with an unusual character. (a)
+  `flag_form` joins raw label values with `" --recording "` and presents the
+  result as something to paste, so a value containing a space —
+  `select with: --recording note=first run` — splits in the shell into a flag
+  plus a stray positional, which for `detect-anomalies` lands in the optional
+  `QUERY` slot. A value containing the literal `" --recording "` parses back as
+  a duplicate key. (b) The stdio server's post-open identity dedup uses
+  `recording_stagger_key`, a `\u{1}`-separated `k=v` join, so `{a: "\u{1}b=c"}`
+  and `{a: "", b: "c"}` render one identity and the second lookup would return
+  the first's reader. *Fix:* single-quote any value containing whitespace or a
+  quote in `flag_form`; dedup on the `BTreeMap` itself rather than a flattened
+  string. *Why:* both are the same species as the defects that arc kept
+  finding — a wrong answer that looks like a right one — just behind inputs
+  nobody types by accident.
