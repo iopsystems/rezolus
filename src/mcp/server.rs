@@ -576,14 +576,11 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
 
-        // Kept ahead of the open so a typo'd path says so plainly; without
-        // it the failure arrives as whatever the parquet decoder makes of a
-        // missing file.
+        // No `exists()` check here: `open_source_with_pool_labeled` makes it,
+        // so both front ends report a missing file with one message instead
+        // of the server saying "Recording file not found" and the CLI
+        // surfacing the decoder's "No such file or directory (os error 2)".
         let path = Path::new(parquet_file);
-        if !path.exists() {
-            return Err(format!("Recording file not found: {parquet_file}").into());
-        }
-
         let selector = Self::selector_of(arguments)?;
         // The CLI's own text, not `get_reader_selected` + `format_recording_info`.
         // With no selector a multi-recording archive is LISTED here rather
@@ -619,8 +616,14 @@ impl Server {
         arguments: &Value,
     ) -> Result<crate::mcp::RecordingSelector, Box<dyn std::error::Error>> {
         match arguments.get("recording") {
+            // An explicit `null` is an ABSENT selector, not a malformed one.
+            // Many MCP clients and LLM tool-call serializers spell an omitted
+            // optional property as `"recording": null`, and `get` hands that
+            // back as `Some(Value::Null)`; passing it to `from_json` would
+            // fail a valid single-recording call with "recording must be an
+            // object of label key to value".
+            None | Some(serde_json::Value::Null) => Ok(crate::mcp::RecordingSelector::default()),
             Some(v) => Ok(crate::mcp::RecordingSelector::from_json(v)?),
-            None => Ok(crate::mcp::RecordingSelector::default()),
         }
     }
 
@@ -638,10 +641,9 @@ impl Server {
             }
         }
 
+        // A missing file is reported by the opener (one message for both
+        // front ends), not pre-checked here.
         let path = Path::new(parquet_file);
-        if !path.exists() {
-            return Err(format!("Recording file not found: {parquet_file}").into());
-        }
 
         // The same open the one-shot CLI uses — including the selector, and
         // the refusal of a multi-recording archive that names none. Server
@@ -1127,6 +1129,45 @@ mod tests {
             no_match.contains(r#"recording {"source": "nope"}"#),
             "the echoed selector must be pasteable as a tool argument: {no_match}"
         );
+    }
+
+    /// An explicit `"recording": null` means "no selector", not an error.
+    ///
+    /// Many MCP clients and LLM tool-call serializers emit an explicit null
+    /// for an omitted optional property. `arguments.get("recording")` returns
+    /// `Some(Value::Null)` for that, which `from_json` rejects as "must be an
+    /// object" — turning a perfectly valid single-recording call into a hard
+    /// failure for a client that did nothing wrong.
+    #[tokio::test]
+    async fn an_explicit_null_recording_means_no_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis"], &[true]);
+
+        let server = Server::new();
+        let args = json!({"parquet_file": path.to_str().unwrap(), "recording": null});
+        let out = server
+            .describe_recording(&args)
+            .await
+            .expect("an explicit null is an omitted selector, not a bad one");
+        assert!(out.contains("Recording Information"), "{out}");
+    }
+
+    /// The missing-file message is the opener's, so it is the same one the
+    /// CLI prints (see `a_missing_file_says_so_rather_than_failing_in_the_decoder`).
+    #[tokio::test]
+    async fn a_missing_file_reports_the_same_way_as_the_cli() {
+        let server = Server::new();
+        let err = server
+            .get_reader_selected(
+                "/nonexistent/does-not-exist.rez",
+                &crate::mcp::RecordingSelector::default(),
+            )
+            .await
+            .err()
+            .expect("a missing file cannot open")
+            .to_string();
+        assert!(err.contains("Recording file not found"), "{err}");
     }
 
     /// A handler that honors `recording` is invisible if the schema never

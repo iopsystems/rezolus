@@ -65,6 +65,17 @@ pub(crate) fn open_source_with_pool_labeled(
     syntax: SelectorSyntax,
 ) -> Result<LabeledSource, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
+
+    // Ahead of the open, and HERE rather than in each front end, so a typo'd
+    // path is diagnosed the same way wherever it was typed. The stdio server
+    // used to carry this check itself while the CLI had none, so the same
+    // mistake read as "Recording file not found: x.rez" to an agent and as
+    // "Failed to load recording: No such file or directory (os error 2)" to a
+    // shell caller.
+    if !file.exists() {
+        return Err(format!("Recording file not found: {}", file.display()).into());
+    }
+
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
         == RezFormat::NotRez
     {
@@ -917,9 +928,18 @@ impl TryFrom<ArgMatches> for Config {
         // subcommand, so the top-level matches never carry it. `None` is
         // server mode, which has no selector to read (see `Config.recording`).
         let recording = match args.subcommand() {
+            // `try_get_many`, not `get_many`: the latter PANICS on an arg id
+            // the matched subcommand never declared, and this lookup runs for
+            // whichever subcommand matched. The first analysis subcommand
+            // added without `recording_arg()` would abort inside clap rather
+            // than run; absent means "no selector", like every other
+            // subcommand that omits the flag.
             Some((_, sub)) => RecordingSelector::parse(
-                sub.get_many::<String>("RECORDING")
-                    .unwrap_or_default()
+                sub.try_get_many::<String>("RECORDING")
+                    .ok()
+                    .flatten()
+                    .into_iter()
+                    .flatten()
                     .cloned(),
             )?,
             None => RecordingSelector::default(),
@@ -1937,6 +1957,50 @@ mod tests {
                 "for {sub}"
             );
         }
+    }
+
+    /// Reading the selector must not panic for a subcommand that never
+    /// declared it.
+    ///
+    /// `get_many` panics on an unknown arg id, and the lookup runs for
+    /// whatever subcommand matched — so the first analysis subcommand added
+    /// without `recording_arg()` would abort the process inside clap instead
+    /// of running, or erroring, like every other bad invocation.
+    #[test]
+    fn a_subcommand_without_the_flag_does_not_panic() {
+        // The real command plus one subcommand whose author forgot
+        // `recording_arg()` — the mistake this guards against.
+        let m = command()
+            .subcommand(clap::Command::new("future-tool"))
+            .try_get_matches_from(["mcp", "future-tool"])
+            .unwrap();
+        let cfg = Config::try_from(m).expect("an unknown subcommand is not a parse failure");
+        assert!(
+            cfg.recording.is_empty(),
+            "no --recording declared means no selector"
+        );
+    }
+
+    /// A missing file reads the same from both front ends.
+    ///
+    /// The server pre-checked `exists()` and said "Recording file not found";
+    /// the CLI had no such check and surfaced whatever the parquet decoder
+    /// made of it ("No such file or directory (os error 2)"). One check, in
+    /// the shared opener, so a typo'd path is diagnosed the same way
+    /// wherever it is typed.
+    #[test]
+    fn a_missing_file_says_so_rather_than_failing_in_the_decoder() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.rez");
+        let msg = match open_source_selected(&missing, &RecordingSelector::default()) {
+            Ok(_) => panic!("a missing file cannot open"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("Recording file not found"),
+            "must name the real problem, not the decoder's view of it: {msg}"
+        );
+        assert!(msg.contains("nope.rez"), "and the path: {msg}");
     }
 
     #[test]
