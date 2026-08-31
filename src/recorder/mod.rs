@@ -38,10 +38,11 @@ pub fn command() -> Command {
              merge — and the deprecated positional URL counts as --url for that rule, as\n\
              positional OUTPUT counts as -o. Prefer the flags.\n\n\
              --url is shorthand for a single endpoint with no modifiers; reach for a single\n\
-             --endpoint when you need source=, role= or protocol= on it, which is still a\n\
-             one-endpoint recording and still eligible for .rez. --config conflicts only with\n\
-             --url/--endpoint: every other flag still applies alongside it, and -o, --interval\n\
-             and --format override the file\'s [recording] table. There is no duration key —\n\
+             --endpoint when you need source=, role= or protocol= on it. Several rezolus\n\
+             endpoints are eligible for .rez too, and become one multi-recording archive\n\
+             (see WHAT IT WRITES). --config conflicts only with --url/--endpoint: every other\n\
+             flag still applies alongside it, and -o, --interval and --format override the\n\
+             file\'s [recording] table. There is no duration key —\n\
              a bounded config-driven run passes --duration on the command line.\n\n\
              HOW LONG TO RECORD (choose one): --duration for a fixed window, nothing to run\n\
              until Ctrl-C, or `-- <command>` to record for exactly the lifetime of a wrapped\n\
@@ -59,10 +60,14 @@ pub fn command() -> Command {
              .rez      (default) A per-sampler archive: one table per sampler, each at its own\n    \
              \x20         cadence, carrying the window each read covered so PromQL rate()\n    \
              \x20         queries in `rezolus view` and `rezolus mcp` can report uncertainty\n    \
-             \x20         bounds instead of a bare number. Needs a single rezolus (msgpack)\n    \
-             \x20         endpoint. Prefer it.\n    \
+             \x20         bounds instead of a bare number. Every endpoint must be a rezolus\n    \
+             \x20         (msgpack) one; several of them become one archive holding a\n    \
+             \x20         recording each, which is what `rezolus view` reads as an A/B or\n    \
+             \x20         multi-host comparison. Prefer it.\n    \
              .parquet  One columnar table on a single uniform clock. Use it for a Prometheus\n    \
-             \x20         source, for several endpoints at once, or for other parquet tooling.\n    \
+             \x20         source, for a run mixing Prometheus and rezolus endpoints, or for\n    \
+             \x20         other parquet tooling. (Several rezolus endpoints do NOT need\n    \
+             \x20         parquet — .rez holds them as separate recordings.)\n    \
              .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
              \x20         is converted to snapshots on the way in, so either source works).\n    \
              \x20         Cheapest thing the recorder can do: it appends and never rewrites.\n    \
@@ -72,11 +77,11 @@ pub fn command() -> Command {
              not .rez: it means parquet, unless --format says otherwise. A --format that\n\
              contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
              rather than a silent choice between them.\n\n\
-             When the format was not chosen at all — no --format, no -o — and the endpoint\n\
-             turns out to be Prometheus, or there is more than one endpoint, the recording\n\
-             falls back to rezolus.parquet and says so on stderr. Pass --format rez (or an\n\
-             -o ending in .rez) to make a .rez archive a requirement instead: then the same\n\
-             situation is an error and nothing is recorded.\n\n\
+             When the format was not chosen at all — no --format, no -o — and any endpoint\n\
+             turns out to be Prometheus, the recording falls back to rezolus.parquet and\n\
+             says so on stderr. The endpoint COUNT never causes that fallback. Pass --format\n\
+             rez (or an -o ending in .rez) to make a .rez archive a requirement instead: then\n\
+             the same situation is an error and nothing is recorded.\n\n\
              OVERWRITING: a .rez output path must NOT already exist — the recorder refuses\n\
              rather than truncate, because the archive is committed as it goes and has no\n\
              staging file. A parquet or raw output IS overwritten. There is no --force; remove\n\
@@ -94,7 +99,11 @@ pub fn command() -> Command {
              rezolus record -o out.rez --interval 100ms --duration 30s\n\n    \
              # Record a Prometheus endpoint to parquet, tagging the source in the metadata\n    \
              rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf\n\n    \
-             # Record several endpoints into ONE combined parquet file\n    \
+             # Record two agents into ONE .rez holding a recording each (multi-host / A/B)\n    \
+             rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez\n\n    \
+             # Same host, two agents: give each a source= so the recordings are tellable apart\n    \
+             rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.rez\n\n    \
+             # Record several endpoints into ONE combined parquet file (needed when one is Prometheus)\n    \
              rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
              # ...or one file per endpoint: writes run_rezolus.parquet and run_svc.parquet\n    \
              rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
@@ -115,10 +124,17 @@ pub fn command() -> Command {
              #   source = \"svc\"           # optional, as are role = and protocol =\n\n\
              TAGGING: -m/--metadata k=v writes file-level metadata and applies to EVERY\n\
              format. -l/--label k=v applies to .rez only (it is dropped for parquet and raw):\n\
-             it tags the recording inside the archive, source and host are auto-populated,\n\
-             and a two-recording .rez drives the viewer\'s A/B comparison — which is what\n\
-             --label arm=redis is for. The source= on an --endpoint is a third thing again:\n\
-             it names which endpoint a metric came from in a multi-endpoint recording.\n\n\
+             it tags the recordings inside the archive, source and host are auto-populated,\n\
+             and a two-recording .rez drives the viewer\'s A/B comparison, which aliases the\n\
+             arms off each recording\'s arm/host labels.\n\n\
+             --label applies to EVERY recording the run produces, so it names the run, not\n\
+             one endpoint in it: --label arm=redis is how you tag a whole single-endpoint\n\
+             capture as one arm, to be compared against another run. Within ONE invocation,\n\
+             what distinguishes the recordings is source= on each --endpoint (plus host,\n\
+             taken from each agent\'s system info) — so two agents on different hosts are\n\
+             already distinct, while two on the same host need a source= each. Recordings\n\
+             that end up with identical labels are warned about at startup: nothing\n\
+             downstream can tell them apart.\n\n\
              To label a recording for a multi-node or multi-instance `rezolus recording\n\
              combine`, set the metadata keys it reads: --metadata node=web-01 and\n\
              --metadata instance=0. (`record --node` / `--instance` were removed: they were\n\
@@ -169,7 +185,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port (e.g. svc-9090). For parquet or raw output only — .rez records a single endpoint")
+                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port (e.g. svc-9090). For parquet or raw output only: a .rez already keeps each endpoint as its own recording inside the one archive, so --separate does not apply to it")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -200,7 +216,7 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez requires a single rezolus/msgpack endpoint")
+                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez requires every endpoint to be a rezolus/msgpack one, but any number of them")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Format)),
         )
@@ -215,7 +231,7 @@ pub fn command() -> Command {
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. .rez output ONLY — dropped for parquet and raw, where --metadata is the equivalent")
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that. .rez output ONLY — dropped for parquet and raw, where --metadata is the equivalent")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -1009,8 +1025,8 @@ pub fn run(mut config: RecordingConfig) {
         .as_nanos() as u64;
     let clock_anchor_mono = Instant::now();
 
-    // The streaming `.rez` writer is opened here — when the (single) endpoint
-    // becomes active, not lazily on the first snapshot — because creating the
+    // The streaming `.rez` writer is opened here — when the endpoints become
+    // active, not lazily on the first snapshot — because creating the
     // output (or, in v2, the `<output>.partial`) and spawning the writer thread
     // are both fallible.
     let mut rez_recorder: Option<RezStream> = None;

@@ -57,12 +57,15 @@ sudo target/release/rezolus exporter config/exporter.toml
 # Recorder - capture metrics to disk (.rez by default)
 target/release/rezolus record                                                           # localhost:4241 -> rezolus.rez
 target/release/rezolus record --url http://localhost:4241 -o out.rez --label arm=redis  # per-sampler .rez archive
+target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez  # one recording per endpoint
 target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
 # (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
 # the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
-# .rez requires a single rezolus/msgpack endpoint; a run that chose no format at all falls
-# back to rezolus.parquet (with a note) for a Prometheus or multi-endpoint source.
+# .rez requires every endpoint to be rezolus/msgpack, but any number of them: several
+# endpoints become one multi-recording archive. A run that chose no format at all falls
+# back to rezolus.parquet (with a note) for a Prometheus source; endpoint count never
+# triggers that fallback.
 # Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
 # recording, source/host auto-populated), --interval, --duration.
 
@@ -129,7 +132,7 @@ The binary operates in seven modes via subcommands:
 
 1. **Agent** (`src/agent/`) - Default. Collects system metrics via samplers.
 2. **Exporter** (`src/exporter/`) - Pulls from agent's msgpack endpoint, exposes Prometheus metrics.
-3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.rez` default, `.parquet`, `.raw`); `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.rez` when no `-o` is given, falling back to `rezolus.parquet` for a Prometheus or multi-endpoint source only when nothing pinned the format. Supports `--metadata key=value`; `--label key=value` tags a `.rez` recording (see "`.rez` archive format" below).
+3. **Recorder** (`src/recorder/`) - Writes metrics to disk. Auto-detects Rezolus vs Prometheus sources. The output extension picks the format (`.rez` default, `.parquet`, `.raw`); `--format` is the explicit form and contradicting the extension is an error. Defaults to `rezolus.rez` when no `-o` is given, falling back to `rezolus.parquet` for a Prometheus source only when nothing pinned the format (endpoint count never triggers it). Several rezolus endpoints in one run write one multi-recording `.rez`, a recording each. Supports `--metadata key=value`; `--label key=value` tags every `.rez` recording in the run, so `--endpoint url,source=name` is what distinguishes two endpoints (see "`.rez` archive format" below).
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling `.rez` v3 buffer on disk (the streaming v3 writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. The buffer is readable live by the viewer/MCP/`parquet metadata`; a snapshot is a `VACUUM INTO` copy taken without pausing the recording.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison, >2 shows the first two), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
@@ -184,7 +187,7 @@ Either way the query engine consumes the window columns to compute `rate()`/`ira
 
 Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. `RezReader::cross_cadence_eval_timestamps` picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
-A `.rez` is always `source=rezolus` and requires a rezolus/msgpack endpoint to produce (not Prometheus). The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`); a multi-recording `.rez` (built by `record` and `parquet combine`) drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels.
+A `.rez` requires every endpoint to be rezolus/msgpack to produce (not Prometheus), but any number of them. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
 
 ### Service Extensions
 
