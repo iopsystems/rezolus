@@ -642,3 +642,32 @@ effort); promote one to a journal entry when it's picked up.
   `Plot`/`View` descriptor + component API, for live data — plus a `<rezolus-section>`
   wrapper. *Why:* a clean split between the static file-mode viewer and a future
   streaming server viewer without forking the frontend.
+- **One WAL commit (and fsync) per recording per tick** — Open, found reviewing
+  multi-endpoint `.rez` (#1109). `writer_loop` handles one `Msg::Wal` per
+  recording per tick, and `RezDb::insert_wal_rows` is one transaction — one
+  fsync at `synchronous=FULL`. An archive used to be one recording, so a tick
+  was one commit; N recordings make it N. This is the same cost `seal_batch`
+  already refuses to pay ("12 implicit commits would be 12 fsyncs at
+  `synchronous=FULL` against a ~46 ms tick"), and the argument was not carried
+  across recordings. It lands on the scrape loop: `RecordingWriter::wal` is a
+  blocking send on a bound-1 channel from inside the tick. Measured runs show
+  zero dropped ticks at 1 s and at 50 ms with two recordings, so this is not
+  urgent — but it scales linearly with endpoint count and the documented
+  multi-host example is the case that grows it. *Fix:* batch the tick — one
+  `Msg` carrying every recording's rows, committed in a single transaction, or
+  a `TickBegin`/`TickEnd` bracket. The fan-out point already exists in
+  `RezStream::ingest`. *Why:* the format's claim is bounded, predictable write
+  cost; per-tick fsyncs scaling with endpoint count quietly erodes it.
+- **A `--recording` selector for the MCP tools** — Open, the real fix behind the
+  refusal added in #1109. `RezReader::open_with_pool` flattens every recording
+  into one view, so a multi-recording archive gives each sampler two owners and
+  `route()` refuses every query as cross-recording. `mcp open_source` now
+  refuses such an archive up front with a message, because the analysis tools
+  fold a per-metric query error into `NoData` and would otherwise report
+  "analyzed N metrics, found anomalies in 0" — a clean-looking wrong answer.
+  That is honest but not useful: `record --endpoint a --endpoint b -o out.rez`
+  is now a documented, ordinary capture, and no MCP tool can read one. *Fix:*
+  a `--recording <label-selector>` on the mcp subcommands, backed by
+  `RezReader::open_recordings`, which already returns one reader per recording
+  with its labels. *Why:* multi-host and A/B captures are exactly the ones worth
+  analyzing, and the agent-facing tools are where that analysis happens.
