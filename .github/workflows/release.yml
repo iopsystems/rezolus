@@ -66,21 +66,29 @@ jobs:
     if: github.repository == 'iopsystems/rezolus'
     name: "rpm ${{ matrix.distro }}:${{ matrix.version }} (${{ matrix.arch }})"
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
-    container: "${{ matrix.distro }}:${{ matrix.version }}"
+    # `image` is explicit because Docker Hub's `library/rockylinux` was
+    # deprecated after Rocky 9 -- Rocky 10 is only published under the
+    # `rockylinux/rockylinux` org repo. `distro`/`version` still name the
+    # artifact and pick the target yum repo (rockylinux 10 -> rocky10).
+    container: "${{ matrix.image }}"
     strategy:
       matrix:
         include:
-          - { distro: rockylinux, version: 9, arch: x86_64 }
-          - { distro: rockylinux, version: 9, arch: arm64 }
-          - { distro: amazonlinux, version: 2023, arch: x86_64 }
-          - { distro: amazonlinux, version: 2023, arch: arm64 }
+          - { distro: rockylinux, version: 9, arch: x86_64, image: "rockylinux:9" }
+          - { distro: rockylinux, version: 9, arch: arm64, image: "rockylinux:9" }
+          - { distro: rockylinux, version: 10, arch: x86_64, image: "rockylinux/rockylinux:10" }
+          - { distro: rockylinux, version: 10, arch: arm64, image: "rockylinux/rockylinux:10" }
+          - { distro: amazonlinux, version: 2023, arch: x86_64, image: "amazonlinux:2023" }
+          - { distro: amazonlinux, version: 2023, arch: arm64, image: "amazonlinux:2023" }
       fail-fast: false
     steps:
+      # `dnf` rather than `yum` throughout: every image in the matrix has it,
+      # while el10 no longer guarantees the legacy `yum` entry point.
       - name: install basic dependencies
         if: matrix.distro == 'amazonlinux'
         shell: bash
         run: |
-          yum install -y tar gzip
+          dnf install -y tar gzip
 
       - uses: actions/checkout@v5
 
@@ -92,7 +100,7 @@ jobs:
       - name: install build dependencies
         shell: bash
         run: |
-          yum install -y gcc elfutils-devel clang openssl-devel
+          dnf install -y gcc elfutils-devel clang openssl-devel
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -133,7 +141,7 @@ jobs:
           echo "Building rpm: Version=$RPM_VERSION Release=$RPM_RELEASE Arch=$RPM_ARCH"
 
           # rpm-build provides rpmbuild (not in the minimal container image).
-          yum install -y rpm-build
+          dnf install -y rpm-build
 
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS} target/generate-rpm
 
@@ -167,7 +175,7 @@ jobs:
             exit 0
           fi
           # Install GPG agent and pinentry (not present in minimal container images)
-          yum install -y --allowerasing gnupg2 pinentry
+          dnf install -y --allowerasing gnupg2 pinentry
 
           # Import the GPG signing key
           echo "$GPG_SIGNING_KEY" | base64 -d | gpg --batch --import
@@ -183,7 +191,7 @@ jobs:
           MACROS
 
           # Install rpm-sign (provides rpmsign binary needed by rpm --addsign)
-          yum install -y rpm-sign
+          dnf install -y rpm-sign
 
           # Sign each RPM
           for rpm in target/generate-rpm/*.rpm; do

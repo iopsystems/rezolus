@@ -179,15 +179,21 @@ elif command -v dnf &> /dev/null || command -v yum &> /dev/null; then
     fi
 
     case "$DISTRO" in
-        rocky)
+        rocky|almalinux|rhel|centos|ol)
+            # Rezolus publishes one RPM repo per Enterprise Linux major
+            # version (named for the distro it is built on), and every el9 /
+            # el10 derivative installs the same package from it.
             MAJOR_VERSION="${VERSION_ID%%.*}"
-            if [[ "$MAJOR_VERSION" == "9" ]]; then
-                REPO_NAME="rocky9"
-            else
-                echo "Error: Unsupported Rocky Linux version: $VERSION_ID" >&2
-                echo "Supported versions: 9" >&2
-                exit 1
-            fi
+            case "$MAJOR_VERSION" in
+                9|10)
+                    REPO_NAME="rocky${MAJOR_VERSION}"
+                    ;;
+                *)
+                    echo "Error: Unsupported ${NAME:-$DISTRO} version: $VERSION_ID" >&2
+                    echo "Supported Enterprise Linux versions: 9, 10" >&2
+                    exit 1
+                    ;;
+            esac
             ;;
         amzn)
             if [[ "$VERSION_ID" == "2023" ]]; then
@@ -200,13 +206,14 @@ elif command -v dnf &> /dev/null || command -v yum &> /dev/null; then
             ;;
         *)
             echo "Error: Unsupported RPM-based distribution: $DISTRO" >&2
-            echo "Supported distributions: Rocky Linux, Amazon Linux" >&2
+            echo "Supported distributions: Rocky Linux, AlmaLinux, RHEL," >&2
+            echo "CentOS Stream, Oracle Linux (9 and 10), and Amazon Linux 2023" >&2
             exit 1
             ;;
     esac
 else
     echo "Error: No supported package manager found" >&2
-    echo "This installer requires apt (Debian/Ubuntu) or dnf/yum (Rocky Linux/Amazon Linux)" >&2
+    echo "This installer requires apt (Debian/Ubuntu) or dnf/yum (Enterprise Linux/Amazon Linux)" >&2
     echo "" >&2
     echo "To install Rezolus without a package manager, use:" >&2
     echo "  cargo install rezolus" >&2
