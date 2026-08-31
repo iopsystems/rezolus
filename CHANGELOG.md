@@ -1,5 +1,59 @@
 ## [Unreleased]
 
+## [5.19.0] - 2026-08-31
+
+### Changed
+
+- Agent: a sampler for a capability the machine lacks now reports `unsupported`
+  rather than `failed`, and `rezolus status` no longer exits non-zero because of
+  it. A host whose CPU has no L3 cache domain, or which has no ROCm library or
+  ethtool support, used to fail a readiness check over hardware it was never
+  going to have. Monitoring that alerts on the status exit code will stop firing
+  on such hosts; a genuine initialization failure still exits non-zero, and
+  `disabled`, `unsupported` and `failed` are now three answers rather than two.
+  (#1102, #1103)
+- GPU: a Tegra SoC's integrated GPU no longer records utilization or PCIe link
+  metrics. NVML answers both queries there and answers wrongly — a hard-coded
+  0% utilization indistinguishable from a genuinely idle GPU once it is a row in
+  an archive, and a placeholder generation and width for a link an iGPU does not
+  have. `gpu_sm_utilization`, `gpu_dram_bandwidth_utilization` and the PCIe
+  series are absent on those parts now rather than present and wrong. (#1108)
+- Viewer/MCP: a query against a `.rez` archive is 12.8x faster. A query opens
+  only the tables it touches, where before it materialized the whole archive and
+  spent 91% of its wall time opening tables it never read. `.rez` is now at or
+  ahead of a single parquet holding the same window. No format change — existing
+  archives get this on read. (#1107)
+
+### Added
+
+- Recorder: several endpoints record into one `.rez`. `rezolus record --endpoint
+  http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez` writes one
+  archive holding a recording per host, where before more than one endpoint
+  silently demoted the output to parquet. Both arms of an A/B can now be
+  captured concurrently rather than in sequence, so they share their background
+  load instead of differing in it as well as in the experiment. (#1109)
+- Packaging: `.rpm` packages for Enterprise Linux 10, and the install script now
+  accepts Rocky Linux, AlmaLinux, RHEL, CentOS Stream and Oracle Linux at major
+  9 or 10. `curl -fsSL https://install.rezolus.com | sudo bash` failed outright
+  on EL10 before. (#1113)
+
+### Fixed
+
+- Recording: reading a `.rez` while it is being written no longer panics when
+  retention evicts a table mid-query. A quiet sampler's only rows could be
+  dropped between the probe that named its table and the query that opened it,
+  crashing the viewer or MCP against a hindsight rolling buffer — which is the
+  one thing that buffer exists to be read as. A table that has gone is reported
+  absent, the same as one that was never there. (#1112)
+- Recording: a Prometheus source that emits timestamps no longer writes
+  acquisition windows anchored decades before the rows holding them. The
+  optional trailing timestamp in the exposition format is a federation staleness
+  marker, not a claim about when we read; taking it at face value gave a row
+  recorded in 2026 a window one second after the Unix epoch — a ~56-year error
+  in the operand `rate()` prices its uncertainty from, nonsense rather than
+  conservative. The window is our fetch. Any pushgateway or federation exporter
+  produced this, on the parquet path as well as `.rez`. (#1111)
+
 ## [5.18.0] - 2026-08-26
 
 ### Changed
@@ -1092,7 +1146,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.18.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.19.0...HEAD
+[5.19.0]: https://github.com/iopsystems/rezolus/compare/v5.18.0...v5.19.0
 [5.18.0]: https://github.com/iopsystems/rezolus/compare/v5.17.0...v5.18.0
 [5.17.0]: https://github.com/iopsystems/rezolus/compare/v5.16.2...v5.17.0
 [5.16.2]: https://github.com/iopsystems/rezolus/compare/v5.16.1...v5.16.2
