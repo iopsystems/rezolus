@@ -4,7 +4,8 @@ use clap::{ArgMatches, Command};
 use std::path::PathBuf;
 
 mod recording_selector;
-// SelectError is unused until Task 2 (`RecordingSelector::resolve`) consumes it.
+// RecordingSelector and SelectError are both unused until `resolve` lands and
+// the MCP CLI/server actually pass a selector through to the reader.
 #[allow(unused_imports)]
 pub(crate) use recording_selector::{RecordingSelector, SelectError};
 
