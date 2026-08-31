@@ -666,19 +666,21 @@ effort); promote one to a journal entry when it's picked up.
   a `TickBegin`/`TickEnd` bracket. The fan-out point already exists in
   `RezStream::ingest`. *Why:* the format's claim is bounded, predictable write
   cost; per-tick fsyncs scaling with endpoint count quietly erodes it.
-- **A `--recording` selector for the MCP tools** — Open, the real fix behind the
-  refusal added in #1109. `RezReader::open_with_pool` flattens every recording
-  into one view, so a multi-recording archive gives each sampler two owners and
-  `route()` refuses every query as cross-recording. `mcp open_source` now
-  refuses such an archive up front with a message, because the analysis tools
-  fold a per-metric query error into `NoData` and would otherwise report
-  "analyzed N metrics, found anomalies in 0" — a clean-looking wrong answer.
-  That is honest but not useful: `record --endpoint a --endpoint b -o out.rez`
-  is now a documented, ordinary capture, and no MCP tool can read one. *Fix:*
-  a `--recording <label-selector>` on the mcp subcommands, backed by
-  `RezReader::open_recordings`, which already returns one reader per recording
-  with its labels. *Why:* multi-host and A/B captures are exactly the ones worth
-  analyzing, and the agent-facing tools are where that analysis happens.
+- **A `--recording` selector for the MCP tools** — **DONE** (this PR), the real
+  fix behind the refusal added in #1109. `RezReader::open_with_pool` flattens
+  every recording into one view, so a multi-recording archive gives each
+  sampler two owners and `route()` refuses every query as cross-recording.
+  `mcp open_source` now refuses such an archive up front with a message,
+  because the analysis tools fold a per-metric query error into `NoData` and
+  would otherwise report "analyzed N metrics, found anomalies in 0" — a
+  clean-looking wrong answer. That is honest but not useful:
+  `record --endpoint a --endpoint b -o out.rez` is now a documented, ordinary
+  capture, and no MCP tool can read one. Shipped: `--recording key=value`
+  (repeatable, ANDed) on all six `mcp` subcommands, and an equivalent optional
+  `recording` object on the stdio server's six tools, resolved by
+  `RecordingSelector` against `RezReader::open_recordings`; it must name
+  exactly one recording, and matching none or several is an error listing the
+  candidates.
 - **The seal stagger still aliases on bit 5 (ASCII case)** — Open, found in the
   second review pass on #1109. The first pass closed bits 6-7 of every absorbed
   byte, but the same algebra survives one bit lower: `x ^ 0x20` is

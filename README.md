@@ -408,6 +408,36 @@ rankings, and subsystem coverage. Requires a recording of at least 10 seconds:
 rezolus mcp extract-features rezolus.parquet   # parquet or .rez recordings
 ```
 
+#### Multi-recording archives
+
+A `.rez` built from several endpoints (see "Several endpoints in one `.rez`"
+above) holds one *recording* per endpoint. Every MCP tool reads one recording
+at a time, so run `describe-recording` with no selector to see what the
+archive holds and the flag that picks each one:
+
+```
+$ rezolus mcp describe-recording ab.rez
+ab.rez holds 2 recordings with data (a multi-host or A/B archive):
+  - host=web-01, source=redis
+    select with: --recording source=redis
+  - host=web-01, source=valkey
+    select with: --recording source=valkey
+
+Run any tool with one of the selectors above to analyze that recording.
+```
+
+Then pass `--recording key=value` (repeatable, ANDed) to any of the six
+subcommands to analyze that one recording:
+
+```bash
+rezolus mcp query ab.rez "sum(rate(cpu_cycles[1m]))" --recording source=valkey
+```
+
+A selector must name exactly one recording: matching none or several is an
+error that lists the candidates, never a guess at which one you meant. The
+stdio server's six tools take the same selector as an optional `recording`
+object instead of repeated flags, e.g. `{"source": "valkey"}`.
+
 ---
 
 ## Use Cases

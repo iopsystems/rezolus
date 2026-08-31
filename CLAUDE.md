@@ -122,6 +122,12 @@ target/release/rezolus mcp query file.parquet "sum(rate(cpu_cycles[1m]))"     # 
 # bands by interval arithmetic; non-rate/non-histogram queries have no band to show)
 target/release/rezolus mcp analyze-correlation file.parquet "metric1" "metric2"
 target/release/rezolus mcp extract-features file.parquet             # structured feature record (JSON)
+target/release/rezolus mcp describe-recording multi.rez              # lists the recordings + their selectors, not an error
+target/release/rezolus mcp query multi.rez "sum(rate(cpu_cycles[1m]))" --recording source=redis  # pick one recording
+# --recording key=value (repeatable, ANDed) is on all six subcommands, and the stdio server's six
+#   tools take an optional recording object, e.g. {"source": "redis"}, same semantics;
+# it must name exactly one recording: none or several is an error listing the candidates, never a
+#   first match.
 ```
 
 ## Architecture
