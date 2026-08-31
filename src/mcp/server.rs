@@ -68,9 +68,27 @@ impl From<&str> for McpTool {
 /// next tool call against the same file.
 const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
+/// A cached reader, tagged with the recording it was opened from.
+struct CachedReader {
+    /// The chosen recording's label set, canonically rendered by
+    /// `recording_stagger_key`. Two selectors that name the same recording of
+    /// the same file share the reader under this identity rather than each
+    /// retaining their own copy of the archive.
+    identity: String,
+    source: Arc<dyn metriken_query::MetricsSource>,
+}
+
 /// MCP server state
 pub struct Server {
-    reader_cache: Arc<RwLock<HashMap<String, Arc<dyn metriken_query::MetricsSource>>>>,
+    /// Keyed by (path, selector) — a TYPED pair, never a formatted string.
+    ///
+    /// A multi-recording `.rez` yields a DIFFERENT reader per recording from
+    /// ONE path, so keying on the path alone serves the second request the
+    /// first's reader and answers about the wrong arm, silently. Keying on
+    /// `format!("{path}\u{{1}}{selector}")` has a narrower version of the same
+    /// bug: label values are free text, so two different selectors can render
+    /// identical key bytes. The tuple cannot alias.
+    reader_cache: Arc<RwLock<HashMap<(String, crate::mcp::RecordingSelector), CachedReader>>>,
     /// Shared LRU row-group cache for all readers opened by this server.
     pool: Arc<BufferPool>,
 }
@@ -181,6 +199,11 @@ impl Server {
                                         "parquet_file": {
                                             "type": "string",
                                             "description": "Path to the parquet file"
+                                        },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
                                         }
                                     },
                                     "required": ["parquet_file"]
@@ -195,6 +218,11 @@ impl Server {
                                         "parquet_file": {
                                             "type": "string",
                                             "description": "Path to the parquet file"
+                                        },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
                                         },
                                         "metric1": {
                                             "type": "string",
@@ -217,6 +245,11 @@ impl Server {
                                         "parquet_file": {
                                             "type": "string",
                                             "description": "Path to the parquet file"
+                                        },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
                                         }
                                     },
                                     "required": ["parquet_file"]
@@ -231,6 +264,11 @@ impl Server {
                                         "parquet_file": {
                                             "type": "string",
                                             "description": "Path to the parquet file"
+                                        },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
                                         },
                                         "query": {
                                             "type": "string",
@@ -250,6 +288,11 @@ impl Server {
                                             "type": "string",
                                             "description": "Path to the parquet file"
                                         },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
+                                        },
                                         "query": {
                                             "type": "string",
                                             "description": "PromQL query expression. For COUNTERS use rate(metric[1m]), for GAUGES query directly, for HISTOGRAMS use histogram_quantile(0.99, metric). Use sum(), avg(), etc. to aggregate multiple series."
@@ -267,6 +310,11 @@ impl Server {
                                         "parquet_file": {
                                             "type": "string",
                                             "description": "Path to the recording (parquet or .rez)"
+                                        },
+                                        "recording": {
+                                            "type": "object",
+                                            "additionalProperties": {"type": "string"},
+                                            "description": "Which recording to read from a multi-recording .rez, as label key/value pairs (e.g. {\"source\": \"redis\"}). Must name exactly one. Call describe_recording without it first to list them."
                                         }
                                     },
                                     "required": ["parquet_file"]
@@ -528,54 +576,98 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
 
+        // Kept ahead of the open so a typo'd path says so plainly; without
+        // it the failure arrives as whatever the parquet decoder makes of a
+        // missing file.
         let path = Path::new(parquet_file);
         if !path.exists() {
-            return Err(format!("Parquet file not found: {parquet_file}").into());
+            return Err(format!("Recording file not found: {parquet_file}").into());
         }
 
-        let reader = self.get_reader(parquet_file).await?;
-        let output = super::format_recording_info(parquet_file, reader.as_ref());
+        let selector = Self::selector_of(arguments)?;
+        // The CLI's own text, not `get_reader_selected` + `format_recording_info`.
+        // With no selector a multi-recording archive is LISTED here rather
+        // than refused, and `describe_recording` is where an agent starts, so
+        // the server answering "pick one, here they are" is the behavior that
+        // has to match. Reproducing that branch here instead is how the two
+        // paths diverged the first time.
+        //
+        // The cost is that this one tool bypasses the reader cache and the
+        // shared pool (`describe_recording_output` opens with a pool of its
+        // own). It is a metadata read called once or twice a session, so the
+        // duplicated open is worth strict parity with the CLI.
+        let output = crate::mcp::describe_recording_output(path, &selector)?;
         Ok(output)
     }
 
-    /// Load or get cached ParquetReader
-    async fn get_reader(
+    /// Read the optional `recording` object from a tool call's arguments.
+    ///
+    /// Absent means "no selector", which is not the same as "any recording":
+    /// over a multi-recording archive it resolves as ambiguous and the caller
+    /// is told to choose. That is the point — the alternative is answering
+    /// from an arm nobody named.
+    fn selector_of(
+        arguments: &Value,
+    ) -> Result<crate::mcp::RecordingSelector, Box<dyn std::error::Error>> {
+        match arguments.get("recording") {
+            Some(v) => Ok(crate::mcp::RecordingSelector::from_json(v)?),
+            None => Ok(crate::mcp::RecordingSelector::default()),
+        }
+    }
+
+    /// Load or get a cached reader for `parquet_file`, honoring `selector`.
+    async fn get_reader_selected(
         &self,
         parquet_file: &str,
+        selector: &crate::mcp::RecordingSelector,
     ) -> Result<Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+        let key = (parquet_file.to_string(), selector.clone());
         {
             let cache = self.reader_cache.read().unwrap();
-            if let Some(reader) = cache.get(parquet_file) {
-                return Ok(Arc::clone(reader));
+            if let Some(hit) = cache.get(&key) {
+                return Ok(Arc::clone(&hit.source));
             }
         }
 
         let path = Path::new(parquet_file);
         if !path.exists() {
-            return Err(format!("Parquet file not found: {parquet_file}").into());
+            return Err(format!("Recording file not found: {parquet_file}").into());
         }
 
-        // The same open the one-shot CLI uses — including the refusal of a
-        // multi-recording archive. Server mode is what an AI agent actually
-        // drives, so having the CLI refuse and the server quietly answer
-        // "94 metrics, all NoData" over a 2-recording archive was the worse
-        // half of the two to leave unfixed. `open_source_with_pool` also does
-        // the `.rez`-vs-parquet dispatch by content, so it replaces the whole
+        // The same open the one-shot CLI uses — including the selector, and
+        // the refusal of a multi-recording archive that names none. Server
+        // mode is what an AI agent actually drives, so any behavior added on
+        // only one of the two paths diverges exactly as the first
+        // multi-recording refusal did: the CLI refused while the server
+        // answered `extract_features` with every metric `NoData` over a
+        // 2-recording archive. `open_source_with_pool_labeled` also does the
+        // `.rez`-vs-parquet dispatch by content, so it replaces the whole
         // branch.
-        // No selector yet: the tool schemas do not carry one, so a
-        // multi-recording archive still comes back as the listing error.
-        let reader = crate::mcp::open_source_with_pool(
-            path,
-            Arc::clone(&self.pool),
-            &crate::mcp::RecordingSelector::default(),
-        )?;
+        let (labels, reader) =
+            crate::mcp::open_source_with_pool_labeled(path, Arc::clone(&self.pool), selector)?;
+        let identity = crate::recorder::seal_policy::recording_stagger_key(&labels);
 
-        {
-            let mut cache = self.reader_cache.write().unwrap();
-            cache.insert(parquet_file.to_string(), Arc::clone(&reader));
-        }
+        let mut cache = self.reader_cache.write().unwrap();
+        // Distinct selectors can name the SAME recording (`source=redis` and
+        // `host=web-01 source=redis`), and an LLM client will emit both across
+        // a session. Collapse them onto one reader by the recording's own
+        // identity so the archive is not retained once per spelling. Matching
+        // on the path too: an identity is only meaningful within one file, and
+        // an archive with no labels at all renders the empty identity.
+        let source = cache
+            .iter()
+            .find(|((p, _), c)| p == parquet_file && c.identity == identity)
+            .map(|(_, c)| Arc::clone(&c.source))
+            .unwrap_or(reader);
+        cache.insert(
+            key,
+            CachedReader {
+                identity,
+                source: Arc::clone(&source),
+            },
+        );
 
-        Ok(reader)
+        Ok(source)
     }
 
     /// Analyze correlation between two metrics
@@ -598,7 +690,8 @@ impl Server {
             .and_then(|m| m.as_str())
             .ok_or("Missing metric2")?;
 
-        let reader = self.get_reader(parquet_file).await?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
 
         use crate::mcp::correlation::{calculate_correlation, format_correlation_result};
 
@@ -616,7 +709,8 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
 
-        let reader = self.get_reader(parquet_file).await?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
 
         use crate::mcp::describe_metrics::format_metrics_description;
         Ok(format_metrics_description(reader.as_ref()))
@@ -637,7 +731,8 @@ impl Server {
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let reader = self.get_reader(parquet_file).await?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
 
         use crate::mcp::anomaly_detection::{detect_anomalies, format_anomaly_detection_result};
 
@@ -657,7 +752,8 @@ impl Server {
             .and_then(|q| q.as_str())
             .ok_or("Missing query")?;
 
-        let reader = self.get_reader(parquet_file).await?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
 
         let (start_time, end_time) = reader.time_range().unwrap_or((0.0, 0.0));
         let step = 1.0;
@@ -678,7 +774,8 @@ impl Server {
             .and_then(|f| f.as_str())
             .ok_or("Missing parquet_file")?;
 
-        let reader = self.get_reader(parquet_file).await?;
+        let selector = Self::selector_of(arguments)?;
+        let reader = self.get_reader_selected(parquet_file, &selector).await?;
         let record = crate::analysis::extract::extract(reader.as_ref())?;
         Ok(serde_json::to_string_pretty(&record)?)
     }
@@ -742,13 +839,13 @@ mod tests {
     /// Server mode must refuse a multi-recording archive exactly as the
     /// one-shot CLI does.
     ///
-    /// This is the half that was missed the first time. `get_reader` had its
+    /// This is the half that was missed the first time. The server had its
     /// own `detect_rez_format` + `open_with_pool` branch, so the CLI refused
     /// while the stdio server — the mode an AI agent actually drives —
     /// answered `extract_features` over a 2-recording archive with every
     /// metric `NoData`, empty correlations, and a `duration_s` that was the
     /// union of two unrelated timelines. Both paths now share
-    /// `mcp::open_source_with_pool`.
+    /// `mcp::open_source_with_pool_labeled`.
     #[tokio::test]
     async fn get_reader_refuses_a_multi_recording_archive() {
         let dir = tempfile::tempdir().unwrap();
@@ -757,7 +854,10 @@ mod tests {
 
         let server = Server::new();
         let err = server
-            .get_reader(path.to_str().unwrap())
+            .get_reader_selected(
+                path.to_str().unwrap(),
+                &crate::mcp::RecordingSelector::default(),
+            )
             .await
             .err()
             .expect("server mode must refuse it, not answer NoData for every metric")
@@ -768,7 +868,7 @@ mod tests {
         );
     }
 
-    /// `get_reader` must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
+    /// The server's open must dispatch a v3 (SQLite) `.rez` to `RezReader`, not
     /// `ParquetReader::open_with_pool`. Mutation check: reverting the
     /// `detect_rez_format` check to `is_rez_path` makes this fail — a v3 file
     /// then falls through to `ParquetReader`, which errors on the SQLite
@@ -785,10 +885,15 @@ mod tests {
         );
 
         let server = Server::new();
-        let result = server.get_reader(rez_path.to_str().unwrap()).await;
+        let result = server
+            .get_reader_selected(
+                rez_path.to_str().unwrap(),
+                &crate::mcp::RecordingSelector::default(),
+            )
+            .await;
         assert!(
             result.is_ok(),
-            "get_reader must accept a v3 .rez: {:?}",
+            "the server must accept a v3 .rez: {:?}",
             result.err().map(|e| e.to_string())
         );
     }
@@ -840,5 +945,191 @@ mod tests {
         assert!(json.contains("\"result\""));
         assert!(json.contains("\"metric\""));
         assert!(json.contains("\"values\""));
+    }
+
+    #[tokio::test]
+    async fn the_server_honors_a_recording_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let server = Server::new();
+        let args = serde_json::json!({
+            "parquet_file": path.to_str().unwrap(),
+            "recording": {"source": "valkey"}
+        });
+        let out = server
+            .describe_recording(&args)
+            .await
+            .expect("a selector must work in server mode too");
+        assert!(out.contains("Recording Information"), "{out}");
+        // Not just "it opened something": the report must be ABOUT the arm
+        // that was named. A handler that resolved the selector and then read
+        // the other recording would still print a well-formed report.
+        assert!(
+            out.contains("valkey") && !out.contains("redis"),
+            "the report must describe the named arm: {out}"
+        );
+    }
+
+    /// The cache is keyed by path; two recordings from one archive must not
+    /// collide. Without the recording in the key, the second request returns
+    /// the first's reader and answers about the wrong arm.
+    #[tokio::test]
+    async fn two_recordings_of_one_archive_do_not_share_a_cache_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let p = path.to_str().unwrap();
+
+        let server = Server::new();
+        let redis = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse(["source=redis".to_string()]).unwrap(),
+            )
+            .await
+            .unwrap();
+        let valkey = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse(["source=valkey".to_string()]).unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(redis.metadata_get("source").as_deref(), Some("redis"));
+        assert_eq!(
+            valkey.metadata_get("source").as_deref(),
+            Some("valkey"),
+            "the second request must not be served the first's cached reader"
+        );
+    }
+
+    /// Two selectors that name the SAME recording share one reader.
+    ///
+    /// The cache is keyed by the resolved recording's identity, not by the
+    /// selector text, so `source=valkey` and `host=web-01 source=valkey` —
+    /// which an LLM client will realistically emit for the same arm across
+    /// two calls — do not each retain their own copy of the archive.
+    #[tokio::test]
+    async fn equivalent_selectors_share_one_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let p = path.to_str().unwrap();
+
+        let server = Server::new();
+        let narrow = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse(["source=valkey".to_string()]).unwrap(),
+            )
+            .await
+            .unwrap();
+        let wide = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse([
+                    "source=valkey".to_string(),
+                    "host=web-01".to_string(),
+                ])
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            Arc::ptr_eq(&narrow, &wide),
+            "two selectors naming one recording must not retain two readers"
+        );
+    }
+
+    /// A handler that honors `recording` is invisible if the schema never
+    /// advertises it: an MCP client sends only what the schema declares, so a
+    /// tool missing the property would leave an agent unable to name an arm
+    /// and told only that the archive holds two.
+    #[tokio::test]
+    async fn every_tool_schema_advertises_the_recording_argument() {
+        let mut server = Server::new();
+        let listing = server
+            .handle_message(json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}))
+            .await
+            .unwrap()
+            .expect("tools/list must answer");
+        let tools = listing["result"]["tools"].as_array().unwrap().clone();
+        assert_eq!(tools.len(), 6, "all six tools must be listed");
+        for tool in tools {
+            let name = tool["name"].as_str().unwrap();
+            let props = &tool["inputSchema"]["properties"];
+            assert!(
+                props.get("recording").is_some(),
+                "{name} does not advertise a recording selector"
+            );
+            // Optional on purpose: a single-recording archive — the common
+            // case — must stay callable without one.
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            assert!(
+                !required.iter().any(|r| r == "recording"),
+                "{name} must not require a selector"
+            );
+        }
+    }
+
+    /// Trap 1, mechanized: EVERY handler that opens a reader has to pass the
+    /// selector down. One that quietly dropped it would fall back to "no
+    /// selector", which over a 2-recording archive is the ambiguity error —
+    /// and that error is exactly what an agent would see instead of an answer.
+    ///
+    /// Asserting "not the ambiguity error" rather than "Ok" on purpose: some
+    /// of these tools legitimately fail on a 3-row fixture (extract_features
+    /// wants 10s of data), and that failure is not the one under test.
+    #[tokio::test]
+    async fn every_handler_honors_the_recording_selector() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        crate::mcp::tests::multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+        let p = path.to_str().unwrap();
+
+        let server = Server::new();
+        let args = json!({
+            "parquet_file": p,
+            "recording": {"source": "valkey"},
+            "query": "cpu_cycles",
+            "metric1": "cpu_cycles",
+            "metric2": "cpu_cycles",
+        });
+
+        type Outcome = Result<String, Box<dyn std::error::Error>>;
+        let outcomes: Vec<(&str, Outcome)> = vec![
+            ("describe_recording", server.describe_recording(&args).await),
+            (
+                "analyze_correlation",
+                server.analyze_correlation(&args).await,
+            ),
+            ("describe_metrics", server.describe_metrics(&args).await),
+            ("detect_anomalies", server.detect_anomalies(&args).await),
+            ("query", server.execute_query(&args).await),
+            (
+                "extract_features",
+                server.execute_extract_features(&args).await,
+            ),
+        ];
+        // Collected, not asserted in the loop: a handler-by-handler report is
+        // what makes this useful when one of the six is missed, and asserting
+        // eagerly would hide the other five behind the first.
+        let dropped: Vec<&str> = outcomes
+            .into_iter()
+            .filter(|(_, outcome)| {
+                outcome
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.to_string().contains("recordings with data"))
+            })
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            dropped.is_empty(),
+            "these handlers dropped the recording selector: {dropped:?}"
+        );
     }
 }

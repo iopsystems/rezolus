@@ -16,6 +16,12 @@ mod server;
 use chrono::{DateTime, Utc};
 use metriken_query::{MetricsSource, QueryResult};
 
+/// The chosen recording's own labels, paired with a reader over it.
+type LabeledSource = (
+    std::collections::BTreeMap<String, String>,
+    std::sync::Arc<dyn metriken_query::MetricsSource>,
+);
+
 /// Open a recording as a query source, selecting ONE recording out of a
 /// multi-recording `.rez` archive.
 ///
@@ -35,6 +41,23 @@ pub(crate) fn open_source_with_pool(
     pool: std::sync::Arc<metriken_query::BufferPool>,
     selector: &RecordingSelector,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+    open_source_with_pool_labeled(file, pool, selector).map(|(_, reader)| reader)
+}
+
+/// As `open_source_with_pool`, but also reporting WHICH recording was chosen,
+/// as that recording's own label set (empty for a plain parquet file).
+///
+/// The stdio server caches readers, and a cache keyed by the selector text
+/// would hold a second copy of the archive for every selector spelling that
+/// names the same arm (`source=redis` and `host=web-01 source=redis` are the
+/// same recording). Only the resolver knows which recording a selector landed
+/// on, so it is the only place that can say — hence the extra return value
+/// rather than a second, guessing, resolution at the call site.
+pub(crate) fn open_source_with_pool_labeled(
+    file: &std::path::Path,
+    pool: std::sync::Arc<metriken_query::BufferPool>,
+    selector: &RecordingSelector,
+) -> Result<LabeledSource, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
         == RezFormat::NotRez
@@ -55,8 +78,11 @@ pub(crate) fn open_source_with_pool(
             )
             .into());
         }
-        return Ok(std::sync::Arc::new(
-            metriken_query::ParquetReader::open_with_pool(file, pool)?,
+        // No labels: a bare parquet file is one recording with no label set
+        // of its own, which is a stable identity for exactly one path.
+        return Ok((
+            std::collections::BTreeMap::new(),
+            std::sync::Arc::new(metriken_query::ParquetReader::open_with_pool(file, pool)?),
         ));
     }
 
@@ -116,8 +142,8 @@ pub(crate) fn open_source_with_pool(
         // Every arm is empty and the caller named none of them. Opening the
         // first reports an empty recording, which is a truer answer than an
         // error about choosing between recordings that all hold nothing.
-        let (_, reader) = recordings.swap_remove(0);
-        return Ok(std::sync::Arc::new(reader));
+        let (labels, reader) = recordings.swap_remove(0);
+        return Ok((labels, std::sync::Arc::new(reader)));
     }
 
     // With every arm empty there is nothing to prefer, so the selector is
@@ -209,8 +235,8 @@ pub(crate) fn open_source_with_pool(
         }
     };
 
-    let (_, reader) = recordings.swap_remove(chosen);
-    Ok(std::sync::Arc::new(reader))
+    let (labels, reader) = recordings.swap_remove(chosen);
+    Ok((labels, std::sync::Arc::new(reader)))
 }
 
 /// Open with a selector and a fresh pool — the one-shot CLI path.

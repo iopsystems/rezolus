@@ -5,10 +5,9 @@
 //! because `mod.rs` is already large.
 //!
 //! `resolve`, `matches`, `is_empty`, `Display` and `describe_candidates` are
-//! all driven from `mcp::open_source_with_pool`, and `parse` from the
-//! `--recording` CLI flag. `from_json` is not driven yet — it lands with the
-//! stdio server's tool schemas — so it carries its own targeted `dead_code`
-//! allow until then rather than the module-wide one this file used to have.
+//! all driven from `mcp::open_source_with_pool`, `parse` from the
+//! `--recording` CLI flag, and `from_json` from the stdio server's `recording`
+//! tool argument.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -19,7 +18,13 @@ use std::fmt;
 /// but the recording may carry more. Recordings auto-carry `source` and
 /// `host` plus any `record --label`, so requiring the full set would make
 /// selectors long and brittle.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+// `Hash` so a selector can be half of a cache key as a TYPED pair. The stdio
+// server caches one reader per (path, selector); formatting the selector into
+// a string key instead would let two different selectors collide, since label
+// values are free text and `{"a": "b,c=d"}` renders the same `Display` text as
+// `{"a": "b", "c": "d"}` — and a collided key hands back a reader for the
+// wrong arm, silently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub(crate) struct RecordingSelector {
     // `BTreeMap`, not `HashMap`: `Display` renders selector text into error
     // messages, so iteration order has to be deterministic (pinned by
@@ -68,9 +73,6 @@ impl RecordingSelector {
     }
 
     /// Parse a JSON object of label key to value (the stdio-server shape).
-    // Same as `parse`: this is the stdio server's entry point and lands
-    // with the tool schemas that carry a `recording` argument.
-    #[allow(dead_code)]
     pub(crate) fn from_json(v: &serde_json::Value) -> Result<Self, String> {
         let obj = v
             .as_object()
