@@ -16,7 +16,7 @@ package manager.
 **Supported distributions:**
 - Debian: 13 (trixie/stable), 12 (bookworm/oldstable), 11 (bullseye/oldoldstable)
 - Ubuntu: 20.04 (focal), 22.04 (jammy), 24.04 (noble)
-- Rocky Linux: 9
+- Enterprise Linux 9 and 10 (Rocky Linux, AlmaLinux, RHEL, CentOS Stream, Oracle Linux)
 - Amazon Linux: 2023
 
 ```bash
@@ -51,13 +51,14 @@ echo "deb [arch=${ARCH}] https://us-apt.pkg.dev/projects/rezolus ${DISTRO}-${COD
 sudo apt update && sudo apt install rezolus
 ```
 
-### AmazonLinux/RockyLinux
+### Enterprise Linux / Amazon Linux
 
 ```bash
 # Add repository and install
 source /etc/os-release
 case "$ID" in
-    rocky) REPO_NAME="rocky9" ;;
+    # One repo per Enterprise Linux major version, shared by all derivatives.
+    rocky|almalinux|rhel|centos|ol) REPO_NAME="rocky${VERSION_ID%%.*}" ;;
     amzn) REPO_NAME="al2023" ;;
 esac
 sudo tee /etc/yum.repos.d/rezolus.repo <<EOF
@@ -84,7 +85,7 @@ symbols.
 # Debian/Ubuntu
 sudo dpkg -i rezolus_*.deb
 
-# Rocky/Amazon Linux  
+# Enterprise/Amazon Linux  
 sudo rpm -i rezolus-*.rpm
 ```
 
@@ -160,7 +161,7 @@ ls -la ../*.deb
 
 ### Building RPM Packages
 
-On a Rocky Linux or Amazon Linux system, you can build `.rpm` packages:
+On an Enterprise Linux (Rocky, Alma, RHEL, ...) or Amazon Linux system, you can build `.rpm` packages:
 
 ```bash
 # Clone the repository

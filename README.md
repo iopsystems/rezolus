@@ -465,7 +465,8 @@ curl -fsSL https://install.rezolus.com | bash
 The quick install script works on both Linux and macOS. On macOS it uses
 Homebrew if available, or falls back to Cargo. It adds the package repo,
 installs Rezolus, and starts the agent and exporter as systemd services.
-Supported distributions include Debian, Ubuntu, Rocky Linux, and Amazon Linux.
+Supported distributions include Debian, Ubuntu, Enterprise Linux 9 and 10
+(Rocky Linux, AlmaLinux, RHEL, CentOS Stream, Oracle Linux), and Amazon Linux.
 
 By default, the `rezolus` (agent) and `rezolus-exporter` services run after
 install, so Prometheus exposition is available immediately. The config assumes
