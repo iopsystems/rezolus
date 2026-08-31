@@ -297,13 +297,20 @@ fn ingest_rez_from_path(
         };
         (systeminfo, file_meta)
     }
-    fn alias_of(labels: &std::collections::BTreeMap<String, String>, fallback: &str) -> String {
-        labels
-            .get("arm")
-            .or_else(|| labels.get("host"))
-            .cloned()
-            .unwrap_or_else(|| fallback.to_string())
-    }
+    // Same rule as the file-mode path: the alias must come from a label that
+    // actually differs across these recordings, or a same-host A/B names both
+    // arms identically.
+    let alias_key = crate::viewer::discriminating_alias_key(
+        &readers.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+    );
+    let alias_of =
+        |labels: &std::collections::BTreeMap<String, String>, fallback: &str| -> String {
+            alias_key
+                .as_ref()
+                .and_then(|k| labels.get(k))
+                .cloned()
+                .unwrap_or_else(|| fallback.to_string())
+        };
 
     let n = readers.len();
     let mut readers = readers.into_iter();

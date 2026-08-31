@@ -305,6 +305,76 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   while busy tables lose seconds (measured: 16 of 26 tables recovered nothing
   from a 120 s run). Correct by policy; a WAL covering the unsealed tail would
   close it.
+- **`record` cannot write a multi-recording `.rez`** — **DONE** (this PR).
+  Source: [multi-endpoint `.rez`](journal/2026-08-28-multi-endpoint-rez-record.md).
+  Everything else in the stack is multi-recording — the manifest is a
+  `Vec<RezRecording>`, the SQLite schema keys on `(recording_id, sampler, seq)`,
+  the reader enumerates N, and `combine` assembles N offline — but
+  `src/recorder/mod.rs:842` demotes to parquet when `endpoints.len() > 1`. So
+  multi-host and A/B capture are offline-only, and two arms recorded
+  sequentially differ in load as well as in the experiment. *Also fixes:* the
+  seal stagger hashes the sampler name alone (`seal_policy.rs:164`), so two
+  agents with identical sampler sets would seal in permanent lockstep — the key
+  must widen to the sampler plus the recording's canonical label set (not the
+  recording id, which would make segmentation depend on endpoint order).
+- **Prometheus sources inside `.rez`** — Open, and it would *improve*
+  measurement honesty rather than compromise it. A scrape is one acquisition —
+  one request, one response — so it models naturally as one acquisition group
+  per target with the window set to the real HTTP round-trip. Today the
+  Prometheus path already emits windows (`prometheus.rs:335`) but they are
+  `Window::new(ns, ns)`, **zero width**: a whole scrape asserted to have been
+  read at an instant, which is exactly what
+  [all-sampler observation windows](journal/2026-07-10-all-sampler-observation-windows.md)
+  calls the lie the arc kills. The writer already ingests `Snapshot::V2` (what
+  `PrometheusConverter` emits) via `group_by_sampler`, so the `.rez` refusal at
+  `src/recorder/mod.rs:836` is a policy check, not a capability limit. *Needs:*
+  `PrometheusConverter` emitting `SnapshotV3` with **one group per target**
+  rather than `SnapshotV2` — the V1/V2 branch of `write_table_parquet`
+  (`rez.rs:305-328`) emits `<name>:window_begin`/`<name>:window_width` per value
+  column, so routing V2 in unchanged would **triple the schema width** of every
+  Prometheus table, which is exactly the cost acquisition groups removed. Also
+  needs the HTTP round-trip pair plumbed to the converter (it is handed only
+  parsed text and one `fetch_ns`, so the request instant never reaches it), the
+  embedded line timestamp dropped as a window source (see the bug below), a
+  table key for a source with no `sampler` label, and an honesty review of the
+  caching-exporter case (a round-trip window under-states if the exporter serves
+  stale values — still better than zero width). *Supersedes* an earlier
+  by-design ruling in the multi-endpoint entry, which was wrong.
+- **Prometheus embedded timestamps become epoch-anchored windows** — Open, a
+  live correctness bug on the shipping parquet path, not just a `.rez` concern.
+  Prometheus exposition allows an optional trailing timestamp in *milliseconds
+  since epoch*, intended as a federation/pushgateway staleness marker.
+  `convert` passes `fetch_ns` to `Scrape::parse_at` as the default, so
+  `sample.timestamp` is the embedded value when present and the fetch instant
+  otherwise — two semantics silently mixed within one recording. The embedded
+  value is then taken at face value by `sample_window`
+  (`src/recorder/prometheus.rs:335`): the existing test
+  `embedded_timestamp_becomes_window` asserts `m_total 3 1000` yields
+  `begin_ns == 1_000_000_000`, a window beginning **one second after the Unix
+  epoch** — decades before the recording holding it. Any exporter that emits
+  timestamps (pushgateway, federation) writes that today, and the window offset
+  is stored relative to the row timestamp, so the resulting `rate()` uncertainty
+  band is nonsense rather than merely wide. *Fix:* derive the window from the
+  recorder's own clock around its own fetch and ignore the line timestamp for
+  window purposes; keep it, if wanted, as a separate staleness field.
+- **Viewer shows only the first two recordings** — Open. `src/viewer/mod.rs:581`
+  truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
+  the writer work above, but the two should not drift: finishing that makes
+  3+-arm archives easy to produce and still unviewable.
+- **Reopening a table can panic on a live archive** — Open, pre-existing.
+  `SamplerReader::reader` (`src/rez_reader.rs:229-233`) reopens a table's
+  segments with `.expect("segments opened at probe time cannot fail to
+  reopen")`. That holds for a finished archive but not a live one: a `.rez` is
+  readable while it is written, and `table_segments` returns sealed segments
+  plus the materialized WAL tail, so a table that had rows at probe time can
+  have none at reopen. The plausible production sequence is hindsight
+  retention — `evict_before` drops everything older than the cutoff, and a
+  quiet sampler's only rows can go between the two reads — leaving the viewer
+  or MCP panicking rather than erroring. Surfaced while fixing a test that
+  raced the writer; the test's own cause was different (an unjoined writer),
+  but the assumption is unsound for the live-read case the format advertises.
+  *Fix:* return an empty/absent series for a table whose segments have gone,
+  the same way a table with no rows is already handled.
 - **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
   parquet-only, so the static-site viewer silently fails on every streamed
   recording. Pre-existing gap, newly load-bearing now that `.rez` is the
@@ -572,3 +642,73 @@ effort); promote one to a journal entry when it's picked up.
   `Plot`/`View` descriptor + component API, for live data — plus a `<rezolus-section>`
   wrapper. *Why:* a clean split between the static file-mode viewer and a future
   streaming server viewer without forking the frontend.
+- **One WAL commit (and fsync) per recording per tick** — Open, found reviewing
+  multi-endpoint `.rez` (#1109). `writer_loop` handles one `Msg::Wal` per
+  recording per tick, and `RezDb::insert_wal_rows` is one transaction — one
+  fsync at `synchronous=FULL`. An archive used to be one recording, so a tick
+  was one commit; N recordings make it N. This is the same cost `seal_batch`
+  already refuses to pay ("12 implicit commits would be 12 fsyncs at
+  `synchronous=FULL` against a ~46 ms tick"), and the argument was not carried
+  across recordings. It lands on the scrape loop: `RecordingWriter::wal` is a
+  blocking send on a bound-1 channel from inside the tick. Measured runs show
+  zero dropped ticks at 1 s and at 50 ms with two recordings, so this is not
+  urgent — but it scales linearly with endpoint count and the documented
+  multi-host example is the case that grows it. *Fix:* batch the tick — one
+  `Msg` carrying every recording's rows, committed in a single transaction, or
+  a `TickBegin`/`TickEnd` bracket. The fan-out point already exists in
+  `RezStream::ingest`. *Why:* the format's claim is bounded, predictable write
+  cost; per-tick fsyncs scaling with endpoint count quietly erodes it.
+- **A `--recording` selector for the MCP tools** — Open, the real fix behind the
+  refusal added in #1109. `RezReader::open_with_pool` flattens every recording
+  into one view, so a multi-recording archive gives each sampler two owners and
+  `route()` refuses every query as cross-recording. `mcp open_source` now
+  refuses such an archive up front with a message, because the analysis tools
+  fold a per-metric query error into `NoData` and would otherwise report
+  "analyzed N metrics, found anomalies in 0" — a clean-looking wrong answer.
+  That is honest but not useful: `record --endpoint a --endpoint b -o out.rez`
+  is now a documented, ordinary capture, and no MCP tool can read one. *Fix:*
+  a `--recording <label-selector>` on the mcp subcommands, backed by
+  `RezReader::open_recordings`, which already returns one reader per recording
+  with its labels. *Why:* multi-host and A/B captures are exactly the ones worth
+  analyzing, and the agent-facing tools are where that analysis happens.
+- **The seal stagger still aliases on bit 5 (ASCII case)** — Open, found in the
+  second review pass on #1109. The first pass closed bits 6-7 of every absorbed
+  byte, but the same algebra survives one bit lower: `x ^ 0x20` is
+  `x + 32 (mod 64)` and `51 * 32 == 32 (mod 64)`, so flipping bit 5 XORs 0x20
+  through the whole chain. Two recording keys differing by an **even** number
+  of bit-5 flips share a bucket for *every* sampler — measured 12/12 for
+  `host=Web-01` vs `host=weB-01`, and for `arm=valkey` vs `arm=VALKEY` (6
+  letters); an odd count, like `redis`/`REDIS`, does not collide. In printable
+  ASCII bit 5 is the case bit, so this needs two recordings whose labels differ
+  only in capitalisation — within one `record` run that means an operator
+  typing two `source=` values that differ only in case, which is unlikely but
+  not impossible. *Fix:* absorb `b >> 5` as a third pass, or any XOR-shift
+  finalizer before the reduction. *Why not already:* each extra fold costs some
+  of the low-bit structure that measures better than random here (0.144 vs
+  0.188 for 12 samplers), and this class is far narrower than the one closed —
+  so it is a deliberate trade to revisit with numbers, not an oversight.
+- **`RezReader::open_with_pool` has no production caller** — Open, observed
+  while fixing #1109. The viewer opens recordings individually, and `mcp` now
+  does too, because flattening a multi-recording archive gives every sampler
+  two owners and makes `route` refuse every query. The flattening entry point
+  is now exercised only by the cross-recording regression tests that pin that
+  refusal. *Fix:* either delete it and rewrite those tests against
+  `open_recordings`, or keep it and say in one place that flattening is a
+  test-only shape. *Why:* a `pub` constructor with no caller is the kind of
+  thing a future consumer reaches for by name and then inherits the refusal
+  from — the reason `mcp` had to grow an explicit guard at all.
+- **A failed `.rez` creation can leave a file that blocks the retry** — Open,
+  pre-existing, surfaced twice while reviewing #1109. `RezDb::create` claims the
+  output path with `O_EXCL`, and the writer refuses to overwrite an existing
+  `.rez` — which is the right default for a container committed as it goes, but
+  it means anything left behind by a failed start blocks the re-run until the
+  operator removes it by hand. Two windows remain: (a) `RezArchive::create`
+  failing *after* `RezDb::create` succeeded — the pragma steps or the thread
+  spawn — returns `Err` without unlinking; (b) `RezStream::discard` removes the
+  main file but not the `-wal`/`-shm` sidecars, which SQLite normally cleans on
+  a clean close but not after an unclean one. #1109 fixed the third window (a
+  partial `start_rez_recorder`, which now calls `discard()`), so these are what
+  is left of the family. *Fix:* have `RezArchive::create` unlink on its own
+  failure path, and have `discard` remove the sidecars alongside the main file.
+  *Why:* the failure mode is "the retry says the file already exists", which
+  reads as a bug in the retry rather than fallout from the original error.

@@ -1,4 +1,21 @@
-//! Streaming `.rez` writer thread. See docs/journal/2026-08-11-rez-streaming-writer.md.
+//! Streaming v1/v2 (tar) `.rez` writer thread. See
+//! docs/journal/2026-08-11-rez-streaming-writer.md.
+//!
+//! **No longer on any live path — this is a test fixture builder now.** The v3
+//! SQLite container replaced it for everything Rezolus writes: `record` and
+//! `hindsight` both go through `rez_v3_writer`, and nothing in the binary
+//! constructs a `StreamRecorder` any more.
+//!
+//! It is kept, rather than deleted, because the v1/v2 *read* path is still
+//! shipped and documented — `rezolus recording upgrade` exists to convert a tar
+//! archive to v3, and `combine` upgrades tar inputs on the way in — and this is
+//! the only way to BUILD a tar archive to test those against. Deleting it would
+//! mean either dropping that coverage or checking in binary fixtures that
+//! cannot be regenerated. Five tests depend on it today: the upgrade path
+//! (`rez_v3_rewrite`), `combine`, `filter`, `annotate`, and segmented v2
+//! reading (`rez_reader`).
+//!
+//! Retire it when the v1/v2 read path is retired, and not before.
 //!
 //! Two halves: `RezWriterHandle` owns a dedicated writer thread that encodes
 //! sealed segments to parquet and appends them to the output tar, and
@@ -22,7 +39,7 @@ use std::time::{Duration, Instant};
 use metriken_exposition::Snapshot;
 use tracing::warn;
 
-use super::seal_policy::stagger_bucket;
+use super::seal_policy::{stagger_bucket, SINGLE_RECORDING_KEY};
 use super::seal_policy::{SealPolicy, SegmentAccount};
 
 use super::rez::{
@@ -536,7 +553,12 @@ impl BuilderState {
     pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         Self {
             builder: TableBuilder::new(sampler.to_string()),
-            account: SegmentAccount::open_first(sampler, policy),
+            // The V1/V2 writer holds exactly one recording per archive — a tar
+            // has no `recordings` table to hold a second — so its stagger
+            // identity is constant. Spread across samplers is unchanged; only
+            // the particular bucket each draws differs from before the key
+            // widened, which the stagger does not depend on.
+            account: SegmentAccount::open_first(sampler, SINGLE_RECORDING_KEY, policy),
         }
     }
 
@@ -546,8 +568,8 @@ impl BuilderState {
         self.account.add_row(entries_approx_bytes(entries));
     }
 
-    fn is_due(&self, policy: &SealPolicy, now: Instant) -> bool {
-        self.account.is_due(policy, now)
+    fn is_due(&self, now: Instant) -> bool {
+        self.account.is_due(now)
     }
 
     /// Rotate onto a fresh builder after a seal.
@@ -592,7 +614,7 @@ pub(crate) fn drain_due(
     let now = Instant::now();
     let mut sealed = Vec::new();
     for (sampler, state) in builders.iter_mut() {
-        if !state.is_due(policy, now) {
+        if !state.is_due(now) {
             continue;
         }
         sealed.push((sampler.clone(), state.seal_completed(sampler, policy, now)));
@@ -1485,21 +1507,25 @@ mod tests {
     #[test]
     fn zero_bucket_sampler_still_seals() {
         const MAX_ROWS: usize = 256;
-        assert_eq!(stagger_bucket("gpu_stall"), 0, "chosen for its zero bucket");
+        assert_eq!(
+            stagger_bucket("network_interfaces", SINGLE_RECORDING_KEY),
+            0,
+            "chosen for its zero bucket"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.rez");
         let handle = RezWriterHandle::create(&out, seed()).unwrap();
         let mut rec = StreamRecorder::with_policy(handle, stagger_policy(MAX_ROWS));
 
-        let (s, ts) = multi_snap(&["gpu_stall"], 0);
+        let (s, ts) = multi_snap(&["network_interfaces"], 0);
         rec.ingest(&s, ts, 0);
         assert_eq!(
-            rec.open_targets("gpu_stall"),
+            rec.open_targets("network_interfaces"),
             Some((MAX_ROWS, Duration::from_secs(3600))),
             "bucket 0 means no reduction, i.e. the full policy"
         );
-        let sealed = first_seal_rows(&mut rec, &["gpu_stall"], MAX_ROWS as u64);
+        let sealed = first_seal_rows(&mut rec, &["network_interfaces"], MAX_ROWS as u64);
         assert_eq!(sealed[0], MAX_ROWS, "it seals at the full target");
         rec.abort();
     }

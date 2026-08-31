@@ -29,13 +29,26 @@ use metriken_exposition::Snapshot;
 
 use super::state::TimeRange;
 use crate::recorder::rez_sqlite::RezDb;
-use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
+use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
 use crate::recorder::seal_policy::SealPolicy;
 
 /// The rolling buffer. One `.rez` recording, fed a row per tick, trimmed to
 /// the configured lookback every tick.
 pub struct HindsightBuffer {
     rec: StreamRecorderV3,
+    /// The archive `rec` writes into.
+    ///
+    /// **Declared after `rec` deliberately.** Fields drop in declaration order,
+    /// and `RezArchive::drop` joins the writer thread. Dropping the archive
+    /// first would not hang — `join` sends `Msg::Shutdown` before releasing its
+    /// own sender, so the writer stops whoever still holds a clone — but it
+    /// would stop the writer while `rec` could still queue a final seal, and
+    /// that work would be dropped.
+    ///
+    /// Hindsight opens exactly one recording; the archive can hold several, and
+    /// does for a multi-endpoint `record` run.
+    #[allow(dead_code)]
+    archive: RezArchive,
     /// How far back the buffer reaches — `[general] duration`.
     lookback: Duration,
     /// The newest row stamp ingested so far. Retention is measured from THIS,
@@ -64,9 +77,11 @@ impl HindsightBuffer {
         lookback: Duration,
         policy: SealPolicy,
     ) -> Result<Self, String> {
-        let writer = RezV3Writer::create(path, seed)?;
+        let mut archive = RezArchive::create(path)?;
+        let writer = archive.add_recording(seed)?;
         Ok(Self {
             rec: StreamRecorderV3::with_policy(writer, policy),
+            archive,
             lookback,
             newest_ts: None,
             first_ts: None,
@@ -862,7 +877,7 @@ mod tests {
         // opens a SECOND connection (`RezDb::open`), so without this, the
         // read can race the async writer thread and see the file before the
         // last `ingest`/`maintain` tick actually committed — exactly what
-        // `RezV3Writer::sync`'s doc warns a second-connection reader must
+        // `RecordingWriter::sync`'s doc warns a second-connection reader must
         // guard against. Reproduced under heavy parallel-test contention on
         // a multi-core Linux container (never locally, on a quiet machine),
         // as `rows >= 6` failing with fewer rows than were ingested.

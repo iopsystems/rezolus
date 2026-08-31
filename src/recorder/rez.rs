@@ -1861,10 +1861,40 @@ pub fn build_labels(
 /// `source` label (falls back to `"recording"`). The manifest — not the dir —
 /// is authoritative for labels; this is only a human-readable tar path.
 pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
+    // `source` alone is not enough now that one archive routinely holds
+    // several recordings: the documented multi-host capture
+    // (`--endpoint web-01 --endpoint web-02`) leaves both recordings
+    // `source=rezolus`, so both would display as "rezolus" — and unlike the
+    // identical-labels case, that one draws no startup warning because the
+    // label sets genuinely differ. Qualify with whichever of `arm`/`host` is
+    // present.
     let base = labels
         .get("source")
         .map(String::as_str)
         .unwrap_or("recording");
+    // `host` first, not `arm`. `--label` is global to a run — one `Vec`
+    // applied to every endpoint — so within a single `record` invocation an
+    // `arm` label is IDENTICAL across all its recordings, while `host` is the
+    // per-endpoint one (it comes from each agent's own systeminfo). Preferring
+    // `arm` would therefore discard the only qualifier that differs and
+    // reproduce the collision this exists to fix:
+    //
+    //   record --endpoint web-01:4241 --endpoint web-02:4241 --label arm=redis
+    //     arm-first  -> both recordings slug "rezolus-redis"
+    //     host-first -> "rezolus-web-01" and "rezolus-web-02"
+    //
+    // `arm` stays as the fallback for archives `parquet combine` assembles
+    // from separately-recorded runs, where it is the label that varies and
+    // `host` may not be present at all.
+    let qualifier = labels
+        .get("host")
+        .or_else(|| labels.get("arm"))
+        .map(String::as_str);
+    let base = match qualifier {
+        Some(q) => format!("{base}-{q}"),
+        None => base.to_string(),
+    };
+    let base = base.as_str();
     let slug: String = base
         .chars()
         .map(|c| {
@@ -2123,7 +2153,7 @@ pub(crate) mod recorder_tests_support {
     /// sampler tables yet) — the cheapest fixture for tests across the crate
     /// that just need `detect_rez_format(path)` to see `V3Sqlite`.
     pub(crate) fn empty_v3_rez(path: &std::path::Path) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer};
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive};
         let seed = ManifestSeed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
@@ -2131,7 +2161,7 @@ pub(crate) mod recorder_tests_support {
             metadata: Default::default(),
             clock_anchor_wall_ns: 1_700_000_000_000_000_000,
         };
-        RezV3Writer::create(path, seed).unwrap();
+        RezArchive::single(path, seed).unwrap();
     }
 
     /// A finalized v3 `.rez` holding `ticks` rows of one counter per named
@@ -2147,7 +2177,7 @@ pub(crate) mod recorder_tests_support {
         samplers: &[&str],
         ticks: u64,
     ) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezV3Writer, StreamRecorderV3};
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
         let seed = ManifestSeed {
             labels: [
@@ -2161,7 +2191,8 @@ pub(crate) mod recorder_tests_support {
                 .collect(),
             clock_anchor_wall_ns: ANCHOR,
         };
-        let mut rec = StreamRecorderV3::new(RezV3Writer::create(path, seed).unwrap());
+        let (archive, writer) = RezArchive::single(path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
         for tick in 0..ticks {
             let ts = ANCHOR + tick * 1_000_000_000;
             let counters = samplers
@@ -2171,7 +2202,9 @@ pub(crate) mod recorder_tests_support {
                 .collect();
             rec.ingest(&snap(ts, counters), ts, 0).unwrap();
         }
-        rec.finalize((ANCHOR + ticks * 1_000_000_000, 0)).unwrap();
+        archive
+            .finalize_single_rec(rec, (ANCHOR + ticks * 1_000_000_000, 0))
+            .unwrap();
     }
 }
 
@@ -3509,6 +3542,54 @@ mod label_tests {
             .collect();
         assert_eq!(recording_dir_slug(&labels), "a-b-c");
         assert_eq!(recording_dir_slug(&BTreeMap::new()), "recording");
+    }
+
+    #[test]
+    fn recording_dir_slug_qualifies_so_a_multi_host_archive_does_not_collide() {
+        let slug = |pairs: &[(&str, &str)]| {
+            recording_dir_slug(
+                &pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            )
+        };
+        // The documented multi-host capture: both recordings are
+        // `source=rezolus`, and they draw NO identical-labels warning because
+        // the label sets genuinely differ on `host`. Without a qualifier both
+        // displayed as "rezolus".
+        assert_eq!(
+            slug(&[("source", "rezolus"), ("host", "web-01")]),
+            "rezolus-web-01"
+        );
+        assert_ne!(
+            slug(&[("source", "rezolus"), ("host", "web-01")]),
+            slug(&[("source", "rezolus"), ("host", "web-02")])
+        );
+
+        // `host` beats `arm`, because `--label` is global to a run: with
+        // `--label arm=redis` across two endpoints, `arm` is the same on both
+        // and only `host` tells them apart.
+        assert_eq!(
+            slug(&[("source", "rezolus"), ("host", "web-01"), ("arm", "redis")]),
+            "rezolus-web-01"
+        );
+        // `arm` is the fallback for a `combine`-assembled archive, where the
+        // arms were recorded separately and may carry no host.
+        assert_eq!(
+            slug(&[("source", "rezolus"), ("arm", "redis")]),
+            "rezolus-redis"
+        );
+
+        // Sanitization runs on the CONCATENATED string, not just the source.
+        assert_eq!(slug(&[("source", "a/b"), ("host", "c d")]), "a-b-c-d");
+
+        // Genuinely indistinguishable labels still collide — that is the case
+        // the recorder warns about at startup rather than papering over.
+        assert_eq!(
+            slug(&[("source", "rezolus"), ("host", "alpha")]),
+            slug(&[("source", "rezolus"), ("host", "alpha")])
+        );
     }
 }
 

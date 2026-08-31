@@ -15,22 +15,75 @@ use metriken_query::{MetricsSource, QueryResult};
 /// `RezReader` and everything else to `ParquetReader` (by content, not extension).
 /// Dispatch covers both `.rez` containers (v2 tar and v3 SQLite) — `RezReader`
 /// itself dispatches on the container internally.
-pub(crate) fn open_source(
+/// Open a recording as a query source, refusing what the analysis tools cannot
+/// read.
+///
+/// `pool` is shared so the stdio server and the one-shot CLI use one budget.
+pub(crate) fn open_source_with_pool(
     file: &std::path::Path,
+    pool: std::sync::Arc<metriken_query::BufferPool>,
 ) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     if crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
-        != RezFormat::NotRez
+        == RezFormat::NotRez
     {
-        let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
-        Ok(std::sync::Arc::new(
-            crate::rez_reader::RezReader::open_with_pool(file, pool)?,
-        ))
-    } else {
-        Ok(std::sync::Arc::new(metriken_query::ParquetReader::open(
-            file,
-        )?))
+        return Ok(std::sync::Arc::new(
+            metriken_query::ParquetReader::open_with_pool(file, pool)?,
+        ));
     }
+
+    // Open the recordings ONCE and build the reader from what comes back.
+    //
+    // `open_with_pool` would flatten them into one view, and two recordings of
+    // the same agent then give every sampler two owners, so the reader refuses
+    // each query as cross-recording — deliberately, since silently answering
+    // from one arm of an A/B is the worse failure. But the analysis tools fold
+    // a per-metric query error into `NoData`, so that refusal surfaces as
+    // "analyzed 41 metrics, found anomalies in 0": a clean-looking wrong
+    // answer, on the shape `record --endpoint a --endpoint b -o out.rez` now
+    // produces by default. So refuse here, where the message reaches the
+    // caller.
+    //
+    // Counting via a second open cost a measured 2x on every invocation —
+    // neither container's probe is catalog-only (v3 reads a segment per table,
+    // tar reads the whole archive into memory). Consuming the recordings we
+    // already have avoids that. The only field this loses versus
+    // `open_with_pool` is `filename`, which nothing under `src/mcp/` reads.
+    let mut recordings = crate::rez_reader::RezReader::open_recordings(file, pool)?;
+
+    // Count only recordings that actually hold tables. An arm that produced no
+    // rows cannot collide with anything, and the flattened reader answers such
+    // an archive correctly — refusing it would reject exactly the run this
+    // branch's own endpoint-activation fix is about.
+    let with_tables = recordings.iter().filter(|(_, r)| !r.is_empty()).count();
+    if with_tables > 1 {
+        return Err(format!(
+            "{} holds {with_tables} recordings with data (a multi-host or A/B archive), \
+             and the analysis tools read one recording at a time. Re-record the endpoint \
+             you want on its own (`record --endpoint <one> -o one.rez`), or open it in \
+             `rezolus view`, which reads two recordings as a comparison",
+            file.display()
+        )
+        .into());
+    }
+
+    // The one with data, else the first — an all-empty archive still opens, and
+    // reports an empty recording rather than erroring.
+    let idx = recordings
+        .iter()
+        .position(|(_, r)| !r.is_empty())
+        .unwrap_or(0);
+    if idx >= recordings.len() {
+        return Err(format!("{} holds no recordings", file.display()).into());
+    }
+    let (_, reader) = recordings.swap_remove(idx);
+    Ok(std::sync::Arc::new(reader))
+}
+
+pub(crate) fn open_source(
+    file: &std::path::Path,
+) -> Result<std::sync::Arc<dyn metriken_query::MetricsSource>, Box<dyn std::error::Error>> {
+    open_source_with_pool(file, metriken_query::BufferPool::new(256 * 1024 * 1024))
 }
 
 /// Format recording information for display
@@ -951,6 +1004,99 @@ mod tests {
         assert!(
             open_source(&parquet_path).is_ok(),
             "bare parquet should open as a MetricsSource"
+        );
+    }
+
+    /// Build a v3 archive holding one recording per `source`, each with rows.
+    pub(crate) fn multi_recording_rez(
+        path: &std::path::Path,
+        sources: &[&str],
+        with_rows: &[bool],
+    ) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        let mut archive = RezArchive::create(path).unwrap();
+        let mut recs: Vec<StreamRecorderV3> = Vec::new();
+        for source in sources {
+            let seed = ManifestSeed {
+                labels: [("source".to_string(), source.to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 1_000_000_000,
+            };
+            recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
+        }
+        for (i, rec) in recs.iter_mut().enumerate() {
+            if !with_rows.get(i).copied().unwrap_or(true) {
+                continue;
+            }
+            for t in 0..3u64 {
+                let ts = 1_000_000_000 * (t + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                rec.ingest(
+                    &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, w)]),
+                    ts,
+                    0,
+                )
+                .unwrap();
+            }
+        }
+        for rec in recs {
+            rec.finalize((4_000_000_000, 0)).unwrap();
+        }
+        archive.join().unwrap();
+    }
+
+    /// A multi-recording archive must be refused HERE, with a message, rather
+    /// than opening into a reader that answers nothing.
+    ///
+    /// `record --endpoint a --endpoint b -o out.rez` now produces this shape
+    /// by default. Flattening the recordings gives every sampler two owners,
+    /// so the reader refuses each query as cross-recording — which is the
+    /// right call, but `extract-features` and `detect-anomalies` fold a
+    /// per-metric query error into `NoData`, so the run would report
+    /// "analyzed N metrics, found anomalies in 0" and look clean.
+    #[test]
+    fn open_source_refuses_a_multi_recording_archive_with_a_message() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let msg = match open_source(&path) {
+            Ok(_) => panic!("a 2-recording archive must be refused"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            msg.contains("2 recordings"),
+            "the message must say how many recordings carry data: {msg}"
+        );
+        assert!(
+            msg.contains("rezolus view"),
+            "and must point at something that CAN read it: {msg}"
+        );
+        assert!(
+            !msg.contains("recording filter"),
+            "must not suggest `filter`, which cannot split by recording: {msg}"
+        );
+    }
+
+    /// An arm that produced no rows must NOT trigger the refusal.
+    ///
+    /// It collides with nothing, so the flattened view answers correctly from
+    /// the arm that has data. Refusing here would reject exactly the run this
+    /// branch's endpoint-activation fix is about — one endpoint up, one that
+    /// never produced a sample.
+    #[test]
+    fn open_source_accepts_an_archive_whose_second_arm_is_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one-empty.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+
+        let source = open_source(&path).expect("an empty second arm must not refuse");
+        assert_eq!(
+            source.counter_names(),
+            vec!["cpu_cycles".to_string()],
+            "and the arm that has data must be the one that is read"
         );
     }
 

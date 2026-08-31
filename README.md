@@ -211,16 +211,17 @@ play, which by default means `rezolus.rez`.
 
 | Extension | What it is | When |
 | --- | --- | --- |
-| `.rez` | **Default.** A per-sampler archive: one table per sampler, each at its own cadence, carrying the acquisition windows the query engine uses to bound `rate()`. | Recording a Rezolus agent. Prefer it. |
-| `.parquet` | One columnar table on a single uniform clock. | A Prometheus source, several endpoints at once, or other parquet tooling. |
+| `.rez` | **Default.** A per-sampler archive: one table per sampler, each at its own cadence, carrying the acquisition windows the query engine uses to bound `rate()`. Holds one *recording* per endpoint. | Recording one or more Rezolus agents. Prefer it. |
+| `.parquet` | One columnar table on a single uniform clock. | A Prometheus source, a run mixing Prometheus and Rezolus endpoints, or other parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
 Passing a `--format` that contradicts the extension (say `--format parquet` with
 `-o out.rez`) is an error rather than a silent choice between them. And because
-`.rez` needs a single Rezolus (msgpack) endpoint, a run that chose *no* format
-at all — no `--format`, no `-o` — falls back to `rezolus.parquet` and says so
-when the endpoint turns out to be Prometheus or there is more than one of them.
-Pass `--format rez` to make `.rez` a requirement instead.
+`.rez` needs every endpoint to be a Rezolus (msgpack) one, a run that chose *no*
+format at all — no `--format`, no `-o` — falls back to `rezolus.parquet` and says
+so when an endpoint turns out to be Prometheus. The *number* of endpoints never
+causes that fallback. Pass `--format rez` to make `.rez` a requirement instead,
+so the same situation is an error and nothing is recorded.
 
 A `.rez` output path must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file. A
@@ -241,6 +242,45 @@ drives the viewer's A/B comparison, which is what `--label arm=redis` is for:
 ```bash
 rezolus record --url http://localhost:4241 -o out.rez --label arm=redis
 ```
+
+`--label` applies to *every* recording the run produces, so in a multi-endpoint
+run it cannot tell two endpoints apart — see below.
+
+#### Several endpoints in one `.rez`
+
+A `.rez` holds one *recording* per endpoint, so several Rezolus agents can be
+captured in a single invocation and land in one archive:
+
+```bash
+rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez
+```
+
+This is what the container's `recordings` list has always modelled, and what
+`rezolus recording combine` could previously only assemble after the fact. The
+live path matters for A/B work: two arms captured *sequentially* differ in
+background load as well as in whatever the experiment changed, while two
+recordings taken concurrently share the same conditions. A two-recording `.rez`
+opens in the viewer as an A/B comparison.
+
+Each recording is identified by its label set. `host` is filled in from the
+agent's system info and `source` from the endpoint's `source=` modifier, so two
+agents on *different* hosts are already distinguishable. Two on the **same**
+host are not — and `--label` cannot separate them, because it applies to every
+recording alike. Give each endpoint its own `source=`:
+
+```bash
+rezolus record \
+  --endpoint http://localhost:4241,source=redis \
+  --endpoint http://localhost:4242,source=valkey \
+  -o ab.rez
+```
+
+If two recordings end up with identical labels, the recorder warns at startup:
+nothing downstream can tell them apart, and they will also seal their segments
+in lockstep. Every endpoint must be a Rezolus (msgpack) endpoint — a Prometheus
+one in the mix means parquet (see [Output formats](#output-formats)).
+`--separate` does not apply to `.rez`, which already keeps each endpoint as its
+own recording inside the one archive.
 
 #### `.rez` durability
 
