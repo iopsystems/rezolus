@@ -128,36 +128,72 @@ impl fmt::Display for RecordingSelector {
     }
 }
 
-/// Render the recordings an archive holds, each with the flag that picks it.
+/// Render specific recordings from an archive, each with the flag that picks
+/// it.
+///
+/// `all` is every recording's labels; `highlight` is which indices of `all`
+/// to render (an empty slice means "render all of them"). Uniqueness is
+/// always computed against `all`, never against `highlight` — that split is
+/// deliberate and prevents a real bug: describing only a matched subset
+/// (e.g. the indices `resolve` returned inside `Ambiguous`) using that
+/// subset as the uniqueness universe would call a label unique because it
+/// only looks that way among the couple of recordings being described, then
+/// hand back a `--recording` that still collides with a THIRD recording
+/// sitting elsewhere in the archive. Taking `all` separately from
+/// `highlight` makes that mistake impossible to write.
 ///
 /// Printing the selector rather than only the labels is the point: the
 /// caller's next command is a copy of a line it was just given.
 ///
 /// Deliberately unnumbered — an index would invite `--recording 1`, which is
 /// not a supported selector.
-pub(crate) fn describe_candidates(candidates: &[BTreeMap<String, String>]) -> String {
+pub(crate) fn describe_candidates(all: &[BTreeMap<String, String>], highlight: &[usize]) -> String {
+    let indices: Vec<usize> = if highlight.is_empty() {
+        (0..all.len()).collect()
+    } else {
+        highlight.to_vec()
+    };
+
     let mut out = String::new();
-    for labels in candidates {
+    for i in indices {
+        let labels = &all[i];
         let rendered: Vec<String> = labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
-        // The most specific single label that would pick this one, if any
-        // exists; otherwise the whole set (each pair its own `--recording`,
-        // since that flag is repeatable and ANDs its pairs together).
-        let unique: Vec<String> = labels
+
+        // Two recordings sharing every label are indistinguishable to any
+        // selector, and a recording with no labels at all sitting among
+        // labeled peers is unselectable for the same reason (no combination
+        // of its labels — there are none — can single it out). Echoes the
+        // recorder's own `warn_if_indistinguishable`, so both messages point
+        // at the same fix.
+        let unselectable =
+            labels.is_empty() || all.iter().enumerate().any(|(j, c)| j != i && c == labels);
+        if unselectable {
+            out.push_str(&format!(
+                "  - {}\n    cannot be selected by labels — no combination of its labels picks \
+                 it out from every other recording in the archive; re-capture giving each \
+                 --endpoint its own source=NAME\n",
+                rendered.join(", ")
+            ));
+            continue;
+        }
+
+        // Any single label unique to this recording (checked against `all`,
+        // not just `highlight`) selects it on its own; take the first in key
+        // order so the listing is byte-stable across runs. If none exists,
+        // fall back to the whole set, one pair per `--recording` flag (the
+        // flag is repeatable and ANDs its pairs together).
+        let unique = labels
             .iter()
             .filter(|(k, v)| {
-                candidates
-                    .iter()
+                all.iter()
                     .filter(|c| c.get(*k).is_some_and(|got| got == *v))
                     .count()
                     == 1
             })
             .map(|(k, v)| format!("{k}={v}"))
-            .collect();
-        let picker = if unique.is_empty() {
-            rendered.join(" --recording ")
-        } else {
-            unique[0].clone()
-        };
+            .next();
+        let picker = unique.unwrap_or_else(|| rendered.join(" --recording "));
+
         out.push_str(&format!(
             "  - {}\n    select with: --recording {picker}\n",
             rendered.join(", ")
@@ -328,6 +364,15 @@ mod tests {
     }
 
     #[test]
+    fn resolve_against_no_candidates_is_no_match() {
+        // Not a panic, not "vacuously ambiguous" — an archive that somehow
+        // holds no recordings is just as much "no match" as one that holds
+        // several none of which fit.
+        let s = RecordingSelector::default();
+        assert_eq!(s.resolve(&[]), Err(SelectError::NoMatch));
+    }
+
+    #[test]
     fn several_matches_is_an_error_not_the_first() {
         // Both arms share host=web-01. Picking the first would silently
         // analyze one arm of an A/B and present it as the answer.
@@ -335,6 +380,27 @@ mod tests {
         assert_eq!(
             s.resolve(&two_arms()),
             Err(SelectError::Ambiguous(vec![0, 1]))
+        );
+    }
+
+    #[test]
+    fn ambiguous_reports_only_the_indices_that_matched() {
+        // Three recordings, exactly two ("arm=a") match, and they are not
+        // contiguous from zero. `two_arms` alone can't catch a `resolve`
+        // that returns `(0..candidates.len())` instead of the real hits,
+        // since there every candidate matches every ambiguous test selector.
+        // The caller uses these indices to list which recordings the
+        // selector matched, so a wrong payload here would show the user
+        // recordings their selector never named.
+        let candidates = vec![
+            labels(&[("arm", "a"), ("host", "1")]),
+            labels(&[("arm", "b"), ("host", "2")]),
+            labels(&[("arm", "a"), ("host", "3")]),
+        ];
+        let s = RecordingSelector::parse(["arm=a".to_string()]).unwrap();
+        assert_eq!(
+            s.resolve(&candidates),
+            Err(SelectError::Ambiguous(vec![0, 2]))
         );
     }
 
@@ -355,18 +421,97 @@ mod tests {
         assert_eq!(s.resolve(&two_arms()[..1]), Ok(0));
     }
 
+    /// Parse the `--recording ...` lines a listing prints and confirm each
+    /// one, fed straight back through `parse` and `resolve`, actually names
+    /// the recording it was printed under.
+    ///
+    /// A round trip is the only check strong enough for this job: a `picker`
+    /// that is always the first label in key order (for `two_arms`, that's
+    /// `host=web-01` for BOTH recordings, since "host" sorts before
+    /// "source") would still pass plain substring assertions — `out` would
+    /// contain "source=redis", "source=valkey", and "--recording" no matter
+    /// what `picker` actually was. Feeding it back through `resolve` is what
+    /// catches a selector that looks plausible but doesn't work.
+    fn assert_listing_round_trips(all: &[BTreeMap<String, String>], out: &str, expect: &[usize]) {
+        let pickers: Vec<&str> = out
+            .lines()
+            .filter_map(|l| l.trim_start().strip_prefix("select with: --recording "))
+            .collect();
+        assert_eq!(
+            pickers.len(),
+            expect.len(),
+            "one selector line per rendered recording: {out}"
+        );
+        for (picker, &i) in pickers.iter().zip(expect) {
+            let pairs: Vec<String> = picker.split(" --recording ").map(str::to_string).collect();
+            let s = RecordingSelector::parse(pairs).unwrap_or_else(|e| {
+                panic!("emitted an unparseable selector for recording {i}: {e} ({picker:?})")
+            });
+            assert_eq!(
+                s.resolve(all),
+                Ok(i),
+                "the selector printed for recording {i} must resolve back to it: {picker:?}\n{out}"
+            );
+        }
+    }
+
     #[test]
     fn the_candidate_listing_names_every_recording_and_its_selector() {
-        let out = describe_candidates(&two_arms());
+        let all = two_arms();
+        let out = describe_candidates(&all, &[]);
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
+        assert_listing_round_trips(&all, &out, &[0, 1]);
+        // No indices: they invite `--recording 1`, which is not a selector.
+        // Checked against a few plausible numbering styles, not just one.
+        for pat in ["[1]", "[2]", "(1)", "(2)", "1.", "2.", "#1", "#2"] {
+            assert!(!out.contains(pat), "found index-like text {pat:?}: {out}");
+        }
+    }
+
+    #[test]
+    fn describe_candidates_computes_uniqueness_against_the_full_archive_not_the_highlighted_subset()
+    {
+        // `arm=a` matches recordings 0 and 1 (Ambiguous([0, 1])). Recording 2
+        // is not in the highlighted set, but it still carries `host=1`, the
+        // same as recording 0 — so `host=1` must NOT be offered as recording
+        // 0's selector, even though within {0, 1} alone it would look
+        // unique.
+        let all = vec![
+            labels(&[("arm", "a"), ("host", "1")]),
+            labels(&[("arm", "a"), ("host", "2")]),
+            labels(&[("arm", "b"), ("host", "1")]),
+        ];
+        assert_eq!(
+            RecordingSelector::parse(["arm=a".to_string()])
+                .unwrap()
+                .resolve(&all),
+            Err(SelectError::Ambiguous(vec![0, 1]))
+        );
+
+        let out = describe_candidates(&all, &[0, 1]);
+        assert_listing_round_trips(&all, &out, &[0, 1]);
+    }
+
+    #[test]
+    fn identical_labels_are_reported_as_unselectable_not_a_dead_end_selector() {
+        // Two recordings that carry exactly the same labels: the recorder
+        // permits this (warning only) and the reader treats it as legal, so
+        // this is reachable, not hypothetical. Offering a `--recording` for
+        // either one would be a dead end — pasting it resolves to
+        // `Ambiguous` again, forever.
+        let dup = vec![
+            labels(&[("host", "web-01"), ("source", "redis")]),
+            labels(&[("host", "web-01"), ("source", "redis")]),
+        ];
+        let out = describe_candidates(&dup, &[]);
         assert!(
-            out.contains("--recording"),
-            "the listing must show the flag that picks one: {out}"
+            !out.contains("select with: --recording"),
+            "no selector can pick between identical label sets, so none should be offered: {out}"
         );
         assert!(
-            !out.contains("[1]"),
-            "no indices — they invite `--recording 1`, which is not a selector: {out}"
+            out.contains("re-capture") && out.contains("source=NAME"),
+            "must explain why, echoing the recorder's own warning: {out}"
         );
     }
 }
