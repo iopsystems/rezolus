@@ -286,7 +286,11 @@ pub fn run(config: Config) {
             query1,
             query2,
         } => run_analyze_correlation(file, query1, query2),
-        Mode::DescribeRecording { file } => run_describe_recording(file),
+        // Task 5 wires the real `--recording` selector through to this call
+        // site; until then every CLI invocation behaves as it always has.
+        Mode::DescribeRecording { file } => {
+            run_describe_recording(file, &RecordingSelector::default())
+        }
         Mode::DescribeMetrics { file } => run_describe_metrics(file),
         Mode::DetectAnomalies { file, query } => run_detect_anomalies(file, query),
         Mode::Query { file, query } => run_query(file, query),
@@ -337,17 +341,66 @@ fn run_analyze_correlation(file: PathBuf, query1: String, query2: String) {
     }
 }
 
-fn run_describe_recording(file: PathBuf) {
-    let reader = match open_source(&file) {
-        Ok(r) => r,
+/// The text `describe-recording` prints.
+///
+/// Split from `run_describe_recording` so the behavior is testable without a
+/// process exit: this is the tool an agent reaches for first, and it is the
+/// one that used to fail on a multi-recording archive.
+pub(crate) fn describe_recording_output(
+    file: &std::path::Path,
+    selector: &RecordingSelector,
+) -> Result<String, Box<dyn std::error::Error>> {
+    use crate::recorder::rez::RezFormat;
+
+    // With no selector, a multi-recording archive is LISTED rather than
+    // refused. `describe-recording` is documented as the place to start, so
+    // making the first tool an agent calls the one that explains what to call
+    // next is the whole point.
+    if selector.is_empty()
+        && crate::recorder::rez::detect_rez_format(file).unwrap_or(RezFormat::NotRez)
+            != RezFormat::NotRez
+    {
+        let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
+        let recordings = crate::rez_reader::RezReader::open_recordings(file, pool)?;
+        let candidates: Vec<std::collections::BTreeMap<String, String>> = recordings
+            .iter()
+            .filter(|(_, r)| !r.is_empty())
+            .map(|(l, _)| l.clone())
+            .collect();
+        if candidates.len() > 1 {
+            // "recordings WITH DATA", not bare "recordings". `candidates`
+            // already excludes arms that produced no rows, and
+            // `open_source_with_pool`'s own NoMatch message names a dead arm
+            // as "recorded but produced no rows" rather than pretending it
+            // isn't there. Saying bare "N recordings" here would give a count
+            // an agent can't reconcile with that later message the moment an
+            // archive has a dead arm — this is the same inconsistency Task 3
+            // settled for the error path, carried over to the listing.
+            return Ok(format!(
+                "{} holds {} recordings with data (a multi-host or A/B archive):\n{}\nRun any \
+                 tool with one of the selectors above to analyze that recording.",
+                file.display(),
+                candidates.len(),
+                describe_candidates(&candidates, &[])
+            ));
+        }
+    }
+
+    let reader = open_source_selected(file, selector)?;
+    Ok(format_recording_info(
+        file.to_str().unwrap_or("<unknown>"),
+        reader.as_ref(),
+    ))
+}
+
+fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
+    match describe_recording_output(&file, selector) {
+        Ok(out) => println!("{out}"),
         Err(e) => {
-            eprintln!("Failed to load parquet file: {e}");
+            eprintln!("Failed to load recording: {e}");
             std::process::exit(1);
         }
-    };
-
-    let output = format_recording_info(file.to_str().unwrap_or("<unknown>"), reader.as_ref());
-    println!("{output}");
+    }
 }
 
 fn run_describe_metrics(file: PathBuf) {
@@ -1601,6 +1654,99 @@ mod tests {
             src.counter_names(),
             vec!["cpu_cycles".to_string()],
             "the arm with rows must be the one opened"
+        );
+    }
+
+    #[test]
+    fn describe_recording_lists_the_arms_instead_of_erroring() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let out = describe_recording_output(&path, &RecordingSelector::default())
+            .expect("listing is not an error — it is the answer");
+        assert!(out.contains("2 recordings"), "{out}");
+        assert!(out.contains("source=redis"), "{out}");
+        assert!(out.contains("source=valkey"), "{out}");
+        assert!(
+            out.contains("--recording"),
+            "the listing must hand back the selector to use next: {out}"
+        );
+    }
+
+    #[test]
+    fn describe_recording_with_a_selector_describes_that_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ab.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
+
+        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let out = describe_recording_output(&path, &sel).unwrap();
+        assert!(
+            out.contains("Recording Information"),
+            "a selected recording gets the ordinary single-recording format: {out}"
+        );
+    }
+
+    /// A dead arm must not be folded into the count the listing advertises.
+    ///
+    /// Three recordings, one of them empty: the listing must say "2
+    /// recordings" (with data), never "3 recordings" — the archive's own
+    /// `describe_candidates` universe only ever includes recordings that hold
+    /// rows, so claiming 3 would promise a selector listing that isn't there.
+    /// And it must not claim just "2 recordings" as if that were the whole
+    /// archive either, since a caller who later names the dead arm gets
+    /// `open_source_with_pool`'s "recorded but produced no rows" message for
+    /// it — the two messages have to be reconcilable, not contradictory.
+    #[test]
+    fn describe_recording_does_not_count_a_dead_arm_as_a_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("triple.rez");
+        multi_recording_rez(
+            &path,
+            &["redis", "valkey", "memcached"],
+            &[true, true, false],
+        );
+
+        let out = describe_recording_output(&path, &RecordingSelector::default())
+            .expect("two live arms still means \"pick one\", not an error");
+        assert!(
+            out.contains("2 recordings with data"),
+            "must count only the arms that hold rows, and say so: {out}"
+        );
+        assert!(
+            !out.contains("3 recordings"),
+            "must not report the dead arm as though it were selectable: {out}"
+        );
+        assert!(out.contains("source=redis"), "{out}");
+        assert!(out.contains("source=valkey"), "{out}");
+        assert!(
+            !out.contains("source=memcached"),
+            "the dead arm has no selector to offer, so it must not appear as a candidate: {out}"
+        );
+    }
+
+    /// Exactly one arm has data: `describe-recording` must describe it
+    /// directly rather than presenting a one-choice "pick one" listing —
+    /// this mirrors `open_source`'s own behavior (see
+    /// `an_empty_arm_with_the_same_labels_does_not_shadow_the_one_with_data`),
+    /// so a run where only one endpoint ever reported does not suddenly
+    /// require a selector just because the archive has more than one arm.
+    #[test]
+    fn describe_recording_with_a_single_live_arm_describes_it_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one-live.rez");
+        multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
+
+        let out = describe_recording_output(&path, &RecordingSelector::default())
+            .expect("a single live arm resolves without a selector");
+        assert!(
+            out.contains("Recording Information"),
+            "the ordinary single-recording format, not a listing: {out}"
+        );
+        assert!(
+            !out.contains("Pick one") && !out.contains("recordings with data"),
+            "must not present a choice when there is only one to make: {out}"
         );
     }
 }
