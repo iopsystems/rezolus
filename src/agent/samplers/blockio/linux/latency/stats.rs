@@ -24,6 +24,20 @@ pub static LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static LATENCIES_ACQ_REG: &'static AcquisitionGroup = &LATENCIES_ACQ;
 
+// A SECOND group for the 4 queue-residency histograms. Queue residency and
+// service latency are different metric families -- they measure different
+// phases of a request's life and move independently under saturation -- and
+// principle 18 keeps families in their own groups even when they are read
+// back-to-back in the same refresh. Same shape as `LATENCIES_ACQ`: the 4 op
+// classes within THIS family are like entities and share one group.
+pub static QUEUE_LATENCIES_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("blockio_latency"),
+    "blockio_latency_queue_latencies",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static QUEUE_LATENCIES_ACQ_REG: &'static AcquisitionGroup = &QUEUE_LATENCIES_ACQ;
+
 /*
  * bpf prog stats
  */
@@ -76,4 +90,36 @@ pub static BLOCKIO_FLUSH_LATENCY: RwLockHistogram =
     metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_latencies" }
 )]
 pub static BLOCKIO_DISCARD_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_queue_latency",
+    description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds",
+    metadata = { op = "read", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
+)]
+pub static BLOCKIO_READ_QUEUE_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_queue_latency",
+    description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds",
+    metadata = { op = "write", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
+)]
+pub static BLOCKIO_WRITE_QUEUE_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_queue_latency",
+    description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds",
+    metadata = { op = "flush", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
+)]
+pub static BLOCKIO_FLUSH_QUEUE_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);
+
+#[metric(
+    name = "blockio_queue_latency",
+    description = "Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds",
+    metadata = { op = "discard", unit = "nanoseconds", acq_group = "blockio_latency_queue_latencies" }
+)]
+pub static BLOCKIO_DISCARD_QUEUE_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, 64);

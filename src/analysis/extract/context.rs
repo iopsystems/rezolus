@@ -122,6 +122,9 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("blockio_bytes", "blockio_requests"),
     ("blockio_errors", "blockio_requests"),
     ("blockio_operations", "blockio_requests"),
+    // Not recoverable by prefix: neither `blockio_latency` nor
+    // `blockio_requests` is a `_`-boundary prefix of this name.
+    ("blockio_queue_latency", "blockio_latency"),
     ("blockio_requeues", "blockio_requests"),
     ("blockio_size", "blockio_requests"),
     ("cgroup_cpu_bandwidth_period_duration", "cpu_bandwidth"),

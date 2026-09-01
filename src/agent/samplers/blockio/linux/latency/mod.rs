@@ -4,7 +4,8 @@
 //! * `block_rq_complete`
 //!
 //! And produces these stats:
-//! * `blockio_latency`
+//! * `blockio_latency` (issue -> complete: how long the device took)
+//! * `blockio_queue_latency` (insert -> issue: how long the request waited)
 
 const NAME: &str = "blockio_latency";
 
@@ -41,6 +42,28 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("write_latency", &BLOCKIO_WRITE_LATENCY, &LATENCIES_ACQ)
     .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY, &LATENCIES_ACQ)
     .histogram("discard_latency", &BLOCKIO_DISCARD_LATENCY, &LATENCIES_ACQ)
+    // Queue residency is its own family, so its own group — see stats.rs's
+    // `QUEUE_LATENCIES_ACQ` doc comment.
+    .histogram(
+        "read_queue_latency",
+        &BLOCKIO_READ_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "write_queue_latency",
+        &BLOCKIO_WRITE_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "flush_queue_latency",
+        &BLOCKIO_FLUSH_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "discard_queue_latency",
+        &BLOCKIO_DISCARD_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
     .disabled_programs(if kernel_has_btf() {
         &[
             "block_rq_insert_raw",
@@ -73,6 +96,10 @@ impl SkelExt for ModSkel<'_> {
             "write_latency" => &self.maps.write_latency,
             "flush_latency" => &self.maps.flush_latency,
             "discard_latency" => &self.maps.discard_latency,
+            "read_queue_latency" => &self.maps.read_queue_latency,
+            "write_queue_latency" => &self.maps.write_queue_latency,
+            "flush_queue_latency" => &self.maps.flush_queue_latency,
+            "discard_queue_latency" => &self.maps.discard_queue_latency,
             _ => unimplemented!(),
         }
     }

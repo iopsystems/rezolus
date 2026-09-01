@@ -54,7 +54,8 @@ distribution.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `blockio_latency` | Distribution of blockio operation latency in nanoseconds | `op={read,write,flush,discard}` |
+| `blockio_latency` | Distribution of blockio operation latency in nanoseconds, from the moment the device began servicing the request until it completed | `op={read,write,flush,discard}` |
+| `blockio_queue_latency` | Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat. Requests that bypass the IO scheduler (blk-mq with the `none` elevator issues directly) have no queue phase and are absent rather than recorded as zero | `op={read,write,flush,discard}` |
 
 ### blockio_requests
 

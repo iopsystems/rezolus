@@ -65,6 +65,36 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    // Queue residency is only present on recordings made by an agent that
+    // collects it, and only on devices whose requests actually pass through an
+    // IO scheduler — blk-mq with the `none` elevator issues directly, so there
+    // is no queue phase to measure. Gate the subgroup on the metric being in
+    // the data rather than rendering empty plots where neither holds.
+    if metric_unique_label_count(data, "blockio_queue_latency", "op") > 0 {
+        let queue = latency.subgroup("Queue Wait");
+        queue.describe(
+            "Time requests spent queued before the device began servicing them. This is the \
+             component that grows under saturation — a device at its limit shows queue wait \
+             climbing while service latency above stays flat.",
+        );
+        for op in &["Read", "Write"] {
+            let op_lower = op.to_lowercase();
+            queue.histogram_rate_mean(
+                op,
+                &format!("queue-latency-{op_lower}"),
+                &format!("blockio_queue_latency{{op=\"{op_lower}\"}}"),
+                RateSource::Counter(format!(
+                    "sum(irate(blockio_operations{{op=\"{op_lower}\"}}[5m]))"
+                )),
+                Unit::Time,
+            );
+            queue.plot_promql(
+                PlotOpts::histogram_latency(*op, format!("queue-latency-{op_lower}")),
+                format!("blockio_queue_latency{{op=\"{op_lower}\"}}"),
+            );
+        }
+    }
+
     view.group(latency);
 
     let mut size = Group::new("Size", "size");
@@ -115,5 +145,17 @@ mod tests {
         // Percentile histograms still present.
         assert!(json.contains("blockio_latency{op=\"read\"}"));
         assert!(json.contains("blockio_size{op=\"write\"}"));
+    }
+
+    #[test]
+    fn queue_wait_subgroup_absent_when_the_metric_is() {
+        // An empty store models a recording from an agent that predates
+        // `blockio_queue_latency`, or a host whose requests never queue.
+        let view = generate(&MemoryStore::builder().build(), vec![]);
+        let json = serde_json::to_string(&view).unwrap().replace("\\\"", "\"");
+        assert!(!json.contains("blockio_queue_latency"));
+        assert!(!json.contains("Queue Wait"));
+        // The service-latency plots are unaffected by the gate.
+        assert!(json.contains("blockio_latency{op=\"read\"}"));
     }
 }
