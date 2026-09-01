@@ -47,8 +47,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use metriken_query::{
-    BufferPool, MetricsSource, ParquetReader, QueryError, QueryOptions, QueryResult, RateMode,
-    SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
+    BufferPool, CompositionSource, MetricsSource, ParquetReader, QueryError, QueryOptions,
+    QueryResult, RateMode, SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
 };
 
 use crate::rez::{self, RecordingBytes};
@@ -238,6 +238,16 @@ impl TableReader {
             TableReader::Segmented(r) => UnionChild::from(r),
         }
     }
+
+    /// The same borrow as [`union_child`](Self::union_child), for the other
+    /// composition: merging this table into a labelled multi-source rather
+    /// than into a same-recording union.
+    fn composition_source(&self) -> CompositionSource {
+        match self {
+            TableReader::Single(r) => CompositionSource::from(r),
+            TableReader::Segmented(r) => CompositionSource::from(r),
+        }
+    }
 }
 
 /// One opened per-table reader. A table is one or more parquet segments, so
@@ -396,6 +406,35 @@ pub struct RezReader {
 pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
 impl RezReader {
+    /// This recording's tables as composition sources, for merging the whole
+    /// recording into a labelled multi-source next to other artifacts — see
+    /// `metriken_query::ParquetBuilder::source_labeled`.
+    ///
+    /// This is the cross-*artifact* composition, distinct from the
+    /// same-recording union `route` builds: there, several tables of one
+    /// sampler answer one query under their own identities; here, the whole
+    /// recording becomes one labelled participant among several recordings,
+    /// each contributing the SAME metric names under a different injected
+    /// label. That is why these are `CompositionSource` and not `UnionChild`
+    /// — the two composers have opposite disjointness rules.
+    ///
+    /// **This opens every table.** Routing deliberately builds only the tables
+    /// a query names (see `SamplerReader::reader`), because a typical query
+    /// touches a small fraction of a large archive. A composed source cannot
+    /// work that way: the builder dispatches across its children by metric
+    /// name and needs them all up front. Callers pay the archive's full open
+    /// cost, so compose once and reuse the result rather than per query.
+    ///
+    /// A table whose segments cannot be parsed is skipped rather than
+    /// poisoning the composition, matching `SamplerReader::reader`.
+    pub fn composition_sources(&self) -> Vec<CompositionSource> {
+        self.tables
+            .iter()
+            .filter_map(|t| t.reader())
+            .map(TableReader::composition_source)
+            .collect()
+    }
+
     /// Whether this recording holds no tables at all.
     ///
     /// An arm that produced no rows — an endpoint that was reachable but never
@@ -2079,6 +2118,51 @@ mod tests {
         /// exactly this one: hindsight evicts everything older than the
         /// cutoff, and a quiet sampler's only rows go with it, so the viewer
         /// or MCP panics instead of answering.
+        /// Two recordings compose into ONE labelled multi-source, each
+        /// keeping its own injected label.
+        ///
+        /// This is the cross-artifact path a consumer needs to answer a single
+        /// query spanning several recordings and slice the answer by which one
+        /// it came from. It is the opposite composition from `route`'s
+        /// same-recording union: there the children must hold DISJOINT metric
+        /// names, here both children hold the SAME name and must stay distinct
+        /// rather than one silently winning.
+        #[test]
+        fn composition_sources_merge_recordings_under_distinct_labels() {
+            let dir = tempfile::tempdir().unwrap();
+            let a_path = dir.path().join("a.rez");
+            let b_path = dir.path().join("b.rez");
+            write_v3(&fixture_rows(6), 2, true, &a_path);
+            write_v3(&fixture_rows(6), 2, true, &b_path);
+
+            let a = open(&a_path);
+            let b = open(&b_path);
+            assert!(
+                !a.composition_sources().is_empty(),
+                "fixture sanity: the recording has tables to compose"
+            );
+
+            let mut builder = metriken_query::ParquetReader::builder();
+            for source in a.composition_sources() {
+                builder = builder.source_labeled(source, [("job", "a")]);
+            }
+            for source in b.composition_sources() {
+                builder = builder.source_labeled(source, [("job", "b")]);
+            }
+            let combined = builder.build().unwrap();
+
+            // Both arms survive, told apart by the injected label -- neither
+            // merged into the other nor dropped.
+            let mut jobs: Vec<String> = combined
+                .counter_labels("cpu_cycles")
+                .into_iter()
+                .filter_map(|l| l.get("job").cloned())
+                .collect();
+            jobs.sort();
+            jobs.dedup();
+            assert_eq!(jobs, vec!["a".to_string(), "b".to_string()]);
+        }
+
         #[test]
         fn a_table_evicted_between_probe_and_query_does_not_panic() {
             let rows = fixture_rows(6);
