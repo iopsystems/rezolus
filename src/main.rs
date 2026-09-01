@@ -166,7 +166,17 @@ fn main() {
             status_cli::run(args);
         }
         Some(("view", args)) => {
-            let config = viewer::Config::try_from(args.clone()).expect("failed to configure");
+            // A message and a non-zero exit, not a panic: every error out of
+            // `Config::try_from` is a malformed argument (an unparseable URL,
+            // a `--baseline`/`--experiment` pair with no `=`), and answering a
+            // typo with a backtrace buries the one line that says what to fix.
+            let config = match viewer::Config::try_from(args.clone()) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(2);
+                }
+            };
 
             viewer::run(config)
         }

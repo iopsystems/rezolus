@@ -322,3 +322,86 @@ fn a_whole_number_of_intervals_still_records_and_stops_on_time() {
         "--duration 2s took {elapsed:?}"
     );
 }
+
+/// `rezolus view` must refuse a recording selector it cannot resolve, with a
+/// message and a non-zero exit — never a panic, and never by falling back to
+/// some other recording.
+///
+/// End-to-end through the real binary because that is where the two failure
+/// modes live: `Config::try_from` errors used to reach `main` as an
+/// `.expect()` (a backtrace in answer to a typo), and a resolution failure
+/// exits from inside `init_file_mode_rez`, which in-process tests cannot
+/// observe. It records a genuine two-recording archive first, so the listing
+/// it prints is one a real capture produces.
+///
+/// Only the refusal paths are driven: a selector that RESOLVES starts a web
+/// server and blocks, which is covered by the in-process tests in
+/// `src/viewer/mod.rs`.
+#[test]
+fn view_refuses_a_recording_selector_it_cannot_resolve() {
+    let a = spawn_fake_agent();
+    let b = spawn_fake_agent();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("fleet.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{a},source=redis"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{b},source=valkey"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    assert!(
+        out.status.success(),
+        "recording two endpoints must exit 0\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let view = |args: &[&str]| -> (Option<i32>, String) {
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("view")
+            .arg(&output)
+            .args(args)
+            .output()
+            .expect("failed to run rezolus view");
+        (
+            out.status.code(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    };
+
+    // A selector that names nothing: refused, listing what the archive holds.
+    let (code, text) = view(&["--baseline", "source=nope"]);
+    assert_eq!(code, Some(1), "a dead selector must exit non-zero: {text}");
+    assert!(
+        text.contains("source=redis") && text.contains("source=valkey"),
+        "the refusal must list the archive's recordings: {text}"
+    );
+    assert!(
+        !text.contains("panicked"),
+        "a dead selector is a user error, not a crash: {text}"
+    );
+
+    // A malformed pair: refused before anything is opened, by name.
+    let (code, text) = view(&["--baseline", "redis"]);
+    assert_eq!(code, Some(2), "a malformed pair must exit non-zero: {text}");
+    assert!(
+        text.contains("--baseline") && text.contains("key=value"),
+        "the message must say what the flag expects: {text}"
+    );
+    assert!(
+        !text.contains("panicked"),
+        "a typo must not produce a backtrace: {text}"
+    );
+}

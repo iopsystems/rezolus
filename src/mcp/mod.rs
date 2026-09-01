@@ -385,7 +385,7 @@ pub(crate) fn open_source_selected(
         file,
         metriken_query::BufferPool::new(256 * 1024 * 1024),
         selector,
-        SelectorSyntax::Flags,
+        SelectorSyntax::Flag("--recording"),
     )
 }
 
@@ -649,7 +649,7 @@ fn listing(
 }
 
 fn run_describe_recording(file: PathBuf, selector: &RecordingSelector) {
-    match describe_recording_output(&file, selector, SelectorSyntax::Flags) {
+    match describe_recording_output(&file, selector, SelectorSyntax::Flag("--recording")) {
         Ok(out) => println!("{out}"),
         Err(e) => {
             eprintln!("Failed to load recording: {e}");
@@ -918,7 +918,7 @@ fn run_extract_features(file: PathBuf, selector: &RecordingSelector) {
     // deciding sampler inference from that field alone would leave every
     // unlabeled metric `unattributed` on exactly the archives this selector
     // exists to read.
-    let opened = match open_selected_labeled(&file, selector, SelectorSyntax::Flags) {
+    let opened = match open_selected_labeled(&file, selector, SelectorSyntax::Flag("--recording")) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("Failed to load recording: {e}");
@@ -1125,6 +1125,7 @@ impl TryFrom<ArgMatches> for Config {
             // than run; absent means "no selector", like every other
             // subcommand that omits the flag.
             Some((_, sub)) => RecordingSelector::parse(
+                "--recording",
                 sub.try_get_many::<String>("RECORDING")
                     .ok()
                     .flatten()
@@ -1708,7 +1709,7 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let src = open_source_selected(&path, &sel).expect("the selector names one recording");
         // Asserted by VALUE, not merely "some series came back": both arms
         // hold `cpu_cycles`, so an assertion that data exists would pass even
@@ -1745,7 +1746,7 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("must not fall back to any recording"),
             Err(e) => e.to_string(),
@@ -1765,7 +1766,7 @@ mod tests {
 
         // Both arms carry host=web-01, so selecting on it matches two. This
         // must NOT fall through to the first.
-        let sel = RecordingSelector::parse(["host=web-01".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["host=web-01".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("an ambiguous selector must not pick an arm"),
             Err(e) => e.to_string(),
@@ -1783,7 +1784,7 @@ mod tests {
         let bytes = crate::recorder::rez::write_table_parquet(&tables[0]).unwrap();
         std::fs::write(&parquet_path, bytes).unwrap();
 
-        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         let msg = match open_source_selected(&parquet_path, &sel) {
             Ok(_) => panic!("a parquet file has no recordings to select"),
             Err(e) => e.to_string(),
@@ -1839,7 +1840,7 @@ mod tests {
         let path = dir.path().join("both-empty.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
 
-        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let src = open_source_selected(&path, &sel).expect("the named arm still opens");
         assert!(src.counter_names().is_empty(), "it really is empty");
         assert_eq!(
@@ -1868,7 +1869,7 @@ mod tests {
         let path = dir.path().join("both-empty.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
 
-        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("must not fall back to an arm the selector did not name"),
             Err(e) => e.to_string(),
@@ -1895,7 +1896,7 @@ mod tests {
         let path = dir.path().join("one-empty.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
 
-        let sel = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("an empty arm holds nothing to analyze"),
             Err(e) => e.to_string(),
@@ -1927,8 +1928,11 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let sel = RecordingSelector::parse(["host=web-01".to_string(), "source=nope".to_string()])
-            .unwrap();
+        let sel = RecordingSelector::parse(
+            "--recording",
+            ["host=web-01".to_string(), "source=nope".to_string()],
+        )
+        .unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("no arm matches source=nope"),
             Err(e) => e.to_string(),
@@ -1960,7 +1964,7 @@ mod tests {
             &[true, true, true],
         );
 
-        let sel = RecordingSelector::parse(["arm=a".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["arm=a".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("arm=a matches two recordings"),
             Err(e) => e.to_string(),
@@ -1997,9 +2001,12 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("listing is not an error — it is the answer");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("listing is not an error — it is the answer");
         assert!(out.contains("2 recordings"), "{out}");
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
@@ -2019,9 +2026,12 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("listing is the answer");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("listing is the answer");
         assert!(
             out.contains("select with: --recording source=redis"),
             "{out}"
@@ -2032,7 +2042,7 @@ mod tests {
         );
 
         // And the error leads, not just the listing.
-        let sel = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         let msg = match open_source_selected(&path, &sel) {
             Ok(_) => panic!("source=nope names no arm"),
             Err(e) => e.to_string(),
@@ -2047,8 +2057,9 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
-        let out = describe_recording_output(&path, &sel, SelectorSyntax::Flags).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
+        let out =
+            describe_recording_output(&path, &sel, SelectorSyntax::Flag("--recording")).unwrap();
         assert!(
             out.contains("Recording Information"),
             "a selected recording gets the ordinary single-recording format: {out}"
@@ -2075,9 +2086,12 @@ mod tests {
             &[true, true, false],
         );
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("two live arms still means \"pick one\", not an error");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("two live arms still means \"pick one\", not an error");
         assert!(
             out.contains("2 recordings with data"),
             "must count only the arms that hold rows, and say so: {out}"
@@ -2106,9 +2120,12 @@ mod tests {
         let path = dir.path().join("one-live.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, false]);
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("a single live arm resolves without a selector");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("a single live arm resolves without a selector");
         assert!(
             out.contains("Recording Information"),
             "the ordinary single-recording format, not a listing: {out}"
@@ -2135,9 +2152,12 @@ mod tests {
         let path = dir.path().join("both-empty.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[false, false]);
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("describing is not an error — the file is readable");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("describing is not an error — the file is readable");
         assert!(
             !out.contains("Recording Information"),
             "must not describe arm 0 as though it were the whole file: {out}"
@@ -2171,9 +2191,12 @@ mod tests {
         let path = dir.path().join("dup.rez");
         multi_recording_rez(&path, &["redis", "redis"], &[true, true]);
 
-        let out =
-            describe_recording_output(&path, &RecordingSelector::default(), SelectorSyntax::Flags)
-                .expect("a listing, not an error");
+        let out = describe_recording_output(
+            &path,
+            &RecordingSelector::default(),
+            SelectorSyntax::Flag("--recording"),
+        )
+        .expect("a listing, not an error");
         assert!(
             !out.contains("select with:"),
             "identical labels leave nothing to offer: {out}"
@@ -2202,8 +2225,9 @@ mod tests {
         let path = dir.path().join("ab.rez");
         multi_recording_rez(&path, &["redis", "valkey"], &[true, true]);
 
-        let sel = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
-        let opened = open_selected_labeled(&path, &sel, SelectorSyntax::Flags).unwrap();
+        let sel = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
+        let opened =
+            open_selected_labeled(&path, &sel, SelectorSyntax::Flag("--recording")).unwrap();
         assert_eq!(
             opened.reader.source(),
             "redis",
@@ -2229,7 +2253,7 @@ mod tests {
         let opened = open_selected_labeled(
             &parquet_path,
             &RecordingSelector::default(),
-            SelectorSyntax::Flags,
+            SelectorSyntax::Flag("--recording"),
         )
         .unwrap();
         assert!(!opened.rezolus_native);
@@ -2263,7 +2287,7 @@ mod tests {
             // rendering choice part of this test's contract.
             assert_eq!(
                 cfg.recording,
-                RecordingSelector::parse(["source=redis".to_string()]).unwrap(),
+                RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap(),
                 "for {sub}"
             );
         }
@@ -2343,8 +2367,11 @@ mod tests {
         let cfg = Config::try_from(m).unwrap();
         assert_eq!(
             cfg.recording,
-            RecordingSelector::parse(["host=web-01".to_string(), "source=redis".to_string()])
-                .unwrap()
+            RecordingSelector::parse(
+                "--recording",
+                ["host=web-01".to_string(), "source=redis".to_string()]
+            )
+            .unwrap()
         );
     }
 

@@ -46,26 +46,36 @@ pub(crate) enum SelectError {
 impl RecordingSelector {
     /// Parse repeated `k=v` arguments (the CLI shape).
     ///
+    /// `flag` is the option these pairs arrived on — `--recording` for the
+    /// MCP subcommands, `--baseline`/`--experiment` for the viewer's two A/B
+    /// slots. It is a parameter rather than a constant because every message
+    /// this function produces is advice about a flag the caller typed, and
+    /// naming a different flag than the one they typed sends them to fix an
+    /// argument they never passed.
+    ///
     /// A key must be non-empty and appear at most once: this is the one
     /// module whose entire job is refusing to resolve ambiguity silently, so
     /// letting `--recording host=a --recording host=b` collapse to `host=b`
     /// via last-write-wins would be that same failure creeping in one layer
     /// earlier. A value may itself contain `=` (`split_once` splits on the
     /// first one only), which is deliberate: label values are free text.
-    pub(crate) fn parse(pairs: impl IntoIterator<Item = String>) -> Result<Self, String> {
+    pub(crate) fn parse(
+        flag: &str,
+        pairs: impl IntoIterator<Item = String>,
+    ) -> Result<Self, String> {
         let mut labels = BTreeMap::new();
         for p in pairs {
             let (k, v) = p
                 .split_once('=')
-                .ok_or_else(|| format!("--recording expects key=value, got {p:?} with no '='"))?;
+                .ok_or_else(|| format!("{flag} expects key=value, got {p:?} with no '='"))?;
             if k.is_empty() {
                 return Err(format!(
-                    "--recording expects key=value, got {p:?} with an empty key"
+                    "{flag} expects key=value, got {p:?} with an empty key"
                 ));
             }
             if let Some(prev) = labels.insert(k.to_string(), v.to_string()) {
                 return Err(format!(
-                    "--recording {k}= specified more than once ({prev:?} and {v:?})"
+                    "{flag} {k}= specified more than once ({prev:?} and {v:?})"
                 ));
             }
         }
@@ -162,8 +172,12 @@ impl fmt::Display for RecordingSelector {
 /// dead end lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectorSyntax {
-    /// `--recording k=v --recording k=v` — the one-shot CLI subcommands.
-    Flags,
+    /// `FLAG k=v FLAG k=v` — a repeatable CLI flag, named by the variant's
+    /// payload (`--recording` for the MCP subcommands, `--baseline` or
+    /// `--experiment` for the viewer's two A/B slots). The name travels with
+    /// the syntax so a listing rendered for one front end can never advertise
+    /// another front end's flag.
+    Flag(&'static str),
     /// `recording {"k": "v"}` — the stdio server's tool argument.
     Json,
 }
@@ -182,13 +196,13 @@ fn picker_form(
 ) -> String {
     let pairs: Vec<(String, String)> = pairs.into_iter().collect();
     match syntax {
-        SelectorSyntax::Flags => format!(
-            "--recording {}",
+        SelectorSyntax::Flag(flag) => format!(
+            "{flag} {}",
             pairs
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect::<Vec<_>>()
-                .join(" --recording ")
+                .join(&format!(" {flag} "))
         ),
         SelectorSyntax::Json => format!(
             "recording {{{}}}",
@@ -363,7 +377,7 @@ mod tests {
 
     #[test]
     fn parses_key_value_pairs() {
-        let s = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         assert!(!s.is_empty());
         assert_eq!(s.to_string(), "source=redis");
     }
@@ -373,7 +387,7 @@ mod tests {
         // Not silently ignored: `--recording redis` is a plausible typo for
         // `--recording source=redis`, and dropping it would run against the
         // wrong recording rather than say so.
-        let err = RecordingSelector::parse(["redis".to_string()]).unwrap_err();
+        let err = RecordingSelector::parse("--recording", ["redis".to_string()]).unwrap_err();
         assert!(
             err.contains("redis"),
             "the error must quote the input: {err}"
@@ -388,7 +402,7 @@ mod tests {
         // recording ever, since `matches` looks the empty key up on real
         // label maps and never finds it, so the failure would surface as
         // "no recording matches" instead of "that isn't a key=value".
-        let err = RecordingSelector::parse(["=redis".to_string()]).unwrap_err();
+        let err = RecordingSelector::parse("--recording", ["=redis".to_string()]).unwrap_err();
         assert!(
             err.contains("=redis"),
             "the error must quote the input: {err}"
@@ -400,7 +414,7 @@ mod tests {
     fn an_empty_value_is_fine() {
         // Unlike an empty key, an empty value is a legitimate label value,
         // not a typo, so it must not be rejected the same way.
-        let s = RecordingSelector::parse(["source=".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=".to_string()]).unwrap();
         assert!(s.matches(&labels(&[("source", "")])));
     }
 
@@ -410,7 +424,8 @@ mod tests {
         // module exists to refuse, just resolved one step before `resolve`
         // ever runs.
         let err =
-            RecordingSelector::parse(["host=a".to_string(), "host=b".to_string()]).unwrap_err();
+            RecordingSelector::parse("--recording", ["host=a".to_string(), "host=b".to_string()])
+                .unwrap_err();
         assert!(err.contains("host"), "{err}");
         assert!(err.contains('a') && err.contains('b'), "{err}");
     }
@@ -421,7 +436,7 @@ mod tests {
         // free text and may legitimately contain '='. Pinned here so a
         // future "simplify this" pass doesn't swap it and silently truncate
         // values like this one.
-        let s = RecordingSelector::parse(["label=a=b".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["label=a=b".to_string()]).unwrap();
         assert!(s.matches(&labels(&[("label", "a=b")])));
     }
 
@@ -437,26 +452,29 @@ mod tests {
 
     #[test]
     fn matching_is_a_subset_not_an_equality() {
-        let s = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         assert!(s.matches(&labels(&[("source", "redis"), ("host", "web-01")])));
     }
 
     #[test]
     fn a_differing_value_does_not_match() {
-        let s = RecordingSelector::parse(["source=redis".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=redis".to_string()]).unwrap();
         assert!(!s.matches(&labels(&[("source", "valkey")])));
     }
 
     #[test]
     fn a_missing_key_does_not_match() {
-        let s = RecordingSelector::parse(["arm=a".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["arm=a".to_string()]).unwrap();
         assert!(!s.matches(&labels(&[("source", "redis")])));
     }
 
     #[test]
     fn several_pairs_are_anded() {
-        let s = RecordingSelector::parse(["source=redis".to_string(), "host=web-01".to_string()])
-            .unwrap();
+        let s = RecordingSelector::parse(
+            "--recording",
+            ["source=redis".to_string(), "host=web-01".to_string()],
+        )
+        .unwrap();
         assert!(s.matches(&labels(&[("source", "redis"), ("host", "web-01")])));
         assert!(!s.matches(&labels(&[("source", "redis"), ("host", "web-02")])));
     }
@@ -466,7 +484,11 @@ mod tests {
         // Not just "some order" — swapping the backing map for a `HashMap`
         // must not pass this test, since `Display` output lands in error
         // messages that need to be reproducible.
-        let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
+        let s = RecordingSelector::parse(
+            "--recording",
+            ["host=b".to_string(), "source=a".to_string()],
+        )
+        .unwrap();
         assert_eq!(s.to_string(), "host=b,source=a");
     }
 
@@ -478,11 +500,12 @@ mod tests {
     /// told to type something that does not work.
     fn reparse(rendered: &str, syntax: SelectorSyntax) -> RecordingSelector {
         match syntax {
-            SelectorSyntax::Flags => RecordingSelector::parse(
+            SelectorSyntax::Flag(flag) => RecordingSelector::parse(
+                flag,
                 rendered
-                    .strip_prefix("--recording ")
+                    .strip_prefix(&format!("{flag} "))
                     .unwrap_or_else(|| panic!("not a flag-form selector: {rendered:?}"))
-                    .split(" --recording ")
+                    .split(&format!(" {flag} "))
                     .map(str::to_string),
             )
             .unwrap_or_else(|e| panic!("unparseable flag selector {rendered:?}: {e}")),
@@ -500,9 +523,13 @@ mod tests {
 
     #[test]
     fn the_flag_form_round_trips_where_display_does_not() {
-        let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
+        let s = RecordingSelector::parse(
+            "--recording",
+            ["host=b".to_string(), "source=a".to_string()],
+        )
+        .unwrap();
         assert_eq!(
-            s.render(SelectorSyntax::Flags),
+            s.render(SelectorSyntax::Flag("--recording")),
             "--recording host=b --recording source=a"
         );
 
@@ -512,13 +539,49 @@ mod tests {
         // `host="b,source=a"` that matches nothing. Error text tells the
         // caller to adjust and retry a selector, so it must print the form
         // that round-trips.
-        let pasted = RecordingSelector::parse([s.to_string()]).unwrap();
+        let pasted = RecordingSelector::parse("--recording", [s.to_string()]).unwrap();
         assert_ne!(pasted, s, "Display must not be mistaken for pasteable");
 
         assert_eq!(
-            reparse(&s.render(SelectorSyntax::Flags), SelectorSyntax::Flags),
+            reparse(
+                &s.render(SelectorSyntax::Flag("--recording")),
+                SelectorSyntax::Flag("--recording")
+            ),
             s,
             "the flag form must round-trip through parse"
+        );
+    }
+
+    /// A second front end spells its selectors with its own flags. Every
+    /// message it renders must name THOSE flags: the viewer takes
+    /// `--baseline`/`--experiment`, and a listing that told its user to type
+    /// `--recording` would be advice `rezolus view` rejects outright.
+    ///
+    /// Mutation check: hard-coding `"--recording"` back into `picker_form`
+    /// or `parse` fails this.
+    #[test]
+    fn a_front_end_with_other_flags_is_rendered_and_parsed_in_its_own_flags() {
+        let s =
+            RecordingSelector::parse("--baseline", ["host=b".to_string(), "source=a".to_string()])
+                .unwrap();
+        let rendered = s.render(SelectorSyntax::Flag("--baseline"));
+        assert_eq!(rendered, "--baseline host=b --baseline source=a");
+        assert!(
+            !rendered.contains("--recording"),
+            "a viewer-facing selector must not advertise the MCP flag: {rendered}"
+        );
+        assert_eq!(
+            reparse(&rendered, SelectorSyntax::Flag("--baseline")),
+            s,
+            "the viewer's flag form must round-trip through parse"
+        );
+
+        // Parse errors are advice about an argument the caller typed, so they
+        // name the flag it arrived on.
+        let err = RecordingSelector::parse("--experiment", ["redis".to_string()]).unwrap_err();
+        assert!(
+            err.contains("--experiment") && !err.contains("--recording"),
+            "parse error must name the flag the caller used: {err}"
         );
     }
 
@@ -527,7 +590,11 @@ mod tests {
     /// JSON that survives `from_json`, not CLI syntax.
     #[test]
     fn the_json_form_round_trips_through_the_server_parser() {
-        let s = RecordingSelector::parse(["host=b".to_string(), "source=a".to_string()]).unwrap();
+        let s = RecordingSelector::parse(
+            "--recording",
+            ["host=b".to_string(), "source=a".to_string()],
+        )
+        .unwrap();
         let rendered = s.render(SelectorSyntax::Json);
         assert_eq!(rendered, r#"recording {"host": "b", "source": "a"}"#);
         assert!(
@@ -543,7 +610,8 @@ mod tests {
     /// revision, a command line), so this is not hypothetical.
     #[test]
     fn the_json_form_escapes_label_values() {
-        let s = RecordingSelector::parse([r#"cmd=say "hi"\now"#.to_string()]).unwrap();
+        let s =
+            RecordingSelector::parse("--recording", [r#"cmd=say "hi"\now"#.to_string()]).unwrap();
         let rendered = s.render(SelectorSyntax::Json);
         assert_eq!(reparse(&rendered, SelectorSyntax::Json), s);
     }
@@ -579,13 +647,13 @@ mod tests {
 
     #[test]
     fn resolves_to_the_one_matching_recording() {
-        let s = RecordingSelector::parse(["source=valkey".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=valkey".to_string()]).unwrap();
         assert_eq!(s.resolve(&two_arms()), Ok(1));
     }
 
     #[test]
     fn no_match_is_an_error_not_a_default() {
-        let s = RecordingSelector::parse(["source=nope".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["source=nope".to_string()]).unwrap();
         assert_eq!(s.resolve(&two_arms()), Err(SelectError::NoMatch));
     }
 
@@ -602,7 +670,7 @@ mod tests {
     fn several_matches_is_an_error_not_the_first() {
         // Both arms share host=web-01. Picking the first would silently
         // analyze one arm of an A/B and present it as the answer.
-        let s = RecordingSelector::parse(["host=web-01".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["host=web-01".to_string()]).unwrap();
         assert_eq!(
             s.resolve(&two_arms()),
             Err(SelectError::Ambiguous(vec![0, 1]))
@@ -623,7 +691,7 @@ mod tests {
             labels(&[("arm", "b"), ("host", "2")]),
             labels(&[("arm", "a"), ("host", "3")]),
         ];
-        let s = RecordingSelector::parse(["arm=a".to_string()]).unwrap();
+        let s = RecordingSelector::parse("--recording", ["arm=a".to_string()]).unwrap();
         assert_eq!(
             s.resolve(&candidates),
             Err(SelectError::Ambiguous(vec![0, 2]))
@@ -689,7 +757,7 @@ mod tests {
         highlight: &[usize],
         expect: &[usize],
     ) {
-        for syntax in [SelectorSyntax::Flags, SelectorSyntax::Json] {
+        for syntax in [SelectorSyntax::Flag("--recording"), SelectorSyntax::Json] {
             let out = describe_candidates(all, highlight, syntax);
             assert_listing_round_trips(all, &out, expect, syntax);
         }
@@ -698,10 +766,10 @@ mod tests {
     #[test]
     fn the_candidate_listing_names_every_recording_and_its_selector() {
         let all = two_arms();
-        let out = describe_candidates(&all, &[], SelectorSyntax::Flags);
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
         assert!(out.contains("source=redis"), "{out}");
         assert!(out.contains("source=valkey"), "{out}");
-        assert_listing_round_trips(&all, &out, &[0, 1], SelectorSyntax::Flags);
+        assert_listing_round_trips(&all, &out, &[0, 1], SelectorSyntax::Flag("--recording"));
         assert_listing_round_trips_both(&all, &[], &[0, 1]);
         // No indices: they invite `--recording 1`, which is not a selector.
         // Checked against a few plausible numbering styles, not just one.
@@ -724,7 +792,7 @@ mod tests {
             labels(&[("arm", "b"), ("host", "1")]),
         ];
         assert_eq!(
-            RecordingSelector::parse(["arm=a".to_string()])
+            RecordingSelector::parse("--recording", ["arm=a".to_string()])
                 .unwrap()
                 .resolve(&all),
             Err(SelectError::Ambiguous(vec![0, 1]))
@@ -744,7 +812,7 @@ mod tests {
             labels(&[("host", "web-01"), ("source", "redis")]),
             labels(&[("host", "web-01"), ("source", "redis")]),
         ];
-        let out = describe_candidates(&dup, &[], SelectorSyntax::Flags);
+        let out = describe_candidates(&dup, &[], SelectorSyntax::Flag("--recording"));
         assert!(
             !out.contains("select with:"),
             "no selector can pick between identical label sets, so none should be offered: {out}"
@@ -783,12 +851,12 @@ mod tests {
             labels(&[("arm", "baseline"), ("host", "h"), ("source", "rezolus")]),
             labels(&[("host", "h"), ("source", "rezolus")]),
         ];
-        let out = describe_candidates(&all, &[], SelectorSyntax::Flags);
+        let out = describe_candidates(&all, &[], SelectorSyntax::Flag("--recording"));
         // Only recording 0 gets a selector (`arm=baseline`); recording 1 gets
         // the unselectable note. The round trip is what proves it: before the
         // fix, recording 1 was offered `--recording host=h --recording
         // source=rezolus`, which resolves to `Ambiguous([0, 1])`.
-        assert_listing_round_trips(&all, &out, &[0], SelectorSyntax::Flags);
+        assert_listing_round_trips(&all, &out, &[0], SelectorSyntax::Flag("--recording"));
         assert_listing_round_trips_both(&all, &[], &[0]);
         assert!(
             out.contains("cannot be selected by labels"),

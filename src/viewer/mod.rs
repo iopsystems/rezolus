@@ -96,7 +96,10 @@ pub fn command() -> Command {
              - nothing (upload-only):    rezolus view    (drag files in from the browser)\n\n\
              A .rez archive loads its per-sampler tables directly. A 2-recording .rez is shown\n\
              as an A/B baseline/experiment comparison (aliases derived from each recording's\n\
-             arm/host labels); a .rez with more than two recordings shows the first two.\n\n\
+             arm/host labels). With more than two recordings it shows the first two unless\n\
+             --baseline/--experiment name which ones by label (repeatable, ANDed, subset\n\
+             match); each must name exactly one recording. `rezolus mcp describe-recording\n\
+             FILE.rez` lists an archive's recordings.\n\n\
              Either positional may be given as alias=path (e.g. redis=./a.parquet) to set the\n\
              display label; the internal slots stay baseline/experiment. The second positional\n\
              (A/B experiment) is only honored when the first is a parquet file — live and\n\
@@ -124,6 +127,8 @@ pub fn command() -> Command {
              rezolus view --tui http://localhost:4241\n\n    \
              # A/B compare two recordings with display labels\n    \
              rezolus view redis=baseline.parquet valkey=experiment.parquet\n\n    \
+             # Pick two arms out of a multi-recording .rez\n    \
+             rezolus view fleet.rez --baseline host=web-01 --experiment host=web-02\n\n    \
              # Stream live from a remote agent on a fixed address\n    \
              rezolus view http://host:4241 --listen 127.0.0.1:8080\n\n    \
              # Upload-only mode: start with no file, then upload from the browser\n    \
@@ -234,6 +239,32 @@ pub fn command() -> Command {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
+            clap::Arg::new("BASELINE_RECORDING")
+                .long("baseline")
+                .value_name("KEY=VALUE")
+                .help(
+                    "Which recording of a multi-recording .rez fills the baseline slot, \
+                     named by labels (repeatable, ANDed; a recording matches when it \
+                     carries every pair given). Must name exactly one recording: matching \
+                     none or several is an error listing the candidates. On its own it \
+                     shows that one recording; pair it with --experiment to choose both \
+                     sides of the A/B. `rezolus mcp describe-recording FILE.rez` lists an \
+                     archive's recordings and their labels.",
+                )
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
+            clap::Arg::new("EXPERIMENT_RECORDING")
+                .long("experiment")
+                .value_name("KEY=VALUE")
+                .help(
+                    "Which recording of a multi-recording .rez fills the experiment slot \
+                     (repeatable, ANDed). Needs --baseline: it names the second arm of a \
+                     comparison, not the first.",
+                )
+                .action(clap::ArgAction::Append),
+        )
+        .arg(
             clap::Arg::new("CACHE_SIZE_MB")
                 .long("cache-size-mb")
                 .value_name("MB")
@@ -262,6 +293,17 @@ pub struct Config {
     cache_size_bytes: usize,
     /// Render a terminal UI instead of the web dashboard.
     tui: bool,
+    /// Label selectors naming which recordings of a multi-recording `.rez`
+    /// fill the A/B slots. An empty selector means the flag was not given.
+    baseline_recording: crate::mcp::RecordingSelector,
+    experiment_recording: crate::mcp::RecordingSelector,
+}
+
+impl Config {
+    /// Whether either recording selector was given.
+    fn selects_a_recording(&self) -> bool {
+        !self.baseline_recording.is_empty() || !self.experiment_recording.is_empty()
+    }
 }
 
 /// Split a positional input into an optional alias and the remaining
@@ -352,6 +394,18 @@ impl TryFrom<ArgMatches> for Config {
             proxy_allow,
             cache_size_bytes,
             tui: args.get_flag("TUI"),
+            baseline_recording: crate::mcp::RecordingSelector::parse(
+                BASELINE_FLAG,
+                args.get_many::<String>("BASELINE_RECORDING")
+                    .unwrap_or_default()
+                    .cloned(),
+            )?,
+            experiment_recording: crate::mcp::RecordingSelector::parse(
+                EXPERIMENT_FLAG,
+                args.get_many::<String>("EXPERIMENT_RECORDING")
+                    .unwrap_or_default()
+                    .cloned(),
+            )?,
         })
     }
 }
@@ -386,8 +440,24 @@ pub fn run(config: Config) {
 
     let mut state = match &config.source {
         Source::File(path) => init_file_mode(&config, path, &registry, Arc::clone(&pool)),
-        Source::Live(url) => init_live_mode(&rt, url, &registry, Arc::clone(&pool)),
+        Source::Live(url) => {
+            if config.selects_a_recording() {
+                eprintln!(
+                    "{}",
+                    selectors_need_a_rez(&format!("the live agent at {url}"))
+                );
+                std::process::exit(1);
+            }
+            init_live_mode(&rt, url, &registry, Arc::clone(&pool))
+        }
         Source::Empty => {
+            if config.selects_a_recording() {
+                eprintln!(
+                    "{}",
+                    selectors_need_a_rez("upload-only mode (no input file)")
+                );
+                std::process::exit(1);
+            }
             info!("No input file — starting in upload-only mode");
             let empty_store: std::sync::Arc<dyn metriken_query::MetricsSource> =
                 std::sync::Arc::new(metriken_query::MemoryStore::builder().build());
@@ -485,6 +555,14 @@ fn init_file_mode(
         != crate::recorder::rez::RezFormat::NotRez
     {
         return init_file_mode_rez(config, path, registry, pool);
+    }
+
+    // Past this point there is no manifest to select from. Silently ignoring
+    // the selector would load a file the caller narrowed and present it as
+    // the narrowed view.
+    if config.selects_a_recording() {
+        eprintln!("{}", selectors_need_a_rez(&path.display().to_string()));
+        std::process::exit(1);
     }
 
     // Combined-A/B tarball detection runs next — bare parquets fall
@@ -610,6 +688,109 @@ pub(crate) fn discriminating_alias_key(
         })
 }
 
+/// The flag naming the recording that fills the viewer's baseline slot.
+const BASELINE_FLAG: &str = "--baseline";
+/// The flag naming the recording that fills the viewer's experiment slot.
+const EXPERIMENT_FLAG: &str = "--experiment";
+const BASELINE_SYNTAX: crate::mcp::SelectorSyntax = crate::mcp::SelectorSyntax::Flag(BASELINE_FLAG);
+const EXPERIMENT_SYNTAX: crate::mcp::SelectorSyntax =
+    crate::mcp::SelectorSyntax::Flag(EXPERIMENT_FLAG);
+
+/// Resolve one slot's selector to a single recording, or say why it did not.
+///
+/// `flag`/`syntax` are the slot's own flag: a caller told to add labels has
+/// to be told to add them to the flag it typed.
+fn resolve_slot(
+    all: &[std::collections::BTreeMap<String, String>],
+    selector: &crate::mcp::RecordingSelector,
+    syntax: crate::mcp::SelectorSyntax,
+) -> Result<usize, String> {
+    selector.resolve(all).map_err(|e| match e {
+        crate::mcp::SelectError::NoMatch => format!(
+            "{} matched no recording in this archive.\nArchive holds {} recording(s):\n{}",
+            selector.render(syntax),
+            all.len(),
+            crate::mcp::describe_candidates(all, &[], syntax),
+        ),
+        crate::mcp::SelectError::Ambiguous(hits) => format!(
+            "{} matched {} recordings; add labels until it names one:\n{}",
+            selector.render(syntax),
+            hits.len(),
+            crate::mcp::describe_candidates(all, &hits, syntax),
+        ),
+    })
+}
+
+/// Which recordings of a multi-recording `.rez` fill the baseline and
+/// experiment slots.
+///
+/// With neither selector this is the historical behavior — recordings 0 and 1,
+/// in manifest order — kept deliberately: a `.rez` written by `record
+/// --endpoint a --endpoint b` is already in the order the user typed, so the
+/// default is not arbitrary for the shape that produces most of these
+/// archives. The selectors exist for the shape where it IS arbitrary: three or
+/// more recordings, where "the first two" is whichever two the recorder
+/// happened to open first.
+///
+/// A selector that matches nothing, or several, is refused rather than
+/// narrowed to a first match — the same call made for the MCP `--recording`
+/// flag, and for the same reason: rendering one arm of a comparison under
+/// another arm's name is a clean-looking wrong answer.
+fn resolve_ab_slots(
+    all: &[std::collections::BTreeMap<String, String>],
+    baseline: &crate::mcp::RecordingSelector,
+    experiment: &crate::mcp::RecordingSelector,
+) -> Result<(usize, Option<usize>), String> {
+    if baseline.is_empty() && experiment.is_empty() {
+        return Ok((0, (all.len() >= 2).then_some(1)));
+    }
+
+    // `--experiment` alone would leave the baseline slot to fall back on
+    // recording 0 — which may well BE the recording just named, and a
+    // comparison of a recording against itself is not a comparison. Refusing
+    // is also the honest reading: the flags name the two sides of one
+    // comparison, so naming only the second is an incomplete instruction, not
+    // an instruction with a default.
+    if baseline.is_empty() {
+        return Err(format!(
+            "{} names the second arm of a comparison, so {BASELINE_FLAG} has to name the \
+             first.\nArchive holds {} recording(s):\n{}",
+            experiment.render(EXPERIMENT_SYNTAX),
+            all.len(),
+            crate::mcp::describe_candidates(all, &[], BASELINE_SYNTAX),
+        ));
+    }
+
+    let b = resolve_slot(all, baseline, BASELINE_SYNTAX)?;
+    if experiment.is_empty() {
+        // A baseline selector on its own is "show me this one arm", not "show
+        // me this arm against whatever is next to it": pairing it with an
+        // unnamed recording would invent the other half of a comparison the
+        // caller did not ask for.
+        return Ok((b, None));
+    }
+    let e = resolve_slot(all, experiment, EXPERIMENT_SYNTAX)?;
+    if b == e {
+        return Err(format!(
+            "{BASELINE_FLAG} and {EXPERIMENT_FLAG} both name the same recording ({}); a \
+             comparison needs two. Both are subset matches, so a selector naming fewer \
+             labels can land on the recording another one already named.",
+            crate::mcp::render_labels(&all[b]),
+        ));
+    }
+    Ok((b, Some(e)))
+}
+
+/// The message for a recording selector passed where there is no archive to
+/// select inside of. `what` names the input as the user gave it.
+fn selectors_need_a_rez(what: &str) -> String {
+    format!(
+        "{BASELINE_FLAG}/{EXPERIMENT_FLAG} name recordings inside a multi-recording .rez \
+         archive, but {what} is not one.\nTo compare two separate files, pass them as \
+         positionals: rezolus view baseline.parquet experiment.parquet"
+    )
+}
+
 /// `.rez` archive file mode: load the per-sampler tables as one `RezReader`
 /// (a `MetricsSource`) and build the baseline dashboard from it. The manifest's
 /// recording metadata stands in for the parquet footer (systeminfo, file
@@ -627,10 +808,11 @@ fn init_file_mode_rez(
     info!("Loading data from .rez archive...");
 
     // One reader per recording (labels preserved). A 2-recording .rez maps onto
-    // the baseline/experiment A/B slots; >2 shows the first two and warns
-    // (simultaneous N-way faceting is a separate future effort). Manifest
-    // recording metadata stands in for the parquet footer.
-    let mut readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
+    // the baseline/experiment A/B slots; >2 shows two of them, chosen by
+    // --baseline/--experiment or defaulting to the first two (simultaneous
+    // N-way faceting is a separate future effort). Manifest recording metadata
+    // stands in for the parquet footer.
+    let readers = crate::rez_reader::RezReader::open_recordings(path, Arc::clone(&pool))
         .unwrap_or_else(|e| {
             eprintln!("failed to load .rez archive: {e}");
             std::process::exit(1);
@@ -638,6 +820,16 @@ fn init_file_mode_rez(
     if readers.is_empty() {
         eprintln!("empty .rez archive (no recordings)");
         std::process::exit(1);
+    }
+
+    // A `.rez` carries both sides itself, so the A/B positional has nothing to
+    // attach — and now that --baseline/--experiment exist, a caller reaching
+    // for a second file is likely reaching for a second recording.
+    if config.experiment_path.is_some() {
+        warn!(
+            "second positional ignored for a .rez archive: its own recordings are the two \
+             sides (choose which with {BASELINE_FLAG}/{EXPERIMENT_FLAG})"
+        );
     }
 
     fn file_meta_json(reader: &crate::rez_reader::RezReader) -> Option<String> {
@@ -649,8 +841,45 @@ fn init_file_mode_rez(
         }
         serde_json::to_string(&serde_json::Value::Object(map)).ok()
     }
-    let alias_key =
-        discriminating_alias_key(&readers.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>());
+    let all_labels: Vec<BTreeMap<String, String>> =
+        readers.iter().map(|(l, _)| l.clone()).collect();
+    let n = readers.len();
+
+    let (b_idx, e_idx) = resolve_ab_slots(
+        &all_labels,
+        &config.baseline_recording,
+        &config.experiment_recording,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+
+    // The alias label names a recording against whatever it could be confused
+    // with.
+    //
+    // Showing TWO: that is each other. A label can fail to tell three
+    // recordings apart while telling the chosen two apart perfectly (two hosts
+    // running the same service, plus a third recording of one of them), and
+    // scoping the choice to the archive would fall back to
+    // "baseline"/"experiment" for a pair the labels describe exactly.
+    //
+    // Showing ONE out of several: the confusion is with the arms left behind.
+    // The window says `fleet.rez`, so aliasing the single shown recording
+    // "baseline" would leave nothing on screen saying WHICH arm of that
+    // archive is being read — the same unattributed-answer failure the
+    // selector exists to prevent. A single-recording archive keeps the
+    // positional name (a hindsight snapshot's `{source: rezolus}` is not a
+    // useful title).
+    let shown: Vec<BTreeMap<String, String>> = std::iter::once(b_idx)
+        .chain(e_idx)
+        .map(|i| all_labels[i].clone())
+        .collect();
+    let alias_key = if shown.len() < 2 && n > 1 {
+        discriminating_alias_key(&all_labels)
+    } else {
+        discriminating_alias_key(&shown)
+    };
     let alias_of = |labels: &BTreeMap<String, String>, fallback: &str| -> String {
         alias_key
             .as_ref()
@@ -659,10 +888,22 @@ fn init_file_mode_rez(
             .unwrap_or_else(|| fallback.to_string())
     };
 
-    let n = readers.len();
-
-    // Baseline = recording 0.
-    let (b_labels, b_reader) = readers.remove(0);
+    // Take the two chosen recordings out by index. `Option::take` rather than
+    // `Vec::remove` because the indices are arbitrary now: removing one would
+    // shift the other.
+    let mut slots: Vec<Option<(BTreeMap<String, String>, crate::rez_reader::RezReader)>> =
+        readers.into_iter().map(Some).collect();
+    let (b_labels, b_reader) = slots[b_idx].take().expect("baseline index is in range");
+    // A selected recording that holds no rows renders an empty dashboard.
+    // That is the truthful outcome — an endpoint that was scraped and reported
+    // nothing is itself a finding — but it looks identical to a failed load,
+    // so say which it is.
+    if b_reader.is_empty() {
+        warn!(
+            "recording {} holds no rows; its dashboard will be empty",
+            crate::mcp::render_labels(&b_labels)
+        );
+    }
     let b_systeminfo = b_reader.metadata_get("systeminfo");
     let b_file_meta = file_meta_json(&b_reader);
     let b_alias = config
@@ -680,9 +921,14 @@ fn init_file_mode_rez(
     state.captures.set_baseline_file_metadata(b_file_meta);
     state.captures.set_baseline_alias(Some(b_alias));
 
-    // Experiment = recording 1, if present.
-    if n >= 2 {
-        let (e_labels, e_reader) = readers.remove(0);
+    if let Some(e_idx) = e_idx {
+        let (e_labels, e_reader) = slots[e_idx].take().expect("experiment index is in range");
+        if e_reader.is_empty() {
+            warn!(
+                "recording {} holds no rows; its dashboard will be empty",
+                crate::mcp::render_labels(&e_labels)
+            );
+        }
         let e_systeminfo = e_reader.metadata_get("systeminfo");
         let e_file_meta = file_meta_json(&e_reader);
         let e_alias = alias_of(&e_labels, "experiment");
@@ -692,11 +938,15 @@ fn init_file_mode_rez(
             e_file_meta,
             Some(e_alias),
         );
-        if n > 2 {
+        if n > 2 && config.baseline_recording.is_empty() && config.experiment_recording.is_empty() {
+            // Only when the pair was NOT chosen: telling a caller how to pick
+            // recordings it just picked is noise, and the warning exists to
+            // flag a choice made for them.
             warn!(
-                "{n}-recording .rez: showing recordings 0 and 1 as baseline/experiment; \
-                 simultaneous N-way faceting is not yet supported (use `parquet metadata` \
-                 to inspect all recordings)"
+                "{n}-recording .rez: showing the first two as baseline/experiment \
+                 (simultaneous N-way faceting is not yet supported). Choose which two with \
+                 {BASELINE_FLAG}/{EXPERIMENT_FLAG}:\n{}",
+                crate::mcp::describe_candidates(&all_labels, &[], BASELINE_SYNTAX),
             );
         }
     }
@@ -1082,6 +1332,452 @@ mod tests {
 
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
         assert_eq!(*state.parquet_path.read(), Some(rez_path));
+        // One recording is not confusable with anything, so it keeps the
+        // positional name — a hindsight snapshot's `{source: rezolus}` is not
+        // a useful title.
+        assert_eq!(
+            state
+                .captures
+                .alias(crate::viewer::capture_registry::CaptureId::Baseline)
+                .as_deref(),
+            Some("baseline"),
+        );
+    }
+
+    /// Labels for a fixture archive, in manifest order.
+    fn labels(pairs: &[(&str, &str)]) -> Vec<std::collections::BTreeMap<String, String>> {
+        pairs
+            .iter()
+            .map(|(source, host)| {
+                [
+                    ("source".to_string(), source.to_string()),
+                    ("host".to_string(), host.to_string()),
+                ]
+                .into_iter()
+                .collect()
+            })
+            .collect()
+    }
+
+    fn sel(flag: &str, pairs: &[&str]) -> crate::mcp::RecordingSelector {
+        crate::mcp::RecordingSelector::parse(flag, pairs.iter().map(|s| s.to_string())).unwrap()
+    }
+
+    fn none() -> crate::mcp::RecordingSelector {
+        crate::mcp::RecordingSelector::default()
+    }
+
+    /// The historical default survives: no selectors means recordings 0 and 1.
+    #[test]
+    fn with_no_selectors_the_first_two_recordings_fill_the_slots() {
+        let all = labels(&[
+            ("redis", "web-01"),
+            ("valkey", "web-01"),
+            ("envoy", "web-02"),
+        ]);
+        assert_eq!(
+            super::resolve_ab_slots(&all, &none(), &none()).unwrap(),
+            (0, Some(1))
+        );
+        assert_eq!(
+            super::resolve_ab_slots(&all[..1], &none(), &none()).unwrap(),
+            (0, None),
+            "a single-recording archive has no experiment slot"
+        );
+    }
+
+    /// The point of the flags: on a 3-recording archive, pick the two that
+    /// are NOT the first two.
+    #[test]
+    fn selectors_choose_recordings_the_default_would_not_show() {
+        let all = labels(&[
+            ("redis", "web-01"),
+            ("valkey", "web-01"),
+            ("envoy", "web-02"),
+        ]);
+        assert_eq!(
+            super::resolve_ab_slots(
+                &all,
+                &sel("--baseline", &["source=envoy"]),
+                &sel("--experiment", &["source=valkey"]),
+            )
+            .unwrap(),
+            (2, Some(1))
+        );
+    }
+
+    /// Several pairs are ANDed, as a subset match — `host=web-01` alone is
+    /// ambiguous here, `host=web-01 source=valkey` is not.
+    #[test]
+    fn selector_labels_are_anded_as_a_subset_match() {
+        let all = labels(&[
+            ("redis", "web-01"),
+            ("valkey", "web-01"),
+            ("envoy", "web-02"),
+        ]);
+        assert_eq!(
+            super::resolve_ab_slots(
+                &all,
+                &sel("--baseline", &["host=web-01", "source=valkey"]),
+                &none(),
+            )
+            .unwrap(),
+            (1, None)
+        );
+    }
+
+    /// A baseline selector on its own shows that one recording. Pairing it
+    /// with whatever recording happens to sit next to it would invent the
+    /// other half of a comparison nobody asked for.
+    #[test]
+    fn a_baseline_selector_alone_shows_one_recording_and_invents_no_peer() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        assert_eq!(
+            super::resolve_ab_slots(&all, &sel("--baseline", &["source=redis"]), &none()).unwrap(),
+            (0, None),
+        );
+    }
+
+    /// `--experiment` alone would leave the baseline slot defaulting to
+    /// recording 0 — possibly the very recording named, i.e. a comparison of
+    /// something against itself.
+    #[test]
+    fn an_experiment_selector_without_a_baseline_is_refused() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        let err = super::resolve_ab_slots(&all, &none(), &sel("--experiment", &["source=redis"]))
+            .unwrap_err();
+        assert!(
+            err.contains("--baseline"),
+            "the error must say what is missing: {err}"
+        );
+        assert!(
+            err.contains("source=redis") && err.contains("source=valkey"),
+            "and list what could fill it: {err}"
+        );
+    }
+
+    /// Both selectors landing on one recording is not a comparison. Reachable
+    /// without a typo: the matches are subset matches, so `--baseline
+    /// host=web-01 source=redis` and `--experiment source=redis` name the
+    /// same arm.
+    #[test]
+    fn both_selectors_naming_one_recording_is_refused() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        let err = super::resolve_ab_slots(
+            &all,
+            &sel("--baseline", &["host=web-01", "source=redis"]),
+            &sel("--experiment", &["source=redis"]),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("same recording") && err.contains("source=redis"),
+            "the error must name the recording both landed on: {err}"
+        );
+    }
+
+    /// A selector matching nothing is refused with the archive's contents —
+    /// never narrowed to a first match, which would render one arm under the
+    /// other's name.
+    #[test]
+    fn a_selector_matching_nothing_lists_the_candidates() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        let err = super::resolve_ab_slots(&all, &sel("--baseline", &["source=nope"]), &none())
+            .unwrap_err();
+        assert!(err.contains("matched no recording"), "{err}");
+        assert!(
+            err.contains("source=redis") && err.contains("source=valkey"),
+            "{err}"
+        );
+    }
+
+    /// An ambiguous selector lists the ones it matched, not the whole archive.
+    #[test]
+    fn an_ambiguous_selector_lists_the_recordings_it_matched() {
+        let all = labels(&[
+            ("redis", "web-01"),
+            ("valkey", "web-01"),
+            ("envoy", "web-02"),
+        ]);
+        let err = super::resolve_ab_slots(&all, &sel("--baseline", &["host=web-01"]), &none())
+            .unwrap_err();
+        assert!(err.contains("matched 2 recordings"), "{err}");
+        assert!(
+            err.contains("source=redis") && err.contains("source=valkey"),
+            "{err}"
+        );
+        assert!(
+            !err.contains("source=envoy"),
+            "an ambiguity listing describes the matches, not the archive: {err}"
+        );
+    }
+
+    /// Every "select with:" line an error prints has to name the flag whose
+    /// slot it fills — a viewer message advertising the MCP `--recording`
+    /// flag is advice `rezolus view` rejects.
+    #[test]
+    fn error_listings_advertise_the_viewers_own_flags() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        for err in [
+            super::resolve_ab_slots(&all, &sel("--baseline", &["source=nope"]), &none())
+                .unwrap_err(),
+            super::resolve_ab_slots(
+                &all,
+                &sel("--baseline", &["source=redis"]),
+                &sel("--experiment", &["source=nope"]),
+            )
+            .unwrap_err(),
+            super::resolve_ab_slots(&all, &none(), &sel("--experiment", &["source=redis"]))
+                .unwrap_err(),
+        ] {
+            assert!(
+                !err.contains("--recording"),
+                "the viewer has no --recording flag: {err}"
+            );
+        }
+
+        // And the slot that failed is the slot named.
+        let err = super::resolve_ab_slots(
+            &all,
+            &sel("--baseline", &["source=redis"]),
+            &sel("--experiment", &["source=nope"]),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("--experiment source=nope"),
+            "the echoed selector must name the flag it arrived on: {err}"
+        );
+    }
+
+    /// Every selector an error tells the caller to try has to parse back
+    /// through the flag it is printed for. `Display`'s comma-joined form does
+    /// not: `parse` splits on the first `=` only.
+    #[test]
+    fn every_selector_an_error_offers_parses_back() {
+        let all = labels(&[("redis", "web-01"), ("valkey", "web-01")]);
+        let err = super::resolve_ab_slots(&all, &sel("--baseline", &["source=nope"]), &none())
+            .unwrap_err();
+        let offered: Vec<&str> = err
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("select with: "))
+            .collect();
+        assert_eq!(offered.len(), 2, "one per recording: {err}");
+        for line in offered {
+            let pairs = line
+                .strip_prefix("--baseline ")
+                .unwrap_or_else(|| panic!("not a --baseline selector: {line}"))
+                .split(" --baseline ")
+                .map(str::to_string);
+            let parsed = crate::mcp::RecordingSelector::parse("--baseline", pairs)
+                .unwrap_or_else(|e| panic!("offered selector {line:?} does not parse: {e}"));
+            super::resolve_ab_slots(&all, &parsed, &none())
+                .unwrap_or_else(|e| panic!("offered selector {line:?} does not resolve: {e}"));
+        }
+    }
+
+    /// The flags are only meaningful inside a `.rez` manifest; anywhere else
+    /// they must be refused rather than ignored, since ignoring one loads a
+    /// file the caller narrowed and shows it as the narrowed view.
+    #[test]
+    fn selectors_outside_a_rez_are_refused_by_name() {
+        let msg = super::selectors_need_a_rez("out.parquet");
+        assert!(
+            msg.contains("--baseline") && msg.contains("--experiment"),
+            "{msg}"
+        );
+        assert!(msg.contains("out.parquet"), "{msg}");
+    }
+
+    /// Selecting recordings must actually put THOSE recordings in the slots,
+    /// asserted by each one's own metadata: a viewer that showed the first two
+    /// regardless would still produce two populated dashboards.
+    #[test]
+    fn selected_recordings_fill_the_ab_slots() {
+        use crate::viewer::capture_registry::CaptureId;
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("fleet.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &rez_path,
+            // One host, three services: `source` is what tells them apart, so
+            // the aliases below are the selected recordings' own sources.
+            &[
+                ("redis", "web-01"),
+                ("valkey", "web-01"),
+                ("envoy", "web-01"),
+            ],
+        );
+
+        let matches = super::command().get_matches_from([
+            "view",
+            rez_path.to_str().unwrap(),
+            "--baseline",
+            "source=envoy",
+            "--experiment",
+            "source=valkey",
+        ]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+
+        assert!(state.captures.experiment_attached());
+        assert_eq!(
+            state.captures.alias(CaptureId::Baseline).as_deref(),
+            Some("envoy"),
+        );
+        assert_eq!(
+            state.captures.alias(CaptureId::Experiment).as_deref(),
+            Some("valkey"),
+        );
+        // Aliases come from the labels; the per-recording metadata is written
+        // by a different path, so it is an independent witness that the right
+        // reader landed in each slot.
+        let b_meta = state
+            .captures
+            .file_metadata(CaptureId::Baseline)
+            .unwrap_or_default();
+        let e_meta = state
+            .captures
+            .file_metadata(CaptureId::Experiment)
+            .unwrap_or_default();
+        assert!(b_meta.contains("envoy"), "baseline metadata: {b_meta}");
+        assert!(e_meta.contains("valkey"), "experiment metadata: {e_meta}");
+    }
+
+    /// A baseline selector alone loads one capture and attaches no experiment.
+    #[test]
+    fn a_baseline_selector_alone_leaves_the_experiment_slot_empty() {
+        use crate::viewer::capture_registry::CaptureId;
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("fleet.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &rez_path,
+            &[("redis", "web-01"), ("valkey", "web-01")],
+        );
+
+        let matches = super::command().get_matches_from([
+            "view",
+            rez_path.to_str().unwrap(),
+            "--baseline",
+            "source=valkey",
+        ]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+
+        assert!(!state.captures.experiment_attached());
+        let b_meta = state
+            .captures
+            .file_metadata(CaptureId::Baseline)
+            .unwrap_or_default();
+        assert!(b_meta.contains("valkey"), "baseline metadata: {b_meta}");
+        // Named, not "baseline": the window title is the archive's filename,
+        // so a generic alias would leave nothing on screen saying which of the
+        // archive's recordings is being read.
+        assert_eq!(
+            state.captures.alias(CaptureId::Baseline).as_deref(),
+            Some("valkey"),
+        );
+    }
+
+    /// The default is unchanged end to end: no flags on a 3-recording archive
+    /// still loads recordings 0 and 1. This also drives the warning that lists
+    /// the archive, which only runs on this path.
+    #[test]
+    fn without_flags_a_three_recording_archive_still_loads_the_first_two() {
+        use crate::viewer::capture_registry::CaptureId;
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("fleet.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &rez_path,
+            &[
+                ("redis", "web-01"),
+                ("valkey", "web-01"),
+                ("envoy", "web-01"),
+            ],
+        );
+
+        let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+
+        assert!(state.captures.experiment_attached());
+        assert_eq!(
+            state.captures.alias(CaptureId::Baseline).as_deref(),
+            Some("redis"),
+        );
+        assert_eq!(
+            state.captures.alias(CaptureId::Experiment).as_deref(),
+            Some("valkey"),
+        );
+    }
+
+    /// A label that cannot tell the whole archive apart can still tell the
+    /// chosen pair apart. Scoping the alias choice to the archive would alias
+    /// this pair "baseline"/"experiment" despite `host` naming them exactly.
+    #[test]
+    fn aliases_come_from_the_recordings_shown_not_the_whole_archive() {
+        use crate::viewer::capture_registry::CaptureId;
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("fleet.rez");
+        crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
+            &rez_path,
+            // `host` does not discriminate all three (web-01 twice) and
+            // neither does `source` (redis twice) — but it discriminates the
+            // two selected below.
+            &[
+                ("redis", "web-01"),
+                ("redis", "web-02"),
+                ("valkey", "web-01"),
+            ],
+        );
+
+        let matches = super::command().get_matches_from([
+            "view",
+            rez_path.to_str().unwrap(),
+            "--baseline",
+            "source=redis",
+            "--baseline",
+            "host=web-01",
+            "--experiment",
+            "source=redis",
+            "--experiment",
+            "host=web-02",
+        ]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+
+        assert_eq!(
+            state.captures.alias(CaptureId::Baseline).as_deref(),
+            Some("web-01"),
+        );
+        assert_eq!(
+            state.captures.alias(CaptureId::Experiment).as_deref(),
+            Some("web-02"),
+        );
+    }
+
+    /// A repeated key on one flag is a contradiction, not a last-one-wins.
+    #[test]
+    fn a_repeated_selector_key_is_rejected_at_parse() {
+        let matches = super::command().get_matches_from([
+            "view",
+            "out.rez",
+            "--baseline",
+            "source=redis",
+            "--baseline",
+            "source=valkey",
+        ]);
+        let err = match super::Config::try_from(matches) {
+            Err(e) => e,
+            Ok(_) => panic!("a repeated selector key must not be accepted"),
+        };
+        assert!(err.contains("--baseline"), "{err}");
+        assert!(err.contains("more than once"), "{err}");
     }
 
     #[test]
