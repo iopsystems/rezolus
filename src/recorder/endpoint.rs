@@ -89,7 +89,47 @@ impl EndpointState {
 pub fn infer_source_name(url: &Url) -> String {
     let host = url.host_str().unwrap_or("unknown");
     let port = url.port().map(|p| format!("-{p}")).unwrap_or_default();
-    format!("{host}{port}")
+    match distinguishing_path(url) {
+        Some(path) => format!("{host}{port}-{path}"),
+        None => format!("{host}{port}"),
+    }
+}
+
+/// The part of a URL's path worth putting in a source name, or `None` when it
+/// carries nothing a host and port do not already say.
+///
+/// **Host and port alone are not unique per target.** Several exporters behind
+/// one address, distinguished only by path, is an ordinary Prometheus
+/// deployment — `/metrics` and `/federate`, or a path per tenant — and it is
+/// far more common there than for a Rezolus agent, which is one per host on a
+/// fixed port. Two targets inferring the SAME source get identical label sets,
+/// and then nothing downstream can tell their recordings apart: no `--recording`
+/// selector names either, and the viewer falls back to positional aliases. The
+/// recorder warns about that, but a warning is a poor substitute for a name.
+///
+/// `/metrics` is excluded because it is the convention rather than a
+/// distinction: appending it to every inferred name would be noise on the
+/// common case and would rename every existing capture's source for nothing.
+fn distinguishing_path(url: &Url) -> Option<String> {
+    let path = url.path().trim_matches('/');
+    if path.is_empty() || path == "metrics" {
+        return None;
+    }
+    // Slashes and anything else awkward become `-`: this ends up as a label
+    // value, a `.rez` recording's directory slug and a `--separate` filename,
+    // so it has to be a plain word in all three.
+    let slug: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    // Collapse the runs the mapping above can create (`/metrics//v2/` →
+    // `metrics--v2`) and trim the edges.
+    let slug = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    (!slug.is_empty()).then_some(slug)
 }
 
 #[cfg(test)]
@@ -101,6 +141,47 @@ mod tests {
         let url: Url = "http://localhost:4241/metrics".parse().unwrap();
         let name = infer_source_name(&url);
         assert_eq!(name, "localhost-4241");
+    }
+
+    /// Several exporters behind one address, distinguished only by path, is an
+    /// ordinary Prometheus deployment. Inferring the same source for both gives
+    /// them identical label sets, and then nothing downstream can tell their
+    /// recordings apart: no `--recording` selector names either, and the viewer
+    /// falls back to positional aliases. The recorder warns, but a warning is a
+    /// poor substitute for a name.
+    #[test]
+    fn two_targets_on_one_address_infer_different_sources() {
+        let a: Url = "http://svc:9090/metrics".parse().unwrap();
+        let b: Url = "http://svc:9090/federate".parse().unwrap();
+        assert_ne!(infer_source_name(&a), infer_source_name(&b));
+    }
+
+    /// `/metrics` is the convention, not a distinction: appending it to every
+    /// inferred name would be noise on the common case and would rename every
+    /// existing capture's source for nothing.
+    #[test]
+    fn the_conventional_metrics_path_is_not_part_of_the_name() {
+        for url in [
+            "http://svc:9090/metrics",
+            "http://svc:9090/metrics/",
+            "http://svc:9090/",
+            "http://svc:9090",
+        ] {
+            let url: Url = url.parse().unwrap();
+            assert_eq!(infer_source_name(&url), "svc-9090", "{url}");
+        }
+    }
+
+    /// The inferred name becomes a label value, a `.rez` recording's directory
+    /// slug and a `--separate` filename, so it has to be a plain word in all
+    /// three — no slashes, no runs of separators, no leading or trailing dash.
+    #[test]
+    fn a_nested_path_becomes_one_plain_word() {
+        let url: Url = "http://svc:9090/metrics//v2/tenant_a/".parse().unwrap();
+        let name = infer_source_name(&url);
+        assert_eq!(name, "svc-9090-metrics-v2-tenant-a");
+        assert!(!name.contains('/') && !name.contains("--"));
+        assert!(!name.starts_with('-') && !name.ends_with('-'));
     }
 
     #[test]

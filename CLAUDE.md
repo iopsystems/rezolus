@@ -62,10 +62,10 @@ target/release/rezolus record --url http://host:9090/metrics -o out.parquet --me
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
 # (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
 # the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
-# .rez requires every endpoint to be rezolus/msgpack, but any number of them: several
-# endpoints become one multi-recording archive. A run that chose no format at all falls
-# back to rezolus.parquet (with a note) for a Prometheus source; endpoint count never
-# triggers that fallback.
+# .rez takes any number of endpoints, rezolus or Prometheus, each as its own recording
+# in one multi-recording archive. A Prometheus scrape becomes one acquisition group per
+# target (`prometheus/scrape`), windowed by the real HTTP round trip. Only --separate
+# demotes the format, since one archive cannot be one file per endpoint.
 # Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
 # recording, source/host auto-populated), --interval, --duration.
 
@@ -195,7 +195,7 @@ Either way the query engine consumes the window columns to compute `rate()`/`ira
 
 Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. `RezReader::cross_cadence_eval_timestamps` picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
-A `.rez` requires every endpoint to be rezolus/msgpack to produce (not Prometheus), but any number of them. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
+A `.rez` takes any number of endpoints, rezolus or Prometheus. A Prometheus target is converted on the way in: one scrape is one request and one response, so it becomes a single V3 acquisition group named `prometheus/scrape`, windowed by the real HTTP round trip (`src/recorder/prometheus.rs`). That is why it is a group rather than a flat V2 snapshot — a V2 table carries `<name>:window_begin`/`<name>:window_width` per value column, which would triple the schema width of every Prometheus table. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
 
 ### `.rez` lives in its own crate
 

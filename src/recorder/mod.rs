@@ -86,11 +86,11 @@ pub fn command() -> Command {
              not .rez: it means parquet, unless --format says otherwise. A --format that\n\
              contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
              rather than a silent choice between them.\n\n\
-             When the format was not chosen at all — no --format, no -o — and any endpoint\n\
-             turns out to be Prometheus, the recording falls back to rezolus.parquet and\n\
-             says so on stderr. The endpoint COUNT never causes that fallback. Pass --format\n\
-             rez (or an -o ending in .rez) to make a .rez archive a requirement instead: then\n\
-             the same situation is an error and nothing is recorded.\n\n\
+             A Prometheus endpoint records into a .rez like any other. One scrape is one\n\
+             request and one response, so it becomes one acquisition group per target,\n\
+             windowed by the real HTTP round trip. Neither the source nor the endpoint\n\
+             count demotes the format any more; only --separate does, since one archive\n\
+             cannot be one file per endpoint.\n\n\
              OVERWRITING: a .rez output path must NOT already exist — the recorder refuses\n\
              rather than truncate, because the archive is committed as it goes and has no\n\
              staging file. A parquet or raw output IS overwritten. There is no --force; remove\n\
@@ -194,7 +194,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port (e.g. svc-9090). For parquet or raw output only: a .rez already keeps each endpoint as its own recording inside the one archive, so --separate does not apply to it")
+                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port plus any distinguishing path (e.g. svc-9090, or svc-9090-federate — the conventional /metrics is left off). For parquet or raw output only: a .rez already keeps each endpoint as its own recording inside the one archive, so --separate does not apply to it")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -225,7 +225,7 @@ pub fn command() -> Command {
             clap::Arg::new("FORMAT")
                 .long("format")
                 .short('f')
-                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez requires every endpoint to be a rezolus/msgpack one, but any number of them")
+                .help("Output format: rez (per-sampler archive, the default), parquet (one columnar table), or raw (concatenated msgpack snapshots). Usually unnecessary — the -o extension picks the format, and giving both a --format and a conflicting extension is an error. rez takes any number of endpoints, rezolus or Prometheus, each as its own recording")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(Format)),
         )
@@ -375,7 +375,31 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
     }
 }
 
-async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
+/// One scrape's body, bracketed by when the request went out and when the
+/// response was fully read.
+///
+/// **The bracket is the point for a Prometheus endpoint.** A scrape is one
+/// acquisition — one request, one response — and every value in it was read
+/// somewhere inside that interval. Nothing narrower is knowable from here: the
+/// exporter does not say when it sampled, only what it read. A Rezolus agent
+/// stamps each metric's own window and this bracket is ignored for it.
+struct Scraped {
+    body: Vec<u8>,
+    /// Wall-clock ns when the request was sent.
+    request_ns: u64,
+    /// Wall-clock ns when the response finished arriving.
+    response_ns: u64,
+}
+
+fn wall_now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+async fn scrape_one(client: &Client, url: &Url) -> Result<Scraped, String> {
+    let request_ns = wall_now_ns();
     let response = client
         .get(url.clone())
         .send()
@@ -384,11 +408,19 @@ async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    response
+    let body = response
         .bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("{e}"))
+        .map_err(|e| format!("{e}"))?;
+    Ok(Scraped {
+        body,
+        request_ns,
+        // Read AFTER the body, not after the headers: the values are in the
+        // body, so a bracket that closed at the response line would exclude
+        // part of the interval they were actually read over.
+        response_ns: wall_now_ns(),
+    })
 }
 
 fn inject_provenance(
@@ -913,7 +945,6 @@ fn build_per_source_metadata(
 
 struct EndpointWriter {
     writer: std::fs::File,
-    converter: Option<prometheus::PrometheusConverter>,
 }
 
 /// Upper bound on a single scrape or endpoint probe, whatever the interval.
@@ -1021,39 +1052,27 @@ pub fn run(mut config: RecordingConfig) {
     let mut rez_mode = wants_rez(config.format);
 
     if rez_mode {
-        // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus
-        // endpoint yields none, so settle it up front (before probing) rather
-        // than recording an empty archive. Auto-detected prometheus is handled
-        // right after the probe, below.
+        // Neither a Prometheus endpoint nor several endpoints is a blocker any
+        // more. Each endpoint becomes its own label-tagged recording in one
+        // archive, and a Prometheus scrape converts to a V3 acquisition group
+        // on the way in — one request and one response is exactly one
+        // acquisition, which is what the group models.
         //
-        // Several endpoints are NOT a blocker any more: each becomes its own
-        // label-tagged recording in one archive, which is what the container's
-        // `recordings` list has always modelled and what `combine` could only
-        // assemble after the fact.
-        let blocker = endpoints
-            .iter()
-            .find(|e| matches!(e.config.protocol, Some(Protocol::Prometheus)))
-            .map(|ep| {
-                format!(
-                    "{} is configured protocol=prometheus, and .rez requires a rezolus (msgpack) endpoint",
-                    ep.config.url
-                )
-            })
-            // `--separate` writes a file per endpoint, which one archive
-            // cannot do. An explicit `.rez` was already rejected at parse
-            // time; reaching here means the format was merely defaulted, so
-            // demote to the parquet-per-endpoint run the flag asked for
-            // rather than erroring on a format nobody chose.
-            .or_else(|| {
-                // Only with several endpoints: with one there is nothing to
-                // separate, and `main`'s multi-endpoint blocker never fired
-                // on a single-endpoint run either.
-                (config.separate && config.endpoints.len() > 1).then(|| {
-                    "--separate writes one file per endpoint, which a .rez cannot do (every \
+        // `--separate` is what remains: it writes a file per endpoint, which
+        // one archive cannot do. An explicit `.rez` was already rejected at
+        // parse time; reaching here means the format was merely defaulted, so
+        // demote to the parquet-per-endpoint run the flag asked for rather
+        // than erroring on a format nobody chose.
+        let blocker = None.or_else(|| {
+            // Only with several endpoints: with one there is nothing to
+            // separate, and `main`'s multi-endpoint blocker never fired
+            // on a single-endpoint run either.
+            (config.separate && config.endpoints.len() > 1).then(|| {
+                "--separate writes one file per endpoint, which a .rez cannot do (every \
                      endpoint is a recording inside the one archive)"
-                        .to_string()
-                })
-            });
+                    .to_string()
+            })
+        });
 
         if let Some(reason) = blocker {
             demote_from_rez(&mut config, &reason);
@@ -1131,31 +1150,8 @@ pub fn run(mut config: RecordingConfig) {
     // output (or, in v2, the `<output>.partial`) and spawning the writer thread
     // are both fallible.
     let mut rez_recorder: Option<RezStream> = None;
-    // Endpoints ruled out of a `.rez` run after it started — a late endpoint
-    // that turned out to be prometheus. Kept so they are not re-probed every
-    // tick for the rest of the run.
-    let mut rez_excluded: std::collections::HashSet<usize> = std::collections::HashSet::new();
     if rez_mode {
-        // An endpoint that ANSWERED as prometheus still blocks the archive, the
-        // same as a configured one: `.rez` ingest reads msgpack snapshots, and
-        // a prometheus endpoint yields none. Checked across every active
-        // endpoint now that there can be several, and reported by name so a
-        // multi-endpoint run says which one demoted it.
-        let non_msgpack = endpoints
-            .iter()
-            .filter(|ep| ep.status == EndpointStatus::Active)
-            .find(|ep| ep.protocol() != Some(&Protocol::Msgpack))
-            .map(|ep| {
-                format!(
-                    "{} answered as prometheus, and .rez requires a rezolus (msgpack) endpoint",
-                    ep.config.url
-                )
-            });
-
-        if let Some(reason) = non_msgpack {
-            demote_from_rez(&mut config, &reason);
-            rez_mode = false;
-        } else {
+        {
             // Every active endpoint becomes a recording in ONE archive. Only
             // the endpoints active at this point: a `.rez` recording is opened
             // when its writer is, and an endpoint that activates later through
@@ -1178,6 +1174,25 @@ pub fn run(mut config: RecordingConfig) {
         }
     }
 
+    // Per-endpoint Prometheus converters, kept OUTSIDE `EndpointWriter`
+    // because `.rez` mode has no writer to hang them on: it has no msgpack
+    // spool at all, snapshots go straight into the streaming writer. Both
+    // modes need the same converter — one per endpoint, because it holds the
+    // (name, labels) -> id map that keeps a column's identity stable across
+    // scrapes, and two endpoints' id spaces must not mix.
+    let mut prom_converters: Vec<Option<prometheus::PrometheusConverter>> = endpoints
+        .iter()
+        .map(|ep| {
+            (ep.status == EndpointStatus::Active && ep.protocol() == Some(&Protocol::Prometheus))
+                .then(|| {
+                    prometheus::PrometheusConverter::with_provenance(
+                        ep.config.source_label().to_string(),
+                        ep.config.url.to_string(),
+                    )
+                })
+        })
+        .collect();
+
     let mut writers: Vec<Option<EndpointWriter>> = endpoints
         .iter()
         .map(|ep| {
@@ -1192,15 +1207,7 @@ pub fn run(mut config: RecordingConfig) {
                         std::process::exit(1);
                     }
                 };
-                let converter = if ep.protocol() == Some(&Protocol::Prometheus) {
-                    Some(prometheus::PrometheusConverter::with_provenance(
-                        ep.config.source_label().to_string(),
-                        ep.config.url.to_string(),
-                    ))
-                } else {
-                    None
-                };
-                Some(EndpointWriter { writer, converter })
+                Some(EndpointWriter { writer })
             } else {
                 None
             }
@@ -1401,7 +1408,11 @@ pub fn run(mut config: RecordingConfig) {
 
             for (idx, result) in results {
                 match result {
-                    Ok(body) => {
+                    Ok(Scraped {
+                        body,
+                        request_ns,
+                        response_ns,
+                    }) => {
                         endpoints[idx].record_success(wall_ns);
 
                         // `.rez`: decode once and hand the snapshot straight to
@@ -1444,40 +1455,58 @@ pub fn run(mut config: RecordingConfig) {
                         // most of a V1/V2-heavy fleet — `from_msgpack` is
                         // still the right-sized, version-agnostic fix here.
                         if rez_mode {
-                            match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                Ok(snapshot) => {
-                                    let snapshot = inject_provenance(
+                            // A Prometheus endpoint converts its text to a
+                            // snapshot here; a rezolus one decodes msgpack.
+                            // Both reach the same `ingest` — the archive has no
+                            // opinion about which wire a recording came off.
+                            //
+                            // The converted snapshot is NOT run through
+                            // `inject_provenance`: the converter already writes
+                            // `source` and `endpoint` into every metric's
+                            // metadata, so injecting again would be a second
+                            // spelling of the same fact, free to disagree.
+                            let snapshot = match prom_converters[idx].as_mut() {
+                                Some(conv) => {
+                                    let text = String::from_utf8_lossy(&body);
+                                    Some(conv.convert(&text, request_ns, response_ns))
+                                }
+                                None => match metriken_exposition::Snapshot::from_msgpack(&body) {
+                                    Ok(snapshot) => Some(inject_provenance(
                                         snapshot,
                                         endpoints[idx].config.source_label(),
                                         endpoints[idx].config.url.as_str(),
-                                    );
-                                    if let Some(rec) = rez_recorder.as_mut() {
-                                        if let Err(e) = rec.ingest(
-                                            idx,
-                                            &endpoints[idx].config.url,
-                                            &snapshot,
-                                            anchored_ns,
-                                            wall_offset_ns,
-                                        ) {
-                                            ingest_failed.get_or_insert(e);
-                                        }
+                                    )),
+                                    Err(e) => {
+                                        warn!(
+                                            "msgpack decode error for {}: {e}",
+                                            endpoints[idx].config.source_label()
+                                        );
+                                        None
                                     }
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "msgpack decode error for {}: {e}",
-                                        endpoints[idx].config.source_label()
-                                    );
+                                },
+                            };
+                            if let (Some(snapshot), Some(rec)) = (snapshot, rez_recorder.as_mut()) {
+                                if let Err(e) = rec.ingest(
+                                    idx,
+                                    &endpoints[idx].config.url,
+                                    &snapshot,
+                                    anchored_ns,
+                                    wall_offset_ns,
+                                ) {
+                                    ingest_failed.get_or_insert(e);
                                 }
                             }
                             continue;
                         }
 
                         if let Some(ref mut ew) = writers[idx] {
-                            let bytes = if let Some(ref mut conv) = ew.converter {
+                            let bytes = if let Some(ref mut conv) = prom_converters[idx] {
                                 // Prometheus: parse text → snapshot → msgpack
                                 let text = String::from_utf8_lossy(&body);
-                                let snapshot = conv.convert(&text, wall_ns);
+                                // The real round trip, not the tick's clock:
+                                // every value in this body was read somewhere
+                                // inside it. See `Scraped`.
+                                let snapshot = conv.convert(&text, request_ns, response_ns);
                                 match rmp_serde::encode::to_vec(&snapshot) {
                                     Ok(b) => b,
                                     Err(e) => {
@@ -1545,7 +1574,7 @@ pub fn run(mut config: RecordingConfig) {
             let pending_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
-                .filter(|(i, ep)| ep.status == EndpointStatus::Pending && !rez_excluded.contains(i))
+                .filter(|(_, ep)| ep.status == EndpointStatus::Pending)
                 .map(|(i, _)| i)
                 .collect();
 
@@ -1612,33 +1641,18 @@ pub fn run(mut config: RecordingConfig) {
                     // opened on the live archive instead, which is what keeps
                     // the "will retry each tick" warning honest.
                     if rez_mode {
-                        // A late endpoint that probes as prometheus cannot be
-                        // archived: the run committed to `.rez` at startup,
-                        // where the demotion check could not see this
-                        // endpoint's protocol because a Pending endpoint has
-                        // not been probed yet.
-                        //
-                        // Drop the endpoint rather than the run. Aborting here
-                        // would let a second, misconfigured endpoint destroy
-                        // hours of a healthy first one's capture — and it
-                        // would make the SAME misconfiguration behave two
-                        // ways: a clean pre-flight demotion when the endpoint
-                        // happens to be up at startup, a run-ending abort when
-                        // it happens to be down. The archive stays valid and
-                        // complete for every endpoint it can hold.
-                        if protocol != Protocol::Msgpack {
-                            eprintln!(
-                                "warning: {} answered as prometheus and cannot go into a \
-                                 .rez; it was unreachable at startup, so the archive was \
-                                 already committed. It will not be recorded — re-run with \
-                                 --format parquet to capture it",
-                                endpoints[idx].config.url
-                            );
-                            // Back to Pending and excluded, so it is neither
-                            // scraped into nothing nor re-probed every tick.
-                            endpoints[idx].status = EndpointStatus::Pending;
-                            rez_excluded.insert(idx);
-                        } else if let Some(rec) = rez_recorder.as_mut() {
+                        // A late endpoint that probes as prometheus gets a
+                        // converter now, the same as one present at startup —
+                        // a scrape becomes an acquisition group and lands in
+                        // the archive like any other recording.
+                        if protocol == Protocol::Prometheus && prom_converters[idx].is_none() {
+                            prom_converters[idx] =
+                                Some(prometheus::PrometheusConverter::with_provenance(
+                                    endpoints[idx].config.source_label().to_string(),
+                                    endpoints[idx].config.url.to_string(),
+                                ));
+                        }
+                        if let Some(rec) = rez_recorder.as_mut() {
                             if let Err(e) = rec.add_endpoint(
                                 idx,
                                 &config,
@@ -1654,18 +1668,16 @@ pub fn run(mut config: RecordingConfig) {
                             }
                         }
                     } else {
-                        let converter = if protocol == Protocol::Prometheus {
-                            Some(prometheus::PrometheusConverter::with_provenance(
-                                endpoints[idx].config.source_label().to_string(),
-                                endpoints[idx].config.url.to_string(),
-                            ))
-                        } else {
-                            None
-                        };
+                        if protocol == Protocol::Prometheus && prom_converters[idx].is_none() {
+                            prom_converters[idx] =
+                                Some(prometheus::PrometheusConverter::with_provenance(
+                                    endpoints[idx].config.source_label().to_string(),
+                                    endpoints[idx].config.url.to_string(),
+                                ));
+                        }
                         writers[idx] = Some(EndpointWriter {
                             writer: tempfile_in(out_dir.clone())
                                 .expect("failed to create temp file"),
-                            converter,
                         });
                     }
                 }
@@ -1817,7 +1829,7 @@ pub fn run(mut config: RecordingConfig) {
                                 let converter = build_parquet_converter(
                                     &config,
                                     &endpoints[idx],
-                                    &ew.converter,
+                                    &prom_converters[idx],
                                 );
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
@@ -1852,7 +1864,7 @@ pub fn run(mut config: RecordingConfig) {
                                 let converter = build_parquet_converter(
                                     &config,
                                     &endpoints[idx],
-                                    &ew.converter,
+                                    &prom_converters[idx],
                                 );
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
@@ -1890,7 +1902,7 @@ pub fn run(mut config: RecordingConfig) {
                                     let converter = build_parquet_converter(
                                         &config,
                                         &endpoints[idx],
-                                        &ew.converter,
+                                        &prom_converters[idx],
                                     );
                                     if let Err(e) = converter
                                         .convert_file_handle(ew.writer.try_clone().unwrap(), dest)

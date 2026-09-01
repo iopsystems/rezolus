@@ -360,8 +360,33 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   agents with identical sampler sets would seal in permanent lockstep — the key
   must widen to the sampler plus the recording's canonical label set (not the
   recording id, which would make segmentation depend on endpoint order).
-- **Prometheus sources inside `.rez`** — Open, and it would *improve*
-  measurement honesty rather than compromise it. A scrape is one acquisition —
+- **Prometheus sources inside `.rez`** — **DONE**, and it did improve
+  measurement honesty rather than compromise it. `PrometheusConverter` emits
+  `SnapshotV3` with one group per target (`prometheus/scrape` — the slash is
+  load-bearing, since `.rez` dispatches a table's WAL rows on it), windowed by
+  the real HTTP round trip now that `scrape_one` returns the request and
+  response instants. Both refusals are gone; only `--separate` still demotes
+  the format. Schema members are ordered by assigned metric id, sorted
+  numerically, so the schema changes only when the metric set does. The parquet
+  path is unchanged and a test pins that on our side of the
+  `metriken-exposition` boundary rather than trusting its contract. Fell out of
+  it: `infer_source_name` used host and port alone, so two exporters behind one
+  address (`/metrics` and `/federate`) inferred the SAME source and became
+  recordings nothing could tell apart — the path joins the name now.
+  *Considered and declined:* widening the window with the exporter's own
+  embedded timestamp to account for a caching exporter. It is on the EXPORTER's
+  clock while the window is on ours, so folding it in re-introduces the
+  two-clocks-in-one-interval mixing the embedded-timestamp entry below removed
+  — and the failure is silent and unmeasurable from here: an exporter five
+  minutes slow inflates every band by five minutes, indistinguishable from a
+  value genuinely five minutes stale. Recording the observed staleness
+  (`response_received - embedded_ts`) as a SEPARATE signal would detect caching
+  exporters without contaminating a quantity that describes our clock; judged
+  not worth the design step it needs. The round-trip window therefore stays a
+  lower bound on uncertainty — which a zero-width window also was, and far
+  worse.
+  *Original analysis, kept because it is what the work followed:* A scrape is
+  one acquisition —
   one request, one response — so it models naturally as one acquisition group
   per target with the window set to the real HTTP round-trip. Today the
   Prometheus path already emits windows (`prometheus.rs:335`) but they are
@@ -400,12 +425,10 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   is stored relative to the row timestamp, so the resulting `rate()` uncertainty
   band is nonsense rather than merely wide. Fixed by deriving the window from `fetch_ns` — the recorder's own
   clock for the tick — and ignoring `sample.timestamp` entirely, which also
-  ends the two-semantics mixing. Still zero-width, which understates: the
-  honest bracket is the real round-trip `[request_sent, response_received]`,
-  and the converter is handed only parsed text and a single instant, so the
-  request instant does not reach it. That widening is tracked with the
-  Prometheus-in-`.rez` entry above — it moves this window's edges, not its
-  anchor.
+  ends the two-semantics mixing. The remaining zero width is **fixed too**:
+  `scrape_one` returns the request and response instants, so the window is now
+  the real round-trip `[request_sent, response_received]` — a widening of this
+  window rather than a change of its anchor, as predicted.
 - **Viewer shows only the first two recordings** — **PARTLY DONE**. `rezolus
   view` now takes `--baseline k=v` / `--experiment k=v` (repeatable, ANDed,
   subset match — the same selector semantics as the MCP `--recording` flag,

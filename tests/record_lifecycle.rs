@@ -76,6 +76,256 @@ fn spawn_fake_agent() -> u16 {
     port
 }
 
+/// Minimal stand-in for a Prometheus exporter. Answers `/metrics` with text
+/// exposition and 404s everything else, so the recorder's probe classifies it
+/// as prometheus rather than msgpack.
+fn spawn_fake_exporter() -> u16 {
+    spawn_fake_exporter_named("http_requests_total")
+}
+
+/// As `spawn_fake_exporter`, with the counter's name chosen by the caller so
+/// two exporters in one run are telling apart by what they expose.
+fn spawn_fake_exporter_named(counter: &'static str) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut tick = 0u64;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            if n == 0 {
+                continue;
+            }
+            tick += 1;
+            let body = format!(
+                "# HELP {counter} Total requests.\n\
+                 # TYPE {counter} counter\n\
+                 {counter}{{code=\"200\"}} {tick}\n\
+                 # TYPE queue_depth gauge\n\
+                 queue_depth {}\n",
+                tick * 2
+            );
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A Prometheus endpoint records into a `.rez` — it used to demote the whole
+/// run to parquet.
+///
+/// The refusal was a policy check, not a capability limit: a scrape is one
+/// request and one response, which is exactly one acquisition group, and the
+/// archive has always been able to hold those. This drives the real binary
+/// end to end because the conversion, the archive write and the read back are
+/// three separate layers and the interesting failures are between them.
+#[test]
+fn a_prometheus_endpoint_records_into_a_rez() {
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("prom.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "recording a prometheus endpoint to .rez must exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        !stderr.contains("falling back") && !stderr.contains("requires a rezolus"),
+        "the run must NOT demote to parquet:\n{stderr}"
+    );
+
+    // A v3 archive, not the parquet fallback.
+    let head = std::fs::read(&output).expect("the recording should exist");
+    assert!(
+        head.starts_with(b"SQLite format 3\0"),
+        "a prometheus recording must be a real .rez, not a renamed parquet"
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("recording")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    // The table is the acquisition group, keyed `<sampler>/<group>`.
+    assert!(
+        stdout.contains("prometheus/scrape"),
+        "the scrape must land in its own acquisition group table: {stdout}"
+    );
+    assert!(
+        stdout.contains("source=svc") || stdout.contains("svc"),
+        "the recording keeps its source label: {stdout}"
+    );
+
+    // And the metrics are queryable out of the archive by name.
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("mcp")
+        .arg("describe-metrics")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus mcp describe-metrics");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        stdout.contains("http_requests_total"),
+        "the exporter's metrics must be readable back out: {stdout}"
+    );
+}
+
+/// Several Prometheus endpoints in one run: each is its own recording, and
+/// each keeps its own metrics.
+///
+/// Every recording's table is keyed `prometheus/scrape` — the SAME key in all
+/// of them — so this is where a per-recording namespace either holds or does
+/// not. It also exercises the id space: each endpoint's converter counts from
+/// 0, so both recordings' first metric is column `"0"` while meaning entirely
+/// different things.
+#[test]
+fn several_prometheus_endpoints_each_become_their_own_recording() {
+    let a = spawn_fake_exporter_named("alpha_total");
+    let b = spawn_fake_exporter_named("beta_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("fleet.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{a}/metrics,source=alpha"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{b}/metrics,source=beta"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "two prometheus endpoints must record (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("mcp")
+        .arg("describe-recording")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus mcp describe-recording");
+    let listing = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        listing.contains("source=alpha") && listing.contains("source=beta"),
+        "both targets must be recordings in the archive: {listing}"
+    );
+
+    // Each recording holds ITS OWN metric, not the other's. Both are column
+    // "0" in their own table, so a namespace collision would show up here as
+    // the wrong name coming back.
+    for (source, mine, theirs) in [
+        ("alpha", "alpha_total", "beta_total"),
+        ("beta", "beta_total", "alpha_total"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("mcp")
+            .arg("describe-metrics")
+            .arg(&output)
+            .arg("--recording")
+            .arg(format!("source={source}"))
+            .output()
+            .expect("failed to run rezolus mcp describe-metrics");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(mine),
+            "the {source} recording must hold {mine}: {stdout}"
+        );
+        assert!(
+            !stdout.contains(theirs),
+            "the {source} recording must NOT hold {theirs}: {stdout}"
+        );
+    }
+}
+
+/// A rezolus agent and a Prometheus exporter in the SAME archive — newly
+/// possible, and the combination nothing else covers.
+///
+/// The two produce completely different table shapes (per-sampler V2 cells vs
+/// a V3 acquisition group), so this is where a container that quietly assumed
+/// one wire per archive would break.
+#[test]
+fn a_rezolus_agent_and_a_prometheus_exporter_share_one_archive() {
+    let agent = spawn_fake_agent();
+    let exporter = spawn_fake_exporter_named("http_requests_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("mixed.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=rezolus"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a mixed run must record (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("recording")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("prometheus/scrape"),
+        "the exporter's acquisition group must be there: {stdout}"
+    );
+    assert!(
+        stdout.contains("fake"),
+        "and the agent's own sampler table alongside it: {stdout}"
+    );
+}
+
 /// A recorder that cannot create its output must exit non-zero.
 ///
 /// Regression this guards: a failure on the output path printed an error and
