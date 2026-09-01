@@ -129,7 +129,18 @@ fn main() {
             hindsight::run(config)
         }
         Some(("mcp", args)) => {
-            let config = mcp::Config::try_from(args.clone()).expect("failed to configure");
+            // Same as `record` below: a malformed `--recording` is the
+            // caller's typo, and `expect` reported it as a panic whose
+            // backtrace buried the one line saying what to fix. That matters
+            // more here than for a human — an agent reading a page of unwind
+            // frames has to guess whether it hit a bug or mistyped a flag.
+            let config = match mcp::Config::try_from(args.clone()) {
+                Ok(config) => config,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    std::process::exit(2);
+                }
+            };
 
             mcp::run(config)
         }

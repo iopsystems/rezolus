@@ -360,12 +360,37 @@ fn analyze_entry(
     analysis
 }
 
+/// Where a recording came from, for the sole purpose of deciding whether its
+/// metric NAMES may be trusted to name rezolus samplers.
+///
+/// Not the same question as `MetricsSource::source()`, which is a label. A
+/// recording inside a `.rez` carries the endpoint name its caller chose
+/// (`record --endpoint url,source=redis`) as its `source`, while the
+/// container itself can only be written from a rezolus/msgpack endpoint — so
+/// the label says "redis" about data that is unambiguously the agent's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provenance {
+    /// The reader is known to be over a rezolus recording, whatever its
+    /// `source` metadata says. Every recording in a `.rez` container.
+    RezolusAgent,
+    /// Provenance unknown: fall back to the `source` file metadata, where
+    /// `"rezolus"` — and nothing else — means the names are the agent's own.
+    FromMetadata,
+}
+
 /// Extract a deterministic overview record from a recording.
 ///
 /// Errors only on structural problems (no time range, sub-10s recording —
 /// the anomaly engine's floor — or the finite-float backstop tripping).
 /// Per-metric analysis failures degrade to quiet entries instead.
-pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::error::Error>> {
+///
+/// `provenance` is a REQUIRED argument rather than a default so that every
+/// caller has to answer it: the wrong answer is silent (metrics attributed
+/// to `unattributed`, coverage hollowed out), never an error.
+pub fn extract(
+    data: &dyn MetricsSource,
+    provenance: Provenance,
+) -> Result<OverviewRecord, Box<dyn std::error::Error>> {
     let (start, end) = data
         .time_range()
         .ok_or("recording has no time range (empty?)")?;
@@ -382,8 +407,18 @@ pub fn extract(data: &dyn MetricsSource) -> Result<OverviewRecord, Box<dyn std::
     // Prometheus-scraped or otherwise foreign recording proves nothing. A
     // missing/empty source is treated as unknown, i.e. conservative (no
     // inference). See the module doc in context.rs.
+    //
+    // Which recording is "genuine" comes from the caller's `provenance`, NOT
+    // from the `source` metadata alone: a recording selected out of a `.rez`
+    // reports the endpoint name its caller chose (`--endpoint
+    // url,source=redis`), so reading that field would refuse inference for
+    // data that is unambiguously the agent's own -- and silently, as
+    // `unattributed` everywhere.
     let source = data.source();
-    let infer = source == "rezolus";
+    let infer = match provenance {
+        Provenance::RezolusAgent => true,
+        Provenance::FromMetadata => source == "rezolus",
+    };
 
     // --- enumerate entries (exhaustive: every metric appears) ---
     let mut entries: Vec<(String, &'static str, String, String, bool)> = Vec::new();

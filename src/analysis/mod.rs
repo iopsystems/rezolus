@@ -38,4 +38,4 @@ pub use record::{
 // `crate::analysis::extract::extract` directly rather than through this
 // re-export, so the alias itself is still unused.
 #[allow(unused_imports)]
-pub use extract::extract;
+pub use extract::{extract, Provenance};
