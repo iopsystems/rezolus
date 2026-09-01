@@ -383,6 +383,13 @@ pub struct RezReader {
     /// The (first) recording's file-level metadata, for `source`/`version`/etc.
     metadata: BTreeMap<String, String>,
     filename: Option<String>,
+    /// Whether every recording behind this reader was cleanly finalized.
+    ///
+    /// Carried rather than only logged because the log has no reader in a
+    /// browser: `tracing::warn!` in wasm goes nowhere, and "this recording
+    /// stops earlier than the run did" is exactly the kind of thing a
+    /// consumer must be able to say out loud. See [`Self::complete`].
+    complete: bool,
 }
 
 /// One `RezReader` per recording, paired with that recording's label set.
@@ -398,6 +405,20 @@ impl RezReader {
     /// second one: an empty arm collides with nothing.
     pub fn is_empty(&self) -> bool {
         self.tables.is_empty()
+    }
+
+    /// Whether every recording behind this reader was cleanly finalized.
+    ///
+    /// False means the archive was opened while it was being written, or was
+    /// copied or killed mid-run: it is readable up to its last checkpoint, and
+    /// rows after that are simply not in it. That is worth SAYING rather than
+    /// rendering as a recording that ended early — most sharply for a `.rez`
+    /// handed over as bytes, where SQLite's own `-wal` sidecar (a separate
+    /// file, holding commits not yet checkpointed into this one) did not come
+    /// along. Reading the same archive by path, next to its sidecar, sees
+    /// further.
+    pub fn complete(&self) -> bool {
+        self.complete
     }
 
     /// Open a `.rez` at `path`, opening each per-sampler table against `pool`,
@@ -420,16 +441,19 @@ impl RezReader {
             // entry point is the single-source view.
             let mut tables = Vec::new();
             let mut metadata = BTreeMap::new();
+            let mut complete = true;
             for (i, (_, reader)) in Self::from_v3(path, pool)?.into_iter().enumerate() {
                 if i == 0 {
                     metadata = reader.metadata;
                 }
+                complete &= reader.complete;
                 tables.extend(reader.tables);
             }
             return Ok(Self {
                 tables,
                 metadata,
                 filename,
+                complete,
             });
         }
         let recordings = read_recordings(path)?;
@@ -603,6 +627,7 @@ impl RezReader {
                     tables,
                     metadata: rec.meta.metadata,
                     filename: Some(rez::recording_dir_slug(&rec.meta.labels)),
+                    complete: rec.complete,
                 },
             ));
         }
@@ -619,7 +644,9 @@ impl RezReader {
             .map(|r| r.metadata.clone())
             .unwrap_or_default();
         let mut tables = Vec::new();
+        let mut complete = true;
         for (recording, rec) in recordings.into_iter().enumerate() {
+            complete &= rec.complete;
             if !rec.complete {
                 tracing::warn!(
                     "recording {} was not cleanly finalized; it was recovered up to its \
@@ -690,6 +717,7 @@ impl RezReader {
             tables,
             metadata,
             filename,
+            complete,
         })
     }
 

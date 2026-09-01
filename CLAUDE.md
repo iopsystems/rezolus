@@ -249,6 +249,8 @@ The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` an
 
 **It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a 2-recording archive fills the A/B slots — the same mapping `rezolus view` makes. Above two, the first two are shown and the rest are named in `WasmCaptureRegistry::notices()`, which the frontend logs; the server viewer's equivalent warning goes to a terminal nobody is watching in a browser.
 
+One thing the browser cannot have: SQLite's `-wal` **sidecar**. A `.rez` carries its own unsealed rows in a `wal` TABLE inside the file, and those travel with an upload — but SQLite also commits into a sidecar file that is not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.rez` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder (a clean exit checkpoints; a `hindsight` snapshot is a consistent single file), and the viewer says so rather than rendering short in silence — `RezReader::complete()` is false for an unfinalized archive, and `WasmCaptureRegistry::notices()` reports it.
+
 Two constraints shape how that works, and both are runtime failures rather than compile errors if broken:
 
 - **No `metriken`.** Its registry declares a `linkme` distributed slice, and `linkme` has no wasm32 implementation — hence `crates/rez`'s `write` feature, which the viewer turns off. CI checks `cargo check -p rez --no-default-features --target wasm32-unknown-unknown`.

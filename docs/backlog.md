@@ -447,9 +447,16 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   from an archive reports that it cannot be saved (`Viewer::can_save`), and
   there is no in-browser picker for which arms of a 3+-recording archive to
   show — the CLI has `--baseline`/`--experiment` for that.
-- **Recovered-archive state not surfaced to consumers** — Open. `RezReader`
-  warns and `parquet metadata` reports "not cleanly finalized", but the viewer
-  API and MCP output don't, so a truncated recording can be analyzed silently.
+- **Recovered-archive state not surfaced to consumers** — Open, one consumer
+  closed. `RezReader` warns and `parquet metadata` reports "not cleanly
+  finalized", but the viewer API and MCP output don't, so a truncated recording
+  can be analyzed silently. The WASM viewer now says it — `RezReader::complete()`
+  carries the flag, and `WasmCaptureRegistry::notices()` reports it — because
+  that consumer has an extra way to read short: a browser is handed one file,
+  and SQLite's `-wal` sidecar (pages committed but not yet checkpointed into the
+  archive) is a separate one. `rezolus view archive.rez` opens by path with the
+  sidecar beside it and sees further. Still open: the server viewer's API and
+  MCP output, which have the flag available and do not report it.
 - **Unbounded startup probe** — Open. `probe_endpoint`/`fetch_agent_metadata`
   have no timeout; a hung (SIGSTOPed) agent hangs `rezolus record` at startup
   and the first ctrl-c doesn't break out. D2 bounded only the per-tick path.

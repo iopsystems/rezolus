@@ -116,6 +116,36 @@ fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRe
     Ok(recordings)
 }
 
+/// What to say about an archive that was never cleanly finalized, or `None`
+/// when every recording in it was.
+///
+/// **This is the one place the browser can hold less than the CLI would show
+/// for the same recording, so it has to be said rather than logged.** A `.rez`
+/// keeps its own unsealed rows in a `wal` TABLE inside the file, and those
+/// travel fine. SQLite ALSO commits into a `-wal` sidecar — a separate file
+/// holding pages not yet checkpointed into the archive. `rezolus view
+/// archive.rez` opens by path and SQLite reads that sidecar; a browser is
+/// handed one file and cannot. So a copy taken from under a running recorder
+/// reads short here and complete there, by up to a checkpoint's worth of ticks.
+///
+/// The archive knows which case it is in: `complete` stays 0 until finalize.
+/// `RezReader` already warned through `tracing`, which in wasm goes nowhere.
+fn incomplete_notice(
+    recordings: &rez::reader::LabeledRecordings,
+    filename: &str,
+) -> Option<String> {
+    if recordings.iter().all(|(_, r)| r.complete()) {
+        return None;
+    }
+    Some(format!(
+        "{filename} was not cleanly finalized: it reads up to its last checkpoint, and any \
+         ticks after that are not in this file. If it was copied while a recorder still held \
+         it, the copy is also missing whatever was still in SQLite's `-wal` sidecar — a \
+         separate file that does not travel with an upload. Take the copy after the recorder \
+         exits, or snapshot it with `rezolus hindsight`."
+    ))
+}
+
 /// Build a synthetic `AbContainers` manifest from two attached viewers
 /// at Save-as-Report time. The WASM viewer's compare mode loads two
 /// independent parquets (no real tar manifest involved), so we
@@ -713,9 +743,20 @@ impl WasmCaptureRegistry {
         if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
             let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
             let recordings = open_rez(data, Arc::clone(&pool))?;
+            self.notices
+                .extend(incomplete_notice(&recordings, filename));
             if recordings.len() >= 2 {
                 return self.attach_rez_comparison(recordings, pool, filename);
             }
+            // Opened here rather than handed to `Viewer::new`, which would
+            // read the archive a second time.
+            let (_, reader) = recordings
+                .into_iter()
+                .next()
+                .expect("open_rez rejects an empty archive");
+            let viewer = Viewer::from_source(Arc::new(reader), pool, Bytes::new(), filename);
+            *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
+            return Ok(());
         }
         let viewer = Viewer::new(data, filename)?;
         *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
@@ -1334,6 +1375,80 @@ mod tests {
             "and not the ones that are: {}",
             notices[0]
         );
+    }
+
+    /// An archive that was never finalized must SAY so.
+    ///
+    /// This is the one place the browser can hold less than `rezolus view`
+    /// would show for the same recording: a `.rez` carries its own unsealed
+    /// rows in a `wal` table inside the file, but SQLite also commits into a
+    /// `-wal` sidecar, and a browser is handed one file. Rendering short
+    /// without saying so would look exactly like a recording that stopped
+    /// early.
+    #[test]
+    fn an_unfinalized_archive_says_it_is_unfinalized() {
+        use rez::rez::recorder_tests_support::{counter, snap};
+        use rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        rec.ingest(
+            &snap(
+                1_000_000_000,
+                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
+            ),
+            1_000_000_000,
+            0,
+        )
+        .unwrap();
+        rec.sync().unwrap();
+        // A consistent single file, the way `hindsight` takes one — the copy a
+        // browser can actually be handed. Still not finalized.
+        let snapshot = dir.path().join("snapshot.rez");
+        rez::rez_sqlite::RezDb::open(&path)
+            .unwrap()
+            .vacuum_into(&snapshot)
+            .unwrap();
+
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &std::fs::read(&snapshot).unwrap(), "live.rez")
+            .unwrap();
+        assert!(reg.has("baseline"));
+
+        let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].contains("not cleanly finalized"),
+            "{}",
+            notices[0]
+        );
+        assert!(
+            notices[0].contains("-wal"),
+            "the notice must name what a single file cannot carry: {}",
+            notices[0]
+        );
+
+        drop(rec);
+        drop(archive);
+    }
+
+    /// And a finalized one says nothing — a notice on every ordinary recording
+    /// would train the reader to ignore the one that matters.
+    #[test]
+    fn a_finalized_archive_raises_no_notice() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+            .unwrap();
+        assert_eq!(reg.notices(), "[]");
     }
 
     /// A single-recording archive is one capture, and must not conjure an
