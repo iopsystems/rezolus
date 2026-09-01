@@ -20,7 +20,10 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
   but v1 assumes two slots and the wire-stable `baseline`/`experiment` ids are
   hard-coded. A third slot needs those ids to become positional or named-but-open.
   *Reopen:* when a third capture is actually needed. Design constraint captured in
-  the entry (n-way extension).
+  the entry (n-way extension). **Now on the critical path** of
+  [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-tarball.md):
+  a two-arm, two-source comparison encodes in a `.rez` as four `{arm, source}`
+  recordings, so replacing the tarball needs this.
 - **Hot-swap a capture** (replace one side, keep the other) — Open. Out of scope
   for v1; no architectural obstacle noted.
 - **Live-agent compare** (file+live or live+live) — Roadmap. Explicitly excluded;
@@ -32,6 +35,46 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
   filename basename, the compare badge shows two identical labels;
   `synthesize_ab_manifest` does not dedupe. Decided to let the user rename
   (documented in #960). Reopen only if it bites in practice.
+
+## A/B container consolidation (`.ab.tar` → `.rez`)
+
+Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-tarball.md).
+
+- **GATE: can the WASM viewer read a v3 `.rez`?** — Open, and first. Everything
+  below is premised on this passing. *Reopen as a new entry* if it does not.
+  - **Wave 1 (bundle cost) — measured 2026-08-27, not disqualifying.**
+    `rusqlite 0.40` builds for `wasm32-unknown-unknown` with stock clang and no
+    emscripten (it resolves to `sqlite-wasm-rs`, not `libsqlite3-sys`); viewer
+    bundle +425 KB gzipped (1.277×), an upper bound with no `wasm-opt`.
+  - **Wave 2 (memory model) — Open, and now the real question.** The default
+    `sqlite-wasm-rs` VFS is in-RAM, which would put the whole archive in wasm
+    memory — the property the v3 entry rejected tar for. Root cause is that
+    SQLite's `xRead` is synchronous while browser file APIs are async; the entry
+    explains the interface. Measure peak wasm memory opening real `.rez` archives
+    at several sizes; evaluate a read-only path that skips the SQL engine and
+    streams segment BLOBs; test the `FileReaderSync`-backed VFS hypothesis (sync
+    random access over the picked `File`, no OPFS copy, worker required —
+    unverified); failing all three, cost the dedicated-worker + OPFS (`sahpool`)
+    restructure.
+
+  *Effort parked 2026-09-01 pending pickup.*
+- **Point `combine --ab` at the `.rez` form; add `.rez` to the picker `accept`
+  list** — Open, independent of the gate. `src/viewer/assets/lib/ui/layout.js:26`
+  omits `.rez` in both viewers even though the server ingests it by content
+  sniffing. Cheap, and it slows growth of the tarball corpus.
+- **`.rez` manifest carries selection + events** — Open. `KEY_SELECTION`/`KEY_EVENTS`
+  are parquet footer keys today; in a `.rez` they are a catalog `UPDATE`, the shape
+  `annotate` established in #1073.
+- **Column-level trim for `.rez`** — Open. `filter` drops whole tables by sampler;
+  Save-as-Report needs per-column projection, which means decode → project →
+  re-encode segments. The one item that breaks the verbatim-BLOB-copy property
+  `rez_v3_rewrite` has held since #1073 — write it knowing that.
+- **Windowless `.rez` tables (non-rezolus sides)** — Open. Ingest is close (the
+  recorder already converts Prometheus scrapes to Snapshots; `demote_from_rez`
+  documents the refusal as policy, `src/recorder/mod.rs:744-760`). The reader must
+  report *no* band for such a table rather than a fabricated one. Open sub-question:
+  whether these should be recordable by `record` at all, or only constructible by
+  `combine`.
 
 ## Viewer — charts & heatmap UX
 
