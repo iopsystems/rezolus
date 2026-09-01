@@ -427,12 +427,43 @@ impl RezReader {
     ///
     /// A table whose segments cannot be parsed is skipped rather than
     /// poisoning the composition, matching `SamplerReader::reader`.
-    pub fn composition_sources(&self) -> Vec<CompositionSource> {
-        self.tables
+    ///
+    /// # Errors
+    ///
+    /// Refuses a reader that **flattens several recordings**, which is what
+    /// [`open_with_pool`](Self::open_with_pool) produces. Every recording of a
+    /// multi-recording archive holds the same sampler names, so composing a
+    /// flattened reader hands the builder several children carrying the same
+    /// metric names under one label — and one silently wins, losing an arm's
+    /// data entirely. That is the exact failure this composer exists to
+    /// prevent, so it refuses rather than warns, mirroring `route`, which
+    /// groups owners by `(recording, sampler)` for the same reason.
+    ///
+    /// Open with [`open_recordings`](Self::open_recordings) instead: one
+    /// reader per recording, each composable under its own label.
+    pub fn composition_sources(
+        &self,
+    ) -> Result<Vec<CompositionSource>, Box<dyn std::error::Error>> {
+        let mut recordings: Vec<usize> = self.tables.iter().map(|t| t.recording).collect();
+        recordings.sort_unstable();
+        recordings.dedup();
+        if recordings.len() > 1 {
+            return Err(format!(
+                "cannot compose a reader flattening {} recordings: they share sampler \
+                 names, so composing them would let one recording's series silently \
+                 replace another's. Open the archive with `open_recordings` and compose \
+                 each recording under its own label.",
+                recordings.len()
+            )
+            .into());
+        }
+
+        Ok(self
+            .tables
             .iter()
             .filter_map(|t| t.reader())
             .map(TableReader::composition_source)
-            .collect()
+            .collect())
     }
 
     /// Whether this recording holds no tables at all.
@@ -1821,6 +1852,68 @@ mod tests {
         assert!(!from_bytes[0].1.counter_names().is_empty());
     }
 
+    /// The composition counterpart to the query refusal below: a flattened
+    /// multi-recording reader must not be composable either.
+    ///
+    /// Every recording carries the same sampler names, so composing a
+    /// flattened reader hands the builder several children holding the SAME
+    /// metric names under one label. Nothing downstream can tell them apart —
+    /// one silently replaces the other and an arm's data is simply gone, which
+    /// is the precise failure `composition_sources` exists to prevent. It was
+    /// reachable through `open_with_pool`, the path a multi-recording archive
+    /// actually takes in production.
+    #[test]
+    fn composition_sources_refuse_a_flattened_multi_recording_reader() {
+        let (_d, p) = two_sampler_rez();
+        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
+        let rec0 = m.recordings.into_iter().next().unwrap();
+        let bytes0: Vec<Vec<Vec<u8>>> = rb
+            .into_iter()
+            .next()
+            .unwrap()
+            .tables
+            .into_iter()
+            .map(|(_, b)| b)
+            .collect();
+
+        let mut a = rec0.clone();
+        a.dir = "arm0".to_string();
+        a.labels.insert("arm".to_string(), "arm0".to_string());
+        let mut b = rec0.clone();
+        b.dir = "arm1".to_string();
+        b.labels.insert("arm".to_string(), "arm1".to_string());
+
+        let d = tempfile::tempdir().unwrap();
+        let out = d.path().join("two_rec.rez");
+        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
+
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        // The flattening path — NOT open_recordings.
+        let flattened = RezReader::open_with_pool(&out, Arc::clone(&pool)).unwrap();
+        // `CompositionSource` is opaque and not `Debug`, so match rather than
+        // `expect_err`.
+        let err = match flattened.composition_sources() {
+            Ok(_) => panic!("composing a flattened 2-recording reader must refuse"),
+            Err(e) => e,
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("open_recordings"),
+            "the error must point at the entry point that works: {msg}"
+        );
+
+        // ...and the same archive opened per recording composes fine, proving
+        // the refusal is about flattening and not about the fixture.
+        let per_recording = RezReader::open_recordings(&out, pool).unwrap();
+        assert_eq!(per_recording.len(), 2);
+        for (_labels, reader) in &per_recording {
+            assert!(
+                !reader.composition_sources().unwrap().is_empty(),
+                "each recording composes on its own"
+            );
+        }
+    }
+
     /// C1 regression: `RezReader::open_with_pool` — NOT `open_recordings` —
     /// is the path a multi-recording archive actually takes in production
     /// (`parquet combine a.rez b.rez` builds a 2-recording A/B archive, and
@@ -2108,16 +2201,6 @@ mod tests {
             RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
         }
 
-        /// A `.rez` is readable while it is being written, and hindsight's
-        /// retention deletes as it goes — so a table that had rows when the
-        /// reader probed it can have none by the time a query opens it.
-        ///
-        /// The reader used to `.expect("segments opened at probe time cannot
-        /// fail to reopen")`, which is true for a finished archive and false
-        /// for the live one the format advertises. The plausible sequence is
-        /// exactly this one: hindsight evicts everything older than the
-        /// cutoff, and a quiet sampler's only rows go with it, so the viewer
-        /// or MCP panics instead of answering.
         /// Two recordings compose into ONE labelled multi-source, each
         /// keeping its own injected label.
         ///
@@ -2135,18 +2218,22 @@ mod tests {
             write_v3(&fixture_rows(6), 2, true, &a_path);
             write_v3(&fixture_rows(6), 2, true, &b_path);
 
-            let a = open(&a_path);
-            let b = open(&b_path);
-            assert!(
-                !a.composition_sources().is_empty(),
-                "fixture sanity: the recording has tables to compose"
+            // `open_recordings` -- one reader per recording -- is the entry
+            // point composition requires; see the refusal test below.
+            let pool = BufferPool::new(64 * 1024 * 1024);
+            let a = RezReader::open_recordings(&a_path, Arc::clone(&pool)).unwrap();
+            let b = RezReader::open_recordings(&b_path, pool).unwrap();
+            assert_eq!(
+                (a.len(), b.len()),
+                (1, 1),
+                "fixture sanity: one recording each"
             );
 
             let mut builder = metriken_query::ParquetReader::builder();
-            for source in a.composition_sources() {
+            for source in a[0].1.composition_sources().unwrap() {
                 builder = builder.source_labeled(source, [("job", "a")]);
             }
-            for source in b.composition_sources() {
+            for source in b[0].1.composition_sources().unwrap() {
                 builder = builder.source_labeled(source, [("job", "b")]);
             }
             let combined = builder.build().unwrap();
@@ -2163,6 +2250,16 @@ mod tests {
             assert_eq!(jobs, vec!["a".to_string(), "b".to_string()]);
         }
 
+        /// A `.rez` is readable while it is being written, and hindsight's
+        /// retention deletes as it goes — so a table that had rows when the
+        /// reader probed it can have none by the time a query opens it.
+        ///
+        /// The reader used to `.expect("segments opened at probe time cannot
+        /// fail to reopen")`, which is true for a finished archive and false
+        /// for the live one the format advertises. The plausible sequence is
+        /// exactly this one: hindsight evicts everything older than the
+        /// cutoff, and a quiet sampler's only rows go with it, so the viewer
+        /// or MCP panics instead of answering.
         #[test]
         fn a_table_evicted_between_probe_and_query_does_not_panic() {
             let rows = fixture_rows(6);
