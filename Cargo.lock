@@ -4182,8 +4182,10 @@ dependencies = [
  "dashboard",
  "metriken-query",
  "report-save",
+ "rez",
  "serde",
  "serde_json",
+ "tempfile",
  "wasm-bindgen",
  "zstd-sys",
 ]

@@ -243,9 +243,20 @@ Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`
 
 ### Static Site Viewer (WASM)
 
-The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads parquet files directly in the browser through a WASM module.
+The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads recordings directly in the browser through a WASM module.
 
-The WASM crate lives at `crates/viewer/`. It is its own Cargo workspace — it targets `wasm32-unknown-unknown` and has profile settings that differ from the main rezolus binary. Build with `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`.
+The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` and builds via `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`. It is a workspace member like any other, but it cannot depend on `rezolus` itself — that is a **binary-only** crate with no `lib` target — so anything both viewers need lives in a shared crate (`dashboard`, `rez`) instead. See the `viewer-parity` skill.
+
+**It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a 2-recording archive fills the A/B slots — the same mapping `rezolus view` makes. Above two, the first two are shown and the rest are named in `WasmCaptureRegistry::notices()`, which the frontend logs; the server viewer's equivalent warning goes to a terminal nobody is watching in a browser.
+
+Two constraints shape how that works, and both are runtime failures rather than compile errors if broken:
+
+- **No `metriken`.** Its registry declares a `linkme` distributed slice, and `linkme` has no wasm32 implementation — hence `crates/rez`'s `write` feature, which the viewer turns off. CI checks `cargo check -p rez --no-default-features --target wasm32-unknown-unknown`.
+- **No threads.** `std::thread::spawn` compiles for wasm32 and panics at runtime, so the reader's parallel footer probe has a sequential wasm arm.
+
+Building the bundle needs a clang that can target wasm32 (zstd and SQLite are compiled from C). Apple's does not; Homebrew LLVM does — `CC_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/clang`.
+
+`crates/viewer` is `crate-type = ["cdylib", "rlib"]` so its behavior is testable natively (`cargo test -p viewer`, a CI step); `tests/wasm_viewer_*.test.mjs` drive the built bundle from node.
 
 ### Key Dependencies
 

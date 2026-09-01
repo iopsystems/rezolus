@@ -29,10 +29,22 @@ description: Use when adding or changing what the rezolus viewer exposes — an 
     run it locally before pushing a viewer change. (A missing `charts/boxplot.js`
     symlink shipped exactly this outage before the guard existed.)
 
-`crates/viewer` **cannot depend on the `rezolus` binary crate** (separate wasm32
-workspace), so any backend logic both need must live in the shared **`dashboard`**
-crate or be **duplicated** in `lib.rs`. That structural gap is why viewer behavior
-gets added to one side and silently missing from the other.
+`crates/viewer` **cannot depend on the `rezolus` binary crate** — `rezolus` is
+binary-only, with no `lib` target — so any backend logic both need must live in a
+shared crate (**`dashboard`**, **`rez`**) or be **duplicated** in `lib.rs`. That
+structural gap is why viewer behavior gets added to one side and silently missing
+from the other. It is also why the `.rez` reader was unreachable from the browser
+for as long as it lived in `src/`: moving it to `crates/rez` is what let the
+static-site viewer open an archive at all.
+
+Two things break in the browser without failing to compile, so watch for them in
+anything the WASM side will reach:
+
+- **`metriken` (and `metriken-exposition`)** — their registry declares a `linkme`
+  distributed slice and `linkme` has no wasm32 implementation. This one IS a
+  compile error, but only in a wasm32 build: `cargo check -p rez
+  --no-default-features --target wasm32-unknown-unknown` is the CI guard.
+- **Threads** — `std::thread::spawn` compiles for wasm32 and panics at runtime.
 
 **Core principle: a change to what the viewer *derives from a loaded recording*
 is a change to BOTH backends.** Shipping it on one is a parity regression, not a

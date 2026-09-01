@@ -8,7 +8,17 @@ homepage.workspace = true
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# `rlib` alongside `cdylib` so this crate can be TESTED. wasm-bindgen's
+# generated code compiles for a native target too (the JS interop is what
+# would panic there, and none of it runs in these tests), so the behavior a
+# browser gets — which container a capture is, which slots an archive fills —
+# is checkable without a browser.
+crate-type = ["cdylib", "rlib"]
+
+[dev-dependencies]
+# Fixture builders for `.rez` archives.
+rez = { path = "../rez", features = ["test-support"] }
+tempfile = "3"
 
 [dependencies]
 bytes = "1"
@@ -16,6 +26,10 @@ bytes = "1"
 # doesn't need the server-side http or ingest features, so we inherit as-is.
 metriken-query.workspace = true
 dashboard.workspace = true
+# The `.rez` reader, WITHOUT its `write` feature: the ingest half pulls
+# `metriken`, whose registry declares a `linkme` distributed slice, and
+# `linkme` has no wasm32 implementation.
+rez = { path = "../rez", default-features = false }
 wasm-bindgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true

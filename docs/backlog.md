@@ -434,10 +434,19 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   table whose segments have gone is reported absent, which is what a table with
   no rows already is, so a query naming only its metrics gets the ordinary
   "references no metric present" error and its neighbours keep answering.
-- **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
-  parquet-only, so the static-site viewer silently fails on every streamed
-  recording. Pre-existing gap, newly load-bearing now that `.rez` is the
-  streaming format. See the `viewer-parity` skill.
+- **WASM viewer cannot open `.rez` at all** — **DONE**. The static-site viewer
+  reads both containers now. What it took: the format moved out of the
+  binary-only `rezolus` crate into `crates/rez` (nothing could depend on it
+  where it was), the read path was decoupled from `metriken` (whose registry
+  declares a `linkme` distributed slice, which has no wasm32 implementation),
+  and the reader gained a byte-based entry point — a browser has an upload, not
+  a path. A 2-recording archive maps onto the A/B slots exactly as `rezolus
+  view` maps it; above two, the rest are named in a notice rather than dropped.
+  Costs ~1.5 MB of bundle (SQLite), 4.5 → 6.1 MB raw, 1.4 → 2.0 MB gzipped.
+  Still open around it: Save as Report is parquet-only, so a capture opened
+  from an archive reports that it cannot be saved (`Viewer::can_save`), and
+  there is no in-browser picker for which arms of a 3+-recording archive to
+  show — the CLI has `--baseline`/`--experiment` for that.
 - **Recovered-archive state not surfaced to consumers** — Open. `RezReader`
   warns and `parquet metadata` reports "not cleanly finalized", but the viewer
   API and MCP output don't, so a truncated recording can be analyzed silently.

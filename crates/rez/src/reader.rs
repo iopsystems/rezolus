@@ -386,7 +386,7 @@ pub struct RezReader {
 }
 
 /// One `RezReader` per recording, paired with that recording's label set.
-type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
+pub type LabeledRecordings = Vec<(BTreeMap<String, String>, RezReader)>;
 
 impl RezReader {
     /// Whether this recording holds no tables at all.
