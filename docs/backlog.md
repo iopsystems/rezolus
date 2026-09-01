@@ -400,12 +400,10 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   is stored relative to the row timestamp, so the resulting `rate()` uncertainty
   band is nonsense rather than merely wide. Fixed by deriving the window from `fetch_ns` — the recorder's own
   clock for the tick — and ignoring `sample.timestamp` entirely, which also
-  ends the two-semantics mixing. Still zero-width, which understates: the
-  honest bracket is the real round-trip `[request_sent, response_received]`,
-  and the converter is handed only parsed text and a single instant, so the
-  request instant does not reach it. That widening is tracked with the
-  Prometheus-in-`.rez` entry above — it moves this window's edges, not its
-  anchor.
+  ends the two-semantics mixing. The remaining zero width is **fixed too**:
+  `scrape_one` returns the request and response instants, so the window is now
+  the real round-trip `[request_sent, response_received]` — a widening of this
+  window rather than a change of its anchor, as predicted.
 - **Viewer shows only the first two recordings** — **PARTLY DONE**. `rezolus
   view` now takes `--baseline k=v` / `--experiment k=v` (repeatable, ANDed,
   subset match — the same selector semantics as the MCP `--recording` flag,

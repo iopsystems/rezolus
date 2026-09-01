@@ -76,6 +76,122 @@ fn spawn_fake_agent() -> u16 {
     port
 }
 
+/// Minimal stand-in for a Prometheus exporter. Answers `/metrics` with text
+/// exposition and 404s everything else, so the recorder's probe classifies it
+/// as prometheus rather than msgpack.
+fn spawn_fake_exporter() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        let mut tick = 0u64;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 8192];
+            let Ok(n) = stream.read(&mut buf) else {
+                continue;
+            };
+            if n == 0 {
+                continue;
+            }
+            tick += 1;
+            let body = format!(
+                "# HELP http_requests_total Total requests.\n\
+                 # TYPE http_requests_total counter\n\
+                 http_requests_total{{code=\"200\"}} {tick}\n\
+                 # TYPE queue_depth gauge\n\
+                 queue_depth {}\n",
+                tick * 2
+            );
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    port
+}
+
+/// A Prometheus endpoint records into a `.rez` — it used to demote the whole
+/// run to parquet.
+///
+/// The refusal was a policy check, not a capability limit: a scrape is one
+/// request and one response, which is exactly one acquisition group, and the
+/// archive has always been able to hold those. This drives the real binary
+/// end to end because the conversion, the archive write and the read back are
+/// three separate layers and the interesting failures are between them.
+#[test]
+fn a_prometheus_endpoint_records_into_a_rez() {
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("prom.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "recording a prometheus endpoint to .rez must exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert!(
+        !stderr.contains("falling back") && !stderr.contains("requires a rezolus"),
+        "the run must NOT demote to parquet:\n{stderr}"
+    );
+
+    // A v3 archive, not the parquet fallback.
+    let head = std::fs::read(&output).expect("the recording should exist");
+    assert!(
+        head.starts_with(b"SQLite format 3\0"),
+        "a prometheus recording must be a real .rez, not a renamed parquet"
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("recording")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    // The table is the acquisition group, keyed `<sampler>/<group>`.
+    assert!(
+        stdout.contains("prometheus/scrape"),
+        "the scrape must land in its own acquisition group table: {stdout}"
+    );
+    assert!(
+        stdout.contains("source=svc") || stdout.contains("svc"),
+        "the recording keeps its source label: {stdout}"
+    );
+
+    // And the metrics are queryable out of the archive by name.
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("mcp")
+        .arg("describe-metrics")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus mcp describe-metrics");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        stdout.contains("http_requests_total"),
+        "the exporter's metrics must be readable back out: {stdout}"
+    );
+}
+
 /// A recorder that cannot create its output must exit non-zero.
 ///
 /// Regression this guards: a failure on the output path printed an error and
