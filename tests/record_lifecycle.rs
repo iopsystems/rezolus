@@ -80,6 +80,12 @@ fn spawn_fake_agent() -> u16 {
 /// exposition and 404s everything else, so the recorder's probe classifies it
 /// as prometheus rather than msgpack.
 fn spawn_fake_exporter() -> u16 {
+    spawn_fake_exporter_named("http_requests_total")
+}
+
+/// As `spawn_fake_exporter`, with the counter's name chosen by the caller so
+/// two exporters in one run are telling apart by what they expose.
+fn spawn_fake_exporter_named(counter: &'static str) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("failed to bind the fake exporter");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -95,9 +101,9 @@ fn spawn_fake_exporter() -> u16 {
             }
             tick += 1;
             let body = format!(
-                "# HELP http_requests_total Total requests.\n\
-                 # TYPE http_requests_total counter\n\
-                 http_requests_total{{code=\"200\"}} {tick}\n\
+                "# HELP {counter} Total requests.\n\
+                 # TYPE {counter} counter\n\
+                 {counter}{{code=\"200\"}} {tick}\n\
                  # TYPE queue_depth gauge\n\
                  queue_depth {}\n",
                 tick * 2
@@ -189,6 +195,134 @@ fn a_prometheus_endpoint_records_into_a_rez() {
     assert!(
         stdout.contains("http_requests_total"),
         "the exporter's metrics must be readable back out: {stdout}"
+    );
+}
+
+/// Several Prometheus endpoints in one run: each is its own recording, and
+/// each keeps its own metrics.
+///
+/// Every recording's table is keyed `prometheus/scrape` — the SAME key in all
+/// of them — so this is where a per-recording namespace either holds or does
+/// not. It also exercises the id space: each endpoint's converter counts from
+/// 0, so both recordings' first metric is column `"0"` while meaning entirely
+/// different things.
+#[test]
+fn several_prometheus_endpoints_each_become_their_own_recording() {
+    let a = spawn_fake_exporter_named("alpha_total");
+    let b = spawn_fake_exporter_named("beta_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("fleet.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{a}/metrics,source=alpha"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{b}/metrics,source=beta"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "two prometheus endpoints must record (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("mcp")
+        .arg("describe-recording")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus mcp describe-recording");
+    let listing = String::from_utf8_lossy(&described.stdout);
+    assert!(
+        listing.contains("source=alpha") && listing.contains("source=beta"),
+        "both targets must be recordings in the archive: {listing}"
+    );
+
+    // Each recording holds ITS OWN metric, not the other's. Both are column
+    // "0" in their own table, so a namespace collision would show up here as
+    // the wrong name coming back.
+    for (source, mine, theirs) in [
+        ("alpha", "alpha_total", "beta_total"),
+        ("beta", "beta_total", "alpha_total"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+            .arg("mcp")
+            .arg("describe-metrics")
+            .arg(&output)
+            .arg("--recording")
+            .arg(format!("source={source}"))
+            .output()
+            .expect("failed to run rezolus mcp describe-metrics");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(mine),
+            "the {source} recording must hold {mine}: {stdout}"
+        );
+        assert!(
+            !stdout.contains(theirs),
+            "the {source} recording must NOT hold {theirs}: {stdout}"
+        );
+    }
+}
+
+/// A rezolus agent and a Prometheus exporter in the SAME archive — newly
+/// possible, and the combination nothing else covers.
+///
+/// The two produce completely different table shapes (per-sampler V2 cells vs
+/// a V3 acquisition group), so this is where a container that quietly assumed
+/// one wire per archive would break.
+#[test]
+fn a_rezolus_agent_and_a_prometheus_exporter_share_one_archive() {
+    let agent = spawn_fake_agent();
+    let exporter = spawn_fake_exporter_named("http_requests_total");
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("mixed.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{agent},source=rezolus"))
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{exporter}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "a mixed run must record (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("recording")
+        .arg("metadata")
+        .arg("-i")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus recording metadata");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    assert!(
+        stdout.contains("prometheus/scrape"),
+        "the exporter's acquisition group must be there: {stdout}"
+    );
+    assert!(
+        stdout.contains("fake"),
+        "and the agent's own sampler table alongside it: {stdout}"
     );
 }
 
