@@ -26,6 +26,7 @@ merged PRs, and project notes; each is grounded in real commits/PRs.
 | 2026-04-19 | [Viewer chart & heatmap UX](2026-04-19-viewer-chart-ux.md) | Shipped (merged) |
 | 2026-04-21 | [A/B compare mode for the viewer](2026-04-21-ab-compare-mode.md) | Shipped (merged) |
 | 2026-05-10 | [Selection → Notebook → Report](2026-05-10-selection-notebook-report.md) | Shipped (merged) |
+| 2026-06-16 | [Per-cgroup attribution for block I/O and network samplers](2026-06-16-cgroup-io-attribution.md) | OPEN — proposal, pre-build. Per-tenant disk/network from the host, mirroring `cgroup_cpu_usage`. Attribution context is the crux: blockio reads `rq → bio → bi_blkg → blkcg → css.id` (present in the checked-in `vmlinux.h`); network TX can use `skb->sk` but RX cannot (NULL before demux), so an **interface-as-tenant-proxy** alternative (`skb->dev->ifindex`, symmetric, 2 derefs) is recorded as the likely primary for network. Per-cgroup histograms explicitly out of scope (MAX_CGROUPS × 496 buckets ≈ 64 MB). Overhead framed as the cgroup "tax" `cpu/usage` already pays fleetwide, with event rate — not per-event cost — as the axis that differs. Three open questions gate coding |
 | 2026-07-02 | [`document-feature` skill — agent-verified CLI help](2026-07-02-document-feature-skill.md) | Shipped (merged) |
 | 2026-07-03 | [Viewer support for "simple capture" parquets](2026-07-03-simple-capture-viewer.md) | Shipped (PR #989) |
 | 2026-07-04 | [Per-source metric descriptions in combined parquets](2026-07-04-per-source-descriptions.md) | Shipped (PR #989) |
