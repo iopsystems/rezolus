@@ -98,6 +98,7 @@ target/release/rezolus recording combine a.parquet b.parquet --ab baseline=redis
 target/release/rezolus recording filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
 target/release/rezolus recording upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
 target/release/rezolus recording upgrade old.rez -o new.rez            # ...or to a new file
+target/release/rezolus recording snapshot live.rez -o incident.rez     # complete copy of an archive still being written
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);
 # combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);
@@ -143,7 +144,7 @@ The binary operates in seven modes via subcommands:
 4. **Hindsight** (`src/hindsight/`) - Maintains a rolling `.rez` v3 buffer on disk (the streaming v3 writer with retention: everything older than `duration` is evicted each tick) for post-incident snapshots. The buffer is readable live by the viewer/MCP/`parquet metadata`; a snapshot is a `VACUUM INTO` copy taken without pausing the recording.
 5. **Viewer** (`src/viewer/`) - Web dashboard with PromQL query engine and TSDB (from `metriken-query` crate). Supports parquet files, `.rez` archives (a 2-recording `.rez` renders as an A/B baseline/experiment comparison; >2 shows the first two unless `--baseline k=v` / `--experiment k=v` name which recordings fill the slots — repeatable, ANDed, subset match, the same selector semantics as the MCP `--recording` flag, and each must name exactly one recording or the run is refused with a listing), live agent connections, and upload-only mode. Generates service KPI dashboards from `ServiceExtension` metadata.
 6. **MCP** (`src/mcp/`) - AI analysis tools (anomaly detection, correlation, PromQL queries, feature extraction). Runs as stdio server or one-shot CLI commands. `query` prints acquisition-window uncertainty bands `[lo, hi]` beside `rate()`/`irate()` values (scalar ops scale the band; series-op-series combines both operands' bands by interval arithmetic, and operands from *different* acquisition tables have their bands widened to the union of both spans first — identical edges mean the same read, so the common case widens by nothing; non-rate/non-histogram queries have no band). See `docs/journal/2026-08-21-cross-table-uncertainty.md`. `extract-features` emits a deterministic, versioned overview record (JSON) summarizing a recording's Rezolus-native features.
-7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -o out.raw`). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
+7. **Parquet** (`src/parquet_tools/`) - File operations: `metadata` (inspect; on a `.rez`, describes the manifest), `annotate` (add service extension KPIs; on a `.rez`, `--queries` embeds them into each recording's manifest), `combine` (merge multi-source files, build an A/B tarball, or assemble single-recording `.rez` into a multi-recording `.rez`), `filter` (drop columns not needed by KPIs; on a `.rez`, `--samplers` drops every table whose sampler is not listed), `convert` (raw msgpack recording, plain or zstd, into parquet — the offline complement to `record -o out.raw`), `snapshot` (a complete standalone copy of a `.rez` that is still being written — `cp` leaves SQLite's `-wal` sidecar behind and silently ends early). Those four accept `.rez` inputs; `convert` takes raw input only and emits parquet only.
 
 ### Sampler Architecture
 
@@ -215,15 +216,52 @@ Fixture builders (`rez::rez::recorder_tests_support`, and the tar writer
 crate's tests, which build most `.rez` fixtures in this repo. The binary enables
 that feature as a dev-dependency.
 
+**The `write` feature (default on) is what separates the two halves.** With it
+off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,
+`RezReader`. That configuration is the one that compiles for
+`wasm32-unknown-unknown`, and the reason it has to exist is narrow — `metriken`'s
+registry (`metriken-core`) declares a `linkme` distributed slice, and `linkme`
+gates on a fixed `target_os` list that `unknown` is not in. So the read path
+must not name a `metriken`/`metriken-exposition` type at all, which is why the
+archive owns:
+
+- `rez::window::Window` — the acquisition window a segment stores. Converted
+  from `metriken::Window` once, at ingest.
+- `rez::schema::{GroupSchema, MetricDesc}` — a group's membership as carried in
+  a WAL row. Its serde field order is the on-disk msgpack, so it is pinned
+  byte-for-byte against the producer's type by a test.
+- `rez::rez::{Cell, CellValue}` — the builder's input. Rows reach a table from
+  an agent snapshot *and* from this archive's own WAL, and only the first has
+  snapshot values to borrow.
+
+`cargo check -p rez --no-default-features --target wasm32-unknown-unknown` is a
+CI step for exactly this reason; nothing else catches a metriken type creeping
+back onto the read path.
+
 ### Service Extensions
 
 Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.
 
 ### Static Site Viewer (WASM)
 
-The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads parquet files directly in the browser through a WASM module.
+The `site/` directory hosts a browser-only viewer deployed to GitHub Pages. It shares the `src/viewer/assets/` frontend (via symlinks) with the server-backed viewer, but loads recordings directly in the browser through a WASM module.
 
-The WASM crate lives at `crates/viewer/`. It is its own Cargo workspace — it targets `wasm32-unknown-unknown` and has profile settings that differ from the main rezolus binary. Build with `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`.
+The WASM crate lives at `crates/viewer/`. It targets `wasm32-unknown-unknown` and builds via `./crates/viewer/build.sh`; output goes to `site/viewer/pkg/` where the frontend imports it as `../pkg/wasm_viewer.js`. It is a workspace member like any other, but it cannot depend on `rezolus` itself — that is a **binary-only** crate with no `lib` target — so anything both viewers need lives in a shared crate (`dashboard`, `rez`) instead. See the `viewer-parity` skill.
+
+**It opens both parquet files and `.rez` archives.** A `.rez` is recognized by content, not by filename, exactly as the CLI recognizes it, and a 2-recording archive fills the A/B slots — the same mapping `rezolus view` makes. Above two, the first two are shown and the rest are named in `WasmCaptureRegistry::notices()`, which the frontend logs; the server viewer's equivalent warning goes to a terminal nobody is watching in a browser.
+
+One thing the browser cannot have: SQLite's `-wal` **sidecar**. A `.rez` carries its own unsealed rows in a `wal` TABLE inside the file, and those travel with an upload — but SQLite also commits into a sidecar file not yet checkpointed into the archive, and an upload is one file. `rezolus view archive.rez` opens by path with the sidecar beside it and sees further. This only differs for a copy taken from under a running recorder, and the gap used to be large: measured at **123 ticks (~2 minutes at a 1s interval)** on a 2000-tick recording, with a sidecar larger than the archive. Two things bound it now — the writer folds the sidecar into the archive every `rez_v3_writer::CHECKPOINT_INTERVAL` (10s), so a plain copy is at most that stale rather than unbounded; and `rezolus recording snapshot <archive> -o out.rez` reads through the sidecar for an exact copy, without pausing the writer.
+
+The size-based autocheckpoint (4 MiB) and the time-based one answer different questions and both are needed: bytes bound the sidecar's disk footprint, time bounds how much of the recording a copy can be missing. A quiet recording takes hours to accumulate 4 MiB, and that is exactly the case where a copy is silently useless. The viewer also says so rather than rendering short in silence: `RezReader::complete()` is false for an unfinalized archive, and `WasmCaptureRegistry::notices()` reports it.
+
+Two constraints shape how that works, and both are runtime failures rather than compile errors if broken:
+
+- **No `metriken`.** Its registry declares a `linkme` distributed slice, and `linkme` has no wasm32 implementation — hence `crates/rez`'s `write` feature, which the viewer turns off. CI checks `cargo check -p rez --no-default-features --target wasm32-unknown-unknown`.
+- **No threads.** `std::thread::spawn` compiles for wasm32 and panics at runtime, so the reader's parallel footer probe has a sequential wasm arm.
+
+Building the bundle needs a clang that can target wasm32 (zstd and SQLite are compiled from C). Apple's does not; Homebrew LLVM does — `CC_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/clang`.
+
+`crates/viewer` is `crate-type = ["cdylib", "rlib"]` so its behavior is testable natively (`cargo test -p viewer`, a CI step); `tests/wasm_viewer_*.test.mjs` drive the built bundle from node.
 
 ### Key Dependencies
 

@@ -113,10 +113,10 @@ impl RezTableIndex {
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::window::Window;
 use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, UInt64Array, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use metriken::Window;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -1028,6 +1028,27 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// container. A v3 SQLite file is not a tar, so `is_rez_path` correctly (and
 /// unchanged) reports `false` for it; callers that need to recognize both
 /// containers call `detect_rez_format`.
+/// Which container an in-memory archive holds — [`detect_rez_format`] for
+/// bytes, which is what a caller holding an upload has.
+///
+/// Shares `SQLITE_MAGIC` and `is_rez_reader` with the path version rather than
+/// re-deriving either: a browser and the CLI disagreeing about what a file IS
+/// would be the worst possible place for a second rule.
+pub fn detect_rez_format_bytes(bytes: &[u8]) -> RezFormat {
+    if looks_like_v3(bytes) {
+        return RezFormat::V3Sqlite;
+    }
+    match is_rez_reader(std::io::Cursor::new(bytes)) {
+        Ok(true) => RezFormat::V2Tar,
+        _ => RezFormat::NotRez,
+    }
+}
+
+/// True when `bytes` starts with SQLite's file header — a v3 `.rez` container.
+pub fn looks_like_v3(bytes: &[u8]) -> bool {
+    bytes.len() >= SQLITE_MAGIC.len() && &bytes[..SQLITE_MAGIC.len()] == SQLITE_MAGIC
+}
+
 pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     let mut file = std::fs::File::open(path)?;
     let mut header = [0u8; 16];
@@ -1046,9 +1067,13 @@ pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     }
 }
 
+// The ingest half's vocabulary. Everything below that mentions these types
+// is gated on `write`; the reader never sees them.
+#[cfg(feature = "write")]
 use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 use tracing::warn;
 
+#[cfg(feature = "write")]
 /// A borrowed snapshot entry, tagged by shape.
 pub enum Entry<'a> {
     Counter(&'a Counter),
@@ -1056,6 +1081,50 @@ pub enum Entry<'a> {
     Histogram(&'a Histogram),
 }
 
+/// One reading's value, in the three shapes a `.rez` column can hold.
+///
+/// The histogram variant borrows an H2 histogram rather than bare buckets: a
+/// column stores the whole thing, and the `histogram` crate is pure Rust, so
+/// carrying it costs the read path nothing.
+#[derive(Debug)]
+pub enum CellValue<'a> {
+    Counter(u64),
+    Gauge(i64),
+    Histogram(&'a histogram::Histogram),
+}
+
+/// One reading in one row, as the archive stores it: a name, the producer's
+/// metadata, an optional acquisition window, and a value.
+///
+/// **The builder's input type, deliberately separate from [`Entry`].** Rows
+/// reach a table from two directions — an agent snapshot at ingest, and this
+/// archive's own WAL when a live tail is materialized into a segment — and
+/// only the first has `metriken-exposition` values behind it. Making the
+/// builder speak `Entry` forced the second to rebuild `Counter`/`Gauge`/
+/// `Histogram` values it had just decoded, purely to have something to borrow,
+/// which put a metrics-registry dependency (and with it `linkme`, which has no
+/// wasm32 implementation) on the READ path of the archive format.
+pub struct Cell<'a> {
+    pub name: &'a str,
+    pub metadata: &'a HashMap<String, String>,
+    pub window: Option<Window>,
+    pub value: CellValue<'a>,
+}
+
+impl Cell<'_> {
+    /// The `metric_type` string the parquet reader keys on to reconstruct the
+    /// column's value shape (counter vs gauge; histograms carry a `:buckets`
+    /// suffix, so their `metric_type` is informational).
+    fn metric_type(&self) -> &'static str {
+        match self.value {
+            CellValue::Counter(_) => "counter",
+            CellValue::Gauge(_) => "gauge",
+            CellValue::Histogram(_) => "histogram",
+        }
+    }
+}
+
+#[cfg(feature = "write")]
 impl Entry<'_> {
     pub fn name(&self) -> &str {
         match self {
@@ -1071,21 +1140,28 @@ impl Entry<'_> {
             Entry::Histogram(h) => &h.metadata,
         }
     }
+    /// The acquisition window, converted to the archive's own [`Window`] —
+    /// the one crossing from the agent's vocabulary into the file format's.
     pub fn window(&self) -> Option<Window> {
         match self {
             Entry::Counter(c) => c.window,
             Entry::Gauge(g) => g.window,
             Entry::Histogram(h) => h.window,
         }
+        .map(Into::into)
     }
-    /// The `metric_type` string the parquet reader keys on to reconstruct the
-    /// column's value shape (counter vs gauge; histograms carry a `:buckets`
-    /// suffix, so their `metric_type` is informational).
-    fn metric_type(&self) -> &'static str {
-        match self {
-            Entry::Counter(_) => "counter",
-            Entry::Gauge(_) => "gauge",
-            Entry::Histogram(_) => "histogram",
+
+    /// Borrow this snapshot entry as the builder's neutral [`Cell`].
+    pub fn as_cell(&self) -> Cell<'_> {
+        Cell {
+            name: self.name(),
+            metadata: self.metadata(),
+            window: self.window(),
+            value: match self {
+                Entry::Counter(c) => CellValue::Counter(c.value),
+                Entry::Gauge(g) => CellValue::Gauge(g.value),
+                Entry::Histogram(h) => CellValue::Histogram(&h.value),
+            },
         }
     }
 }
@@ -1125,16 +1201,25 @@ const HISTOGRAM_BUCKET_BYTES: usize = 8;
 /// A cell whose shape does not match its column's established type is skipped
 /// by `push_row` and charged nothing here, for the same reason: it is not
 /// stored.
-pub fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
-    entries
+pub fn cells_approx_bytes(cells: &[Cell<'_>]) -> usize {
+    cells
         .iter()
-        .map(|e| match e {
-            Entry::Counter(_) | Entry::Gauge(_) => CELL_OVERHEAD_BYTES,
-            Entry::Histogram(h) => {
-                CELL_OVERHEAD_BYTES + h.value.as_slice().len() * HISTOGRAM_BUCKET_BYTES
+        .map(|c| match c.value {
+            CellValue::Counter(_) | CellValue::Gauge(_) => CELL_OVERHEAD_BYTES,
+            CellValue::Histogram(h) => {
+                CELL_OVERHEAD_BYTES + h.as_slice().len() * HISTOGRAM_BUCKET_BYTES
             }
         })
         .sum()
+}
+
+#[cfg(feature = "write")]
+/// [`cells_approx_bytes`] for a row still in snapshot form. One rule, borrowed
+/// rather than restated: a second spelling of "what a row costs" is exactly
+/// what the doc above says must not exist.
+pub fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
+    let cells: Vec<Cell<'_>> = entries.iter().map(Entry::as_cell).collect();
+    cells_approx_bytes(&cells)
 }
 
 /// A growing per-sampler table. Columns are sparse: shorter than the row count
@@ -1220,22 +1305,33 @@ impl TableBuilder {
     /// `wall_offset_ns` the wall-clock observation for that tick (raw
     /// `SystemTime` reading minus `snapshot_ts`), stored once per row in the
     /// table-level `:wall_offset` sidecar.
-    pub fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+    /// [`push_row`](Self::push_row) for a row still in snapshot form.
+    ///
+    /// The ingest path's spelling. Rows from this archive's own WAL take
+    /// `push_row` directly — they have no snapshot values to borrow, which is
+    /// the whole reason the builder speaks [`Cell`].
+    #[cfg(feature = "write")]
+    pub fn push_entries(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+        let cells: Vec<Cell<'_>> = entries.iter().map(Entry::as_cell).collect();
+        self.push_row(snapshot_ts, wall_offset_ns, &cells);
+    }
+
+    pub fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, cells: &[Cell<'_>]) {
         let row = self.timestamps.len();
         self.timestamps.push(snapshot_ts);
         self.wall_offsets.push(wall_offset_ns);
         let mut added_bytes = 0usize;
-        for e in entries {
-            let name = e.name().to_string();
+        for e in cells {
+            let name = e.name.to_string();
             let order = &mut self.order;
             let col = self.columns.entry(name.clone()).or_insert_with(|| {
                 order.push(name.clone());
-                let values = match e {
-                    Entry::Counter(_) => RezValues::Counter(Vec::new()),
-                    Entry::Gauge(_) => RezValues::Gauge(Vec::new()),
-                    Entry::Histogram(_) => RezValues::Histogram(Vec::new()),
+                let values = match e.value {
+                    CellValue::Counter(_) => RezValues::Counter(Vec::new()),
+                    CellValue::Gauge(_) => RezValues::Gauge(Vec::new()),
+                    CellValue::Histogram(_) => RezValues::Histogram(Vec::new()),
                 };
-                let mut metadata = e.metadata().clone();
+                let mut metadata = e.metadata.clone();
                 metadata
                     .entry("metric_type".to_string())
                     .or_insert_with(|| e.metric_type().to_string());
@@ -1253,29 +1349,29 @@ impl TableBuilder {
             // column from counter to gauge mid-recording). Pushing the window
             // regardless would leave `windows` one longer than `values` and
             // shift every later row's window onto the wrong value.
-            let cell_bytes = match (e, &mut col.values) {
-                (Entry::Counter(c), RezValues::Counter(v)) => {
-                    v.push(Some(c.value));
+            let cell_bytes = match (&e.value, &mut col.values) {
+                (CellValue::Counter(c), RezValues::Counter(v)) => {
+                    v.push(Some(*c));
                     Some(CELL_OVERHEAD_BYTES)
                 }
-                (Entry::Gauge(g), RezValues::Gauge(v)) => {
-                    v.push(Some(g.value));
+                (CellValue::Gauge(g), RezValues::Gauge(v)) => {
+                    v.push(Some(*g));
                     Some(CELL_OVERHEAD_BYTES)
                 }
-                (Entry::Histogram(h), RezValues::Histogram(v)) => {
+                (CellValue::Histogram(h), RezValues::Histogram(v)) => {
                     // The clone below copies the whole bucket `Box<[u64]>` —
                     // 496 buckets ≈ 4 KB at the `HISTOGRAM_GROUPING_POWER` = 3
                     // that `docs/principles.md` standardizes on. One histogram
                     // cell is ~100x a scalar one, which is why the seal cap
                     // counts bytes rather than rows.
-                    let buckets = h.value.as_slice().len();
-                    v.push(Some(h.value.clone()));
+                    let buckets = h.as_slice().len();
+                    v.push(Some((*h).clone()));
                     Some(CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
                 }
                 _ => None,
             };
             if let Some(bytes) = cell_bytes {
-                col.windows.push(e.window());
+                col.windows.push(e.window);
                 added_bytes += bytes;
             }
         }
@@ -1339,6 +1435,7 @@ impl TableBuilder {
     }
 }
 
+#[cfg(feature = "write")]
 /// One V3 acquisition-group tick's contribution to its table's approx-bytes
 /// seal budget (see `entries_approx_bytes`, which this mirrors for the
 /// group-keyed shape).
@@ -1426,7 +1523,7 @@ impl GroupTableBuilder {
 
     fn get_or_create(
         &mut self,
-        desc: &metriken_exposition::MetricDesc,
+        desc: &crate::schema::MetricDesc,
         metric_type: &'static str,
         empty: RezValues,
     ) -> &mut RezColumn {
@@ -1471,7 +1568,7 @@ impl GroupTableBuilder {
         ts: u64,
         wall_offset_ns: i64,
         window: Option<Window>,
-        schema: &metriken_exposition::GroupSchema,
+        schema: &crate::schema::GroupSchema,
         counters: &[Option<u64>],
         gauges: &[Option<i64>],
         // `(grouping_power, max_value_power, buckets)` per histogram slot —
@@ -1665,6 +1762,7 @@ mod table_sampler_tests {
     }
 }
 
+#[cfg(feature = "write")]
 /// Partition a snapshot's metrics by their `sampler` label (`"unattributed"`
 /// when the label is absent). Shared by the in-memory `RezRecorder` and the
 /// streaming `StreamRecorder` so the two ingest paths cannot drift apart.
@@ -1723,6 +1821,7 @@ pub fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<'_>>> {
     groups
 }
 
+#[cfg(feature = "write")]
 /// One sampler group's dedup key: the representative acquisition window (max
 /// `end_ns` among windowed metrics), or `snapshot_ts` when nothing in the group
 /// carries a window (windowless → one row per poll).
@@ -1771,6 +1870,7 @@ impl RezRecorder {
     /// Partition `snapshot`'s metrics by their `sampler` label; for each sampler
     /// append a row iff its representative window (max `end_ns` among windowed
     /// metrics) advanced, else key on `snapshot_ts` (windowless → per-poll row).
+    #[cfg(feature = "write")]
     pub fn ingest(&mut self, snapshot: &Snapshot, snapshot_ts: u64) {
         for (sampler, entries) in group_by_sampler(snapshot) {
             let key = dedup_key(&entries, snapshot_ts);
@@ -1788,7 +1888,7 @@ impl RezRecorder {
             // observation is exactly zero. It becomes meaningful when the
             // recorder loop switches to monotonic-anchored row stamps and
             // passes its own per-tick wall reading through.
-            table.push_row(snapshot_ts, 0, &entries);
+            table.push_entries(snapshot_ts, 0, &entries);
         }
     }
 
@@ -1910,6 +2010,7 @@ pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
 #[cfg(test)]
 mod builder_tests {
     use super::*;
+    use crate::window::Window;
     use metriken_exposition::{Counter, Gauge, Histogram};
     use std::collections::HashMap;
 
@@ -1934,7 +2035,7 @@ mod builder_tests {
         assert_eq!(b.approx_bytes(), 0, "a fresh builder accounts nothing");
 
         let c = Counter::new("0".to_string(), 1, cmeta("s"));
-        b.push_row(1_000, 0, &[Entry::Counter(&c)]);
+        b.push_entries(1_000, 0, &[Entry::Counter(&c)]);
         let after_scalar = b.approx_bytes();
         assert_eq!(
             after_scalar, CELL_OVERHEAD_BYTES,
@@ -1944,7 +2045,7 @@ mod builder_tests {
         let h = Histogram::new("1".to_string(), hist(7, 64), cmeta("s"));
         let buckets = h.value.as_slice().len();
         assert_eq!(buckets, h.value.config().total_buckets());
-        b.push_row(2_000, 0, &[Entry::Histogram(&h)]);
+        b.push_entries(2_000, 0, &[Entry::Histogram(&h)]);
         assert_eq!(
             b.approx_bytes() - after_scalar,
             CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES,
@@ -1963,7 +2064,7 @@ mod builder_tests {
         let c = Counter::new("0".to_string(), 1, cmeta("s"));
         let g = Gauge::new("1".to_string(), 1, cmeta("s"));
         for row in 0..100u64 {
-            b.push_row(row * 1_000, 0, &[Entry::Counter(&c), Entry::Gauge(&g)]);
+            b.push_entries(row * 1_000, 0, &[Entry::Counter(&c), Entry::Gauge(&g)]);
         }
         // Pre-condition: without it a shrink that does nothing still passes.
         assert!(
@@ -2012,7 +2113,7 @@ mod builder_tests {
         let entries = [Entry::Counter(&c), Entry::Gauge(&g), Entry::Histogram(&h)];
 
         let mut b = TableBuilder::new("s".to_string());
-        b.push_row(1_000, 0, &entries);
+        b.push_entries(1_000, 0, &entries);
         assert_eq!(
             entries_approx_bytes(&entries),
             b.approx_bytes(),
@@ -2022,7 +2123,7 @@ mod builder_tests {
         // Again on a second row, so an estimate that only matches while columns
         // are being created cannot pass.
         let before = b.approx_bytes();
-        b.push_row(2_000, 0, &entries);
+        b.push_entries(2_000, 0, &entries);
         assert_eq!(entries_approx_bytes(&entries), b.approx_bytes() - before);
     }
 
@@ -2041,9 +2142,9 @@ mod builder_tests {
         assert_eq!(size_of::<Option<Window>>(), WINDOW_SLOT_BYTES);
 
         let mut b = TableBuilder::new("s".to_string());
-        let c =
-            Counter::new("0".to_string(), 1, cmeta("s")).with_window(Some(Window::new(900, 1_000)));
-        b.push_row(1_000, 0, &[Entry::Counter(&c)]);
+        let c = Counter::new("0".to_string(), 1, cmeta("s"))
+            .with_window(Some(Window::new(900, 1_000).into()));
+        b.push_entries(1_000, 0, &[Entry::Counter(&c)]);
 
         // One value slot and one window slot were pushed, so both must be paid
         // for. The strict inequality is the part that catches a revert.
@@ -2072,16 +2173,16 @@ mod builder_tests {
     #[test]
     fn mismatch_arm_does_not_desync_values_and_windows() {
         let mut b = TableBuilder::new("s".to_string());
-        let w = |n: u64| Some(Window::new(n, n + 100));
+        let w = |n: u64| Some(metriken::Window::new(n, n + 100));
 
         let c0 = Counter::new("0".to_string(), 1, cmeta("s")).with_window(w(900));
-        b.push_row(1_000, 0, &[Entry::Counter(&c0)]);
+        b.push_entries(1_000, 0, &[Entry::Counter(&c0)]);
         // Same column name, now a gauge: shape mismatch against the established
         // counter column.
         let g = Gauge::new("0".to_string(), -5, cmeta("s")).with_window(w(1_900));
-        b.push_row(2_000, 0, &[Entry::Gauge(&g)]);
+        b.push_entries(2_000, 0, &[Entry::Gauge(&g)]);
         let c1 = Counter::new("0".to_string(), 3, cmeta("s")).with_window(w(2_900));
-        b.push_row(3_000, 0, &[Entry::Counter(&c1)]);
+        b.push_entries(3_000, 0, &[Entry::Counter(&c1)]);
 
         let table = b.finish();
         assert_eq!(table.timestamps.len(), 3);
@@ -2117,7 +2218,7 @@ mod builder_tests {
     fn wall_offsets_roundtrip_through_parquet() {
         let mut b = TableBuilder::new("cpu_usage".to_string());
         let c = Counter::new("0".to_string(), 7, cmeta("cpu_usage"));
-        b.push_row(1_000, -123_456, &[Entry::Counter(&c)]);
+        b.push_entries(1_000, -123_456, &[Entry::Counter(&c)]);
         let table = b.finish();
         assert_eq!(table.wall_offsets, vec![-123_456]);
 
@@ -2141,7 +2242,9 @@ mod builder_tests {
 /// `parquet` tests all build `.rez` fixtures with these.
 #[cfg(any(test, feature = "test-support"))]
 pub mod recorder_tests_support {
-    use metriken::Window;
+    // The agent's window: these builders make snapshot values, which is the
+    // one place the archive still speaks metriken's vocabulary.
+    use crate::window::Window;
     use metriken_exposition::{Counter, Snapshot, SnapshotV2};
     use std::collections::HashMap;
     use std::time::SystemTime;
@@ -2167,7 +2270,8 @@ pub mod recorder_tests_support {
     }
 
     pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
-        Counter::new(name.to_string(), value, cmeta(name, sampler)).with_window(window)
+        Counter::new(name.to_string(), value, cmeta(name, sampler))
+            .with_window(window.map(Into::into))
     }
 
     /// Create a minimal, valid, empty v3 `.rez` at `path` (one recording, no
@@ -2196,7 +2300,7 @@ pub mod recorder_tests_support {
     /// wrong arm fail.
     pub fn multi_recording_v3_rez(path: &std::path::Path, recordings: &[(&str, &str)]) {
         use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
-        use metriken::Window;
+        use crate::window::Window;
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
 
         let mut archive = RezArchive::create(path).unwrap();
@@ -2280,7 +2384,7 @@ pub mod recorder_tests_support {
 #[cfg(test)]
 mod recorder_tests {
     use super::*;
-    use metriken::Window;
+    use crate::window::Window;
     use metriken_exposition::Snapshot;
     use std::collections::HashMap;
     use std::time::SystemTime;
@@ -2511,7 +2615,7 @@ mod manifest_tests {
 #[cfg(test)]
 mod table_tests {
     use super::*;
-    use metriken::Window;
+    use crate::window::Window;
     use std::collections::HashMap;
 
     fn meta(metric: &str, mtype: &str) -> HashMap<String, String> {
@@ -2605,7 +2709,7 @@ mod table_tests {
 #[cfg(test)]
 mod archive_tests {
     use super::*;
-    use metriken::Window;
+    use crate::window::Window;
     use std::collections::HashMap;
 
     fn counter_col(name: &str, vals: Vec<Option<u64>>, wins: Vec<Option<Window>>) -> RezColumn {
@@ -3404,7 +3508,7 @@ mod recovery_tests {
 mod finalize_tests {
     use super::recorder_tests_support::*;
     use super::*;
-    use metriken::Window;
+    use crate::window::Window;
     use metriken_exposition::{Gauge, Snapshot, SnapshotV2};
     use std::collections::HashMap;
     use std::time::SystemTime;
@@ -3486,7 +3590,7 @@ mod finalize_tests {
             .into_iter()
             .collect::<HashMap<_, _>>(),
         )
-        .with_window(Some(w));
+        .with_window(Some(w.into()));
         let s = Snapshot::V2(SnapshotV2 {
             systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(2_000),
             duration: std::time::Duration::ZERO,
@@ -3668,7 +3772,7 @@ mod malformed_histogram_tests {
                 1_000 + row,
                 0,
                 None,
-                &schema,
+                &(&schema).into(),
                 &[Some(row + 1)],
                 &[],
                 // grouping_power >= max_value_power is rejected by

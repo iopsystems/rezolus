@@ -62,7 +62,7 @@ fn empty_dashboard_context() -> dashboard::dashboard::DashboardContext {
 /// `source:` nav entry in the WASM viewer, not just the server). `service_names`
 /// are the sources already covered by a service template (excluded here).
 fn classify_sources(
-    reader: &ParquetReader,
+    reader: &dyn MetricsSource,
     file_metadata: &std::collections::HashMap<String, String>,
     service_names: &std::collections::HashSet<&str>,
 ) -> Vec<dashboard::dashboard::SourceEntry> {
@@ -80,7 +80,10 @@ fn classify_sources(
     metric_names.extend(reader.histogram_names());
 
     let filename = reader.filename_or_default();
-    let filename_stem = filename.strip_suffix(".parquet").unwrap_or(&filename);
+    let filename_stem = filename
+        .strip_suffix(".parquet")
+        .or_else(|| filename.strip_suffix(".rez"))
+        .unwrap_or(&filename);
 
     dashboard::source_kind::classify_sources(
         &serde_json::Value::Object(map),
@@ -88,6 +91,59 @@ fn classify_sources(
         service_names,
         Some(filename_stem),
     )
+}
+
+/// Render a recording's labels for a message: `k=v, k=v` in key order.
+fn render_labels(labels: &std::collections::BTreeMap<String, String>) -> String {
+    labels
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Open every recording of a `.rez` held as bytes.
+///
+/// The one place the browser turns an uploaded archive into readers, so both
+/// entry points — a single capture and the two-slot registry — agree on what
+/// the file contains.
+fn open_rez(data: &[u8], pool: Arc<BufferPool>) -> Result<rez::reader::LabeledRecordings, JsValue> {
+    let recordings = rez::reader::RezReader::open_recordings_from_bytes(data.to_vec(), pool)
+        .map_err(|e| JsValue::from_str(&format!("Failed to load .rez archive: {e}")))?;
+    if recordings.is_empty() {
+        return Err(JsValue::from_str("empty .rez archive (no recordings)"));
+    }
+    Ok(recordings)
+}
+
+/// What to say about an archive that was never cleanly finalized, or `None`
+/// when every recording in it was.
+///
+/// **This is the one place the browser can hold less than the CLI would show
+/// for the same recording, so it has to be said rather than logged.** A `.rez`
+/// keeps its own unsealed rows in a `wal` TABLE inside the file, and those
+/// travel fine. SQLite ALSO commits into a `-wal` sidecar — a separate file
+/// holding pages not yet checkpointed into the archive. `rezolus view
+/// archive.rez` opens by path and SQLite reads that sidecar; a browser is
+/// handed one file and cannot. So a copy taken from under a running recorder
+/// reads short here and complete there, by up to a checkpoint's worth of ticks.
+///
+/// The archive knows which case it is in: `complete` stays 0 until finalize.
+/// `RezReader` already warned through `tracing`, which in wasm goes nowhere.
+fn incomplete_notice(
+    recordings: &rez::reader::LabeledRecordings,
+    filename: &str,
+) -> Option<String> {
+    if recordings.iter().all(|(_, r)| r.complete()) {
+        return None;
+    }
+    Some(format!(
+        "{filename} was not cleanly finalized: it reads up to its last checkpoint, and any \
+         ticks after that are not in this file. If it was copied while a recorder still held \
+         it, the copy is also missing whatever was still in SQLite's `-wal` sidecar — a \
+         separate file that does not travel with an upload. `rezolus recording snapshot \
+         <archive> -o out.rez` takes a complete copy without stopping the recorder."
+    ))
 }
 
 /// Build a synthetic `AbContainers` manifest from two attached viewers
@@ -120,7 +176,10 @@ fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::A
 
 #[wasm_bindgen]
 pub struct Viewer {
-    reader: Arc<ParquetReader>,
+    /// The loaded capture. Type-erased because a capture is a parquet file or
+    /// one recording of a `.rez` archive, and every method below asks it only
+    /// for what `MetricsSource` already answers.
+    reader: Arc<dyn MetricsSource>,
     /// Per-Viewer buffer pool. WASM is single-upload-per-Viewer; each
     /// Viewer gets its own pool sized at `WASM_CACHE_SIZE_BYTES`.
     _pool: Arc<BufferPool>,
@@ -143,6 +202,10 @@ pub struct Viewer {
     /// re-encodes a projection from this source, not from the reader
     /// (which has lost internal Arrow field metadata like the
     /// `metric` key used by `parquet filter`'s keep-field predicate).
+    ///
+    /// Empty for a capture that came out of a `.rez`: an archive is many
+    /// parquet tables, not the single file the report projection re-encodes.
+    /// [`Viewer::can_save`] is what callers ask, rather than testing this.
     source_bytes: Bytes,
 }
 
@@ -188,15 +251,63 @@ struct ViewerInfo {
 impl Viewer {
     #[wasm_bindgen(constructor)]
     pub fn new(data: &[u8], filename: &str) -> Result<Viewer, JsValue> {
+        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
+
+        // `.rez` is recognized by CONTENT, not by the name the browser gives
+        // us: a file dragged in may be called anything, and the server viewer
+        // sniffs the container the same way.
+        if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
+            let mut recordings = open_rez(data, Arc::clone(&pool))?;
+            if recordings.len() > 1 {
+                // One `Viewer` is one capture. Silently taking the first
+                // recording would show one arm of an A/B under the whole
+                // archive's name — the failure this format's readers refuse
+                // everywhere else. `WasmCaptureRegistry::attach` is the entry
+                // point that can fill both slots.
+                return Err(JsValue::from_str(&format!(
+                    "{filename} holds {} recordings; open it as a comparison rather than a \
+                     single capture",
+                    recordings.len()
+                )));
+            }
+            let (_, reader) = recordings.remove(0);
+            return Ok(Self::from_source(
+                Arc::new(reader),
+                pool,
+                Bytes::new(),
+                filename,
+            ));
+        }
+
         let bytes = Bytes::from(data.to_vec());
         let source_bytes = bytes.clone();
-        let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
-        let reader = Arc::new(
+        let reader: Arc<dyn MetricsSource> = Arc::new(
             ParquetReader::open_bytes_with_pool(bytes, Arc::clone(&pool))
                 .map_err(|e| JsValue::from_str(&format!("Failed to load parquet: {}", e)))?
                 .with_filename(filename.to_string()),
         );
+        Ok(Self::from_source_bytes(reader, pool, source_bytes))
+    }
 
+    /// Build a capture around an already-open source.
+    ///
+    /// `filename` is applied by the caller for a parquet (the reader carries
+    /// it); a `.rez` recording names itself from its own labels, so this arm
+    /// takes the archive's name only to report it.
+    fn from_source(
+        reader: Arc<dyn MetricsSource>,
+        pool: Arc<BufferPool>,
+        source_bytes: Bytes,
+        _filename: &str,
+    ) -> Viewer {
+        Self::from_source_bytes(reader, pool, source_bytes)
+    }
+
+    fn from_source_bytes(
+        reader: Arc<dyn MetricsSource>,
+        pool: Arc<BufferPool>,
+        source_bytes: Bytes,
+    ) -> Viewer {
         let file_metadata = reader.file_metadata();
         let context = if is_trimmed_report(&file_metadata) {
             empty_dashboard_context()
@@ -212,7 +323,7 @@ impl Viewer {
             dashboard::dashboard::build_dashboard_context(None, &[], None, &sources)
         };
 
-        Ok(Viewer {
+        Viewer {
             reader,
             _pool: pool,
             file_metadata,
@@ -220,7 +331,17 @@ impl Viewer {
             cached_bodies: std::cell::RefCell::new(std::collections::HashMap::new()),
             alias: None,
             source_bytes,
-        })
+        }
+    }
+
+    /// Whether Save as Report can re-encode this capture.
+    ///
+    /// False for one opened out of a `.rez`: the projection re-encodes the
+    /// capture's original parquet, and an archive is many tables rather than
+    /// one file. Reported rather than attempted, so the UI can say why instead
+    /// of handing back an empty download.
+    pub fn can_save(&self) -> bool {
+        !self.source_bytes.is_empty()
     }
 
     /// Set or clear the display alias for this capture. Pass `None`
@@ -403,6 +524,7 @@ impl Viewer {
     /// frontend decodes it the same way. A non-series result (scalar/vector) is
     /// surfaced as an error so the frontend falls back to the JSON query path,
     /// matching the server. `band` is `"lo,hi"` (empty → interquartile default).
+    #[allow(clippy::too_many_arguments)]
     pub fn query_range_display(
         &self,
         query: &str,
@@ -588,6 +710,13 @@ fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
 pub struct WasmCaptureRegistry {
     baseline: Option<Viewer>,
     experiment: Option<Viewer>,
+    /// Things the UI should say out loud about the last attach — currently
+    /// only "this archive holds more recordings than are being shown".
+    ///
+    /// The server viewer logs that to a terminal nobody is watching in a
+    /// browser, so it is returned instead of dropped: an archive whose third
+    /// arm is silently missing looks exactly like an archive with two arms.
+    notices: Vec<String>,
 }
 
 #[wasm_bindgen]
@@ -597,15 +726,99 @@ impl WasmCaptureRegistry {
         Self {
             baseline: None,
             experiment: None,
+            notices: Vec::new(),
         }
     }
 
-    /// Attach a parquet capture under the given slot ("baseline" or
-    /// "experiment").  Replaces any previously attached capture in that slot.
+    /// Attach a capture under the given slot ("baseline" or "experiment").
+    /// Replaces any previously attached capture in that slot.
+    ///
+    /// A multi-recording `.rez` is the exception: it carries both sides of a
+    /// comparison itself, so it fills BOTH slots and the requested one is
+    /// ignored. That is the same mapping `rezolus view` makes for the same
+    /// file — the alternative, loading one arm into one slot, would show an
+    /// A/B archive as a single capture with no sign that half of it is missing.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
+        self.notices.clear();
+        if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
+            let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
+            let recordings = open_rez(data, Arc::clone(&pool))?;
+            self.notices
+                .extend(incomplete_notice(&recordings, filename));
+            if recordings.len() >= 2 {
+                return self.attach_rez_comparison(recordings, pool, filename);
+            }
+            // Opened here rather than handed to `Viewer::new`, which would
+            // read the archive a second time.
+            let (_, reader) = recordings
+                .into_iter()
+                .next()
+                .expect("open_rez rejects an empty archive");
+            let viewer = Viewer::from_source(Arc::new(reader), pool, Bytes::new(), filename);
+            *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
+            return Ok(());
+        }
         let viewer = Viewer::new(data, filename)?;
         *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
         Ok(())
+    }
+
+    /// Load a multi-recording `.rez` into the two A/B slots.
+    ///
+    /// Recordings 0 and 1, in manifest order, matching `rezolus view`. Aliases
+    /// come from `dashboard::capture_alias`, the same rule the server viewer
+    /// uses, so one archive is labelled identically wherever it is opened —
+    /// and scoped to the two recordings SHOWN, since a label can fail to tell
+    /// three apart while telling the chosen two apart exactly.
+    fn attach_rez_comparison(
+        &mut self,
+        recordings: rez::reader::LabeledRecordings,
+        pool: Arc<BufferPool>,
+        filename: &str,
+    ) -> Result<(), JsValue> {
+        let total = recordings.len();
+        let mut recordings = recordings;
+        let extra: Vec<String> = recordings
+            .split_off(2)
+            .into_iter()
+            .map(|(labels, _)| render_labels(&labels))
+            .collect();
+        let shown: Vec<std::collections::BTreeMap<String, String>> =
+            recordings.iter().map(|(l, _)| l.clone()).collect();
+        let alias_key = dashboard::capture_alias::discriminating_alias_key(&shown);
+
+        let mut it = recordings.into_iter();
+        for (slot, fallback) in [
+            (Slot::Baseline, "baseline"),
+            (Slot::Experiment, "experiment"),
+        ] {
+            let (labels, reader) = it.next().expect("split_off(2) leaves exactly two");
+            let alias = alias_key
+                .as_ref()
+                .and_then(|k| labels.get(k))
+                .cloned()
+                .unwrap_or_else(|| fallback.to_string());
+            let mut viewer =
+                Viewer::from_source(Arc::new(reader), Arc::clone(&pool), Bytes::new(), filename);
+            viewer.set_alias(Some(alias));
+            *self.slot_mut(slot) = Some(viewer);
+        }
+
+        if !extra.is_empty() {
+            self.notices.push(format!(
+                "{filename} holds {total} recordings; showing the first two. Not shown: {}. \
+                 Pick different ones with `rezolus view {filename} --baseline k=v --experiment \
+                 k=v`.",
+                extra.join("; ")
+            ));
+        }
+        Ok(())
+    }
+
+    /// What the UI should say about the last `attach`, as a JSON array of
+    /// strings. Empty when there is nothing to report.
+    pub fn notices(&self) -> String {
+        serde_json::to_string(&self.notices).unwrap_or_else(|_| "[]".to_string())
     }
 
     /// Set or clear the display alias for a capture slot. No-op when
@@ -676,6 +889,7 @@ impl WasmCaptureRegistry {
         self.require_slot(capture).map(|v| v.query(query, time))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn query_range_display(
         &self,
         capture: &str,
@@ -1078,6 +1292,217 @@ mod tests {
         strip_sections_from_section_body(&mut value);
         assert!(value.get("sections").is_none());
         assert_eq!(value["groups"], serde_json::json!([]));
+    }
+
+    /// Build a multi-recording `.rez` and hand back its bytes, the way a
+    /// browser receives one: a blob, with no file behind it.
+    fn rez_bytes(recordings: &[(&str, &str)]) -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fleet.rez");
+        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, recordings);
+        std::fs::read(&path).unwrap()
+    }
+
+    /// A `.rez` carrying two recordings IS a comparison, so it fills both
+    /// slots — the same mapping `rezolus view` makes for the same file.
+    /// Loading one arm into one slot would show an A/B archive as a single
+    /// capture with nothing on screen saying half of it is missing.
+    #[test]
+    fn a_two_recording_rez_fills_both_capture_slots() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach(
+            "baseline",
+            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.rez",
+        )
+        .unwrap();
+
+        assert!(reg.has("baseline") && reg.has("experiment"));
+        // Identity, not just "two captures loaded": each slot must be the
+        // recording it claims. The arms' own metadata is written by a
+        // different path than their labels, so it is an independent witness.
+        assert!(
+            reg.file_metadata_json("baseline")
+                .unwrap()
+                .contains("redis")
+        );
+        assert!(
+            reg.file_metadata_json("experiment")
+                .unwrap()
+                .contains("valkey")
+        );
+        // And named by the label that tells them apart — the shared rule the
+        // server viewer uses, so one archive reads the same in both.
+        assert_eq!(
+            reg.slot("baseline").unwrap().alias.as_deref(),
+            Some("redis")
+        );
+        assert_eq!(
+            reg.slot("experiment").unwrap().alias.as_deref(),
+            Some("valkey")
+        );
+        assert_eq!(reg.notices(), "[]");
+    }
+
+    /// Above two, the archive holds recordings the browser is not showing.
+    /// The server viewer says so on a terminal; here it has to reach the UI,
+    /// because an archive whose third arm is silently missing looks exactly
+    /// like an archive with two arms.
+    #[test]
+    fn recordings_beyond_the_first_two_are_reported_not_dropped() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach(
+            "baseline",
+            &rez_bytes(&[
+                ("redis", "web-01"),
+                ("valkey", "web-01"),
+                ("envoy", "web-01"),
+            ]),
+            "fleet.rez",
+        )
+        .unwrap();
+
+        let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(notices[0].contains("3 recordings"), "{}", notices[0]);
+        assert!(
+            notices[0].contains("source=envoy"),
+            "the notice must name what is NOT shown: {}",
+            notices[0]
+        );
+        assert!(
+            !notices[0].contains("source=redis"),
+            "and not the ones that are: {}",
+            notices[0]
+        );
+    }
+
+    /// An archive that was never finalized must SAY so.
+    ///
+    /// This is the one place the browser can hold less than `rezolus view`
+    /// would show for the same recording: a `.rez` carries its own unsealed
+    /// rows in a `wal` table inside the file, but SQLite also commits into a
+    /// `-wal` sidecar, and a browser is handed one file. Rendering short
+    /// without saying so would look exactly like a recording that stopped
+    /// early.
+    #[test]
+    fn an_unfinalized_archive_says_it_is_unfinalized() {
+        use rez::rez::recorder_tests_support::{counter, snap};
+        use rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        rec.ingest(
+            &snap(
+                1_000_000_000,
+                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
+            ),
+            1_000_000_000,
+            0,
+        )
+        .unwrap();
+        rec.sync().unwrap();
+        // A consistent single file, the way `hindsight` takes one — the copy a
+        // browser can actually be handed. Still not finalized.
+        let snapshot = dir.path().join("snapshot.rez");
+        rez::rez_sqlite::RezDb::open(&path)
+            .unwrap()
+            .vacuum_into(&snapshot)
+            .unwrap();
+
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &std::fs::read(&snapshot).unwrap(), "live.rez")
+            .unwrap();
+        assert!(reg.has("baseline"));
+
+        let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert!(
+            notices[0].contains("not cleanly finalized"),
+            "{}",
+            notices[0]
+        );
+        assert!(
+            notices[0].contains("-wal"),
+            "the notice must name what a single file cannot carry: {}",
+            notices[0]
+        );
+
+        drop(rec);
+        drop(archive);
+    }
+
+    /// And a finalized one says nothing — a notice on every ordinary recording
+    /// would train the reader to ignore the one that matters.
+    #[test]
+    fn a_finalized_archive_raises_no_notice() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+            .unwrap();
+        assert_eq!(reg.notices(), "[]");
+    }
+
+    /// A single-recording archive is one capture, and must not conjure an
+    /// experiment slot out of nothing.
+    #[test]
+    fn a_single_recording_rez_is_one_capture() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+            .unwrap();
+        assert!(reg.has("baseline"));
+        assert!(!reg.has("experiment"));
+    }
+
+    /// The `.rez` branch must not capture the parquet path: a parquet still
+    /// lands in the slot the caller asked for, and nothing else moves.
+    #[test]
+    fn a_parquet_still_attaches_to_the_slot_it_was_given() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("experiment", &parquet_bytes(), "capture.parquet")
+            .unwrap();
+        assert!(reg.has("experiment"));
+        assert!(!reg.has("baseline"));
+    }
+
+    /// Save as Report re-encodes a projection of the capture's ORIGINAL
+    /// parquet. An archive is many tables rather than one file, so a capture
+    /// out of a `.rez` reports that it cannot be saved instead of handing back
+    /// an empty download.
+    #[test]
+    fn a_capture_from_an_archive_reports_that_it_cannot_be_saved() {
+        let rez = Viewer::new(&rez_bytes(&[("redis", "web-01")]), "one.rez").unwrap();
+        assert!(!rez.can_save());
+        let parquet = Viewer::new(&parquet_bytes(), "capture.parquet").unwrap();
+        assert!(parquet.can_save());
+    }
+
+    /// One parquet table's bytes — a real parquet, produced by the same
+    /// writer that fills a `.rez` segment.
+    fn parquet_bytes() -> Vec<u8> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("one.rez");
+        rez::rez::recorder_tests_support::multi_recording_v3_rez(&path, &[("redis", "web-01")]);
+        let readers =
+            rez::reader::RezReader::open_recordings(&path, BufferPool::new(8 * 1024 * 1024))
+                .unwrap();
+        // Pull the single table's segment bytes back out of the archive.
+        let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
+        let rec = db.read_recordings().unwrap().remove(0);
+        let sampler = db.all_samplers(rec.id).unwrap().remove(0);
+        drop(readers);
+        let metas = db.read_segment_meta(rec.id, &sampler).unwrap();
+        db.read_segment_bytes(rec.id, &sampler, metas[0].0)
+            .unwrap()
+            .expect("the fixture seals one segment")
     }
 
     #[test]

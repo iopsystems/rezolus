@@ -23,7 +23,7 @@ const FILE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="non
 export const openParquetPicker = (onPick) => () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.parquet,.ab.tar,.tar,application/octet-stream,application/x-tar';
+    input.accept = '.parquet,.rez,.ab.tar,.tar,application/octet-stream,application/x-tar';
     input.onchange = async () => {
         const file = input.files && input.files[0];
         if (file && onPick) await onPick(file);

@@ -434,13 +434,33 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   table whose segments have gone is reported absent, which is what a table with
   no rows already is, so a query naming only its metrics gets the ordinary
   "references no metric present" error and its neighbours keep answering.
-- **WASM viewer cannot open `.rez` at all** — Open. `crates/viewer/` is
-  parquet-only, so the static-site viewer silently fails on every streamed
-  recording. Pre-existing gap, newly load-bearing now that `.rez` is the
-  streaming format. See the `viewer-parity` skill.
-- **Recovered-archive state not surfaced to consumers** — Open. `RezReader`
-  warns and `parquet metadata` reports "not cleanly finalized", but the viewer
-  API and MCP output don't, so a truncated recording can be analyzed silently.
+- **WASM viewer cannot open `.rez` at all** — **DONE**. The static-site viewer
+  reads both containers now. What it took: the format moved out of the
+  binary-only `rezolus` crate into `crates/rez` (nothing could depend on it
+  where it was), the read path was decoupled from `metriken` (whose registry
+  declares a `linkme` distributed slice, which has no wasm32 implementation),
+  and the reader gained a byte-based entry point — a browser has an upload, not
+  a path. A 2-recording archive maps onto the A/B slots exactly as `rezolus
+  view` maps it; above two, the rest are named in a notice rather than dropped.
+  Costs ~1.5 MB of bundle (SQLite), 4.5 → 6.1 MB raw, 1.4 → 2.0 MB gzipped.
+  Fell out of it: a plain copy of a live archive was losing everything SQLite
+  had not checkpointed — 123 ticks (~2 min) on a 2000-tick fixture, unbounded
+  for a slow recording — so the writer now checkpoints on a 10s timer as well
+  as at 4 MiB, and `rezolus recording snapshot` takes an exact copy.
+  Still open around it: Save as Report is parquet-only, so a capture opened
+  from an archive reports that it cannot be saved (`Viewer::can_save`), and
+  there is no in-browser picker for which arms of a 3+-recording archive to
+  show — the CLI has `--baseline`/`--experiment` for that.
+- **Recovered-archive state not surfaced to consumers** — Open, one consumer
+  closed. `RezReader` warns and `parquet metadata` reports "not cleanly
+  finalized", but the viewer API and MCP output don't, so a truncated recording
+  can be analyzed silently. The WASM viewer now says it — `RezReader::complete()`
+  carries the flag, and `WasmCaptureRegistry::notices()` reports it — because
+  that consumer has an extra way to read short: a browser is handed one file,
+  and SQLite's `-wal` sidecar (pages committed but not yet checkpointed into the
+  archive) is a separate one. `rezolus view archive.rez` opens by path with the
+  sidecar beside it and sees further. Still open: the server viewer's API and
+  MCP output, which have the flag available and do not report it.
 - **Unbounded startup probe** — Open. `probe_endpoint`/`fetch_agent_metadata`
   have no timeout; a hung (SIGSTOPed) agent hangs `rezolus record` at startup
   and the first ctrl-c doesn't break out. D2 bounded only the per-tick path.
@@ -765,6 +785,12 @@ effort); promote one to a journal entry when it's picked up.
   a `TickBegin`/`TickEnd` bracket. The fan-out point already exists in
   `RezStream::ingest`. *Why:* the format's claim is bounded, predictable write
   cost; per-tick fsyncs scaling with endpoint count quietly erodes it.
+  *Related, and NOT the same axis:* the writer also checkpoints the WAL on a
+  10s timer (`rez_v3_writer::CHECKPOINT_INTERVAL`) so a plain copy of a live
+  archive cannot fall arbitrarily far behind. That is one fsync per 10s on the
+  writer thread, independent of tick rate or endpoint count — anyone measuring
+  the tick path should know it exists, and should not confuse it with the
+  per-tick commits above.
 - **A `--recording` selector for the MCP tools** — **DONE** (this PR), the real
   fix behind the refusal added in #1109. `RezReader::open_with_pool` flattens
   every recording into one view, so a multi-recording archive gives each

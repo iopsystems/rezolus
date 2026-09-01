@@ -405,7 +405,6 @@ mod tests {
     use crate::recorder::rez::recorder_tests_support::{counter, snap};
     use crate::recorder::rez::{detect_rez_format, read_table_parquet, RezFormat};
     use crate::recorder::rez_sqlite::{Evicted, RecordingMeta, SegmentMeta};
-    use metriken::Window;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
@@ -447,7 +446,7 @@ mod tests {
                     &format!("{s}_ops"),
                     s,
                     i,
-                    Some(Window::new(ts - SECOND / 2, ts)),
+                    Some(::rez::window::Window::new(ts - SECOND / 2, ts)),
                 )
             })
             .collect();

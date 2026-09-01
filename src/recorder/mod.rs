@@ -2186,7 +2186,7 @@ mod tests {
             "fake_ops",
             "fake",
             i,
-            Some(metriken::Window::new(ts - 500, ts)),
+            Some(::rez::window::Window::new(ts - 500, ts)),
         );
         let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
         let url = Url::parse("http://localhost:4241").unwrap();
@@ -2281,7 +2281,7 @@ mod tests {
                 "fake_ops",
                 "fake",
                 i,
-                Some(metriken::Window::new(ts - 500, ts)),
+                Some(::rez::window::Window::new(ts - 500, ts)),
             );
             let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
             rec.ingest(0, &rez_endpoint().config.url, &snapshot, ts, 0)

@@ -210,7 +210,7 @@ const FileUpload = {
                 'Choose File',
                 m('input', {
                     type: 'file',
-                    accept: '.parquet',
+                    accept: '.parquet,.rez',
                     style: 'display:none',
                     onchange: (e) => {
                         const file = e.target.files[0];

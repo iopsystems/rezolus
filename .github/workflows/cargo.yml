@@ -154,6 +154,14 @@ jobs:
         run: cargo install wasm-pack --version ^0.14 --locked
       - name: Install wabt
         run: sudo apt-get update && sudo apt-get -y install wabt
+      # The `.rez` reader has to keep compiling for the browser. Its default
+      # feature set does NOT: the ingest half pulls `metriken`, whose registry
+      # declares a `linkme` distributed slice, and `linkme` has no wasm32
+      # implementation. Nothing else catches a metriken type creeping back onto
+      # the read path — the native build stays green, and the WASM viewer only
+      # fails once it actually depends on this crate.
+      - name: Check the .rez reader still builds for wasm32
+        run: cargo check -p rez --no-default-features --target wasm32-unknown-unknown --locked
       - name: Rebuild WASM viewer
         run: ./crates/viewer/build.sh
       - name: Check template symlinks are committed
@@ -259,6 +267,17 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace --exclude viewer ${{ env.FEATURE_FLAGS }} --tests --bins --locked ${{ env.FLAGS }}
+      # The WASM viewer is excluded above because it is built for wasm32 by
+      # crates/viewer/build.sh, not by this matrix. Its BEHAVIOR still needs
+      # checking, though — which container an uploaded capture is, and which
+      # slots a multi-recording archive fills, are decisions that would
+      # otherwise be covered by nothing. wasm-bindgen's generated code compiles
+      # natively (only the JS interop would panic there, and none of it runs in
+      # these tests), so the crate is testable on this host.
+      - name: test wasm viewer
+        shell: bash
+        run: |
+          cargo test -p viewer --locked ${{ env.FLAGS }}
       - name: doctests
         if: ${{ matrix.profile == 'debug' }}
         shell: bash

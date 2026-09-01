@@ -540,6 +540,84 @@ pub fn command() -> Command {
                         .value_parser(value_parser!(PathBuf)),
                 ),
         )
+        .subcommand(
+            Command::new("snapshot")
+                .about("Copy a .rez that is still being written, without stopping the writer")
+                .long_about(
+                    "Take a complete, standalone copy of a `.rez` archive while a recorder\n\
+                     or `hindsight` is still appending to it.\n\n\
+                     WHY NOT `cp`: a v3 `.rez` is a SQLite database in WAL mode, so recent\n\
+                     commits live in a `<file>-wal` SIDECAR until they are checkpointed into\n\
+                     the archive. Copying the archive alone leaves them behind — measured at\n\
+                     123 ticks (~2 minutes at a 1s interval) on a 2000-tick recording, with\n\
+                     a sidecar larger than the archive itself. The copy is not corrupt, it\n\
+                     is simply older, which is the worse failure: it reads as a recording\n\
+                     that stopped early.\n\n\
+                     This reads the archive the way every other reader does — sidecar\n\
+                     included — and writes one consistent file. The writer is never paused\n\
+                     and the original is not modified.\n\n\
+                     The result is what to hand to someone else, upload to the static-site\n\
+                     viewer (a browser is given one file and cannot see a sidecar), or keep\n\
+                     as an incident artifact. A v1/v2 tar archive has no sidecar, so this is\n\
+                     a plain copy for those.\n\n\
+                     EXAMPLES:\n    \
+                     # Grab the last N minutes of a running hindsight buffer\n    \
+                     rezolus recording snapshot /var/lib/rezolus/hindsight.rez -o incident.rez\n\n    \
+                     # ...or of a `rezolus record` still in progress\n    \
+                     rezolus recording snapshot rezolus.rez -o so-far.rez",
+                )
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("The .rez archive to snapshot (may be open for writing)")
+                        .required(true)
+                        .value_parser(value_parser!(PathBuf)),
+                )
+                .arg(
+                    clap::Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .value_name("REZ")
+                        .required(true)
+                        .help("Where to write the snapshot. Must not already exist.")
+                        .value_parser(value_parser!(PathBuf)),
+                ),
+        )
+}
+
+/// Copy a live `.rez` into one complete standalone file.
+///
+/// **The point is SQLite's `-wal` sidecar.** A v3 archive is a SQLite database
+/// in WAL mode: commits land in `<file>-wal` and are checkpointed into the
+/// archive in batches, so the archive on its own is a consistent view as of
+/// the last checkpoint and nothing newer. `cp` takes that older view — and it
+/// is not detectably wrong, it just ends early. `VACUUM INTO` reads through a
+/// normal read transaction (sidecar included, writer un-paused) and writes a
+/// single file with everything in it.
+///
+/// A v1/v2 tar archive has no sidecar and no writer that appends in place, so
+/// there the honest implementation is a plain copy.
+fn snapshot_rez(
+    path: &std::path::Path,
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez::{detect_rez_format, RezFormat};
+
+    if output.exists() {
+        return Err(format!("{} already exists", output.display()).into());
+    }
+    match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
+        RezFormat::V3Sqlite => {
+            crate::recorder::rez_sqlite::RezDb::open(path)?.vacuum_into(output)?;
+        }
+        RezFormat::V2Tar => {
+            std::fs::copy(path, output)?;
+        }
+        RezFormat::NotRez => {
+            return Err(format!("{} is not a .rez archive", path.display()).into());
+        }
+    }
+    println!("Wrote {}", output.display());
+    Ok(())
 }
 
 /// Rewrite a v1/v2 (tar) `.rez` as a v3 (SQLite) one.
@@ -617,6 +695,11 @@ pub fn run(args: ArgMatches) {
             let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
             let output = sub_args.get_one::<PathBuf>("output").map(|p| p.as_path());
             upgrade_rez(path, output)
+        }
+        Some(("snapshot", sub_args)) => {
+            let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
+            let output = sub_args.get_one::<PathBuf>("output").unwrap();
+            snapshot_rez(path, output)
         }
         _ => unreachable!(),
     };
@@ -706,6 +789,91 @@ fn read_parquet_footer(
 mod command_name_tests {
     /// `parquet` keeps working as an alias for `recording`.
     ///
+    /// The whole reason `snapshot` exists: a plain copy of a live v3 archive
+    /// silently ends early, because SQLite's `-wal` sidecar holds commits not
+    /// yet checkpointed into the archive. Measured at 123 ticks behind on a
+    /// 2000-tick recording — with a sidecar LARGER than the archive.
+    ///
+    /// So this asserts the difference, not just that the snapshot opens: the
+    /// snapshot must reach the last tick, and the `cp` must not. If a future
+    /// change made a plain copy complete (an aggressive checkpoint, say), the
+    /// second half fails and this command's rationale needs revisiting —
+    /// which is exactly when someone should look.
+    #[test]
+    fn a_snapshot_carries_what_a_plain_copy_leaves_in_the_sidecar() {
+        use ::rez::rez::recorder_tests_support::{counter, snap};
+        use ::rez::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&live, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+
+        // Enough ticks, wide enough, to push past the WAL autocheckpoint and
+        // leave a real sidecar behind. A handful of rows would all still be in
+        // the sidecar and the copy would have no catalog at all — a different
+        // (and already covered) failure.
+        let ticks = 2_000u64;
+        for t in 0..ticks {
+            let ts = 1_000_000_000 * (t + 1);
+            let cells: Vec<_> = (0..40)
+                .map(|m| counter(&format!("m{m}"), "cpu_usage", t + m, None))
+                .collect();
+            rec.ingest(&snap(ts, cells), ts, 0).unwrap();
+        }
+        rec.sync().unwrap();
+
+        let last_ts = 1_000_000_000 * ticks;
+        let snapshot = dir.path().join("snap.rez");
+        super::snapshot_rez(&live, &snapshot).unwrap();
+        let plain_copy = dir.path().join("copy.rez");
+        std::fs::copy(&live, &plain_copy).unwrap();
+
+        // How far each one's newest row reaches.
+        let reach = |p: &std::path::Path| -> Option<u64> {
+            let db = ::rez::rez_sqlite::RezDb::open(p).ok()?;
+            let rec = db.read_recordings().ok()?.into_iter().next()?;
+            db.live_wal_span(rec.id, "cpu_usage").ok()?.last_ts
+        };
+
+        assert_eq!(
+            reach(&snapshot),
+            Some(last_ts),
+            "a snapshot must reach the last committed tick"
+        );
+        let copied = reach(&plain_copy).expect("the copy is readable, just older");
+        assert!(
+            copied < last_ts,
+            "the premise of this command: a plain copy should be behind, but it \
+             reached {copied} of {last_ts}"
+        );
+
+        drop(rec);
+        drop(archive);
+    }
+
+    /// Refuses to overwrite: the output is an incident artifact, and clobbering
+    /// one silently is worse than making the caller pick a name.
+    #[test]
+    fn a_snapshot_will_not_overwrite_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.rez");
+        ::rez::rez::recorder_tests_support::empty_v3_rez(&live);
+        let out = dir.path().join("taken.rez");
+        std::fs::write(&out, b"do not clobber me").unwrap();
+
+        let err = super::snapshot_rez(&live, &out).expect_err("must refuse");
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&out).unwrap(), b"do not clobber me");
+    }
+
     /// The rename is the point — these subcommands stopped being
     /// parquet-specific once `.rez` arrived — but every existing script and
     /// runbook types `rezolus recording ...`, and breaking those to make a name

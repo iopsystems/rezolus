@@ -109,6 +109,14 @@ const fetchInitialState = async () => {
 
 async function loadParquet(data, filename) {
     await initWasmViewer(data, filename);
+    // A multi-recording `.rez` carries both sides of a comparison in one
+    // file, so attaching it filled the experiment slot too (the WASM
+    // registry decides this — it is the same mapping `rezolus view` makes).
+    // Hand off to the compare path rather than rendering half the archive.
+    if (ViewerApi.hasCapture('experiment')) {
+        await loadComparisonFromRegistry(filename);
+        return;
+    }
     // Stale {minTime, maxTime} would point fresh queries at a window
     // outside the new file.
     clearMetadataCache();
@@ -313,6 +321,91 @@ async function loadCapture(source, alias = null) {
     }
 }
 
+// Bring up the compare dashboard from whatever is already in the registry.
+//
+// Both A/B entry points end here: two separately loaded parquets, and a
+// single multi-recording `.rez` that filled both slots by itself. Sharing
+// this is what keeps them the same dashboard — an archive rendered through a
+// second, nearly-identical setup would drift from the two-file path silently,
+// since nothing compares the two.
+async function initCompareDashboard({ experimentFallbackName, legends = null, category = null } = {}) {
+    // Templates were initialized for baseline inside initWasmViewer via
+    // loadTemplates (which stashes the JSON in loadedTemplatesJson). Now also
+    // init for the experiment slot, then trigger the combined-regen pass that
+    // picks up a matching category and rewrites baseline's section list.
+    if (typeof loadedTemplatesJson === 'string' && loadedTemplatesJson.length > 0) {
+        ViewerApi.initTemplates(loadedTemplatesJson, 'experiment');
+        ViewerApi.regenerateCombined(loadedTemplatesJson, category);
+    }
+
+    // Fetch baseline + experiment state for initDashboard.
+    const base = await fetchInitialState();
+    const [experimentSystemInfo, experimentFileMetadata, expMeta] = await Promise.all([
+        ViewerApi.getSystemInfo('experiment').catch(() => null),
+        ViewerApi.getFileMetadata('experiment').catch(() => null),
+        ViewerApi.getMetadata('experiment').catch(() => null),
+    ]);
+    const experimentFilename = expMeta?.data?.filename || experimentFallbackName;
+    let experimentQueryRange = null;
+    const data = expMeta?.data ?? expMeta;
+    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+    if (minT != null && maxT != null) {
+        const start = Number(minT);
+        const end = Number(maxT);
+        if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+            experimentQueryRange = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
+        }
+    }
+
+    try {
+        const sections = await ViewerApi.getSections();
+        bootstrapSharedSections(Array.isArray(sections) ? sections : (sections?.data?.sections || []));
+    } catch (_) {
+        bootstrapSharedSections([]);
+    }
+    const reportMode = base.fileMetadata?.report === 'trimmed'
+        || experimentFileMetadata?.report === 'trimmed';
+    // A `.rez` names its own arms — the registry set each slot's alias from
+    // the label that tells the recordings apart, the same rule `rezolus view`
+    // uses. An explicit legend (the demo URLs' `label=file` form) still wins.
+    const baseMeta = await ViewerApi.getMetadata('baseline').catch(() => null);
+    const aliasOf = (meta) => (meta?.data ?? meta)?.alias || null;
+    initDashboard({
+        systemInfo: base.systemInfo,
+        fileMetadata: base.fileMetadata,
+        selectionPayload: base.selectionPayload,
+        compareMode: true,
+        categoryName: category || null,
+        baselineAlias: legends?.baseline || aliasOf(baseMeta),
+        experimentSystemInfo,
+        experimentAlias: legends?.experiment || aliasOf(expMeta),
+        experimentFileMetadata,
+        experimentFilename,
+        experimentQueryRange,
+        reportMode,
+    });
+}
+
+// Bring up a comparison whose two arms are already attached — the
+// multi-recording `.rez` path, where one uploaded file filled both slots.
+async function loadComparisonFromRegistry(filename) {
+    clearMetadataCache();
+    await initCompareDashboard({ experimentFallbackName: filename });
+    for (const notice of ViewerApi.attachNotices()) {
+        // Not silent: an archive whose third arm is missing from the view
+        // looks exactly like an archive with two arms.
+        console.warn(notice);
+    }
+    const currentSection = (m.route.get() || '').replace(/^\//, '').split('/')[0];
+    if (currentSection) {
+        delete sectionResponseCache[currentSection];
+        loadSection(currentSection).then(() => m.redraw()).catch(() => m.redraw());
+    } else {
+        m.redraw();
+    }
+}
+
 // Load a pair of demo parquets as baseline + experiment and launch the
 // viewer in compare mode. Triggered by ?demoA=<file>&demoB=<file>.
 async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
@@ -349,58 +442,7 @@ async function loadCompareDemo(fileA, fileB, legends = null, category = null) {
         await initWasmViewer(dataA, fileA);
         await ViewerApi.attachExperimentBytes(dataB, fileB);
 
-        // Templates were initialized for baseline inside initWasmViewer
-        // via loadTemplates (which stashes the JSON in loadedTemplatesJson).
-        // Now also init for the experiment slot, then trigger the
-        // combined-regen pass that picks up a matching category and
-        // rewrites baseline's section list.
-        if (typeof loadedTemplatesJson === 'string' && loadedTemplatesJson.length > 0) {
-            ViewerApi.initTemplates(loadedTemplatesJson, 'experiment');
-            ViewerApi.regenerateCombined(loadedTemplatesJson, category);
-        }
-
-        // Fetch baseline + experiment state for initDashboard.
-        const base = await fetchInitialState();
-        const [experimentSystemInfo, experimentFileMetadata, expMeta] = await Promise.all([
-            ViewerApi.getSystemInfo('experiment').catch(() => null),
-            ViewerApi.getFileMetadata('experiment').catch(() => null),
-            ViewerApi.getMetadata('experiment').catch(() => null),
-        ]);
-        const experimentFilename = expMeta?.data?.filename || fileB;
-        let experimentQueryRange = null;
-        const data = expMeta?.data ?? expMeta;
-        const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
-        const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
-        if (minT != null && maxT != null) {
-            const start = Number(minT);
-            const end = Number(maxT);
-            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
-                experimentQueryRange = { start, end, step: Math.max(1, Math.floor((end - start) / 500)) };
-            }
-        }
-
-        try {
-            const sections = await ViewerApi.getSections();
-            bootstrapSharedSections(Array.isArray(sections) ? sections : (sections?.data?.sections || []));
-        } catch (_) {
-            bootstrapSharedSections([]);
-        }
-        const reportMode = base.fileMetadata?.report === 'trimmed'
-            || experimentFileMetadata?.report === 'trimmed';
-        initDashboard({
-            systemInfo: base.systemInfo,
-            fileMetadata: base.fileMetadata,
-            selectionPayload: base.selectionPayload,
-            compareMode: true,
-            categoryName: category || null,
-            baselineAlias: legends?.baseline || null,
-            experimentSystemInfo,
-            experimentAlias: legends?.experiment || null,
-            experimentFileMetadata,
-            experimentFilename,
-            experimentQueryRange,
-            reportMode,
-        });
+        await initCompareDashboard({ experimentFallbackName: fileB, legends, category });
 
         // Canonicalize the URL: repeated `capture=label=path` (or bare
         // `capture=path` when no label). Order encodes role — first is

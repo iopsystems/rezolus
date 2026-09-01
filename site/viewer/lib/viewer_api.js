@@ -42,6 +42,26 @@ const ViewerApi = {
         registry.attach('experiment', bytes, filename || 'experiment.parquet');
     },
 
+    // Whether a capture slot currently holds anything. The registry fills
+    // BOTH slots on its own when an attached `.rez` holds two recordings, so
+    // the caller cannot know from what it passed in.
+    hasCapture(captureId) {
+        return !!registry && registry.has(captureId);
+    },
+
+    // Anything the last attach wants said out loud — currently only "this
+    // archive holds more recordings than are being shown". Returns an array of
+    // strings, empty when there is nothing to report.
+    attachNotices() {
+        if (!registry || typeof registry.notices !== 'function') return [];
+        try {
+            const parsed = JSON.parse(registry.notices());
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_) {
+            return [];
+        }
+    },
+
     async detachExperiment() {
         ensureRegistry();
         registry.detach('experiment');
