@@ -67,7 +67,16 @@ impl PrometheusConverter {
         metadata
     }
 
-    pub fn convert(&mut self, text: &str, fetch_ns: u64) -> Snapshot {
+    /// Convert one scrape, bracketed by the round trip that produced it.
+    ///
+    /// `request_ns`/`response_ns` are when the request went out and when the
+    /// response finished arriving. Every value in `text` was read by the
+    /// exporter somewhere inside that interval, and nothing here can narrow it
+    /// further: exposition carries no acquisition instant, and the one
+    /// timestamp it may carry means something else entirely (see
+    /// [`sample_window`]).
+    pub fn convert(&mut self, text: &str, request_ns: u64, response_ns: u64) -> Snapshot {
+        let fetch_ns = response_ns;
         let sanitized = sanitize_metric_names(text);
         let lines = sanitized.lines().map(|l| Ok(l.to_string()));
         let fetch_time = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(fetch_ns as i64);
@@ -92,7 +101,7 @@ impl PrometheusConverter {
 
         // One window for the whole scrape: every sample in it was read by the
         // same request/response, so they share an acquisition instant.
-        let window = sample_window(fetch_ns);
+        let window = sample_window(request_ns, response_ns);
 
         for sample in scrape.samples {
             let mut labels: Vec<(String, String)> = sample
@@ -351,14 +360,31 @@ fn sanitize_metric_names(text: &str) -> String {
 /// but a ~56-year error in the operand `rate()` prices its uncertainty from.
 /// Any exporter that emits timestamps (pushgateway, federation) wrote that.
 ///
-/// Still zero-width, which understates: a scrape is one request and one
-/// response, so the honest bracket is the real round-trip
-/// `[request_sent, response_received]`. The converter is handed only parsed
-/// text and a single instant, so the request instant does not reach it — that
-/// is tracked with the Prometheus-in-`.rez` work, and is a widening of this
-/// window rather than a change of its anchor.
-fn sample_window(fetch_ns: u64) -> Option<metriken::Window> {
-    Some(metriken::Window::new(fetch_ns, fetch_ns))
+/// The window is the real round trip, `[request_sent, response_received]`. It
+/// was zero-width — a whole scrape asserted to have been read at an instant,
+/// which is the lie the all-sampler-observation-windows arc exists to kill.
+/// Every value in a response was read by the exporter somewhere inside the
+/// round trip and nothing here can say where, so that interval is the honest
+/// bound: `rate()` prices its uncertainty from a bracket that actually
+/// contains the reading rather than one asserted to be exact.
+///
+/// **A caching exporter under-states this, and that is still an improvement.**
+/// If an exporter serves values it computed before the request arrived, the
+/// true acquisition instant is earlier than `request_sent` and the real
+/// uncertainty is wider than what is recorded. Nothing observable from the
+/// client distinguishes that case — exposition carries no acquisition instant
+/// — so the recorded window is a lower bound on the uncertainty rather than a
+/// complete account of it. A zero-width window was a lower bound too, and a
+/// far worse one: it claimed no uncertainty at all.
+fn sample_window(request_ns: u64, response_ns: u64) -> Option<metriken::Window> {
+    // Defensive: a non-monotonic wall clock (NTP step, VM migration) can make
+    // the response read EARLIER than the request. A window whose end precedes
+    // its begin would give `rate()` a saturating-to-zero width, so collapse it
+    // to the instant we are surest of instead.
+    if response_ns < request_ns {
+        return Some(metriken::Window::new(response_ns, response_ns));
+    }
+    Some(metriken::Window::new(request_ns, response_ns))
 }
 
 fn empty_snapshot() -> Snapshot {
@@ -393,17 +419,17 @@ mod tests {
     #[test]
     fn an_embedded_timestamp_is_not_the_window() {
         let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
-        let fetch_ns = 5_000_000_000u64;
+        let (request_ns, response_ns) = (5_000_000_000u64, 5_002_000_000u64);
         let text = "m_total 3 1000\n";
-        let Snapshot::V2(s) = conv.convert(text, fetch_ns) else {
+        let Snapshot::V2(s) = conv.convert(text, request_ns, response_ns) else {
             panic!()
         };
         let w = s.counters[0].window.expect("window set");
         assert_eq!(
-            w.begin_ns, fetch_ns,
-            "the window is our fetch, not the exporter's 1000 ms epoch stamp"
+            (w.begin_ns, w.end_ns),
+            (request_ns, response_ns),
+            "the window is our round trip, not the exporter's 1000 ms epoch stamp"
         );
-        assert_eq!(w.end_ns, fetch_ns);
     }
 
     /// The offset is stored relative to the row timestamp, so an epoch-anchored
@@ -414,7 +440,8 @@ mod tests {
         let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
         // A realistic recording clock: 2026-ish, not 1970.
         let fetch_ns = 1_780_000_000_000_000_000u64;
-        let Snapshot::V2(s) = conv.convert("m_total 3 1000\n", fetch_ns) else {
+        let Snapshot::V2(s) = conv.convert("m_total 3 1000\n", fetch_ns, fetch_ns + 2_000_000)
+        else {
             panic!()
         };
         let w = s.counters[0].window.expect("window set");
@@ -429,12 +456,55 @@ mod tests {
     #[test]
     fn absent_timestamp_falls_back_to_fetch_time() {
         let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
-        let fetch_ns = 5_000_000_000u64;
+        let (request_ns, response_ns) = (5_000_000_000u64, 5_002_000_000u64);
         let text = "m_total 3\n";
-        let Snapshot::V2(s) = conv.convert(text, fetch_ns) else {
+        let Snapshot::V2(s) = conv.convert(text, request_ns, response_ns) else {
             panic!()
         };
         let w = s.counters[0].window.expect("window set");
-        assert_eq!(w.begin_ns, fetch_ns, "no embedded ts -> fetch time");
+        assert_eq!((w.begin_ns, w.end_ns), (request_ns, response_ns));
+    }
+
+    /// A scrape is one acquisition, and its honest bracket is the round trip.
+    ///
+    /// This was `Window::new(ns, ns)` — a whole scrape asserted to have been
+    /// read at an instant, which is the claim
+    /// `docs/journal/2026-07-10-all-sampler-observation-windows.md` calls the
+    /// lie the arc kills. A zero-width window tells `rate()` there is no
+    /// uncertainty to price; the round trip tells it the truth we can actually
+    /// observe.
+    #[test]
+    fn every_value_in_a_scrape_carries_the_round_trip_as_its_window() {
+        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let (request_ns, response_ns) = (10_000_000_000u64, 10_045_000_000u64);
+        let text = "\
+# TYPE a_total counter
+a_total 1
+# TYPE b gauge
+b 2
+";
+        let Snapshot::V2(s) = conv.convert(text, request_ns, response_ns) else {
+            panic!()
+        };
+        assert!(!s.counters.is_empty() && !s.gauges.is_empty(), "fixture");
+        for w in s
+            .counters
+            .iter()
+            .map(|c| c.window)
+            .chain(s.gauges.iter().map(|g| g.window))
+        {
+            let w = w.expect("every value carries a window");
+            assert_eq!((w.begin_ns, w.end_ns), (request_ns, response_ns));
+            assert!(w.width_ns() > 0, "a scrape is not an instant");
+        }
+    }
+
+    /// A wall clock that steps backwards mid-scrape (NTP, a VM migration) must
+    /// not produce a window whose end precedes its begin: the width saturates
+    /// to zero, which would silently re-assert the very claim this replaced.
+    #[test]
+    fn a_backwards_clock_collapses_rather_than_inverting() {
+        let w = sample_window(9_000, 8_000).unwrap();
+        assert_eq!((w.begin_ns, w.end_ns), (8_000, 8_000));
     }
 }

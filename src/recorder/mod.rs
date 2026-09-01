@@ -375,7 +375,31 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
     }
 }
 
-async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
+/// One scrape's body, bracketed by when the request went out and when the
+/// response was fully read.
+///
+/// **The bracket is the point for a Prometheus endpoint.** A scrape is one
+/// acquisition — one request, one response — and every value in it was read
+/// somewhere inside that interval. Nothing narrower is knowable from here: the
+/// exporter does not say when it sampled, only what it read. A Rezolus agent
+/// stamps each metric's own window and this bracket is ignored for it.
+struct Scraped {
+    body: Vec<u8>,
+    /// Wall-clock ns when the request was sent.
+    request_ns: u64,
+    /// Wall-clock ns when the response finished arriving.
+    response_ns: u64,
+}
+
+fn wall_now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+}
+
+async fn scrape_one(client: &Client, url: &Url) -> Result<Scraped, String> {
+    let request_ns = wall_now_ns();
     let response = client
         .get(url.clone())
         .send()
@@ -384,11 +408,19 @@ async fn scrape_one(client: &Client, url: &Url) -> Result<Vec<u8>, String> {
     if !response.status().is_success() {
         return Err(format!("HTTP {}", response.status()));
     }
-    response
+    let body = response
         .bytes()
         .await
         .map(|b| b.to_vec())
-        .map_err(|e| format!("{e}"))
+        .map_err(|e| format!("{e}"))?;
+    Ok(Scraped {
+        body,
+        request_ns,
+        // Read AFTER the body, not after the headers: the values are in the
+        // body, so a bracket that closed at the response line would exclude
+        // part of the interval they were actually read over.
+        response_ns: wall_now_ns(),
+    })
 }
 
 fn inject_provenance(
@@ -1401,7 +1433,11 @@ pub fn run(mut config: RecordingConfig) {
 
             for (idx, result) in results {
                 match result {
-                    Ok(body) => {
+                    Ok(Scraped {
+                        body,
+                        request_ns,
+                        response_ns,
+                    }) => {
                         endpoints[idx].record_success(wall_ns);
 
                         // `.rez`: decode once and hand the snapshot straight to
@@ -1477,7 +1513,10 @@ pub fn run(mut config: RecordingConfig) {
                             let bytes = if let Some(ref mut conv) = ew.converter {
                                 // Prometheus: parse text → snapshot → msgpack
                                 let text = String::from_utf8_lossy(&body);
-                                let snapshot = conv.convert(&text, wall_ns);
+                                // The real round trip, not the tick's clock:
+                                // every value in this body was read somewhere
+                                // inside it. See `Scraped`.
+                                let snapshot = conv.convert(&text, request_ns, response_ns);
                                 match rmp_serde::encode::to_vec(&snapshot) {
                                     Ok(b) => b,
                                     Err(e) => {
