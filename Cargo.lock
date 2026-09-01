@@ -2956,6 +2956,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rez"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "bytes",
+ "histogram",
+ "metriken",
+ "metriken-exposition",
+ "metriken-query",
+ "parquet",
+ "rmp-serde",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "rezolus"
 version = "5.19.1-alpha.2"
 dependencies = [
@@ -3006,6 +3026,7 @@ dependencies = [
  "regex",
  "report-save",
  "reqwest",
+ "rez",
  "rmp-serde",
  "rusqlite",
  "rustfft",

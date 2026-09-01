@@ -51,9 +51,9 @@ use metriken_query::{
     SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
 };
 
-use crate::recorder::rez::{self, RecordingBytes};
-use crate::recorder::rez_sqlite::RezDb;
-use crate::recorder::rez_v3_writer::materialize_wal_tail;
+use crate::rez::{self, RecordingBytes};
+use crate::rez_sqlite::RezDb;
+use crate::rez_v3_writer::materialize_wal_tail;
 
 /// The two concrete reader shapes a `.rez` table opens as, kept concrete
 /// (not type-erased behind `Box<dyn MetricsSource>`) so a same-timeline
@@ -847,7 +847,7 @@ impl RezReader {
         step_s: f64,
         rate_mode: RateMode,
     ) -> Option<Arc<[u64]>> {
-        use crate::recorder::rez::table_sampler;
+        use crate::rez::table_sampler;
 
         if matches!(rate_mode, RateMode::Raw) {
             return None;
@@ -1142,7 +1142,7 @@ fn union_sorted(iters: impl Iterator<Item = Vec<String>>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::rez::RezRecorder;
+    use crate::rez::RezRecorder;
     use metriken::Window;
     use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
     use std::time::SystemTime;
@@ -1236,8 +1236,8 @@ mod tests {
     /// Write the same `rows` through the streaming writer with a tiny row cap,
     /// so every table seals into several segments.
     fn write_streamed_rez(rows: &[(Snapshot, u64)], max_rows: usize, out: &std::path::Path) {
-        use crate::recorder::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
-        use crate::recorder::seal_policy::SealPolicy;
+        use crate::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
+        use crate::seal_policy::SealPolicy;
 
         let handle = RezWriterHandle::create(
             out,
@@ -1268,7 +1268,7 @@ mod tests {
 
     /// `sampler -> segment count` for a written archive.
     fn segment_counts(path: &std::path::Path) -> BTreeMap<String, usize> {
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(path).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(path).unwrap();
         manifest.recordings[0]
             .tables
             .iter()
@@ -1355,8 +1355,8 @@ mod tests {
     /// multi-segment and `RezReader` opens it with the segment-aware source —
     /// the reader that implements the `__run__` conflict policy.
     fn segmented_histogram_rez(n: u64, max_rows: usize, out: &std::path::Path) {
-        use crate::recorder::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
-        use crate::recorder::seal_policy::SealPolicy;
+        use crate::rez_stream::{ManifestSeed, RezWriterHandle, StreamRecorder};
+        use crate::seal_policy::SealPolicy;
         use metriken_exposition::Histogram as ExpHistogram;
 
         let handle = RezWriterHandle::create(
@@ -1462,7 +1462,7 @@ mod tests {
         // Build a 2-recording .rez by reading a 1-recording fixture and writing
         // it twice under distinct dirs/arms via write_archive_bytes.
         let (_d, p) = two_sampler_rez();
-        let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
+        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
         let rec0 = m.recordings.into_iter().next().unwrap();
         let bytes0: Vec<Vec<Vec<u8>>> = rb
             .into_iter()
@@ -1482,8 +1482,7 @@ mod tests {
 
         let d = tempfile::tempdir().unwrap();
         let out = d.path().join("two_rec.rez");
-        crate::recorder::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)])
-            .unwrap();
+        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
 
         let pool = BufferPool::new(64 * 1024 * 1024);
         let readers = RezReader::open_recordings(&out, pool).unwrap();
@@ -1505,7 +1504,7 @@ mod tests {
     #[test]
     fn multi_recording_same_sampler_query_errors_instead_of_silently_dropping_one_recording() {
         let (_d, p) = two_sampler_rez();
-        let (m, rb) = crate::recorder::rez::read_archive_bytes(&p).unwrap();
+        let (m, rb) = crate::rez::read_archive_bytes(&p).unwrap();
         let rec0 = m.recordings.into_iter().next().unwrap();
         let bytes0: Vec<Vec<Vec<u8>>> = rb
             .into_iter()
@@ -1525,8 +1524,7 @@ mod tests {
 
         let d = tempfile::tempdir().unwrap();
         let out = d.path().join("two_rec.rez");
-        crate::recorder::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)])
-            .unwrap();
+        crate::rez::write_archive_bytes(&out, &[(a, bytes0.clone()), (b, bytes0)]).unwrap();
 
         let pool = BufferPool::new(64 * 1024 * 1024);
         // The flattening path — NOT open_recordings.
@@ -1715,11 +1713,11 @@ mod tests {
 
     mod v3 {
         use super::*;
-        use crate::recorder::rez_sqlite::WalRow;
-        use crate::recorder::rez_v3_writer::{
+        use crate::rez_sqlite::WalRow;
+        use crate::rez_v3_writer::{
             encode_wal_row, ManifestSeed, RezArchive, StreamRecorderV3, WalCell, WalValue,
         };
-        use crate::recorder::seal_policy::SealPolicy;
+        use crate::seal_policy::SealPolicy;
         use metriken_exposition::Histogram as ExpHistogram;
 
         const ANCHOR: u64 = 1_700_000_000_000_000_000;

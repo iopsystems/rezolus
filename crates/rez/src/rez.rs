@@ -121,9 +121,9 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 // Only the test-only eager reader (read_table_parquet) needs these.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use arrow::array::ListArray;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 /// Per-metric column values for a table (row-aligned with the table's timestamps).
@@ -370,7 +370,7 @@ fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezErr
 /// bound per-column-writer memory and none of them measurably does, while
 /// chunk-level statistics costs finalize latency and read pruning. The
 /// dictionary is the whole effect.
-pub(crate) fn segment_writer_props() -> WriterProperties {
+pub fn segment_writer_props() -> WriterProperties {
     WriterProperties::builder()
         .set_compression(Compression::LZ4_RAW)
         .set_dictionary_enabled(false)
@@ -387,7 +387,7 @@ pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
     Ok(buf)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 fn u64_col(a: &ArrayRef) -> &UInt64Array {
     a.as_any()
         .downcast_ref::<UInt64Array>()
@@ -398,7 +398,7 @@ fn u64_col(a: &ArrayRef) -> &UInt64Array {
 /// path decodes tables lazily via metriken-query's `ParquetReader`
 /// (`read_archive_bytes` → `RezReader`); this eager decoder exists to verify
 /// the write path independently.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, RezError> {
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))?.build()?;
 
@@ -606,7 +606,7 @@ pub struct RezArchive {
     pub tables: Vec<Vec<RezTable>>,
 }
 
-pub(crate) fn append_tar_entry<W: std::io::Write>(
+pub fn append_tar_entry<W: std::io::Write>(
     builder: &mut tar::Builder<W>,
     name: &str,
     bytes: &[u8],
@@ -1050,28 +1050,28 @@ use metriken_exposition::{Counter, Gauge, Histogram, Snapshot};
 use tracing::warn;
 
 /// A borrowed snapshot entry, tagged by shape.
-pub(crate) enum Entry<'a> {
+pub enum Entry<'a> {
     Counter(&'a Counter),
     Gauge(&'a Gauge),
     Histogram(&'a Histogram),
 }
 
 impl Entry<'_> {
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         match self {
             Entry::Counter(c) => &c.name,
             Entry::Gauge(g) => &g.name,
             Entry::Histogram(h) => &h.name,
         }
     }
-    pub(crate) fn metadata(&self) -> &HashMap<String, String> {
+    pub fn metadata(&self) -> &HashMap<String, String> {
         match self {
             Entry::Counter(c) => &c.metadata,
             Entry::Gauge(g) => &g.metadata,
             Entry::Histogram(h) => &h.metadata,
         }
     }
-    pub(crate) fn window(&self) -> Option<Window> {
+    pub fn window(&self) -> Option<Window> {
         match self {
             Entry::Counter(c) => c.window,
             Entry::Gauge(g) => g.window,
@@ -1125,7 +1125,7 @@ const HISTOGRAM_BUCKET_BYTES: usize = 8;
 /// A cell whose shape does not match its column's established type is skipped
 /// by `push_row` and charged nothing here, for the same reason: it is not
 /// stored.
-pub(crate) fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
+pub fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
     entries
         .iter()
         .map(|e| match e {
@@ -1139,7 +1139,7 @@ pub(crate) fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
 
 /// A growing per-sampler table. Columns are sparse: shorter than the row count
 /// until padded (a metric absent in some rows gets `None` there).
-pub(crate) struct TableBuilder {
+pub struct TableBuilder {
     sampler: String,
     timestamps: Vec<u64>,
     wall_offsets: Vec<i64>,
@@ -1153,7 +1153,7 @@ pub(crate) struct TableBuilder {
 }
 
 impl TableBuilder {
-    pub(crate) fn new(sampler: String) -> Self {
+    pub fn new(sampler: String) -> Self {
         Self {
             sampler,
             timestamps: Vec::new(),
@@ -1181,7 +1181,7 @@ impl TableBuilder {
     /// so both containers reach it identically. This is what
     /// `entries_approx_bytes_matches_what_push_row_accounts` pins that against.
     #[cfg(test)]
-    pub(crate) fn approx_bytes(&self) -> usize {
+    pub fn approx_bytes(&self) -> usize {
         self.approx_bytes
     }
 
@@ -1189,11 +1189,11 @@ impl TableBuilder {
     /// "never seal an empty builder" test).
     /// Rows appended so far.
     ///
-    /// `#[cfg(test)]` because its only caller is the tar writer, which is
-    /// itself test-only now — the v3 writer rebuilds a table from the WAL at
+    /// Gated because its only caller is the tar writer, which is itself a
+    /// fixture-only path now — the v3 writer rebuilds a table from the WAL at
     /// seal time and never asks a builder how full it is.
-    #[cfg(test)]
-    pub(crate) fn rows(&self) -> usize {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn rows(&self) -> usize {
         self.timestamps.len()
     }
 
@@ -1220,12 +1220,7 @@ impl TableBuilder {
     /// `wall_offset_ns` the wall-clock observation for that tick (raw
     /// `SystemTime` reading minus `snapshot_ts`), stored once per row in the
     /// table-level `:wall_offset` sidecar.
-    pub(crate) fn push_row(
-        &mut self,
-        snapshot_ts: u64,
-        wall_offset_ns: i64,
-        entries: &[Entry<'_>],
-    ) {
+    pub fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
         let row = self.timestamps.len();
         self.timestamps.push(snapshot_ts);
         self.wall_offsets.push(wall_offset_ns);
@@ -1320,7 +1315,7 @@ impl TableBuilder {
     /// This runs on the scrape thread, so its cost is bounded deliberately: one
     /// realloc-and-copy per column, and the transient double-allocation a
     /// shrink needs is one column's worth, never the whole table's.
-    pub(crate) fn finish(mut self) -> RezTable {
+    pub fn finish(mut self) -> RezTable {
         let rows = self.timestamps.len();
         let columns = self
             .order
@@ -1357,7 +1352,7 @@ impl TableBuilder {
 /// an absent (`None`) slot — "registered, no reading this tick" per
 /// `GroupSnapshot`'s doc — costs nothing, matching `entries_approx_bytes`'
 /// "only counted cells" rule.
-pub(crate) fn group_approx_bytes(g: &metriken_exposition::GroupSnapshot) -> usize {
+pub fn group_approx_bytes(g: &metriken_exposition::GroupSnapshot) -> usize {
     let mut bytes = WINDOW_SLOT_BYTES;
     bytes += g.counters.iter().filter(|v| v.is_some()).count() * VALUE_SLOT_BYTES;
     bytes += g.gauges.iter().filter(|v| v.is_some()).count() * VALUE_SLOT_BYTES;
@@ -1374,7 +1369,7 @@ pub(crate) fn group_approx_bytes(g: &metriken_exposition::GroupSnapshot) -> usiz
 /// sparse and keyed by name — a schema-hash change mid-table (a cgroup
 /// added/removed) is handled the same lazy-padding way `TableBuilder`
 /// handles a metric appearing or vanishing.
-pub(crate) struct GroupTableBuilder {
+pub struct GroupTableBuilder {
     name: String,
     timestamps: Vec<u64>,
     wall_offsets: Vec<i64>,
@@ -1388,7 +1383,7 @@ pub(crate) struct GroupTableBuilder {
 }
 
 impl GroupTableBuilder {
-    pub(crate) fn new(name: String) -> Self {
+    pub fn new(name: String) -> Self {
         Self {
             name,
             reported_bad_histograms: HashSet::new(),
@@ -1403,7 +1398,7 @@ impl GroupTableBuilder {
     /// Rows pushed so far — lets a caller that skipped some input rows (an
     /// un-anchored WAL tail) tell "nothing pushed at all" from "pushed a
     /// partial table" without inspecting the finished `RezTable`.
-    pub(crate) fn rows(&self) -> usize {
+    pub fn rows(&self) -> usize {
         self.timestamps.len()
     }
 
@@ -1471,7 +1466,7 @@ impl GroupTableBuilder {
     /// `histogram::Histogram::from_buckets` can fail on a malformed payload.
     /// Errors rather than panics, matching the v2 writer's WAL-recovery path.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn push_row(
+    pub fn push_row(
         &mut self,
         ts: u64,
         wall_offset_ns: i64,
@@ -1566,7 +1561,7 @@ impl GroupTableBuilder {
     /// Consume the builder into the table the writer will encode. Mirrors
     /// `TableBuilder::finish`, but stamps `table_window` (`Some`) instead of
     /// leaving each column's `windows` populated.
-    pub(crate) fn finish(mut self) -> RezTable {
+    pub fn finish(mut self) -> RezTable {
         let rows = self.timestamps.len();
         let columns = self
             .order
@@ -1673,7 +1668,7 @@ mod table_sampler_tests {
 /// Partition a snapshot's metrics by their `sampler` label (`"unattributed"`
 /// when the label is absent). Shared by the in-memory `RezRecorder` and the
 /// streaming `StreamRecorder` so the two ingest paths cannot drift apart.
-pub(crate) fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<'_>>> {
+pub fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<'_>>> {
     let (counters, gauges, histograms) = match snapshot {
         Snapshot::V1(s) => (&s.counters, &s.gauges, &s.histograms),
         Snapshot::V2(s) => (&s.counters, &s.gauges, &s.histograms),
@@ -1731,7 +1726,7 @@ pub(crate) fn group_by_sampler(snapshot: &Snapshot) -> BTreeMap<&str, Vec<Entry<
 /// One sampler group's dedup key: the representative acquisition window (max
 /// `end_ns` among windowed metrics), or `snapshot_ts` when nothing in the group
 /// carries a window (windowless → one row per poll).
-pub(crate) fn dedup_key(entries: &[Entry<'_>], snapshot_ts: u64) -> u64 {
+pub fn dedup_key(entries: &[Entry<'_>], snapshot_ts: u64) -> u64 {
     entries
         .iter()
         .filter_map(|e| e.window())
@@ -1799,7 +1794,7 @@ impl RezRecorder {
 
     /// Test/inspection helper: the current (unpadded) table builder view.
     #[cfg(test)]
-    pub(crate) fn table(&self, sampler: &str) -> Option<&TableBuilder> {
+    pub fn table(&self, sampler: &str) -> Option<&TableBuilder> {
         self.tables.get(sampler)
     }
 
@@ -1910,12 +1905,6 @@ pub fn recording_dir_slug(labels: &BTreeMap<String, String>) -> String {
     } else {
         slug
     }
-}
-
-/// True when the recording should be written as a `.rez` archive: either the
-/// output path ends in `.rez` or `--format rez` was given.
-pub fn wants_rez(format: crate::Format) -> bool {
-    format == crate::Format::Rez
 }
 
 #[cfg(test)]
@@ -2145,15 +2134,47 @@ mod builder_tests {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod recorder_tests_support {
-    pub use super::recorder_tests::{counter, snap};
+/// Fixture builders shared by this crate's tests and the `rezolus` binary's.
+///
+/// Gated on `test-support` rather than `#[cfg(test)]`: a `#[cfg(test)]` module
+/// here is invisible to the crate next door, and the binary's viewer, MCP and
+/// `parquet` tests all build `.rez` fixtures with these.
+#[cfg(any(test, feature = "test-support"))]
+pub mod recorder_tests_support {
+    use metriken::Window;
+    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn cmeta(metric: &str, sampler: &str) -> HashMap<String, String> {
+        [
+            ("metric".to_string(), metric.to_string()),
+            ("sampler".to_string(), sampler.to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    pub fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
+            duration: std::time::Duration::ZERO,
+            metadata: HashMap::new(),
+            counters,
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
+        Counter::new(name.to_string(), value, cmeta(name, sampler)).with_window(window)
+    }
 
     /// Create a minimal, valid, empty v3 `.rez` at `path` (one recording, no
     /// sampler tables yet) — the cheapest fixture for tests across the crate
     /// that just need `detect_rez_format(path)` to see `V3Sqlite`.
-    pub(crate) fn empty_v3_rez(path: &std::path::Path) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive};
+    pub fn empty_v3_rez(path: &std::path::Path) {
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive};
         let seed = ManifestSeed {
             labels: [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
@@ -2173,8 +2194,8 @@ pub(crate) mod recorder_tests_support {
     /// wrong arm still returns *some* series, so a test asserting only that
     /// data came back would pass either way; distinguishable values make the
     /// wrong arm fail.
-    pub(crate) fn multi_recording_v3_rez(path: &std::path::Path, recordings: &[(&str, &str)]) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+    pub fn multi_recording_v3_rez(path: &std::path::Path, recordings: &[(&str, &str)]) {
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         use metriken::Window;
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
 
@@ -2224,13 +2245,8 @@ pub(crate) mod recorder_tests_support {
     /// Real rows, not an empty catalog: the rewrite tools copy segments and
     /// materialize WAL tails, so a fixture with no data would exercise
     /// neither.
-    pub(crate) fn populated_v3_rez(
-        path: &std::path::Path,
-        arm: &str,
-        samplers: &[&str],
-        ticks: u64,
-    ) {
-        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+    pub fn populated_v3_rez(path: &std::path::Path, arm: &str, samplers: &[&str], ticks: u64) {
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
         let seed = ManifestSeed {
             labels: [
@@ -2265,33 +2281,11 @@ pub(crate) mod recorder_tests_support {
 mod recorder_tests {
     use super::*;
     use metriken::Window;
-    use metriken_exposition::{Counter, Snapshot, SnapshotV2};
+    use metriken_exposition::Snapshot;
     use std::collections::HashMap;
     use std::time::SystemTime;
 
-    fn cmeta(metric: &str, sampler: &str) -> HashMap<String, String> {
-        [
-            ("metric".to_string(), metric.to_string()),
-            ("sampler".to_string(), sampler.to_string()),
-        ]
-        .into_iter()
-        .collect()
-    }
-
-    pub fn snap(ts: u64, counters: Vec<Counter>) -> Snapshot {
-        Snapshot::V2(SnapshotV2 {
-            systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
-            duration: std::time::Duration::ZERO,
-            metadata: HashMap::new(),
-            counters,
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        })
-    }
-
-    pub fn counter(name: &str, sampler: &str, value: u64, window: Option<Window>) -> Counter {
-        Counter::new(name.to_string(), value, cmeta(name, sampler)).with_window(window)
-    }
+    use super::recorder_tests_support::{counter, snap};
 
     // Interim behavior until native V3 ingest lands: a V3 payload here means
     // the agent was flipped ahead of this recorder build, so group_by_sampler
@@ -3027,7 +3021,7 @@ mod archive_tests {
 
         // v3: a SQLite database created by the v3 container module.
         let v3 = dir.path().join("v3.rez");
-        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        drop(crate::rez_sqlite::RezDb::create(&v3).unwrap());
         assert_eq!(detect_rez_format(&v3).unwrap(), RezFormat::V3Sqlite);
 
         // v2: an actual tar archive, built the way the other tests here do.
@@ -3057,7 +3051,7 @@ mod archive_tests {
         assert!(is_rez_path(&v2).unwrap());
 
         let v3 = dir.path().join("v3.rez");
-        drop(crate::recorder::rez_sqlite::RezDb::create(&v3).unwrap());
+        drop(crate::rez_sqlite::RezDb::create(&v3).unwrap());
         // A v3 file is NOT a tar, so the legacy sniff correctly says false.
         // This is why callers must migrate to detect_rez_format rather than
         // having is_rez_path silently start returning true for SQLite files.
@@ -3517,24 +3511,6 @@ mod finalize_tests {
             other => panic!("expected gauge column, got {other:?}"),
         }
         assert_eq!(t.columns[0].windows, vec![Some(w)]);
-    }
-}
-
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
-    use crate::Format;
-
-    /// The `.rez` extension is folded into the format by
-    /// `RecordingConfig::resolve_format_and_output`, so by the time the
-    /// recorder asks, the format is the only thing left to consult — an
-    /// extension that disagreed with an explicit `--format` was rejected at
-    /// parse time rather than quietly overriding it here.
-    #[test]
-    fn format_alone_selects_rez() {
-        assert!(wants_rez(Format::Rez));
-        assert!(!wants_rez(Format::Parquet));
-        assert!(!wants_rez(Format::Raw));
     }
 }
 

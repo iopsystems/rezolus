@@ -419,7 +419,7 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   `baseline`/`experiment` capture ids to become open-ended, which is UI work,
   not selection work.
 - **Reopening a table can panic on a live archive** — **DONE**. Was open,
-  `SamplerReader::reader` (`src/rez_reader.rs:229-233`) reopens a table's
+  `SamplerReader::reader` (`crates/rez/src/reader.rs:229-233`) reopens a table's
   segments with `.expect("segments opened at probe time cannot fail to
   reopen")`. That holds for a finished archive but not a live one: a `.rez` is
   readable while it is written, and `table_segments` returns sealed segments
@@ -466,7 +466,7 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   *Reopen:* if restart-heavy recordings make split columns a real annoyance.
 - **Seal thresholds as compile-time constants** — Open. Byte-first seal
   thresholds (est. bytes primary, row cap, ~5 min age bound for the kill-loss
-  window) ship as constants in `src/recorder/rez.rs`. *Reopen:* if real
+  window) ship as constants in `crates/rez/src/rez.rs`. *Reopen:* if real
   workloads need tuning — promote to a `--flag` or config knob.
 - **Fast finalize for the classic parquet path** — By design. The single-file
   parquet's wide schema is only knowable once recording ends, so its finalize
