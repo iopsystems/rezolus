@@ -18,10 +18,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use metriken_exposition::{GroupSchema, GroupSnapshot, Snapshot};
 use tracing::warn;
@@ -146,6 +146,19 @@ impl RezArchive {
     ///
     /// The archive holds no recordings yet; add each with `add_recording`.
     pub fn create(path: &Path) -> Result<Self, String> {
+        Self::create_checkpointing_every(path, CHECKPOINT_INTERVAL)
+    }
+
+    /// [`create`](Self::create) with the WAL checkpoint cadence chosen by the
+    /// caller.
+    ///
+    /// Exists so the staleness bound is testable: asserting it through
+    /// `create` would mean a test that sleeps [`CHECKPOINT_INTERVAL`].
+    /// Production takes the constant.
+    pub fn create_checkpointing_every(
+        path: &Path,
+        checkpoint_every: Duration,
+    ) -> Result<Self, String> {
         let db = RezDb::create(path)?;
 
         // Bound 1, as in v2: the hand-off blocks while the writer is busy,
@@ -162,7 +175,7 @@ impl RezArchive {
         // path, not a staging artifact a later run would have to interpret.
         let thread = std::thread::Builder::new()
             .name("rez-v3-writer".to_string())
-            .spawn(move || writer_thread(rx, db, thread_err))
+            .spawn(move || writer_thread(rx, db, thread_err, checkpoint_every))
             .map_err(|e| format!("failed to spawn the .rez writer thread: {e}"))?;
 
         Ok(Self {
@@ -487,21 +500,53 @@ struct Encoded {
 /// The writer thread body. Every fallible operation returns `Err`; the loop
 /// exits on the first error so the failure surfaces on the next hand-off
 /// instead of accumulating against a broken recording.
-fn writer_thread(rx: Receiver<Msg>, mut db: RezDb, err_slot: ErrorSlot) -> Result<(), String> {
+fn writer_thread(
+    rx: Receiver<Msg>,
+    mut db: RezDb,
+    err_slot: ErrorSlot,
+    checkpoint_every: Duration,
+) -> Result<(), String> {
     // `rx` is BORROWED by the loop, not moved into it, so the receiver outlives
     // the error store below. That ordering is the whole point: a handle's send
     // fails the instant the receiver drops, and if the slot were still empty at
     // that moment the handle would report a generic "writer exited" instead of
     // the writer's own error. Holding `rx` here means the channel is still open
     // while the slot is written, so any send that fails afterwards finds it.
-    let result = writer_loop(&rx, &mut db);
+    let result = writer_loop(&rx, &mut db, checkpoint_every);
     if let Err(ref e) = result {
         *err_slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(e.clone());
     }
     result
 }
 
-fn writer_loop(rx: &Receiver<Msg>, db: &mut RezDb) -> Result<(), String> {
+/// How stale a plain copy of a live archive is allowed to be.
+///
+/// SQLite commits into a `<file>-wal` sidecar and folds it into the archive at
+/// a checkpoint, so a copy of the archive ALONE — which is what anyone who
+/// `cp`s one, or uploads one to a browser, ends up with — is a consistent view
+/// as of the last checkpoint and nothing after it. That copy is not corrupt; it
+/// simply ends early, and nothing about it says so.
+///
+/// [`crate::rez_sqlite`]'s autocheckpoint bounds how many BYTES can accumulate
+/// (4 MiB). It cannot bound how much TIME they represent: a busy recording
+/// crosses 4 MiB in seconds, a quiet one in hours, and the quiet one is the
+/// case where a copy is silently useless. Measured before this existed: 123
+/// ticks — about two minutes at a 1s interval — missing from a plain copy of a
+/// 2000-tick recording.
+///
+/// 10s is chosen to be short against the window anyone reasons about (an
+/// incident, a benchmark run) and long against the work: a passive checkpoint
+/// of one interval's frames is a few tens of KiB at a typical fleet cadence,
+/// and it runs on the writer THREAD rather than the scrape loop. It does not
+/// make a copy exact — `rezolus recording snapshot` does that — it makes what a
+/// copy loses bounded and small.
+pub const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(10);
+
+fn writer_loop(
+    rx: &Receiver<Msg>,
+    db: &mut RezDb,
+    checkpoint_every: Duration,
+) -> Result<(), String> {
     // Next segment sequence number, per (recording, sampler). Keyed by both
     // because `seq` is scoped to a recording's sampler in the `segments` table:
     // two recordings of the same host have the same sampler names and each
@@ -515,9 +560,35 @@ fn writer_loop(rx: &Receiver<Msg>, db: &mut RezDb) -> Result<(), String> {
     // must not pay for a vacuum on the way down.
     let mut added: usize = 0;
     let mut finalized: usize = 0;
+    // When the sidecar was last folded into the archive. Advanced on every
+    // checkpoint, including ones taken while idle — the guarantee is about
+    // elapsed time, not about arriving messages.
+    let mut last_checkpoint = Instant::now();
 
     loop {
-        match rx.recv() {
+        // `recv_timeout`, not `recv`: a writer with nothing to do still has to
+        // wake and checkpoint. A recording that has gone quiet is exactly when
+        // someone copies it.
+        let waited = rx.recv_timeout(checkpoint_every.saturating_sub(last_checkpoint.elapsed()));
+        if last_checkpoint.elapsed() >= checkpoint_every {
+            // Best-effort: a checkpoint that cannot proceed (a reader is
+            // holding an older snapshot) is not an error, and failing the
+            // writer over one would trade every subsequent tick for a copy's
+            // freshness.
+            if let Err(e) = db.checkpoint_passive() {
+                warn!("failed to checkpoint the WAL: {e}");
+            }
+            last_checkpoint = Instant::now();
+        }
+        let received = match waited {
+            Ok(msg) => Ok(msg),
+            // Nothing arrived within the checkpoint window: go round again.
+            Err(RecvTimeoutError::Timeout) => continue,
+            // Every handle is gone. Falls into the same arm the blocking
+            // `recv` used to reach.
+            Err(RecvTimeoutError::Disconnected) => Err(()),
+        };
+        match received {
             // Nothing to do but answer: arriving here at all means every
             // message queued before it has already been handled.
             #[cfg(any(test, feature = "test-support"))]
@@ -1456,6 +1527,90 @@ mod tests {
             }])
             .unwrap(),
         }
+    }
+
+    /// THE guarantee this cadence exists for: a plain copy of a live archive
+    /// stays close to current.
+    ///
+    /// SQLite commits into a `-wal` sidecar, so a copy of the archive alone —
+    /// what a `cp`, or a browser upload, actually gets — sees only what has
+    /// been checkpointed. The size-based autocheckpoint bounds the sidecar's
+    /// BYTES and says nothing about its AGE: measured before this existed, a
+    /// 2000-tick recording's plain copy was 123 ticks (~2 minutes at 1s)
+    /// behind.
+    ///
+    /// Asserted as a difference against an un-checkpointed writer in the same
+    /// test, not against a constant, so it stays meaningful whatever the
+    /// fixture's row sizes are.
+    #[test]
+    fn a_plain_copy_of_a_live_archive_keeps_up_when_the_writer_checkpoints() {
+        fn last_row_in_a_plain_copy(checkpoint_every: Duration, dir: &Path) -> Option<u64> {
+            let live = dir.join(format!("live-{}.rez", checkpoint_every.as_millis()));
+            let mut archive =
+                RezArchive::create_checkpointing_every(&live, checkpoint_every).unwrap();
+            let mut writer = archive.add_recording(seed()).unwrap();
+            let id = writer.recording_id();
+
+            for t in 0..400u64 {
+                let ts = 1_000_000_000 * (t + 1);
+                writer
+                    .wal(vec![WalRow {
+                        sampler: "cpu_usage".to_string(),
+                        ts,
+                        wall_offset: 0,
+                        row: encode_wal_row(&[WalCell {
+                            name: "0".to_string(),
+                            metadata: None,
+                            value: WalValue::Counter(t),
+                            window: None,
+                        }])
+                        .unwrap(),
+                    }])
+                    .unwrap();
+            }
+            writer.sync().unwrap();
+            // Let the writer's timer fire at least once. Only meaningful for
+            // the short interval; the long one has nothing to wait for.
+            std::thread::sleep(Duration::from_millis(60));
+            writer.sync().unwrap();
+
+            let copy = dir.join(format!("copy-{}.rez", checkpoint_every.as_millis()));
+            std::fs::copy(&live, &copy).unwrap();
+            // `None` covers both "the copy has no rows for this table" and
+            // "the copy has no catalog at all" — the un-checkpointed case can
+            // be either, and both mean the same thing here: the copy did not
+            // keep up.
+            let reach = RezDb::open(&copy)
+                .ok()
+                .and_then(|db| db.live_wal_span(id, "cpu_usage").ok())
+                .and_then(|s| s.last_ts);
+
+            drop(writer);
+            drop(archive);
+            reach
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let last_ts = 1_000_000_000 * 400;
+
+        // Checkpointing often: the copy reaches the last committed row.
+        let checkpointed = last_row_in_a_plain_copy(Duration::from_millis(10), dir.path());
+        assert_eq!(
+            checkpointed,
+            Some(last_ts),
+            "a checkpointing writer must leave the archive itself current"
+        );
+
+        // Effectively never (the size-based autocheckpoint still applies, but
+        // this fixture is far too small to trip it): the copy falls short. This
+        // half is the premise — without it, the assertion above would pass on a
+        // container that never needed the cadence.
+        let stale = last_row_in_a_plain_copy(Duration::from_secs(3_600), dir.path());
+        assert!(
+            stale != Some(last_ts),
+            "premise: without a checkpoint the copy should NOT be current, but it \
+             reached {stale:?}"
+        );
     }
 
     #[test]

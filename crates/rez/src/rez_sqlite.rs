@@ -31,6 +31,11 @@ pub const PAGE_SIZE: u32 = 4096;
 /// SQLite's own ~1000-page default, so it changes nothing today — it exists so
 /// that the sidecar's size, and the checkpoint pause it implies, cannot track a
 /// future page size.
+///
+/// This bounds the sidecar's SIZE. It does not bound its AGE, and the two come
+/// apart badly: a recording slow enough to take an hour to accumulate 4 MiB
+/// leaves the archive an hour behind the sidecar, and a plain copy of it an
+/// hour short. [`crate::rez_v3_writer::CHECKPOINT_INTERVAL`] is the age bound.
 const WAL_AUTOCHECKPOINT_BYTES: u32 = 4 * 1024 * 1024;
 
 /// Page cache for a connection that READS segments back, as a negative
@@ -334,6 +339,31 @@ impl RezDb {
             );
         }
         Ok(db)
+    }
+
+    /// Copy what the `-wal` sidecar holds into the archive itself, best-effort.
+    ///
+    /// **PASSIVE, deliberately.** A passive checkpoint moves whatever frames it
+    /// can and returns; it never waits for a reader, and it never blocks the
+    /// writer behind one. `FULL`/`TRUNCATE` would stall until readers finish,
+    /// and this runs on the writer thread with a capacity-1 channel behind it —
+    /// a stall there backpressures the scrape loop, which is the one cost this
+    /// whole container is shaped to avoid.
+    ///
+    /// Best-effort is the right contract: the caller is bounding how STALE a
+    /// copy of the archive can be, not demanding an exact one. `rezolus
+    /// recording snapshot` is the exact one.
+    pub fn checkpoint_passive(&self) -> Result<(), String> {
+        // `execute_batch`, not `pragma_query`: rusqlite QUOTES the pragma name
+        // it is given, so `pragma_query(None, "wal_checkpoint(PASSIVE)", ..)`
+        // asks for a pragma literally named `wal_checkpoint(PASSIVE)`. SQLite
+        // answers an unknown pragma with no rows and no error — the call
+        // returns `Ok` having checkpointed nothing. Found by the test that
+        // asserts a plain copy keeps up; it would otherwise have shipped as a
+        // cadence that silently never ran.
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
+            .map_err(|e| format!("failed to checkpoint the WAL: {e}"))
     }
 
     /// The pragmas that live on the connection, not in the file. Applied by
