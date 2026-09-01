@@ -1028,6 +1028,27 @@ const SQLITE_MAGIC: &[u8; 16] = b"SQLite format 3\0";
 /// container. A v3 SQLite file is not a tar, so `is_rez_path` correctly (and
 /// unchanged) reports `false` for it; callers that need to recognize both
 /// containers call `detect_rez_format`.
+/// Which container an in-memory archive holds — [`detect_rez_format`] for
+/// bytes, which is what a caller holding an upload has.
+///
+/// Shares `SQLITE_MAGIC` and `is_rez_reader` with the path version rather than
+/// re-deriving either: a browser and the CLI disagreeing about what a file IS
+/// would be the worst possible place for a second rule.
+pub fn detect_rez_format_bytes(bytes: &[u8]) -> RezFormat {
+    if looks_like_v3(bytes) {
+        return RezFormat::V3Sqlite;
+    }
+    match is_rez_reader(std::io::Cursor::new(bytes)) {
+        Ok(true) => RezFormat::V2Tar,
+        _ => RezFormat::NotRez,
+    }
+}
+
+/// True when `bytes` starts with SQLite's file header — a v3 `.rez` container.
+pub fn looks_like_v3(bytes: &[u8]) -> bool {
+    bytes.len() >= SQLITE_MAGIC.len() && &bytes[..SQLITE_MAGIC.len()] == SQLITE_MAGIC
+}
+
 pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     let mut file = std::fs::File::open(path)?;
     let mut header = [0u8; 16];

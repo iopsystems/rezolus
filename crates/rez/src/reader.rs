@@ -65,6 +65,75 @@ enum TableReader {
     Segmented(SegmentedParquetReader),
 }
 
+/// Parse one probe segment's footer per table.
+///
+/// **Threaded natively, sequential on wasm32.** The parallel version is a
+/// measured win — footer parsing is ~0.45 ms per table and linear in TABLE
+/// count, so it is what grows as samplers and acquisition groups multiply —
+/// but `std::thread::spawn` on `wasm32-unknown-unknown` panics rather than
+/// failing to compile, so a shared implementation would build cleanly and then
+/// abort in the browser on the first archive opened.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_tables(pending: &[PendingProbe]) -> Vec<Result<ProbedTable, String>> {
+    // Chunked, and each worker gets its OWN small pool.
+    //
+    // One thread per table spawned 50 threads that then serialized on the
+    // shared pool's mutex — 0.45 ms/table became 0.25 ms, where the core count
+    // says it should have collapsed. A probe reader is thrown away the moment
+    // its names are read, so it has nothing to gain from the shared pool and
+    // everything to lose by contending for it. Chunking amortizes spawn cost
+    // over the same threads.
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .min(pending.len().max(1));
+    let chunk = pending.len().div_ceil(workers.max(1));
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = pending
+            .chunks(chunk.max(1))
+            .map(|batch| {
+                scope.spawn(move || {
+                    // 8 MiB is ample for footer-only reads and is never
+                    // shared, so it cannot be contended.
+                    let pool = BufferPool::new(8 * 1024 * 1024);
+                    batch
+                        .iter()
+                        .map(|p| probe_one(p, &pool))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| vec![Err("probe panicked".to_string())])
+            })
+            .collect()
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn probe_tables(pending: &[PendingProbe]) -> Vec<Result<ProbedTable, String>> {
+    let pool = BufferPool::new(8 * 1024 * 1024);
+    pending.iter().map(|p| probe_one(p, &pool)).collect()
+}
+
+/// One table's footer: the metric names it holds and its row cadence.
+fn probe_one(
+    (sampler, bytes, span): &PendingProbe,
+    pool: &Arc<BufferPool>,
+) -> Result<ProbedTable, String> {
+    let probe = ParquetReader::open_bytes_with_pool(bytes.clone(), Arc::clone(pool))
+        .map_err(|e| format!("probing table {sampler}: {e}"))?;
+    let names = TableNames {
+        counters: probe.counter_names().into_iter().collect(),
+        gauges: probe.gauge_names().into_iter().collect(),
+        histograms: probe.histogram_names().into_iter().collect(),
+    };
+    Ok((sampler.clone(), names, probe.interval(), *span))
+}
+
 /// One table awaiting its footer probe: its key, the segment bytes to parse,
 /// and the span the catalog already answered.
 type PendingProbe = (String, Vec<u8>, Option<(u64, u64)>);
@@ -88,6 +157,20 @@ enum SegmentSource {
         recording_id: i64,
         sampler: String,
     },
+    /// A catalog that exists only in memory, shared by every table of the
+    /// archive it came from.
+    ///
+    /// The `Db` arm above reopens the file per lazy read, which a byte-backed
+    /// archive cannot do — there is no path, and re-deserializing the image
+    /// per table would copy the whole archive once per table. So this arm
+    /// shares one connection instead. The `Mutex` is what makes that legal:
+    /// `rusqlite::Connection` is `Send` but not `Sync`, and a `SamplerReader`
+    /// is read from several threads on the native probe path.
+    SharedDb {
+        db: Arc<std::sync::Mutex<RezDb>>,
+        recording_id: i64,
+        sampler: String,
+    },
 }
 
 impl SegmentSource {
@@ -102,6 +185,17 @@ impl SegmentSource {
                 sampler,
             } => {
                 let db = RezDb::open(path)?;
+                table_segments(&db, *recording_id, sampler)
+            }
+            SegmentSource::SharedDb {
+                db,
+                recording_id,
+                sampler,
+            } => {
+                // A poisoned lock means another thread panicked mid-read. The
+                // catalog is read-only here, so nothing is half-written and
+                // the data is still good.
+                let db = db.lock().unwrap_or_else(|e| e.into_inner());
                 table_segments(&db, *recording_id, sampler)
             }
         }
@@ -342,6 +436,32 @@ impl RezReader {
         Self::from_recordings(recordings, filename, pool)
     }
 
+    /// [`open_recordings`](Self::open_recordings) for an archive that exists
+    /// only as bytes.
+    ///
+    /// The browser's entry point: a file dropped onto the static-site viewer
+    /// is a `Uint8Array`, and there is no filesystem to write it to. Both
+    /// containers are recognized here, by content, exactly as
+    /// [`rez::detect_rez_format`] does for a path — the caller has no
+    /// extension to trust either.
+    pub fn open_recordings_from_bytes(
+        bytes: Vec<u8>,
+        pool: Arc<BufferPool>,
+    ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        if rez::looks_like_v3(&bytes) {
+            return Self::from_v3_db(crate::rez_sqlite::RezDb::open_bytes(bytes)?, None, pool);
+        }
+        let recordings = rez::read_archive_reader(std::io::Cursor::new(bytes))?.1;
+        let mut out = Vec::with_capacity(recordings.len());
+        for rec in recordings {
+            let labels = rec.labels.clone();
+            let filename = Some(rec.dir.clone());
+            let reader = Self::from_recordings(vec![rec], filename, Arc::clone(&pool))?;
+            out.push((labels, reader));
+        }
+        Ok(out)
+    }
+
     /// Open a `.rez` as one `RezReader` **per recording**, paired with that
     /// recording's labels. Used by the viewer to map a 2-recording `.rez` onto
     /// baseline/experiment without cross-recording sampler-name collisions.
@@ -374,7 +494,24 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        let db = RezDb::open(path)?;
+        Self::from_v3_db(RezDb::open(path)?, Some(path.to_path_buf()), pool)
+    }
+
+    /// [`from_v3`](Self::from_v3) over an already-open catalog, so a caller
+    /// holding an archive as BYTES (a browser upload — there is no path to
+    /// open) reaches exactly the same reader.
+    ///
+    /// `path` is `Some` only when the archive is a file. It decides how a
+    /// table fetches its segments later: from the file, reopened per read, or
+    /// from this one shared in-memory catalog. Everything else — the probe,
+    /// the spans, the WAL tail — is identical, which is the point.
+    fn from_v3_db(
+        db: RezDb,
+        path: Option<std::path::PathBuf>,
+        pool: Arc<BufferPool>,
+    ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        let shared = Arc::new(std::sync::Mutex::new(db));
+        let db = shared.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = Vec::new();
 
         for (recording, rec) in db.read_recordings()?.into_iter().enumerate() {
@@ -430,57 +567,8 @@ impl RezReader {
                 pending.push((sampler, bytes, span));
             }
 
-            // Phase two: parse the footers in parallel. Each probe is
-            // independent and touches only the shared `BufferPool`, which is
-            // `Mutex`-guarded.
-            // Chunked, and each worker gets its OWN small pool.
-            //
-            // One thread per table spawned 50 threads that then serialized on
-            // the shared pool's mutex — 0.45 ms/table became 0.25 ms, where the
-            // core count says it should have collapsed. A probe reader is
-            // thrown away the moment its names are read, so it has nothing to
-            // gain from the shared pool and everything to lose by contending
-            // for it. Chunking amortizes spawn cost over the same threads.
-            let workers = std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(4)
-                .min(pending.len().max(1));
-            let chunk = pending.len().div_ceil(workers.max(1));
-            let probed: Vec<Result<ProbedTable, String>> = std::thread::scope(|scope| {
-                let handles: Vec<_> = pending
-                    .chunks(chunk.max(1))
-                    .map(|batch| {
-                        scope.spawn(move || {
-                            // 8 MiB is ample for footer-only reads and is
-                            // never shared, so it cannot be contended.
-                            let pool = BufferPool::new(8 * 1024 * 1024);
-                            batch
-                                .iter()
-                                .map(|(sampler, bytes, span)| {
-                                    let probe = ParquetReader::open_bytes_with_pool(
-                                        bytes.clone(),
-                                        Arc::clone(&pool),
-                                    )
-                                    .map_err(|e| format!("probing table {sampler}: {e}"))?;
-                                    let names = TableNames {
-                                        counters: probe.counter_names().into_iter().collect(),
-                                        gauges: probe.gauge_names().into_iter().collect(),
-                                        histograms: probe.histogram_names().into_iter().collect(),
-                                    };
-                                    Ok((sampler.clone(), names, probe.interval(), *span))
-                                })
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .flat_map(|h| {
-                        h.join()
-                            .unwrap_or_else(|_| vec![Err("probe panicked".to_string())])
-                    })
-                    .collect()
-            });
+            // Phase two: parse the footers. One probe per table, independent.
+            let probed: Vec<Result<ProbedTable, String>> = probe_tables(&pending);
 
             let mut tables = Vec::new();
             for probe in probed {
@@ -491,10 +579,17 @@ impl RezReader {
                     names,
                     span,
                     interval,
-                    segments: SegmentSource::Db {
-                        path: path.to_path_buf(),
-                        recording_id: rec.id,
-                        sampler,
+                    segments: match &path {
+                        Some(path) => SegmentSource::Db {
+                            path: path.clone(),
+                            recording_id: rec.id,
+                            sampler,
+                        },
+                        None => SegmentSource::SharedDb {
+                            db: Arc::clone(&shared),
+                            recording_id: rec.id,
+                            sampler,
+                        },
                     },
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
@@ -1490,6 +1585,173 @@ mod tests {
         assert_eq!(readers[0].0.get("arm").map(String::as_str), Some("arm0"));
         assert_eq!(readers[1].0.get("arm").map(String::as_str), Some("arm1"));
         assert!(!readers[0].1.counter_names().is_empty());
+    }
+
+    /// Reading an archive from BYTES has to answer exactly what reading the
+    /// same archive from disk answers. This is the browser's whole path: a
+    /// dropped file is a `Uint8Array` and there is no filesystem to write it
+    /// to, so an in-memory catalog that quietly saw fewer tables — or fewer
+    /// rows — would show a different dashboard for the same file with nothing
+    /// to indicate it.
+    #[test]
+    fn a_v3_archive_read_from_bytes_matches_the_same_archive_read_from_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fleet.rez");
+        crate::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("redis", "web-01"), ("valkey", "web-01")],
+        );
+
+        let from_disk =
+            RezReader::open_recordings(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let from_bytes = RezReader::open_recordings_from_bytes(
+            std::fs::read(&path).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+
+        assert_eq!(from_bytes.len(), from_disk.len());
+        for ((disk_labels, disk), (byte_labels, bytes)) in from_disk.iter().zip(&from_bytes) {
+            assert_eq!(byte_labels, disk_labels);
+            assert_eq!(bytes.counter_names(), disk.counter_names());
+            assert_eq!(bytes.time_range(), disk.time_range());
+            // By VALUE, not merely "some series came back": the two arms of
+            // this fixture hold different numbers, so a byte-backed reader
+            // that opened the wrong recording would still answer here.
+            // Identity, not merely "some series came back": the fixture's two
+            // arms both hold `cpu_cycles`, so an assertion that data exists
+            // would pass even if the byte-backed reader opened the wrong one.
+            assert_eq!(bytes.metadata_get("source"), disk.metadata_get("source"));
+            assert_eq!(bytes.sample_timestamps(), disk.sample_timestamps());
+        }
+    }
+
+    /// The bytes a browser holds are the main database file alone — a `-wal`
+    /// sidecar is a separate file it never gets. That must not cost the
+    /// archive's own unsealed rows, which live in the `wal` TABLE inside the
+    /// image: a hindsight snapshot's newest data is exactly there, and
+    /// silently reading only sealed segments would under-report the window an
+    /// incident is in.
+    #[test]
+    fn a_live_wal_tail_survives_the_trip_through_bytes() {
+        use crate::rez::recorder_tests_support::{counter, snap};
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        for t in 0..3u64 {
+            let ts = 1_000_000_000 * (t + 1);
+            rec.ingest(
+                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, None)]),
+                ts,
+                0,
+            )
+            .unwrap();
+        }
+        // Committed but NOT sealed: the rows are in the `wal` table, and no
+        // segment holds them.
+        rec.sync().unwrap();
+
+        // Snapshot the live archive the way `hindsight` does. A raw copy of a
+        // file a writer still holds is NOT the same thing — its committed
+        // pages are in the `-wal` sidecar, which a single blob does not carry,
+        // and reading one gets "no such table: recordings" rather than a
+        // partial answer. `VACUUM INTO` produces a consistent single file, and
+        // that is what a browser is ever handed.
+        let snapshot = dir.path().join("snapshot.rez");
+        crate::rez_sqlite::RezDb::open(&path)
+            .unwrap()
+            .vacuum_into(&snapshot)
+            .unwrap();
+
+        let readers = RezReader::open_recordings_from_bytes(
+            std::fs::read(&snapshot).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(readers.len(), 1);
+        assert!(
+            readers[0]
+                .1
+                .counter_names()
+                .iter()
+                .any(|n| n == "cpu_cycles"),
+            "an unsealed table must still be visible from bytes: {:?}",
+            readers[0].1.counter_names()
+        );
+
+        drop(rec);
+        drop(archive);
+    }
+
+    /// A raw copy of an archive a writer still holds is a valid SQLite file
+    /// with none of the archive in it — SQLite's committed pages are in a
+    /// `-wal` sidecar, a second file a single blob does not carry. Say that,
+    /// rather than letting it surface as "no such table: recordings", which
+    /// reads like corruption.
+    #[test]
+    fn a_copy_taken_mid_write_says_what_went_wrong() {
+        use crate::rez::recorder_tests_support::{counter, snap};
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        rec.ingest(
+            &snap(
+                1_000_000_000,
+                vec![counter("cpu_cycles", "cpu_usage", 1, None)],
+            ),
+            1_000_000_000,
+            0,
+        )
+        .unwrap();
+        rec.sync().unwrap();
+
+        let err = match RezReader::open_recordings_from_bytes(
+            std::fs::read(&path).unwrap(),
+            BufferPool::new(8 * 1024 * 1024),
+        ) {
+            Ok(_) => panic!("a mid-write copy has no catalog in it"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("-wal"), "{err}");
+        assert!(err.contains("still being written"), "{err}");
+
+        drop(rec);
+        drop(archive);
+    }
+
+    /// A v2 tar archive reaches the same entry point — the caller has an
+    /// extension it cannot trust either way, so the container is decided by
+    /// content on both paths.
+    #[test]
+    fn a_v2_tar_archive_also_opens_from_bytes() {
+        let (_d, p) = two_sampler_rez();
+        let from_bytes = RezReader::open_recordings_from_bytes(
+            std::fs::read(&p).unwrap(),
+            BufferPool::new(16 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(from_bytes.len(), 1);
+        assert!(!from_bytes[0].1.counter_names().is_empty());
     }
 
     /// C1 regression: `RezReader::open_with_pool` — NOT `open_recordings` —

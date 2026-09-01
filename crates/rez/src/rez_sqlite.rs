@@ -255,6 +255,86 @@ impl RezDb {
         Ok(db)
     }
 
+    /// Open a `.rez` that exists only as bytes — an upload in a browser,
+    /// where there is no filesystem to point `open` at.
+    ///
+    /// **The bytes are copied into SQLite, not borrowed.** `sqlite3_deserialize`
+    /// takes ownership of an in-memory database image, and the connection reads
+    /// pages out of it for as long as it lives.
+    ///
+    /// **The image's journal mode is rewritten from WAL to rollback first, and
+    /// that needs justifying.** A `.rez` is created with `journal_mode=WAL`,
+    /// which persists in the file header (bytes 18 and 19, the file-format
+    /// write and read versions, both `2`). An in-memory database cannot do
+    /// WAL — there is no sidecar to write — so SQLite refuses the deserialized
+    /// image outright, with `unable to open database file`. Setting those two
+    /// bytes to `1` says "rollback journal", which is exactly what
+    /// `PRAGMA journal_mode = DELETE` would have persisted.
+    ///
+    /// What that costs: any SQLite transaction still living only in a `-wal`
+    /// sidecar is not in these bytes and is not read. That is not a new gap —
+    /// the sidecar is a separate file that a caller holding one `.rez` blob
+    /// never has — and it is not where a `.rez`'s own liveness lives: unsealed
+    /// rows are rows of the `wal` TABLE, inside this image, and
+    /// `materialize_wal_tail` reads them like any other.
+    pub fn open_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+        const HEADER: &[u8] = b"SQLite format 3\0";
+        const JOURNAL_MODE_ROLLBACK: u8 = 1;
+        // Byte 19 is the read version; a value above 2 means a format this
+        // SQLite cannot read, and quietly stamping it down to 1 would turn
+        // that into a wrong answer rather than an error.
+        const FILE_FORMAT_WAL: u8 = 2;
+
+        let mut bytes = bytes;
+        if bytes.len() < 20 || !bytes.starts_with(HEADER) {
+            return Err("not a v3 (SQLite) .rez archive".to_string());
+        }
+        if bytes[18] == FILE_FORMAT_WAL && bytes[19] == FILE_FORMAT_WAL {
+            bytes[18] = JOURNAL_MODE_ROLLBACK;
+            bytes[19] = JOURNAL_MODE_ROLLBACK;
+        }
+
+        let mut conn = Connection::open_in_memory()
+            .map_err(|e| format!("failed to open an in-memory database: {e}"))?;
+        // `deserialize_read_exact` copies from the reader into SQLite's own
+        // allocation, so the caller's `Vec` is dropped here rather than leaked
+        // for the connection's lifetime.
+        let len = bytes.len();
+        // Read-only: nothing here writes, and SQLite then never has to grow
+        // its own copy of the image.
+        conn.deserialize_read_exact(rusqlite::MAIN_DB, &mut bytes.as_slice(), len, true)
+            .map_err(|e| format!("failed to read the .rez archive: {e}"))?;
+        let db = RezDb { conn };
+        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
+
+        // A `.rez` always has a `recordings` table. Its absence has one
+        // overwhelmingly likely cause worth naming: the bytes are a plain copy
+        // of an archive a writer still held. SQLite commits into a `-wal`
+        // SIDECAR, a second file that a single blob does not carry, so such a
+        // copy can be a valid SQLite database with none of the archive in it.
+        // Left as bare "no such table: recordings", that reads like a corrupt
+        // file rather than a copy taken the wrong way.
+        let has_catalog: bool = db
+            .conn
+            .query_row(
+                "select count(*) from sqlite_master where type = 'table' and name = 'recordings'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n > 0)
+            .map_err(|e| format!("failed to inspect the archive: {e}"))?;
+        if !has_catalog {
+            return Err(
+                "not a .rez archive, or a copy taken while it was still being \
+                        written — an archive's most recent pages live in a `-wal` sidecar \
+                        that a single copied file does not carry. Copy it after the \
+                        recorder exits, or snapshot it with `rezolus hindsight`"
+                    .to_string(),
+            );
+        }
+        Ok(db)
+    }
+
     /// The pragmas that live on the connection, not in the file. Applied by
     /// both `create` and `open`.
     ///
