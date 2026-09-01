@@ -53,7 +53,7 @@ use metriken_query::{
 
 use crate::rez::{self, RecordingBytes};
 use crate::rez_sqlite::RezDb;
-use crate::rez_v3_writer::materialize_wal_tail;
+use crate::wal::materialize_wal_tail;
 
 /// The two concrete reader shapes a `.rez` table opens as, kept concrete
 /// (not type-erased behind `Box<dyn MetricsSource>`) so a same-timeline
@@ -1143,7 +1143,7 @@ fn union_sorted(iters: impl Iterator<Item = Vec<String>>) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::rez::RezRecorder;
-    use metriken::Window;
+    use crate::window::Window;
     use metriken_exposition::{Counter, Gauge, Snapshot, SnapshotV2};
     use std::time::SystemTime;
 
@@ -1158,7 +1158,7 @@ mod tests {
             .into_iter()
             .collect(),
         )
-        .with_window(w)
+        .with_window(w.map(Into::into))
     }
 
     fn gauge(name: &str, sampler: &str, v: i64, w: Option<Window>) -> Gauge {
@@ -1172,7 +1172,7 @@ mod tests {
             .into_iter()
             .collect(),
         )
-        .with_window(w)
+        .with_window(w.map(Into::into))
     }
 
     fn snap(ts: u64, counters: Vec<Counter>, gauges: Vec<Gauge>) -> Snapshot {
@@ -1398,7 +1398,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             )
-            .with_window(Some(Window::new(ts - 50_000_000, ts)));
+            .with_window(Some(Window::new(ts - 50_000_000, ts).into()));
             let snapshot = Snapshot::V2(SnapshotV2 {
                 systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
                 duration: std::time::Duration::ZERO,
@@ -1714,10 +1714,9 @@ mod tests {
     mod v3 {
         use super::*;
         use crate::rez_sqlite::WalRow;
-        use crate::rez_v3_writer::{
-            encode_wal_row, ManifestSeed, RezArchive, StreamRecorderV3, WalCell, WalValue,
-        };
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
         use crate::seal_policy::SealPolicy;
+        use crate::wal::{encode_wal_row, WalCell, WalValue};
         use metriken_exposition::Histogram as ExpHistogram;
 
         const ANCHOR: u64 = 1_700_000_000_000_000_000;
@@ -2114,7 +2113,7 @@ mod tests {
                 String,
                 Vec<(String, String)>,
                 rez::RezValues,
-                Vec<Option<Window>>,
+                Vec<Option<crate::window::Window>>,
             )>,
         );
         fn shape(t: &rez::RezTable) -> TableShape {
@@ -2239,7 +2238,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     )
-                    .with_window(w);
+                    .with_window(w.map(Into::into));
                     let s = Snapshot::V2(SnapshotV2 {
                         systemtime: SystemTime::UNIX_EPOCH + std::time::Duration::from_nanos(ts),
                         duration: std::time::Duration::ZERO,
@@ -2494,7 +2493,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: schema.hash(),
                         schema: Some(std::sync::Arc::clone(&schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2580,7 +2579,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2589,7 +2588,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2744,7 +2743,7 @@ mod tests {
                     name: "cpu_usage/percpu".to_string(),
                     schema_hash: percpu_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                    window: w,
+                    window: w.map(Into::into),
                     counters: vec![Some(i * 1_000)],
                     gauges: Vec::new(),
                     histograms: Vec::new(),
@@ -2753,7 +2752,7 @@ mod tests {
                     name: "cpu_usage/freq".to_string(),
                     schema_hash: freq_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&freq_schema)),
-                    window: w,
+                    window: w.map(Into::into),
                     counters: Vec::new(),
                     gauges: vec![Some(2_000 + i as i64)],
                     histograms: Vec::new(),
@@ -2762,7 +2761,7 @@ mod tests {
                     name: "cpu_usage/sched".to_string(),
                     schema_hash: sched_schema.hash(),
                     schema: Some(std::sync::Arc::clone(&sched_schema)),
-                    window: w,
+                    window: w.map(Into::into),
                     counters: Vec::new(),
                     gauges: Vec::new(),
                     histograms: vec![Some(h)],
@@ -2859,7 +2858,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w_fast,
+                        window: w_fast.map(Into::into),
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2868,7 +2867,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w_slow,
+                        window: w_slow.map(Into::into),
                         counters: vec![Some(i * 10)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2981,7 +2980,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: percpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&percpu_schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -2990,7 +2989,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: slow_w,
+                        window: slow_w.map(Into::into),
                         counters: vec![Some(i / 3)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -3098,7 +3097,7 @@ mod tests {
                         name: "cpu_usage/percpu".to_string(),
                         schema_hash: cpu_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&cpu_schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i * 1_000)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),
@@ -3107,7 +3106,7 @@ mod tests {
                         name: "cpu_usage/softirq".to_string(),
                         schema_hash: softirq_schema.hash(),
                         schema: Some(std::sync::Arc::clone(&softirq_schema)),
-                        window: w,
+                        window: w.map(Into::into),
                         counters: vec![Some(i)],
                         gauges: Vec::new(),
                         histograms: Vec::new(),

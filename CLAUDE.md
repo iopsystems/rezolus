@@ -215,6 +215,28 @@ Fixture builders (`rez::rez::recorder_tests_support`, and the tar writer
 crate's tests, which build most `.rez` fixtures in this repo. The binary enables
 that feature as a dev-dependency.
 
+**The `write` feature (default on) is what separates the two halves.** With it
+off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,
+`RezReader`. That configuration is the one that compiles for
+`wasm32-unknown-unknown`, and the reason it has to exist is narrow — `metriken`'s
+registry (`metriken-core`) declares a `linkme` distributed slice, and `linkme`
+gates on a fixed `target_os` list that `unknown` is not in. So the read path
+must not name a `metriken`/`metriken-exposition` type at all, which is why the
+archive owns:
+
+- `rez::window::Window` — the acquisition window a segment stores. Converted
+  from `metriken::Window` once, at ingest.
+- `rez::schema::{GroupSchema, MetricDesc}` — a group's membership as carried in
+  a WAL row. Its serde field order is the on-disk msgpack, so it is pinned
+  byte-for-byte against the producer's type by a test.
+- `rez::rez::{Cell, CellValue}` — the builder's input. Rows reach a table from
+  an agent snapshot *and* from this archive's own WAL, and only the first has
+  snapshot values to borrow.
+
+`cargo check -p rez --no-default-features --target wasm32-unknown-unknown` is a
+CI step for exactly this reason; nothing else catches a metriken type creeping
+back onto the read path.
+
 ### Service Extensions
 
 Service-level KPI dashboards are defined in `src/viewer/service_extension.rs` (`ServiceExtension`/`Kpi` structs). They allow the viewer to generate custom dashboard sections from PromQL queries embedded in parquet metadata. The `parquet annotate` command validates and embeds these. Templates live in `src/parquet_tools/templates/`.

@@ -16,6 +16,13 @@ pub mod rez_sqlite;
 /// Nothing ships that writes this container any more.
 #[cfg(any(test, feature = "test-support"))]
 pub mod rez_stream;
+/// v3 rewrite tooling (`combine`/`filter`/`upgrade`), which writes archives.
+#[cfg(feature = "write")]
 pub mod rez_v3_rewrite;
+/// The v3 streaming writer.
+#[cfg(feature = "write")]
 pub mod rez_v3_writer;
+pub mod schema;
 pub mod seal_policy;
+pub mod wal;
+pub mod window;

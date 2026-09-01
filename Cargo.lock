@@ -2195,8 +2195,7 @@ dependencies = [
 [[package]]
 name = "metriken"
 version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "674854d8e0c525f2630a859e4bfe6ca5f452d27e38592079950e3d396fa7f358"
+source = "git+https://github.com/iopsystems/metriken?rev=f052a95b1319da8dd69e191bd060b03c354fb986#f052a95b1319da8dd69e191bd060b03c354fb986"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2208,8 +2207,7 @@ dependencies = [
 [[package]]
 name = "metriken-core"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e343d088765ec5ad0ad60fd9faa2480a909afd627662f9bf5546a144362fe83"
+source = "git+https://github.com/iopsystems/metriken?rev=f052a95b1319da8dd69e191bd060b03c354fb986#f052a95b1319da8dd69e191bd060b03c354fb986"
 dependencies = [
  "histogram",
  "linkme",
@@ -2221,8 +2219,7 @@ dependencies = [
 [[package]]
 name = "metriken-derive"
 version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba9466276652f7134a720d6d7e004bb5277dfa85a349e63030bb80b9aacf3db5"
+source = "git+https://github.com/iopsystems/metriken?rev=f052a95b1319da8dd69e191bd060b03c354fb986#f052a95b1319da8dd69e191bd060b03c354fb986"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2233,8 +2230,7 @@ dependencies = [
 [[package]]
 name = "metriken-exposition"
 version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27254ab0c2cb71085b17be543db1970d11bde2144b78ed82ccdee0a35001d4eb"
+source = "git+https://github.com/iopsystems/metriken?rev=f052a95b1319da8dd69e191bd060b03c354fb986#f052a95b1319da8dd69e191bd060b03c354fb986"
 dependencies = [
  "arrow",
  "chrono",
@@ -2248,8 +2244,7 @@ dependencies = [
 [[package]]
 name = "metriken-query"
 version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b67c45bb8e386b82eef87e692629a9ea689b03af4bb16bbda489ab9b708522e2"
+source = "git+https://github.com/iopsystems/metriken?rev=f052a95b1319da8dd69e191bd060b03c354fb986#f052a95b1319da8dd69e191bd060b03c354fb986"
 dependencies = [
  "arrow",
  "bytes",

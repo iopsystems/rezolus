@@ -154,6 +154,14 @@ jobs:
         run: cargo install wasm-pack --version ^0.14 --locked
       - name: Install wabt
         run: sudo apt-get update && sudo apt-get -y install wabt
+      # The `.rez` reader has to keep compiling for the browser. Its default
+      # feature set does NOT: the ingest half pulls `metriken`, whose registry
+      # declares a `linkme` distributed slice, and `linkme` has no wasm32
+      # implementation. Nothing else catches a metriken type creeping back onto
+      # the read path — the native build stays green, and the WASM viewer only
+      # fails once it actually depends on this crate.
+      - name: Check the .rez reader still builds for wasm32
+        run: cargo check -p rez --no-default-features --target wasm32-unknown-unknown --locked
       - name: Rebuild WASM viewer
         run: ./crates/viewer/build.sh
       - name: Check template symlinks are committed

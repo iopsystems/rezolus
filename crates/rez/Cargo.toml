@@ -11,9 +11,9 @@ publish = false
 arrow = "58.2.0"
 bytes = "1"
 histogram.workspace = true
-metriken.workspace = true
-metriken-exposition.workspace = true
-metriken-query = { workspace = true, features = ["ingest"] }
+metriken = { workspace = true, optional = true }
+metriken-exposition = { workspace = true, optional = true }
+metriken-query.workspace = true
 parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "simdutf8",
@@ -31,10 +31,21 @@ tempfile = "3"
 tracing = "0.1"
 
 [features]
+default = ["write"]
+# Everything that turns an agent snapshot into archive rows: the ingest path
+# and both writers. Off, the crate is a READER — which is the configuration
+# that compiles for wasm32, since `metriken`'s registry (`metriken-core`)
+# declares a `linkme` distributed slice and `linkme` has no wasm32
+# implementation.
+write = [
+    "dep:metriken",
+    "dep:metriken-exposition",
+    "metriken-query/ingest",
+]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate
 # under test next door.
-test-support = []
+test-support = ["write"]
 
 [dev-dependencies]
 tempfile = "3"

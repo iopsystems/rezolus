@@ -224,3 +224,20 @@ assets = [
         "644",
     ],
 ]
+
+# TEMPORARY: `.rez` composition needs `ParquetBuilder::source_labeled` and
+# `CompositionSource`, added in iopsystems/metriken#140 and not yet released to
+# crates.io. Patched rather than changing the dependency declarations, so the
+# whole rollback is deleting this section once metriken-query 0.21 ships.
+#
+# Every metriken crate is patched together, not just metriken-query: it depends
+# on metriken-exposition by path within that workspace, so patching it alone
+# would source metriken-exposition from git while this crate sources it from
+# crates.io -- two packages of the same name, and a type mismatch wherever a
+# snapshot crosses between them.
+[patch.crates-io]
+metriken = { git = "https://github.com/iopsystems/metriken", rev = "f052a95b1319da8dd69e191bd060b03c354fb986" }
+metriken-core = { git = "https://github.com/iopsystems/metriken", rev = "f052a95b1319da8dd69e191bd060b03c354fb986" }
+metriken-derive = { git = "https://github.com/iopsystems/metriken", rev = "f052a95b1319da8dd69e191bd060b03c354fb986" }
+metriken-exposition = { git = "https://github.com/iopsystems/metriken", rev = "f052a95b1319da8dd69e191bd060b03c354fb986" }
+metriken-query = { git = "https://github.com/iopsystems/metriken", rev = "f052a95b1319da8dd69e191bd060b03c354fb986" }

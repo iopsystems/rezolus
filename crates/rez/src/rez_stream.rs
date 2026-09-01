@@ -561,8 +561,8 @@ impl BuilderState {
     }
 
     /// Append one row to the open segment, and account it.
-    pub fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
-        self.builder.push_row(ts, wall_offset_ns, entries);
+    pub fn push_entries(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+        self.builder.push_entries(ts, wall_offset_ns, entries);
         self.account.add_row(entries_approx_bytes(entries));
     }
 
@@ -663,7 +663,7 @@ impl StreamRecorder {
                 .builders
                 .entry(sampler.to_string())
                 .or_insert_with(|| BuilderState::open_first(sampler, policy));
-            state.push_row(anchored_ts, wall_offset_ns, &entries);
+            state.push_entries(anchored_ts, wall_offset_ns, &entries);
         }
     }
 
@@ -740,7 +740,7 @@ pub fn write_segmented_rez(
     finalize: bool,
 ) -> PathBuf {
     use crate::rez::recorder_tests_support::{counter, snap};
-    use metriken::Window;
+    use crate::window::Window;
 
     let seed = ManifestSeed {
         dir: dir.to_string(),
@@ -788,7 +788,7 @@ mod tests {
     use super::*;
     use crate::rez::recorder_tests_support::{counter, snap};
     use crate::rez::{Entry, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
-    use metriken::Window;
+    use crate::window::Window;
     use std::io::Read;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
@@ -812,7 +812,7 @@ mod tests {
         let mut b = TableBuilder::new(sampler.to_string());
         for (i, &t) in ts.iter().enumerate() {
             let c = counter("0", sampler, i as u64, Some(Window::new(t - 100, t)));
-            b.push_row(t, wall_offset, &[Entry::Counter(&c)]);
+            b.push_entries(t, wall_offset, &[Entry::Counter(&c)]);
         }
         SealJob {
             sampler: sampler.to_string(),
