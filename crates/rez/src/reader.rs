@@ -400,6 +400,20 @@ pub struct RezReader {
     /// stops earlier than the run did" is exactly the kind of thing a
     /// consumer must be able to say out loud. See [`Self::complete`].
     complete: bool,
+    /// How many recordings this reader's tables came from.
+    ///
+    /// Set once at construction rather than derived from
+    /// `SamplerReader::recording`, because that field's meaning is NOT uniform:
+    /// `from_v3_db` numbers recordings archive-globally while `from_recordings`
+    /// numbers them per call. Counting distinct values across tables therefore
+    /// happens to be right today only because `open_with_pool`'s tar branch
+    /// passes every recording in one call. Rebuilding that branch on top of
+    /// `open_recordings` -- the obvious cleanup -- would give every table
+    /// `recording == 0` and silently defeat the check in
+    /// [`composition_sources`](Self::composition_sources) with its test still
+    /// green. Carrying the count here makes the invariant explicit and
+    /// refactor-proof.
+    recordings: usize,
 }
 
 /// One `RezReader` per recording, paired with that recording's label set.
@@ -426,46 +440,95 @@ impl RezReader {
     /// cost, so compose once and reuse the result rather than per query.
     ///
     /// A table whose segments cannot be parsed is skipped rather than
-    /// poisoning the composition, matching `SamplerReader::reader`.
+    /// poisoning the composition, matching `SamplerReader::reader` — unless
+    /// EVERY table is skipped, which is an error rather than an empty vec (see
+    /// below).
+    ///
+    /// # The caller owns label uniqueness
+    ///
+    /// The injected label is what keeps two recordings' identically-named
+    /// series apart, and this method cannot see it. `open_recordings` does not
+    /// solve that on the caller's behalf: **two recordings may legally carry
+    /// identical label sets** — two endpoints that infer the same `source` and
+    /// `host` do exactly that, and the recorder only warns. A caller that
+    /// derives its injected label from a recording's own labels can therefore
+    /// give both arms the same one and reproduce the merge this method refuses,
+    /// one level up. Derive the label from something the caller knows is
+    /// unique per participant instead.
+    ///
+    /// # Composition tolerates name-sharing that `route` refuses
+    ///
+    /// `route` answers a query naming metrics from several tables of one
+    /// sampler through `UnionMetricsSource::try_new`, which REFUSES when those
+    /// tables share a metric name. This composition has no equivalent check,
+    /// because it is eager and whole-archive: refusing here would reject an
+    /// entire archive over a name the caller may never query. Shared names are
+    /// real and shipped — `gpu_nvidia` and `gpu_amd_smi` both publish
+    /// `gpu_utilization` — so on a host running both, a composed query that
+    /// aggregates the name away (`sum by (id) (gpu_utilization)`) sums across
+    /// vendors where `route` would have refused. The series remain
+    /// distinguishable by their `sampler` label; a caller that must not
+    /// conflate them should group by it.
     ///
     /// # Errors
     ///
     /// Refuses a reader that **flattens several recordings**, which is what
-    /// [`open_with_pool`](Self::open_with_pool) produces. Every recording of a
-    /// multi-recording archive holds the same sampler names, so composing a
-    /// flattened reader hands the builder several children carrying the same
-    /// metric names under one label — and one silently wins, losing an arm's
-    /// data entirely. That is the exact failure this composer exists to
-    /// prevent, so it refuses rather than warns, mirroring `route`, which
-    /// groups owners by `(recording, sampler)` for the same reason.
+    /// [`open_with_pool`](Self::open_with_pool) produces. Every recording holds
+    /// the same sampler names, so composing a flattened reader hands the
+    /// builder several children carrying the same metric names under one
+    /// label. `ParquetBuilder` does not dedup or dispatch — it CONCATENATES
+    /// (`MultiParquetSource`: "same (metric, label) pairs in multiple files
+    /// produce duplicate series") — so the result is duplicate,
+    /// indistinguishable series and a silently doubled aggregate, with
+    /// histograms interleaving into one series index. Not, as an earlier
+    /// version of this comment claimed, one recording replacing another: that
+    /// is `UnionSource`'s first-wins, a different composer.
     ///
     /// Open with [`open_recordings`](Self::open_recordings) instead: one
     /// reader per recording, each composable under its own label.
+    ///
+    /// Also refuses when every table was skipped but the recording has tables,
+    /// since an empty composition is indistinguishable from an arm that was
+    /// simply flat. A recording with no tables at all returns `Ok(vec![])` —
+    /// check [`is_empty`](Self::is_empty) first if that matters.
     pub fn composition_sources(
         &self,
     ) -> Result<Vec<CompositionSource>, Box<dyn std::error::Error>> {
-        let mut recordings: Vec<usize> = self.tables.iter().map(|t| t.recording).collect();
-        recordings.sort_unstable();
-        recordings.dedup();
-        if recordings.len() > 1 {
+        if self.recordings > 1 {
             return Err(format!(
-                "cannot compose a reader flattening {} recordings: they share sampler \
-                 names, so composing them would let one recording's series silently \
-                 replace another's. Open the archive with `open_recordings` and compose \
-                 each recording under its own label.",
-                recordings.len()
+                "cannot compose a reader flattening {} recordings: they publish the same \
+                 metric names, so composing them emits duplicate, indistinguishable series \
+                 and double-counts every aggregation over them. Open the archive with \
+                 `open_recordings` and compose each recording under its own label.",
+                self.recordings
             )
             .into());
         }
 
-        Ok(self
+        let sources: Vec<CompositionSource> = self
             .tables
             .iter()
             .filter_map(|t| t.reader())
             .map(TableReader::composition_source)
-            .collect())
-    }
+            .collect();
 
+        // A table whose segments cannot be opened is skipped above. Dropping
+        // EVERY table silently would be indistinguishable from a recording that
+        // was simply flat: the caller composes nothing, `build()` succeeds on
+        // the other arms, and every query about this one answers empty. That is
+        // the same silent per-arm loss the refusal above exists to prevent, so
+        // say it rather than return an empty vec.
+        if sources.is_empty() && !self.tables.is_empty() {
+            return Err(format!(
+                "none of this recording's {} tables could be opened -- their segments were \
+                 evicted or are unreadable -- so composing it would contribute nothing",
+                self.tables.len()
+            )
+            .into());
+        }
+
+        Ok(sources)
+    }
     /// Whether this recording holds no tables at all.
     ///
     /// An arm that produced no rows — an endpoint that was reachable but never
@@ -512,7 +575,9 @@ impl RezReader {
             let mut tables = Vec::new();
             let mut metadata = BTreeMap::new();
             let mut complete = true;
+            let mut recordings = 0usize;
             for (i, (_, reader)) in Self::from_v3(path, pool)?.into_iter().enumerate() {
+                recordings += 1;
                 if i == 0 {
                     metadata = reader.metadata;
                 }
@@ -524,6 +589,7 @@ impl RezReader {
                 metadata,
                 filename,
                 complete,
+                recordings,
             });
         }
         let recordings = read_recordings(path)?;
@@ -698,6 +764,7 @@ impl RezReader {
                     metadata: rec.meta.metadata,
                     filename: Some(rez::recording_dir_slug(&rec.meta.labels)),
                     complete: rec.complete,
+                    recordings: 1,
                 },
             ));
         }
@@ -713,6 +780,9 @@ impl RezReader {
             .first()
             .map(|r| r.metadata.clone())
             .unwrap_or_default();
+        // Captured before the Vec is consumed: this is the reader's recording
+        // count, which `composition_sources` refuses on.
+        let recording_count = recordings.len();
         let mut tables = Vec::new();
         let mut complete = true;
         for (recording, rec) in recordings.into_iter().enumerate() {
@@ -788,6 +858,7 @@ impl RezReader {
             metadata,
             filename,
             complete,
+            recordings: recording_count,
         })
     }
 
@@ -1850,6 +1921,42 @@ mod tests {
         .unwrap();
         assert_eq!(from_bytes.len(), 1);
         assert!(!from_bytes[0].1.counter_names().is_empty());
+    }
+
+    /// The v3/SQLite twin of the tar refusal below.
+    ///
+    /// The two flattening branches of `open_with_pool` reach their recording
+    /// count by DIFFERENT routes, so pinning one proves nothing about the
+    /// other — and v3 is the branch that matters: `parquet combine` emits v3,
+    /// and `record --endpoint a --endpoint b` writes a multi-recording v3
+    /// archive directly. The tar test below covers `from_recordings`; this one
+    /// covers `from_v3`.
+    #[test]
+    fn composition_sources_refuse_a_flattened_multi_recording_v3_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fleet.rez");
+        crate::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("redis", "web-01"), ("valkey", "web-01")],
+        );
+
+        let pool = BufferPool::new(16 * 1024 * 1024);
+        let flattened = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
+        let err = match flattened.composition_sources() {
+            Ok(_) => panic!("composing a flattened 2-recording v3 archive must refuse"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("open_recordings"),
+            "the error must point at the entry point that works: {err}"
+        );
+
+        // Per recording, each composes on its own.
+        let per_recording = RezReader::open_recordings(&path, pool).unwrap();
+        assert_eq!(per_recording.len(), 2);
+        for (_labels, reader) in &per_recording {
+            assert!(reader.composition_sources().is_ok());
+        }
     }
 
     /// The composition counterpart to the query refusal below: a flattened
