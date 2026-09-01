@@ -47,5 +47,14 @@ write = [
 # under test next door.
 test-support = ["write"]
 
+# Builds only with `test-support`, which is what supplies the fixture builders
+# it calls. Declared rather than left implicit because `--all-targets` compiles
+# examples: without this, `cargo check -p rez --all-targets` fails on a crate
+# that is otherwise fine, and it fails for a reason that looks like a broken
+# crate rather than a missing feature.
+[[example]]
+name = "write_rez_fixture"
+required-features = ["test-support"]
+
 [dev-dependencies]
 tempfile = "3"
