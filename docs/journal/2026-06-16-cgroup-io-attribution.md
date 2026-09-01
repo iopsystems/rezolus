@@ -1,4 +1,15 @@
-# Proposal: Per-cgroup attribution for block I/O and network samplers
+# Per-cgroup attribution for block I/O and network samplers
+
+- **Opened:** 2026-06-16
+- **Status:** OPEN — proposal, pre-build. Nothing is implemented: as of `main`
+  today, `blockio/requests/mod.bpf.c` and `network/traffic/mod.bpf.c` contain no
+  cgroup references at all. Three open questions below (network RX attribution,
+  counter layout, metric naming) need a decision before coding.
+- **Driver:** [Rezolus on GPU servers — operator/tenant insights](../gpu_hypervisor_tenant_insights.md),
+  which names per-tenant disk and network attribution as the gap that keeps the
+  host from answering "which guest is doing this I/O?".
+- **Tracked in:** [`docs/backlog.md`](../backlog.md) → "Agent — per-cgroup I/O
+  attribution".
 
 ## Motivation
 
@@ -14,7 +25,7 @@ network behavior from the host, consistent with the existing per-cgroup CPU
 metrics.
 
 This is the enhancement called out as a gap in
-`docs/gpu_hypervisor_tenant_insights.md`.
+[`docs/gpu_hypervisor_tenant_insights.md`](../gpu_hypervisor_tenant_insights.md).
 
 ## What "good" looks like
 

@@ -91,7 +91,7 @@ capacity planning, oversubscription decisions, and fairness.
   hosts that throttle under load.
 
 ### Anomaly detection at fleet scale
-- Rezolus recordings (parquet) plus the MCP analysis tools
+- Rezolus recordings (`.rez` archives, or parquet) plus the MCP analysis tools
   (`detect-anomalies`, `analyze-correlation`, PromQL `query`) let the operator
   run automated regression and anomaly sweeps across many tenants without
   manual dashboard-watching.

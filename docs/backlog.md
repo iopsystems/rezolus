@@ -615,6 +615,54 @@ recording (single iGPU, 55 min at 1 s).
   (`src/agent/sampler_status.rs`) is whole-sampler only; there is no per-metric
   equivalent today. *Reopen:* if per-metric status machinery lands.
 
+## Agent — per-cgroup I/O attribution
+
+Source: [per-cgroup attribution for block I/O and network samplers](journal/2026-06-16-cgroup-io-attribution.md).
+Rezolus attributes CPU, scheduler, syscall and TLB activity per cgroup, but
+`blockio_*` is labeled only by `op` and `network_traffic` only by `direction` —
+so a hypervisor host cannot answer "which guest is doing this I/O?". Nothing is
+built: `blockio/requests/mod.bpf.c` and `network/traffic/mod.bpf.c` contain no
+cgroup references.
+
+- **`cgroup_blockio_operations` / `cgroup_blockio_bytes`** — Open, and first.
+  Cleanest attribution story: completion runs in IRQ/softirq context so
+  `bpf_get_current_cgroup_id()` is wrong; the issuing cgroup comes off the
+  request as `rq → bio → bi_blkg → blkcg → css.id`, a CO-RE read against types
+  already in the checked-in `vmlinux.h`. Add the counters in `blockio/requests`
+  only — `block_rq_complete` is already shared with `blockio/latency` (principle
+  11, and the "Known drift" note in `docs/principles.md`).
+- **`cgroup_network_bytes` / `_packets`, TX first** — Open, after blockio.
+  `skb->sk` is populated for locally originated traffic at
+  `net_dev_start_xmit`, so TX attributes; at `netif_receive_skb` it is typically
+  NULL (pre-demux), so RX does not.
+- **Network RX attribution** — Open, and the decision that gates the network
+  work. Either accept TX-only at the device hook, or move attribution to the
+  socket layer — which overlaps the existing `tcp/*` samplers and so becomes a
+  cross-sampler consolidation (principle 11) covering only TCP.
+- **Interface as the tenant proxy** — Open, and arguably the *primary* network
+  approach rather than cgroup attribution. Each guest already gets a dedicated
+  host-side netdev (tap/macvtap/VF representor/veth), `skb->dev` is populated on
+  both hooks (solving RX), and the chain is 2 derefs rather than blockio's 4.
+  Breaks on kernel-bypass datapaths (OVS-DPDK, vhost-user, SR-IOV passthrough
+  without a representor), shared interfaces, and ifindex reuse. Prefer emitting
+  interface-keyed metrics and joining `ifname → tenant` downstream (principle
+  9). Note `network_interfaces` is global-only today, so this is a real addition
+  rather than a relabel.
+- **Per-cgroup blockio size histograms** — Deferred, deliberately.
+  `MAX_CGROUPS × 496` H2 buckets is ~16 MB per op, ~64 MB for four; that breaks
+  the bounded-memory discipline (principles 8, 13). *Reopen:* only with config
+  gating or a sparse representation, as its own proposal.
+- **Counter layout and metric naming** — Open (minor). Confirm `packed_counters`
+  keyed by cgroup id, matching `cgroup_cpu_usage`; and prefer the distinct
+  `cgroup_`-prefixed metric over adding a `cgroup` label to `blockio_*`.
+- **Size the tax empirically, don't guess** — Open. Every sampler already exports
+  `rezolus_bpf_run_time`/`rezolus_bpf_run_count`; take mean ns per invocation for
+  `cpu_usage` as the fleetwide baseline, then measure `blockio_requests` /
+  `network_traffic` before and after under fio / a packet generator (principle
+  16). Per-event cost is roughly the cgroup tax `cpu/usage` already pays; the
+  axis that actually differs is hook firing rate (Mpps / millions of IOPS vs
+  tick accounting).
+
 ## metriken — measurement uncertainty (arc)
 
 Source: [measurement uncertainty](journal/2026-07-08-measurement-uncertainty.md).
