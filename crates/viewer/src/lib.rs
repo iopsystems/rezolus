@@ -141,8 +141,8 @@ fn incomplete_notice(
         "{filename} was not cleanly finalized: it reads up to its last checkpoint, and any \
          ticks after that are not in this file. If it was copied while a recorder still held \
          it, the copy is also missing whatever was still in SQLite's `-wal` sidecar — a \
-         separate file that does not travel with an upload. Take the copy after the recorder \
-         exits, or snapshot it with `rezolus hindsight`."
+         separate file that does not travel with an upload. `rezolus recording snapshot \
+         <archive> -o out.rez` takes a complete copy without stopping the recorder."
     ))
 }
 

@@ -327,8 +327,9 @@ impl RezDb {
             return Err(
                 "not a .rez archive, or a copy taken while it was still being \
                         written — an archive's most recent pages live in a `-wal` sidecar \
-                        that a single copied file does not carry. Copy it after the \
-                        recorder exits, or snapshot it with `rezolus hindsight`"
+                        that a single copied file does not carry. Take the copy with \
+                        `rezolus recording snapshot <archive> -o out.rez`, which reads \
+                        through the sidecar without stopping the recorder"
                     .to_string(),
             );
         }
