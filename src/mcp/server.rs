@@ -1034,14 +1034,16 @@ mod tests {
         let redis = server
             .get_reader_selected(
                 p,
-                &crate::mcp::RecordingSelector::parse(["source=redis".to_string()]).unwrap(),
+                &crate::mcp::RecordingSelector::parse("--recording", ["source=redis".to_string()])
+                    .unwrap(),
             )
             .await
             .unwrap();
         let valkey = server
             .get_reader_selected(
                 p,
-                &crate::mcp::RecordingSelector::parse(["source=valkey".to_string()]).unwrap(),
+                &crate::mcp::RecordingSelector::parse("--recording", ["source=valkey".to_string()])
+                    .unwrap(),
             )
             .await
             .unwrap();
@@ -1071,17 +1073,18 @@ mod tests {
         let narrow = server
             .get_reader_selected(
                 p,
-                &crate::mcp::RecordingSelector::parse(["source=valkey".to_string()]).unwrap(),
+                &crate::mcp::RecordingSelector::parse("--recording", ["source=valkey".to_string()])
+                    .unwrap(),
             )
             .await
             .unwrap();
         let wide = server
             .get_reader_selected(
                 p,
-                &crate::mcp::RecordingSelector::parse([
-                    "source=valkey".to_string(),
-                    "host=web-01".to_string(),
-                ])
+                &crate::mcp::RecordingSelector::parse(
+                    "--recording",
+                    ["source=valkey".to_string(), "host=web-01".to_string()],
+                )
                 .unwrap(),
             )
             .await
@@ -1151,7 +1154,8 @@ mod tests {
         let no_match = server
             .get_reader_selected(
                 p,
-                &crate::mcp::RecordingSelector::parse(["source=nope".to_string()]).unwrap(),
+                &crate::mcp::RecordingSelector::parse("--recording", ["source=nope".to_string()])
+                    .unwrap(),
             )
             .await
             .err()

@@ -2164,6 +2164,59 @@ pub(crate) mod recorder_tests_support {
         RezArchive::single(path, seed).unwrap();
     }
 
+    /// A finalized MULTI-recording v3 `.rez`: one recording per `(source,
+    /// host)` pair, each carrying those two labels, `source` also in its
+    /// per-recording metadata, and three rows of a `cpu_usage/cpu_cycles`
+    /// counter whose values are unique to the recording.
+    ///
+    /// The values differ per recording on purpose. A consumer that picks the
+    /// wrong arm still returns *some* series, so a test asserting only that
+    /// data came back would pass either way; distinguishable values make the
+    /// wrong arm fail.
+    pub(crate) fn multi_recording_v3_rez(path: &std::path::Path, recordings: &[(&str, &str)]) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        use metriken::Window;
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+
+        let mut archive = RezArchive::create(path).unwrap();
+        let mut recs: Vec<StreamRecorderV3> = Vec::new();
+        for (source, host) in recordings {
+            let seed = ManifestSeed {
+                labels: [
+                    ("source".to_string(), source.to_string()),
+                    ("host".to_string(), host.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+                // Mirrors `recorder::build_rez_metadata`: the same `source`
+                // appears in the per-recording metadata as in the labels, so
+                // a test can read back WHICH recording it was handed.
+                metadata: [("source".to_string(), source.to_string())]
+                    .into_iter()
+                    .collect(),
+                clock_anchor_wall_ns: ANCHOR,
+            };
+            recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
+        }
+        for (i, rec) in recs.iter_mut().enumerate() {
+            for t in 0..3u64 {
+                let ts = ANCHOR + 1_000_000_000 * (t + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                let v = (i as u64 + 1) * 1_000 + t;
+                rec.ingest(
+                    &snap(ts, vec![counter("cpu_cycles", "cpu_usage", v, w)]),
+                    ts,
+                    0,
+                )
+                .unwrap();
+            }
+        }
+        for rec in recs {
+            rec.finalize((ANCHOR + 4_000_000_000, 0)).unwrap();
+        }
+        archive.join().unwrap();
+    }
+
     /// A finalized v3 `.rez` holding `ticks` rows of one counter per named
     /// sampler, labelled `arm=<arm>` so a multi-recording assembly can tell
     /// its inputs apart.

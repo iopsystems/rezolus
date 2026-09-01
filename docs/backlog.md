@@ -406,10 +406,18 @@ Source: [`.rez` v3 — SQLite container with a real WAL](journal/2026-08-12-rez-
   request instant does not reach it. That widening is tracked with the
   Prometheus-in-`.rez` entry above — it moves this window's edges, not its
   anchor.
-- **Viewer shows only the first two recordings** — Open. `src/viewer/mod.rs:581`
-  truncates a multi-recording `.rez` to the A/B slots and warns. Independent of
-  the writer work above, but the two should not drift: finishing that makes
-  3+-arm archives easy to produce and still unviewable.
+- **Viewer shows only the first two recordings** — **PARTLY DONE**. `rezolus
+  view` now takes `--baseline k=v` / `--experiment k=v` (repeatable, ANDed,
+  subset match — the same selector semantics as the MCP `--recording` flag,
+  sharing `src/mcp/recording_selector.rs`), so which two arms of a 3+-recording
+  `.rez` fill the A/B slots is a choice rather than manifest order. Each flag
+  must name exactly one recording; matching none or several is refused with a
+  listing, never narrowed to a first match. The default with no flags is
+  unchanged (recordings 0 and 1, warning improved to list the archive). What
+  remains is genuine N-way faceting — showing more than two arms at once —
+  which is the "N-way compare (N > 2)" entry above: it needs the wire-stable
+  `baseline`/`experiment` capture ids to become open-ended, which is UI work,
+  not selection work.
 - **Reopening a table can panic on a live archive** — **DONE**. Was open,
   `SamplerReader::reader` (`src/rez_reader.rs:229-233`) reopens a table's
   segments with `.expect("segments opened at probe time cannot fail to
