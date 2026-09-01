@@ -83,6 +83,7 @@ mod nvidia {
     use super::Gpu;
     use libloading::{Library, Symbol};
     use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+    use std::path::{Path, PathBuf};
 
     // nvmlReturn_t: 0 == NVML_SUCCESS.
     type NvmlReturn = c_int;
@@ -130,9 +131,31 @@ mod nvidia {
     type FnDevicePcieWidth = unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> NvmlReturn;
     type FnDeviceCores = unsafe extern "C" fn(NvmlDevice, *mut c_uint) -> NvmlReturn;
 
-    /// Query the NVIDIA GPUs via NVML. Returns empty if NVML can't be loaded or
-    /// initialized (e.g. no NVIDIA driver).
+    /// Query the NVIDIA GPUs.
+    ///
+    /// NVML is preferred and answers in full (memory, PCIe link, SM count,
+    /// compute capability). When it cannot be loaded or initialised — the
+    /// driver is installed but the userspace library is not, which is ordinary
+    /// on a headless host — the driver's own `/proc` interface is scraped
+    /// instead. That yields far less (a model name, a driver version, the PCI
+    /// address and NUMA node) but it beats reporting no GPU at all on a machine
+    /// that plainly has one.
+    ///
+    /// The fallback lives here rather than in the summary layer so it triggers
+    /// on *NVIDIA* being unreadable, not on the whole GPU list being empty: a
+    /// host with an AMD card and an NVIDIA card whose NVML is missing used to
+    /// skip the scan entirely, because the list was non-empty.
     pub fn get_gpus() -> Vec<Gpu> {
+        let gpus = nvml_gpus();
+        if gpus.is_empty() {
+            proc_gpus()
+        } else {
+            gpus
+        }
+    }
+
+    /// Query via NVML. Empty if the library can't be loaded or initialised.
+    fn nvml_gpus() -> Vec<Gpu> {
         // SAFETY: loading a system shared library is inherently unsafe; we trust
         // the NVIDIA-provided library and only call documented NVML functions.
         unsafe {
@@ -161,6 +184,94 @@ mod nvidia {
             }
             gpus
         }
+    }
+
+    /// Enumerate NVIDIA GPUs from `/proc/driver/nvidia/gpus/<pci_addr>/`, the
+    /// driver's own interface, for hosts where NVML is absent.
+    ///
+    /// Only the fields that interface actually exposes are filled; everything
+    /// NVML would have supplied (memory, PCIe link, core count, compute
+    /// capability) stays `None` rather than being guessed at.
+    pub(super) fn proc_gpus() -> Vec<Gpu> {
+        let gpu_dir = Path::new("/proc/driver/nvidia/gpus");
+        if !gpu_dir.exists() {
+            return Vec::new();
+        }
+
+        let driver = std::fs::read_to_string("/proc/driver/nvidia/version")
+            .ok()
+            .and_then(|v| parse_proc_driver_version(&v));
+
+        let mut entries: Vec<PathBuf> = match std::fs::read_dir(gpu_dir) {
+            Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
+            Err(_) => return Vec::new(),
+        };
+
+        // readdir order is arbitrary; sort by PCI address so the index each GPU
+        // receives is stable across runs (it is the join key for metrics).
+        entries.sort();
+
+        let mut gpus = Vec::new();
+
+        for (index, dir) in entries.into_iter().enumerate() {
+            let Ok(contents) = std::fs::read_to_string(dir.join("information")) else {
+                continue;
+            };
+
+            let name = contents.lines().find_map(|line| {
+                line.strip_prefix("Model:")
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+            });
+
+            // The directory is named for the PCI address, e.g.
+            // /proc/driver/nvidia/gpus/0000:01:00.0/information
+            let pci_bus_id = dir
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty());
+
+            let numa_node = pci_bus_id.as_deref().and_then(|bdf| {
+                std::fs::read_to_string(format!("/sys/bus/pci/devices/{bdf}/numa_node"))
+                    .ok()
+                    .and_then(|v| v.trim().parse::<i32>().ok())
+                    .and_then(|n| (n >= 0).then_some(n as usize))
+            });
+
+            gpus.push(Gpu {
+                index,
+                vendor: "nvidia".to_string(),
+                name,
+                memory_bytes: None,
+                driver: driver.clone(),
+                pci_bus_id,
+                numa_node,
+                architecture: None,
+                pcie_gen: None,
+                pcie_width: None,
+                cores: None,
+            });
+        }
+
+        gpus
+    }
+
+    /// Pull the driver version out of `/proc/driver/nvidia/version`, whose first
+    /// line reads like:
+    ///   `NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.173.02  ...`
+    ///
+    /// Matched as "the first dotted numeric token" rather than by leading digit,
+    /// which is what the previous version did — that would have taken `64` out
+    /// of `x86_64` had the vendor string ever shifted, and silently reported it
+    /// as the driver version.
+    pub(super) fn parse_proc_driver_version(contents: &str) -> Option<String> {
+        contents.lines().next()?.split_whitespace().find_map(|w| {
+            let trimmed = w.trim_end_matches(|c: char| !c.is_ascii_digit());
+            let dotted = trimmed.split('.').count() >= 2;
+            let numeric =
+                !trimmed.is_empty() && trimmed.chars().all(|c| c.is_ascii_digit() || c == '.');
+            (dotted && numeric).then(|| trimmed.to_string())
+        })
     }
 
     unsafe fn collect(lib: &Library) -> Vec<Gpu> {
@@ -845,5 +956,69 @@ mod tests {
     fn get_gpus_does_not_panic_and_serializes() {
         let gpus = get_gpus();
         let _ = serde_json::to_string(&gpus).expect("gpus serialize");
+    }
+
+    /// The /proc fallback must agree with NVML on the facts both can see.
+    ///
+    /// Skips itself on a host with no NVIDIA driver, which is most of them —
+    /// this asserts only where there is something to assert against.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn proc_fallback_agrees_with_nvml_where_both_report() {
+        let from_proc = super::nvidia::proc_gpus();
+        if from_proc.is_empty() {
+            return; // no /proc/driver/nvidia/gpus on this host
+        }
+
+        for g in &from_proc {
+            assert_eq!(g.vendor, "nvidia");
+            // The directory name is the PCI address; it must survive as one.
+            let bdf = g
+                .pci_bus_id
+                .as_deref()
+                .expect("proc entry names a PCI address");
+            assert!(bdf.contains(':'), "not a BDF: {bdf}");
+            // Fields /proc cannot answer stay absent rather than being invented.
+            assert!(g.memory_bytes.is_none());
+            assert!(g.cores.is_none());
+        }
+
+        // Indices must be dense and ordered, since they are the join key.
+        let indices: Vec<usize> = from_proc.iter().map(|g| g.index).collect();
+        assert_eq!(indices, (0..from_proc.len()).collect::<Vec<_>>());
+
+        // Where NVML also answers, the two must describe the same devices.
+        let from_nvml = super::nvidia::get_gpus();
+        if from_nvml.iter().any(|g| g.memory_bytes.is_some()) {
+            assert_eq!(from_nvml.len(), from_proc.len());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_the_driver_version_from_proc() {
+        use super::nvidia::parse_proc_driver_version;
+
+        // The real first line from a host running the 580 driver.
+        assert_eq!(
+            parse_proc_driver_version(
+                "NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.173.02  Wed Jul  2 2025\n                 GCC version:  gcc version 13.3.0"
+            )
+            .as_deref(),
+            Some("580.173.02"),
+        );
+
+        // `x86_64` must not be mistaken for a version: it is numeric-ish and
+        // starts with a digit after the underscore, which a looser match would
+        // accept. Requiring a dotted numeric token rules it out.
+        assert_eq!(
+            parse_proc_driver_version("NVRM version: NVIDIA UNIX x86_64 Kernel Module  470.1  x")
+                .as_deref(),
+            Some("470.1"),
+        );
+
+        // Nothing version-shaped at all.
+        assert_eq!(parse_proc_driver_version("NVRM version: unknown"), None);
+        assert_eq!(parse_proc_driver_version(""), None);
     }
 }

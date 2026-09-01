@@ -125,6 +125,31 @@ pub struct GpuSummary {
     pub driver: Option<String>,
     /// NUMA node this GPU is attached to
     pub numa_node: Option<usize>,
+    /// PCI bus identifier, e.g. `0000:04:00.0`.
+    ///
+    /// Unlike `index`, this is stable across reboots and hardware changes, so
+    /// it is the identifier to join on when correlating a GPU across
+    /// recordings. Note the formats differ by source: NVML reports an 8-digit
+    /// domain (`00000000:01:00.0`) where sysfs uses four (`0000:01:00.0`), so
+    /// normalize before comparing across vendors. `None` on platforms with no
+    /// PCI (Apple).
+    pub pci_bus_id: Option<String>,
+    /// Architecture / compute capability:
+    /// - NVIDIA: compute capability, e.g. "8.0".
+    /// - AMD: LLVM target / gfx name, e.g. "gfx942".
+    /// - Intel: "integrated" or "discrete".
+    pub architecture: Option<String>,
+    /// Current PCIe link generation (1-7).
+    ///
+    /// The *current* negotiated state, not the card's maximum: power management
+    /// downshifts an idle GPU, so a gen4 x16 card commonly reads gen1 x1 at
+    /// rest. `None` for an integrated GPU, which has no PCIe link.
+    pub pcie_gen: Option<usize>,
+    /// Current PCIe link width in lanes. See `pcie_gen` on why this moves.
+    pub pcie_width: Option<usize>,
+    /// Number of compute cores: NVIDIA SM count, AMD CU count. `None` on Intel,
+    /// whose driver exposes no EU count in sysfs.
+    pub cores: Option<usize>,
 }
 
 /// Collect a cross-platform system summary.
