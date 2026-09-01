@@ -39,7 +39,9 @@ use std::time::{Duration, Instant};
 use metriken_exposition::Snapshot;
 use tracing::warn;
 
-use super::seal_policy::{stagger_bucket, SINGLE_RECORDING_KEY};
+#[cfg(test)]
+use super::seal_policy::stagger_bucket;
+use super::seal_policy::SINGLE_RECORDING_KEY;
 use super::seal_policy::{SealPolicy, SegmentAccount};
 
 use super::rez::{
@@ -49,7 +51,7 @@ use super::rez::{
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
-pub(crate) struct ManifestSeed {
+pub struct ManifestSeed {
     /// Directory holding this recording's tables inside the tar.
     pub dir: String,
     pub labels: BTreeMap<String, String>,
@@ -61,7 +63,7 @@ pub(crate) struct ManifestSeed {
 
 /// One sealed segment handed to the writer thread. The table already carries
 /// its `wall_offsets`; everything here is owned data (`Send + 'static`).
-pub(crate) struct SealJob {
+pub struct SealJob {
     pub sampler: String,
     pub table: RezTable,
 }
@@ -132,7 +134,7 @@ impl TableState {
 
 /// Handle to the writer thread. Every fallible hand-off reports the writer's
 /// stored error, in the required order: send-failure → join → report.
-pub(crate) struct RezWriterHandle {
+pub struct RezWriterHandle {
     tx: Option<SyncSender<WriterMsg>>,
     thread: Option<JoinHandle<Result<(), String>>>,
     partial: PathBuf,
@@ -141,7 +143,7 @@ pub(crate) struct RezWriterHandle {
 impl RezWriterHandle {
     /// Create `<output>.partial`, write the initial empty checkpoint manifest,
     /// and spawn the writer thread.
-    pub(crate) fn create(output: &Path, seed: ManifestSeed) -> Result<Self, String> {
+    pub fn create(output: &Path, seed: ManifestSeed) -> Result<Self, String> {
         let partial = partial_path(output)?;
         rename_aside_if_present(&partial)?;
 
@@ -209,13 +211,13 @@ impl RezWriterHandle {
 
     /// The in-progress archive's path — the recovery artifact if this recording
     /// never finalizes.
-    pub(crate) fn partial_path(&self) -> &Path {
+    pub fn partial_path(&self) -> &Path {
         &self.partial
     }
 
     /// Hand one seal batch (= one checkpoint) to the writer. Blocks while the
     /// channel is full: that is the intended backpressure signal.
-    pub(crate) fn seal(&mut self, batch: Vec<SealJob>) -> Result<(), String> {
+    pub fn seal(&mut self, batch: Vec<SealJob>) -> Result<(), String> {
         if batch.is_empty() {
             // An empty batch is the common case — nothing is due most ticks —
             // but returning `Ok` unconditionally means writer health is only
@@ -239,11 +241,7 @@ impl RezWriterHandle {
 
     /// Seal the tails, write the final manifest and tar footer, rename the
     /// `.partial` into place.
-    pub(crate) fn finalize(
-        mut self,
-        tails: Vec<SealJob>,
-        clock_offset: (u64, i64),
-    ) -> Result<(), String> {
+    pub fn finalize(mut self, tails: Vec<SealJob>, clock_offset: (u64, i64)) -> Result<(), String> {
         self.send(WriterMsg::Finalize {
             tails,
             clock_offset,
@@ -252,7 +250,7 @@ impl RezWriterHandle {
     }
 
     /// Give up on the recording: stop the writer and unlink the `.partial`.
-    pub(crate) fn abort(mut self) {
+    pub fn abort(mut self) {
         if let Err(e) = self.join() {
             warn!("the .rez writer failed before the recording was aborted: {e}");
         }
@@ -544,13 +542,13 @@ fn writer_thread(
 /// writers differ only in what they build out of a sealed `TableBuilder`, and
 /// widening the fields to share the rest is what let the `due` predicate get
 /// copied in the first place.
-pub(crate) struct BuilderState {
+pub struct BuilderState {
     builder: TableBuilder,
     account: SegmentAccount,
 }
 
 impl BuilderState {
-    pub(crate) fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
+    pub fn open_first(sampler: &str, policy: &SealPolicy) -> Self {
         Self {
             builder: TableBuilder::new(sampler.to_string()),
             // The V1/V2 writer holds exactly one recording per archive — a tar
@@ -563,7 +561,7 @@ impl BuilderState {
     }
 
     /// Append one row to the open segment, and account it.
-    pub(crate) fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+    pub fn push_row(&mut self, ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
         self.builder.push_row(ts, wall_offset_ns, entries);
         self.account.add_row(entries_approx_bytes(entries));
     }
@@ -581,19 +579,19 @@ impl BuilderState {
 
     /// The final partial segment, or `None` when there is nothing to seal.
     /// Consuming, because a recorder only asks this while finalizing.
-    pub(crate) fn into_tail(self) -> Option<TableBuilder> {
+    pub fn into_tail(self) -> Option<TableBuilder> {
         (self.builder.rows() > 0).then_some(self.builder)
     }
 
     /// Rows in the open segment.
     #[cfg(test)]
-    pub(crate) fn open_rows(&self) -> usize {
+    pub fn open_rows(&self) -> usize {
         self.builder.rows()
     }
 
     /// The row and age targets the *current* open segment seals at.
     #[cfg(test)]
-    pub(crate) fn targets(&self) -> (usize, Duration) {
+    pub fn targets(&self) -> (usize, Duration) {
         self.account.targets()
     }
 }
@@ -607,7 +605,7 @@ impl BuilderState {
 /// lines are all the two ingest paths do differently — everything that could
 /// drift, the `due` predicate and the `mem::replace` rotation that carries
 /// `last_key` forward by leaving it outside the builder, is shared.
-pub(crate) fn drain_due(
+pub fn drain_due(
     builders: &mut BTreeMap<String, BuilderState>,
     policy: &SealPolicy,
 ) -> Vec<(String, TableBuilder)> {
@@ -623,7 +621,7 @@ pub(crate) fn drain_due(
 }
 
 /// The scrape-side half: per-sampler open segments plus the seal decision.
-pub(crate) struct StreamRecorder {
+pub struct StreamRecorder {
     /// Open segment per sampler: builder, open instant, and current targets.
     builders: BTreeMap<String, BuilderState>,
     /// Window-advance dedup keys. Held here, not on the builder, so dedup
@@ -635,11 +633,11 @@ pub(crate) struct StreamRecorder {
 }
 
 impl StreamRecorder {
-    pub(crate) fn new(handle: RezWriterHandle) -> Self {
+    pub fn new(handle: RezWriterHandle) -> Self {
         Self::with_policy(handle, SealPolicy::default())
     }
 
-    pub(crate) fn with_policy(handle: RezWriterHandle, policy: SealPolicy) -> Self {
+    pub fn with_policy(handle: RezWriterHandle, policy: SealPolicy) -> Self {
         Self {
             builders: BTreeMap::new(),
             last_keys: BTreeMap::new(),
@@ -651,7 +649,7 @@ impl StreamRecorder {
     /// Append one scraped snapshot: partition by sampler and, for each sampler
     /// whose representative acquisition window advanced, push a row stamped
     /// `anchored_ts` with this tick's `wall_offset_ns` observation.
-    pub(crate) fn ingest(&mut self, snapshot: &Snapshot, anchored_ts: u64, wall_offset_ns: i64) {
+    pub fn ingest(&mut self, snapshot: &Snapshot, anchored_ts: u64, wall_offset_ns: i64) {
         for (sampler, entries) in group_by_sampler(snapshot) {
             let key = dedup_key(&entries, anchored_ts);
             if let Some(&last) = self.last_keys.get(sampler) {
@@ -675,7 +673,7 @@ impl StreamRecorder {
     /// Call this every loop iteration, scrape or not: an unreachable endpoint
     /// must still get its pre-outage rows sealed, or the kill-loss window is no
     /// longer bounded in time.
-    pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
+    pub fn maybe_seal(&mut self) -> Result<(), String> {
         let batch = drain_due(&mut self.builders, &self.policy)
             .into_iter()
             .map(|(sampler, builder)| SealJob {
@@ -688,7 +686,7 @@ impl StreamRecorder {
 
     /// Seal the remaining partial segments (small by construction) and finalize
     /// the archive.
-    pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
+    pub fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<SealJob> = std::mem::take(&mut self.builders)
             .into_iter()
             .filter_map(|(sampler, state)| {
@@ -702,7 +700,7 @@ impl StreamRecorder {
     }
 
     /// Give up on the recording: stop the writer and unlink the `.partial`.
-    pub(crate) fn abort(self) {
+    pub fn abort(self) {
         self.handle.abort();
     }
 
@@ -731,8 +729,8 @@ impl StreamRecorder {
 /// cleanly finalized, `complete` recording), `false` drops the writer and
 /// leaves the recoverable `<out>.partial` (an incomplete recording). Returns
 /// the path that now exists.
-#[cfg(test)]
-pub(crate) fn write_segmented_rez(
+#[cfg(any(test, feature = "test-support"))]
+pub fn write_segmented_rez(
     out: &Path,
     dir: &str,
     labels: BTreeMap<String, String>,
@@ -741,7 +739,7 @@ pub(crate) fn write_segmented_rez(
     max_rows: usize,
     finalize: bool,
 ) -> PathBuf {
-    use crate::recorder::rez::recorder_tests_support::{counter, snap};
+    use crate::rez::recorder_tests_support::{counter, snap};
     use metriken::Window;
 
     let seed = ManifestSeed {
@@ -788,8 +786,8 @@ pub(crate) fn write_segmented_rez(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::rez::recorder_tests_support::{counter, snap};
-    use crate::recorder::rez::{Entry, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
+    use crate::rez::recorder_tests_support::{counter, snap};
+    use crate::rez::{Entry, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
     use metriken::Window;
     use std::io::Read;
 
@@ -883,9 +881,9 @@ mod tests {
         let handle = RezWriterHandle::create(&out, seed()).unwrap();
         assert!(partial.exists(), "the .partial is created up front");
         assert!(!out.exists(), "the output appears only on clean finalize");
-        assert!(crate::recorder::rez::is_rez_path(&partial).unwrap());
+        assert!(crate::rez::is_rez_path(&partial).unwrap());
 
-        let (manifest, recordings) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        let (manifest, recordings) = crate::rez::read_archive_bytes(&partial).unwrap();
         assert_eq!(manifest.version, 2);
         assert_eq!(manifest.recordings.len(), 1);
         let rec = &manifest.recordings[0];
@@ -942,7 +940,7 @@ mod tests {
         assert_eq!(manifests[1].recordings[0].tables[0].rows, 3);
         assert_eq!(manifests[2].recordings[0].tables[0].rows, 5);
 
-        let (manifest, recordings) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let (manifest, recordings) = crate::rez::read_archive_bytes(&out).unwrap();
         assert_eq!(manifest.version, 2);
         let rec = &manifest.recordings[0];
         assert!(rec.complete, "finalize marks the recording complete");
@@ -1035,7 +1033,7 @@ mod tests {
 
         // Exit-on-first-error: nothing the writer accepted after the failure
         // reached the archive, and the output was never produced.
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(&partial).unwrap();
         assert!(
             manifest.recordings[0].tables.is_empty(),
             "the writer stopped at the first error"
@@ -1141,7 +1139,7 @@ mod tests {
         let mut recovered_counts: Vec<usize> = Vec::new();
         for cut in cuts {
             std::fs::write(&cut_path, &bytes[..cut]).unwrap();
-            match crate::recorder::rez::read_archive_bytes(&cut_path) {
+            match crate::rez::read_archive_bytes(&cut_path) {
                 Ok((manifest, recordings)) => {
                     first_ok.get_or_insert(cut);
                     let rec = &manifest.recordings[0];
@@ -1187,7 +1185,7 @@ mod tests {
         );
 
         // The untruncated `.partial` still carries every sealed segment.
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(&partial).unwrap();
         let named: usize = manifest.recordings[0]
             .tables
             .iter()
@@ -1213,7 +1211,7 @@ mod tests {
         drop(handle);
 
         assert!(!out.exists(), "no output without a clean finalize");
-        let (manifest, recordings) = crate::recorder::rez::read_archive_bytes(&partial).unwrap();
+        let (manifest, recordings) = crate::rez::read_archive_bytes(&partial).unwrap();
         let rec = &manifest.recordings[0];
         assert!(!rec.complete, "recovered recordings are not complete");
         assert_eq!(rec.tables.len(), 1);
@@ -1248,7 +1246,7 @@ mod tests {
         let handle = RezWriterHandle::create(&out, seed()).unwrap();
         let aside = dir.path().join("out.rez.partial.recovered-0");
         assert_eq!(std::fs::read(&aside).unwrap(), b"old recoverable bytes");
-        assert!(crate::recorder::rez::is_rez_path(&partial).unwrap());
+        assert!(crate::rez::is_rez_path(&partial).unwrap());
         handle.abort();
 
         // A second collision picks the next free suffix.
@@ -1327,7 +1325,7 @@ mod tests {
         rec.maybe_seal().unwrap();
         rec.finalize((ts, 0)).unwrap();
 
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(&out).unwrap();
         let idx = &manifest.recordings[0].tables[0];
         assert_eq!(idx.rows, 5, "5 distinct observations, the 6th deduped");
         assert_eq!(idx.files.len(), 3, "ceil(5 / 2) segments");
@@ -1369,7 +1367,7 @@ mod tests {
         rec.ingest(&s, ts, 0);
         rec.finalize((ts, 0)).unwrap();
 
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(&out).unwrap();
         let idx = &manifest.recordings[0].tables[0];
         assert_eq!(idx.files.len(), 2);
         assert_eq!(idx.rows, 2);
@@ -1574,7 +1572,7 @@ mod tests {
         }
         rec.finalize((ts, 0)).unwrap();
 
-        let (manifest, _) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let (manifest, _) = crate::rez::read_archive_bytes(&out).unwrap();
         let idx = &manifest.recordings[0].tables[0];
         assert_eq!(idx.files.len(), 1, "empty builders never seal");
         assert_eq!(idx.rows, 1);
@@ -1588,7 +1586,7 @@ mod tests {
         let rec = StreamRecorder::new(handle);
         rec.finalize((1, 0)).unwrap();
 
-        let (manifest, recordings) = crate::recorder::rez::read_archive_bytes(&out).unwrap();
+        let (manifest, recordings) = crate::rez::read_archive_bytes(&out).unwrap();
         assert!(manifest.recordings[0].tables.is_empty());
         assert!(manifest.recordings[0].complete);
         assert!(recordings[0].tables.is_empty());

@@ -52,7 +52,7 @@ use super::seal_policy::{SealPolicy, SegmentAccount};
 /// than reintroduce the field. A/B aliasing is NOT affected: both viewer paths
 /// alias baseline/experiment on `arm`/`host` labels only, and `labels` survives
 /// verbatim in the `recordings` row.
-pub(crate) type ManifestSeed = RecordingMeta;
+pub type ManifestSeed = RecordingMeta;
 
 enum Msg {
     /// Insert a `recordings` row and hand its id back.
@@ -99,7 +99,7 @@ enum Msg {
     Shutdown,
     /// Reply once everything queued ahead of this has been committed. Carries
     /// no data and changes nothing — see [`RecordingWriter::sync`].
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Sync(SyncSender<()>),
 }
 
@@ -130,7 +130,7 @@ const RECLAIM_FREELIST_DIVISOR: u32 = 10;
 
 /// Handle to the writer thread. Every fallible hand-off reports the writer's
 /// stored error, in the required order: send-failure → join → report.
-pub(crate) struct RezArchive {
+pub struct RezArchive {
     /// The master sender. Kept only to clone per-recording handles from, and
     /// dropped by `join` so the writer's channel can actually close.
     tx: Option<SyncSender<Msg>>,
@@ -149,7 +149,7 @@ impl RezArchive {
     /// an early-killed recording is just a recording whose `complete` is 0.
     ///
     /// The archive holds no recordings yet; add each with `add_recording`.
-    pub(crate) fn create(path: &Path) -> Result<Self, String> {
+    pub fn create(path: &Path) -> Result<Self, String> {
         let db = RezDb::create(path)?;
 
         // Bound 1, as in v2: the hand-off blocks while the writer is busy,
@@ -183,9 +183,9 @@ impl RezArchive {
     /// label-tagged `recordings` list — and they are independent: each has its
     /// own segment sequences, its own clock-offset series, and its own
     /// `complete` flag.
-    pub(crate) fn add_recording(&mut self, seed: ManifestSeed) -> Result<RecordingWriter, String> {
+    pub fn add_recording(&mut self, seed: ManifestSeed) -> Result<RecordingWriter, String> {
         // Derived before the seed is sent, since the seed moves.
-        let stagger_key = crate::recorder::seal_policy::recording_stagger_key(&seed.labels);
+        let stagger_key = crate::seal_policy::recording_stagger_key(&seed.labels);
         let Some(tx) = self.tx.as_ref() else {
             return Err("the .rez writer thread has already been joined".to_string());
         };
@@ -214,7 +214,7 @@ impl RezArchive {
     }
 
     /// The archive being written — valid and readable while it is written.
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
@@ -228,7 +228,7 @@ impl RezArchive {
     /// distinction is load-bearing: the guarantee lives in `Msg::Shutdown`, not
     /// in the drop order, and removing it would turn every "must drop first"
     /// note in this file into a real deadlock.
-    pub(crate) fn join(&mut self) -> Result<(), String> {
+    pub fn join(&mut self) -> Result<(), String> {
         // Tell the writer to stop before releasing our own sender. A handle
         // that outlived its archive still holds a clone, so waiting for the
         // channel to close on its own could wait forever; `Shutdown` ends the
@@ -268,7 +268,7 @@ impl RezArchive {
     /// thread, so anything that reads the file straight afterwards has to join
     /// too. Mirrors `RezStream::finalize` in the recorder.
     #[cfg(test)]
-    pub(crate) fn finalize_single(
+    pub fn finalize_single(
         mut self,
         writer: RecordingWriter,
         clock_offset: (u64, i64),
@@ -280,8 +280,8 @@ impl RezArchive {
 
     /// As `finalize_single`, but for a caller holding the `StreamRecorderV3`
     /// (which owns the handle) rather than a bare `RecordingWriter`.
-    #[cfg(test)]
-    pub(crate) fn finalize_single_rec(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn finalize_single_rec(
         mut self,
         rec: StreamRecorderV3,
         clock_offset: (u64, i64),
@@ -291,11 +291,8 @@ impl RezArchive {
         queued.and(joined)
     }
 
-    #[cfg(test)]
-    pub(crate) fn single(
-        path: &Path,
-        seed: ManifestSeed,
-    ) -> Result<(Self, RecordingWriter), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn single(path: &Path, seed: ManifestSeed) -> Result<(Self, RecordingWriter), String> {
         let mut archive = Self::create(path)?;
         let writer = archive.add_recording(seed)?;
         Ok((archive, writer))
@@ -318,7 +315,7 @@ impl Drop for RezArchive {
 /// Cheap and cloneable-in-spirit: it is a sender plus an id. Dropping it
 /// releases this recording's claim on the writer; the thread exits once every
 /// handle *and* the archive's master sender are gone.
-pub(crate) struct RecordingWriter {
+pub struct RecordingWriter {
     tx: SyncSender<Msg>,
     recording_id: i64,
     /// This recording's stagger identity — its canonical label set. Held here
@@ -339,24 +336,24 @@ impl RecordingWriter {
     /// uses: the recorder asks the archive directly. Kept because a recorder
     /// naming its own output is the obvious thing to want.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// The `recordings` row this handle appends to.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn recording_id(&self) -> i64 {
+    pub fn recording_id(&self) -> i64 {
         self.recording_id
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     /// This recording's stagger identity — see `stagger_bucket`.
-    pub(crate) fn stagger_key(&self) -> &str {
+    pub fn stagger_key(&self) -> &str {
         &self.stagger_key
     }
 
     /// Hand one tick's WAL rows to the writer.
-    pub(crate) fn wal(&mut self, rows: Vec<WalRow>) -> Result<(), String> {
+    pub fn wal(&mut self, rows: Vec<WalRow>) -> Result<(), String> {
         if rows.is_empty() {
             return self.check_alive();
         }
@@ -369,7 +366,7 @@ impl RecordingWriter {
     /// Hand one seal batch (= one transaction) to the writer, as the samplers
     /// to seal. Blocks while the channel is full: that is the intended
     /// backpressure signal.
-    pub(crate) fn seal(&mut self, batch: Vec<String>) -> Result<(), String> {
+    pub fn seal(&mut self, batch: Vec<String>) -> Result<(), String> {
         if batch.is_empty() {
             return self.check_alive();
         }
@@ -390,7 +387,7 @@ impl RecordingWriter {
     ///
     /// Fire-and-forget, like `wal` and `seal`: a failure surfaces on the next
     /// hand-off, which is the convention the whole writer follows.
-    pub(crate) fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
+    pub fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
         self.send(Msg::Evict {
             recording_id: self.recording_id,
             cutoff_ts,
@@ -422,8 +419,8 @@ impl RecordingWriter {
     /// inherent to an asynchronous writer and harmless. Tests do assert it, and
     /// without a barrier they race the writer. Give this a `cfg`-free home the
     /// moment a real caller needs to see its own last tick.
-    #[cfg(test)]
-    pub(crate) fn sync(&mut self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn sync(&mut self) -> Result<(), String> {
         let (tx, rx) = sync_channel(0);
         self.send(Msg::Sync(tx))?;
         let _ = rx.recv();
@@ -435,7 +432,7 @@ impl RecordingWriter {
     /// Consumes the handle, which is what releases its sender: the writer
     /// thread ends when the last handle and the archive's master sender are
     /// gone, so a handle kept alive past its finalize would stall the join.
-    pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
+    pub fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         self.send(Msg::Finalize {
             recording_id: self.recording_id,
             clock_offset,
@@ -527,7 +524,7 @@ fn writer_loop(rx: &Receiver<Msg>, db: &mut RezDb) -> Result<(), String> {
         match rx.recv() {
             // Nothing to do but answer: arriving here at all means every
             // message queued before it has already been handled.
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Ok(Msg::Sync(reply)) => {
                 let _ = reply.send(());
             }
@@ -785,7 +782,7 @@ fn seal_batch(
 /// as `[index, payload]`, so these field names cost nothing on the wire and are
 /// chosen for readability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct WalCell {
+pub struct WalCell {
     /// The snapshot entry's name — the segment's column key (`"5"`, `"5x3"`).
     /// Numeric-id strings of a few bytes, so carrying one per cell per tick is
     /// noise next to the value; dropping them and relying on positional order
@@ -839,7 +836,7 @@ pub(crate) struct WalCell {
 /// A cell's value, tagged by shape — which is also what tells a reader which
 /// `RezValues` column the cell belongs in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) enum WalValue {
+pub enum WalValue {
     Counter(u64),
     Gauge(i64),
     /// `(grouping_power, max_value_power, buckets)`. The H2 config travels with
@@ -972,7 +969,7 @@ fn materialize_sampler_wal_tail(
 /// they read; duplicating it here would just be a second place for it to
 /// drift from the one that is actually used.
 #[derive(Debug, PartialEq)]
-pub(crate) struct MaterializedTail {
+pub struct MaterializedTail {
     pub bytes: Vec<u8>,
     pub rows: u64,
     pub first_ts: u64,
@@ -1004,7 +1001,7 @@ pub(crate) struct MaterializedTail {
 /// `no_registered_sampler_name_contains_a_slash` pinning the invariant
 /// against every registered `SAMPLERS` entry; the structural non-aliasing
 /// above is the release-build backstop if that is ever violated anyway.
-pub(crate) fn is_group_table_key(table_key: &str) -> bool {
+pub fn is_group_table_key(table_key: &str) -> bool {
     table_key.contains('/')
 }
 
@@ -1017,7 +1014,7 @@ pub(crate) fn is_group_table_key(table_key: &str) -> bool {
 /// writing) call this — neither has access to `StreamRecorderV3`'s in-memory
 /// schema cache, which is why a V3 group's WAL rows must be self-sufficient
 /// (see [`WalGroupRow`]).
-pub(crate) fn materialize_wal_tail(
+pub fn materialize_wal_tail(
     table_key: &str,
     rows: &[WalRow],
 ) -> Result<Option<MaterializedTail>, Box<dyn std::error::Error>> {
@@ -1045,7 +1042,7 @@ pub(crate) fn materialize_wal_tail(
 /// external schema cache — required because both the writer thread and a
 /// fresh reader process call it (see `materialize_wal_tail`'s doc).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct WalGroupRow {
+pub struct WalGroupRow {
     /// Which schema (by content hash) these values align with.
     pub schema_hash: (u64, u64),
     /// The schema itself, present only on the row that (re-)anchors it —
@@ -1060,12 +1057,12 @@ pub(crate) struct WalGroupRow {
     pub histograms: Vec<Option<(u8, u8, Vec<u64>)>>,
 }
 
-pub(crate) fn encode_wal_group_row(row: &WalGroupRow) -> Result<Vec<u8>, String> {
+pub fn encode_wal_group_row(row: &WalGroupRow) -> Result<Vec<u8>, String> {
     rmp_serde::to_vec(row).map_err(|e| format!("failed to encode a group WAL row: {e}"))
 }
 
 /// The inverse of [`encode_wal_group_row`].
-pub(crate) fn decode_wal_group_row(bytes: &[u8]) -> Result<WalGroupRow, String> {
+pub fn decode_wal_group_row(bytes: &[u8]) -> Result<WalGroupRow, String> {
     rmp_serde::from_slice(bytes).map_err(|e| format!("failed to decode a group WAL row: {e}"))
 }
 
@@ -1164,12 +1161,12 @@ fn materialize_group_wal_tail(
 }
 
 // Encode one sampler's cells for one tick into a `wal.row` BLOB.
-pub(crate) fn encode_wal_row(cells: &[WalCell]) -> Result<Vec<u8>, String> {
+pub fn encode_wal_row(cells: &[WalCell]) -> Result<Vec<u8>, String> {
     rmp_serde::to_vec(cells).map_err(|e| format!("failed to encode a WAL row: {e}"))
 }
 
 /// The inverse of [`encode_wal_row`] — the recovery entry point.
-pub(crate) fn decode_wal_row(bytes: &[u8]) -> Result<Vec<WalCell>, String> {
+pub fn decode_wal_row(bytes: &[u8]) -> Result<Vec<WalCell>, String> {
     rmp_serde::from_slice(bytes).map_err(|e| format!("failed to decode a WAL row: {e}"))
 }
 
@@ -1187,7 +1184,7 @@ pub(crate) fn decode_wal_row(bytes: &[u8]) -> Result<Vec<WalCell>, String> {
 /// of 26 tables recovered nothing at all because they had not sealed yet. Here
 /// every tick is committed as it arrives, for quiet tables as much as busy
 /// ones, so an unclean kill costs one tick rather than a whole open segment.
-pub(crate) struct StreamRecorderV3 {
+pub struct StreamRecorderV3 {
     /// Open segment per sampler — the seal decision's inputs, and no rows.
     ///
     /// **The rows live in the WAL and nowhere else.** v2 keeps a parallel
@@ -1253,7 +1250,7 @@ pub(crate) struct StreamRecorderV3 {
 /// or references an unknown hash with no schema attached, affects neither —
 /// it is an error, not a cache event.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SchemaCacheStats {
+pub struct SchemaCacheStats {
     pub hits: u64,
     pub misses: u64,
 }
@@ -1271,11 +1268,11 @@ const SCHEMA_RING_LEN: usize = 3;
 type SchemaRing = std::collections::VecDeque<((u64, u64), Arc<GroupSchema>)>;
 
 impl StreamRecorderV3 {
-    pub(crate) fn new(handle: RecordingWriter) -> Self {
+    pub fn new(handle: RecordingWriter) -> Self {
         Self::with_policy(handle, SealPolicy::default())
     }
 
-    pub(crate) fn with_policy(handle: RecordingWriter, policy: SealPolicy) -> Self {
+    pub fn with_policy(handle: RecordingWriter, policy: SealPolicy) -> Self {
         Self {
             accounts: BTreeMap::new(),
             last_keys: BTreeMap::new(),
@@ -1296,13 +1293,13 @@ impl StreamRecorderV3 {
     /// archive now backs several recorders and the path is a property of the
     /// archive rather than of any one recording.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         self.handle.path()
     }
 
     /// V3 schema-hash cache hit/miss counts so far — see [`SchemaCacheStats`].
     #[cfg(test)]
-    pub(crate) fn schema_cache_stats(&self) -> SchemaCacheStats {
+    pub fn schema_cache_stats(&self) -> SchemaCacheStats {
         self.schema_stats
     }
 
@@ -1328,7 +1325,7 @@ impl StreamRecorderV3 {
     /// return `Ok` for the tick that ultimately kills the writer, and the error
     /// surfaces on a later hand-off. That is inherent to the writer thread and
     /// is why `maybe_seal` polls health even with nothing to seal.
-    pub(crate) fn ingest(
+    pub fn ingest(
         &mut self,
         snapshot: &Snapshot,
         anchored_ts: u64,
@@ -1689,7 +1686,7 @@ impl StreamRecorderV3 {
     /// message is committed before it is read, and every row after it is not
     /// yet visible to `live_wal`'s watermark. The segment therefore covers
     /// exactly the rows this decision was made about.
-    pub(crate) fn maybe_seal(&mut self) -> Result<(), String> {
+    pub fn maybe_seal(&mut self) -> Result<(), String> {
         let now = Instant::now();
         let mut batch = Vec::new();
         for (sampler, account) in self.accounts.iter_mut() {
@@ -1718,15 +1715,15 @@ impl StreamRecorderV3 {
     /// — but hindsight is the same writer with retention configured, and this
     /// is the configuration. Call it AFTER `maybe_seal`, so a segment closed
     /// this tick is catalogued before the cutoff is applied to it.
-    pub(crate) fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
+    pub fn evict_before(&mut self, cutoff_ts: u64) -> Result<(), String> {
         self.handle.evict_before(cutoff_ts)
     }
 
     /// Block until the writer has committed everything handed off so far; see
     /// [`RecordingWriter::sync`]. Needed before reading the file through a second
     /// connection, which otherwise sees the state from before the last tick.
-    #[cfg(test)]
-    pub(crate) fn sync(&mut self) -> Result<(), String> {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn sync(&mut self) -> Result<(), String> {
         self.handle.sync()
     }
 
@@ -1737,7 +1734,7 @@ impl StreamRecorderV3 {
     /// reader can materialize that tail: a cleanly finished recording should be
     /// segments and nothing else, so the WAL is left empty and no consumer pays
     /// for a replay it does not need.
-    pub(crate) fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
+    pub fn finalize(mut self, clock_offset: (u64, i64)) -> Result<(), String> {
         let tails: Vec<String> = std::mem::take(&mut self.accounts)
             .into_iter()
             .filter(|(_, account)| account.rows() > 0)
@@ -1766,8 +1763,8 @@ impl StreamRecorderV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recorder::rez::recorder_tests_support::counter;
-    use crate::recorder::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
+    use crate::rez::recorder_tests_support::counter;
+    use crate::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
     use metriken::Window;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
@@ -2382,7 +2379,7 @@ mod tests {
         // noise (steady state, where it would be pure cost), and it must be
         // BOUNDED when it does run, so a shrink cannot put a multi-second
         // reclaim on a tick.
-        use crate::recorder::rez_sqlite::RecordingMeta;
+        use crate::rez_sqlite::RecordingMeta;
 
         let dir = tempfile::tempdir().unwrap();
         let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
@@ -2470,7 +2467,7 @@ mod tests {
     // `StreamRecorderV3` — the ingest side.
     // ---------------------------------------------------------------------
 
-    use crate::recorder::rez::recorder_tests_support::snap;
+    use crate::rez::recorder_tests_support::snap;
     use metriken_exposition::{Counter, Gauge, Histogram as ExpHistogram, Snapshot, SnapshotV2};
     use std::collections::HashMap;
     use std::time::{Duration, SystemTime};
@@ -2842,8 +2839,7 @@ mod tests {
     /// stored parquet BLOB.
     fn segment_unit(bytes: &[u8]) -> String {
         let table =
-            crate::recorder::rez::read_table_parquet("cpu_usage".to_string(), bytes.to_vec())
-                .unwrap();
+            crate::rez::read_table_parquet("cpu_usage".to_string(), bytes.to_vec()).unwrap();
         table
             .columns
             .iter()
@@ -3297,7 +3293,7 @@ mod tests {
             );
 
             // And the emitted window values decode back to the group's window.
-            let table = crate::recorder::rez::read_table_parquet(
+            let table = crate::rez::read_table_parquet(
                 "cpu_usage/percpu".to_string(),
                 segs[0].bytes.clone(),
             )
@@ -3523,7 +3519,7 @@ mod tests {
             let mut selected: Vec<&str> = all
                 .iter()
                 .map(String::as_str)
-                .filter(|t| crate::recorder::rez::table_sampler(t) == "cpu_usage")
+                .filter(|t| crate::rez::table_sampler(t) == "cpu_usage")
                 .collect();
             selected.sort();
             assert_eq!(selected, vec!["cpu_usage/aggregate", "cpu_usage/percpu"]);
@@ -3584,11 +3580,8 @@ mod tests {
                 "the catalog extent must reflect the ONE row that materialized \
                  (ts=2_000), not the raw WAL span's rows=2/first_ts=1_000"
             );
-            let table = crate::recorder::rez::read_table_parquet(
-                "cpu_usage/percpu".to_string(),
-                tail.bytes,
-            )
-            .unwrap();
+            let table =
+                crate::rez::read_table_parquet("cpu_usage/percpu".to_string(), tail.bytes).unwrap();
             assert_eq!(
                 table.timestamps,
                 vec![2_000],
@@ -3706,11 +3699,8 @@ mod tests {
                  (ts=1_200, tick 3's self-anchored row), not the raw live_wal \
                  span's rows=2/first_ts=1_100"
             );
-            let table = crate::recorder::rez::read_table_parquet(
-                "cpu_usage/percpu".to_string(),
-                tail.bytes,
-            )
-            .unwrap();
+            let table =
+                crate::rez::read_table_parquet("cpu_usage/percpu".to_string(), tail.bytes).unwrap();
             assert_eq!(
                 table.timestamps,
                 vec![1_200],

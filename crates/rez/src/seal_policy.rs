@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 /// `[0, STAGGER_BUCKETS)`, i.e. somewhere in `[max_rows / 2, max_rows]`. 64
 /// buckets is ample spread for a dozen tables, and capping the reduction at
 /// 50% bounds the startup cost to one short segment per sampler.
-pub(crate) const STAGGER_BUCKETS: u64 = 64;
+pub const STAGGER_BUCKETS: u64 = 64;
 
 /// The stagger identity of a writer that can only ever hold one recording.
 ///
@@ -25,7 +25,7 @@ pub(crate) const STAGGER_BUCKETS: u64 = 64;
 /// builder for the reader and `parquet_tools` tests, and nothing in the bin's
 /// live path constructs one any more.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const SINGLE_RECORDING_KEY: &str = "";
+pub const SINGLE_RECORDING_KEY: &str = "";
 
 /// When an open segment is due to be sealed. Byte-first: the byte cap is the
 /// one that bounds both the builder's memory footprint and the encoder's input,
@@ -36,7 +36,7 @@ pub(crate) const SINGLE_RECORDING_KEY: &str = "";
 /// open segment is naturally tiny — so age sealing only bounds how much data an
 /// unclean kill loses. It is also what drives segment count, so the trade (loss
 /// window vs segments and read-time merge width) is deliberate.
-pub(crate) struct SealPolicy {
+pub struct SealPolicy {
     pub max_bytes: usize,
     pub max_rows: usize,
     pub max_age: Duration,
@@ -94,7 +94,7 @@ impl Default for SealPolicy {
 /// at the same row from the same input, which they do by both deciding here —
 /// the alternative is two copies of a four-term predicate drifting apart in a
 /// way that only shows up as differently-shaped archives.
-pub(crate) struct SegmentAccount {
+pub struct SegmentAccount {
     rows: usize,
     approx_bytes: usize,
     /// Instant the current segment was opened (the age bound's origin).
@@ -125,7 +125,7 @@ impl SegmentAccount {
     /// over the tick budget. Shortening only the first segment desyncs the
     /// tables for the life of the recording while leaving steady-state segment
     /// size and count untouched — `rotate` restores the full policy.
-    pub(crate) fn open_first(sampler: &str, recording_key: &str, policy: &SealPolicy) -> Self {
+    pub fn open_first(sampler: &str, recording_key: &str, policy: &SealPolicy) -> Self {
         let bucket = stagger_bucket(sampler, recording_key);
         // Divide before multiplying: `max_rows` is `usize::MAX` in several
         // callers, and `max_rows * bucket` would overflow.
@@ -148,7 +148,7 @@ impl SegmentAccount {
 
     /// Account one appended row. `bytes` is [`entries_approx_bytes`] of that
     /// row, which is exactly what `TableBuilder::push_row` would have charged.
-    pub(crate) fn add_row(&mut self, bytes: usize) {
+    pub fn add_row(&mut self, bytes: usize) {
         self.rows += 1;
         self.approx_bytes += bytes;
     }
@@ -160,7 +160,7 @@ impl SegmentAccount {
     /// because all three are staggered on the first segment and `rotate`
     /// restores them. Reading `policy.max_bytes` here instead is what let the
     /// byte cap escape the stagger.
-    pub(crate) fn is_due(&self, now: Instant) -> bool {
+    pub fn is_due(&self, now: Instant) -> bool {
         self.rows > 0
             && (self.approx_bytes >= self.max_bytes
                 || self.rows >= self.max_rows
@@ -169,7 +169,7 @@ impl SegmentAccount {
 
     /// Reset onto a fresh segment after a seal, dropping the startup stagger:
     /// every segment after the first uses the full policy.
-    pub(crate) fn rotate(&mut self, policy: &SealPolicy, now: Instant) {
+    pub fn rotate(&mut self, policy: &SealPolicy, now: Instant) {
         self.rows = 0;
         self.approx_bytes = 0;
         self.opened_at = now;
@@ -179,19 +179,19 @@ impl SegmentAccount {
     }
 
     /// Rows in the open segment.
-    pub(crate) fn rows(&self) -> usize {
+    pub fn rows(&self) -> usize {
         self.rows
     }
 
     /// The row and age targets the *current* open segment seals at.
     #[cfg(test)]
-    pub(crate) fn targets(&self) -> (usize, Duration) {
+    pub fn targets(&self) -> (usize, Duration) {
         (self.max_rows, self.max_age)
     }
 
     /// This segment's byte cap, after the first-segment stagger.
     #[cfg(test)]
-    pub(crate) fn byte_target(&self) -> usize {
+    pub fn byte_target(&self) -> usize {
         self.max_bytes
     }
 }
@@ -226,7 +226,7 @@ impl SegmentAccount {
 /// the degenerate case — the operator gave two endpoints nothing to tell them
 /// apart — and the answer is to warn rather than to fold in the id and
 /// reintroduce order-dependence.
-pub(crate) fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
+pub fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
     const PRIME: u64 = 0x0000_0100_0000_01b3; // FNV-1a 64-bit prime
 
     // Absorb one byte, twice: the byte itself, then the two bits the final
@@ -279,7 +279,7 @@ pub(crate) fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
 ///
 /// `BTreeMap` already fixes the order, so this is just a rendering — but it is
 /// done in one place so the writer and any test agree on the exact bytes.
-pub(crate) fn recording_stagger_key(labels: &std::collections::BTreeMap<String, String>) -> String {
+pub fn recording_stagger_key(labels: &std::collections::BTreeMap<String, String>) -> String {
     let mut out = String::new();
     for (k, v) in labels {
         if !out.is_empty() {

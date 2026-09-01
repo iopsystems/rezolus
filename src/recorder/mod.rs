@@ -4,19 +4,28 @@ mod child;
 mod config;
 mod endpoint;
 mod prometheus;
-pub(crate) mod rez;
-pub(crate) mod rez_sqlite;
+// The `.rez` format lives in its own crate so the WASM viewer can read the
+// archives this binary writes (`rezolus` is binary-only, so nothing could
+// depend on it). Re-exported under the paths call sites already use.
 /// The tar (v1/v2) `.rez` writer, kept only so tests can build v1/v2 fixtures.
 ///
 /// Nothing ships that writes this container any more: `record` writes v3, and
 /// `combine`/`filter`/`annotate`/`parquet upgrade` convert a tar archive
 /// rather than producing one. Proving that tar archives still READ, though,
-/// requires being able to construct one.
+/// requires being able to construct one — which is what the `rez` crate's
+/// `test-support` feature (a dev-dependency here) exists for.
 #[cfg(test)]
-pub(crate) mod rez_stream;
-pub(crate) mod rez_v3_rewrite;
-pub(crate) mod rez_v3_writer;
-pub(crate) mod seal_policy;
+pub(crate) use ::rez::rez_stream;
+pub(crate) use ::rez::{rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, seal_policy};
+
+/// True when the recording should be written as a `.rez` archive: either the
+/// output path ends in `.rez` or `--format rez` was given.
+///
+/// Lives here rather than in the `rez` crate because `Format` is this binary's
+/// CLI vocabulary — the archive format has no opinion about how a run chose it.
+fn wants_rez(format: crate::Format) -> bool {
+    format == crate::Format::Rez
+}
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
@@ -1009,7 +1018,7 @@ pub fn run(mut config: RecordingConfig) {
 
     // `.rez` per-sampler archive mode. By this point the output extension has
     // already been folded into the format, so the format is the whole answer.
-    let mut rez_mode = rez::wants_rez(config.format);
+    let mut rez_mode = wants_rez(config.format);
 
     if rez_mode {
         // `.rez` ingest reads msgpack snapshots; an explicitly-prometheus

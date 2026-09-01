@@ -25,7 +25,7 @@ use rusqlite::{Connection, OpenFlags};
 /// where it hurts: every tick commits a small WAL row, so write amplification
 /// scales with the page size. Optimize for the per-tick write, not the bulk
 /// read.
-pub(crate) const PAGE_SIZE: u32 = 4096;
+pub const PAGE_SIZE: u32 = 4096;
 
 /// Cap the `-wal` sidecar by BYTES, not pages. At `PAGE_SIZE` this is close to
 /// SQLite's own ~1000-page default, so it changes nothing today — it exists so
@@ -78,7 +78,7 @@ const SCHEMA_VERSION: i64 = 3;
 
 /// One recording's identity: everything known when the recording starts.
 #[derive(Clone)]
-pub(crate) struct RecordingMeta {
+pub struct RecordingMeta {
     pub labels: BTreeMap<String, String>,
     pub metadata: BTreeMap<String, String>,
     /// Wall-clock reading (ns since epoch) at recording start. Row timestamps
@@ -87,7 +87,7 @@ pub(crate) struct RecordingMeta {
 }
 
 /// A row of the `recordings` table.
-pub(crate) struct RecordingRow {
+pub struct RecordingRow {
     pub id: i64,
     pub meta: RecordingMeta,
     /// Whether the recording was cleanly finalized. This is what replaced the
@@ -99,14 +99,14 @@ pub(crate) struct RecordingRow {
 /// The catalog facts about one sealed segment. The segment's own bytes are an
 /// opaque parquet BLOB the database never looks inside — this is everything
 /// SQLite is asked to know about it.
-pub(crate) struct SegmentMeta {
+pub struct SegmentMeta {
     pub rows: u64,
     pub first_ts: u64,
     pub last_ts: u64,
 }
 
 /// A row of the `segments` table for one `(recording, sampler)`.
-pub(crate) struct SegmentRow {
+pub struct SegmentRow {
     pub seq: u64,
     pub meta: SegmentMeta,
     pub bytes: Vec<u8>,
@@ -119,7 +119,7 @@ pub(crate) struct SegmentRow {
 /// unchanged every tick, so carrying them per row costs several times the
 /// payload for nothing. They are re-anchored once per segment instead — see
 /// `WalCell`.
-pub(crate) struct WalRow {
+pub struct WalRow {
     pub sampler: String,
     pub ts: u64,
     pub wall_offset: i64,
@@ -130,7 +130,7 @@ pub(crate) struct WalRow {
 /// can tell "the window moved" from "nothing was old enough yet" — and so a
 /// test can assert the WAL rows went with their segments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct Evicted {
+pub struct Evicted {
     pub segments: usize,
     pub wal_rows: usize,
 }
@@ -138,7 +138,7 @@ pub(crate) struct Evicted {
 /// How many rows a table holds and what time span they cover, answered from
 /// catalog columns alone — no segment or WAL payload is read. `first_ts` and
 /// `last_ts` are `None` when `rows` is 0.
-pub(crate) struct Span {
+pub struct Span {
     pub rows: u64,
     pub first_ts: Option<u64>,
     pub last_ts: Option<u64>,
@@ -156,7 +156,7 @@ const LIVE_WAL_PREDICATE: &str = "recording_id = ?1 AND sampler = ?2 \
            0)";
 
 /// An open handle on a `.rez` v3 file.
-pub(crate) struct RezDb {
+pub struct RezDb {
     conn: Connection,
 }
 
@@ -167,7 +167,7 @@ impl RezDb {
     /// Fails if `path` already exists: a `.rez` is valid from creation, so there
     /// is no `.partial` staging file standing between a new recording and a
     /// previous one.
-    pub(crate) fn create(path: &Path) -> Result<Self, String> {
+    pub fn create(path: &Path) -> Result<Self, String> {
         Self::create_with_page_size(path, PAGE_SIZE)
     }
 
@@ -235,7 +235,7 @@ impl RezDb {
     }
 
     /// Open an existing `.rez`, reapplying the per-connection pragmas.
-    pub(crate) fn open(path: &Path) -> Result<Self, String> {
+    pub fn open(path: &Path) -> Result<Self, String> {
         // No `SQLITE_OPEN_CREATE`: opening a `.rez` that is not there is an
         // error, not an empty new recording.
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
@@ -311,13 +311,13 @@ impl RezDb {
     }
 
     /// Start a recording, returning its id.
-    pub(crate) fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
+    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
         insert_recording_sql(&self.conn, meta)
     }
 
     /// Every recording in the file, in insertion order. A `.rez` may hold
     /// several (multi-host, or an A/B pair).
-    pub(crate) fn read_recordings(&self) -> Result<Vec<RecordingRow>, String> {
+    pub fn read_recordings(&self) -> Result<Vec<RecordingRow>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -373,7 +373,7 @@ impl RezDb {
     /// prune runs outside the seal transaction" is made unrepresentable rather
     /// than merely documented — inside it, a quiet sampler's accumulated rows
     /// make the delete long enough to threaten the tick.
-    pub(crate) fn transaction<T>(
+    pub fn transaction<T>(
         &mut self,
         f: impl FnOnce(&RezTx<'_>) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -394,7 +394,7 @@ impl RezDb {
 
     /// Insert one sealed segment's bytes and catalog facts, committing on its
     /// own. Batch writers should use `transaction` instead.
-    pub(crate) fn insert_segment(
+    pub fn insert_segment(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -426,7 +426,7 @@ impl RezDb {
     /// table at open (`time_range` is asked before any query runs) and the
     /// payload for almost none of them, so the two questions get separate
     /// queries.
-    pub(crate) fn read_segment_meta(
+    pub fn read_segment_meta(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -456,7 +456,7 @@ impl RezDb {
 
     /// One segment's payload, by sequence number — for the reader's name probe,
     /// which needs a single segment's schema and none of the rest.
-    pub(crate) fn read_segment_bytes(
+    pub fn read_segment_bytes(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -481,7 +481,7 @@ impl RezDb {
         }
     }
 
-    pub(crate) fn read_segments(
+    pub fn read_segments(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -546,7 +546,7 @@ impl RezDb {
     /// selecting part of one would mean decoding and re-encoding it — the cost
     /// the container exists to avoid. A caller gets a little more than it asked
     /// for at each edge and should report the span it actually got.
-    pub(crate) fn segments_overlapping(
+    pub fn segments_overlapping(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -584,7 +584,7 @@ impl RezDb {
     /// `f` gets `&Self`, so it may call any reader here; it must not write
     /// through this handle, which is why this is not exposed as a general
     /// transaction.
-    pub(crate) fn read_snapshot<T>(
+    pub fn read_snapshot<T>(
         &self,
         f: impl FnOnce(&Self) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -603,7 +603,7 @@ impl RezDb {
     /// Sum of `rows` across every segment for `(recording_id, sampler)`. Does
     /// not include WAL rows — callers combining sealed and unsealed row
     /// counts must add `live_wal().len()` themselves.
-    pub(crate) fn total_rows(&self, recording_id: i64, sampler: &str) -> Result<u64, String> {
+    pub fn total_rows(&self, recording_id: i64, sampler: &str) -> Result<u64, String> {
         let total: i64 = self
             .conn
             .query_row(
@@ -619,7 +619,7 @@ impl RezDb {
     /// alphabetically. A sampler with only unsealed WAL rows and no sealed
     /// segment yet will NOT appear here — use `all_samplers` for "every
     /// sampler this recording has ever seen".
-    pub(crate) fn samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+    pub fn samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -645,7 +645,7 @@ impl RezDb {
     /// this module is the only place that knows the schema well enough to
     /// look at both tables. Recovery/inventory callers should call this, not
     /// `samplers()`, when they need to know which tables exist at all.
-    pub(crate) fn all_samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+    pub fn all_samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -682,18 +682,14 @@ impl RezDb {
     /// through. `&mut self` makes "don't open a nested transaction while one
     /// is outstanding" a compile error for that caller instead of a runtime
     /// one. Reads stay on `&self`.
-    pub(crate) fn insert_wal_rows(
-        &mut self,
-        recording_id: i64,
-        rows: &[WalRow],
-    ) -> Result<(), String> {
+    pub fn insert_wal_rows(&mut self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
         self.transaction(|tx| tx.insert_wal_rows(recording_id, rows))
     }
 
     /// Every WAL row for `(recording_id, sampler)`, sealed or not, oldest
     /// first. Recovery should use `live_wal` instead — this is the raw table,
     /// kept for inspection and for the WAL tests to compare against.
-    pub(crate) fn read_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+    pub fn read_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -729,7 +725,7 @@ impl RezDb {
     ///
     /// This turns the prune into a pure background optimisation with no
     /// correctness role.
-    pub(crate) fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+    pub fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
         let mut stmt = self
             .conn
             .prepare(&format!(
@@ -745,7 +741,7 @@ impl RezDb {
     /// share `LIVE_WAL_PREDICATE`, so the depth cannot drift from the rows the
     /// reader replays); this is the aggregate form, for callers that want the
     /// number rather than the payload.
-    pub(crate) fn live_wal_span(&self, recording_id: i64, sampler: &str) -> Result<Span, String> {
+    pub fn live_wal_span(&self, recording_id: i64, sampler: &str) -> Result<Span, String> {
         self.query_span(
             &format!("SELECT COUNT(*), MIN(ts), MAX(ts) FROM wal WHERE {LIVE_WAL_PREDICATE}"),
             recording_id,
@@ -759,11 +755,7 @@ impl RezDb {
     /// `parquet metadata` describes a 197 MB archive from this, and pulling
     /// `bytes` back only to discard it is exactly the cost the catalog exists to
     /// avoid.
-    pub(crate) fn segment_span(
-        &self,
-        recording_id: i64,
-        sampler: &str,
-    ) -> Result<(u64, Span), String> {
+    pub fn segment_span(&self, recording_id: i64, sampler: &str) -> Result<(u64, Span), String> {
         let segments: i64 = self
             .conn
             .query_row(
@@ -837,7 +829,7 @@ impl RezDb {
     /// that is why WAL rows are per-sampler rather than whole snapshots — a
     /// slow-sealing table's prune must not touch, or be blocked by, any other
     /// sampler's tail.
-    pub(crate) fn prune_wal(
+    pub fn prune_wal(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -874,11 +866,7 @@ impl RezDb {
     /// and it only stops it if the two land together: a straddling row has
     /// `ts <= last_ts < cutoff_ts`, so the WAL delete provably covers every row
     /// the segment delete un-shadows.
-    pub(crate) fn evict_before(
-        &mut self,
-        recording_id: i64,
-        cutoff_ts: u64,
-    ) -> Result<Evicted, String> {
+    pub fn evict_before(&mut self, recording_id: i64, cutoff_ts: u64) -> Result<Evicted, String> {
         self.evict(
             recording_id,
             "DELETE FROM segments WHERE recording_id = ?1 AND last_ts < ?2",
@@ -923,7 +911,7 @@ impl RezDb {
     /// `pages` says. That is not a slow reclaim, it is no reclaim at all: at
     /// one page per retention pass a hindsight buffer would never work off a
     /// spike.
-    pub(crate) fn incremental_vacuum(&self, pages: u32) -> Result<(), String> {
+    pub fn incremental_vacuum(&self, pages: u32) -> Result<(), String> {
         let fail = |e| format!("failed to reclaim {pages} pages: {e}");
         let mut stmt = self
             .conn
@@ -946,7 +934,7 @@ impl RezDb {
     /// A plain file copy is NOT an equivalent: in WAL mode the main database
     /// file lags every commit since the last checkpoint, so copying it alone
     /// silently loses the most recent ticks.
-    pub(crate) fn vacuum_into(&self, dest: &Path) -> Result<(), String> {
+    pub fn vacuum_into(&self, dest: &Path) -> Result<(), String> {
         let dest = dest
             .to_str()
             .ok_or_else(|| format!("dump destination {} is not valid UTF-8", dest.display()))?;
@@ -960,7 +948,7 @@ impl RezDb {
     /// together — from catalog columns alone. `None` when the recording holds
     /// no rows at all, which for a rolling buffer means "nothing within the
     /// lookback".
-    pub(crate) fn recording_time_span(
+    pub fn recording_time_span(
         &self,
         recording_id: i64,
     ) -> Result<(Option<u64>, Option<u64>), String> {
@@ -984,7 +972,7 @@ impl RezDb {
     /// Mark a recording cleanly finalized, outside any batch. The dump uses
     /// it: a copy taken at time T is a finished artifact even though the
     /// buffer it came from is still running.
-    pub(crate) fn mark_complete(&mut self, recording_id: i64) -> Result<(), String> {
+    pub fn mark_complete(&mut self, recording_id: i64) -> Result<(), String> {
         self.transaction(|tx| tx.mark_complete(recording_id))
     }
 
@@ -996,7 +984,7 @@ impl RezDb {
     /// table added here without being handled there would vanish silently
     /// from every rewritten archive.
     #[cfg(test)]
-    pub(crate) fn user_table_names(&self) -> Result<Vec<String>, String> {
+    pub fn user_table_names(&self) -> Result<Vec<String>, String> {
         let mut stmt = self
             .conn
             .prepare(
@@ -1016,7 +1004,7 @@ impl RezDb {
     /// column: `annotate` changes it and nothing else, and rewriting an
     /// archive's every segment BLOB to edit one JSON string would make a
     /// cheap operation cost the size of the recording.
-    pub(crate) fn update_recording_metadata(
+    pub fn update_recording_metadata(
         &self,
         recording_id: i64,
         metadata: &BTreeMap<String, String>,
@@ -1036,20 +1024,20 @@ impl RezDb {
         Ok(())
     }
 
-    pub(crate) fn pragma_u32(&self, name: &str) -> Result<u32, String> {
+    pub fn pragma_u32(&self, name: &str) -> Result<u32, String> {
         let value = self.pragma_i64(name)?;
         u32::try_from(value).map_err(|_| format!("pragma {name} is {value}, not a u32"))
     }
 
     /// Signed, because `cache_size` is negative when denominated in kibibytes.
-    pub(crate) fn pragma_i64(&self, name: &str) -> Result<i64, String> {
+    pub fn pragma_i64(&self, name: &str) -> Result<i64, String> {
         self.conn
             .pragma_query_value(None, name, |row| row.get(0))
             .map_err(|e| format!("failed to read pragma {name}: {e}"))
     }
 
     /// The recording's `(ts, offset_ns)` clock observations, oldest first.
-    pub(crate) fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, String> {
+    pub fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, String> {
         let mut stmt = self
             .conn
             .prepare("SELECT ts, offset_ns FROM clock_offsets WHERE recording_id = ?1 ORDER BY ts")
@@ -1067,7 +1055,7 @@ impl RezDb {
         Ok(out)
     }
 
-    pub(crate) fn pragma_string(&self, name: &str) -> Result<String, String> {
+    pub fn pragma_string(&self, name: &str) -> Result<String, String> {
         self.conn
             .pragma_query_value(None, name, |row| row.get(0))
             .map_err(|e| format!("failed to read pragma {name}: {e}"))
@@ -1081,7 +1069,7 @@ impl RezDb {
 /// and no read accessor. The prune belongs OUTSIDE the seal transaction, where
 /// its cost cannot land on a tick, and `live_wal`'s watermark filter is what
 /// makes a crash between the two harmless — see `live_wal`.
-pub(crate) struct RezTx<'a> {
+pub struct RezTx<'a> {
     tx: rusqlite::Transaction<'a>,
 }
 
@@ -1092,7 +1080,7 @@ impl RezTx<'_> {
     /// recorded: the ranged dump writes a recording row and every segment it
     /// selected, and either the whole file is that recording or there is no
     /// file at all.
-    pub(crate) fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
+    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
         insert_recording_sql(&self.tx, meta)
     }
 
@@ -1102,7 +1090,7 @@ impl RezTx<'_> {
     /// (`blob_open`). At the sizes a segment reaches, `blob_open`'s two-step
     /// (reserve, then stream) is measurably slower than handing SQLite the
     /// whole buffer, so the simpler API is also the faster one here.
-    pub(crate) fn insert_segment(
+    pub fn insert_segment(
         &self,
         recording_id: i64,
         sampler: &str,
@@ -1114,7 +1102,7 @@ impl RezTx<'_> {
     }
 
     /// Insert every WAL row for one tick — one sampler each, typically.
-    pub(crate) fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
+    pub fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
         let mut stmt = self
             .tx
             .prepare(
@@ -1136,7 +1124,7 @@ impl RezTx<'_> {
     }
 
     /// Append one `(ts, offset_ns)` clock observation for the recording.
-    pub(crate) fn insert_clock_offset(
+    pub fn insert_clock_offset(
         &self,
         recording_id: i64,
         ts: u64,
@@ -1154,7 +1142,7 @@ impl RezTx<'_> {
     /// Mark the recording cleanly finalized. This is what replaced the
     /// `.partial` filename convention: the file is valid from creation, so
     /// "was it finished" is a queryable property instead of a name.
-    pub(crate) fn mark_complete(&self, recording_id: i64) -> Result<(), String> {
+    pub fn mark_complete(&self, recording_id: i64) -> Result<(), String> {
         self.tx
             .execute(
                 "UPDATE recordings SET complete = 1 WHERE id = ?1",

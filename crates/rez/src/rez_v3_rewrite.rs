@@ -10,11 +10,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::recorder::rez::table_sampler;
-use crate::recorder::rez_sqlite::{RecordingMeta, RezDb, RezTx, SegmentMeta};
+use crate::rez::table_sampler;
+use crate::rez_sqlite::{RecordingMeta, RezDb, RezTx, SegmentMeta};
 
 /// What one copy pass carries across.
-pub(crate) struct CopySpec<'a> {
+pub struct CopySpec<'a> {
     /// Row-timestamp bound in nanoseconds. The rewrite tools copy everything;
     /// hindsight's dump narrows it to the incident window.
     pub start: u64,
@@ -33,7 +33,7 @@ pub(crate) struct CopySpec<'a> {
 
 impl CopySpec<'_> {
     /// Every recording, every table, every row, metadata untouched.
-    pub(crate) fn everything() -> Self {
+    pub fn everything() -> Self {
         CopySpec {
             start: 0,
             end: u64::MAX,
@@ -60,7 +60,7 @@ impl CopySpec<'_> {
 /// complete afterwards for a specific reason: the buffer it copied is
 /// perpetually mid-recording and would otherwise never produce a snapshot that
 /// did not warn.
-pub(crate) fn copy_recordings_into(
+pub fn copy_recordings_into(
     src: &RezDb,
     tx: &RezTx<'_>,
     spec: &CopySpec<'_>,
@@ -115,7 +115,7 @@ pub(crate) fn copy_recordings_into(
             // tail's span would claim a start the bytes do not contain.
             // `last_ts` stays the raw tail's own last row — a skip is always a
             // leading run, so that one is always right.
-            let materialized = crate::recorder::rez_v3_writer::materialize_wal_tail(&table, &tail)
+            let materialized = crate::rez_v3_writer::materialize_wal_tail(&table, &tail)
                 .map_err(|e| format!("failed to seal the {table} tail: {e}"))?;
             if let Some(materialized) = materialized {
                 let meta = SegmentMeta {
@@ -208,8 +208,8 @@ type CatalogedTable<'a> = (&'a str, Vec<(SegmentMeta, &'a Vec<u8>)>);
 /// reader materializes it that way. That is the same footprint `parquet
 /// combine` has always had on a v2 input, but it does bound the size of
 /// archive this can upgrade in one pass.
-pub(crate) fn upgrade_tar_to_v3(src: &Path, dest: &Path) -> Result<usize, String> {
-    use crate::recorder::rez;
+pub fn upgrade_tar_to_v3(src: &Path, dest: &Path) -> Result<usize, String> {
+    use crate::rez;
 
     let (manifest, recordings) = rez::read_archive_bytes(src)
         .map_err(|e| format!("failed to read {}: {e}", src.display()))?;
@@ -264,7 +264,7 @@ pub(crate) fn upgrade_tar_to_v3(src: &Path, dest: &Path) -> Result<usize, String
 
 #[cfg(test)]
 mod tests {
-    use crate::recorder::rez_sqlite::RezDb;
+    use crate::rez_sqlite::RezDb;
 
     /// Every table in the v3 schema is either copied by
     /// [`super::copy_recordings_into`] or deliberately not carried, and this
@@ -316,8 +316,8 @@ mod tests {
     /// checkpoint still reads as recovered afterwards.
     #[test]
     fn upgrading_a_tar_archive_carries_data_labels_and_completeness() {
-        use crate::recorder::rez;
-        use crate::recorder::rez_stream::write_segmented_rez;
+        use crate::rez;
+        use crate::rez_stream::write_segmented_rez;
 
         let d = tempfile::tempdir().unwrap();
         // One cleanly finalized, one recovered from a checkpoint.

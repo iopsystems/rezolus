@@ -180,10 +180,10 @@ File-level metadata keys are defined in `src/parquet_metadata.rs`:
 
 ### `.rez` Archive Format
 
-The `.rez` format (`src/recorder/rez.rs`, `src/rez_reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
+The `.rez` format (`crates/rez/`: `src/rez.rs`, `src/reader.rs`) is a container holding many parquet tables plus a `manifest.json`, rather than a single parquet file. Two container shapes exist and both are readable:
 
 - **v2 (tar)** — a tar archive with `manifest.json` and one table per sampler (`<recording>/<sampler>.parquet`).
-- **v3 (SQLite)** — a SQLite container (`src/recorder/rez_sqlite.rs`, `src/recorder/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
+- **v3 (SQLite)** — a SQLite container (`crates/rez/src/rez_sqlite.rs`, `crates/rez/src/rez_v3_writer.rs`) with a real WAL: rows land in the WAL and are periodically sealed into parquet segments. This is what `hindsight` maintains as its rolling buffer, and it is readable live while a writer is still appending.
 
 Each sampler records at its own cadence. Table granularity depends on the snapshot format the agent produced:
 
@@ -195,6 +195,25 @@ Either way the query engine consumes the window columns to compute `rate()`/`ira
 Because each sampler records at its own cadence, a query spanning *two samplers of materially different cadence* (measured row spacing differing by at least 2x, with the slower coarser than the step) is evaluated at the **slow sampler's own row timestamps** rather than on the uniform `start + k·step` grid — otherwise nearly every point lands where the slow sampler never read and its value is merely held forward. `RezReader::cross_cadence_eval_timestamps` picks those timestamps and passes them as `QueryOptions::eval_timestamps`; cadence is measured from the rows (never `interval()`, which reports one nominal value for the whole archive) and per *sampler*, since a group that skips ticks is sparse within its sampler's cadence rather than a second cadence. Single-sampler queries and `RateMode::Raw` are untouched.
 
 A `.rez` requires every endpoint to be rezolus/msgpack to produce (not Prometheus), but any number of them. The manifest carries per-recording label sets (`source`/`host` auto-populated, plus any `record --label k=v`, which applies to every recording in the run); a multi-recording `.rez` — built live by `record --endpoint a --endpoint b -o out.rez`, or offline by `parquet combine` — drives the viewer's A/B comparison, aliasing baseline/experiment from each recording's `arm`/`host` labels. The seal stagger keys on sampler + the recording's canonical label set (`seal_policy::recording_stagger_key`), so two recordings of the same agent do not seal in lockstep; identical label sets warn at startup.
+
+### `.rez` lives in its own crate
+
+`crates/rez` holds the whole format — container (v2 tar, v3 SQLite), writers,
+and the `RezReader` that presents an archive as a `metriken_query::MetricsSource`.
+It is a workspace crate rather than a module of the binary because `rezolus` is
+**binary-only** (no `lib` target), so nothing can depend on it: a reader living
+there was reachable by the server viewer and by nothing else, which is why the
+static-site WASM viewer has never opened a `.rez`.
+
+The binary re-exports the modules under the paths call sites already use
+(`crate::recorder::rez`, `crate::rez_reader`, …), so `.rez` code reads the same
+from inside `rezolus`.
+
+Fixture builders (`rez::rez::recorder_tests_support`, and the tar writer
+`rez_stream`) sit behind the crate's `test-support` feature rather than
+`#[cfg(test)]` — a `#[cfg(test)]` module in `rez` is invisible to the binary
+crate's tests, which build most `.rez` fixtures in this repo. The binary enables
+that feature as a dev-dependency.
 
 ### Service Extensions
 
