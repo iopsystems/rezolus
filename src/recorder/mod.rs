@@ -832,12 +832,14 @@ impl RezStream {
         drop(self.archive);
         // Safe to remove: `RezDb::create` claimed this path with O_EXCL during
         // THIS run, so it cannot be a file that was already there.
-        if let Err(e) = std::fs::remove_file(&path) {
-            warn!(
-                "failed to remove the empty recording at {}: {e}",
-                path.display()
-            );
-        }
+        //
+        // Sidecars included. A `.rez` is three files while it is open, and
+        // SQLite only cleans `-wal`/`-shm` up on a CLEAN close — so removing
+        // the main file alone can leave a stray `-wal` beside a path the next
+        // run believes is free. That is worse than a stale main file: `O_EXCL`
+        // catches the main file and says so, while a stray sidecar is adopted
+        // silently by the newly created database.
+        rez_sqlite::RezDb::remove_archive(&path);
     }
 }
 
