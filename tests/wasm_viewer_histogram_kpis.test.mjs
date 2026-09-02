@@ -6,16 +6,24 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const pkgJs = path.join(repoRoot, 'site/viewer/pkg/wasm_viewer.js');
+const pkgWasm = path.join(repoRoot, 'site/viewer/pkg/wasm_viewer_bg.wasm');
+
+// Skip cleanly if the bundle hasn't been built, the way the sibling
+// wasm_viewer_* tests do. Without this the file throws ENOENT at import time,
+// which `node --test tests/*.mjs` reports as a failure rather than a skip.
+if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
+    test('WASM histogram KPIs (bundle not built — skipped)', { skip: true }, () => {});
+} else {
+
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rezolus-wasm-viewer-'));
 const wasmJsCopy = path.join(tmpDir, 'wasm_viewer.mjs');
 
-fs.copyFileSync(path.join(repoRoot, 'site/viewer/pkg/wasm_viewer.js'), wasmJsCopy);
+fs.copyFileSync(pkgJs, wasmJsCopy);
 
 const { initSync, WasmCaptureRegistry } = await import(pathToFileURL(wasmJsCopy).href);
 
-initSync({
-    module: fs.readFileSync(path.join(repoRoot, 'site/viewer/pkg/wasm_viewer_bg.wasm')),
-});
+initSync({ module: fs.readFileSync(pkgWasm) });
 
 test('static WASM viewer keeps vLLM latency histograms available', () => {
     const registry = new WasmCaptureRegistry();
@@ -47,3 +55,5 @@ test('static WASM viewer keeps vLLM latency histograms available', () => {
         );
     }
 });
+
+}
