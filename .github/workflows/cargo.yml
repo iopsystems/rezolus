@@ -164,6 +164,14 @@ jobs:
         run: cargo check -p rez --no-default-features --target wasm32-unknown-unknown --locked
       - name: Rebuild WASM viewer
         run: ./crates/viewer/build.sh
+      # The JS suite runs HERE rather than in its own job because four of its
+      # files drive the built bundle (tests/wasm_viewer_*.test.mjs); anywhere
+      # else they skip themselves and prove nothing.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Run the viewer JS tests
+        run: node --test tests/*.mjs
       - name: Check template symlinks are committed
         # build.sh self-heals missing symlinks under site/viewer/templates/
         # so the deploy doesn't break, but the symlinks must also be in
