@@ -78,6 +78,142 @@
             mask-repeat: no-repeat;
             -webkit-mask-repeat: no-repeat;
         }
+
+        /* Triangular ("isometric") graph paper.
+
+           Drawn as an SVG tile rather than as three `repeating-linear-gradient`
+           families. Gradients cannot work here: each one measures its phase
+           from where its own gradient line starts, which depends on the box
+           size and the angle, so three families at 0/60/120 degrees land at
+           arbitrary offsets from one another and never share a vertex. Real
+           graph paper has all three lines meeting at one point; a tile gets
+           that by construction.
+
+           The tile is 48x84 and the vertices are its corners plus its centre,
+           so concurrency is exact. That makes the triangles 60.3 degrees rather
+           than 60 (an equilateral tile would be 48x83.14) -- 0.4px of height
+           across a cell, and worth it for integer tile dimensions that never
+           seam. Horizontals are drawn at y=0, 42 and 84: the two edge lines are
+           each half-clipped by the viewBox and meet across the seam as one
+           full-width line. */
+        :root {
+            --paper-tile:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%230b5cd5' stroke-opacity='0.06' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
+            --paper-tile-major:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%230b5cd5' stroke-opacity='0.10' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --paper-tile:
+                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
+                --paper-tile-major:
+                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
+            }
+        }
+
+        body {
+            background-color: #f7f9ff;
+            background-image: var(--paper-tile);
+            background-size: 48px 84px;
+            background-position: 0 0;
+            background-attachment: fixed;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #0f172a; }
+        }
+
+        /* The major grid is the same tile at exactly 6x -- six small triangles
+           along each side of a major one -- so its vertices land on minor
+           vertices instead of near them. Both are `fixed`, which is what keeps
+           the two in register as the page scrolls. */
+        .paper-major {
+            background-image: var(--paper-tile-major);
+            background-size: 288px 504px;
+            background-position: 0 0;
+            background-attachment: fixed;
+        }
+
+        /* Text sits ON the paper, not in it. Content blocks get their own
+           surface so a grid line never runs behind a line of type; it is held
+           just short of opaque, so the pattern still reads faintly through and
+           the blocks do not look pasted on. The paper stays fully visible in
+           the gutters between them. */
+        :root {
+            --surface-solid: rgba(247, 249, 255, 0.88);   /* the page ground (#f7f9ff), not white */
+            --surface-edge: rgba(15, 23, 42, 0.06);
+            --band: rgba(255, 255, 255, 0.94);
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --surface-solid: rgba(15, 23, 42, 0.86);
+                --surface-edge: rgba(148, 163, 184, 0.12);
+                /* "almost white" inverts to a lifted slate, not to white. */
+                --band: rgba(30, 41, 59, 0.88);
+            }
+        }
+
+        .card-surface,
+        .paper-cards > * {
+            background-color: var(--surface-solid);
+            border: 1px solid var(--surface-edge);
+            border-radius: 1rem;
+        }
+
+        .card-surface { padding: 2rem; }
+
+        /* Use-case and component cards carry a header band: icon and title on a
+           near-white strip, prose on the card's paper surface below.
+           `overflow: hidden` is what makes the band's top corners follow the
+           card radius, and the margin reset overrides the header row's `mb-3`,
+           which was there when both halves shared one padding box. */
+        .paper-cards > * {
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .paper-cards > * > div:first-child {
+            background-color: var(--band);
+            border-bottom: 1px solid var(--surface-edge);
+            padding: 1rem 1.25rem;
+            margin-bottom: 0;
+        }
+
+        .paper-cards > * > p {
+            padding: 1.25rem;
+        }
+
+        /* For blocks that already carry their own padding and border. */
+        .surface-soft,
+        .paper-fill > * {
+            background-color: var(--surface-solid);
+        }
+
+        /* Nav: hairline rules between items. The rule rides on each link after
+           the first, with padding that matches the flex gap, so it sits exactly
+           midway between two labels instead of hugging one of them. */
+        :root { --nav-rule: rgba(15, 23, 42, 0.12); }
+
+        @media (prefers-color-scheme: dark) {
+            :root { --nav-rule: rgba(148, 163, 184, 0.18); }
+        }
+
+        .nav-links > a + a {
+            border-left: 1px solid var(--nav-rule);
+            padding-left: 1.5rem;
+        }
+
+        /* Section headings that keep the block's padding but neither fill nor
+           frame -- the type carries them, the way the hero does. The border is
+           made transparent rather than removed so the box does not shift by
+           2px against the surfaced headings beside it. */
+        .card-surface.bare {
+            background-color: transparent;
+            border-color: transparent;
+        }
+
     </style>
 </head>
 
@@ -88,48 +224,149 @@
         class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
         <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <a href="/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
-            <div class="hidden md:flex items-center gap-8 text-sm font-medium">
-                <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
+            <div class="hidden md:flex items-center gap-6 text-base font-semibold nav-links">
+                <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
+                    href="#use-cases">Use Cases</a>
+                <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#features">Features</a>
-                <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
+                <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#quickstart">Quick Start</a>
-                <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
+                <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="docs/installation.html">Docs</a>
-                <a class="inline-flex items-center gap-1 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
+                <a class="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="viewer/" target="_blank" rel="noopener">Viewer<span class="material-symbols-outlined text-[14px] opacity-70" data-icon="open_in_new">open_in_new</span></a>
             </div>
             <a href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener"
-                class="inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-sm font-bold no-underline hover:opacity-90 transition-opacity">
+                class="inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-base font-bold no-underline hover:opacity-90 transition-opacity">
                 GitHub<span class="material-symbols-outlined text-[14px] opacity-80" data-icon="open_in_new">open_in_new</span>
             </a>
         </div>
     </nav>
 
     <!-- Hero -->
-    <section class="pt-40 pb-24 px-6">
+    <section class="pt-40 pb-24 px-6 paper-major">
         <div class="max-w-3xl mx-auto text-center">
-            <div class="mb-6">
-                <span class="text-blue-700 dark:text-blue-300 text-base font-bold tracking-widest uppercase">Open Source</span>
-            </div>
             <h1
                 class="hero-title text-5xl md:text-7xl tracking-tight text-slate-800 dark:text-white mb-8 leading-[1.05]">
                 High-resolution<br />systems &amp; performance<br />telemetry
             </h1>
             <p
-                class="text-[22px] md:text-2xl text-slate-500 dark:text-slate-400 leading-relaxed mb-12 max-w-2xl mx-auto">
-                eBPF-powered telemetry with near-zero runtime overhead. Capture CPU, GPU, scheduler, SSD,
-                network,
-                and syscall metrics at the resolution that surface real issues.
+                class="text-[22px] md:text-2xl text-slate-600 dark:text-slate-300 leading-relaxed mb-12 max-w-2xl mx-auto">
+                eBPF-powered telemetry with near-zero runtime overhead. Use fine-grained CPU, GPU, scheduler, SSD,
+                network, and syscall metrics to surface real issues.
             </p>
             <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
                 <a href="#quickstart"
-                    class="bg-primary dark:bg-blue-600 text-white px-8 py-3.5 rounded-lg text-sm font-bold no-underline hover:opacity-90 transition-opacity">
+                    class="bg-primary dark:bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-bold no-underline hover:opacity-90 transition-opacity">
                     Get Started
                 </a>
                 <a href="docs/architecture.html"
-                    class="border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 px-8 py-3.5 rounded-lg text-sm font-bold no-underline hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                    class="border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 px-10 py-4 rounded-lg text-lg font-bold no-underline hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
                     How It Works
                 </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Use cases -->
+    <section class="py-24 px-6 paper-major" id="use-cases">
+        <div class="max-w-6xl mx-auto">
+            <div class="text-center mb-20 card-surface bare">
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Where
+                    microseconds make or break the product</h2>
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">Most off-the-shelf telemetry is built for
+                    web services, where millisecond latencies and minutely averages are acceptable. The rest of the world needs better measurement.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 paper-cards">
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-blue-600 dark:text-blue-400"
+                                data-icon="candlestick_chart">candlestick_chart</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">High-frequency trading</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Everything about the application has been optimized to a T. But you still need to be sure that nothing in the environment could ruin the day. Rezolus uses the world's fastest histogram to catch the smallest delay.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-green-600 dark:text-green-400"
+                                data-icon="directions_car">directions_car</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Autonomous systems</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Perception and planning loops stick to a strict deadline. Rezolus runs well on embedded systems and monitors the possible sources of contention: scheduler, GPU, block I/O, locks, with recall in hindsight.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-purple-600 dark:text-purple-400"
+                                data-icon="precision_manufacturing">precision_manufacturing</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Industrial control &amp; robotics</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">On a real-time kernel the chase is often down to the last cycle. Run-queue delay, involuntary context switches, CPU migrations, and TLB shootdowns are all included out of the box.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
+                                data-icon="database">database</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Storage &amp; database appliances</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Complex workloads stress systems in unpredictable ways. Capture both workload characteristics and device runtime behavior in their full dynamic range with histograms, plus drive health and temperature info for debugging.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-rose-100 dark:bg-rose-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-rose-600 dark:text-rose-400"
+                                data-icon="cloud_off">cloud_off</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Air-gapped &amp; edge</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Local-first design fit inside one static binary. No time-series database, nothing phoning home, no need for third-party dashboards. Recordings land on local disk, and the viewer opens them readily in your browser.</p>
+                </div>
+
+                <div>
+                    <div class="flex items-center gap-3 mb-3">
+                        <div
+                            class="w-12 h-12 rounded-xl bg-cyan-100 dark:bg-cyan-900/40 flex items-center justify-center">
+                            <span class="material-symbols-outlined text-cyan-600 dark:text-cyan-400"
+                                data-icon="router">router</span>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Network &amp; ISP infrastructure</h3>
+                    </div>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Light enough to provide fine-grain visibility into a box that runs close to line rate. Interface and ethtool counters sit alongside per-CPU scheduler and PMU behavior, so the box can speak to you when something is not right.</p>
+                </div>
+
+            </div>
+
+            <div class="mt-10 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 bg-white dark:bg-slate-800">
+                <h3 class="text-lg italic font-normal text-slate-900 dark:text-white mb-4">Why it is safe to leave running</h3>
+                <ul class="space-y-3 list-disc pl-5 marker:text-slate-400 dark:marker:text-slate-600">
+                    <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
+                            class="font-bold text-slate-900 dark:text-white">Just a metrics agent.</span> Quantified
+                        and bounded per-refresh cost.</li>
+                    <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
+                            class="font-bold text-slate-900 dark:text-white">Runs on a vanilla modern kernel.</span>
+                        CO-RE eBPF &mdash; no module, no patch.</li>
+                    <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
+                            class="font-bold text-slate-900 dark:text-white">Local first.</span> Hindsight in a buffer,
+                        record on demand.</li>
+                </ul>
             </div>
         </div>
     </section>
@@ -137,14 +374,14 @@
     <!-- Features -->
     <section class="py-24 px-6" id="features">
         <div class="max-w-6xl mx-auto">
-            <div class="text-center mb-20">
+            <div class="text-center mb-20 card-surface bare">
                 <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Six
                     tools, one binary</h2>
-                <p class="text-xl text-slate-500 dark:text-slate-400 max-w-xl mx-auto">Full
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Full
                     observability workflow from collection to analysis. Use it alone or integrate with OTel. </p>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-16">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 paper-cards">
 
                 <div>
                     <div class="flex items-center gap-3 mb-3">
@@ -155,7 +392,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Agent</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Collects system metrics via
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Collects system metrics via
                         eBPF with near-zero overhead. Exposes data over HTTP for downstream consumers.</p>
                 </div>
 
@@ -168,7 +405,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Exporter</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Serves Prometheus-compatible
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Serves Prometheus-compatible
                         metrics with configurable histogram percentiles. Scrape-ready.</p>
                 </div>
 
@@ -181,7 +418,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Recorder</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Captures high-fidelity
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Captures high-fidelity
                         metric
                         snapshots to Parquet files for benchmarking and performance analysis.</p>
                 </div>
@@ -195,7 +432,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Hindsight</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Maintains a rolling ring
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Maintains a rolling ring
                         buffer on disk. Trigger snapshots via signal or HTTP for post-incident analysis.</p>
                 </div>
 
@@ -208,7 +445,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Viewer</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">Interactive web dashboard
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Interactive web dashboard
                         with
                         PromQL support. Explore recordings or stream live from a running agent.</p>
                 </a>
@@ -222,7 +459,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">MCP Server</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">AI-guided analysis tools.
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI-guided analysis tools.
                         Query recordings with PromQL, detect anomalies, and correlate metrics.</p>
                 </div>
 
@@ -244,7 +481,7 @@
                     <button onclick="showTab('linux')" id="tab-linux"
                         class="px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all">Linux</button>
                     <button onclick="showTab('macos')" id="tab-macos"
-                        class="px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all">macOS</button>
+                        class="px-5 py-2 rounded-md text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-slate-700 dark:hover:text-slate-300 transition-all">macOS</button>
                 </div>
             </div>
 
@@ -270,10 +507,10 @@
                             </div>
                         </div>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 mb-3">This adds the package repo, installs
+                    <p class="text-base text-slate-600 dark:text-slate-300 mb-3">This adds the package repo, installs
                         Rezolus, and starts the agent as a systemd service. Supports Debian, Ubuntu, Rocky Linux, and
                         Amazon Linux.</p>
-                    <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                         <span class="material-symbols-outlined text-sm">info</span>
                         <span class="text-slate-600 dark:text-slate-500">Run as root or with sudo</span>
                     </div>
@@ -298,14 +535,14 @@
                                     class="text-green-400">rezolus view http://localhost:4241</code></div>
                         </div>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400 mt-3">Streams live metrics from the agent
+                    <p class="text-base text-slate-600 dark:text-slate-300 mt-3">Streams live metrics from the agent
                         into
                         an interactive web dashboard. The agent listens on <code
                             class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">0.0.0.0:4241</code>, so
                         you can also point the viewer at a remote host.</p>
                 </div>
 
-                <p class="text-sm text-slate-400">Requires Linux kernel 5.8+ and root. See <a
+                <p class="text-sm text-slate-500 dark:text-slate-400">Requires Linux kernel 5.8+ and root. See <a
                         href="docs/installation.html" class="text-blue-600 dark:text-blue-400 underline">full
                         installation docs</a> for building from source or managing services individually.</p>
             </div>
@@ -318,7 +555,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             1</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install via Homebrew</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -331,6 +568,13 @@
                                     class="text-green-400">curl -fsSL https://install.rezolus.com | bash</code></div>
                         </div>
                     </div>
+                    <div
+                        class="mt-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+                        <p class="text-base text-amber-800 dark:text-amber-300"><strong>Note:</strong> The macOS agent
+                            collects basic CPU and Apple GPU metrics only. eBPF-based samplers (scheduler, block I/O,
+                            TCP, syscall) require Linux. Use the viewer and recorder to work with remote Linux
+                            agents.</p>
+                    </div>
                 </div>
 
                 <div>
@@ -338,7 +582,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Run the agent and explore</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Explore local or remote metrics</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -357,12 +601,6 @@
                     </div>
                 </div>
 
-                <div
-                    class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                    <p class="text-base text-amber-800 dark:text-amber-300"><strong>Note:</strong> The macOS agent
-                        collects basic CPU and Apple GPU metrics only. eBPF-based samplers (scheduler, block I/O, TCP,
-                        syscall) require Linux. Use the viewer and recorder to work with remote Linux agents.</p>
-                </div>
             </div>
 
         </div>
@@ -371,14 +609,14 @@
     <!-- Metrics overview -->
     <section class="py-24 px-6">
         <div class="max-w-6xl mx-auto">
-            <div class="text-center mb-16">
+            <div class="text-center mb-16 card-surface">
                 <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">What it
                     measures</h2>
-                <p class="text-xl text-slate-500 dark:text-slate-400 max-w-xl mx-auto">Covering
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Covering
                     the full Linux performance stack. Plus bring your own metrics.</p>
             </div>
 
-            <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-4 paper-fill">
                 <a href="docs/telemetry.html#cpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
@@ -387,7 +625,7 @@
                                 data-icon="memory">memory</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">CPU</h3>
                     </div>
-                    <p class="text-base text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
                 </a>
                 <a href="docs/telemetry.html#gpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -397,7 +635,7 @@
                                 data-icon="developer_board">developer_board</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">GPU</h3>
                     </div>
-                    <p class="text-base text-slate-400">NVIDIA and Apple Silicon metrics</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA and Apple Silicon metrics</p>
                 </a>
                 <a href="docs/telemetry.html#memory"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -407,7 +645,7 @@
                                 data-icon="dynamic_form">dynamic_form</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Memory</h3>
                     </div>
-                    <p class="text-base text-slate-400">Usage, vmstat, NUMA allocations</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Usage, vmstat, NUMA allocations</p>
                 </a>
                 <a href="docs/telemetry.html#network"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -417,7 +655,7 @@
                                 data-icon="lan">lan</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Network</h3>
                     </div>
-                    <p class="text-base text-slate-400">Traffic, errors, ethtool counters</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Traffic, errors, ethtool counters</p>
                 </a>
                 <a href="docs/telemetry.html#tcp"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -427,7 +665,7 @@
                                 data-icon="cable">cable</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">TCP</h3>
                     </div>
-                    <p class="text-base text-slate-400">Connect latency, jitter, retransmits</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Connect latency, jitter, retransmits</p>
                 </a>
                 <a href="docs/telemetry.html#blockio"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -437,7 +675,7 @@
                                 data-icon="storage">storage</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Block I/O</h3>
                     </div>
-                    <p class="text-base text-slate-400">Latency distributions, request counts</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Latency distributions, request counts</p>
                 </a>
                 <a href="docs/telemetry.html#scheduler"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -447,7 +685,7 @@
                                 data-icon="schedule">schedule</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Scheduler</h3>
                     </div>
-                    <p class="text-base text-slate-400">Runqueue latency, context switches</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Runqueue latency, context switches</p>
                 </a>
                 <a href="docs/telemetry.html#syscall"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -457,7 +695,7 @@
                                 data-icon="terminal">terminal</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Syscall</h3>
                     </div>
-                    <p class="text-base text-slate-400">Counts and latency by type</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Counts and latency by type</p>
                 </a>
                 <a href="docs/telemetry.html#rezolus"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -467,7 +705,7 @@
                                 data-icon="speed">speed</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Rezolus</h3>
                     </div>
-                    <p class="text-base text-slate-400">Self-monitoring: CPU, memory, I/O</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Self-monitoring: CPU, memory, I/O</p>
                 </a>
             </div>
         </div>
@@ -480,54 +718,54 @@
 
     <!-- Docs CTA -->
     <section class="py-24 px-6 bg-white dark:bg-slate-900">
-        <div class="max-w-4xl mx-auto">
+        <div class="max-w-6xl mx-auto">
             <div class="text-center mb-16">
                 <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">
                     Documentation</h2>
-                <p class="text-xl text-slate-500 dark:text-slate-400">Everything you need to deploy and operate Rezolus.
+                <p class="text-xl text-slate-600 dark:text-slate-300">Everything you need to deploy and operate Rezolus.
                 </p>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <a href="docs/installation.html"
-                    class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
-                    <span
-                        class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
-                        data-icon="download">download</span>
-                    <div>
+                    class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
+                            data-icon="download">download</span>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Installation</h3>
-                        <p class="text-base text-slate-400">Packages, source builds, platform support</p>
                     </div>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Packages, source builds, platform support</p>
                 </a>
                 <a href="docs/architecture.html"
-                    class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
-                    <span
-                        class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
-                        data-icon="account_tree">account_tree</span>
-                    <div>
+                    class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
+                            data-icon="account_tree">account_tree</span>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Architecture</h3>
-                        <p class="text-base text-slate-400">Modes, samplers, eBPF integration</p>
                     </div>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Modes, samplers, eBPF integration</p>
                 </a>
                 <a href="docs/cli.html"
-                    class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
-                    <span
-                        class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
-                        data-icon="terminal">terminal</span>
-                    <div>
+                    class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
+                            data-icon="terminal">terminal</span>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
-                        <p class="text-base text-slate-400">Commands, flags, TOML config reference</p>
                     </div>
+                    <p class="text-base text-slate-500 dark:text-slate-400">Commands, flags, TOML config reference</p>
                 </a>
                 <a href="docs/api.html"
-                    class="group flex items-center gap-4 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
-                    <span
-                        class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
-                        data-icon="api">api</span>
-                    <div>
+                    class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
+                    <div class="flex items-center gap-3">
+                        <span
+                            class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
+                            data-icon="api">api</span>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">API Reference</h3>
-                        <p class="text-base text-slate-400">HTTP endpoints for every mode</p>
                     </div>
+                    <p class="text-base text-slate-500 dark:text-slate-400">HTTP endpoints for every mode</p>
                 </a>
             </div>
         </div>
@@ -535,12 +773,12 @@
 
     <!-- Footer -->
     <footer class="py-12 px-6 border-t border-slate-200 dark:border-slate-800">
-        <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8">
+        <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 card-surface">
             <div>
                 <div class="text-lg font-bold text-slate-900 dark:text-white mb-1">Rezolus</div>
-                <p class="text-base text-slate-400">MIT or Apache-2.0</p>
+                <p class="text-base text-slate-500 dark:text-slate-400">MIT or Apache-2.0</p>
             </div>
-            <div class="flex gap-8 text-sm text-slate-400">
+            <div class="flex gap-8 text-sm text-slate-500 dark:text-slate-400">
                 <a class="hover:text-blue-500 transition-colors no-underline"
                     href="https://github.com/iopsystems/rezolus">GitHub</a>
                 <a class="hover:text-blue-500 transition-colors no-underline"
@@ -565,10 +803,10 @@
             const macosTab = document.getElementById('tab-macos');
             if (platform === 'linux') {
                 linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
-                macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+                macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
             } else {
                 macosTab.className = 'px-5 py-2 rounded-md text-sm font-bold bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-sm transition-all';
-                linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
+                linuxTab.className = 'px-5 py-2 rounded-md text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-slate-700 dark:hover:text-slate-300 transition-all';
             }
         }
     </script>

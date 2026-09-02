@@ -65,19 +65,19 @@
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Core Concepts</h4>
 <a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="architecture.html">Architecture</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
-<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
-<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Reference</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
 </div>
@@ -85,10 +85,25 @@
 </aside>
 
 <!-- Content -->
-<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
 
 <h1 class="text-4xl font-extrabold tracking-tight mb-4">Architecture</h1>
 <p class="text-lg text-slate-500 dark:text-slate-400 mb-12">How Rezolus is structured and how the pieces fit together.</p>
+
+<!-- What you can do with Rezolus. The SVG is a symlink to docs/architecture.svg,
+     the same diagram the README uses; regenerate both with
+     `dot -Tsvg docs/architecture.dot -o docs/architecture.svg`. The light panel
+     is deliberate: the graph is drawn with pastel fills on white, so in dark
+     mode it reads as a lit plate rather than as a diagram that forgot to
+     invert. -->
+<figure class="mb-12 lg:-mx-16">
+<div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white p-4 overflow-x-auto">
+<img src="architecture.svg" width="839" height="598"
+     class="w-full h-auto min-w-[560px]"
+     alt="What you can do with Rezolus: the rezolus agent collects from your systems (CPU, GPU, kernel, containers, services). From there you can expose Prometheus metrics with rezolus exporter, watch a live dashboard with rezolus view, or capture a recording with rezolus record or rezolus hindsight. Recordings are .parquet files or .rez archives you can explore in the viewer, analyze with an AI assistant via rezolus mcp, or manage with rezolus recording." />
+</div>
+<figcaption class="text-sm text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">Every box is the same <code class="text-xs px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">rezolus</code> binary &mdash; you just pick the subcommand for the job.</figcaption>
+</figure>
 
 <!-- Operating Modes -->
 <section class="mb-16">
