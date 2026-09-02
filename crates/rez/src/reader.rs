@@ -338,6 +338,52 @@ impl SamplerReader {
     /// metrics it held gets the ordinary "references no metric present in this
     /// .rez" error rather than a crash. `OnceLock<Option<_>>` so a table that
     /// has gone is not re-fetched on every subsequent query.
+    /// Per-metric column metadata, read from this table's FIRST segment.
+    ///
+    /// A table's segments share a schema (`schema_hash` is what asserts it), so
+    /// one footer answers for all of them. Read on demand rather than at open:
+    /// nothing on the query path wants this, and probing it for every table of
+    /// a large archive would pay a cost the routing catalog deliberately avoids.
+    ///
+    /// A metric spans one column per label set; the first column carrying a
+    /// given `metric` key wins, since they agree on unit and description and
+    /// differ only in their labels.
+    fn metric_metadata(&self) -> BTreeMap<String, BTreeMap<String, String>> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+
+        let segments = match self.segments.all() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("fetching segments for {}: {e}", self.sampler);
+                return out;
+            }
+        };
+        let Some(first) = segments.into_iter().next() else {
+            return out;
+        };
+
+        let builder = match ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(first)) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("reading schema for {}: {e}", self.sampler);
+                return out;
+            }
+        };
+
+        for field in builder.schema().fields() {
+            let meta = field.metadata();
+            let Some(name) = meta.get("metric") else {
+                continue;
+            };
+            out.entry(name.clone())
+                .or_insert_with(|| meta.clone().into_iter().collect());
+        }
+
+        out
+    }
+
     fn reader(&self) -> Option<&TableReader> {
         self.reader
             .get_or_init(|| {
@@ -575,6 +621,34 @@ impl RezReader {
         rate_mode: RateMode,
     ) -> Option<Arc<[u64]>> {
         self.cross_cadence_eval_timestamps(query, step_s, rate_mode)
+    }
+
+    /// Every metric's column metadata: `unit`, `description`, `metric_type`,
+    /// and the metric's label keys, exactly as the recorder wrote them into the
+    /// parquet schema.
+    ///
+    /// [`MetricsSource`] answers which metrics exist and what labels they
+    /// carry, but not what they MEAN — a consumer building a metric catalog
+    /// (systemslab populates one at import) needs the unit and description too,
+    /// and those live only in the columns' arrow metadata.
+    ///
+    /// Reads one segment footer per table, on demand. Nothing on the query path
+    /// calls this, so the cost is paid only by a consumer that wants the
+    /// catalog, and never at open.
+    ///
+    /// Tables hold disjoint metric names, so merging is unambiguous in the
+    /// normal case. Where two samplers deliberately share a name — `gpu_nvidia`
+    /// and `gpu_amd_smi` both publish `gpu_utilization`, since only one
+    /// populates on a given host — the first table wins. They describe the same
+    /// vendor-neutral quantity, so unit and description agree.
+    pub fn metric_metadata(&self) -> BTreeMap<String, BTreeMap<String, String>> {
+        let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        for table in &self.tables {
+            for (metric, meta) in table.metric_metadata() {
+                out.entry(metric).or_insert(meta);
+            }
+        }
+        out
     }
 
     /// Whether this recording holds no tables at all.
@@ -2362,6 +2436,87 @@ mod tests {
 
         fn open(path: &std::path::Path) -> RezReader {
             RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+        }
+
+        /// A consumer building a metric catalog needs what a metric MEANS, not
+        /// just that it exists: `MetricsSource` answers names and labels, while
+        /// the unit and description live only in the columns' arrow metadata.
+        ///
+        /// systemslab populates exactly such a catalog at import, and without
+        /// this had to leave every `.rez` metric's unit empty.
+        #[test]
+        fn metric_metadata_carries_unit_and_description_per_metric() {
+            use metriken_exposition::Counter;
+
+            fn described(name: &str, sampler: &str, unit: &str, desc: &str, v: u64) -> Counter {
+                Counter::new(
+                    name.to_string(),
+                    v,
+                    [
+                        ("metric".to_string(), name.to_string()),
+                        ("sampler".to_string(), sampler.to_string()),
+                        ("unit".to_string(), unit.to_string()),
+                        ("description".to_string(), desc.to_string()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            }
+
+            let rows: Vec<(Snapshot, u64)> = (0..4u64)
+                .map(|i| {
+                    let ts = 1_000_000_000 * (i + 1);
+                    (
+                        snap(
+                            ts,
+                            vec![
+                                described(
+                                    "cpu_cycles",
+                                    "cpu_usage",
+                                    "cycles",
+                                    "CPU cycles executed",
+                                    i * 1_000,
+                                ),
+                                described(
+                                    "cpu_instructions",
+                                    "cpu_usage",
+                                    "instructions",
+                                    "Instructions retired",
+                                    i * 500,
+                                ),
+                            ],
+                            vec![],
+                        ),
+                        ts,
+                    )
+                })
+                .collect();
+
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("described.rez");
+            write_v3(&rows, 2, true, &path);
+
+            let catalog = open(&path).metric_metadata();
+
+            let cycles = catalog
+                .get("cpu_cycles")
+                .expect("the metric must appear in the catalog");
+            assert_eq!(cycles.get("unit").map(String::as_str), Some("cycles"));
+            assert_eq!(
+                cycles.get("description").map(String::as_str),
+                Some("CPU cycles executed")
+            );
+            // Label keys ride along, which is what a consumer records as tags.
+            assert_eq!(cycles.get("sampler").map(String::as_str), Some("cpu_usage"));
+
+            // Every metric is answered, not just the table's first column.
+            assert_eq!(
+                catalog
+                    .get("cpu_instructions")
+                    .and_then(|m| m.get("unit"))
+                    .map(String::as_str),
+                Some("instructions")
+            );
         }
 
         /// Two recordings compose into ONE labelled multi-source, each
