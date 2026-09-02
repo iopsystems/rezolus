@@ -54,8 +54,9 @@ distribution.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `blockio_latency` | Distribution of blockio operation latency in nanoseconds, from the moment the device began servicing the request until it completed | `op={read,write,flush,discard}` |
-| `blockio_queue_latency` | Distribution of time block IO requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under device saturation, where service latency alone stays flat. Requests that bypass the IO scheduler (blk-mq with the `none` elevator issues directly) have no queue phase and are absent rather than recorded as zero | `op={read,write,flush,discard}` |
+| `blockio_device_latency` | Distribution of block IO device service latency in nanoseconds, from the moment the device began servicing the request until it completed. Recordings made before this metric was renamed carry the same measurement as `blockio_latency` | `op={read,write,flush,discard}` |
+| `blockio_queue_latency` | Distribution of time requests spent queued before the device began servicing them, in nanoseconds. This is the component that grows under saturation, where device latency alone stays flat. A request that goes straight to the driver has no queue phase and records no sample, so on such a device the histogram is present but empty | `op={read,write,flush,discard}` |
+| `blockio_total_latency` | Distribution of end-to-end latency in nanoseconds, from the request entering the queue until it completed — queue and device together. Measured directly rather than summed, because two histograms cannot be added | `op={read,write,flush,discard}` |
 
 ### blockio_requests
 

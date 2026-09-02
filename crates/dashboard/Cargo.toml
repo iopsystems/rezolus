@@ -16,4 +16,7 @@ serde_json.workspace = true
 include_dir.workspace = true
 
 [dev-dependencies]
+histogram.workspace = true
+metriken-exposition.workspace = true
+metriken-query = { workspace = true, features = ["ingest"] }
 tempfile = "3"

@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+### Added
+
+- Agent: block IO latency is now split into its three phases, each a histogram
+  broken down by `op` (read, write, flush, discard). `blockio_queue_latency` is
+  the time a request waited before the device began servicing it — the
+  component that grows under saturation, where device latency alone stays flat.
+  `blockio_total_latency` is the end-to-end span the issuing workload actually
+  experiences, measured directly rather than summed (two histograms cannot be
+  added). The sampler already traced `block_rq_insert`, but insert and issue
+  shared one timestamp and issue overwrote it, discarding the interval — so
+  this needs no new probe attach. A request that goes straight to the driver
+  has no queue phase and records no queue sample. (#1054, #1124)
+
+### Changed
+
+- **Agent: `blockio_latency` is renamed `blockio_device_latency`.** It is the
+  same measurement — the pre-split metric always reported the issue-to-complete
+  span — but the bare name became ambiguous once the queue and end-to-end
+  phases were split out alongside it. Readers treat the two names as one
+  metric: the viewer, dashboard, and TUI resolve whichever name a recording
+  carries (`blockio_device_latency_metric`), so existing recordings keep
+  rendering unchanged. External consumers that query `blockio_latency` by name
+  — Prometheus rules, Grafana dashboards, saved PromQL — need updating.
+  (#1054, #1124)
+
 ## [5.19.0] - 2026-08-31
 
 ### Changed

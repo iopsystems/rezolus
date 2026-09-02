@@ -158,7 +158,7 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
     metadata::regenerate_dashboards(&state);
 
     let mut app = App::new(initial_sections(&state));
-    let overview_tiles = render::overview::tiles();
+    let mut overview_tiles = render::overview::tiles(state.baseline_data().as_ref());
 
     // A panic inside the draw loop, or an external SIGINT (`kill -INT`, a
     // supervisor) delivered while the terminal is in raw mode, would
@@ -201,6 +201,12 @@ pub fn run_tui(state: AppState, live: bool, _rt: &tokio::runtime::Runtime) {
         if live {
             metadata::regenerate_dashboards(&state);
             app.reconcile_sections(initial_sections(&state));
+            // In live mode the store is typically EMPTY at startup —
+            // `init_live_mode` only spawns `ingest_loop`, which awaits its
+            // first interval tick before fetching. Anything derived from the
+            // metric catalog, the blockio name alias included, has to be
+            // recomputed here rather than once before the loop.
+            overview_tiles = render::overview::tiles(state.baseline_data().as_ref());
             dirty = true;
         }
 
