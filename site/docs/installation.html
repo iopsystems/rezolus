@@ -65,19 +65,19 @@
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Getting Started</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
 <a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="installation.html">Installation</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Core Concepts</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Core Concepts</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
-<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
-<a class="block pl-7 pr-3 py-1 text-xs text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Reference</h4>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Reference</h4>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
 <a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
 </div>
@@ -85,7 +85,7 @@
 </aside>
 
 <!-- Content -->
-<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl">
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
 
 <h1 class="text-4xl font-extrabold tracking-tight mb-4">Installation</h1>
 <p class="text-lg text-slate-500 dark:text-slate-400 mb-12">Get Rezolus running on your system.</p>
@@ -124,11 +124,11 @@
 <div class="space-y-4">
 <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-800">
 <h3 class="text-sm font-bold mb-2">Debian / Ubuntu</h3>
-<p class="text-sm text-slate-500">Debian 11, 12, 13 &middot; Ubuntu 20.04, 22.04, 24.04</p>
+<p class="text-sm text-slate-500 dark:text-slate-400">Debian 11, 12, 13 &middot; Ubuntu 20.04, 22.04, 24.04</p>
 </div>
 <div class="p-5 rounded-xl border border-slate-200 dark:border-slate-800">
-<h3 class="text-sm font-bold mb-2">RHEL / Amazon Linux</h3>
-<p class="text-sm text-slate-500">Enterprise Linux 9 &amp; 10 &middot; Amazon Linux 2023</p>
+<h3 class="text-sm font-bold mb-2">Enterprise Linux (Rocky, Alma, RHEL) / Amazon Linux</h3>
+<p class="text-sm text-slate-500 dark:text-slate-400">Rocky Linux, AlmaLinux, RHEL, CentOS Stream and Oracle Linux 9 &amp; 10 &middot; Amazon Linux 2023</p>
 </div>
 </div>
 </section>
@@ -201,11 +201,23 @@
 <div id="panel-macos" class="hidden">
 
 <div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 mb-10">
-<p class="text-sm text-amber-800 dark:text-amber-300"><strong>Note:</strong> macOS support is limited to basic CPU metrics. eBPF-based samplers (scheduler, block I/O, TCP, syscall) require Linux.</p>
+<p class="text-sm text-amber-800 dark:text-amber-300"><strong>Note:</strong> macOS support covers CPU and Apple Silicon GPU metrics. eBPF-based samplers (scheduler, block I/O, TCP, syscall) require Linux.</p>
 </div>
 
 <section class="mb-16">
 <h2 class="text-xl font-bold mb-4">Install</h2>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
+<div class="w-3 h-3 rounded-full bg-red-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-amber-500/50"></div>
+<div class="w-3 h-3 rounded-full bg-green-500/50"></div>
+</div>
+<div class="p-6 font-mono text-sm leading-8">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">brew install iopsystems/iop/rezolus</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-500 dark:text-slate-400 mt-4 mb-4">The formula lives in the <a class="text-blue-600 dark:text-blue-400 no-underline hover:underline" href="https://github.com/iopsystems/homebrew-iop">iopsystems/homebrew-iop</a> tap; <code class="text-xs px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">brew</code> adds it for you on first install.</p>
+<p class="text-sm text-slate-500 dark:text-slate-400 mt-6 mb-4">The install script does the same thing, and falls back to building with Cargo when Homebrew is not present:</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
 <div class="w-3 h-3 rounded-full bg-red-500/50"></div>
