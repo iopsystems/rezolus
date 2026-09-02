@@ -898,16 +898,51 @@ fn warn_if_indistinguishable(
     url: &Url,
 ) {
     let key = seal_policy::recording_stagger_key(labels);
-    match seen.get(&key) {
-        Some(other) => eprintln!(
+    if let Some(warning) = indistinguishable_warning(seen, &key, url) {
+        eprintln!("{warning}");
+    }
+    seen.insert(key, url.to_string());
+}
+
+/// What is wrong with this recording's labels against the ones already seen,
+/// or `None` when nothing is.
+///
+/// Split from the printing so the DECISION is testable: whether a pair warns,
+/// and which of the two warnings it earns, is the part with rules in it.
+fn indistinguishable_warning(
+    seen: &BTreeMap<String, String>,
+    key: &str,
+    url: &Url,
+) -> Option<String> {
+    if let Some(other) = seen.get(key) {
+        return Some(format!(
             "warning: {other} and {url} carry identical labels ({key:?}), so nothing \
              downstream can tell their recordings apart — give each --endpoint its own \
              source=NAME to distinguish them"
-        ),
-        None => {
-            seen.insert(key, url.to_string());
-        }
+        ));
     }
+    // Distinguishable to a reader, but NOT to the seal stagger: two keys
+    // differing only in bit 5 of an even number of bytes draw the same bucket
+    // for every sampler (in printable ASCII, the same labels in different
+    // capitalisation). Their recordings would then seal in permanent lockstep,
+    // doubling the co-seal batch exactly when the archive holds twice the
+    // tables — the failure the stagger exists to prevent, reached by two names
+    // an operator would read as different.
+    //
+    // Warned rather than hashed around: every hash that closes this aliasing
+    // spreads a real sampler set at or worse than random, where this one
+    // spreads it perfectly. See `seal_policy::stagger_bucket`.
+    if let Some((other_key, other_url)) = seen
+        .iter()
+        .find(|(k, _)| seal_policy::staggers_identically(k, key))
+    {
+        return Some(format!(
+            "warning: {other_url} ({other_key:?}) and {url} ({key:?}) differ only in \
+             capitalisation, which the seal stagger cannot tell apart — their recordings \
+             will seal in lockstep. Give them labels that differ by more than case"
+        ));
+    }
+    None
 }
 
 /// Derive one tick's row stamp from the recording's clock anchor.
@@ -2240,6 +2275,58 @@ mod tests {
             role: None,
             protocol: Some(Protocol::Msgpack),
         })
+    }
+
+    /// Labels an operator reads as different, that the seal stagger cannot
+    /// tell apart.
+    ///
+    /// Two keys differing only in bit 5 of an even number of bytes draw the
+    /// same bucket for EVERY sampler, and in printable ASCII bit 5 is the case
+    /// bit. Their recordings then seal in permanent lockstep — the failure the
+    /// stagger exists to prevent — reached by two names that look distinct.
+    /// Warned rather than hashed around, because every hash that closed the
+    /// aliasing spread a real sampler set at or worse than random where this
+    /// one spreads it perfectly (see `seal_policy::stagger_bucket`).
+    #[test]
+    fn labels_differing_only_in_case_are_warned_about() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        let mut seen = BTreeMap::new();
+        seen.insert("arm=valkey".to_string(), "http://a:4241/".to_string());
+
+        // Even number of case flips: shares every bucket.
+        let w = super::indistinguishable_warning(&seen, "arm=VALKEY", &url("http://b:4241"))
+            .expect("an even-flip case difference must warn");
+        assert!(w.contains("lockstep"), "{w}");
+        assert!(w.contains("capitalisation"), "{w}");
+
+        // Odd: does not alias, so must NOT warn — a warning on every
+        // case-insensitive match would cry wolf on pairs that stagger fine.
+        assert!(
+            super::indistinguishable_warning(&seen, "arm=Valkey", &url("http://b:4241")).is_none(),
+            "an odd-flip case difference does not alias and must not warn"
+        );
+
+        // Genuinely distinct labels: silent.
+        assert!(
+            super::indistinguishable_warning(&seen, "arm=redis", &url("http://b:4241")).is_none()
+        );
+    }
+
+    /// The identical-labels warning still fires, and says the other thing:
+    /// nothing downstream can tell the recordings apart at all. The two
+    /// warnings are different problems and must not be collapsed.
+    #[test]
+    fn identical_labels_warn_about_identity_not_lockstep() {
+        let mut seen = BTreeMap::new();
+        seen.insert("arm=valkey".to_string(), "http://a:4241/".to_string());
+        let w = super::indistinguishable_warning(
+            &seen,
+            "arm=valkey",
+            &Url::parse("http://b:4241").unwrap(),
+        )
+        .expect("identical labels must warn");
+        assert!(w.contains("identical labels"), "{w}");
+        assert!(!w.contains("lockstep"), "{w}");
     }
 
     /// One tick of one counter for `endpoint`.
