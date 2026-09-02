@@ -1964,11 +1964,19 @@ mod tests {
     ///
     /// Every recording carries the same sampler names, so composing a
     /// flattened reader hands the builder several children holding the SAME
-    /// metric names under one label. Nothing downstream can tell them apart —
-    /// one silently replaces the other and an arm's data is simply gone, which
-    /// is the precise failure `composition_sources` exists to prevent. It was
-    /// reachable through `open_with_pool`, the path a multi-recording archive
-    /// actually takes in production.
+    /// metric names under one label. Nothing downstream can tell them apart:
+    /// `ParquetBuilder` concatenates rather than dedups or dispatches
+    /// (`MultiParquetSource`: "same (metric, label) pairs in multiple files
+    /// produce duplicate series"), so the result is duplicate, indistinguishable
+    /// series and a silently doubled aggregate — the precise failure
+    /// `composition_sources` exists to prevent. It was reachable through
+    /// `open_with_pool`, the path a multi-recording archive actually takes in
+    /// production.
+    ///
+    /// NOT one recording replacing another: that is `UnionSource`'s first-wins,
+    /// which the `route` refusals elsewhere in this file are about. The two
+    /// composers fail differently and the distinction is easy to lose, since
+    /// every neighbouring comment here is legitimately about the other one.
     #[test]
     fn composition_sources_refuse_a_flattened_multi_recording_reader() {
         let (_d, p) = two_sampler_rez();
