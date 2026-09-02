@@ -244,17 +244,33 @@ pub fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
     // identity for bits 6-7 while leaving the low-bit structure — which
     // measures *better* than a well-avalanched finalizer here — intact.
     //
-    // It does NOT close bit 5, and the same algebra applies: `x ^ 0x20` is
+    // It does NOT close bit 5, and that is now a measured decision rather than
+    // a deferral. The same algebra applies one bit lower: `x ^ 0x20` is
     // `x + 32 (mod 64)` and `51 * 32 == 32 (mod 64)`, so flipping bit 5 of an
-    // absorbed byte just XORs 0x20 through the whole chain. Two label sets
-    // differing by an EVEN number of bit-5 flips still share every bucket. In
-    // printable ASCII bit 5 is the case bit, so this needs two recordings
-    // whose labels differ only by capitalisation (`host=Web-01` vs
-    // `host=weB-01`) — which within one `record` run means an operator typing
-    // two `source=` values that differ only in case. Left open rather than
-    // absorbing `b >> 5` as well, because each extra fold costs some of the
-    // low-bit advantage and this class is far narrower than the one closed.
-    // Tracked in docs/backlog.md.
+    // absorbed byte XORs 0x20 through the whole chain and a second flip
+    // cancels it. Two label sets differing by an EVEN number of bit-5 flips
+    // share every bucket. In printable ASCII bit 5 is the case bit, so this
+    // needs two recordings whose labels differ only by capitalisation.
+    //
+    // **Closing it costs more than it buys, because the spread and the alias
+    // are the same property.** The low-bit structure that makes this hash
+    // spread a real sampler set PERFECTLY is exactly the affine structure the
+    // alias exploits. Measured over 500 recording keys, as colliding
+    // sampler-pairs normalised by what a uniform random assignment would give
+    // (0 = perfect, 1.0 = random):
+    //
+    //     candidate                12 samplers   26 samplers   alias
+    //     this hash                0.000         0.394         total lockstep
+    //     + absorb `b >> 5`        1.939         1.378         8/26 (not closed!)
+    //     + fold `b>>5 ^ b>>6`     1.939         1.182         1/26
+    //     reduce from top bits     0.981         1.002         closed
+    //
+    // Every candidate that closes the alias lands at or WORSE than random,
+    // and the `b >> 5` fold the backlog proposed does not even close it. The
+    // alias needs an operator to type two labels differing only in case, so it
+    // is detected and warned about instead — see `staggers_identically`, which
+    // states the condition exactly rather than approximating it with a
+    // case-insensitive compare.
     let absorb = |h: &mut u64, b: u64| {
         *h ^= b;
         *h = h.wrapping_mul(PRIME);
@@ -273,6 +289,40 @@ pub fn stagger_bucket(sampler: &str, recording_key: &str) -> u64 {
         absorb(&mut h, *b as u64);
     }
     h % STAGGER_BUCKETS
+}
+
+/// Whether two recording keys draw the SAME stagger bucket for EVERY sampler.
+///
+/// Not a string comparison — an exact statement about
+/// [`stagger_bucket`](stagger_bucket)'s algebra. The absorb is affine in each
+/// byte modulo `STAGGER_BUCKETS`, and `x ^ 0x20` is `x + 32 (mod 64)` with
+/// `51 * 32 == 32 (mod 64)`, so flipping bit 5 of one absorbed byte XORs 0x20
+/// through the whole chain and flipping it in a second byte cancels that out.
+/// Two keys therefore share every bucket exactly when they differ only in
+/// bit 5, in an EVEN number of positions.
+///
+/// In printable ASCII bit 5 is the case bit, so among realistic label values
+/// this is: the same labels typed with different capitalisation, in an even
+/// number of letters. `arm=valkey`/`arm=VALKEY` (six letters) shares all 26
+/// buckets; `arm=redis`/`arm=REDIS` (five) shares none.
+///
+/// This exists so the recorder can WARN about the one situation the aliasing
+/// can be reached in, which is far cheaper than hashing around it — see the
+/// note on `stagger_bucket` for the measurements behind that choice.
+pub fn staggers_identically(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut bit5_flips = 0usize;
+    for (x, y) in a.bytes().zip(b.bytes()) {
+        match x ^ y {
+            0 => {}
+            0x20 => bit5_flips += 1,
+            // Any other difference reaches bits the absorb does not cancel.
+            _ => return false,
+        }
+    }
+    bit5_flips.is_multiple_of(2)
 }
 
 /// A recording's stagger identity: its label set, canonically rendered.
@@ -300,6 +350,113 @@ mod tests {
     /// which is why it is a hand-written FNV-1a and not `DefaultHasher`. The
     /// literals pin the constants: if the hash changes, every recording's
     /// segment boundaries move.
+    /// The realistic sampler set, for spread and aliasing checks alike.
+    const SAMPLERS: [&str; 26] = [
+        "cpu_usage",
+        "cpu_perf",
+        "cpu_bandwidth",
+        "cpu_migrations",
+        "cpu_tlb_flush",
+        "cpu_frequency",
+        "scheduler",
+        "blockio_latency",
+        "blockio_requests",
+        "network_interfaces",
+        "network_traffic",
+        "syscall_counts",
+        "syscall_latency",
+        "tcp_connect_latency",
+        "tcp_packet_latency",
+        "tcp_receive",
+        "tcp_retransmit",
+        "tcp_traffic",
+        "memory",
+        "page_cache",
+        "gpu_nvidia",
+        "softirq",
+        "rezolus",
+        "cgroup_cpu",
+        "cgroup_memory",
+        "filesystem",
+    ];
+
+    /// `staggers_identically` must agree with the hash it claims to describe.
+    ///
+    /// It is an algebraic shortcut — "differ only in bit 5, an even number of
+    /// times" — standing in for "draws the same bucket for every sampler". A
+    /// shortcut that drifted from the function it describes would make the
+    /// recorder warn about safe pairs, or stay silent on lockstep, and nothing
+    /// else would notice. So it is checked against `stagger_bucket` itself.
+    #[test]
+    fn staggers_identically_agrees_with_the_hash() {
+        let cases = [
+            // Even bit-5 flips: every sampler collides.
+            ("arm=valkey", "arm=VALKEY"),
+            ("arm=Ab", "arm=aB"),
+            ("host=Web-01", "host=weB-01"),
+            // Odd: none do.
+            ("arm=redis", "arm=REDIS"),
+            ("arm=ab", "arm=aB"),
+            // Not a case difference at all.
+            ("host=web-01", "host=webm01"),
+            ("host=web-01", "host=web-02"),
+            ("arm=a", "arm=ab"),
+            // Identical.
+            ("arm=a", "arm=a"),
+        ];
+        for (a, b) in cases {
+            let predicted = staggers_identically(a, b);
+            let shares_all = SAMPLERS
+                .iter()
+                .all(|s| stagger_bucket(s, a) == stagger_bucket(s, b));
+            assert_eq!(
+                predicted, shares_all,
+                "staggers_identically({a:?}, {b:?}) said {predicted}, but the hash \
+                 shares-all is {shares_all}"
+            );
+        }
+    }
+
+    /// The property the stagger exists for, stated as a number so a future
+    /// change to the hash has to answer for it.
+    ///
+    /// Colliding sampler-pairs, normalised by what a uniform random assignment
+    /// would give: 0 = every table its own bucket, 1.0 = random. This hash
+    /// spreads a 12-sampler recording PERFECTLY and a 26-sampler one better
+    /// than random — which is the reason bit-5 aliasing is warned about rather
+    /// than hashed away, since every candidate that closed it measured at or
+    /// worse than random here.
+    #[test]
+    fn the_stagger_spreads_a_real_sampler_set_better_than_random() {
+        fn clumping(key: &str, n: usize) -> f64 {
+            let mut counts = [0u32; STAGGER_BUCKETS as usize];
+            for s in &SAMPLERS[..n] {
+                counts[stagger_bucket(s, key) as usize] += 1;
+            }
+            let pairs: f64 = counts
+                .iter()
+                .map(|&c| f64::from(c) * (f64::from(c) - 1.0) / 2.0)
+                .sum();
+            let expected = (n as f64) * (n as f64 - 1.0) / 2.0 / STAGGER_BUCKETS as f64;
+            pairs / expected
+        }
+
+        // Over many recordings, not one: the bucket a sampler draws depends on
+        // both, and a hash that spread well for a single key would say nothing.
+        for i in 0..200 {
+            let key = format!("host=web-{i:03}\u{1}source=rezolus");
+            assert_eq!(
+                clumping(&key, 12),
+                0.0,
+                "12 samplers must each get their own bucket ({key})"
+            );
+            assert!(
+                clumping(&key, 26) < 1.0,
+                "26 samplers must clump less than random ({key})"
+            );
+        }
+    }
+
     #[test]
     fn stagger_is_deterministic() {
         assert_eq!(stagger_bucket("cpu_usage", SINGLE_RECORDING_KEY), 32);

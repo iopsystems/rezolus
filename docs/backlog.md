@@ -846,7 +846,30 @@ effort); promote one to a journal entry when it's picked up.
   `RecordingSelector` against `RezReader::open_recordings`; it must name
   exactly one recording, and matching none or several is an error listing the
   candidates.
-- **The seal stagger still aliases on bit 5 (ASCII case)** — Open, found in the
+- **The seal stagger still aliases on bit 5 (ASCII case)** — **DONE**, and not
+  by changing the hash. Revisited with numbers, as this entry asked. The
+  measurement overturned the proposed fix: **the spread and the alias are the
+  same property** — the low-bit affine structure that makes this hash spread a
+  real sampler set PERFECTLY is exactly what the alias exploits. Colliding
+  sampler-pairs normalised by a uniform random assignment (0 = perfect, 1.0 =
+  random), over 500 recording keys:
+  | candidate | 12 samplers | 26 samplers | alias |
+  |---|---|---|---|
+  | shipping hash | 0.000 | 0.394 | total lockstep |
+  | + absorb `b >> 5` (this entry's fix) | 1.939 | 1.378 | **8/26 — not closed** |
+  | + fold `b>>5 ^ b>>6` | 1.939 | 1.182 | 1/26 |
+  | reduce from top bits | 0.981 | 1.002 | closed |
+  Every candidate that closes it lands at or worse than random, and the
+  proposed `b >> 5` fold does not even close it. So the hash stands and the
+  situation is DETECTED instead: `seal_policy::staggers_identically` states the
+  condition exactly (differ only in bit 5, an even number of times — not a
+  case-insensitive compare, which would cry wolf on the odd-count pairs that
+  stagger fine) and the recorder warns at startup, beside the existing
+  identical-labels warning. A test pins the shortcut against `stagger_bucket`
+  itself, since a drifted shortcut would warn about safe pairs or stay silent
+  on lockstep with nothing else noticing. The spread numbers are pinned too, so
+  a future hash change has to answer for them.
+  *Original entry:* found in the
   second review pass on #1109. The first pass closed bits 6-7 of every absorbed
   byte, but the same algebra survives one bit lower: `x ^ 0x20` is
   `x + 32 (mod 64)` and `51 * 32 == 32 (mod 64)`, so flipping bit 5 XORs 0x20
