@@ -62,12 +62,17 @@ enum Msg {
         seed: Box<ManifestSeed>,
         reply: SyncSender<Result<i64, String>>,
     },
-    /// One tick's WAL rows for one recording, across all its samplers — one
-    /// transaction.
-    Wal {
-        recording_id: i64,
-        rows: Vec<WalRow>,
-    },
+    /// One tick's WAL rows for EVERY recording in the archive, across all
+    /// their samplers — one transaction, and therefore one fsync at
+    /// `synchronous=FULL`.
+    ///
+    /// Per tick rather than per recording, because the cost is paid on the
+    /// scrape loop: `wal`/`wal_tick` is a blocking send on a bound-1 channel
+    /// from inside the tick, and a commit per recording made that cost scale
+    /// linearly with endpoint count. `seal_batch` already refused the same
+    /// trade ("12 implicit commits would be 12 fsyncs at `synchronous=FULL`
+    /// against a ~46 ms tick"); this carries the argument across recordings.
+    Wal { ticks: Vec<(i64, Vec<WalRow>)> },
     /// One seal batch for one recording = one transaction.
     Seal {
         recording_id: i64,
@@ -97,6 +102,12 @@ enum Msg {
     /// no data and changes nothing — see [`RecordingWriter::sync`].
     #[cfg(any(test, feature = "test-support"))]
     Sync(SyncSender<()>),
+    /// Answer with how many transactions the writer's connection has
+    /// committed. A barrier as well as a question, exactly as `Sync` is: the
+    /// reply means everything queued ahead of it has been handled, so a caller
+    /// can count a tick's commits without racing the writer.
+    #[cfg(any(test, feature = "test-support"))]
+    Commits(SyncSender<u64>),
 }
 
 /// Where the writer thread leaves its failure so a *handle* can report it.
@@ -262,6 +273,68 @@ impl RezArchive {
         take_writer_error(&self.err)
     }
 
+    /// Commit one tick's staged rows for EVERY recording, as one transaction.
+    ///
+    /// The multi-recording counterpart to [`RecordingWriter::wal`]. Each
+    /// recording's rows come from [`StreamRecorderV3::stage`]; this hands them
+    /// over together so the archive pays one commit — one fsync at
+    /// `synchronous=FULL` — per tick rather than one per endpoint.
+    ///
+    /// **Why the cost is worth naming:** the hand-off is a blocking send on a
+    /// bound-1 channel from inside the scrape tick, so a per-recording commit
+    /// put a linear-in-endpoint-count fsync bill on the loop that has to keep
+    /// up with the sampling interval. `seal_batch` already refused exactly this
+    /// trade within one recording; this is the same argument across them.
+    ///
+    /// An empty batch does not send: it still checks the writer is alive, so a
+    /// tick where nothing advanced cannot mask a dead writer.
+    pub fn wal_tick(&mut self, ticks: Vec<(i64, Vec<WalRow>)>) -> Result<(), String> {
+        let ticks: Vec<(i64, Vec<WalRow>)> = ticks
+            .into_iter()
+            .filter(|(_, rows)| !rows.is_empty())
+            .collect();
+        if ticks.is_empty() {
+            return self.check_alive();
+        }
+        let Some(tx) = self.tx.as_ref() else {
+            return Err("the .rez writer thread has already been joined".to_string());
+        };
+        if tx.send(Msg::Wal { ticks }).is_ok() {
+            return Ok(());
+        }
+        Err(take_writer_error(&self.err))
+    }
+
+    /// How many transactions the writer has committed, as a barrier: the
+    /// answer arrives only after everything queued ahead of it is handled.
+    ///
+    /// Exists so "one commit per tick, whatever the endpoint count" is a
+    /// property a test asserts rather than a comment claims — an fsync is not
+    /// observable from inside the process, but the commit that causes it is.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn commits_for_test(&mut self) -> u64 {
+        let (tx, rx) = sync_channel(0);
+        let Some(sender) = self.tx.as_ref() else {
+            return 0;
+        };
+        if sender.send(Msg::Commits(tx)).is_err() {
+            return 0;
+        }
+        rx.recv().unwrap_or(0)
+    }
+
+    /// Whether the writer thread is still alive, without writing anything.
+    ///
+    /// Mirrors `RecordingWriter::check_alive`: the shared error slot is the
+    /// only signal available, since the archive cannot ask a thread it owns
+    /// whether it has finished without joining it.
+    fn check_alive(&mut self) -> Result<(), String> {
+        match self.err.lock() {
+            Ok(guard) if guard.is_some() => Err(guard.clone().unwrap_or_default()),
+            _ => Ok(()),
+        }
+    }
+
     /// Create an archive holding exactly one recording.
     ///
     /// The shape every caller had before archives could hold several, and
@@ -350,7 +423,6 @@ impl RecordingWriter {
     }
 
     /// The `recordings` row this handle appends to.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn recording_id(&self) -> i64 {
         self.recording_id
     }
@@ -361,14 +433,18 @@ impl RecordingWriter {
         &self.stagger_key
     }
 
-    /// Hand one tick's WAL rows to the writer.
+    /// Hand one tick's WAL rows to the writer, for THIS recording alone.
+    ///
+    /// The single-recording spelling — hindsight, and a one-endpoint `record`.
+    /// An archive with several recordings should stage each one and commit the
+    /// tick once, through [`RezArchive::wal_tick`]: one transaction instead of
+    /// one per recording.
     pub fn wal(&mut self, rows: Vec<WalRow>) -> Result<(), String> {
         if rows.is_empty() {
             return self.check_alive();
         }
         self.send(Msg::Wal {
-            recording_id: self.recording_id,
-            rows,
+            ticks: vec![(self.recording_id, rows)],
         })
     }
 
@@ -605,7 +681,11 @@ fn writer_loop(
                 }
                 let _ = reply.send(inserted);
             }
-            Ok(Msg::Wal { recording_id, rows }) => db.insert_wal_rows(recording_id, &rows)?,
+            Ok(Msg::Wal { ticks }) => db.insert_wal_rows_batch(&ticks)?,
+            #[cfg(any(test, feature = "test-support"))]
+            Ok(Msg::Commits(reply)) => {
+                let _ = reply.send(db.commits());
+            }
             Ok(Msg::Seal {
                 recording_id,
                 batch,
@@ -1000,6 +1080,34 @@ impl StreamRecorderV3 {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
+        let rows = self.stage(snapshot, anchored_ts, wall_offset_ns)?;
+        self.handle.wal(rows)
+    }
+
+    /// Build this tick's WAL rows for THIS recording without committing them.
+    ///
+    /// The archive-level half of [`ingest`](Self::ingest): a caller holding
+    /// several recordings stages each one and commits the tick once, through
+    /// [`RezArchive::wal_tick`], so an archive pays one transaction — one fsync
+    /// at `synchronous=FULL` — per tick rather than one per endpoint.
+    ///
+    /// Everything except the hand-off happens here, dedup and seal accounting
+    /// included, so the two spellings cannot drift on what a tick MEANS. The
+    /// accounting advances even if the caller then fails to commit: that is
+    /// unchanged from `ingest`, whose send could always fail after the same
+    /// state moved.
+    /// The `recordings` row this recorder appends to — the key a batched tick
+    /// commit is addressed by.
+    pub fn recording_id(&self) -> i64 {
+        self.handle.recording_id()
+    }
+
+    pub fn stage(
+        &mut self,
+        snapshot: &Snapshot,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<Vec<WalRow>, String> {
         // Native V3 ingest is keyed by GROUP, not sampler, and its WAL payload
         // shape (`WalGroupRow`) differs entirely from V1/V2's `WalCell`s — so
         // it is its own path rather than a fork inside the loop below.
@@ -1098,7 +1206,7 @@ impl StreamRecorderV3 {
                 .or_insert_with(|| SegmentAccount::open_first(sampler, stagger_key, policy))
                 .add_row(entries_approx_bytes(&entries));
         }
-        self.handle.wal(wal_rows)
+        Ok(wal_rows)
     }
 
     /// The native V3 path: one WAL row per acquisition group whose window
@@ -1125,7 +1233,7 @@ impl StreamRecorderV3 {
         groups: &[GroupSnapshot],
         anchored_ts: u64,
         wall_offset_ns: i64,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<WalRow>, String> {
         let mut wal_rows = Vec::new();
         let mut accepted: Vec<(&str, u64, usize)> = Vec::new();
         // Names already accepted THIS TICK. `group_by_sampler`'s V1/V2 path is
@@ -1339,7 +1447,7 @@ impl StreamRecorderV3 {
                 .or_insert_with(|| SegmentAccount::open_first(name, stagger_key, policy))
                 .add_row(bytes);
         }
-        self.handle.wal(wal_rows)
+        Ok(wal_rows)
     }
 
     /// Seal every open segment past any threshold, as ONE batch → one
@@ -1527,6 +1635,84 @@ mod tests {
             }])
             .unwrap(),
         }
+    }
+
+    /// THE property the batched tick exists for: an archive's commit count per
+    /// tick does not grow with its recording count.
+    ///
+    /// At `synchronous=FULL` a commit is an fsync, and the hand-off is a
+    /// blocking send from inside the scrape loop — so a commit per recording
+    /// put a linear-in-endpoint-count fsync bill on the loop that has to keep
+    /// up with the sampling interval. `seal_batch` already refused that trade
+    /// within one recording ("12 implicit commits would be 12 fsyncs at
+    /// `synchronous=FULL` against a ~46 ms tick"); this is the same argument
+    /// across recordings.
+    ///
+    /// Asserted as ONE commit for FOUR recordings, and separately that a
+    /// 4-recording tick costs the same as a 1-recording tick — a count alone
+    /// could be satisfied by a writer that committed once and dropped three
+    /// recordings' rows, so the row check below is not decoration.
+    #[test]
+    fn a_tick_costs_one_commit_however_many_recordings_it_spans() {
+        fn commits_for(recordings: usize, dir: &Path) -> (u64, usize) {
+            let path = dir.join(format!("{recordings}.rez"));
+            let mut archive = RezArchive::create(&path).unwrap();
+            let mut recs: Vec<StreamRecorderV3> = (0..recordings)
+                .map(|i| {
+                    let mut seed = seed();
+                    seed.labels.insert("source".to_string(), format!("svc{i}"));
+                    StreamRecorderV3::new(archive.add_recording(seed).unwrap())
+                })
+                .collect();
+
+            // Baseline AFTER the recordings exist: `add_recording` commits, and
+            // what is being measured is the per-TICK cost.
+            let baseline = archive.commits_for_test();
+
+            let ts = 1_000_000_000u64;
+            let staged: Vec<(i64, Vec<WalRow>)> = recs
+                .iter_mut()
+                .map(|rec| {
+                    let rows = rec
+                        .stage(
+                            &snap(ts, vec![counter("cpu_cycles", "cpu_usage", 1, None)]),
+                            ts,
+                            0,
+                        )
+                        .unwrap();
+                    (rec.recording_id(), rows)
+                })
+                .collect();
+            archive.wal_tick(staged).unwrap();
+
+            // `commits_for_test` is itself the barrier: the writer answers it
+            // only after the tick ahead of it is committed.
+            let commits = archive.commits_for_test() - baseline;
+            let rows: usize = {
+                let db = RezDb::open(&path).unwrap();
+                (0..recordings)
+                    .map(|i| db.read_wal(i as i64 + 1, "cpu_usage").unwrap().len())
+                    .sum()
+            };
+            drop(recs);
+            drop(archive);
+            (commits, rows)
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let (one_commit, one_rows) = commits_for(1, dir.path());
+        let (four_commits, four_rows) = commits_for(4, dir.path());
+
+        assert_eq!(one_commit, 1, "a one-recording tick is one commit");
+        assert_eq!(
+            four_commits, one_commit,
+            "a four-recording tick must cost the same as a one-recording tick, \
+             not four times as much"
+        );
+        // ...and all four recordings' rows are actually in it. Without this, a
+        // writer that committed once and dropped three would pass above.
+        assert_eq!(one_rows, 1);
+        assert_eq!(four_rows, 4, "every recording's row must be in that commit");
     }
 
     /// THE guarantee this cadence exists for: a plain copy of a live archive

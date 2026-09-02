@@ -792,7 +792,24 @@ effort); promote one to a journal entry when it's picked up.
   `Plot`/`View` descriptor + component API, for live data — plus a `<rezolus-section>`
   wrapper. *Why:* a clean split between the static file-mode viewer and a future
   streaming server viewer without forking the frontend.
-- **One WAL commit (and fsync) per recording per tick** — Open, found reviewing
+- **One WAL commit (and fsync) per recording per tick** — **DONE**. A tick is
+  staged per recording (`StreamRecorderV3::stage`) and committed once
+  (`RezArchive::wal_tick` -> `RezDb::insert_wal_rows_batch`), so an archive
+  pays one transaction — one fsync at `synchronous=FULL` — per tick however
+  many endpoints it holds. `RezDb::commits()` makes that assertable: the test
+  pins one commit for four recordings AND that all four recordings' rows are in
+  it, since a count alone would be satisfied by a writer that committed once
+  and dropped three. Mutation-checked against the old per-recording commit,
+  which reads 4. A side benefit worth knowing: the tick is now atomic across
+  recordings, so a crash cannot leave one endpoint's row for tick N present and
+  another's missing. *Considered and declined:* moving to `synchronous=NORMAL`
+  with an fsync on a uniform clock. It trades the documented "survives power
+  loss, not merely process death" property for a win the existing measurement
+  says is not where the tail is ("the tail is checkpoint and prune work, not
+  fsync"), and it would leave the cost linear in endpoint count — N commits
+  still cost N commit records and N sets of page writes, just without the
+  fsyncs. Coalescing fixes the linearity at its root and keeps durability.
+  *Original entry:* found reviewing
   multi-endpoint `.rez` (#1109). `writer_loop` handles one `Msg::Wal` per
   recording per tick, and `RezDb::insert_wal_rows` is one transaction — one
   fsync at `synchronous=FULL`. An archive used to be one recording, so a tick

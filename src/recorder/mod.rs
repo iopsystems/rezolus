@@ -648,6 +648,13 @@ struct RezStream {
     /// msgpack endpoints get a recording: a sparse map says which endpoints
     /// are being archived without a `None` per endpoint that is not.
     recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
+    /// This tick's rows, per recording, waiting for one commit.
+    ///
+    /// Cleared by `commit_tick`. Rows sitting here have already advanced each
+    /// recorder's dedup and seal accounting — the same as the moment between
+    /// `StreamRecorderV3::ingest` building its rows and its send returning, so
+    /// a failure to commit loses the tick exactly as a failed send always did.
+    staged: Vec<(i64, Vec<rez_sqlite::WalRow>)>,
     /// Canonical label key -> the endpoint URL that claimed it first, for the
     /// indistinguishable-labels warning.
     ///
@@ -678,7 +685,14 @@ impl RezStream {
     /// archive would finalize successfully one recording short. Every endpoint
     /// that scrapes in this mode opens its recording first, at startup or on
     /// activation, so reaching this arm means that invariant broke.
-    fn ingest(
+    /// Stage one endpoint's tick. Nothing reaches the archive until
+    /// [`commit_tick`](Self::commit_tick).
+    ///
+    /// Staged rather than committed because the archive commits the whole tick
+    /// at once: at `synchronous=FULL` every commit is an fsync, and the
+    /// hand-off is a blocking send from inside the scrape loop, so a commit per
+    /// endpoint put a linear-in-endpoint-count fsync bill on the tick.
+    fn stage(
         &mut self,
         endpoint: usize,
         url: &Url,
@@ -686,13 +700,30 @@ impl RezStream {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
-        match self.recs.get_mut(&endpoint) {
-            Some(rec) => rec.ingest(snapshot, anchored_ts, wall_offset_ns),
-            None => Err(format!(
-                "{url} was scraped with no .rez recording open for it; its samples \
-                 would be discarded"
-            )),
+        let rows = match self.recs.get_mut(&endpoint) {
+            Some(rec) => rec.stage(snapshot, anchored_ts, wall_offset_ns)?,
+            None => {
+                return Err(format!(
+                    "{url} was scraped with no .rez recording open for it; its samples \
+                     would be discarded"
+                ))
+            }
+        };
+        // Keyed by recording id, which is what the writer commits against.
+        if let Some(rec) = self.recs.get(&endpoint) {
+            self.staged.push((rec.recording_id(), rows));
         }
+        Ok(())
+    }
+
+    /// Commit every endpoint staged this tick, as one transaction.
+    ///
+    /// Called once per tick whether or not anything staged: an empty commit
+    /// does not write, but it does check the writer is still alive, so a run
+    /// whose endpoints all went quiet cannot sit on a dead writer unnoticed.
+    fn commit_tick(&mut self) -> Result<(), String> {
+        let staged = std::mem::take(&mut self.staged);
+        self.archive.wal_tick(staged)
     }
 
     /// Open a recording for an endpoint that became reachable after the
@@ -757,6 +788,7 @@ impl RezStream {
             recs,
             mut archive,
             seen_labels: _,
+            staged: _,
         } = self;
         // Every recording is finalized, even if an earlier one failed: they
         // are independent rows in one archive, and stopping at the first
@@ -832,6 +864,7 @@ fn start_rez_recorder(
     let mut stream = RezStream {
         recs: BTreeMap::new(),
         seen_labels: BTreeMap::new(),
+        staged: Vec::new(),
         archive,
     };
 
@@ -1486,7 +1519,7 @@ pub fn run(mut config: RecordingConfig) {
                                 },
                             };
                             if let (Some(snapshot), Some(rec)) = (snapshot, rez_recorder.as_mut()) {
-                                if let Err(e) = rec.ingest(
+                                if let Err(e) = rec.stage(
                                     idx,
                                     &endpoints[idx].config.url,
                                     &snapshot,
@@ -1683,6 +1716,21 @@ pub fn run(mut config: RecordingConfig) {
                 }
             }
 
+            // Commit the whole tick — every endpoint staged above — as ONE
+            // transaction, before the seal check. One commit means one fsync at
+            // `synchronous=FULL` however many endpoints the archive holds; a
+            // commit per endpoint made the tick's cost scale with their count,
+            // on the loop that has to keep up with the sampling interval.
+            //
+            // Every tick, scrape or not, for the same reason `maybe_seal` runs
+            // unconditionally: an empty commit writes nothing but does check
+            // the writer is alive, so a run whose endpoints all went quiet
+            // cannot sit on a dead writer unnoticed.
+            let committed = match rez_recorder.as_mut() {
+                Some(rec) => rec.commit_tick(),
+                None => Ok(()),
+            };
+
             // Seal checks run every tick, scrape or not: if they were
             // ingest-driven an unreachable endpoint would leave its pre-outage
             // rows unsealed forever and the age bound would stop bounding the
@@ -1694,6 +1742,7 @@ pub fn run(mut config: RecordingConfig) {
             if let Some(e) = late_endpoint_failure
                 .take()
                 .or(ingest_failed)
+                .or_else(|| committed.err())
                 .or_else(|| sealed.err())
             {
                 eprintln!("error: recording failed: {e}");
@@ -2202,7 +2251,11 @@ mod tests {
         );
         let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
         let url = Url::parse("http://localhost:4241").unwrap();
-        rec.ingest(endpoint, &url, &snapshot, ts, 0)
+        // A whole tick, as the recorder does one: stage every endpoint, then
+        // commit once. Testing `stage` alone would leave the rows uncommitted
+        // and every assertion about the file vacuous.
+        rec.stage(endpoint, &url, &snapshot, ts, 0)?;
+        rec.commit_tick()
     }
 
     #[test]
@@ -2296,8 +2349,9 @@ mod tests {
                 Some(::rez::window::Window::new(ts - 500, ts)),
             );
             let snapshot = rez::recorder_tests_support::snap(ts, vec![c]);
-            rec.ingest(0, &rez_endpoint().config.url, &snapshot, ts, 0)
-                .expect("ingest");
+            rec.stage(0, &rez_endpoint().config.url, &snapshot, ts, 0)
+                .expect("stage");
+            rec.commit_tick().expect("commit");
             rec.maybe_seal().expect("seal");
         }
     }
