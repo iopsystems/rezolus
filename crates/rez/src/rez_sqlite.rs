@@ -163,6 +163,9 @@ const LIVE_WAL_PREDICATE: &str = "recording_id = ?1 AND sampler = ?2 \
 /// An open handle on a `.rez` v3 file.
 pub struct RezDb {
     conn: Connection,
+    /// Committed transactions. See [`RezDb::commits`].
+    #[cfg(any(test, feature = "test-support"))]
+    commits: std::cell::Cell<u64>,
 }
 
 impl RezDb {
@@ -198,7 +201,11 @@ impl RezDb {
         // with `file:` stays a filename.
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| format!("failed to open {}: {e}", path.display()))?;
-        let db = RezDb { conn };
+        let db = RezDb {
+            conn,
+            #[cfg(any(test, feature = "test-support"))]
+            commits: std::cell::Cell::new(0),
+        };
 
         // ORDER IS LOAD-BEARING, and a reordering here fails invisibly — the
         // file is written with the wrong geometry and only a full VACUUM of
@@ -245,7 +252,11 @@ impl RezDb {
         // error, not an empty new recording.
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|e| format!("failed to open {}: {e}", path.display()))?;
-        let db = RezDb { conn };
+        let db = RezDb {
+            conn,
+            #[cfg(any(test, feature = "test-support"))]
+            commits: std::cell::Cell::new(0),
+        };
         // `page_size`, `auto_vacuum` and `journal_mode` persist in the file;
         // these do not, and forgetting them silently downgrades durability
         // (synchronous falls back to NORMAL) on every subsequent write.
@@ -309,7 +320,11 @@ impl RezDb {
         // its own copy of the image.
         conn.deserialize_read_exact(rusqlite::MAIN_DB, &mut bytes.as_slice(), len, true)
             .map_err(|e| format!("failed to read the .rez archive: {e}"))?;
-        let db = RezDb { conn };
+        let db = RezDb {
+            conn,
+            #[cfg(any(test, feature = "test-support"))]
+            commits: std::cell::Cell::new(0),
+        };
         db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
 
         // A `.rez` always has a `recordings` table. Its absence has one
@@ -484,6 +499,17 @@ impl RezDb {
     /// prune runs outside the seal transaction" is made unrepresentable rather
     /// than merely documented — inside it, a quiet sampler's accumulated rows
     /// make the delete long enough to threaten the tick.
+    /// How many transactions this connection has COMMITTED.
+    ///
+    /// Exists so "one commit per tick, whatever the endpoint count" is a
+    /// property a test can assert rather than one a comment claims. At
+    /// `synchronous=FULL` a commit is an fsync, and fsyncs are not otherwise
+    /// observable from inside the process.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn commits(&self) -> u64 {
+        self.commits.get()
+    }
+
     pub fn transaction<T>(
         &mut self,
         f: impl FnOnce(&RezTx<'_>) -> Result<T, String>,
@@ -500,6 +526,8 @@ impl RezDb {
         tx.tx
             .commit()
             .map_err(|e| format!("failed to commit transaction: {e}"))?;
+        #[cfg(any(test, feature = "test-support"))]
+        self.commits.set(self.commits.get() + 1);
         Ok(out)
     }
 
@@ -795,6 +823,25 @@ impl RezDb {
     /// one. Reads stay on `&self`.
     pub fn insert_wal_rows(&mut self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
         self.transaction(|tx| tx.insert_wal_rows(recording_id, rows))
+    }
+
+    /// One tick's rows for several recordings, in ONE transaction.
+    ///
+    /// **The transaction count is the point, not the row count.** At
+    /// `synchronous=FULL` every commit is an fsync, and the send that carries
+    /// this is a blocking hand-off from inside the scrape tick — so a commit
+    /// per recording made the tick's cost scale linearly with endpoint count.
+    /// Committing the tick once makes it constant. It also makes the tick
+    /// atomic across recordings: a crash cannot leave one endpoint's row for
+    /// tick N present and another's missing, which is the state a reader
+    /// comparing two arms would have to interpret.
+    pub fn insert_wal_rows_batch(&mut self, ticks: &[(i64, Vec<WalRow>)]) -> Result<(), String> {
+        self.transaction(|tx| {
+            for (recording_id, rows) in ticks {
+                tx.insert_wal_rows(*recording_id, rows)?;
+            }
+            Ok(())
+        })
     }
 
     /// Every WAL row for `(recording_id, sampler)`, sealed or not, oldest
