@@ -872,8 +872,19 @@ effort); promote one to a journal entry when it's picked up.
   test-only shape. *Why:* a `pub` constructor with no caller is the kind of
   thing a future consumer reaches for by name and then inherits the refusal
   from — the reason `mcp` had to grow an explicit guard at all.
-- **A failed `.rez` creation can leave a file that blocks the retry** — Open,
-  pre-existing, surfaced twice while reviewing #1109. `RezDb::create` claims the
+- **A failed `.rez` creation can leave a file that blocks the retry** — **DONE**.
+  Both remaining windows closed: `RezDb::create` removes what it claimed if
+  anything after the claim fails, and `RezArchive::create` removes it if the
+  thread spawn fails. `RezStream::discard` and both of those go through one
+  `RezDb::remove_archive`, which takes the `-wal`/`-shm` sidecars with the
+  archive — a stray sidecar is WORSE than a stray main file, since `O_EXCL`
+  catches the main file and says so while a sidecar beside a newly-created
+  database is adopted silently and its frames replayed in. Also pinned: a
+  cleanly finalized archive leaves exactly one file, which is what makes
+  "copy it, ship it, upload it" sound advice. The old "a spawn failure leaves
+  a valid empty recording" rationale was true and useless — valid is not
+  useful when it holds nothing and blocks the retry.
+  *Original entry:* pre-existing, surfaced twice while reviewing #1109. `RezDb::create` claims the
   output path with `O_EXCL`, and the writer refuses to overwrite an existing
   `.rez` — which is the right default for a container committed as it goes, but
   it means anything left behind by a failed start blocks the re-run until the

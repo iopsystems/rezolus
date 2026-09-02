@@ -179,6 +179,42 @@ impl RezDb {
         Self::create_with_page_size(path, PAGE_SIZE)
     }
 
+    /// A SQLite sidecar's path: the suffix is appended to the whole filename,
+    /// not swapped for the extension — `out.rez` has `out.rez-wal`, not
+    /// `out-wal`.
+    fn sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    }
+
+    /// Remove an archive AND its SQLite sidecars, ignoring what is not there.
+    ///
+    /// **A `.rez` is three files on disk while it is open**, not one: SQLite
+    /// puts recent commits in `<path>-wal` and the shared index in
+    /// `<path>-shm`. It cleans both up on a clean close, but not after an
+    /// unclean one — so anything that removes an archive has to remove them
+    /// too, or the next run finds a `-wal` beside a path it believes is free.
+    /// That is worse than a stale main file: `O_EXCL` catches the main file
+    /// and says so, while a stray sidecar is adopted silently by the newly
+    /// created database and its frames replayed into it.
+    ///
+    /// Best-effort by design: this runs on failure paths, where the error that
+    /// brought us here is the one worth reporting.
+    pub fn remove_archive(path: &Path) {
+        for p in [
+            path.to_path_buf(),
+            Self::sidecar(path, "-wal"),
+            Self::sidecar(path, "-shm"),
+        ] {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("failed to remove {}: {e}", p.display()),
+            }
+        }
+    }
+
     /// `create`, with the page size as a parameter. The parameter exists so a
     /// test can create at a NON-default page size: SQLite's own default happens
     /// to equal `PAGE_SIZE`, so asserting 4096 on a normally-created file passes
@@ -196,6 +232,24 @@ impl RezDb {
             .open(path)
             .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
 
+        // From here the file is OURS, and a failure must not leave it behind:
+        // the writer refuses to overwrite an existing `.rez`, so a half-created
+        // one turns the operator's retry into "the file already exists" — which
+        // reads as a bug in the retry rather than fallout from the error that
+        // actually happened.
+        match Self::init_created(path, page_size) {
+            Ok(db) => Ok(db),
+            Err(e) => {
+                Self::remove_archive(path);
+                Err(e)
+            }
+        }
+    }
+
+    /// Everything `create_with_page_size` does after claiming the path. Split
+    /// out so a failure in any of it has one cleanup site rather than one per
+    /// `?`.
+    fn init_created(path: &Path, page_size: u32) -> Result<Self, String> {
         // No `SQLITE_OPEN_CREATE`: the file above is the only one this may
         // adopt. No `SQLITE_OPEN_URI` either, so a path that happens to begin
         // with `file:` stays a filename.

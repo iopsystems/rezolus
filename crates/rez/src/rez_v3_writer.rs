@@ -181,13 +181,25 @@ impl RezArchive {
         let (tx, rx) = sync_channel(1);
         let err: ErrorSlot = Arc::new(Mutex::new(None));
         let thread_err = Arc::clone(&err);
-        // A spawn failure leaves the file in place, unlike v2's `.partial`
-        // unlink: it is a valid empty recording at the caller's chosen output
-        // path, not a staging artifact a later run would have to interpret.
-        let thread = std::thread::Builder::new()
+        // A spawn failure removes the file, sidecars included. It leaves a
+        // VALID empty recording at the caller's chosen path — which used to be
+        // the argument for keeping it — but valid is not the same as useful:
+        // it holds nothing, and the writer refuses to overwrite an existing
+        // `.rez`, so leaving it turns the operator's retry into "the file
+        // already exists". That reads as a bug in the retry rather than
+        // fallout from the spawn failure that actually happened.
+        let thread = match std::thread::Builder::new()
             .name("rez-v3-writer".to_string())
             .spawn(move || writer_thread(rx, db, thread_err, checkpoint_every))
-            .map_err(|e| format!("failed to spawn the .rez writer thread: {e}"))?;
+        {
+            Ok(thread) => thread,
+            Err(e) => {
+                // The closure was dropped with the failed spawn, and the
+                // connection with it, so the file is closed and ours to remove.
+                RezDb::remove_archive(path);
+                return Err(format!("failed to spawn the .rez writer thread: {e}"));
+            }
+        };
 
         Ok(Self {
             tx: Some(tx),
@@ -1635,6 +1647,120 @@ mod tests {
             }])
             .unwrap(),
         }
+    }
+
+    /// A `.rez` that finished cleanly is ONE file.
+    ///
+    /// SQLite keeps recent commits in `<path>-wal` and a shared index in
+    /// `<path>-shm` while a database is open, and removes both on a clean
+    /// close. That is the whole basis for treating a finished archive as a
+    /// single artifact — something to copy, ship, or hand to a browser — so it
+    /// is worth pinning rather than assuming: if a future change left a
+    /// sidecar behind, every one of those uses would start silently shipping a
+    /// fraction of the archive.
+    #[test]
+    fn a_cleanly_finalized_archive_leaves_exactly_one_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("done.rez");
+        let (archive, writer) = RezArchive::single(&path, seed()).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        let ts = 1_000_000_000u64;
+        rec.ingest(
+            &snap(ts, vec![counter("cpu_cycles", "cpu_usage", 1, None)]),
+            ts,
+            0,
+        )
+        .unwrap();
+        archive.finalize_single_rec(rec, (ts, 0)).unwrap();
+
+        let left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            left,
+            vec!["done.rez".to_string()],
+            "a finished archive must be one file, with no -wal/-shm beside it"
+        );
+    }
+
+    /// A creation that fails after claiming the path must not leave the path
+    /// claimed.
+    ///
+    /// The writer refuses to overwrite an existing `.rez` — right for a
+    /// container committed as it goes — so anything left by a failed start
+    /// blocks the re-run until someone removes it by hand, and the retry's
+    /// error ("the file already exists") describes neither what went wrong nor
+    /// what to do. Driven through the pragma path by handing `create` a
+    /// directory: the `create_new` succeeds against a path inside it, and
+    /// initialisation then fails.
+    #[test]
+    fn a_failed_creation_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blocked.rez");
+
+        // A path whose parent is a FILE, not a directory: `create_new` fails
+        // outright, so nothing is claimed and nothing is left.
+        let a_file = dir.path().join("afile");
+        std::fs::write(&a_file, b"x").unwrap();
+        assert!(RezDb::create(&a_file.join("inner.rez")).is_err());
+
+        // And the retry after a real creation is what must work: create,
+        // remove as `discard` does, create again at the same path.
+        let db = RezDb::create(&path).unwrap();
+        drop(db);
+        RezDb::remove_archive(&path);
+        assert!(
+            !path.exists(),
+            "removing an archive must remove the archive"
+        );
+        RezDb::create(&path).expect("the path must be free for the retry");
+    }
+
+    /// `remove_archive` takes the sidecars with it.
+    ///
+    /// A stray `-wal` is worse than a stray main file, not better: `O_EXCL`
+    /// catches the main file and says so, while a sidecar left beside a
+    /// newly-created database is adopted silently and its frames replayed in.
+    #[test]
+    fn removing_an_archive_removes_its_sidecars() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut writer = archive.add_recording(seed()).unwrap();
+        writer
+            .wal(vec![WalRow {
+                sampler: "cpu_usage".to_string(),
+                ts: 1_000,
+                wall_offset: 0,
+                row: encode_wal_row(&[WalCell {
+                    name: "0".to_string(),
+                    metadata: None,
+                    value: WalValue::Counter(1),
+                    window: None,
+                }])
+                .unwrap(),
+            }])
+            .unwrap();
+        writer.sync().unwrap();
+
+        let wal = dir.path().join("live.rez-wal");
+        assert!(wal.exists(), "fixture sanity: an open archive has a -wal");
+
+        drop(writer);
+        drop(archive);
+        RezDb::remove_archive(&path);
+
+        let left: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            left.is_empty(),
+            "sidecars must go with the archive: {left:?}"
+        );
     }
 
     /// THE property the batched tick exists for: an archive's commit count per
