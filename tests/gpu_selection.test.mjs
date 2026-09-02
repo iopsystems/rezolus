@@ -70,3 +70,19 @@ test('a partial cross product does not claim a vendor constraint it cannot expre
     assert.match(q, /id=~"0\|1"/);
     assert.doesNotMatch(q, /vendor=~/);
 });
+
+// Per-GPU charts group by (id, vendor) so two GPUs sharing an id draw as two
+// lines. They must stay exempt from the selector's filter, which is keyed on a
+// regex over that grouping — a regex that only matched the older `by (id)`
+// form would silently start filtering them.
+test('per-GPU groupings are exempt from the selection filter', () => {
+    const re = /by\s*\(\s*id\s*[,)]/;
+    assert.ok(re.test('sum by (id) (gpu_utilization) / 100'));
+    assert.ok(re.test('sum by (id, vendor) (gpu_utilization) / 100'));
+    assert.ok(re.test('max by (id, vendor) (gpu_temperature)'));
+    assert.ok(re.test('sum by ( id , vendor ) (gpu_clock)'));
+    // Aggregate charts are not exempt; they are what the selector filters.
+    assert.ok(!re.test('avg(gpu_utilization) / 100'));
+    assert.ok(!re.test('sum(gpu_memory{state="used"})'));
+    assert.ok(!re.test('sum by (vendor) (gpu_utilization)'));
+});

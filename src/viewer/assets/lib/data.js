@@ -702,10 +702,22 @@ const applyResultToPlot = (plot, result) => {
                     if (item.values && Array.isArray(item.values)) {
                         let seriesName = 'Series ' + (idx + 1);
                         if (item.metric) {
-                            for (const [key, value] of Object.entries(item.metric)) {
-                                if (key !== '__name__') {
-                                    seriesName = value;
-                                    break;
+                            // A GPU is identified by (vendor, id): every
+                            // vendor's sampler numbers its devices from 0, so a
+                            // host with an NVIDIA card and an Intel iGPU has two
+                            // GPUs both labelled id="0". Taking whichever label
+                            // iterates first would name both series "0" — two
+                            // indistinguishable lines — or drop the id entirely
+                            // and name them by vendor. Qualify explicitly.
+                            const { id, vendor } = item.metric;
+                            if (id !== undefined && vendor !== undefined) {
+                                seriesName = `${vendor} ${id}`;
+                            } else {
+                                for (const [key, value] of Object.entries(item.metric)) {
+                                    if (key !== '__name__') {
+                                        seriesName = value;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -847,7 +859,11 @@ const createDataApi = ({
         // On the GPU section, filter the non-per-GPU charts to the selected GPU
         // `id`s. Per-GPU charts group `by (id)` to draw one line per GPU and
         // must always show all GPUs, so they are exempt. Empty selection = all.
-        if (_selectedGpus.length > 0 && sectionRoute === '/gpu' && !/by\s*\(\s*id\s*\)/.test(q)) {
+        // Per-GPU charts group by id (and by vendor, since an id is only
+        // unique within one vendor) to draw one line per GPU; they must show
+        // every GPU regardless of the selection, so they are exempt.
+        if (_selectedGpus.length > 0 && sectionRoute === '/gpu'
+            && !/by\s*\(\s*id\s*[,)]/.test(q)) {
             q = applyGpuSelection(q, _selectedGpus);
         }
         if (injectTopologyLabels && serviceName) {
