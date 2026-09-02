@@ -345,12 +345,14 @@ pub(crate) const AMBIGUOUS_METRICS: &[(&str, &[&str])] = &[
 /// token — the sampler's metrics don't share its name prefix, so the plain
 /// first-token rule below would compute the wrong domain for them. Applied
 /// uniformly to sampler names too for simplicity; harmless in practice
-/// since no *sampler* name in [`EXPECTED_SUBSYSTEMS`] starts with `drive_`
-/// or `gpmu_` (`domain_of("drivehealth")` still yields `"drivehealth"` —
-/// its first token doesn't match either alias key).
+/// since no *sampler* name in [`EXPECTED_SUBSYSTEMS`] starts with `drive_`,
+/// `gpmu_`, `core_` or `package_` (`domain_of("drivehealth")` still yields
+/// `"drivehealth"` — its first token doesn't match any alias key).
 const DOMAIN_ALIASES: &[(&str, &str)] = &[
+    ("core", "cpu"),          // cpu_power sampler emits core_c*_residency metrics
     ("drive", "drivehealth"), // drivehealth sampler emits drive_* metrics
     ("gpmu", "gpu"),          // gpu_amd_pmu sampler emits gpmu_* metrics
+    ("package", "cpu"),       // cpu_power sampler emits package_c*_residency metrics
 ];
 
 /// Domain of a sampler or metric name: its first `_`-separated token, except
@@ -358,7 +360,9 @@ const DOMAIN_ALIASES: &[(&str, &str)] = &[
 /// token (`cgroup_cpu_usage` -> `cpu`, `cgroup_scheduler_offcpu` ->
 /// `scheduler`, `cgroup_syscall` -> `syscall`), and the result is mapped
 /// through [`DOMAIN_ALIASES`] (`drive_temperature` -> `drive` -> aliased to
-/// `drivehealth`; `gpmu_busy_cycles` -> `gpmu` -> aliased to `gpu`).
+/// `drivehealth`; `gpmu_busy_cycles` -> `gpmu` -> aliased to `gpu`;
+/// `core_c6_residency` -> `core` and `package_c6_residency` -> `package`, both
+/// aliased to `cpu`, since `cpu_power` emits them without its own prefix).
 /// Applied to sampler names (`blockio_latency` -> `blockio`, `drivehealth`
 /// -> `drivehealth`, `rezolus_rusage` -> `rezolus`) and to metric names
 /// alike, so `build_coverage`'s pruning and extraction's uncertain-domain

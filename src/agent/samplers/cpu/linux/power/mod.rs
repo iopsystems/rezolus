@@ -1,5 +1,9 @@
-//! Collects CPU energy, power, and idle-state residency from the perf PMUs the
-//! kernel exposes for them.
+//! Collects CPU energy and idle-state residency from the perf PMUs the kernel
+//! exposes for them.
+//!
+//! Energy, not power: energy is a monotonic counter that aggregates correctly
+//! over any window, and power is its derivative, recoverable at query time. No
+//! power gauge is exported -- see the note on the energy metrics in `stats.rs`.
 //!
 //! This sampler produces, for each domain the hardware implements:
 //! * `cpu_<domain>_energy` - cumulative energy in microjoules. Power is its
@@ -75,9 +79,11 @@ struct Reader {
     /// group. Derived from the CPU the counter was created on via `Index`.
     index: usize,
     kind: Kind,
-    /// The acquisition group this counter belongs to. Held per reader so the
-    /// member set can be built from what actually opened, and so `refresh`
-    /// brackets each entity space separately.
+    /// The acquisition group this counter belongs to -- equivalently, the
+    /// metric it feeds, since each metric owns a group. Held per reader so
+    /// `init` can build the member set from what actually opened and partition
+    /// the readers into `ReaderGroup`s, which is what lets `refresh` bracket
+    /// each group over only its own readers.
     acq: &'static AcquisitionGroup,
     /// Previous cumulative value, for differencing. `None` until the first
     /// sample establishes a baseline.
@@ -102,14 +108,63 @@ enum Kind {
     },
 }
 
+/// One acquisition group and the readers that populate it.
+///
+/// The partition is built once at `init` so that `refresh` brackets each group
+/// over only its own readers: a group's window then describes the read of that
+/// group's members and nothing else.
+struct ReaderGroup {
+    acq: &'static AcquisitionGroup,
+    readers: Vec<Reader>,
+}
+
 /// Every acquisition group this sampler declares, so `init` can build each
 /// one's member set and `refresh` can bracket each independently.
+///
+/// One group per metric, because the exposition layer applies a group's member
+/// set to every metric routed to it: a group shared by several metrics
+/// declares the union of their populations, and any metric short of that union
+/// publishes fabricated zeros at the surplus indices. See the header comment in
+/// `stats.rs`.
 const ACQ_GROUPS: &[&AcquisitionGroup] = &[
     &CPU_POWER_PACKAGE_ENERGY_ACQ,
+    &CPU_POWER_CORES_ENERGY_ACQ,
+    &CPU_POWER_IGPU_ENERGY_ACQ,
+    &CPU_POWER_DRAM_ENERGY_ACQ,
     &CPU_POWER_CORE_ENERGY_ACQ,
     &CPU_POWER_PLATFORM_ENERGY_ACQ,
-    &CPU_POWER_CORE_CSTATE_ACQ,
-    &CPU_POWER_PACKAGE_CSTATE_ACQ,
+    &CPU_POWER_CORE_C1_ACQ,
+    &CPU_POWER_CORE_C2_ACQ,
+    &CPU_POWER_CORE_C3_ACQ,
+    &CPU_POWER_CORE_C6_ACQ,
+    &CPU_POWER_CORE_C7_ACQ,
+    &CPU_POWER_CORE_C8_ACQ,
+    &CPU_POWER_CORE_C9_ACQ,
+    &CPU_POWER_CORE_C10_ACQ,
+    &CPU_POWER_PACKAGE_C1_ACQ,
+    &CPU_POWER_PACKAGE_C2_ACQ,
+    &CPU_POWER_PACKAGE_C3_ACQ,
+    &CPU_POWER_PACKAGE_C6_ACQ,
+    &CPU_POWER_PACKAGE_C7_ACQ,
+    &CPU_POWER_PACKAGE_C8_ACQ,
+    &CPU_POWER_PACKAGE_C9_ACQ,
+    &CPU_POWER_PACKAGE_C10_ACQ,
+];
+
+/// The core-scope C-state level groups, in the order their levels are declared.
+///
+/// `core_cstate_residency` sums every one of these levels, so its own group's
+/// population is the union of theirs -- and unlike the per-level metrics that
+/// union is correct, because every core-scope reader writes the total.
+const CORE_CSTATE_LEVEL_ACQ_GROUPS: &[&AcquisitionGroup] = &[
+    &CPU_POWER_CORE_C1_ACQ,
+    &CPU_POWER_CORE_C2_ACQ,
+    &CPU_POWER_CORE_C3_ACQ,
+    &CPU_POWER_CORE_C6_ACQ,
+    &CPU_POWER_CORE_C7_ACQ,
+    &CPU_POWER_CORE_C8_ACQ,
+    &CPU_POWER_CORE_C9_ACQ,
+    &CPU_POWER_CORE_C10_ACQ,
 ];
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -117,7 +172,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    let readers = discover();
+    let mut readers = discover();
 
     if readers.is_empty() {
         // None of the PMUs are present. This is the normal case under
@@ -139,19 +194,56 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // `open_counter` failure leaves a hole while later indices still succeed.
     //
     // The set is built per group from the readers that actually opened, so a
-    // domain whose PMU is absent declares no members at all.
-    for acq in ACQ_GROUPS {
-        let members: Vec<usize> = readers
-            .iter()
-            .filter(|r| std::ptr::eq(r.acq, *acq))
-            .map(|r| r.index)
-            .collect();
+    // domain whose PMU is absent declares no members at all -- and since every
+    // group backs exactly one metric, that set is that metric's own population
+    // rather than a union over its neighbours'.
+    //
+    // Readers are partitioned into their groups here, once, so `refresh` can
+    // bracket each group over only its own readers. These are independent perf
+    // fds with no per-device handle to re-open, so reading them group-major
+    // costs exactly what one flat sweep did -- there is no re-visit to trade
+    // against, which is why this does not need the device-visit archetype's
+    // "stale value under a fresh window" dispensation.
+    let mut groups: Vec<ReaderGroup> = Vec::new();
 
-        acq.set_member_set(&members);
+    for acq in ACQ_GROUPS {
+        let (mine, rest): (Vec<Reader>, Vec<Reader>) =
+            readers.into_iter().partition(|r| std::ptr::eq(r.acq, *acq));
+
+        readers = rest;
+
+        // Declared even when empty: a group with no readers is a metric whose
+        // PMU this part does not expose, and an empty member set is how it
+        // says "no members" rather than falling back to backing capacity.
+        acq.set_member_set(&mine.iter().map(|r| r.index).collect::<Vec<_>>());
+
+        if !mine.is_empty() {
+            groups.push(ReaderGroup { acq, readers: mine });
+        }
     }
 
+    debug_assert!(
+        readers.is_empty(),
+        "every reader's acquisition group must appear in ACQ_GROUPS"
+    );
+
+    // `core_cstate_residency` is written by every core-scope level reader, so
+    // its population is the union of the level groups' -- the one place a
+    // union is the right answer, because here every member really is written.
+    // Its window is not stamped separately: the readers that feed it are
+    // bracketed by their own level groups, and `set_member_set` sorts and
+    // de-duplicates, so the repeated core ids collapse.
+    let total_members: Vec<usize> = CORE_CSTATE_LEVEL_ACQ_GROUPS
+        .iter()
+        .filter_map(|acq| acq.member_set())
+        .flatten()
+        .copied()
+        .collect();
+
+    CPU_POWER_CORE_CSTATE_ACQ.set_member_set(&total_members);
+
     Ok(Some(Box::new(Power {
-        inner: PowerInner { readers }.into(),
+        inner: PowerInner { groups }.into(),
     })))
 }
 
@@ -180,68 +272,85 @@ impl Sampler for Power {
 }
 
 struct PowerInner {
-    readers: Vec<Reader>,
+    groups: Vec<ReaderGroup>,
 }
 
 impl PowerInner {
-    // Brackets each entity space separately (principle 18). Every bracket
-    // spans its member writes and stamps last via `finish()`. None discard: a
-    // single counter's failed `read()` is individually, normally fallible
-    // rather than a bulk sweep failure -- same ruling as `cpu_l3`/`cpu_dtlb`.
+    // Brackets each group separately (principle 18): one group per metric, so
+    // a window describes the read of exactly that metric's members and the
+    // groups carry genuinely distinct spans rather than N copies of the whole
+    // sweep. Every bracket spans its own member writes and stamps last via
+    // `finish()`.
+    //
+    // None discard: a single counter's failed `read()` is individually,
+    // normally fallible rather than a bulk sweep failure -- same ruling as
+    // `cpu_l3`/`cpu_dtlb`, which applies here for the same reason it does
+    // there now that each bracket really is one group's own read section.
     fn refresh(&mut self) {
-        // One guard per entity space. All five span the whole sweep because the
-        // readers share a single Vec; principle 18 permits that explicitly --
-        // the width is a deliberate upper bound on the read span, which
-        // over-states rate() uncertainty and never under-states it.
-        let guards: Vec<_> = ACQ_GROUPS.iter().map(|acq| acq.acquire()).collect();
+        for group in self.groups.iter_mut() {
+            let guard = group.acq.acquire();
 
-        for reader in self.readers.iter_mut() {
-            let Ok(raw) = reader.counter.read() else {
-                continue;
-            };
+            // Whether any member value was actually written under this
+            // bracket. On the very first refresh every reader takes the
+            // baseline `continue` below, so nothing is written and there is no
+            // interval to describe; stamping anyway would publish a fresh
+            // window over counters still reading 0 -- the same fabricated-zero
+            // failure the sparse member set exists to prevent, and the honest
+            // signal is "no new data this tick" instead.
+            let mut wrote = false;
 
-            // The first sample only establishes a baseline. A counter that goes
-            // backwards was reset underneath us; re-baseline and skip the
-            // interval rather than emitting a bogus spike.
-            let Some(previous) = reader.previous.replace(raw) else {
-                continue;
-            };
+            for reader in group.readers.iter_mut() {
+                let Ok(raw) = reader.counter.read() else {
+                    continue;
+                };
 
-            let Some(delta) = raw.checked_sub(previous) else {
-                continue;
-            };
+                // The first sample only establishes a baseline. A counter that
+                // goes backwards was reset underneath us; re-baseline and skip
+                // the interval rather than emitting a bogus spike.
+                let Some(previous) = reader.previous.replace(raw) else {
+                    continue;
+                };
 
-            let index = reader.index;
+                let Some(delta) = raw.checked_sub(previous) else {
+                    continue;
+                };
 
-            match &mut reader.kind {
-                Kind::Energy {
-                    scale,
-                    energy,
-                    energy_uj,
-                } => {
-                    let delta_uj = delta as f64 * *scale * 1_000_000.0;
+                let index = reader.index;
 
-                    // Accumulate in floating point, emit the integer part, and
-                    // carry the remainder into the next interval so that
-                    // truncation does not drift.
-                    *energy_uj += delta_uj;
-                    let whole = energy_uj.trunc();
-                    *energy_uj -= whole;
+                match &mut reader.kind {
+                    Kind::Energy {
+                        scale,
+                        energy,
+                        energy_uj,
+                    } => {
+                        let delta_uj = delta as f64 * *scale * 1_000_000.0;
 
-                    let _ = energy.add(index, whole as u64);
-                }
-                Kind::Cstate { residency, total } => {
-                    let _ = residency.add(index, delta);
+                        // Accumulate in floating point, emit the integer part,
+                        // and carry the remainder into the next interval so
+                        // that truncation does not drift.
+                        *energy_uj += delta_uj;
+                        let whole = energy_uj.trunc();
+                        *energy_uj -= whole;
 
-                    if let Some(total) = total {
-                        let _ = total.add(index, delta);
+                        let _ = energy.add(index, whole as u64);
+                    }
+                    Kind::Cstate { residency, total } => {
+                        let _ = residency.add(index, delta);
+
+                        if let Some(total) = total {
+                            let _ = total.add(index, delta);
+                        }
                     }
                 }
-            }
-        }
 
-        for guard in guards {
-            guard.finish();
+                wrote = true;
+            }
+
+            if wrote {
+                guard.finish();
+            } else {
+                guard.discard();
+            }
         }
     }
 }
@@ -257,6 +366,13 @@ enum Index {
     /// and whose cpumask CPU ids are sparse (`0,64` on a two-socket host).
     Ordinal,
     /// Always index zero. Used for host-scope counters, of which there is one.
+    ///
+    /// A host-scope domain still publishes a package-scope cpumask -- `energy-psys`
+    /// names one CPU per package like its `power`-PMU siblings -- but it measures
+    /// the whole platform, so every one of those CPUs reads the SAME quantity.
+    /// Opening all of them would `add()` that quantity into index 0 once per
+    /// package: a two-socket host would report double the platform draw, not two
+    /// halves of it. Only the first cpumask entry is opened; see `open_energy`.
     Zero,
 }
 
@@ -264,8 +380,11 @@ enum Index {
 fn discover() -> Vec<Reader> {
     let mut readers = Vec::new();
 
-    // The acquisition group tracks the entity space, which is exactly what
-    // `Index` encodes: package ordinal, physical core, or the single host.
+    // Each domain carries its own acquisition group, because each backs its
+    // own metric: a part exposing `energy-pkg` but not `energy-gpu` must
+    // declare no members for the latter rather than inheriting the former's.
+    // `Index` still encodes the entity space the members are numbered in:
+    // package ordinal, physical core, or the single host.
     for (pmu, event, index, energy, acq) in [
         (
             "power",
@@ -279,21 +398,21 @@ fn discover() -> Vec<Reader> {
             "energy-cores",
             Index::Ordinal,
             &CPU_CORES_ENERGY,
-            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+            &CPU_POWER_CORES_ENERGY_ACQ,
         ),
         (
             "power",
             "energy-gpu",
             Index::Ordinal,
             &CPU_IGPU_ENERGY,
-            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+            &CPU_POWER_IGPU_ENERGY_ACQ,
         ),
         (
             "power",
             "energy-ram",
             Index::Ordinal,
             &CPU_DRAM_ENERGY,
-            &CPU_POWER_PACKAGE_ENERGY_ACQ,
+            &CPU_POWER_DRAM_ENERGY_ACQ,
         ),
         (
             "power",
@@ -319,8 +438,7 @@ fn discover() -> Vec<Reader> {
         "cstate_core",
         Index::Cpu,
         core_cstate_metric,
-        Some(&CORE_CSTATE),
-        &CPU_POWER_CORE_CSTATE_ACQ,
+        Some((&CORE_CSTATE, &CPU_POWER_CORE_CSTATE_ACQ)),
         &mut readers,
     );
     open_cstate(
@@ -328,7 +446,6 @@ fn discover() -> Vec<Reader> {
         Index::Ordinal,
         package_cstate_metric,
         None,
-        &CPU_POWER_PACKAGE_CSTATE_ACQ,
         &mut readers,
     );
 
@@ -340,9 +457,11 @@ impl Index {
     ///
     /// Writes past a metric group's capacity are dropped by metriken rather
     /// than panicking, so an index that overflows its group would silently
-    /// lose that series. Warn once here, at discovery, instead of leaving the
-    /// loss invisible.
-    fn resolve(self, pmu: &str, event: &str, cpu: usize, ordinal: usize) -> usize {
+    /// lose that series. Warn once here, at discovery, and return `None` so no
+    /// reader is built for it: keeping one would cost a `read()` syscall per
+    /// refresh, forever, for a value that is discarded every time. Declining
+    /// the counter makes the ceiling visible as absent data instead.
+    fn resolve(self, pmu: &str, event: &str, cpu: usize, ordinal: usize) -> Option<usize> {
         let (index, limit) = match self {
             Index::Cpu => (cpu, MAX_CPUS),
             Index::Ordinal => (ordinal, MAX_PACKAGES),
@@ -354,9 +473,11 @@ impl Index {
                 "{NAME}: {pmu}/{event} on cpu{cpu} maps to index {index}, \
                  beyond the metric group's {limit} entries; this series will not be reported"
             );
+
+            return None;
         }
 
-        index
+        Some(index)
     }
 }
 
@@ -373,7 +494,20 @@ fn open_energy(
         return;
     };
 
-    for (ordinal, cpu) in cpumask(pmu).into_iter().enumerate() {
+    let cpus = cpumask(pmu);
+
+    // A host-scope domain is one quantity however many CPUs may read it, so
+    // take a single reader for it. Every other scope opens its whole cpumask.
+    let cpus = match index {
+        Index::Zero => &cpus[..cpus.len().min(1)],
+        Index::Cpu | Index::Ordinal => &cpus[..],
+    };
+
+    for (ordinal, &cpu) in cpus.iter().enumerate() {
+        let Some(resolved) = index.resolve(pmu, event, cpu, ordinal) else {
+            continue;
+        };
+
         let Some(counter) = open_counter(pmu, event, cpu) else {
             continue;
         };
@@ -382,7 +516,7 @@ fn open_energy(
 
         readers.push(Reader {
             counter,
-            index: index.resolve(pmu, event, cpu, ordinal),
+            index: resolved,
             kind: Kind::Energy {
                 scale,
                 energy,
@@ -400,9 +534,8 @@ fn open_energy(
 fn open_cstate(
     pmu: &str,
     index: Index,
-    level_metric: fn(u8) -> Option<&'static CounterGroup>,
-    total: Option<&'static CounterGroup>,
-    acq: &'static AcquisitionGroup,
+    level_metric: fn(u8) -> Option<(&'static CounterGroup, &'static AcquisitionGroup)>,
+    total: Option<(&'static CounterGroup, &'static AcquisitionGroup)>,
     readers: &mut Vec<Reader>,
 ) {
     let cpus = cpumask(pmu);
@@ -412,12 +545,16 @@ fn open_cstate(
     }
 
     for (event, level) in cstate_events(pmu) {
-        let Some(residency) = level_metric(level) else {
+        let Some((residency, acq)) = level_metric(level) else {
             debug!("{NAME}: {pmu}/{event} has no metric for level c{level}, skipping");
             continue;
         };
 
         for (ordinal, &cpu) in cpus.iter().enumerate() {
+            let Some(resolved) = index.resolve(pmu, &event, cpu, ordinal) else {
+                continue;
+            };
+
             let Some(counter) = open_counter(pmu, &event, cpu) else {
                 continue;
             };
@@ -426,8 +563,11 @@ fn open_cstate(
 
             readers.push(Reader {
                 counter,
-                index: index.resolve(pmu, &event, cpu, ordinal),
-                kind: Kind::Cstate { residency, total },
+                index: resolved,
+                kind: Kind::Cstate {
+                    residency,
+                    total: total.map(|(metric, _)| metric),
+                },
                 acq,
                 previous: None,
             });
@@ -515,30 +655,36 @@ fn cstate_events(pmu: &str) -> Vec<(String, u8)> {
     events
 }
 
-fn core_cstate_metric(level: u8) -> Option<&'static CounterGroup> {
+/// The metric and acquisition group for one core C-state level.
+///
+/// Paired here so a level cannot be routed to a group that is not its own:
+/// each level owns a group, since a part exposing c1/c3/c6/c7 must declare no
+/// members for c2/c8/c9/c10 rather than inheriting the levels it does expose.
+fn core_cstate_metric(level: u8) -> Option<(&'static CounterGroup, &'static AcquisitionGroup)> {
     Some(match level {
-        1 => &CORE_C1,
-        2 => &CORE_C2,
-        3 => &CORE_C3,
-        6 => &CORE_C6,
-        7 => &CORE_C7,
-        8 => &CORE_C8,
-        9 => &CORE_C9,
-        10 => &CORE_C10,
+        1 => (&CORE_C1, &CPU_POWER_CORE_C1_ACQ),
+        2 => (&CORE_C2, &CPU_POWER_CORE_C2_ACQ),
+        3 => (&CORE_C3, &CPU_POWER_CORE_C3_ACQ),
+        6 => (&CORE_C6, &CPU_POWER_CORE_C6_ACQ),
+        7 => (&CORE_C7, &CPU_POWER_CORE_C7_ACQ),
+        8 => (&CORE_C8, &CPU_POWER_CORE_C8_ACQ),
+        9 => (&CORE_C9, &CPU_POWER_CORE_C9_ACQ),
+        10 => (&CORE_C10, &CPU_POWER_CORE_C10_ACQ),
         _ => return None,
     })
 }
 
-fn package_cstate_metric(level: u8) -> Option<&'static CounterGroup> {
+/// The metric and acquisition group for one package C-state level.
+fn package_cstate_metric(level: u8) -> Option<(&'static CounterGroup, &'static AcquisitionGroup)> {
     Some(match level {
-        1 => &PACKAGE_C1,
-        2 => &PACKAGE_C2,
-        3 => &PACKAGE_C3,
-        6 => &PACKAGE_C6,
-        7 => &PACKAGE_C7,
-        8 => &PACKAGE_C8,
-        9 => &PACKAGE_C9,
-        10 => &PACKAGE_C10,
+        1 => (&PACKAGE_C1, &CPU_POWER_PACKAGE_C1_ACQ),
+        2 => (&PACKAGE_C2, &CPU_POWER_PACKAGE_C2_ACQ),
+        3 => (&PACKAGE_C3, &CPU_POWER_PACKAGE_C3_ACQ),
+        6 => (&PACKAGE_C6, &CPU_POWER_PACKAGE_C6_ACQ),
+        7 => (&PACKAGE_C7, &CPU_POWER_PACKAGE_C7_ACQ),
+        8 => (&PACKAGE_C8, &CPU_POWER_PACKAGE_C8_ACQ),
+        9 => (&PACKAGE_C9, &CPU_POWER_PACKAGE_C9_ACQ),
+        10 => (&PACKAGE_C10, &CPU_POWER_PACKAGE_C10_ACQ),
         _ => return None,
     })
 }

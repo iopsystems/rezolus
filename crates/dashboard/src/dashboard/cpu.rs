@@ -358,12 +358,14 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     // only on parts that implement them — so every subgroup is gated on the
     // metric actually appearing in the recording.
     //
-    // Power is derived from the energy counters rather than read from the
-    // `cpu_*_power` gauges. The gauges are averages over the sampler's own
-    // refresh interval, so a scrape landing mid-interval returns a stale
-    // value; `irate` over the monotonic energy counter is correct for any
-    // window. The counters are microjoules, so irate() gives uJ/s (= uW) and
-    // the /1e6 converts to watts.
+    // Power is derived from the energy counters; the sampler exports no power
+    // gauge at all, deliberately. A gauge would be an average over the
+    // sampler's own refresh interval, so a scrape landing mid-interval would
+    // return a stale value, and an integer-milliwatt gauge would truncate a
+    // microwatt-scale domain (an idle iGPU) to zero while its energy counter
+    // still advanced. `irate` over the monotonic energy counter is correct for
+    // any window instead. The counters are microjoules, so irate() gives uJ/s
+    // (= uW) and the /1e6 converts to watts.
     let mut power = Group::new("Power", "power");
 
     let domains: &[(&str, &str, &str)] = &[
@@ -398,12 +400,14 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
         let per_id = metric_unique_label_count(data, metric, "id") > 1;
 
-        sg.plot_promql(
-            PlotOpts::counter(format!("{label} Power"), format!("{id}-power"), Unit::Power),
-            format!("sum(irate({metric}[5m])) / 1000000"),
-        );
+        let opts = PlotOpts::counter(format!("{label} Power"), format!("{id}-power"), Unit::Power);
+        let query = format!("sum(irate({metric}[5m])) / 1000000");
 
+        // Full width when this plot is alone on its row; half when the per-id
+        // companion sits beside it. Same treatment as the utilization and TLB
+        // groups above.
         if per_id {
+            sg.plot_promql(opts, query);
             sg.plot_promql(
                 PlotOpts::counter(
                     format!("{label} Power (Per-ID)"),
@@ -412,6 +416,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 ),
                 format!("sum by (id) (irate({metric}[5m])) / 1000000"),
             );
+        } else {
+            sg.plot_promql_full(opts, query);
         }
     }
 
@@ -429,11 +435,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         total.describe(
             "Fraction of time cores spent in any idle C-state, summed across every level the hardware exposes.",
         );
-        total.plot_promql(
-            PlotOpts::counter("Idle %", "cstate-total", Unit::Percentage).percentage_range(),
-            "sum(irate(core_cstate_residency[5m])) / sum(irate(cpu_tsc[5m]))".to_string(),
-        );
+        let opts = PlotOpts::counter("Idle %", "cstate-total", Unit::Percentage).percentage_range();
+        let query =
+            "avg(sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m])))"
+                .to_string();
+
         if metric_unique_label_count(data, "core_cstate_residency", "id") > 1 {
+            total.plot_promql(opts, query);
             total.plot_promql(
                 PlotOpts::counter(
                     "Idle % (Per-Core)",
@@ -444,6 +452,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 "sum by (id) (irate(core_cstate_residency[5m])) / sum by (id) (irate(cpu_tsc[5m]))"
                     .to_string(),
             );
+        } else {
+            total.plot_promql_full(opts, query);
         }
     }
 
@@ -456,16 +466,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         sg.describe(format!(
             "Fraction of time cores spent in the C{level} idle state."
         ));
-        sg.plot_promql(
-            PlotOpts::counter(
-                format!("C{level} %"),
-                format!("cstate-core-c{level}"),
-                Unit::Percentage,
-            )
-            .percentage_range(),
-            format!("sum(irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
-        );
+        let opts = PlotOpts::counter(
+            format!("C{level} %"),
+            format!("cstate-core-c{level}"),
+            Unit::Percentage,
+        )
+        .percentage_range();
+        let query =
+            format!("avg(sum by (id) (irate({metric}[5m])) / sum by (id) (irate(cpu_tsc[5m])))");
+
         if metric_unique_label_count(data, &metric, "id") > 1 {
+            sg.plot_promql(opts, query);
             sg.plot_promql(
                 PlotOpts::counter(
                     format!("C{level} % (Per-Core)"),
@@ -475,6 +486,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 .percentage_range(),
                 format!("sum by (id) (irate({metric}[5m])) / sum by (id) (irate(cpu_tsc[5m]))"),
             );
+        } else {
+            sg.plot_promql_full(opts, query);
         }
     }
 
@@ -487,21 +500,27 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         sg.describe(format!(
             "Fraction of time the package spent in the C{level} idle state."
         ));
+        // The denominator is `avg`, not `sum`, over cpu_tsc. A package
+        // residency counter ticks at the TSC rate for ONE package, so the
+        // matching whole is one CPU's worth of TSC -- not the sum over every
+        // logical CPU, which would divide by the thread count and render a
+        // package sitting fully in this state as 1/nproc. TSC ticks at the
+        // same invariant rate on every CPU, so their average is that whole.
+        //
         // Half-width, matching the core C-state plots beside it. The per-id
         // companion is gated on there actually being more than one package:
         // resolveStyle() only draws a heatmap for a multi-series result, so on
         // a single-socket host it would just repeat this line beside itself.
-        sg.plot_promql(
-            PlotOpts::counter(
-                format!("Package C{level} %"),
-                format!("cstate-pkg-c{level}"),
-                Unit::Percentage,
-            )
-            .percentage_range(),
-            format!("sum(irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
-        );
+        let opts = PlotOpts::counter(
+            format!("Package C{level} %"),
+            format!("cstate-pkg-c{level}"),
+            Unit::Percentage,
+        )
+        .percentage_range();
+        let query = format!("avg(irate({metric}[5m])) / avg(irate(cpu_tsc[5m]))");
 
         if metric_unique_label_count(data, &metric, "id") > 1 {
+            sg.plot_promql(opts, query);
             sg.plot_promql(
                 PlotOpts::counter(
                     format!("Package C{level} % (Per-Package)"),
@@ -509,8 +528,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                     Unit::Percentage,
                 )
                 .percentage_range(),
-                format!("sum by (id) (irate({metric}[5m])) / sum(irate(cpu_tsc[5m]))"),
+                format!("sum by (id) (irate({metric}[5m])) / avg(irate(cpu_tsc[5m]))"),
             );
+        } else {
+            sg.plot_promql_full(opts, query);
         }
     }
 

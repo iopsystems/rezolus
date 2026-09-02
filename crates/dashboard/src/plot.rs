@@ -577,7 +577,6 @@ pub enum Unit {
     Percentage,
     Frequency,
     Power,
-    Energy,
 }
 
 impl std::fmt::Display for Unit {
@@ -592,7 +591,6 @@ impl std::fmt::Display for Unit {
             Self::Percentage => "percentage",
             Self::Frequency => "frequency",
             Self::Power => "power",
-            Self::Energy => "energy",
         };
 
         write!(f, "{s}")
