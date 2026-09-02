@@ -529,6 +529,54 @@ impl RezReader {
 
         Ok(sources)
     }
+    /// The evaluation timestamps a composed query needs to stay faithful to
+    /// this recording's cadences, or `None` when it does not need any.
+    ///
+    /// Querying this reader directly applies the cross-cadence policy itself
+    /// (see `query_range_opts`): when a query spans samplers recording at
+    /// different rates, the points are moved onto the SLOW table's own rows, so
+    /// every point lands where both operands genuinely have data. A caller that
+    /// instead composes [`composition_sources`](Self::composition_sources) into
+    /// a labelled multi-source queries that composed reader, never this one, and
+    /// so silently loses the policy — the composed reader falls back to the
+    /// uniform grid and holds the slow operand's value forward between its real
+    /// readings.
+    ///
+    /// Pass the result to `QueryOptions::with_eval_timestamps` on the composed
+    /// query to restore it:
+    ///
+    /// ```rust,ignore
+    /// let mut opts = QueryOptions::default();
+    /// if let Some(points) = reader.eval_timestamps_for(query, step_s, opts.rate_mode) {
+    ///     opts = opts.with_eval_timestamps(Some(points));
+    /// }
+    /// composed.query_range_opts(query, start_s, end_s, step_s, &opts)
+    /// ```
+    ///
+    /// `None` means the composed query needs no adjustment: the query touches
+    /// one cadence (the overwhelming majority), or `rate_mode` is
+    /// [`RateMode::Raw`], which places points at real un-snapped sample times
+    /// by contract and must not have them relocated.
+    ///
+    /// # This answers for ONE recording
+    ///
+    /// The timestamps are absolute, so they describe this recording's timeline
+    /// and no other. A caller composing SEVERAL recordings cannot simply pick
+    /// one: two jobs that ran at different wall-clock times share no instants,
+    /// and imposing one's rows on the other puts every point where the other
+    /// has no data — the very fault this exists to avoid. Apply this when
+    /// exactly one recording is in the composition, or when every recording
+    /// answers with the same timestamps; otherwise there is no well-defined
+    /// alignment and the uniform grid is the honest fallback.
+    pub fn eval_timestamps_for(
+        &self,
+        query: &str,
+        step_s: f64,
+        rate_mode: RateMode,
+    ) -> Option<Arc<[u64]>> {
+        self.cross_cadence_eval_timestamps(query, step_s, rate_mode)
+    }
+
     /// Whether this recording holds no tables at all.
     ///
     /// An arm that produced no rows — an endpoint that was reachable but never
@@ -3816,6 +3864,71 @@ mod tests {
     /// operand as if the two were simultaneous. Here the slow rows are at
     /// x.5 s and unevenly spaced, so landing on them is only possible by using
     /// them directly — which is exactly what the assertion checks.
+    #[test]
+    fn eval_timestamps_restore_cross_cadence_fidelity_to_a_composed_query() {
+        const QUERY: &str = "rate(cpu_cycles[2s]) + rate(reads[4s])";
+        let (_d, path) = cross_cadence_rez();
+        let pool = BufferPool::new(64 * 1024 * 1024);
+        let reader = RezReader::open_with_pool(&path, Arc::clone(&pool)).unwrap();
+
+        let times = |r: QueryResult| -> Vec<f64> {
+            let QueryResult::Matrix { result } = r else {
+                panic!("expected a matrix");
+            };
+            result
+                .first()
+                .expect("one series expected")
+                .values
+                .iter()
+                .map(|(t, _)| *t)
+                .collect()
+        };
+
+        // Compose exactly as a labelled multi-artifact consumer does.
+        let mut builder = metriken_query::ParquetReader::builder();
+        for source in reader.composition_sources().unwrap() {
+            builder = builder.source_labeled(source, [("job", "a")]);
+        }
+        let composed = builder.build().unwrap();
+
+        // Composed, with no help: back on the uniform grid, holding the slow
+        // operand's value forward between its three real readings.
+        let plain = times(composed.query_range(QUERY, 0.0, 14.0, 1.0).unwrap());
+        assert!(
+            plain.len() > 2,
+            "fixture sanity: an unaided composed query spreads over the grid, got {plain:?}"
+        );
+
+        // Composed, with the recording's own evaluation points: identical to
+        // querying the archive directly.
+        let opts = QueryOptions::default();
+        let points = reader
+            .eval_timestamps_for(QUERY, 1.0, opts.rate_mode)
+            .expect("a two-cadence query must yield evaluation points");
+        let aligned = times(
+            composed
+                .query_range_opts(
+                    QUERY,
+                    0.0,
+                    14.0,
+                    1.0,
+                    &opts.with_eval_timestamps(Some(points)),
+                )
+                .unwrap(),
+        );
+        assert_eq!(
+            aligned,
+            vec![5.0, 11.0],
+            "composed + eval timestamps must match the direct reader's answer"
+        );
+
+        // A single-cadence query needs no adjustment, so composing it is
+        // already faithful and this returns None.
+        assert!(reader
+            .eval_timestamps_for("rate(cpu_cycles[2s])", 1.0, RateMode::default())
+            .is_none());
+    }
+
     #[test]
     fn a_cross_cadence_query_lands_on_the_slow_tables_real_rows() {
         let (_d, path) = cross_cadence_rez();
