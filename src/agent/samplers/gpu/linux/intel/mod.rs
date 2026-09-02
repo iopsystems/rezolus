@@ -97,6 +97,14 @@ use stats::*;
 /// on, while keeping the driver read rate off the scrape cadence.
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How early a scrape may arrive and still be served with a fresh read.
+///
+/// Scrape timers jitter by well under a millisecond in practice; 50ms is far
+/// above that and still two orders of magnitude below the default interval, so
+/// it cannot meaningfully raise the driver read rate. See the note in
+/// `refresh` for the aliasing this prevents.
+const SCRAPE_TOLERANCE: Duration = Duration::from_millis(50);
+
 /// Maximum number of Intel GPUs tracked. Hosts with more are truncated (logged
 /// once at init).
 pub(crate) const MAX_GPUS: usize = 8;
@@ -277,10 +285,26 @@ impl Sampler for IntelPmu {
     async fn refresh(&self) {
         // Throttle: dispatch at most once per `interval`. This is the only work
         // done on the sample cycle; everything else happens off-worker.
+        //
+        // The comparison carries a tolerance, and it is load-bearing rather
+        // than cosmetic. A consumer scraping at the same period as `interval`
+        // — the common case, since both default to 1s — arrives each cycle a
+        // few hundred microseconds early or late depending on jitter. A strict
+        // `<` then rejects roughly every other scrape, and because these are
+        // cumulative counters the exported series alternates between an
+        // unchanged value and one that jumped two intervals' worth. Measured on
+        // an Arc A770 at a steady 2400 MHz, the recorded `actual-frequency`
+        // deltas read `0, 4799, 0, 4800, ...`, which differentiates to a
+        // plausible-looking 4800 MHz — double the truth, with no gap to hint
+        // that a sample was dropped.
+        //
+        // Admitting a read that is within `SCRAPE_TOLERANCE` of due costs at
+        // most that much extra driver traffic and keeps one reading per scrape.
         {
             let mut last = self.last_read.lock().unwrap();
+            let due = self.interval.saturating_sub(SCRAPE_TOLERANCE);
             match *last {
-                Some(t) if t.elapsed() < self.interval => return,
+                Some(t) if t.elapsed() < due => return,
                 _ => *last = Some(Instant::now()),
             }
         }

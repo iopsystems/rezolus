@@ -320,6 +320,15 @@ integrated GPU, 11 engines and 4 frequency counters between them): 40-66 us per
 sweep in a release build. Reads are dispatched via `spawn_blocking`; the
 on-cycle cost is a time comparison.
 
+The read cadence admits a scrape arriving up to 50ms early. Without that
+tolerance, a consumer scraping at the same period as `interval` — the common
+case, since both default to 1s — has roughly every other scrape rejected by
+timer jitter, and the exported cumulative counters then alternate between an
+unchanged value and one that jumped two intervals' worth. That differentiates
+to double the true rate with no gap to indicate a dropped sample: an A770 held
+at a steady 2400 MHz recorded as 4800. Measured before the fix, two thirds of
+samples in a 155-second capture were stale repeats.
+
 The sweep is bracketed by two acquisition groups rather than one
 (`gpu_intel_pmu_engines` and `gpu_intel_pmu_devices`). It is a single read
 section, but its metrics live in two index spaces — per-engine entries are
