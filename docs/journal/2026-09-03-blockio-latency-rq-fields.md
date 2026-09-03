@@ -1,12 +1,14 @@
 # blockio latency — drop the in-flight map, read the kernel's own rq timestamps
 
 - **Opened:** 2026-09-03
-- **Status:** **GO — implemented & measured.** The three block-IO latency
-  phases (`blockio_queue_latency`, `blockio_device_latency`,
-  `blockio_total_latency`, shipped in #1124) are now computed from the kernel's
-  own `struct request` timestamps at `block_rq_complete` alone, rather than
-  bracketing `block_rq_insert` → `block_rq_issue` → `block_rq_complete` with a
-  pointer-keyed hash map. One probe replaces three; the map is gone. Every
+- **Status:** **SHIPPED, measured.** The three block-IO latency phases
+  (`blockio_queue_latency`, `blockio_device_latency`, `blockio_total_latency`,
+  shipped in #1124) are now computed from the kernel's own `struct request`
+  timestamps at `block_rq_complete` alone, rather than bracketing
+  `block_rq_insert` → `block_rq_issue` → `block_rq_complete` with a
+  pointer-keyed hash map. One probe replaces three; the map is gone.
+  **+10.2% throughput / −505 ns/IO** under saturation, device/total
+  distributions bit-identical to the old method (see *Results*). Every
   assumption behind the swap was probed on real hardware first — see *Go/no-go*.
 - **Driver:** a true-cost measurement of the map (below) found the sampler's
   dominant per-IO cost is the `start` hash, not the probe dispatch.
@@ -159,9 +161,31 @@ the kernel timestamps this effort reads.
 
 ## Results
 
-- **Overhead:** _(filled in at close-out from the delta A/B below)_
-- **Correctness:** the shipped sampler's device/queue/total distributions match
-  the field-probe values that the go/no-go A/B validated against the old method.
+Built the branch and `main` on `delta` and A/B'd them under identical load.
+
+- **Verifier & load:** the single `block_rq_complete` program (451 instructions,
+  up from the old complete's 387 because it now does the field reads and gates)
+  loads clean — sampler reports healthy. The old build loaded three programs
+  (insert 27, issue 357, complete 387 = **771 instructions**); the new is **451
+  in one program**.
+- **Overhead (the point):** `null_blk` mq-deadline, fio randread pinned to 4
+  cores, `perf stat -C`, 3 reps, new-vs-old:
+  - throughput **696,287 → 767,347 IOPS, +10.2%** (sd < 4.2k).
+  - **29,895 → 27,253 cycles/IO — 2,642 cycles/IO (≈505 ns/IO at 5.23 GHz)
+    saved.** This is the map cost recovered; it is contention-dependent (the
+    original hv01 measurement put the full sampler's map-bound cost at ~9,400
+    cycles/IO across *8* saturated cores — more cores, more cross-core bounce),
+    so the absolute figure scales with core count, but the win is real and
+    measured on both hosts.
+  - per-refresh userspace latency (mmap read) mean **45.8 → 38.8 µs**.
+- **Correctness (value equivalence, same fio, 2.4M IOs/arm):**
+  - `blockio_device_latency` and `blockio_total_latency`: p50/p99/p999 buckets
+    **identical** to the old method (131/131, 153/153, 156/156).
+  - `blockio_queue_latency`: tail **identical** (p99 bucket 133/133); p50 differs
+    exactly as the go/no-go A/B predicted — new reports a true **0** for the
+    requests that never queued, where the old method sat at its ~512 ns–2 µs
+    tracepoint-traversal floor (bucket 65). The cleaner reading, not a
+    regression.
 - Both BPF targets (x86_64, aarch64) compile against the checked-in `vmlinux.h`.
 
 ## Deferred / reopen
