@@ -200,7 +200,7 @@ fn picker_form(
             "{flag} {}",
             pairs
                 .iter()
-                .map(|(k, v)| format!("{k}={v}"))
+                .map(|(k, v)| shell_word(&format!("{k}={v}")))
                 .collect::<Vec<_>>()
                 .join(&format!(" {flag} "))
         ),
@@ -218,6 +218,34 @@ fn picker_form(
 /// One JSON string literal, escaped.
 fn json_str(s: &str) -> String {
     serde_json::Value::String(s.to_string()).to_string()
+}
+
+/// `word` as a single POSIX shell word, quoted only if it would not survive
+/// the shell as-is.
+///
+/// The flag form is advice to PASTE — `select with: --recording note=first run`
+/// — so a value with a space splits in the shell into a flag plus a stray
+/// positional (which for `detect-anomalies` lands in the optional `QUERY`
+/// slot), and a value containing the literal ` --recording ` parses back as a
+/// duplicate key. Neither is something an operator types on purpose, but both
+/// are a wrong answer wearing a right one's clothes — the species this arc kept
+/// finding.
+///
+/// Single-quote style, because it is TOTAL: inside `'...'` every byte is
+/// literal, so the only escape needed is for `'` itself, rendered `'\''` (close
+/// the quote, an escaped apostrophe, reopen). No character can slip through the
+/// way double-quote escaping lets `$`, `` ` ``, `\` and `!` do. Left bare when
+/// the word is already shell-safe, so the common `source=redis` reads unchanged
+/// and existing captures' advice does not churn.
+fn shell_word(word: &str) -> String {
+    // The set that never needs quoting in POSIX sh. `=` is here because the
+    // token is `k=v`; the rest are the label-value characters that occur in
+    // practice (paths, versions, hostports).
+    let safe = |c: char| c.is_ascii_alphanumeric() || "_-.,:/=@%+".contains(c);
+    if !word.is_empty() && word.chars().all(safe) {
+        return word.to_string();
+    }
+    format!("'{}'", word.replace('\'', "'\\''"))
 }
 
 /// Render a recording's labels for display: `k=v, k=v` in key order.
@@ -500,15 +528,30 @@ mod tests {
     /// told to type something that does not work.
     fn reparse(rendered: &str, syntax: SelectorSyntax) -> RecordingSelector {
         match syntax {
-            SelectorSyntax::Flag(flag) => RecordingSelector::parse(
-                flag,
-                rendered
-                    .strip_prefix(&format!("{flag} "))
-                    .unwrap_or_else(|| panic!("not a flag-form selector: {rendered:?}"))
-                    .split(&format!(" {flag} "))
-                    .map(str::to_string),
-            )
-            .unwrap_or_else(|e| panic!("unparseable flag selector {rendered:?}: {e}")),
+            // Model the real round trip: the rendered line is PASTED into a
+            // shell, which unquotes it into argv, and clap hands `parse` the
+            // words that followed each flag. `shlex::split` is that shell step
+            // — a DIFFERENT implementation from `shell_word`'s quoting, so a
+            // quoting bug (a bare space, a mangled apostrophe) surfaces here as
+            // a wrong word count rather than passing on a shared mistake.
+            SelectorSyntax::Flag(flag) => {
+                let argv = shlex::split(rendered)
+                    .unwrap_or_else(|| panic!("rendered form does not shell-split: {rendered:?}"));
+                let mut pairs = Vec::new();
+                let mut it = argv.into_iter();
+                while let Some(word) = it.next() {
+                    assert_eq!(
+                        word, flag,
+                        "expected {flag:?} in {rendered:?}, got {word:?}"
+                    );
+                    pairs.push(
+                        it.next()
+                            .unwrap_or_else(|| panic!("{flag} with no value in {rendered:?}")),
+                    );
+                }
+                RecordingSelector::parse(flag, pairs)
+                    .unwrap_or_else(|e| panic!("unparseable flag selector {rendered:?}: {e}"))
+            }
             SelectorSyntax::Json => {
                 let body = rendered
                     .strip_prefix("recording ")
@@ -549,6 +592,72 @@ mod tests {
             ),
             s,
             "the flag form must round-trip through parse"
+        );
+    }
+
+    /// A label value with a space must survive being pasted into a shell.
+    ///
+    /// The flag form is advice to paste (`select with: --recording ...`), so an
+    /// un-quoted space turns one selector into a flag plus a stray positional —
+    /// which for `detect-anomalies` lands in its optional `QUERY` slot and
+    /// quietly runs a different analysis. `reparse` shell-splits the rendered
+    /// line with `shlex` (a different implementation from the quoter), so this
+    /// asserts the value comes back BYTE-for-byte after a real round trip
+    /// through the shell.
+    #[test]
+    fn a_value_with_a_space_round_trips_through_the_shell() {
+        let s = RecordingSelector::parse("--recording", ["note=first run".to_string()]).unwrap();
+        let rendered = s.render(SelectorSyntax::Flag("--recording"));
+        // The token is quoted, so the shell keeps it one word.
+        assert!(
+            rendered.contains("'note=first run'"),
+            "a spaced value must be quoted: {rendered}"
+        );
+        assert_eq!(
+            reparse(&rendered, SelectorSyntax::Flag("--recording")),
+            s,
+            "a spaced value must survive the shell unchanged"
+        );
+    }
+
+    /// The nastier inputs, each round-tripped through the shell: a value that
+    /// contains the literal flag delimiter (which un-quoted would parse back as
+    /// a second key), an apostrophe (the one character single-quoting must
+    /// escape), and shell metacharacters.
+    #[test]
+    fn awkward_values_round_trip_through_the_shell() {
+        for pair in [
+            "note=a --recording b",
+            "note=it's fine",
+            "note=$(reboot)",
+            "cmd=a|b;c",
+            "q=*",
+        ] {
+            let s = RecordingSelector::parse("--recording", [pair.to_string()]).unwrap();
+            assert_eq!(
+                reparse(
+                    &s.render(SelectorSyntax::Flag("--recording")),
+                    SelectorSyntax::Flag("--recording")
+                ),
+                s,
+                "value {pair:?} must survive the shell unchanged"
+            );
+        }
+    }
+
+    /// Quoting only when needed: the common selector reads exactly as before,
+    /// so existing captures' advice does not churn and the output stays terse.
+    #[test]
+    fn a_safe_value_is_not_quoted() {
+        let s = RecordingSelector::parse(
+            "--recording",
+            ["source=redis".to_string(), "host=web-01".to_string()],
+        )
+        .unwrap();
+        assert_eq!(
+            s.render(SelectorSyntax::Flag("--recording")),
+            "--recording host=web-01 --recording source=redis",
+            "a shell-safe selector must not gain quotes"
         );
     }
 
