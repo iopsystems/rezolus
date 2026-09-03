@@ -115,7 +115,13 @@ jobs:
           shared-key: check-ubuntu-latest
           save-if: false
       - name: install cargo-audit
-        run: cargo install cargo-audit
+        # `--locked` uses cargo-audit's own committed Cargo.lock. Without it,
+        # `cargo install` resolves the tool's dependencies fresh against
+        # crates.io and a broken upstream release breaks the audit job for
+        # every PR — e.g. tinyvec 1.13.0 (2026-09-03) fails to compile
+        # (`cannot find macro vec`), which has nothing to do with this repo's
+        # own dependency tree. `wasm-pack` below is pinned for the same reason.
+        run: cargo install cargo-audit --locked
       - run: |
           cargo audit
 
