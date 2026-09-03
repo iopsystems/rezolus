@@ -1,15 +1,18 @@
-//! Collects BlockIO Latency stats using BPF and traces:
-//! * `block_rq_insert`
-//! * `block_rq_issue`
-//! * `block_rq_complete`
+//! Collects BlockIO Latency stats using BPF, tracing `block_rq_complete` and
+//! reading the kernel's own per-request timestamps (`start_time_ns`,
+//! `io_start_time_ns`) at completion.
 //!
 //! And produces these stats, one per phase of a request's life:
-//! * `blockio_queue_latency` (insert -> issue: how long the request waited)
-//! * `blockio_device_latency` (issue -> complete: how long the device took)
-//! * `blockio_total_latency` (insert -> complete: the two together)
+//! * `blockio_queue_latency` (init -> dispatch: how long the request waited)
+//! * `blockio_device_latency` (dispatch -> complete: how long the device took)
+//! * `blockio_total_latency` (init -> complete: the two together)
 //!
 //! `blockio_device_latency` was called `blockio_latency` before the phases were
-//! split out, and measures exactly what that metric always measured.
+//! split out. Earlier versions bracketed `block_rq_insert`/`block_rq_issue`/
+//! `block_rq_complete` with a per-request hash map; that map was the sampler's
+//! dominant per-IO cost, so it now reads the kernel's request timestamps at
+//! completion instead (see
+//! docs/journal/2026-09-03-blockio-latency-rq-fields.md).
 
 const NAME: &str = "blockio_latency";
 
@@ -102,17 +105,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &TOTAL_LATENCIES_ACQ,
     )
     .disabled_programs(if kernel_has_btf() {
-        &[
-            "block_rq_insert_raw",
-            "block_rq_issue_raw",
-            "block_rq_complete_raw",
-        ]
+        &["block_rq_complete_raw"]
     } else {
-        &[
-            "block_rq_insert_btf",
-            "block_rq_issue_btf",
-            "block_rq_complete_btf",
-        ]
+        &["block_rq_complete_btf"]
     })
     .build()?;
 
@@ -148,14 +143,6 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
-        debug!(
-            "{NAME} block_rq_insert_btf() BPF instruction count: {}",
-            self.progs.block_rq_insert_btf.insn_cnt()
-        );
-        debug!(
-            "{NAME} block_rq_issue_btf() BPF instruction count: {}",
-            self.progs.block_rq_issue_btf.insn_cnt()
-        );
         debug!(
             "{NAME} block_rq_complete_btf() BPF instruction count: {}",
             self.progs.block_rq_complete_btf.insn_cnt()

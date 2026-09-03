@@ -706,6 +706,27 @@ cgroup references.
   axis that actually differs is hook firing rate (Mpps / millions of IOPS vs
   tick accounting).
 
+## Agent — blockio latency (rq-field method)
+
+Source: [blockio latency — drop the map, read rq timestamps](journal/2026-09-03-blockio-latency-rq-fields.md).
+The sampler now computes device/queue/total latency from `struct request`'s own
+`start_time_ns`/`io_start_time_ns` at `block_rq_complete`, no side map. Deferred
+items from that effort:
+
+- **Requeue under load** — Open. `block_rq_requeue` is left unhooked; a requeued
+  request measures device latency from its *last* dispatch (`io_start_time_ns` is
+  re-stamped). Not stress-tested (0 requeues on the probe workloads). *Reopen:*
+  if a requeue-heavy workload shows anomalous device tails.
+- **True partial completions** — Open. Recording is gated on
+  `nr_bytes == __data_len` (final completion) for stateless dedup; the
+  `nr_bytes < __data_len` branch is unexercised because real partials need SCSI
+  residual / specific drivers we could not force. *Reopen:* if a device known to
+  do partial completions shows count inflation or low-biased percentiles.
+- **Tag-allocation wait phase** — Idea. `alloc_time_ns` yields a fourth phase
+  (`start_time_ns − alloc_time_ns`, the wait for a free request tag — a deeper
+  saturation signal than queue wait) but is 0% populated without an active
+  iocost/iolatency controller. *Reopen:* expose it where a controller is active.
+
 ## metriken — measurement uncertainty (arc)
 
 Source: [measurement uncertainty](journal/2026-07-08-measurement-uncertainty.md).
