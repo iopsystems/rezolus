@@ -279,7 +279,7 @@
             </h1>
             <p
                 class="text-[22px] md:text-2xl text-slate-600 dark:text-slate-300 leading-relaxed mb-12 max-w-2xl mx-auto">
-                基于 eBPF 的遥测，运行时开销接近于零。用细粒度的 CPU、GPU、调度器、SSD、网络与系统调用指标，把真实存在的问题暴露出来。
+                基于 eBPF 的遥测，运行时开销接近于零。用细粒度的 CPU、GPU、调度器、SSD、网络与系统调用度量，把真实存在的问题暴露出来。
                 network, and syscall metrics to surface real issues.
             </p>
             <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -385,7 +385,7 @@
                 <h3 class="text-lg italic font-normal text-slate-900 dark:text-white mb-4">为什么可以一直开着</h3>
                 <ul class="space-y-3 list-disc pl-5 marker:text-slate-400 dark:marker:text-slate-600">
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
-                            class="font-bold text-slate-900 dark:text-white">只是一个指标采集代理。</span> 每次刷新的开销可量化、有上界。
+                            class="font-bold text-slate-900 dark:text-white">只是一个度量采集代理。</span> 每次刷新的开销可量化、有上界。
                         and bounded per-refresh cost.</li>
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
                             class="font-bold text-slate-900 dark:text-white">运行在原版的现代内核上。</span>
@@ -419,7 +419,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Agent</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">通过 eBPF 采集系统指标，开销接近于零。以 HTTP 暴露数据，供下游消费。
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">通过 eBPF 采集系统度量，开销接近于零。以 HTTP 暴露数据，供下游消费。
                         eBPF with near-zero overhead. Exposes data over HTTP for downstream consumers.</p>
                 </div>
 
@@ -432,7 +432,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Exporter</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">提供 Prometheus 兼容的指标，直方图分位数可配置，开箱即可被抓取。
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">提供 Prometheus 兼容的度量，直方图分位数可配置，开箱即可被抓取。
                         metrics with configurable histogram percentiles. Scrape-ready.</p>
                 </div>
 
@@ -445,7 +445,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Recorder</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">把高保真的指标快照写入 Parquet 文件，用于基准测试与性能分析。
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">把高保真的度量快照写入 Parquet 文件，用于基准测试与性能分析。
                         metric
                         snapshots to Parquet files for benchmarking and performance analysis.</p>
                 </div>
@@ -486,7 +486,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">MCP Server</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI 引导的分析工具。用 PromQL 查询记录、检测异常、关联指标。
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI 引导的分析工具。用 PromQL 查询记录、检测异常、关联度量。
                         Query recordings with PromQL, detect anomalies, and correlate metrics.</p>
                 </div>
 
@@ -548,7 +548,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览你的指标</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览你的度量</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -562,7 +562,7 @@
                                     class="text-green-400">rezolus view http://localhost:4241</code></div>
                         </div>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 mt-3">把 agent 的实时指标接入交互式 Web 仪表盘。agent 监听在
+                    <p class="text-base text-slate-600 dark:text-slate-300 mt-3">把 agent 的实时度量接入交互式 Web 仪表盘。agent 监听在
                         into
                         an interactive web dashboard. The agent listens on <code
                             class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">0.0.0.0:4241</code>，因此你也可以让 Viewer 指向远程主机。
@@ -597,7 +597,7 @@
                     </div>
                     <div
                         class="mt-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                        <p class="text-base text-amber-800 dark:text-amber-300"><strong>注意：</strong> macOS 上的 agent 只采集基础的 CPU 与 Apple GPU 指标。基于 eBPF 的采样器（调度器、块 I/O、TCP、系统调用）需要 Linux。可以用 Viewer 和 Recorder 连接远程的 Linux agent。
+                        <p class="text-base text-amber-800 dark:text-amber-300"><strong>注意：</strong> macOS 上的 agent 只采集基础的 CPU 与 Apple GPU 度量。基于 eBPF 的采样器（调度器、块 I/O、TCP、系统调用）需要 Linux。可以用 Viewer 和 Recorder 连接远程的 Linux agent。
                             collects basic CPU and Apple GPU metrics only. eBPF-based samplers (scheduler, block I/O,
                             TCP, syscall) require Linux. Use the viewer and recorder to work with remote Linux
                             agents.</p>
@@ -609,7 +609,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览本地或远程的指标</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览本地或远程的度量</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -618,10 +618,10 @@
                             <div class="w-3 h-3 rounded-full bg-green-500/50"></div>
                         </div>
                         <div class="p-6 font-mono text-sm leading-8">
-                            <div class="text-slate-500 text-xs"># 在 Mac 上查看远程 Linux 主机的指标</div>
+                            <div class="text-slate-500 text-xs"># 在 Mac 上查看远程 Linux 主机的度量</div>
                             <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code
                                     class="text-green-400">rezolus view http://&lt;remote-host&gt;:4241</code></div>
-                            <div class="text-slate-500 text-xs mt-3"># 或者在本地运行 agent（仅 CPU 指标）</div>
+                            <div class="text-slate-500 text-xs mt-3"># 或者在本地运行 agent（仅 CPU 度量）</div>
                             <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code
                                     class="text-green-400">sudo rezolus /etc/rezolus/agent.toml</code></div>
                         </div>
@@ -639,7 +639,7 @@
             <div class="text-center mb-16 card-surface">
                 <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">它测量什么
                     measures</h2>
-                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">覆盖完整的 Linux 性能栈，也可以接入你自己的指标。
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">覆盖完整的 Linux 性能栈，也可以接入你自己的度量。
                     the full Linux performance stack. Plus bring your own metrics.</p>
             </div>
 
@@ -662,7 +662,7 @@
                                 data-icon="developer_board">developer_board</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">GPU</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA 与 Apple Silicon 指标</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA 与 Apple Silicon 度量</p>
                 </a>
                 <a href="/docs/telemetry.html#memory"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
@@ -737,8 +737,8 @@
             </div>
         </div>
             <div class="mt-12 text-center text-lg font-medium text-slate-700 dark:text-slate-200 space-y-3">
-                <p><span class="text-blue-700 dark:text-blue-400 font-bold">CPU、调度器与系统调用</span> 指标还会 <em>按 cgroup（容器）分别上报</em>.</p>
-                <p>也可以从任意 <span class="text-blue-700 dark:text-blue-400 font-bold">OpenTelemetry</span> 端点接入你自己的指标。</p>
+                <p><span class="text-blue-700 dark:text-blue-400 font-bold">CPU、调度器与系统调用</span> 度量还会 <em>按 cgroup（容器）分别上报</em>.</p>
+                <p>也可以从任意 <span class="text-blue-700 dark:text-blue-400 font-bold">OpenTelemetry</span> 端点接入你自己的度量。</p>
             </div>
 
     </section>
@@ -790,9 +790,9 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="insights">insights</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">指标</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">度量</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">逐个说明采样器与指标类型</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">逐个说明采样器与度量类型</p>
                 </a>
                 <a href="/docs/cli.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
