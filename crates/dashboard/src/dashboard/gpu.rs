@@ -159,7 +159,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         tensor.plot_promql(
             PlotOpts::gauge("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_tensor_utilization) / 100".to_string(),
+            "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         tensor.plot_promql(
             PlotOpts::gauge(
@@ -169,13 +169,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             )
             .percentage_range()
             .with_row_label("GPU"),
-            "sum by (id, vendor) (gpu_tensor_utilization) / 100".to_string(),
+            "sum by (id, vendor) (gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     } else {
         tensor.plot_promql_full(
             PlotOpts::gauge("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_tensor_utilization) / 100".to_string(),
+            "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -184,7 +184,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if multi_gpu {
         sm.plot_promql(
             PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
-            "avg(gpu_sm_utilization) / 100".to_string(),
+            "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge(
@@ -194,12 +194,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             )
             .percentage_range()
             .with_row_label("GPU"),
-            "sum by (id, vendor) (gpu_sm_utilization) / 100".to_string(),
+            "sum by (id, vendor) (gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_sm_occupancy) / 100".to_string(),
+            "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge(
@@ -209,17 +209,17 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             )
             .percentage_range()
             .with_row_label("GPU"),
-            "sum by (id, vendor) (gpu_sm_occupancy) / 100".to_string(),
+            "sum by (id, vendor) (gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
     } else {
         sm.plot_promql_full(
             PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
-            "avg(gpu_sm_utilization) / 100".to_string(),
+            "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql_full(
             PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_sm_occupancy) / 100".to_string(),
+            "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -268,7 +268,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range(),
-            "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
+            "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         dram_bw.plot_promql(
             PlotOpts::gauge(
@@ -278,7 +278,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             )
             .percentage_range()
             .with_row_label("GPU"),
-            "sum by (id, vendor) (gpu_dram_bandwidth_utilization) / 100".to_string(),
+            "sum by (id, vendor) (gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100"
+                .to_string(),
         );
     } else {
         dram_bw.plot_promql_full(
@@ -288,7 +289,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range(),
-            "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
+            "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -309,7 +310,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth"
+        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
             .to_string(),
     );
 
@@ -326,7 +327,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth"
+        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
             .to_string(),
     );
 
@@ -334,7 +335,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     capacity.describe("Aggregate theoretical PCIe bandwidth available to all GPUs.");
     capacity.plot_promql_full(
         PlotOpts::gauge("Bandwidth", "pcie-bandwidth", Unit::Datarate),
-        "sum(gpu_pcie_bandwidth)".to_string(),
+        "sum(gpu_pcie_bandwidth{vendor=\"nvidia\"})".to_string(),
     );
 
     view.group(pcie);
@@ -636,12 +637,14 @@ fn intel_pmu(view: &mut View, multi_gpu: bool) {
             Unit::Percentage,
         )
         .with_row_label("Class"),
-        "sum by (engine_class) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+        "sum by (engine_class) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
+            .to_string(),
     );
     engines.plot_promql(
         PlotOpts::gauge("Busy % by Engine", "intel-engine-pct", Unit::Percentage)
             .with_row_label("Engine"),
-        "sum by (engine) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+        "sum by (engine) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
+            .to_string(),
     );
 
     // The engine that carries the compute workload, called out on its own
@@ -655,12 +658,12 @@ fn intel_pmu(view: &mut View, multi_gpu: bool) {
             Unit::Percentage,
         )
         .percentage_range(),
-        "sum(rate(gpu_engine_busy_time{engine_class=\"compute\"}[5m])) / 1000000000".to_string(),
+        "sum(rate(gpu_engine_busy_time{engine_class=\"compute\", vendor=\"intel\"}[5m])) / 1000000000".to_string(),
     );
     engines.plot_promql(
         PlotOpts::gauge("Render Engine Busy %", "intel-render-pct", Unit::Percentage)
             .percentage_range(),
-        "sum(rate(gpu_engine_busy_time{engine_class=\"render\"}[5m])) / 1000000000".to_string(),
+        "sum(rate(gpu_engine_busy_time{engine_class=\"render\", vendor=\"intel\"}[5m])) / 1000000000".to_string(),
     );
 
     if multi_gpu {
@@ -676,7 +679,8 @@ fn intel_pmu(view: &mut View, multi_gpu: bool) {
                 Unit::Percentage,
             )
             .with_row_label("GPU"),
-            "sum by (id, vendor) (rate(gpu_engine_busy_time[5m])) / 1000000000".to_string(),
+            "sum by (id, vendor) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
+                .to_string(),
         );
     }
 
@@ -691,12 +695,12 @@ fn intel_pmu(view: &mut View, multi_gpu: bool) {
     );
     freq.plot_promql(
         PlotOpts::gauge("Actual", "intel-freq-actual", Unit::Frequency),
-        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"actual\"}[5m])) * 1000000"
+        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
             .to_string(),
     );
     freq.plot_promql(
         PlotOpts::gauge("Requested", "intel-freq-requested", Unit::Frequency),
-        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"requested\"}[5m])) * 1000000"
+        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
             .to_string(),
     );
 

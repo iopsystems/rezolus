@@ -86,3 +86,40 @@ test('per-GPU groupings are exempt from the selection filter', () => {
     assert.ok(!re.test('sum(gpu_memory{state="used"})'));
     assert.ok(!re.test('sum by (vendor) (gpu_utilization)'));
 });
+
+// Series naming for per-GPU charts. The vendor is shown only when the result
+// spans vendors: on a single-vendor host "intel GPU 0" is noise where "GPU 0"
+// says the same thing, but with two vendors both numbering from 0 the vendor
+// is the only thing telling the lines apart.
+//
+// Mirrors the logic in data.js; the vendor-spanning case cannot be produced by
+// any host available here (it needs a discrete Intel GPU alongside another
+// vendor publishing a shared metric name), so it is covered here instead.
+const nameSeries = (results) => {
+    const vendors = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
+    const qualify = vendors.size > 1;
+    return results.map((i) => {
+        const { id, vendor } = i.metric;
+        if (id !== undefined && vendor !== undefined) {
+            return qualify ? `${vendor} GPU ${id}` : `GPU ${id}`;
+        }
+        return null;
+    });
+};
+
+const series = (vendor, id) => ({ metric: { vendor, id } });
+
+test('one vendor: series are named by id alone', () => {
+    assert.deepEqual(nameSeries([series('amd', '0'), series('amd', '1')]),
+        ['GPU 0', 'GPU 1']);
+});
+
+test('two vendors sharing an id: the vendor disambiguates', () => {
+    assert.deepEqual(nameSeries([series('nvidia', '0'), series('intel', '0')]),
+        ['nvidia GPU 0', 'intel GPU 0']);
+});
+
+test('a series with no vendor label falls back rather than throwing', () => {
+    // The macOS GPU sampler sets no vendor on any of its metrics.
+    assert.deepEqual(nameSeries([{ metric: { id: '0' } }]), [null]);
+});

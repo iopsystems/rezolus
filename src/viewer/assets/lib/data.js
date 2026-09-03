@@ -698,20 +698,32 @@ const applyResultToPlot = (plot, result) => {
                 const seriesIntervals = [];
                 let timestamps = null;
 
+                // A GPU is identified by (vendor, id): every vendor's sampler
+                // numbers its devices from 0, so a host with an NVIDIA card and
+                // an Intel iGPU has two GPUs both labelled id="0". Naming a
+                // series by whichever label iterates first would render both as
+                // "0" — two indistinguishable lines.
+                //
+                // The vendor is only worth showing when the result actually
+                // spans vendors; on a single-vendor host "intel GPU 0" is noise
+                // where "GPU 0" says the same thing. Decided over the whole
+                // result set, so every line in one chart is named consistently.
+                const gpuVendors = new Set(
+                    result.data.result
+                        .map((item) => item.metric && item.metric.vendor)
+                        .filter(Boolean),
+                );
+                const qualifyGpuVendor = gpuVendors.size > 1;
+
                 result.data.result.forEach((item, idx) => {
                     if (item.values && Array.isArray(item.values)) {
                         let seriesName = 'Series ' + (idx + 1);
                         if (item.metric) {
-                            // A GPU is identified by (vendor, id): every
-                            // vendor's sampler numbers its devices from 0, so a
-                            // host with an NVIDIA card and an Intel iGPU has two
-                            // GPUs both labelled id="0". Taking whichever label
-                            // iterates first would name both series "0" — two
-                            // indistinguishable lines — or drop the id entirely
-                            // and name them by vendor. Qualify explicitly.
                             const { id, vendor } = item.metric;
                             if (id !== undefined && vendor !== undefined) {
-                                seriesName = `${vendor} ${id}`;
+                                seriesName = qualifyGpuVendor
+                                    ? `${vendor} GPU ${id}`
+                                    : `GPU ${id}`;
                             } else {
                                 for (const [key, value] of Object.entries(item.metric)) {
                                     if (key !== '__name__') {
