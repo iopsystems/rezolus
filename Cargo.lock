@@ -1001,7 +1001,9 @@ dependencies = [
 name = "dashboard"
 version = "0.1.0"
 dependencies = [
+ "histogram",
  "include_dir",
+ "metriken-exposition",
  "metriken-query",
  "serde",
  "serde_json",

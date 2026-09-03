@@ -5,6 +5,9 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
+use ::dashboard::blockio_device_latency_metric;
+use metriken_query::MetricsSource;
+
 use super::chart::draw_chart;
 use crate::viewer::tui::layout::{overview_grid, too_small};
 use crate::viewer::tui::model::{PlotDef, PlotKind, DEFAULT_PERCENTILES};
@@ -40,7 +43,15 @@ fn pct(query: &str) -> PlotDef {
 /// first when the terminal is small). Queries mirror the web overview
 /// section (`crates/dashboard/src/dashboard/overview.rs`) and the memory
 /// section so they resolve against the real metric catalog.
-pub fn tiles() -> Vec<Tile> {
+/// `data` is consulted only to resolve metric-name aliases (currently just the
+/// blockio latency either-name pick via `blockio_device_latency_metric`)
+/// against the recording actually loaded. The tile list's length and order are
+/// otherwise data-independent — callers and tests may rely on both staying
+/// fixed; only individual tiles' query text adapts to `data`. Because the
+/// resolution happens at call time, a caller whose data can gain metrics later
+/// (a live agent still filling in its catalog) must re-call `tiles()` after
+/// that data changes, not just once at startup.
+pub fn tiles(data: &dyn MetricsSource) -> Vec<Tile> {
     vec![
         // CPU busy fraction: ns of CPU consumed per second / cores / 1e9.
         Tile {
@@ -64,7 +75,7 @@ pub fn tiles() -> Vec<Tile> {
         },
         Tile {
             title: "Block IO Latency",
-            def: pct("blockio_latency"),
+            def: pct(blockio_device_latency_metric(data)),
         },
         Tile {
             title: "Memory Used",
@@ -144,11 +155,13 @@ fn draw_tile(f: &mut Frame, area: Rect, tile: &Tile, data: &ChartData) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use metriken_query::MemoryStore;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     fn render_at(w: u16, h: u16) {
-        let tiles = tiles();
+        let store = MemoryStore::builder().build();
+        let tiles = tiles(&store);
         let data: Vec<ChartData> = tiles.iter().map(|_| ChartData::Empty).collect();
         assert_eq!(data.len(), tiles.len());
         let backend = TestBackend::new(w, h);
@@ -173,6 +186,20 @@ mod tests {
 
     #[test]
     fn tile_count_is_stable() {
-        assert_eq!(tiles().len(), 6);
+        let store = MemoryStore::builder().build();
+        assert_eq!(tiles(&store).len(), 6);
+    }
+
+    /// The blockio tile follows the recording's metric name. An empty store has
+    /// neither name, so it must fall back to the one a current agent emits
+    /// rather than the retired pre-rename name.
+    #[test]
+    fn blockio_tile_uses_the_name_the_recording_has() {
+        let store = MemoryStore::builder().build();
+        let blockio = tiles(&store)
+            .into_iter()
+            .find(|t| t.title == "Block IO Latency")
+            .expect("blockio tile present");
+        assert_eq!(blockio.def.base_query, "blockio_device_latency");
     }
 }

@@ -23,6 +23,43 @@ pub fn metric_unique_label_count(data: &dyn MetricsSource, metric: &str, key: &s
     data.label_values(metric, key).len()
 }
 
+/// True if `metric` exists in `data` under any metric type. Unlike
+/// `metric_unique_label_count`, this does not require the metric to
+/// carry any particular label key.
+pub fn has_metric(data: &dyn MetricsSource, metric: &str) -> bool {
+    !data.counter_labels(metric).is_empty()
+        || !data.gauge_labels(metric).is_empty()
+        || !data.histogram_labels(metric).is_empty()
+}
+
+/// Pre-rename recordings carry `blockio_latency`; post-rename recordings carry
+/// `blockio_device_latency`. Pick whichever this recording actually has so old
+/// captures keep rendering. Selecting the name from the data (rather than
+/// emitting a PromQL `x or y` fallback) keeps generated queries readable and
+/// does not depend on `or` support in the query engine.
+///
+/// The two are the same measurement: before the phases were split out, the
+/// insert and issue hooks shared one timestamp and issue overwrote it, so
+/// `blockio_latency` always reported the issue-to-complete span.
+///
+/// If neither is present (e.g. a recording taken with the `blockio_latency`
+/// sampler disabled), name the metric a current agent would emit rather than
+/// the retired pre-rename name — the chart is empty either way, but the query
+/// text is user-visible (Query Explorer, copy-paste, TUI/MCP consumers).
+///
+/// This is the single source of truth for the alias: every consumer that needs
+/// to pick between the two names calls this rather than re-deriving it, so they
+/// cannot disagree about which name a given recording uses.
+pub fn blockio_device_latency_metric(data: &dyn MetricsSource) -> &'static str {
+    if has_metric(data, "blockio_device_latency") {
+        "blockio_device_latency"
+    } else if has_metric(data, "blockio_latency") {
+        "blockio_latency"
+    } else {
+        "blockio_device_latency"
+    }
+}
+
 #[derive(Default, Serialize)]
 pub struct View {
     // interval between consecutive datapoints as fractional seconds

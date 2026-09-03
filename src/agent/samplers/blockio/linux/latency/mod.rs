@@ -3,8 +3,13 @@
 //! * `block_rq_issue`
 //! * `block_rq_complete`
 //!
-//! And produces these stats:
-//! * `blockio_latency`
+//! And produces these stats, one per phase of a request's life:
+//! * `blockio_queue_latency` (insert -> issue: how long the request waited)
+//! * `blockio_device_latency` (issue -> complete: how long the device took)
+//! * `blockio_total_latency` (insert -> complete: the two together)
+//!
+//! `blockio_device_latency` was called `blockio_latency` before the phases were
+//! split out, and measures exactly what that metric always measured.
 
 const NAME: &str = "blockio_latency";
 
@@ -35,12 +40,67 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    // All 4 op-class latency histograms share ONE group — see stats.rs's
-    // `LATENCIES_ACQ` doc comment.
-    .histogram("read_latency", &BLOCKIO_READ_LATENCY, &LATENCIES_ACQ)
-    .histogram("write_latency", &BLOCKIO_WRITE_LATENCY, &LATENCIES_ACQ)
-    .histogram("flush_latency", &BLOCKIO_FLUSH_LATENCY, &LATENCIES_ACQ)
-    .histogram("discard_latency", &BLOCKIO_DISCARD_LATENCY, &LATENCIES_ACQ)
+    // One group per phase — see stats.rs's acquisition-group doc comment.
+    .histogram(
+        "read_device_latency",
+        &BLOCKIO_READ_DEVICE_LATENCY,
+        &DEVICE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "write_device_latency",
+        &BLOCKIO_WRITE_DEVICE_LATENCY,
+        &DEVICE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "flush_device_latency",
+        &BLOCKIO_FLUSH_DEVICE_LATENCY,
+        &DEVICE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "discard_device_latency",
+        &BLOCKIO_DISCARD_DEVICE_LATENCY,
+        &DEVICE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "read_queue_latency",
+        &BLOCKIO_READ_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "write_queue_latency",
+        &BLOCKIO_WRITE_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "flush_queue_latency",
+        &BLOCKIO_FLUSH_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "discard_queue_latency",
+        &BLOCKIO_DISCARD_QUEUE_LATENCY,
+        &QUEUE_LATENCIES_ACQ,
+    )
+    .histogram(
+        "read_total_latency",
+        &BLOCKIO_READ_TOTAL_LATENCY,
+        &TOTAL_LATENCIES_ACQ,
+    )
+    .histogram(
+        "write_total_latency",
+        &BLOCKIO_WRITE_TOTAL_LATENCY,
+        &TOTAL_LATENCIES_ACQ,
+    )
+    .histogram(
+        "flush_total_latency",
+        &BLOCKIO_FLUSH_TOTAL_LATENCY,
+        &TOTAL_LATENCIES_ACQ,
+    )
+    .histogram(
+        "discard_total_latency",
+        &BLOCKIO_DISCARD_TOTAL_LATENCY,
+        &TOTAL_LATENCIES_ACQ,
+    )
     .disabled_programs(if kernel_has_btf() {
         &[
             "block_rq_insert_raw",
@@ -69,10 +129,18 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
 impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
-            "read_latency" => &self.maps.read_latency,
-            "write_latency" => &self.maps.write_latency,
-            "flush_latency" => &self.maps.flush_latency,
-            "discard_latency" => &self.maps.discard_latency,
+            "read_device_latency" => &self.maps.read_device_latency,
+            "write_device_latency" => &self.maps.write_device_latency,
+            "flush_device_latency" => &self.maps.flush_device_latency,
+            "discard_device_latency" => &self.maps.discard_device_latency,
+            "read_queue_latency" => &self.maps.read_queue_latency,
+            "write_queue_latency" => &self.maps.write_queue_latency,
+            "flush_queue_latency" => &self.maps.flush_queue_latency,
+            "discard_queue_latency" => &self.maps.discard_queue_latency,
+            "read_total_latency" => &self.maps.read_total_latency,
+            "write_total_latency" => &self.maps.write_total_latency,
+            "flush_total_latency" => &self.maps.flush_total_latency,
+            "discard_total_latency" => &self.maps.discard_total_latency,
             _ => unimplemented!(),
         }
     }
