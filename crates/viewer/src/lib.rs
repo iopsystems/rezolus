@@ -15,24 +15,12 @@ use wasm_bindgen::prelude::*;
 
 mod report_save;
 
-/// Parse a JS-side capture id into an internal slot selector. Mirrors
-/// the server-side CaptureId::parse but lives here to avoid pulling
-/// the viewer crate dependency graph into the wasm module.
-#[derive(Copy, Clone)]
-enum Slot {
-    Baseline,
-    Experiment,
-}
-
-impl Slot {
-    fn parse(capture: &str) -> Result<Self, JsValue> {
-        match capture {
-            "baseline" => Ok(Slot::Baseline),
-            "experiment" => Ok(Slot::Experiment),
-            other => Err(JsValue::from_str(&format!("unknown capture id: {other}"))),
-        }
-    }
-}
+/// The anchor capture's id — what an absent `?capture=` resolves to, never
+/// renamed. Mirrors the server registry's `BASELINE_ID`.
+const BASELINE_ID: &str = "baseline";
+/// The conventional id of the first non-anchor capture (the classic A/B
+/// experiment). Mirrors the server registry's `EXPERIMENT_ID`.
+const EXPERIMENT_ID: &str = "experiment";
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -708,8 +696,12 @@ fn serialize_lean_section(mut value: serde_json::Value) -> Option<String> {
 /// unaffected.
 #[wasm_bindgen]
 pub struct WasmCaptureRegistry {
+    /// The anchor. Always addressed by id `baseline`.
     baseline: Option<Viewer>,
-    experiment: Option<Viewer>,
+    /// Non-anchor captures in attach order, keyed by wire id; the first is
+    /// conventionally `experiment`. The two-armed operations (A/B combine,
+    /// report save) use `baseline` + this first entry — they stay pairwise.
+    others: Vec<(String, Viewer)>,
     /// Things the UI should say out loud about the last attach — currently
     /// only "this archive holds more recordings than are being shown".
     ///
@@ -725,7 +717,7 @@ impl WasmCaptureRegistry {
     pub fn new() -> Self {
         Self {
             baseline: None,
-            experiment: None,
+            others: Vec::new(),
             notices: Vec::new(),
         }
     }
@@ -755,11 +747,11 @@ impl WasmCaptureRegistry {
                 .next()
                 .expect("open_rez rejects an empty archive");
             let viewer = Viewer::from_source(Arc::new(reader), pool, Bytes::new(), filename);
-            *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
+            self.set_capture(capture, viewer);
             return Ok(());
         }
         let viewer = Viewer::new(data, filename)?;
-        *self.slot_mut(Slot::parse(capture)?) = Some(viewer);
+        self.set_capture(capture, viewer);
         Ok(())
     }
 
@@ -788,10 +780,7 @@ impl WasmCaptureRegistry {
         let alias_key = dashboard::capture_alias::discriminating_alias_key(&shown);
 
         let mut it = recordings.into_iter();
-        for (slot, fallback) in [
-            (Slot::Baseline, "baseline"),
-            (Slot::Experiment, "experiment"),
-        ] {
+        for (id, fallback) in [(BASELINE_ID, "baseline"), (EXPERIMENT_ID, "experiment")] {
             let (labels, reader) = it.next().expect("split_off(2) leaves exactly two");
             let alias = alias_key
                 .as_ref()
@@ -801,7 +790,7 @@ impl WasmCaptureRegistry {
             let mut viewer =
                 Viewer::from_source(Arc::new(reader), Arc::clone(&pool), Bytes::new(), filename);
             viewer.set_alias(Some(alias));
-            *self.slot_mut(slot) = Some(viewer);
+            self.set_capture(id, viewer);
         }
 
         if !extra.is_empty() {
@@ -824,7 +813,7 @@ impl WasmCaptureRegistry {
     /// Set or clear the display alias for a capture slot. No-op when
     /// the slot is empty.
     pub fn set_alias(&mut self, capture: &str, alias: Option<String>) -> Result<(), JsValue> {
-        if let Some(viewer) = self.slot_mut(Slot::parse(capture)?).as_mut() {
+        if let Some(viewer) = self.slot_by_id_mut(capture) {
             viewer.set_alias(alias);
         }
         Ok(())
@@ -832,8 +821,10 @@ impl WasmCaptureRegistry {
 
     /// Drop the capture in the given slot (no-op if unknown or empty).
     pub fn detach(&mut self, capture: &str) {
-        if let Ok(slot) = Slot::parse(capture) {
-            *self.slot_mut(slot) = None;
+        if capture == BASELINE_ID {
+            self.baseline = None;
+        } else {
+            self.others.retain(|(id, _)| id != capture);
         }
     }
 
@@ -908,9 +899,7 @@ impl WasmCaptureRegistry {
     /// Initialise ServiceExtension templates for the given capture.  Mirrors
     /// `Viewer::init_templates`.
     pub fn init_templates(&mut self, capture: &str, templates_json: &str) -> Result<(), JsValue> {
-        let slot = Slot::parse(capture)?;
-        self.slot_mut(slot)
-            .as_mut()
+        self.slot_by_id_mut(capture)
             .ok_or_else(|| JsValue::from_str("capture not attached"))?
             .init_templates(templates_json)
     }
@@ -945,7 +934,7 @@ impl WasmCaptureRegistry {
         category_name: Option<String>,
     ) -> Result<(), JsValue> {
         // Both captures must be attached; otherwise nothing to combine.
-        if self.experiment.is_none() || self.baseline.is_none() {
+        if self.experiment().is_none() || self.baseline.is_none() {
             return Ok(());
         }
 
@@ -964,8 +953,7 @@ impl WasmCaptureRegistry {
             .map(|v| v.detect_and_validate_service_exts(&registry))
             .unwrap_or_default();
         let experiment_exts = self
-            .experiment
-            .as_ref()
+            .experiment()
             .map(|v| v.detect_and_validate_service_exts(&registry))
             .unwrap_or_default();
 
@@ -1016,8 +1004,7 @@ impl WasmCaptureRegistry {
             .map(|v| is_trimmed_report(&v.file_metadata))
             .unwrap_or(false)
             || self
-                .experiment
-                .as_ref()
+                .experiment()
                 .map(|v| is_trimmed_report(&v.file_metadata))
                 .unwrap_or(false);
         let context = if report_mode {
@@ -1029,7 +1016,7 @@ impl WasmCaptureRegistry {
             baseline.context = context.clone();
             baseline.cached_bodies.borrow_mut().clear();
         }
-        if let Some(experiment) = self.experiment.as_mut() {
+        if let Some(experiment) = self.experiment_mut() {
             experiment.context = context;
             experiment.cached_bodies.borrow_mut().clear();
         }
@@ -1059,7 +1046,7 @@ impl WasmCaptureRegistry {
             .as_ref()
             .ok_or_else(|| JsValue::from_str("no baseline capture attached"))?;
 
-        match self.experiment.as_ref() {
+        match self.experiment() {
             Some(experiment) => {
                 let manifest = synthesize_manifest(baseline, experiment);
                 report_save::save_combined_ab_tarball(
@@ -1085,22 +1072,53 @@ impl WasmCaptureRegistry {
         }
     }
 
+    /// The attached capture with wire id `capture`, or `None`.
     fn slot(&self, capture: &str) -> Option<&Viewer> {
-        match Slot::parse(capture).ok()? {
-            Slot::Baseline => self.baseline.as_ref(),
-            Slot::Experiment => self.experiment.as_ref(),
+        if capture == BASELINE_ID {
+            return self.baseline.as_ref();
+        }
+        self.others
+            .iter()
+            .find(|(id, _)| id == capture)
+            .map(|(_, v)| v)
+    }
+
+    /// Mutable access to an already-attached capture by id.
+    fn slot_by_id_mut(&mut self, capture: &str) -> Option<&mut Viewer> {
+        if capture == BASELINE_ID {
+            return self.baseline.as_mut();
+        }
+        self.others
+            .iter_mut()
+            .find(|(id, _)| id == capture)
+            .map(|(_, v)| v)
+    }
+
+    /// Attach (or replace, by id) a capture. `baseline` fills the anchor; any
+    /// other id replaces that capture in place or appends it, so re-uploading
+    /// one arm does not reorder the rest.
+    fn set_capture(&mut self, capture: &str, viewer: Viewer) {
+        if capture == BASELINE_ID {
+            self.baseline = Some(viewer);
+            return;
+        }
+        match self.others.iter_mut().find(|(id, _)| id == capture) {
+            Some((_, existing)) => *existing = viewer,
+            None => self.others.push((capture.to_string(), viewer)),
         }
     }
 
-    fn slot_mut(&mut self, slot: Slot) -> &mut Option<Viewer> {
-        match slot {
-            Slot::Baseline => &mut self.baseline,
-            Slot::Experiment => &mut self.experiment,
-        }
+    /// The conventional experiment — the first non-anchor capture — for the
+    /// two-armed A/B operations that stay pairwise.
+    fn experiment(&self) -> Option<&Viewer> {
+        self.others.first().map(|(_, v)| v)
+    }
+
+    fn experiment_mut(&mut self) -> Option<&mut Viewer> {
+        self.others.first_mut().map(|(_, v)| v)
     }
 
     fn require_slot(&self, capture: &str) -> Result<&Viewer, JsValue> {
-        Slot::parse(capture)?;
         self.slot(capture)
             .ok_or_else(|| JsValue::from_str("capture not attached"))
     }
@@ -1449,6 +1467,75 @@ mod tests {
         reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
             .unwrap();
         assert_eq!(reg.notices(), "[]");
+    }
+
+    /// The registry holds more than two captures, each reachable by its own
+    /// id — the storage generalization behind N-way compare. Attaching
+    /// parquet uploads under distinct ids keeps them distinct.
+    #[test]
+    fn the_registry_holds_more_than_two_captures() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &parquet_bytes(), "base.parquet")
+            .unwrap();
+        reg.attach("redis", &parquet_bytes(), "redis.parquet")
+            .unwrap();
+        reg.attach("valkey", &parquet_bytes(), "valkey.parquet")
+            .unwrap();
+
+        for id in ["baseline", "redis", "valkey"] {
+            assert!(reg.has(id), "{id} must be attached");
+            assert!(reg.slot(id).is_some(), "{id} must resolve to a viewer");
+        }
+        // Each is its own capture, not one shadowing another.
+        assert_eq!(
+            reg.slot("redis").unwrap().reader.filename().as_deref(),
+            Some("redis.parquet")
+        );
+        assert_eq!(
+            reg.slot("valkey").unwrap().reader.filename().as_deref(),
+            Some("valkey.parquet")
+        );
+
+        // The two-armed experiment helper points at the FIRST non-anchor
+        // capture — the classic A/B second arm the gated operations use.
+        assert_eq!(
+            reg.experiment().unwrap().reader.filename().as_deref(),
+            Some("redis.parquet"),
+        );
+
+        // Detaching one leaves the rest addressable and in order.
+        reg.detach("redis");
+        assert!(!reg.has("redis"));
+        assert!(reg.has("valkey"));
+        assert_eq!(
+            reg.experiment().unwrap().reader.filename().as_deref(),
+            Some("valkey.parquet"),
+            "the next non-anchor capture becomes the experiment",
+        );
+    }
+
+    /// Re-attaching a capture by id replaces it in place rather than
+    /// appending a duplicate, so re-uploading one arm does not reorder the rest.
+    #[test]
+    fn re_attaching_a_capture_by_id_replaces_in_place() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &parquet_bytes(), "base.parquet")
+            .unwrap();
+        reg.attach("redis", &parquet_bytes(), "old.parquet")
+            .unwrap();
+        reg.attach("valkey", &parquet_bytes(), "valkey.parquet")
+            .unwrap();
+        reg.attach("redis", &parquet_bytes(), "new.parquet")
+            .unwrap();
+
+        assert_eq!(reg.others.len(), 2, "no duplicate redis");
+        assert_eq!(
+            reg.slot("redis").unwrap().reader.filename().as_deref(),
+            Some("new.parquet")
+        );
+        // redis stays first (its original position), valkey second.
+        assert_eq!(reg.others[0].0, "redis");
+        assert_eq!(reg.others[1].0, "valkey");
     }
 
     /// A single-recording archive is one capture, and must not conjure an
