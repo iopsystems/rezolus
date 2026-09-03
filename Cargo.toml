@@ -147,6 +147,10 @@ tar = { version = "0.4.45", default-features = false }
 # builders. A `#[cfg(test)]` module over there would be invisible here, so they
 # live behind a feature that only the test build turns on.
 rez = { workspace = true, features = ["test-support"] }
+# A real shell-word splitter, used ONLY to verify `shell_word`'s quoting
+# round-trips — a different implementation from the quoter, so the test cannot
+# share a bug with the code it checks. Already in the tree via `cc`.
+shlex = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libbpf-rs = { version = "0.26.2" }

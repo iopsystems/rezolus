@@ -1616,6 +1616,50 @@ mod tests {
         archive.join().unwrap();
     }
 
+    /// Build a multi-recording archive from arbitrary label maps.
+    ///
+    /// The general form behind the `source`/`arm` helpers, for tests that need
+    /// label sets those cannot express — e.g. two recordings whose canonical
+    /// `\u{1}`-joined renders COLLIDE while the maps differ, which is what the
+    /// cache-identity aliasing test needs. Each recording gets three rows of a
+    /// counter and its `source` (if any) mirrored into its metadata.
+    pub(crate) fn multi_recording_rez_with_labels(
+        path: &std::path::Path,
+        recordings: &[std::collections::BTreeMap<String, String>],
+    ) {
+        use crate::recorder::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        let mut archive = RezArchive::create(path).unwrap();
+        let mut recs: Vec<StreamRecorderV3> = Vec::new();
+        for labels in recordings {
+            let metadata = labels
+                .get("source")
+                .map(|s| [("source".to_string(), s.clone())].into_iter().collect())
+                .unwrap_or_default();
+            let seed = ManifestSeed {
+                labels: labels.clone(),
+                metadata,
+                clock_anchor_wall_ns: 1_000_000_000,
+            };
+            recs.push(StreamRecorderV3::new(archive.add_recording(seed).unwrap()));
+        }
+        for rec in recs.iter_mut() {
+            for t in 0..3u64 {
+                let ts = 1_000_000_000 * (t + 1);
+                let w = Some(Window::new(ts - 50_000_000, ts));
+                rec.ingest(
+                    &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, w)]),
+                    ts,
+                    0,
+                )
+                .unwrap();
+            }
+        }
+        for rec in recs {
+            rec.finalize((4_000_000_000, 0)).unwrap();
+        }
+        archive.join().unwrap();
+    }
+
     /// A multi-recording archive must be refused HERE, with a message, rather
     /// than opening into a reader that answers nothing.
     ///

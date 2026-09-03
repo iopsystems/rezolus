@@ -70,11 +70,16 @@ const MCP_CACHE_SIZE_BYTES: usize = 500 * 1024 * 1024;
 
 /// A cached reader, tagged with the recording it was opened from.
 struct CachedReader {
-    /// The chosen recording's label set, canonically rendered by
-    /// `recording_stagger_key`. Two selectors that name the same recording of
-    /// the same file share the reader under this identity rather than each
-    /// retaining their own copy of the archive.
-    identity: String,
+    /// The chosen recording's label set — the recording's own identity, so
+    /// two selectors that name the same recording of the same file share one
+    /// reader rather than each retaining a copy of the archive.
+    ///
+    /// The `BTreeMap` itself, NOT a flattened string. A `\u{1}`-joined `k=v`
+    /// render aliases: `{a: "\u{1}b=c"}` and `{a: "", b: "c"}` flatten to the
+    /// same bytes, so the second lookup would hand back the first's reader and
+    /// answer about the wrong recording. Comparing the maps cannot alias — the
+    /// same shape of bug this whole selector arc kept closing.
+    identity: std::collections::BTreeMap<String, String>,
     source: Arc<dyn metriken_query::MetricsSource>,
     /// What the analysis layer may trust this recording's metric names to
     /// mean, as the OPEN determined it. Cached alongside the reader because
@@ -690,7 +695,7 @@ impl Server {
         )?;
         let provenance = opened.provenance();
         let reader = opened.reader;
-        let identity = crate::recorder::seal_policy::recording_stagger_key(&opened.labels);
+        let identity = opened.labels.clone();
 
         let mut cache = self.reader_cache.write().unwrap();
         // Distinct selectors can name the SAME recording (`source=redis` and
@@ -698,7 +703,7 @@ impl Server {
         // a session. Collapse them onto one reader by the recording's own
         // identity so the archive is not retained once per spelling. Matching
         // on the path too: an identity is only meaningful within one file, and
-        // an archive with no labels at all renders the empty identity.
+        // an archive with no labels at all has the empty map as its identity.
         let source = cache
             .iter()
             .find(|((p, _), c)| p == parquet_file && c.identity == identity)
@@ -1092,6 +1097,63 @@ mod tests {
         assert!(
             Arc::ptr_eq(&narrow, &wide),
             "two selectors naming one recording must not retain two readers"
+        );
+    }
+
+    /// Two recordings whose OLD flattened identity would collide must not
+    /// share a cached reader.
+    ///
+    /// The dedup once rendered a recording's labels to a `\u{1}`-joined `k=v`
+    /// string, which aliases: `{x: "a\u{1}y=b"}` and `{x: "a", y: "b"}` render
+    /// the same bytes, so the second lookup would return the first's reader and
+    /// answer about the wrong recording. Keying on the label MAP cannot alias.
+    /// Reachable only with an operator-chosen label value carrying a `\u{1}` —
+    /// nobody types it by accident, but it is the same wrong-answer-looking-
+    /// right species this arc kept closing behind unusual inputs.
+    #[tokio::test]
+    async fn recordings_whose_flattened_identity_collides_do_not_share_a_reader() {
+        use std::collections::BTreeMap;
+        let a: BTreeMap<String, String> = [("x".to_string(), "a\u{1}y=b".to_string())]
+            .into_iter()
+            .collect();
+        let b: BTreeMap<String, String> = [
+            ("x".to_string(), "a".to_string()),
+            ("y".to_string(), "b".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        // Precondition: the OLD identity really would have conflated them.
+        assert_eq!(
+            crate::recorder::seal_policy::recording_stagger_key(&a),
+            crate::recorder::seal_policy::recording_stagger_key(&b),
+            "fixture must actually exercise the aliasing the fix removes",
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("collide.rez");
+        crate::mcp::tests::multi_recording_rez_with_labels(&path, &[a, b]);
+        let p = path.to_str().unwrap();
+
+        let server = Server::new();
+        // Select each uniquely: `y=b` names only B, the whole odd value names A.
+        let ra = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse("--recording", ["x=a\u{1}y=b".to_string()])
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let rb = server
+            .get_reader_selected(
+                p,
+                &crate::mcp::RecordingSelector::parse("--recording", ["y=b".to_string()]).unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&ra, &rb),
+            "two distinct recordings must not be conflated by a flattened identity"
         );
     }
 

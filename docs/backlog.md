@@ -922,7 +922,22 @@ effort); promote one to a journal entry when it's picked up.
   *Why:* the failure mode is "the retry says the file already exists", which
   reads as a bug in the retry rather than fallout from the original error.
 - **Selector output is not shell-escaped, and the cache identity can alias** —
-  Open, found reviewing MCP recording selection (#1117). Two narrow holes, both
+  **DONE**. Both closed. (a) `picker_form`'s flag branch now runs each `k=v`
+  through `shell_word`, POSIX single-quoting any token that is not already
+  shell-safe — so `select with: --recording note='first run'` survives being
+  pasted, and a value containing the literal ` --recording ` stays one word
+  instead of parsing back as a duplicate key. Single-quote style because it is
+  total: inside `'...'` the only escape needed is `'` itself. The round-trip
+  tests now shell-split the rendered line with `shlex` (a dev-dependency, a
+  DIFFERENT implementation from the quoter) before parsing, so a quoting bug
+  surfaces as a wrong word count rather than passing on a shared mistake;
+  mutation-checked by reverting to the raw join, which fails them. (b) The
+  server's post-open identity dedup keys on the label `BTreeMap` itself, not
+  `recording_stagger_key`'s `\u{1}`-joined string — `{x: "a\u{1}y=b"}` and
+  `{x: "a", y: "b"}` flatten identically but compare unequal as maps, so the
+  second lookup no longer returns the first's reader; mutation-checked by
+  reverting to the flattened identity, which conflates them.
+  *Original entry:* Two narrow holes, both
   needing an operator-chosen label value with an unusual character. (a)
   `flag_form` joins raw label values with `" --recording "` and presents the
   result as something to paste, so a value containing a space —
