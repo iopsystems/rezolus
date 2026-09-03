@@ -266,7 +266,11 @@ mod tests {
     use super::*;
 
     fn store(name: &str) -> Arc<dyn MetricsSource> {
-        Arc::new(metriken_query::MemoryStore::builder().filename(name).build())
+        Arc::new(
+            metriken_query::MemoryStore::builder()
+                .filename(name)
+                .build(),
+        )
     }
 
     fn registry() -> CaptureRegistry {
@@ -313,8 +317,20 @@ mod tests {
     fn the_store_holds_more_than_two_captures() {
         let reg = registry();
         reg.attach_experiment(store("a.parquet"), None, None, Some("redis".into()));
-        reg.attach_capture("valkey", store("b.parquet"), None, None, Some("valkey".into()));
-        reg.attach_capture("envoy", store("c.parquet"), None, None, Some("envoy".into()));
+        reg.attach_capture(
+            "valkey",
+            store("b.parquet"),
+            None,
+            None,
+            Some("valkey".into()),
+        );
+        reg.attach_capture(
+            "envoy",
+            store("c.parquet"),
+            None,
+            None,
+            Some("envoy".into()),
+        );
 
         assert_eq!(
             reg.capture_ids(),
@@ -344,7 +360,11 @@ mod tests {
 
         assert_eq!(
             reg.capture_ids(),
-            vec!["baseline".to_string(), "redis".to_string(), "valkey".to_string()],
+            vec![
+                "baseline".to_string(),
+                "redis".to_string(),
+                "valkey".to_string()
+            ],
         );
         assert_eq!(reg.filename_by_id("redis"), "new.parquet");
     }
