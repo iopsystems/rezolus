@@ -423,7 +423,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     view.group(clocks);
 
     amd_pmu(&mut view);
-    intel_pmu(&mut view, multi_gpu);
+    intel_pmu(&mut view, data);
 
     view
 }
@@ -616,71 +616,75 @@ fn amd_pmu(view: &mut View) {
 /// use, so it already appears in the shared Memory group above. VRAM is
 /// discrete-only — an integrated GPU has no device-local memory region and
 /// publishes no such series.
-fn intel_pmu(view: &mut View, multi_gpu: bool) {
+/// The engine classes the Intel sampler labels, in the order they are shown.
+///
+/// These are the `engine_class` values `gpu/linux/intel/mod.rs` maps sysfs
+/// engine names onto; `other` is its fallback for an unrecognised prefix.
+const ENGINE_CLASSES: [(&str, &str); 6] = [
+    ("compute", "Compute"),
+    ("render", "Render"),
+    ("copy", "Copy"),
+    ("video", "Video"),
+    ("video-enhance", "Video Enhance"),
+    ("other", "Other"),
+];
+
+fn intel_pmu(view: &mut View, data: &dyn MetricsSource) {
     let mut pmu = Group::new("Intel GPU Performance Counters", "intel-pmu");
 
-    // ----- Engine occupancy -----
-    let engines = pmu.subgroup("Engine Busy");
-    engines.describe(
-        "Fraction of wall time each GPU engine spent executing work, from the i915/xe PMU. \
-         This is occupancy, not efficiency: an engine at 100% had work queued, which does not \
-         mean the execution units were saturated — read it alongside the frequency charts.",
-    );
-
-    // Aggregate across engines of a class. Summing the busy time of several
-    // engines can exceed one device-second (they run concurrently), which is
-    // correct and why this is not clamped to 100%.
-    engines.plot_promql(
-        PlotOpts::gauge(
-            "Busy % by Engine Class",
-            "intel-engine-class-pct",
-            Unit::Percentage,
-        )
-        .with_row_label("Class"),
-        "sum by (engine_class) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
-            .to_string(),
-    );
-    engines.plot_promql(
-        PlotOpts::gauge("Busy % by Engine", "intel-engine-pct", Unit::Percentage)
-            .with_row_label("Engine"),
-        "sum by (engine) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
-            .to_string(),
-    );
-
-    // The engine that carries the compute workload, called out on its own
-    // because it is the one to watch on a GPGPU host. A discrete Arc exposes a
-    // compute engine; an integrated GPU generally does not, and this chart is
-    // then empty while the render one below carries the load.
-    engines.plot_promql(
-        PlotOpts::gauge(
-            "Compute Engine Busy %",
-            "intel-compute-pct",
-            Unit::Percentage,
-        )
-        .percentage_range(),
-        "sum(rate(gpu_engine_busy_time{engine_class=\"compute\", vendor=\"intel\"}[5m])) / 1000000000".to_string(),
-    );
-    engines.plot_promql(
-        PlotOpts::gauge("Render Engine Busy %", "intel-render-pct", Unit::Percentage)
-            .percentage_range(),
-        "sum(rate(gpu_engine_busy_time{engine_class=\"render\", vendor=\"intel\"}[5m])) / 1000000000".to_string(),
-    );
-
-    if multi_gpu {
-        let per_device = pmu.subgroup("Per-Device Engine Busy");
-        per_device.describe(
-            "Engine busy time broken out by GPU id — on a host with both an integrated GPU and \
-             a discrete Arc card, this is what separates them.",
+    // ----- Engine occupancy, one subgroup per engine class -----
+    //
+    // The i915/xe PMU counts busy time per engine, and the engine classes do
+    // very different jobs — a compute kernel, a blit, a video decode. Stacking
+    // every class into one chart made them hard to read against each other and
+    // buried the one that mattered for a given workload. Each class now gets
+    // its own subgroup with two plots: the aggregate across the host, and the
+    // same broken out per GPU.
+    //
+    // Only classes the recording actually contains are emitted, so an
+    // integrated GPU (no compute engine) shows no empty compute section.
+    for (class_name, title) in ENGINE_CLASSES {
+        let query_all = format!(
+            "sum(rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+             vendor=\"intel\"}}[5m])) / 1000000000"
         );
-        per_device.plot_promql(
+
+        if !data
+            .label_values("gpu_engine_busy_time", "engine_class")
+            .contains(class_name)
+        {
+            continue;
+        }
+
+        let engines = pmu.subgroup(title);
+        engines.describe(format!(
+            "Fraction of wall time the {class_name} engine(s) spent executing work, from the \
+             i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, \
+             which does not mean the execution units were saturated — read it alongside the \
+             frequency charts. Summing several engines of one class can exceed 100%, since they \
+             run concurrently."
+        ));
+
+        engines.plot_promql(
             PlotOpts::gauge(
-                "Busy % (Per-GPU)",
-                "intel-engine-pct-per-gpu",
+                format!("{title} Busy %"),
+                format!("intel-{class_name}-pct"),
+                Unit::Percentage,
+            ),
+            query_all,
+        );
+
+        engines.plot_promql(
+            PlotOpts::gauge(
+                format!("{title} Busy % (Per-GPU)"),
+                format!("intel-{class_name}-pct-per-gpu"),
                 Unit::Percentage,
             )
             .with_row_label("GPU"),
-            "sum by (id, vendor) (rate(gpu_engine_busy_time{vendor=\"intel\"}[5m])) / 1000000000"
-                .to_string(),
+            format!(
+                "sum by (id, vendor) (rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+                 vendor=\"intel\"}}[5m])) / 1000000000"
+            ),
         );
     }
 

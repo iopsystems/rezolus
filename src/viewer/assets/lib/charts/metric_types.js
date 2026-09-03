@@ -54,13 +54,22 @@ export function resolveStyle(type_, subtype, result) {
         return 'scatter';
     }
 
-    // gauge or delta_counter: infer from result shape
-    if (result?.data?.result?.length > 1) {
-        const first = result.data.result[0];
+    // gauge or delta_counter: infer from result shape.
+    //
+    // A per-entity result (one series per CPU/GPU, carrying an `id`) renders as
+    // a heatmap — including when there is only ONE such entity. Requiring two
+    // made a chart's type depend on how many devices happened to be present:
+    // the same "Per-GPU" chart drew a heatmap on a two-GPU host and a line
+    // chart on a one-GPU host, and on a mixed-vendor host most per-GPU charts
+    // fell back to lines because only one vendor publishes each metric name.
+    // A one-row heatmap is the honest rendering of "per-entity, one entity".
+    const series = result?.data?.result;
+    if (series?.length >= 1) {
+        const first = series[0];
         if (first.metric && first.metric.id != null) {
             return 'heatmap';
         }
-        return 'multi';
+        if (series.length > 1) return 'multi';
     }
     return 'line';
 }

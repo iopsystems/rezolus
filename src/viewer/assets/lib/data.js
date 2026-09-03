@@ -567,12 +567,38 @@ export const promqlResultToHeatmapTriples = (results) => {
     const triples = [];
     let minValue = Infinity;
     let maxValue = -Infinity;
+
+    // Row labels, parallel to the row indices below. An `id` alone does not
+    // identify a GPU — every vendor's sampler numbers its devices from 0, so a
+    // host with an NVIDIA card and an Intel iGPU has two series both at id=0.
+    // Indexing rows by parseInt(id) would stack them on the same row, one
+    // silently overwriting the other.
+    //
+    // So rows are laid out by result order whenever the ids do not uniquely
+    // identify the series, and each row carries its own label.
+    const ids = results.map((item) => item.metric && item.metric.id);
+    const numericIds = ids.map((v) => parseInt(v, 10));
+    const idsUsable = numericIds.every((v) => !Number.isNaN(v))
+        && new Set(numericIds).size === numericIds.length;
+
+    const vendors = new Set(
+        results.map((item) => item.metric && item.metric.vendor).filter(Boolean),
+    );
+    const qualifyVendor = vendors.size > 1;
+
+    // Indexed by ROW, not by result order: when ids are usable a row is the id
+    // value itself, and rows for absent ids stay unlabelled.
+    const rowLabels = [];
     results.forEach((item, idx) => {
-        let y = idx;
-        if (item.metric && item.metric.id != null) {
-            const parsed = parseInt(item.metric.id, 10);
-            if (!Number.isNaN(parsed)) y = parsed;
-        }
+        const m = item.metric || {};
+        const row = idsUsable ? numericIds[idx] : idx;
+        rowLabels[row] = m.id == null
+            ? `${row}`
+            : (qualifyVendor && m.vendor ? `${m.vendor} ${m.id}` : `${m.id}`);
+    });
+
+    results.forEach((item, idx) => {
+        const y = idsUsable ? numericIds[idx] : idx;
         for (const [ts, rawVal] of item.values || []) {
             const ti = timestampToIndex.get(ts);
             if (ti === undefined) continue;
@@ -585,6 +611,7 @@ export const promqlResultToHeatmapTriples = (results) => {
         }
     });
     return {
+        rowLabels,
         timestamps,
         triples,
         minValue: Number.isFinite(minValue) ? minValue : null,
@@ -677,10 +704,13 @@ const applyResultToPlot = (plot, result) => {
 
         if (hasMultipleSeries) {
             if (style === 'heatmap') {
-                const { timestamps, triples, minValue, maxValue } =
+                const { timestamps, triples, minValue, maxValue, rowLabels } =
                     promqlResultToHeatmapTriples(result.data.result);
                 plot.data = triples;
                 plot.time_data = timestamps;
+                // Per-row names, so a GPU heatmap can say "nvidia 0" / "intel 0"
+                // where the bare id would be ambiguous.
+                plot.row_labels = rowLabels;
                 plot.min_value = minValue != null ? minValue : Infinity;
                 plot.max_value = maxValue != null ? maxValue : -Infinity;
             } else {

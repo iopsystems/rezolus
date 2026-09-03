@@ -123,3 +123,40 @@ test('a series with no vendor label falls back rather than throwing', () => {
     // The macOS GPU sampler sets no vendor on any of its metrics.
     assert.deepEqual(nameSeries([{ metric: { id: '0' } }]), [null]);
 });
+
+// Heatmap row layout. Rows were indexed by parseInt(id), so two GPUs sharing an
+// id — an NVIDIA card and an Intel iGPU, both id="0" — landed on the same row,
+// one silently overwriting the other. Rows now fall back to result order when
+// the ids do not uniquely identify the series, and each row carries a label.
+const heatmapRowLabels = (results) => {
+    const ids = results.map((i) => i.metric && i.metric.id);
+    const nums = ids.map((v) => parseInt(v, 10));
+    const usable = nums.every((v) => !Number.isNaN(v)) && new Set(nums).size === nums.length;
+    const vendors = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
+    const qualify = vendors.size > 1;
+    const out = [];
+    results.forEach((item, idx) => {
+        const m = item.metric || {};
+        const row = usable ? nums[idx] : idx;
+        out[row] = m.id == null
+            ? String(row)
+            : (qualify && m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
+    });
+    return out;
+};
+
+test('heatmap rows: one vendor keeps bare ids', () => {
+    assert.deepEqual(heatmapRowLabels([series('amd', '0'), series('amd', '1')]), ['0', '1']);
+});
+
+test('heatmap rows: two GPUs sharing an id get distinct rows, vendor-qualified', () => {
+    const rows = heatmapRowLabels([series('nvidia', '0'), series('intel', '0')]);
+    assert.equal(rows.length, 2, 'both GPUs must occupy their own row');
+    assert.deepEqual(rows, ['nvidia 0', 'intel 0']);
+});
+
+test('heatmap rows: a single GPU still yields one labelled row', () => {
+    // A per-entity chart is a heatmap even with one entity, so the one-row case
+    // must label correctly rather than fall through to the index.
+    assert.deepEqual(heatmapRowLabels([series('intel', '0')]), ['0']);
+});
