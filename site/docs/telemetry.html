@@ -127,10 +127,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU nanoseconds by state: <code>user</code>, <code>system</code></span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">softirq</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU interrupt count by kind: hi, timer, net_tx, net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">softirq_time</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU nanoseconds spent in softirq, same kinds</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup nanoseconds by state: <code>user</code>, <code>system</code></span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU nanoseconds by state: <code>user</code>, <code>system</code></span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">softirq</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU interrupt count by kind: hi, timer, net_tx, net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">softirq_time</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU nanoseconds spent in softirq, same kinds</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup nanoseconds by state: <code>user</code>, <code>system</code></span></div>
 </div>
 </details>
 
@@ -140,9 +140,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_aperf</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU actual performance cycles</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_mperf</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU maximum performance cycles</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_tsc</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU timestamp counter cycles</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_aperf</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU actual performance cycles</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_mperf</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU maximum performance cycles</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_tsc</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU timestamp counter cycles</span></div>
 </div>
 </details>
 
@@ -152,16 +152,16 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU cycle count</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU retired instructions</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_branch_instructions</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU branch instructions</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_branch_misses</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU branch mispredictions</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_dtlb_miss</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU data TLB misses (with <code>op</code>: load, store on Intel)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_l3_access</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU L3 cache accesses</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_l3_miss</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU L3 cache misses</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_tlb_flush</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU TLB flush count by reason: task_switch, remote_shootdown, local_shootdown, etc.</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup cycle count</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup retired instructions</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU cycle count</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU retired instructions</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_branch_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU branch instructions</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_branch_misses</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU branch mispredictions</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_dtlb_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU data TLB misses (with <code>op</code>: load, store on Intel)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_l3_access</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU L3 cache accesses</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_l3_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU L3 cache misses</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_tlb_flush</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU TLB flush count by reason: task_switch, remote_shootdown, local_shootdown, etc.</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup cycle count</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup retired instructions</span></div>
 </div>
 </details>
 
@@ -171,10 +171,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_cores</code><span class="text-slate-500 pl-4 md:pl-0">Number of online logical cores (gauge)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU migration count with <code>direction</code>: from, to</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_bandwidth_*</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup CFS quota, period, throttled time, period counts</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup CPU migration count</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_cores</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Number of online logical cores (gauge)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU migration count with <code>direction</code>: from, to</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_cpu_bandwidth_*</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup CFS quota, period, throttled time, period counts</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup CPU migration count</span></div>
 </div>
 </details>
 </section>
@@ -192,12 +192,12 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_runqueue_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks wait in the runqueue (ns)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_running</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks spend running on CPU (ns)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_offcpu</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks spend off-CPU (ns)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_context_switch</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU involuntary context switches</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_runqueue_wait</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU total nanoseconds spent waiting</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_scheduler_*</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup: runqueue_wait, offcpu, context_switch</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">scheduler_runqueue_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram of time tasks wait in the runqueue (ns)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">scheduler_running</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram of time tasks spend running on CPU (ns)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">scheduler_offcpu</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram of time tasks spend off-CPU (ns)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">scheduler_context_switch</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU involuntary context switches</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">scheduler_runqueue_wait</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-CPU total nanoseconds spent waiting</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_scheduler_*</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup: runqueue_wait, offcpu, context_switch</span></div>
 </div>
 </details>
 </section>
@@ -215,7 +215,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) with <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">blockio_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) with <code>op</code>: read, write, flush, discard</span></div>
 </div>
 </details>
 
@@ -225,9 +225,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>op</code>: read, write, flush, discard</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter (bytes) with <code>op</code>: read, write, flush, discard</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_size</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (bytes) with <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">blockio_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter (bytes) with <code>op</code>: read, write, flush, discard</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">blockio_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (bytes) with <code>op</code>: read, write, flush, discard</span></div>
 </div>
 </details>
 </section>
@@ -245,8 +245,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_packets</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_packets</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>direction</code>: receive, transmit</span></div>
 </div>
 </details>
 
@@ -256,10 +256,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_drop</code><span class="text-slate-500 pl-4 md:pl-0">Dropped packets counter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_transmit_busy</code><span class="text-slate-500 pl-4 md:pl-0">Transmit busy counter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_transmit_complete</code><span class="text-slate-500 pl-4 md:pl-0">Completed transmissions counter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_transmit_timeout</code><span class="text-slate-500 pl-4 md:pl-0">Transmit timeout events</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_drop</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Dropped packets counter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_transmit_busy</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Transmit busy counter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_transmit_complete</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Completed transmissions counter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_transmit_timeout</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Transmit timeout events</span></div>
 </div>
 </details>
 
@@ -269,10 +269,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_bandwidth_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">With <code>direction</code>: receive, transmit</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_pps_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">Packets-per-second limit exceeded</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_conntrack_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">Connection tracking limit exceeded</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_linklocal_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">Link-local traffic limit exceeded</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_ena_bandwidth_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">With <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_ena_pps_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Packets-per-second limit exceeded</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_ena_conntrack_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Connection tracking limit exceeded</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">network_ena_linklocal_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Link-local traffic limit exceeded</span></div>
 </div>
 </details>
 </section>
@@ -290,9 +290,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_packets</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_size</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (bytes) with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_bytes</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_packets</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (bytes) with <code>direction</code>: receive, transmit</span></div>
 </div>
 </details>
 
@@ -302,11 +302,11 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; time to establish connection</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_packet_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; receive-to-read latency</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_jitter</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; inter-packet jitter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_srtt</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; smoothed round-trip time</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_retransmit</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; retransmitted packets</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) &mdash; time to establish connection</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_packet_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) &mdash; receive-to-read latency</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_jitter</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) &mdash; inter-packet jitter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_srtt</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) &mdash; smoothed round-trip time</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">tcp_retransmit</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; retransmitted packets</span></div>
 </div>
 </details>
 </section>
@@ -325,9 +325,9 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </summary>
 <div class="px-5 py-4 text-base border-t border-slate-200 dark:border-slate-800">
 <div class="space-y-2 mb-4">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">syscall</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>op</code> label (see categories below)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">syscall_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) with <code>op</code> label (same categories)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_syscall</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup counters with same <code>op</code> labels</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">syscall</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>op</code> label (see categories below)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">syscall_latency</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Histogram (ns) with <code>op</code> label (same categories)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">cgroup_syscall</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-cgroup counters with same <code>op</code> labels</span></div>
 </div>
 <p class="text-slate-400 mb-2">Syscall categories (<code>op</code> values):</p>
 <div class="flex flex-wrap gap-2">
@@ -365,17 +365,17 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_total</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_free</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_available</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_buffers</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_cached</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_hit</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; allocations on intended node</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_miss</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; allocations on non-intended node</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_foreign</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; allocations intended for this node, placed elsewhere</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_interleave</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; interleave policy allocations</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_local</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; allocations on local node</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_numa_other</code><span class="text-slate-500 pl-4 md:pl-0">Counter &mdash; allocations on remote node</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_total</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_free</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_available</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_buffers</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_cached</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_hit</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; allocations on intended node</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_miss</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; allocations on non-intended node</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_foreign</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; allocations intended for this node, placed elsewhere</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_interleave</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; interleave policy allocations</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_local</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; allocations on local node</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">memory_numa_other</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter &mdash; allocations on remote node</span></div>
 </div>
 </details>
 </section>
@@ -393,19 +393,19 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_memory</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (bytes) with <code>state</code>: free, used</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (milliwatts)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU counter (millijoules)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_temperature</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (Celsius)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (Hz) with <code>clock</code>: compute, graphics, memory, video</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (percentage)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_memory_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (percentage)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_pcie_bandwidth</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (bytes/sec) with <code>direction</code>: receive</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_pcie_throughput</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (bytes/sec) with <code>direction</code>: receive, transmit</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_sm_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_sm_occupancy</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_dram_bandwidth_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_tensor_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (%) with <code>pipe</code>: any, hmma (FP16/BF16/TF32), imma (integer), dfma (FP64) &mdash; Hopper+ only</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_memory</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (bytes) with <code>state</code>: free, used</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (milliwatts)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU counter (millijoules)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_temperature</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (Celsius)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (Hz) with <code>clock</code>: compute, graphics, memory, video</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (percentage)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_memory_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (percentage)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_pcie_bandwidth</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (bytes/sec) with <code>direction</code>: receive</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_pcie_throughput</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (bytes/sec) with <code>direction</code>: receive, transmit</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_sm_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_sm_occupancy</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_dram_bandwidth_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (%) &mdash; Hopper+ only</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_tensor_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (%) with <code>pipe</code>: any, hmma (FP16/BF16/TF32), imma (integer), dfma (FP64) &mdash; Hopper+ only</span></div>
 </div>
 </details>
 
@@ -415,10 +415,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (milliwatts)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU counter (millijoules)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (Hz) with <code>clock</code>: graphics</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (percentage)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (milliwatts)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU counter (millijoules)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (Hz) with <code>clock</code>: graphics</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">gpu_utilization</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Per-GPU gauge (percentage)</span></div>
 </div>
 </details>
 </section>
@@ -436,12 +436,12 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
 <div class="px-5 py-4 space-y-2 text-base border-t border-slate-200 dark:border-slate-800">
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0">Counter (ns) with <code>state</code>: user, system</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_memory_usage_resident_set_size</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_memory_page_reclaims</code><span class="text-slate-500 pl-4 md:pl-0">Counter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_memory_page_faults</code><span class="text-slate-500 pl-4 md:pl-0">Counter</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>op</code>: read, write</span></div>
-<div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_context_switch</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>kind</code>: voluntary, involuntary</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter (ns) with <code>state</code>: user, system</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_memory_usage_resident_set_size</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Gauge (bytes)</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_memory_page_reclaims</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_memory_page_faults</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>op</code>: read, write</span></div>
+<div class="flex flex-col md:flex-row md:flex-wrap md:gap-x-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:min-w-[18rem]">rezolus_context_switch</code><span class="text-slate-500 pl-4 md:pl-0 md:flex-1 md:min-w-[24rem]">Counter with <code>kind</code>: voluntary, involuntary</span></div>
 </div>
 </details>
 </section>
