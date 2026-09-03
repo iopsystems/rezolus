@@ -51,7 +51,7 @@
 <nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
 <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
 <a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
-<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
 <a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
@@ -63,7 +63,7 @@ class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg te
 </div>
 <div id="nav-menu" hidden
 class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
-<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-base font-semibold">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
@@ -111,7 +111,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Samplers -->
 <section class="mb-8" id="samplers">
 <h2 class="text-xl font-bold mb-2">Samplers</h2>
-<p class="text-sm text-slate-500 dark:text-slate-400">Instrumentation categories grouped by subsystem. Each can be enabled or disabled independently in the agent config.</p>
+<p class="text-base text-slate-500 dark:text-slate-400">Instrumentation categories grouped by subsystem. Each can be enabled or disabled independently in the agent config.</p>
 </section>
 
 <!-- CPU -->
@@ -123,10 +123,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Usage</h4><p class="text-xs text-slate-400">CPU time by state, softirq breakdown</p></div>
+<div><h4 class="text-sm font-bold">Usage</h4><p class="text-sm text-slate-400">CPU time by state, softirq breakdown</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU nanoseconds by state: <code>user</code>, <code>system</code></span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">softirq</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU interrupt count by kind: hi, timer, net_tx, net_rx, block, irq_poll, tasklet, sched, hrtimer, rcu</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">softirq_time</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU nanoseconds spent in softirq, same kinds</span></div>
@@ -136,10 +136,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Frequency</h4><p class="text-xs text-slate-400">APERF, MPERF, TSC cycle counters</p></div>
+<div><h4 class="text-sm font-bold">Frequency</h4><p class="text-sm text-slate-400">APERF, MPERF, TSC cycle counters</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_aperf</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU actual performance cycles</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_mperf</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU maximum performance cycles</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_tsc</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU timestamp counter cycles</span></div>
@@ -148,10 +148,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Performance Counters</h4><p class="text-xs text-slate-400">Cycles, instructions, branch predictions, cache, TLB</p></div>
+<div><h4 class="text-sm font-bold">Performance Counters</h4><p class="text-sm text-slate-400">Cycles, instructions, branch predictions, cache, TLB</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_cycles</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU cycle count</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_instructions</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU retired instructions</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_branch_instructions</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU branch instructions</span></div>
@@ -167,10 +167,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Bandwidth &amp; Migrations</h4><p class="text-xs text-slate-400">CFS throttling, CPU migration events</p></div>
+<div><h4 class="text-sm font-bold">Bandwidth &amp; Migrations</h4><p class="text-sm text-slate-400">CFS throttling, CPU migration events</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_cores</code><span class="text-slate-500 pl-4 md:pl-0">Number of online logical cores (gauge)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cpu_migrations</code><span class="text-slate-500 pl-4 md:pl-0">Per-CPU migration count with <code>direction</code>: from, to</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">cgroup_cpu_bandwidth_*</code><span class="text-slate-500 pl-4 md:pl-0">Per-cgroup CFS quota, period, throttled time, period counts</span></div>
@@ -188,10 +188,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Runqueue</h4><p class="text-xs text-slate-400">Scheduling latency, running time, off-CPU time, context switches</p></div>
+<div><h4 class="text-sm font-bold">Runqueue</h4><p class="text-sm text-slate-400">Scheduling latency, running time, off-CPU time, context switches</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_runqueue_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks wait in the runqueue (ns)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_running</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks spend running on CPU (ns)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">scheduler_offcpu</code><span class="text-slate-500 pl-4 md:pl-0">Histogram of time tasks spend off-CPU (ns)</span></div>
@@ -211,20 +211,20 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Latency</h4><p class="text-xs text-slate-400">I/O latency distributions by operation type</p></div>
+<div><h4 class="text-sm font-bold">Latency</h4><p class="text-sm text-slate-400">I/O latency distributions by operation type</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) with <code>op</code>: read, write, flush, discard</span></div>
 </div>
 </details>
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Requests</h4><p class="text-xs text-slate-400">Operation counts, bytes transferred, size distributions</p></div>
+<div><h4 class="text-sm font-bold">Requests</h4><p class="text-sm text-slate-400">Operation counts, bytes transferred, size distributions</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_operations</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>op</code>: read, write, flush, discard</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter (bytes) with <code>op</code>: read, write, flush, discard</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">blockio_size</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (bytes) with <code>op</code>: read, write, flush, discard</span></div>
@@ -241,10 +241,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Traffic</h4><p class="text-xs text-slate-400">Aggregate bytes and packets</p></div>
+<div><h4 class="text-sm font-bold">Traffic</h4><p class="text-sm text-slate-400">Aggregate bytes and packets</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_packets</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
 </div>
@@ -252,10 +252,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Interfaces</h4><p class="text-xs text-slate-400">Drops, transmit errors, timeouts</p></div>
+<div><h4 class="text-sm font-bold">Interfaces</h4><p class="text-sm text-slate-400">Drops, transmit errors, timeouts</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_drop</code><span class="text-slate-500 pl-4 md:pl-0">Dropped packets counter</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_transmit_busy</code><span class="text-slate-500 pl-4 md:pl-0">Transmit busy counter</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_transmit_complete</code><span class="text-slate-500 pl-4 md:pl-0">Completed transmissions counter</span></div>
@@ -265,10 +265,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Ethtool (ENA)</h4><p class="text-xs text-slate-400">AWS EC2 Elastic Network Adapter allowance counters</p></div>
+<div><h4 class="text-sm font-bold">Ethtool (ENA)</h4><p class="text-sm text-slate-400">AWS EC2 Elastic Network Adapter allowance counters</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_bandwidth_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">With <code>direction</code>: receive, transmit</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_pps_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">Packets-per-second limit exceeded</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">network_ena_conntrack_allowance_exceeded</code><span class="text-slate-500 pl-4 md:pl-0">Connection tracking limit exceeded</span></div>
@@ -286,10 +286,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Traffic</h4><p class="text-xs text-slate-400">Bytes, packets, and segment size distributions</p></div>
+<div><h4 class="text-sm font-bold">Traffic</h4><p class="text-sm text-slate-400">Bytes, packets, and segment size distributions</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_bytes</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_packets</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>direction</code>: receive, transmit</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_size</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (bytes) with <code>direction</code>: receive, transmit</span></div>
@@ -298,10 +298,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Latency</h4><p class="text-xs text-slate-400">Connection establishment, packet delivery, jitter, RTT</p></div>
+<div><h4 class="text-sm font-bold">Latency</h4><p class="text-sm text-slate-400">Connection establishment, packet delivery, jitter, RTT</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_connect_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; time to establish connection</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_packet_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; receive-to-read latency</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">tcp_jitter</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) &mdash; inter-packet jitter</span></div>
@@ -320,10 +320,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Counts &amp; Latency</h4><p class="text-xs text-slate-400">Invocation counts and latency distributions by syscall category</p></div>
+<div><h4 class="text-sm font-bold">Counts &amp; Latency</h4><p class="text-sm text-slate-400">Invocation counts and latency distributions by syscall category</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="space-y-2 mb-4">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">syscall</code><span class="text-slate-500 pl-4 md:pl-0">Counter with <code>op</code> label (see categories below)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">syscall_latency</code><span class="text-slate-500 pl-4 md:pl-0">Histogram (ns) with <code>op</code> label (same categories)</span></div>
@@ -361,10 +361,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Meminfo &amp; VMStat</h4><p class="text-xs text-slate-400">System memory gauges and NUMA allocation counters</p></div>
+<div><h4 class="text-sm font-bold">Meminfo &amp; VMStat</h4><p class="text-sm text-slate-400">System memory gauges and NUMA allocation counters</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_total</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_free</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">memory_available</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
@@ -389,10 +389,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">NVIDIA</h4><p class="text-xs text-slate-400">Memory, power, temperature, clocks, utilization (Linux)</p></div>
+<div><h4 class="text-sm font-bold">NVIDIA</h4><p class="text-sm text-slate-400">Memory, power, temperature, clocks, utilization (Linux)</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_memory</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (bytes) with <code>state</code>: free, used</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (milliwatts)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU counter (millijoules)</span></div>
@@ -411,10 +411,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Apple Silicon</h4><p class="text-xs text-slate-400">Power, clocks, utilization (macOS)</p></div>
+<div><h4 class="text-sm font-bold">Apple Silicon</h4><p class="text-sm text-slate-400">Power, clocks, utilization (macOS)</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_power_usage</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (milliwatts)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_energy_consumption</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU counter (millijoules)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">gpu_clock</code><span class="text-slate-500 pl-4 md:pl-0">Per-GPU gauge (Hz) with <code>clock</code>: graphics</span></div>
@@ -432,10 +432,10 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <details class="group mb-4 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden" open>
 <summary class="flex items-center justify-between px-5 py-3 cursor-pointer bg-slate-50 dark:bg-slate-900/50 hover:bg-slate-100 dark:hover:bg-slate-800/50 transition-colors">
-<div><h4 class="text-sm font-bold">Resource Usage</h4><p class="text-xs text-slate-400">Rezolus process CPU, memory, I/O, and context switches</p></div>
+<div><h4 class="text-sm font-bold">Resource Usage</h4><p class="text-sm text-slate-400">Rezolus process CPU, memory, I/O, and context switches</p></div>
 <span class="material-symbols-outlined text-slate-400 group-open:rotate-180 transition-transform text-lg" data-icon="expand_more">expand_more</span>
 </summary>
-<div class="px-5 py-4 space-y-2 text-xs border-t border-slate-200 dark:border-slate-800">
+<div class="px-5 py-4 space-y-2 text-sm border-t border-slate-200 dark:border-slate-800">
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_cpu_usage</code><span class="text-slate-500 pl-4 md:pl-0">Counter (ns) with <code>state</code>: user, system</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_memory_usage_resident_set_size</code><span class="text-slate-500 pl-4 md:pl-0">Gauge (bytes)</span></div>
 <div class="flex flex-col md:flex-row md:gap-3"><code class="text-blue-600 dark:text-blue-400 md:shrink-0 md:w-72">rezolus_memory_page_reclaims</code><span class="text-slate-500 pl-4 md:pl-0">Counter</span></div>
@@ -449,25 +449,25 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Metric Types -->
 <section class="mb-12" id="types">
 <h2 class="text-xl font-bold mb-6">Metric types</h2>
-<p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Every metric in a Rezolus recording is one of these three shapes. Column metadata records the type, and the viewer dispatches chart rendering accordingly.</p>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-6">Every metric in a Rezolus recording is one of these three shapes. Column metadata records the type, and the viewer dispatches chart rendering accordingly.</p>
 <div class="space-y-3">
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
-<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">counter</code><span class="text-xs text-slate-400">UInt64, monotonic</span></div>
-<p class="text-sm text-slate-500 dark:text-slate-400">A monotonically non-decreasing total. Rates and deltas are derived at query time via <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">rate()</code> / <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">irate()</code>. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">cpu_usage</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">syscall</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">blockio_operations</code>.</p>
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">counter</code><span class="text-sm text-slate-400">UInt64, monotonic</span></div>
+<p class="text-base text-slate-500 dark:text-slate-400">A monotonically non-decreasing total. Rates and deltas are derived at query time via <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">rate()</code> / <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">irate()</code>. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">cpu_usage</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">syscall</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">blockio_operations</code>.</p>
 </div>
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
-<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">gauge</code><span class="text-xs text-slate-400">Int64, instantaneous</span></div>
-<p class="text-sm text-slate-500 dark:text-slate-400">An instantaneous value that can go up or down. Used as-is &mdash; no rate derivation. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">cpu_cores</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">memory_used</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">gpu_utilization</code>.</p>
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">gauge</code><span class="text-sm text-slate-400">Int64, instantaneous</span></div>
+<p class="text-base text-slate-500 dark:text-slate-400">An instantaneous value that can go up or down. Used as-is &mdash; no rate derivation. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">cpu_cores</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">memory_used</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">gpu_utilization</code>.</p>
 </div>
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 px-5 py-4">
-<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">histogram</code><span class="text-xs text-slate-400">List&lt;UInt64&gt;, H2 bucketed</span></div>
-<p class="text-sm text-slate-500 dark:text-slate-400">A full bucketed distribution per snapshot, not just summary percentiles. Queryable via <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">histogram_quantiles()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">histogram_mean()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">histogram_sum()</code>, etc. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">scheduler_runqueue_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">syscall_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">tcp_packet_latency</code>.</p>
+<div class="flex items-baseline gap-3 mb-2"><code class="text-blue-600 dark:text-blue-400 font-bold">histogram</code><span class="text-sm text-slate-400">List&lt;UInt64&gt;, H2 bucketed</span></div>
+<p class="text-base text-slate-500 dark:text-slate-400">A full bucketed distribution per snapshot, not just summary percentiles. Queryable via <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">histogram_quantiles()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">histogram_mean()</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">histogram_sum()</code>, etc. Examples: <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">scheduler_runqueue_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">syscall_latency</code>, <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">tcp_packet_latency</code>.</p>
 </div>
 </div>
 </section>
 
 
-<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
 <a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Architecture</a>
 <a href="api.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">API Reference &rarr;</a>
 </div>
