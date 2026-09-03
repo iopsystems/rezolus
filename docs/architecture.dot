@@ -3,8 +3,10 @@
 // Render:  dot -Tsvg docs/architecture.dot -o docs/architecture.svg
 //          dot -Tpng docs/architecture.dot -o docs/architecture.png
 //
-// Everything below is the one `rezolus` binary — you just pick the
-// subcommand for the job. Arrows read as "what you do next".
+// Solid boxes are all the one `rezolus` binary — you just pick the
+// subcommand for the job. DASHED boxes are what you point it at: they are
+// not part of Rezolus, they are the external systems and services being
+// measured. Arrows read as "what you do next".
 //
 // Labels use small HTML tables so the text centers (plain <br/> labels
 // left-align in some Graphviz builds).
@@ -20,7 +22,7 @@ digraph rezolus {
   edge [fontname="Helvetica", fontsize=12, color="#607d8b"];
 
   // ---- What you're watching --------------------------------------------
-  system [fillcolor="#e8f5e0", color="#7cb342", label=<
+  system [fillcolor="#e8f5e0", color="#7cb342", style="rounded,filled,dashed", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
       <tr><td align="center"><b>Target systems</b></td></tr>
       <tr><td align="center" balign="center"><font point-size="11">CPU · GPU · kernel · scheduler<br/>syscalls · block I/O · network<br/>containers · services</font></td></tr>
@@ -28,7 +30,7 @@ digraph rezolus {
 
   // ---- A service that exposes its own metrics (scraped straight into
   //      record, bypassing the agent) --------------------------------
-  service [fillcolor="#e8f5e0", color="#7cb342", group="gRecord", label=<
+  service [fillcolor="#e8f5e0", color="#7cb342", group="gRecord", style="rounded,filled,dashed", label=<
     <table border="0" cellborder="0" cellspacing="0" cellpadding="1">
       <tr><td align="center"><b>Target services</b></td></tr>
       <tr><td align="center" balign="center"><font point-size="11">Prometheus-compatible endpoint<br/>vLLM · SGLang · Valkey</font></td></tr>

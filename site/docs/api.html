@@ -49,10 +49,27 @@
 <nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
 <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
 <a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
-<div class="hidden md:flex items-center gap-8 text-sm font-medium">
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
 <a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Open menu"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="api.html">API Reference</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
 </div>
 </div>
 </nav>
@@ -88,36 +105,36 @@
 <main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
 
 <h1 class="text-4xl font-extrabold tracking-tight mb-4">API Reference</h1>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">HTTP endpoints exposed by each operating mode.</p>
+<p class="text-xl text-slate-500 dark:text-slate-400 mb-12">HTTP endpoints exposed by each operating mode.</p>
 
 <!-- Agent -->
 <section class="mb-16" id="agent-api">
 <h2 class="text-xl font-bold mb-2">Agent</h2>
-<p class="text-sm text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4241</code></p>
+<p class="text-base text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4241</code></p>
 
 <div class="space-y-4">
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Returns the Rezolus version string.</p></div>
-</div>
-
-<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/metrics/json</code>
-</div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">JSON snapshot of all current metric values including counters, gauges, and histograms.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Returns the Rezolus version string.</p></div>
 </div>
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/metrics/binary</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/metrics/json</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Msgpack-encoded binary snapshot. Used internally by the exporter, recorder, and hindsight modes.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">JSON snapshot of all current metric values including counters, gauges, and histograms.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/metrics/binary</code>
+</div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Msgpack-encoded binary snapshot. Used internally by the exporter, recorder, and hindsight modes.</p></div>
 </div>
 </div>
 </section>
@@ -125,31 +142,31 @@
 <!-- Exporter -->
 <section class="mb-16" id="exporter-api">
 <h2 class="text-xl font-bold mb-2">Exporter</h2>
-<p class="text-sm text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
+<p class="text-base text-slate-400 mb-6">Default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
 
 <div class="space-y-4">
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/metrics</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/metrics</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Prometheus-format metrics. Histograms converted to summary percentiles as configured.</p></div>
-</div>
-
-<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/metrics/json</code>
-</div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Proxied JSON metrics from the upstream agent.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Prometheus-format metrics. Histograms converted to summary percentiles as configured.</p></div>
 </div>
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/metrics/binary</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/metrics/json</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Proxied msgpack metrics from the upstream agent.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Proxied JSON metrics from the upstream agent.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/metrics/binary</code>
+</div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Proxied msgpack metrics from the upstream agent.</p></div>
 </div>
 </div>
 </section>
@@ -157,26 +174,26 @@
 <!-- Hindsight -->
 <section class="mb-16" id="hindsight-api">
 <h2 class="text-xl font-bold mb-2">Hindsight</h2>
-<p class="text-sm text-slate-400 mb-6">Optional HTTP API, default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
+<p class="text-base text-slate-400 mb-6">Optional HTTP API, default: <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded">0.0.0.0:4242</code></p>
 
 <div class="space-y-4">
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/status</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/status</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Buffer status including time range of stored data.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Buffer status including time range of stored data.</p></div>
 </div>
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/dump</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/dump</code>
 </div>
 <div class="px-5 py-4">
-<p class="text-sm text-slate-500 mb-4">Download ring buffer contents as Parquet.</p>
+<p class="text-base text-slate-500 mb-4">Download ring buffer contents as Parquet.</p>
 <h4 class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Query Parameters</h4>
-<div class="space-y-2 text-xs text-slate-500">
+<div class="space-y-2 text-sm text-slate-500">
 <div><code class="text-blue-600 dark:text-blue-400">last</code> &mdash; Duration window, e.g. <code>?last=5m</code></div>
 <div><code class="text-blue-600 dark:text-blue-400">start</code> &mdash; Start timestamp, e.g. <code>?start=2024-01-01T12:00:00Z</code></div>
 <div><code class="text-blue-600 dark:text-blue-400">end</code> &mdash; End timestamp</div>
@@ -186,10 +203,10 @@
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-[10px] font-bold rounded uppercase">POST</span>
-<code class="text-sm font-bold">/dump/file</code>
+<span class="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-bold rounded uppercase">POST</span>
+<code class="text-base font-bold">/dump/file</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Write ring buffer to the configured output file on disk.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Write ring buffer to the configured output file on disk.</p></div>
 </div>
 </div>
 </section>
@@ -197,56 +214,73 @@
 <!-- Viewer -->
 <section class="mb-16" id="viewer-api">
 <h2 class="text-xl font-bold mb-2">Viewer</h2>
-<p class="text-sm text-slate-400 mb-6">Local web server</p>
+<p class="text-base text-slate-400 mb-6">Local web server</p>
 
 <div class="space-y-4">
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/api/v1/query</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/api/v1/query</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">PromQL instant query against the built-in TSDB.</p></div>
-</div>
-
-<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/api/v1/query_range</code>
-</div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">PromQL range query for time-series data.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">PromQL instant query against the built-in TSDB.</p></div>
 </div>
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/api/v1/labels</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/api/v1/query_range</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">All available label names.</p></div>
-</div>
-
-<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
-<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/api/v1/label/{name}/values</code>
-</div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">All values for a specific label.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">PromQL range query for time-series data.</p></div>
 </div>
 
 <div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
 <div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
-<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-[10px] font-bold rounded uppercase">GET</span>
-<code class="text-sm font-bold">/api/v1/metadata</code>
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/api/v1/labels</code>
 </div>
-<div class="px-5 py-4"><p class="text-sm text-slate-500">Time range metadata for the loaded recording.</p></div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">All available label names.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/api/v1/label/{name}/values</code>
+</div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">All values for a specific label.</p></div>
+</div>
+
+<div class="rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden">
+<div class="flex items-center gap-4 px-5 py-3 bg-slate-50 dark:bg-slate-900/50">
+<span class="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold rounded uppercase">GET</span>
+<code class="text-base font-bold">/api/v1/metadata</code>
+</div>
+<div class="px-5 py-4"><p class="text-base text-slate-500">Time range metadata for the loaded recording.</p></div>
 </div>
 </div>
 </section>
 
-<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-sm">
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
 <a href="telemetry.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Metrics</a>
 <a href="cli.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">CLI &amp; Configuration &rarr;</a>
 </div>
 
 </main>
 </div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
 </body></html>
