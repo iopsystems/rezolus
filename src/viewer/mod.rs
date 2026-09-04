@@ -40,6 +40,7 @@ mod ab_extract;
 mod actions;
 mod metadata;
 mod report_save;
+mod report_save_rez;
 mod routes;
 mod state;
 mod tui;
@@ -858,6 +859,7 @@ fn init_file_mode_rez(
     // reads it per-capture from `file_metadata`; the server keeps one global
     // slot, so the anchor is the one that fills it.
     let b_selection = b_reader.metadata_get(crate::parquet_metadata::KEY_SELECTION);
+    let b_report_marker = b_reader.metadata_get(crate::parquet_metadata::KEY_REPORT);
     // A CLI --baseline-alias still wins over the label-derived one.
     let b_alias = config
         .baseline_alias
@@ -871,6 +873,11 @@ fn init_file_mode_rez(
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
     *state.selection.write() = b_selection;
+    // A `.rez` report stamps `KEY_REPORT=trimmed` on its anchor recording, the
+    // manifest analogue of the parquet footer marker read on the parquet path.
+    // Without this a reloaded `.rez` report would render its (mostly trimmed)
+    // sections instead of going straight to the saved Report view.
+    *state.trimmed_report_marker.write() = b_report_marker;
     state.captures.set_baseline_systeminfo(b_systeminfo);
     state.captures.set_baseline_file_metadata(b_file_meta);
     state.captures.set_baseline_alias(Some(b_alias));
@@ -1317,6 +1324,10 @@ mod tests {
                 crate::parquet_metadata::KEY_EVENTS.to_string(),
                 r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
             );
+            md.insert(
+                crate::parquet_metadata::KEY_REPORT.to_string(),
+                crate::parquet_metadata::REPORT_VALUE_TRIMMED.to_string(),
+            );
             db.update_recording_metadata(recs[0].id, &md).unwrap();
         }
 
@@ -1334,6 +1345,13 @@ mod tests {
                 .as_deref()
                 .is_some_and(|s| s.contains("cpu_usage")),
             "the baseline recording's selection must fill state.selection"
+        );
+
+        // The report marker on the anchor makes the archive load as a report —
+        // the round trip a `.rez` Save-as-Report depends on.
+        assert!(
+            state.is_trimmed_report(),
+            "KEY_REPORT on the anchor manifest must set the trimmed-report marker"
         );
 
         // Events ride the baseline's file_metadata blob, parsed as JSON.
