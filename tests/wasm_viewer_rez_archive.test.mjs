@@ -64,14 +64,19 @@ if (!fs.existsSync(pkgJs) || !fs.existsSync(pkgWasm)) {
         assert.equal(JSON.parse(registry.notices()).length, 0);
     });
 
-    test('a third recording is reported rather than silently dropped', () => {
+    test('every recording of a 3-recording .rez attaches', () => {
         const registry = new WasmCaptureRegistry();
         registry.attach('baseline', fixture('three.rez', 3), 'fleet.rez');
 
-        const notices = JSON.parse(registry.notices());
-        assert.equal(notices.length, 1, JSON.stringify(notices));
-        assert.match(notices[0], /3 recordings/);
-        assert.match(notices[0], /source=envoy/, 'names the arm that is NOT shown');
+        // No "some recordings not shown" notice any more — all three attach,
+        // ready for an N-way overlay.
+        assert.equal(JSON.parse(registry.notices()).length, 0);
+        const captures = JSON.parse(registry.captures());
+        assert.deepEqual(captures.map((c) => c.id), ['baseline', 'experiment', 'envoy']);
+        // Identity intact: each capture is its own recording.
+        assert.match(registry.file_metadata_json('baseline'), /redis/);
+        assert.match(registry.file_metadata_json('experiment'), /valkey/);
+        assert.match(registry.file_metadata_json('envoy'), /envoy/);
     });
 
     test('a single-recording .rez is one capture', () => {
