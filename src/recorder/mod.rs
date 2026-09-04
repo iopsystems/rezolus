@@ -16,7 +16,9 @@ mod prometheus;
 /// `test-support` feature (a dev-dependency here) exists for.
 #[cfg(test)]
 pub(crate) use ::rez::rez_stream;
-pub(crate) use ::rez::{rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, seal_policy};
+pub(crate) use ::rez::{
+    parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, seal_policy,
+};
 
 /// True when the recording should be written as a `.rez` archive: either the
 /// output path ends in `.rez` or `--format rez` was given.

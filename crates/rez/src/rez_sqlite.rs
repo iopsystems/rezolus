@@ -179,6 +179,50 @@ impl RezDb {
         Self::create_with_page_size(path, PAGE_SIZE)
     }
 
+    /// Create a `.rez` that lives only in memory, for a consumer with no
+    /// filesystem to write to — a browser assembling a report `.rez` from
+    /// uploaded bytes. It has NO WAL (an in-memory database cannot have one),
+    /// which is exactly the shape [`serialize`](Self::serialize) then
+    /// [`open_bytes`](Self::open_bytes) expect: the bytes carry the whole
+    /// archive, sidecar-free.
+    ///
+    /// Unlike [`create`](Self::create) it skips the on-disk geometry pragmas
+    /// (`auto_vacuum`, `journal_mode=WAL`) — those bound a long-lived file's
+    /// footprint and durability, neither of which a transient in-memory image
+    /// serialized straight to bytes has any use for.
+    pub fn create_in_memory() -> Result<Self, String> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| format!("failed to open an in-memory database: {e}"))?;
+        let db = RezDb {
+            conn,
+            #[cfg(any(test, feature = "test-support"))]
+            commits: std::cell::Cell::new(0),
+        };
+        db.set_pragma("page_size", PAGE_SIZE)?;
+        db.apply_connection_pragmas(WRITER_CACHE_SIZE_KIB)?;
+        db.conn
+            .execute_batch(SCHEMA_SQL)
+            .map_err(|e| format!("failed to create .rez schema: {e}"))?;
+        db.conn
+            .execute(
+                "INSERT INTO schema_version(version) VALUES (?1)",
+                [SCHEMA_VERSION],
+            )
+            .map_err(|e| format!("failed to record .rez schema version: {e}"))?;
+        Ok(db)
+    }
+
+    /// Serialize the whole database to bytes — the inverse of
+    /// [`open_bytes`](Self::open_bytes). Used to hand a report `.rez` built in
+    /// memory back to a caller (a browser download) without a filesystem.
+    pub fn serialize(&self) -> Result<Vec<u8>, String> {
+        let data = self
+            .conn
+            .serialize(rusqlite::MAIN_DB)
+            .map_err(|e| format!("failed to serialize .rez: {e}"))?;
+        Ok(data.to_vec())
+    }
+
     /// A SQLite sidecar's path: the suffix is appended to the whole filename,
     /// not swapped for the extension — `out.rez` has `out.rez-wal`, not
     /// `out-wal`.

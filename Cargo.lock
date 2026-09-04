@@ -2915,6 +2915,7 @@ dependencies = [
  "dashboard",
  "metriken-query",
  "parquet",
+ "rez",
  "serde",
  "serde_json",
  "tar",

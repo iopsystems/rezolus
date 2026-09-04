@@ -1,93 +1,34 @@
-//! Save-as-Report for a `.rez` source — the server-side writer.
+//! Save-as-Report for a `.rez` source — the server's thin adapter.
 //!
-//! A loaded `.rez` (single recording, or a 2-recording A/B) saves to a
-//! trimmed `.rez` rather than a parquet or a `.parquet.ab.tar`: the report is
-//! the same container as the source, which is the point of retiring the
-//! tarball. It reuses the `rez_v3_rewrite` column-trim primitive
-//! (`CopySpec::keep_metrics`) and embeds the selection/events/report marker
-//! into the anchor recording's manifest, the same catalog-`UPDATE` shape
-//! `annotate` established.
-//!
-//! **Server-only.** The trim machinery lives under `rez`'s `write` feature
-//! (it pulls `metriken`, which has no wasm32 build), so the browser viewer
-//! cannot produce a `.rez` report yet — tracked as a follow-up. Everything
-//! here therefore lives in the binary, not in the wasm-safe `report-save`
-//! crate.
+//! A loaded `.rez` (single recording, or a 2-recording A/B) saves to a trimmed
+//! `.rez` rather than a parquet or a `.parquet.ab.tar`. The actual assembly is
+//! the shared, reader-available `report_save::build_rez_report_from_rez` (so
+//! the browser viewer runs the same code); this wrapper just reads the source
+//! file into bytes, since the server has a path and the shared crate works on
+//! bytes. A v2 (tar) source is not supported here — `open_bytes` needs a v3
+//! SQLite image; upgrade the archive first.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
-
-/// Build a `.rez` report from `source_path`.
-///
-/// When `keep_metrics` is `Some`, each table's segments are re-encoded down to
-/// those metric columns (plus the structural timestamp/window sidecars) and a
-/// table left with none of them is dropped — this is the trimmed report, and
-/// it stamps `KEY_REPORT=trimmed` so the loader knows to open it straight to
-/// the Report view. When `None`, the archive is copied whole (BLOBs verbatim)
-/// and only the selection is embedded — the untrimmed "save selection" case,
-/// which carries no report marker, exactly as the parquet path behaves.
-///
-/// `selection_json` and `events_json` are written into the ANCHOR recording's
-/// manifest (recordings are numbered in catalog order, so the first is the
-/// anchor the viewer maps onto the baseline slot). Returns the archive bytes.
+/// Build a `.rez` report from `source_path` — see
+/// `report_save::build_rez_report_from_rez` for the semantics (trim when
+/// `keep_metrics` is `Some`, embed selection/events, stamp the report marker).
 pub fn build_rez_report(
     source_path: &Path,
     keep_metrics: Option<&BTreeSet<String>>,
     selection_json: &str,
     events_json: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    use crate::recorder::rez_sqlite::RezDb;
-    use crate::recorder::rez_v3_rewrite::{copy_recordings_into, CopySpec};
-
-    let src = RezDb::open(source_path)?;
-
-    // Staged in a temp dir; the whole file is read back into memory to stream
-    // as a download attachment, so it never needs a durable path.
-    let staging = tempfile::tempdir().map_err(|e| format!("failed to stage a report: {e}"))?;
-    let staged = staging.path().join("report.rez");
-
-    let mut dst = RezDb::create(&staged)?;
-    dst.transaction(|tx| {
-        src.read_snapshot(|src| {
-            let spec = CopySpec {
-                keep_metrics,
-                ..CopySpec::everything()
-            };
-            copy_recordings_into(src, tx, &spec)?;
-            Ok(())
-        })
-    })?;
-
-    // Embed selection / events / report marker into the anchor recording. The
-    // copy is a catalog write; this is one more `UPDATE` on top of it.
-    let recordings = dst.read_recordings()?;
-    let anchor = recordings.first().ok_or_else(|| {
-        "report has no recordings — the source archive was empty or fully trimmed away".to_string()
-    })?;
-    let mut metadata = anchor.meta.metadata.clone();
-    metadata.insert(KEY_SELECTION.to_string(), selection_json.to_string());
-    if keep_metrics.is_some() {
-        metadata.insert(KEY_REPORT.to_string(), REPORT_VALUE_TRIMMED.to_string());
-    }
-    if let Some(events) = events_json {
-        metadata.insert(KEY_EVENTS.to_string(), events.to_string());
-    } else {
-        // A save carrying no events must not leave a stale payload behind.
-        metadata.remove(KEY_EVENTS);
-    }
-    dst.update_recording_metadata(anchor.id, &metadata)?;
-
-    drop(dst);
-    drop(src);
-
-    std::fs::read(&staged).map_err(|e| format!("failed to read back the report: {e}"))
+    let bytes = std::fs::read(source_path)
+        .map_err(|e| format!("failed to read {}: {e}", source_path.display()))?;
+    ::report_save::build_rez_report_from_rez(&bytes, keep_metrics, selection_json, events_json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parquet_metadata::{KEY_EVENTS, KEY_REPORT, KEY_SELECTION, REPORT_VALUE_TRIMMED};
     use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
     use crate::recorder::rez_sqlite::RezDb;
     use std::collections::BTreeSet;

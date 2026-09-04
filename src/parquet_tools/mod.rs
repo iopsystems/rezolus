@@ -1,6 +1,5 @@
 mod annotate;
 pub(crate) mod combine;
-mod combine_rez_ingest;
 mod convert;
 mod events;
 mod filter;
