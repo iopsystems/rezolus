@@ -137,6 +137,25 @@ const UNIT_SYSTEMS = {
         }]
     },
 
+    // Power (watts). Dashboard power plots derive watts from the microjoule
+    // energy counters: irate() yields uJ/s (= uW), so the query divides by 1e6.
+    power: {
+        base: 'W',
+        scales: [{
+            threshold: 0,
+            suffix: 'W',
+            divisor: 1
+        }, {
+            threshold: 1000,
+            suffix: 'KW',
+            divisor: 1000
+        }, {
+            threshold: 1000000,
+            suffix: 'MW',
+            divisor: 1000000
+        }]
+    },
+
     // Count (no units, just numbers with K, M, B suffixes)
     count: {
         base: '',
