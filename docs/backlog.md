@@ -759,6 +759,25 @@ in metriken; rezolus is first consumer. Value-uncertainty is modeled but deferre
   hard-fork + no crates.io publish until migration is solid (a real cross-team
   gate).
 
+## Agent — fentry migration for hot kprobe samplers
+
+Source: [fentry vs kprobe dispatch](journal/2026-09-04-fentry-vs-kprobe-dispatch.md).
+Measured: an fentry probe is ~61 ns/call (56%) cheaper than kprobe on a clean
+`tcp_sendmsg` (kernel 6.12). 8 samplers still use kprobe:
+`cpu/{tlb_flush,bandwidth,usage}`, `network/interfaces`,
+`tcp/{traffic,receive,retransmit,connect_latency}`.
+
+- **Add BTF-gated fentry twins to the hot single-hook samplers** — Open. fentry
+  needs BTF, so it is a twin with the kprobe kept as the CO-RE-only fallback
+  (principle 2), like the tp_btf/raw_tp pattern. Order by hook rate; `tcp_traffic`
+  (`tcp_sendmsg`/`tcp_cleanup_rbuf`, per-message) first. Re-measure each on a
+  clean function with `scripts/bench-fentry-vs-kprobe.sh` before/after.
+- **Consolidated hooks are a separate case** — Open. kprobes sharing one function
+  share a single ftrace dispatch (a second sampler is cheap incremental), while
+  fentries each need a trampoline; the 61 ns standalone win does not transfer to
+  a hook several samplers share (principle 11). Measure those separately before
+  migrating.
+
 ## Tooling / skills
 
 Source: [`document-feature` skill](journal/2026-07-02-document-feature-skill.md).
