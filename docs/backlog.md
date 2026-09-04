@@ -19,11 +19,13 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
   query param, and the `alias=path` positional syntax were built to generalize,
   but v1 assumes two slots and the wire-stable `baseline`/`experiment` ids are
   hard-coded. A third slot needs those ids to become positional or named-but-open.
-  *Reopen:* when a third capture is actually needed. Design constraint captured in
-  the entry (n-way extension). **Now on the critical path** of
-  [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-tarball.md):
-  a two-arm, two-source comparison encodes in a `.rez` as four `{arm, source}`
-  recordings, so replacing the tarball needs this.
+  *Reopen:* for the remaining UI polish (a compare strip listing N) and browser
+  verification. **N-way overlay is functionally complete**: both registries hold
+  N, a multi-recording `.rez` attaches every recording under named-from-labels
+  (positional fallback) ids via `dashboard::capture_alias::assign_capture_identities`,
+  `/api/v1/captures` enumerates them, the overlay renderer draws N, and
+  `?capture=<named-id>` round-trips on the server. Diff/side-by-side/spectrum stay
+  gated to exactly 2. This unblocked the `.parquet.ab.tar` retirement below.
 - **Hot-swap a capture** (replace one side, keep the other) — Open. Out of scope
   for v1; no architectural obstacle noted.
 - **Live-agent compare** (file+live or live+live) — Roadmap. Explicitly excluded;
@@ -40,8 +42,10 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
 
 Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-tarball.md).
 
-- **GATE: can the WASM viewer read a v3 `.rez`?** — Open, and first. Everything
-  below is premised on this passing. *Reopen as a new entry* if it does not.
+- **GATE: can the WASM viewer read a v3 `.rez`?** — DONE (#1121–#1123). The WASM
+  viewer opens a v3 `.rez` via `sqlite3_deserialize` (whole image into wasm RAM,
+  no `-wal`/`-shm` sidecars, no async-VFS problem); the N-way overlay attaches
+  every recording. Everything below was premised on this passing; it passed.
   - **Wave 1 (bundle cost) — measured 2026-08-27, not disqualifying.**
     `rusqlite 0.40` builds for `wasm32-unknown-unknown` with stock clang and no
     emscripten (it resolves to `sqlite-wasm-rs`, not `libsqlite3-sys`); viewer
@@ -59,9 +63,11 @@ Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-ta
 
   *Effort parked 2026-09-01 pending pickup.*
 - **Point `combine --ab` at the `.rez` form; add `.rez` to the picker `accept`
-  list** — Open, independent of the gate. `src/viewer/assets/lib/ui/layout.js:26`
-  omits `.rez` in both viewers even though the server ingests it by content
-  sniffing. Cheap, and it slows growth of the tarball corpus.
+  list** — DONE. The picker `accept` list gained `.rez` in #1122
+  (`ui/landing.js`, `ui/layout.js`). `combine`'s `--about`/`long_about`, the
+  `--ab` flag help, and the examples now lead with the preferred 2-recording
+  `.rez` A/B form and mark the tarball legacy (for parquet-only inputs). Slows
+  growth of the tarball corpus while the deeper workstreams below land.
 - **`.rez` manifest carries selection + events** — Open. `KEY_SELECTION`/`KEY_EVENTS`
   are parquet footer keys today; in a `.rez` they are a catalog `UPDATE`, the shape
   `annotate` established in #1073.
