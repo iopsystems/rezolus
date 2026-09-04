@@ -91,8 +91,20 @@ static int probe_ip(bool receiving, struct sock* sk, size_t size) {
     return 0;
 }
 
+// fentry/kprobe twins share probe_ip(); only the attach mechanism differs.
+// fentry is the cheaper dispatch (measured ~56% less than kprobe on a modern
+// KPROBES_ON_FTRACE kernel -- see
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md), but it needs BTF, so
+// the kprobe twin is kept as the CO-RE-only fallback and one is disabled at load
+// time based on kernel_has_btf() (see disabled_programs in mod.rs).
+
+SEC("fentry/tcp_sendmsg")
+int BPF_PROG(tcp_sendmsg_fentry, struct sock* sk, struct msghdr* msg, size_t size) {
+    return probe_ip(false, sk, size);
+}
+
 SEC("kprobe/tcp_sendmsg")
-int BPF_KPROBE(tcp_sendmsg, struct sock* sk, struct msghdr* msg, size_t size) {
+int BPF_KPROBE(tcp_sendmsg_kprobe, struct sock* sk, struct msghdr* msg, size_t size) {
     return probe_ip(false, sk, size);
 }
 
@@ -102,8 +114,17 @@ int BPF_KPROBE(tcp_sendmsg, struct sock* sk, struct msghdr* msg, size_t size) {
  * - misses tcp_read_sock() traffic
  * we'd much prefer tracepoints once they are available.
  */
+SEC("fentry/tcp_cleanup_rbuf")
+int BPF_PROG(tcp_cleanup_rbuf_fentry, struct sock* sk, int copied) {
+    if (copied <= 0) {
+        return 0;
+    }
+
+    return probe_ip(true, sk, copied);
+}
+
 SEC("kprobe/tcp_cleanup_rbuf")
-int BPF_KPROBE(tcp_cleanup_rbuf, struct sock* sk, int copied) {
+int BPF_KPROBE(tcp_cleanup_rbuf_kprobe, struct sock* sk, int copied) {
     if (copied <= 0) {
         return 0;
     }
