@@ -103,12 +103,15 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } bandwidth_throttled_time SEC(".maps");
 
-SEC("kprobe/tg_set_cfs_bandwidth")
-int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
-    struct task_group* tg = (struct task_group*)PT_REGS_PARM1(ctx);
-    struct cfs_bandwidth* cfs_b = (struct cfs_bandwidth*)PT_REGS_PARM2(ctx);
+// fentry/kprobe twins share these handlers; only the attach mechanism differs.
+// fentry is the cheaper dispatch (see
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
+// kprobe twins are the CO-RE-only fallback and one set is disabled at load time
+// on kernel_has_btf() (see disabled_programs in mod.rs).
 
-    if (!tg || !cfs_b)
+static __always_inline int handle_tg_set_cfs_bandwidth(struct task_group* tg, u64 period,
+                                                       u64 quota) {
+    if (!tg)
         return 0;
 
     // get the cgroup id and serial number
@@ -137,17 +140,20 @@ int tg_set_cfs_bandwidth(struct pt_regs* ctx) {
         bpf_ringbuf_reserve(&bandwidth_info, sizeof(struct bandwidth_info), 0);
     if (bw_info) {
         bw_info->id = cgroup_id;
-        bw_info->quota = BPF_CORE_READ(cfs_b, quota);
-        bw_info->period = BPF_CORE_READ(cfs_b, period);
+        // period/quota come straight from the args. The kernel signature is
+        // tg_set_cfs_bandwidth(tg, period, quota, burst); the old code cast
+        // arg1 (the period) to a pointer and dereferenced it, reading 0
+        // (issue #1166). fentry receives these typed; the kprobe reads
+        // PARM2/PARM3.
+        bw_info->quota = quota;
+        bw_info->period = period;
         bpf_ringbuf_submit(bw_info, 0);
     }
 
     return 0;
 }
 
-SEC("kprobe/throttle_cfs_rq")
-int throttle_cfs_rq(struct pt_regs* ctx) {
-    struct cfs_rq* cfs_rq = (struct cfs_rq*)PT_REGS_PARM1(ctx);
+static __always_inline int handle_throttle_cfs_rq(struct cfs_rq* cfs_rq) {
     int cpu = BPF_CORE_READ(cfs_rq, rq, cpu);
 
     // get the cgroup id and serial number
@@ -191,9 +197,7 @@ int throttle_cfs_rq(struct pt_regs* ctx) {
     return 0;
 }
 
-SEC("kprobe/unthrottle_cfs_rq")
-int unthrottle_cfs_rq(struct pt_regs* ctx) {
-    struct cfs_rq* cfs_rq = (struct cfs_rq*)PT_REGS_PARM1(ctx);
+static __always_inline int handle_unthrottle_cfs_rq(struct cfs_rq* cfs_rq) {
     int cpu = BPF_CORE_READ(cfs_rq, rq, cpu);
 
     // get the cgroup id
@@ -240,6 +244,36 @@ int unthrottle_cfs_rq(struct pt_regs* ctx) {
     bpf_map_update_elem(&throttle_start, &cgroup_runqueue_idx, &zero, BPF_ANY);
 
     return 0;
+}
+
+SEC("fentry/tg_set_cfs_bandwidth")
+int BPF_PROG(tg_set_cfs_bandwidth_fentry, struct task_group* tg, u64 period, u64 quota, u64 burst) {
+    return handle_tg_set_cfs_bandwidth(tg, period, quota);
+}
+
+SEC("kprobe/tg_set_cfs_bandwidth")
+int BPF_KPROBE(tg_set_cfs_bandwidth_kprobe, struct task_group* tg, u64 period, u64 quota) {
+    return handle_tg_set_cfs_bandwidth(tg, period, quota);
+}
+
+SEC("fentry/throttle_cfs_rq")
+int BPF_PROG(throttle_cfs_rq_fentry, struct cfs_rq* cfs_rq) {
+    return handle_throttle_cfs_rq(cfs_rq);
+}
+
+SEC("kprobe/throttle_cfs_rq")
+int BPF_KPROBE(throttle_cfs_rq_kprobe, struct cfs_rq* cfs_rq) {
+    return handle_throttle_cfs_rq(cfs_rq);
+}
+
+SEC("fentry/unthrottle_cfs_rq")
+int BPF_PROG(unthrottle_cfs_rq_fentry, struct cfs_rq* cfs_rq) {
+    return handle_unthrottle_cfs_rq(cfs_rq);
+}
+
+SEC("kprobe/unthrottle_cfs_rq")
+int BPF_KPROBE(unthrottle_cfs_rq_kprobe, struct cfs_rq* cfs_rq) {
+    return handle_unthrottle_cfs_rq(cfs_rq);
 }
 
 char LICENSE[] SEC("license") = "GPL";

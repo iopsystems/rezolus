@@ -1,5 +1,5 @@
 //! Collects CPU CFS bandwidth control and throttling stats using BPF and traces:
-//! * `tg_set_cfs_bandwidth`
+//! * `tg_set_cfs_bandwidth` (fentry when the kernel has BTF, else kprobe)
 //! * `throttle_cfs_rq`
 //! * `unthrottle_cfs_rq`
 //!
@@ -101,6 +101,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("bandwidth_info", handle_bandwidth_info)
+    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
+    .disabled_programs(if kernel_has_btf() {
+        &[
+            "tg_set_cfs_bandwidth_kprobe",
+            "throttle_cfs_rq_kprobe",
+            "unthrottle_cfs_rq_kprobe",
+        ]
+    } else {
+        &[
+            "tg_set_cfs_bandwidth_fentry",
+            "throttle_cfs_rq_fentry",
+            "unthrottle_cfs_rq_fentry",
+        ]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -131,16 +145,16 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} tg_set_cfs_bandwidth() BPF instruction count: {}",
-            self.progs.tg_set_cfs_bandwidth.insn_cnt()
+            "{NAME} tg_set_cfs_bandwidth_fentry() BPF instruction count: {}",
+            self.progs.tg_set_cfs_bandwidth_fentry.insn_cnt()
         );
         debug!(
-            "{NAME} throttle_cfs_rq() BPF instruction count: {}",
-            self.progs.throttle_cfs_rq.insn_cnt()
+            "{NAME} throttle_cfs_rq_fentry() BPF instruction count: {}",
+            self.progs.throttle_cfs_rq_fentry.insn_cnt()
         );
         debug!(
-            "{NAME} unthrottle_cfs_rq() BPF instruction count: {}",
-            self.progs.unthrottle_cfs_rq.insn_cnt()
+            "{NAME} unthrottle_cfs_rq_fentry() BPF instruction count: {}",
+            self.progs.unthrottle_cfs_rq_fentry.insn_cnt()
         );
     }
 }
