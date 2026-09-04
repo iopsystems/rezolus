@@ -178,9 +178,15 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // kprobe/raw fallbacks. Without BTF: the reverse. cpuacct_account_field and
     // sched_process_exit both switch on the same signal.
     .disabled_programs(if kernel_has_btf() {
-        &["handle__sched_process_exit_raw", "cpuacct_account_field_kprobe"]
+        &[
+            "handle__sched_process_exit_raw",
+            "cpuacct_account_field_kprobe",
+        ]
     } else {
-        &["handle__sched_process_exit_btf", "cpuacct_account_field_fentry"]
+        &[
+            "handle__sched_process_exit_btf",
+            "cpuacct_account_field_fentry",
+        ]
     })
     // Losing this probe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
     // entire CPU-time-by-category breakdown; label it so the health reason is
