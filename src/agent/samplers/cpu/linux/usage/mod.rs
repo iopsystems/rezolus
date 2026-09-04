@@ -174,15 +174,22 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .ringbuf_handler("task_info", handle_task_info)
     .ringbuf_handler("task_exit", handle_task_exit)
+    // BTF present: use the fentry twins (cheaper dispatch), disable the
+    // kprobe/raw fallbacks. Without BTF: the reverse. cpuacct_account_field and
+    // sched_process_exit both switch on the same signal.
     .disabled_programs(if kernel_has_btf() {
-        &["handle__sched_process_exit_raw"]
+        &["handle__sched_process_exit_raw", "cpuacct_account_field_kprobe"]
     } else {
-        &["handle__sched_process_exit_btf"]
+        &["handle__sched_process_exit_btf", "cpuacct_account_field_fentry"]
     })
-    // Losing this kprobe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
+    // Losing this probe (e.g. CONFIG_TICK_CPU_ACCOUNTING kernels) drops the
     // entire CPU-time-by-category breakdown; label it so the health reason is
-    // legible.
-    .required_programs(&[("cpuacct_account_field_kprobe", "CPU time by category")])
+    // legible. Require whichever variant is the active one.
+    .required_programs(if kernel_has_btf() {
+        &[("cpuacct_account_field_fentry", "CPU time by category")]
+    } else {
+        &[("cpuacct_account_field_kprobe", "CPU time by category")]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -216,7 +223,11 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} cpuacct_account_field() BPF instruction count: {}",
+            "{NAME} cpuacct_account_field_fentry() BPF instruction count: {}",
+            self.progs.cpuacct_account_field_fentry.insn_cnt()
+        );
+        debug!(
+            "{NAME} cpuacct_account_field_kprobe() BPF instruction count: {}",
             self.progs.cpuacct_account_field_kprobe.insn_cnt()
         );
         debug!(
