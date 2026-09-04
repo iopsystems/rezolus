@@ -48,10 +48,12 @@ pub fn command() -> Command {
                      By default KPIs come from the built-in template matching the file's source;\n\
                      override with --queries <file.json>. --undo strips a prior annotation.\n\n\
                      A .rez archive is also accepted: --queries embeds a ServiceExtension (KPIs)\n\
-                     into each recording's manifest metadata. Since a .rez is source=rezolus with\n\
-                     no built-in template, --queries is required for a .rez. Either container\n\
-                     works, and what is left behind is always v3 (SQLite): annotating is a\n\
-                     rewrite, so a v1/v2 tar archive is upgraded on the way through and says so.\n\n\
+                     and the event flags (--event/--add-events/--clear-events) embed timeline\n\
+                     events, both into each recording's manifest metadata. Since a .rez is\n\
+                     source=rezolus with no built-in template, at least one of --queries or the\n\
+                     event flags is required. Either container works, and what is left behind is\n\
+                     always v3 (SQLite): annotating is a rewrite, so a v1/v2 tar archive is\n\
+                     upgraded on the way through and says so.\n\n\
                      EXAMPLES:\n    \
                      # Attach KPIs from the built-in template for this file's source\n    \
                      rezolus recording annotate rezolus.parquet\n\n    \
@@ -65,8 +67,10 @@ pub fn command() -> Command {
                      rezolus recording annotate rezolus.parquet --event 'time=2026-05-12T15:23Z,kind=restart,description=\"deploy\"'\n\n    \
                      # Remove a previously added annotation\n    \
                      rezolus recording annotate rezolus.parquet --undo\n\n    \
-                     # Embed KPIs into each recording of a .rez archive (--queries required)\n    \
-                     rezolus recording annotate out.rez --queries kpis.json",
+                     # Embed KPIs into each recording of a .rez archive\n    \
+                     rezolus recording annotate out.rez --queries kpis.json\n\n    \
+                     # Add a timeline event to each recording of a .rez archive\n    \
+                     rezolus recording annotate out.rez --event 'time=2026-05-12T15:23Z,kind=deploy,description=\"rollout\"'",
                 )
                 .arg(
                     clap::Arg::new("FILE")

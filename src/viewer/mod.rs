@@ -853,6 +853,11 @@ fn init_file_mode_rez(
     warn_if_empty(&b_labels, &b_reader);
     let b_systeminfo = b_reader.metadata_get("systeminfo");
     let b_file_meta = file_meta_json(&b_reader);
+    // Selection is the anchor's, matching the parquet A/B path (mod.rs where
+    // only the baseline's selection fills `state.selection`). The WASM backend
+    // reads it per-capture from `file_metadata`; the server keeps one global
+    // slot, so the anchor is the one that fills it.
+    let b_selection = b_reader.metadata_get(crate::parquet_metadata::KEY_SELECTION);
     // A CLI --baseline-alias still wins over the label-derived one.
     let b_alias = config
         .baseline_alias
@@ -865,6 +870,7 @@ fn init_file_mode_rez(
         Arc::clone(&pool),
     );
     *state.parquet_path.write() = Some(path.to_path_buf());
+    *state.selection.write() = b_selection;
     state.captures.set_baseline_systeminfo(b_systeminfo);
     state.captures.set_baseline_file_metadata(b_file_meta);
     state.captures.set_baseline_alias(Some(b_alias));
@@ -1275,6 +1281,70 @@ mod tests {
                 .alias(crate::viewer::capture_registry::CaptureId::Baseline)
                 .as_deref(),
             Some("baseline"),
+        );
+    }
+
+    /// Selection and events embedded in a `.rez` recording's manifest are
+    /// surfaced by `init_file_mode_rez` exactly as the parquet footer path
+    /// surfaces them: selection into `state.selection`, events inside the
+    /// baseline's `file_metadata` (where the frontend's `seedEventsFromMetadata`
+    /// finds them). Before this workstream, `init_file_mode_rez` never set
+    /// `state.selection` for a `.rez`.
+    #[test]
+    fn init_file_mode_rez_surfaces_manifest_selection_and_events() {
+        use crate::recorder::rez_sqlite::RezDb;
+
+        let dir = tempfile::tempdir().unwrap();
+        let rez_path = dir.path().join("rec.rez");
+        crate::recorder::rez::recorder_tests_support::populated_v3_rez(
+            &rez_path,
+            "baseline",
+            &["cpu_usage"],
+            6,
+        );
+
+        // Write a selection + events payload straight into the recording's
+        // manifest metadata (the shape `annotate`/report-save produce).
+        {
+            let db = RezDb::open(&rez_path).unwrap();
+            let recs = db.read_recordings().unwrap();
+            let mut md = recs[0].meta.metadata.clone();
+            md.insert(
+                crate::parquet_metadata::KEY_SELECTION.to_string(),
+                r#"{"entries":[{"query":"cpu_usage"}]}"#.to_string(),
+            );
+            md.insert(
+                crate::parquet_metadata::KEY_EVENTS.to_string(),
+                r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
+            );
+            db.update_recording_metadata(recs[0].id, &md).unwrap();
+        }
+
+        let matches = super::command().get_matches_from(["view", rez_path.to_str().unwrap()]);
+        let config = super::Config::try_from(matches).unwrap();
+        let registry = ::dashboard::TemplateRegistry::empty();
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let state = super::init_file_mode(&config, &rez_path, &registry, pool);
+
+        // Selection reached the global slot the `/api/v1/selection` route serves.
+        assert!(
+            state
+                .selection
+                .read()
+                .as_deref()
+                .is_some_and(|s| s.contains("cpu_usage")),
+            "the baseline recording's selection must fill state.selection"
+        );
+
+        // Events ride the baseline's file_metadata blob, parsed as JSON.
+        let fm = state
+            .captures
+            .file_metadata_by_id(crate::viewer::capture_registry::BASELINE_ID)
+            .expect("baseline file_metadata is present");
+        let fm: serde_json::Value = serde_json::from_str(&fm).unwrap();
+        assert_eq!(
+            fm["events"]["events"][0]["description"], "rollout",
+            "events must be nested (as parsed JSON) under the `events` key of file_metadata"
         );
     }
 

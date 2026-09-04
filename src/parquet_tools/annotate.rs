@@ -26,24 +26,7 @@ pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
 
     match dispatch_format(path) {
         format @ (RezFormat::V3Sqlite | RezFormat::V2Tar) => {
-            let custom = args.get_one::<PathBuf>("queries").unwrap_or_else(|| {
-                eprintln!("error: annotating a .rez requires --queries <service-extension.json> (a .rez has no service template)");
-                std::process::exit(1);
-            });
-            let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
-                eprintln!("error: failed to read {custom:?}: {e}");
-                std::process::exit(1);
-            });
-            // parse-validate up front
-            let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
-                eprintln!("error: invalid service extension JSON: {e}");
-                std::process::exit(1);
-            });
-            let result = annotate_rez_any(path, format, &content);
-            result.unwrap_or_else(|e| {
-                eprintln!("error: failed to annotate .rez: {e}");
-                std::process::exit(1);
-            });
+            run_rez(args, path, format);
             return;
         }
         RezFormat::NotRez => {}
@@ -260,9 +243,98 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
     );
 }
 
-/// Embed a custom ServiceExtension into every recording of a `.rez`, validated
-/// against that recording's data. Rewrites the archive in place (copying table
-/// bytes verbatim).
+/// The manifest edits one `annotate` invocation applies to every recording of
+/// a `.rez`. Both fields are optional; `run_rez` guarantees at least one is
+/// present, since an annotate that changes nothing is a mistake worth an error.
+struct RezAnnotation<'a> {
+    /// Validated ServiceExtension JSON to embed under `KEY_SERVICE_QUERIES`
+    /// (KPIs). Re-probed against each recording's own metrics.
+    ext_json: Option<&'a str>,
+    /// Event operations to fold into each recording's `KEY_EVENTS` payload.
+    events: Option<EventOps<'a>>,
+}
+
+/// Event operations for a `.rez` annotate, applied in the same
+/// `clear → add file → add inline` order as the parquet footer path.
+struct EventOps<'a> {
+    add_files: &'a [&'a Path],
+    inline: &'a [String],
+    clear: bool,
+}
+
+/// Collect the KPI and event operations from the CLI and apply them to a
+/// `.rez` of either container. `--queries` and/or the event flags
+/// (`--event`/`--add-events`/`--clear-events`) drive it; a `.rez` has no
+/// built-in service template, so at least one must be given.
+///
+/// Footer-shaped flags (`--undo`/`--node`/`--source`/`--systeminfo`) have no
+/// per-recording manifest analogue wired yet, so they warn rather than
+/// silently no-op.
+fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
+    let queries = args.get_one::<PathBuf>("queries");
+    let event_files: Vec<&Path> = args
+        .get_many::<PathBuf>("add-events")
+        .map(|it| it.map(PathBuf::as_path).collect())
+        .unwrap_or_default();
+    let inline_events: Vec<String> = args
+        .get_many::<String>("event")
+        .map(|it| it.cloned().collect())
+        .unwrap_or_default();
+    let clear_events = args.get_flag("clear-events");
+    let events_requested = clear_events || !event_files.is_empty() || !inline_events.is_empty();
+
+    for (present, label) in [
+        (args.get_flag("undo"), "--undo"),
+        (args.get_one::<String>("node").is_some(), "--node"),
+        (args.get_one::<String>("source").is_some(), "--source"),
+        (
+            args.get_one::<PathBuf>("systeminfo").is_some(),
+            "--systeminfo",
+        ),
+    ] {
+        if present {
+            eprintln!("warning: {label} is not supported on a .rez archive; ignoring");
+        }
+    }
+
+    if queries.is_none() && !events_requested {
+        eprintln!(
+            "error: annotating a .rez needs --queries <service-extension.json> and/or event \
+             flags (--event/--add-events/--clear-events); a .rez has no built-in service template"
+        );
+        std::process::exit(1);
+    }
+
+    let ext_content = queries.map(|custom| {
+        let content = std::fs::read_to_string(custom).unwrap_or_else(|e| {
+            eprintln!("error: failed to read {custom:?}: {e}");
+            std::process::exit(1);
+        });
+        // parse-validate up front
+        let _: ServiceExtension = serde_json::from_str(&content).unwrap_or_else(|e| {
+            eprintln!("error: invalid service extension JSON: {e}");
+            std::process::exit(1);
+        });
+        content
+    });
+
+    let events = events_requested.then(|| EventOps {
+        add_files: &event_files,
+        inline: &inline_events,
+        clear: clear_events,
+    });
+
+    let annotation = RezAnnotation {
+        ext_json: ext_content.as_deref(),
+        events,
+    };
+
+    annotate_rez_any(path, format, &annotation).unwrap_or_else(|e| {
+        eprintln!("error: failed to annotate .rez: {e}");
+        std::process::exit(1);
+    });
+}
+
 /// Annotate a `.rez` of either container, always leaving a v3 one behind.
 ///
 /// A v1/v2 (tar) archive is upgraded in place first: annotating is a rewrite,
@@ -270,10 +342,10 @@ fn validate_kpis(path: &Path, ext: &mut ServiceExtension) {
 fn annotate_rez_any(
     path: &Path,
     format: RezFormat,
-    ext_json: &str,
+    annotation: &RezAnnotation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if format != RezFormat::V2Tar {
-        return annotate_rez_v3(path, ext_json);
+        return annotate_rez_v3(path, annotation);
     }
     let staging = tempfile::tempdir_in(
         path.parent()
@@ -282,7 +354,7 @@ fn annotate_rez_any(
     )?;
     let staged = staging.path().join("upgraded.rez");
     crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &staged)?;
-    annotate_rez_v3_at(&staged, path, ext_json)?;
+    annotate_rez_v3_at(&staged, path, annotation)?;
     // Staged beside the target so this rename is atomic and same-filesystem:
     // the original survives untouched until the annotated copy is complete.
     std::fs::rename(&staged, path)?;
@@ -293,14 +365,17 @@ fn annotate_rez_any(
     Ok(())
 }
 
-/// Embed KPIs into every recording of a v3 (SQLite) `.rez`.
+/// Embed KPIs and/or events into every recording of a v3 (SQLite) `.rez`.
 ///
-/// Unlike `combine` and `filter` this rewrites nothing: the KPI set is a
-/// catalog column, so annotating is an `UPDATE` per recording. No segment is
+/// Unlike `combine` and `filter` this rewrites nothing: KPIs and events are
+/// catalog columns, so annotating is an `UPDATE` per recording. No segment is
 /// read or copied, which is why annotating a 4 GB archive costs the same as
 /// annotating a 4 MB one.
-fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error::Error>> {
-    annotate_rez_v3_at(path, path, ext_json)
+fn annotate_rez_v3(
+    path: &Path,
+    annotation: &RezAnnotation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    annotate_rez_v3_at(path, path, annotation)
 }
 
 /// `annotate_rez_v3`, with the archive being written and the name to report
@@ -310,11 +385,12 @@ fn annotate_rez_v3(path: &Path, ext_json: &str) -> Result<(), Box<dyn std::error
 fn annotate_rez_v3_at(
     path: &Path,
     display: &Path,
-    ext_json: &str,
+    annotation: &RezAnnotation,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::parquet_metadata::KEY_EVENTS;
     use crate::recorder::rez_sqlite::RezDb;
+    use crate::viewer::Events;
 
-    let base_ext: ServiceExtension = serde_json::from_str(ext_json)?;
     let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
     let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
 
@@ -331,25 +407,63 @@ fn annotate_rez_v3_at(
         .into());
     }
 
-    let mut kpis = 0usize;
+    let mut kpis: Option<usize> = None;
+    // (events remaining after the ops, whether they were cleared first) — the
+    // input is identical for every recording, so the last one's counts stand
+    // in for the report.
+    let mut events_report: Option<(usize, bool)> = None;
     for (rec, (_labels, reader)) in recordings.iter().zip(readers) {
-        let mut ext = base_ext.clone();
-        // Validated per recording, not once: a KPI's query is only meaningful
-        // against the metrics that recording actually holds, and a
-        // multi-recording archive can hold different sets.
-        validate_kpis_source(&reader, &mut ext);
-        kpis = ext.kpis.len();
         let mut metadata = rec.meta.metadata.clone();
-        metadata.insert(
-            crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
-            serde_json::to_string(&ext)?,
-        );
+
+        if let Some(ext_json) = annotation.ext_json {
+            let mut ext: ServiceExtension = serde_json::from_str(ext_json)?;
+            // Validated per recording, not once: a KPI's query is only
+            // meaningful against the metrics that recording actually holds, and
+            // a multi-recording archive can hold different sets.
+            validate_kpis_source(&reader, &mut ext);
+            kpis = Some(ext.kpis.len());
+            metadata.insert(
+                crate::parquet_metadata::KEY_SERVICE_QUERIES.to_string(),
+                serde_json::to_string(&ext)?,
+            );
+        }
+
+        if let Some(ops) = &annotation.events {
+            let existing = metadata
+                .get(KEY_EVENTS)
+                .map(|s| serde_json::from_str::<Events>(s))
+                .transpose()
+                .map_err(|e| format!("recording has an invalid events payload: {e}"))?;
+            let (events, _added, _dropped) =
+                super::events::apply_event_ops(existing, ops.add_files, ops.inline, ops.clear)?;
+            // An empty payload drops the key rather than storing `{"events":[]}`,
+            // matching the parquet footer path (`write_events`).
+            if events.events.is_empty() {
+                metadata.remove(KEY_EVENTS);
+            } else {
+                metadata.insert(KEY_EVENTS.to_string(), serde_json::to_string(&events)?);
+            }
+            events_report = Some((events.events.len(), ops.clear));
+        }
+
         db.update_recording_metadata(rec.id, &metadata)?;
     }
+
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(k) = kpis {
+        parts.push(format!("{k} KPIs"));
+    }
+    if let Some((total, cleared)) = events_report {
+        parts.push(if cleared {
+            format!("{total} event(s) (replaced)")
+        } else {
+            format!("{total} event(s)")
+        });
+    }
     println!(
-        "Annotated {:?}: embedded {} KPIs into {} recording(s)",
+        "Annotated {:?}: embedded {} into {} recording(s)",
         display,
-        kpis,
+        parts.join(" and "),
         recordings.len()
     );
     Ok(())
@@ -875,6 +989,26 @@ mod tests {
 
     // ── annotate_rez tests ──
 
+    /// A KPIs-only annotation, the shape every pre-events test used.
+    fn kpi_annotation(ext_json: &str) -> RezAnnotation<'_> {
+        RezAnnotation {
+            ext_json: Some(ext_json),
+            events: None,
+        }
+    }
+
+    /// An events-only annotation adding the given inline events.
+    fn inline_events_annotation(inline: &[String]) -> RezAnnotation<'_> {
+        RezAnnotation {
+            ext_json: None,
+            events: Some(EventOps {
+                add_files: &[],
+                inline,
+                clear: false,
+            }),
+        }
+    }
+
     /// Build a single-recording `.rez` fixture on disk; return (tempdir, path).
     fn build_one_recording_rez() -> (tempfile::TempDir, PathBuf) {
         use crate::recorder::rez::RezRecorder;
@@ -932,7 +1066,7 @@ mod tests {
         let before = std::fs::metadata(&path).unwrap().len();
 
         let ext_json = r#"{"service_name":"test","kpis":[{"role":"overview","title":"Zero","query":"0","type":"gauge"}]}"#;
-        annotate_rez_v3(&path, ext_json).unwrap();
+        annotate_rez_v3(&path, &kpi_annotation(ext_json)).unwrap();
 
         let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
         let recordings = db.read_recordings().unwrap();
@@ -967,7 +1101,12 @@ mod tests {
         let (_d, path) = build_one_recording_rez();
         let ext_json = r#"{"service_name":"test","kpis":[{"role":"overview","title":"Cycles","query":"cpu_cycles","type":"counter"}]}"#;
 
-        annotate_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, ext_json).unwrap();
+        annotate_rez_any(
+            &path,
+            crate::recorder::rez::RezFormat::V2Tar,
+            &kpi_annotation(ext_json),
+        )
+        .unwrap();
 
         // Annotating a tar archive upgrades it in place, so it reads back as
         // v3 — the KPIs land in the recording's metadata column rather than a
@@ -1017,7 +1156,12 @@ mod tests {
         // The KPI queries a metric the fixture really has, so `available`
         // resolves through the segmented reader rather than short-circuiting.
         let ext_json = r#"{"service_name":"seg","kpis":[{"role":"overview","title":"Ops","query":"rate(cpu_usage_ops[2s])","type":"counter"}]}"#;
-        annotate_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, ext_json).unwrap();
+        annotate_rez_any(
+            &path,
+            crate::recorder::rez::RezFormat::V2Tar,
+            &kpi_annotation(ext_json),
+        )
+        .unwrap();
 
         let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
         let recordings = db.read_recordings().unwrap();
@@ -1040,6 +1184,120 @@ mod tests {
         assert!(
             ext.kpis[0].available,
             "the KPI validated against the spliced segments"
+        );
+    }
+
+    /// Annotating a v3 archive with `--event`-style inline events writes the
+    /// `{"events":[...]}` payload into the recording's `KEY_EVENTS` metadata,
+    /// and — the point of this workstream — it round-trips through the reader's
+    /// `file_metadata()`, which is exactly the map both viewer backends read.
+    #[test]
+    fn annotate_rez_v3_embeds_events_and_they_round_trip_through_the_reader() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        use metriken_query::MetricsSource;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 6);
+
+        let inline = vec!["timestamp=1000000000,kind=deploy,description=rollout,id=e1".to_string()];
+        annotate_rez_v3(&path, &inline_events_annotation(&inline)).unwrap();
+
+        // Stored in the catalog metadata column.
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        let raw = recordings[0]
+            .meta
+            .metadata
+            .get(crate::parquet_metadata::KEY_EVENTS)
+            .expect("events must be embedded in the recording metadata");
+        let events: crate::viewer::Events = serde_json::from_str(raw).unwrap();
+        assert_eq!(events.events.len(), 1);
+        assert_eq!(events.events[0].description, "rollout");
+        assert_eq!(events.events[0].kind.as_deref(), Some("deploy"));
+
+        // The reader surfaces it under `events` in `file_metadata()` — the same
+        // map `init_file_mode_rez` (server) and `Viewer` (WASM) serialize for
+        // the frontend's `seedEventsFromMetadata`.
+        let pool = metriken_query::BufferPool::new(64 * 1024 * 1024);
+        let readers = crate::rez_reader::RezReader::open_recordings(&path, pool).unwrap();
+        let (_labels, reader) = &readers[0];
+        let surfaced = reader
+            .file_metadata()
+            .get(crate::parquet_metadata::KEY_EVENTS)
+            .cloned()
+            .expect("the reader surfaces events in file_metadata");
+        let surfaced: crate::viewer::Events = serde_json::from_str(&surfaced).unwrap();
+        assert_eq!(surfaced.events[0].id.as_deref(), Some("e1"));
+    }
+
+    /// Events and KPIs can land in one invocation, and each recording keeps
+    /// pre-existing metadata (both new keys are additive merges, not a replace).
+    #[test]
+    fn annotate_rez_v3_embeds_events_and_kpis_together() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 6);
+
+        let inline = vec!["timestamp=2000000000,description=marker".to_string()];
+        let annotation = RezAnnotation {
+            ext_json: Some(
+                r#"{"service_name":"svc","kpis":[{"role":"overview","title":"Z","query":"0","type":"gauge"}]}"#,
+            ),
+            events: Some(EventOps {
+                add_files: &[],
+                inline: &inline,
+                clear: false,
+            }),
+        };
+        annotate_rez_v3(&path, &annotation).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let md = &db.read_recordings().unwrap()[0].meta.metadata;
+        assert!(md.contains_key(KEY_SERVICE_QUERIES), "KPIs embedded");
+        assert!(
+            md.contains_key(crate::parquet_metadata::KEY_EVENTS),
+            "events embedded"
+        );
+        assert!(
+            md.contains_key("sampling_interval_ms"),
+            "pre-existing metadata survives an events+KPIs annotate"
+        );
+    }
+
+    /// `--clear-events` with no adds drops the key entirely rather than storing
+    /// an empty `{"events":[]}`, matching the parquet footer path.
+    #[test]
+    fn annotate_rez_v3_clear_events_removes_the_key() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 6);
+
+        let inline = vec!["timestamp=1000000000,description=x".to_string()];
+        annotate_rez_v3(&path, &inline_events_annotation(&inline)).unwrap();
+
+        let clear = RezAnnotation {
+            ext_json: None,
+            events: Some(EventOps {
+                add_files: &[],
+                inline: &[],
+                clear: true,
+            }),
+        };
+        annotate_rez_v3(&path, &clear).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        assert!(
+            !db.read_recordings().unwrap()[0]
+                .meta
+                .metadata
+                .contains_key(crate::parquet_metadata::KEY_EVENTS),
+            "clearing events drops the key"
         );
     }
 

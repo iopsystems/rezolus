@@ -28,33 +28,24 @@ use std::path::Path;
 use crate::parquet_metadata::KEY_EVENTS;
 use crate::viewer::{Event, Events};
 
-/// Apply event-related operations to a parquet file in the order
-/// `clear → add file → add inline`.
+/// Fold event operations over an existing payload, in the order
+/// `clear → add file → add inline`, without any file I/O. This is the pure
+/// core of [`run`] so the parquet footer path and the `.rez` manifest path
+/// (`parquet_tools::annotate`) share one transform.
 ///
-/// Returns `Ok(true)` if anything changed (and the file was rewritten),
-/// `Ok(false)` if no event operations were requested.
-pub(super) fn run(
-    path: &Path,
+/// `existing` is the payload already attached (ignored when `clear`). Returns
+/// the normalized result plus `(added, dropped_by_id)` counts for reporting.
+pub(super) fn apply_event_ops(
+    existing: Option<Events>,
     add_files: &[&Path],
     inline: &[String],
     clear: bool,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    if !clear && add_files.is_empty() && inline.is_empty() {
-        return Ok(false);
-    }
-
+) -> Result<(Events, usize, usize), Box<dyn std::error::Error>> {
     let mut events = if clear {
         Events::default()
     } else {
-        read_events(path)?.unwrap_or_default()
+        existing.unwrap_or_default()
     };
-
-    let original_existing_ids: std::collections::HashSet<String> = events
-        .events
-        .iter()
-        .filter_map(|e| e.id.clone())
-        .filter(|id| !id.is_empty())
-        .collect();
 
     let mut added = 0usize;
     for file in add_files {
@@ -71,6 +62,34 @@ pub(super) fn run(
     let before = events.events.len();
     events.normalize();
     let dropped = before - events.events.len();
+
+    Ok((events, added, dropped))
+}
+
+/// Apply event-related operations to a parquet file in the order
+/// `clear → add file → add inline`.
+///
+/// Returns `Ok(true)` if anything changed (and the file was rewritten),
+/// `Ok(false)` if no event operations were requested.
+pub(super) fn run(
+    path: &Path,
+    add_files: &[&Path],
+    inline: &[String],
+    clear: bool,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    if !clear && add_files.is_empty() && inline.is_empty() {
+        return Ok(false);
+    }
+
+    let existing = if clear { None } else { read_events(path)? };
+    let original_existing_ids: std::collections::HashSet<String> = existing
+        .iter()
+        .flat_map(|e| e.events.iter())
+        .filter_map(|e| e.id.clone())
+        .filter(|id| !id.is_empty())
+        .collect();
+
+    let (events, added, dropped) = apply_event_ops(existing, add_files, inline, clear)?;
 
     write_events(path, &events)?;
 
