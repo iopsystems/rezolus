@@ -86,6 +86,22 @@ ttl = "10ms"
 # rank behind the ones named, so a partial list cannot silently drop one.
 # pmu_priority = ["cpu_perf", "cpu_branch", "cpu_dtlb", "cpu_l3", "cpu_frequency"]
 
+# Enable host-wide BPF run-time statistics so `rezolus_bpf_run_time` and
+# `rezolus_bpf_run_count` populate (mean ns/call per sampler — the principle-16
+# self-telemetry used to size sampler overhead).
+#
+# OFF by default, and deliberately. The kernel has a single global switch for
+# run-time accounting; turning it on adds two clock reads to EVERY BPF program
+# run on the host, not just Rezolus's. On a box running XDP at line rate,
+# cilium, or other heavy BPF, that is a real per-event tax on programs the agent
+# does not own. Rezolus enables it through a BPF_ENABLE_STATS fd held for its
+# lifetime, so it turns back off when the agent exits (no lingering
+# `kernel.bpf_stats_enabled` sysctl) — but while on it is still host-wide.
+#
+# Leave it off in normal operation; turn it on only while actively investigating
+# sampler overhead, and prefer a host that is not saturating other BPF programs.
+# bpf_stats = false
+
 [scheduler]
 # By default, Rezolus will use the SCHED_RR realtime scheduling policy to ensure
 # collection happens with minimal delay. Other policies are: `normal` and `fifo`
