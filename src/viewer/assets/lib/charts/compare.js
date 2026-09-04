@@ -77,6 +77,42 @@ export const captureColorFor = (id, extraIndex) => {
     return CAPTURE_PALETTE[extraIndex % CAPTURE_PALETTE.length];
 };
 
+/**
+ * Rows for the compare badge, one per attached capture, in display order.
+ *
+ * Pure (no DOM) so it can be unit-tested. `captures` is the `[{id, alias}]`
+ * list from `getCaptures()`; the anchor keeps its signature colour, the first
+ * non-anchor the experiment colour, and the rest walk the extra palette — the
+ * SAME assignment the overlay uses, so a capture's dot in the badge matches its
+ * line on the chart. Filenames are only known for the two A/B slots (they come
+ * from the attach flow); extra arms of a `.rez` show their alias alone.
+ */
+export const compareBadgeRows = (captures, opts = {}) => {
+    const {
+        baselineAlias,
+        experimentAlias,
+        baselineFilename,
+        experimentFilename,
+    } = opts;
+    let extra = 0;
+    return (captures || []).map((c) => {
+        const isBaseline = c.id === CAPTURE_BASELINE;
+        const isExperiment = c.id === CAPTURE_EXPERIMENT;
+        const alias = isBaseline
+            ? (c.alias || baselineAlias || 'baseline')
+            : isExperiment
+                ? (c.alias || experimentAlias || 'experiment')
+                : (c.alias || c.id);
+        const color = captureColorFor(c.id, isBaseline || isExperiment ? -1 : extra++);
+        const filename = isBaseline
+            ? (baselineFilename || null)
+            : isExperiment
+                ? (experimentFilename || null)
+                : null;
+        return { id: c.id, label: alias, color, filename };
+    });
+};
+
 // A stable id -> color map for a set of captures, so a capture keeps its color
 // across every sub-chart regardless of which labels it happens to carry.
 const captureColors = (captures) => {

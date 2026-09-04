@@ -2,6 +2,7 @@ import { TimeRangeBar, GranularitySelector, TimeModeSelector } from './controls.
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { compareBadgeRows } from '../charts/compare.js';
 
 const formatSize = (bytes) => {
     if (!bytes) return '';
@@ -58,6 +59,27 @@ const TopNav = {
             compareMode && (() => {
                 const baselineLabel = attrs.baselineAlias || 'baseline';
                 const experimentLabel = attrs.experimentAlias || 'experiment';
+
+                // N-way (> 2 captures, from a multi-recording `.rez`): a static
+                // strip listing every capture, each dot colored to match its
+                // overlay line. No dropdown — the arms are recordings INSIDE the
+                // archive, so there is no per-capture file to show or Load
+                // button to offer; an expandable card would be empty. The ≤ 2
+                // path below is the unchanged A/B badge (filenames + Load).
+                const caps = attrs.captures || [];
+                if (caps.length > 2) {
+                    const rows = compareBadgeRows(caps, {
+                        baselineAlias: attrs.baselineAlias,
+                        experimentAlias: attrs.experimentAlias,
+                    });
+                    return m('div.compare-badge.compare-badge-nway', {
+                        title: `Comparing ${rows.length} captures`,
+                    }, rows.map((r) => m('span.compare-badge-chip', { key: r.id }, [
+                        m('span.compare-dot', { style: { color: r.color } }, '●'),
+                        m('span.compare-badge-label', r.label),
+                    ])));
+                }
+
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
                     m('div.compare-capture-info', [
                         m('div.compare-capture-head', [

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 // palette falls back to its literals (same shim the other compare tests use).
 globalThis.document = globalThis.document || { documentElement: {} };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
-const { renderCompareChart, captureColorFor, BASELINE_COLOR, EXPERIMENT_COLOR } =
+const { renderCompareChart, captureColorFor, compareBadgeRows, BASELINE_COLOR, EXPERIMENT_COLOR } =
     await import('../src/viewer/assets/lib/charts/compare.js');
 const { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } = await import('../src/viewer/assets/lib/data.js');
 
@@ -72,4 +72,38 @@ test('a lone anchor does not overlay (renders baseline-only upstream)', () => {
         captureLabels: {},
     });
     assert.equal(out, false);
+});
+
+test('compareBadgeRows lists every capture with matching colors', () => {
+    const caps = [
+        { id: 'baseline', alias: 'redis' },
+        { id: 'experiment', alias: 'valkey' },
+        { id: 'envoy', alias: 'envoy' },
+        { id: 'nginx', alias: 'nginx' },
+    ];
+    const rows = compareBadgeRows(caps, {
+        baselineFilename: 'a.rez',
+        experimentFilename: 'b.rez',
+    });
+    assert.equal(rows.length, 4, 'one row per capture');
+    assert.deepEqual(rows.map((r) => r.label), ['redis', 'valkey', 'envoy', 'nginx']);
+    // Dot colors match the overlay's per-capture assignment.
+    assert.equal(rows[0].color, BASELINE_COLOR);
+    assert.equal(rows[1].color, EXPERIMENT_COLOR);
+    assert.equal(rows[2].color, captureColorFor('envoy', 0));
+    assert.equal(rows[3].color, captureColorFor('nginx', 1));
+    // Filenames only for the two A/B slots; extra arms carry none.
+    assert.equal(rows[0].filename, 'a.rez');
+    assert.equal(rows[1].filename, 'b.rez');
+    assert.equal(rows[2].filename, null);
+    assert.equal(rows[3].filename, null);
+});
+
+test('compareBadgeRows falls back to alias then id for labels', () => {
+    const rows = compareBadgeRows(
+        [{ id: 'baseline' }, { id: 'weird' }],
+        { baselineAlias: 'base' },
+    );
+    assert.equal(rows[0].label, 'base');
+    assert.equal(rows[1].label, 'weird');
 });
