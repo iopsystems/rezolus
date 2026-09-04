@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # tests/viewer_smoke.sh — end-to-end smoke test for `rezolus view`.
 #
-# Spawns the viewer in four configurations (upload-only, file mode, A/B
-# file mode, proxy enabled) on adjacent ports, hits the public API
+# Spawns the viewer in five configurations (upload-only, file mode, A/B
+# file mode, N-way 3-recording .rez, proxy enabled) on adjacent ports, hits
+# the public API
 # endpoints, and asserts the expected mode + payload shape. Also covers
 # experiment attach / detach via /api/v1/captures/experiment.
 #
 # Live mode is intentionally skipped — it requires a running rezolus
 # agent and isn't reproducible from a dev/CI machine without one.
 #
-# Requirements: cargo, bash 4+, curl, jq. Listens on 18500-18503.
+# Requirements: cargo, bash 4+, curl, jq. Listens on 18500-18504.
 # Exits 0 on full pass, 1 on first failed assertion (with the failing
 # server's log printed for context).
 
@@ -20,6 +21,7 @@ PORT_UPLOAD=18500
 PORT_FILE=18501
 PORT_AB=18502
 PORT_PROXY=18503
+PORT_NWAY=18504
 
 PARQUET_FILE=site/viewer/data/cachecannon.parquet
 PARQUET_AB_A=site/viewer/data/AB_base.parquet
@@ -28,10 +30,19 @@ PARQUET_AB_B=site/viewer/data/AB_base_pin.parquet
 LOGDIR=$(mktemp -d -t rezolus-smoke-XXXXXX)
 echo "logs: $LOGDIR"
 
+# A 3-recording `.rez` for the N-way (N > 2) section: redis / valkey / envoy,
+# so `/api/v1/captures` should enumerate three named captures, not just the
+# two A/B slots. Built by the rez crate's fixture example.
+NWAY_REZ="$LOGDIR/three.rez"
+
 # Build before launching anything so a compile failure surfaces early.
 # Examples include `gen_ab_fixtures`, the AB smoke section's fixture
 # generator — kept out of the production binary.
 cargo build --bin rezolus --example gen_ab_fixtures 2>&1 | tail -3
+
+# Generate the N-way fixture (3 recordings). The example lives in the rez
+# crate behind `test-support` so it never ships in the binary.
+cargo run -q -p rez --features test-support --example write_rez_fixture -- "$NWAY_REZ" 3 2>&1 | tail -1
 
 # Don't pop browser tabs during the smoke test.
 export REZOLUS_NO_OPEN=1
@@ -53,6 +64,11 @@ PID_FILE=$!
     > "$LOGDIR/ab.log" 2>&1 &
 PID_AB=$!
 
+./target/debug/rezolus view "$NWAY_REZ" \
+    --listen 127.0.0.1:$PORT_NWAY \
+    > "$LOGDIR/nway.log" 2>&1 &
+PID_NWAY=$!
+
 ./target/debug/rezolus view \
     --proxy-allow=httpbin.org \
     --listen 127.0.0.1:$PORT_PROXY \
@@ -60,7 +76,7 @@ PID_AB=$!
 PID_PROXY=$!
 
 cleanup() {
-    kill "$PID_UPLOAD" "$PID_FILE" "$PID_AB" "$PID_PROXY" 2>/dev/null || true
+    kill "$PID_UPLOAD" "$PID_FILE" "$PID_AB" "$PID_NWAY" "$PID_PROXY" 2>/dev/null || true
     wait 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -79,13 +95,14 @@ wait_for_port() {
     done
 }
 
-for port in $PORT_UPLOAD $PORT_FILE $PORT_AB $PORT_PROXY; do
+for port in $PORT_UPLOAD $PORT_FILE $PORT_AB $PORT_NWAY $PORT_PROXY; do
     wait_for_port "$port" || {
         echo "--- log for port $port ---"
         case $port in
             $PORT_UPLOAD) cat "$LOGDIR/upload.log" ;;
             $PORT_FILE)   cat "$LOGDIR/file.log" ;;
             $PORT_AB)     cat "$LOGDIR/ab.log" ;;
+            $PORT_NWAY)   cat "$LOGDIR/nway.log" ;;
             $PORT_PROXY)  cat "$LOGDIR/proxy.log" ;;
         esac
         exit 1
@@ -145,6 +162,24 @@ unknown=$(curl -fsS "http://127.0.0.1:$PORT_AB/api/v1/metadata?capture=nope")
 eq "unknown capture errors"  "$(echo "$unknown" | jq -r .status)"     "error"    "$LOGDIR/ab.log"
 eq "unknown capture type"    "$(echo "$unknown" | jq -r .errorType)"  "capture_not_found" "$LOGDIR/ab.log"
 
+echo "==> N-way (N > 2): a 3-recording .rez enumerates three captures"
+ncaps=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/captures")
+eq "N-way captures count"    "$(echo "$ncaps" | jq -r 'length')"       "3"        "$LOGDIR/nway.log"
+# Named-from-labels ids: the anchor keeps `baseline`, its A/B partner keeps
+# `experiment`, and the third is named from its discriminating label (`envoy`).
+eq "N-way id 0"              "$(echo "$ncaps" | jq -r '.[0].id')"       "baseline"   "$LOGDIR/nway.log"
+eq "N-way id 1"              "$(echo "$ncaps" | jq -r '.[1].id')"       "experiment" "$LOGDIR/nway.log"
+eq "N-way id 2"              "$(echo "$ncaps" | jq -r '.[2].id')"       "envoy"      "$LOGDIR/nway.log"
+eq "N-way alias 0"          "$(echo "$ncaps" | jq -r '.[0].alias')"    "redis"      "$LOGDIR/nway.log"
+eq "N-way alias 2"          "$(echo "$ncaps" | jq -r '.[2].alias')"    "envoy"      "$LOGDIR/nway.log"
+# The third capture routes by its named id — the fix that stopped `?capture=`
+# collapsing an unknown/extra arm to the baseline. It must resolve, and an
+# unknown id must still error.
+nmeta=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/metadata?capture=envoy")
+eq "N-way envoy metadata"    "$(echo "$nmeta" | jq -r .status)"        "success"    "$LOGDIR/nway.log"
+nbad=$(curl -fsS "http://127.0.0.1:$PORT_NWAY/api/v1/metadata?capture=nope")
+eq "N-way unknown errors"    "$(echo "$nbad" | jq -r .errorType)"      "capture_not_found" "$LOGDIR/nway.log"
+
 mode=$(mode_at $PORT_PROXY)
 eq "proxy url_loading"       "$(echo "$mode" | jq -r .url_loading)"  "proxy"    "$LOGDIR/proxy.log"
 
@@ -189,35 +224,29 @@ sleep 1
 mode=$(mode_at $PORT_FILE)
 eq "experiment attached → compare_mode" "$(echo "$mode" | jq -r .compare_mode)" "true" "$LOGDIR/file.log"
 
-echo "==> POST /api/v1/save_with_selection in two-file compare returns a tarball"
-SAVE_RESP="$LOGDIR/two-file-save.parquet.ab.tar"
+echo "==> POST /api/v1/save_with_selection in two-file compare returns a .rez"
+# A compare save now assembles a 2-recording .rez, not a .parquet.ab.tar.
+SAVE_RESP="$LOGDIR/two-file-save.rez"
 curl -fsS -X POST \
     -H 'Content-Type: application/json' \
     -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
     "http://127.0.0.1:$PORT_FILE/api/v1/save_with_selection" \
     -o "$SAVE_RESP"
 
-ab_listing=$(tar tf "$SAVE_RESP" 2>&1 | tr '\n' ' ')
-case "$ab_listing" in
-    *baseline.parquet*experiment.parquet*ab.json*|*baseline.parquet*ab.json*experiment.parquet*|*experiment.parquet*baseline.parquet*ab.json*|*experiment.parquet*ab.json*baseline.parquet*|*ab.json*baseline.parquet*experiment.parquet*|*ab.json*experiment.parquet*baseline.parquet*) : ;;
-    *) fail "two-file compare save: tarball missing expected entries" "$ab_listing" "baseline.parquet, experiment.parquet, ab.json" "$LOGDIR/file.log" ;;
+# It must be a valid v3 `.rez` holding both sides as recordings.
+save_meta=$(./target/debug/rezolus recording metadata -i "$SAVE_RESP" 2>&1)
+case "$save_meta" in
+    *"2 recording(s)"*) : ;;
+    *) fail "compare save: not a 2-recording .rez" "$save_meta" "2 recording(s)" "$LOGDIR/file.log" ;;
 esac
 
-ab_manifest=$(tar xfO "$SAVE_RESP" ab.json)
-eq "two-file compare save: manifest version" \
-    "$(echo "$ab_manifest" | jq -r .version)" "1" "$LOGDIR/file.log"
-[ -n "$(echo "$ab_manifest" | jq -r .baseline.alias)" ] \
-    || fail "two-file compare save: empty baseline.alias" "" "non-empty" "$LOGDIR/file.log"
-[ -n "$(echo "$ab_manifest" | jq -r .experiment.alias)" ] \
-    || fail "two-file compare save: empty experiment.alias" "" "non-empty" "$LOGDIR/file.log"
-
-echo "==> reload the saved tarball, save again, manifest survives round-trip"
+echo "==> reload the saved .rez, it re-opens as a 2-capture compare and re-saves"
 PORT_ROUNDTRIP=18506
 ./target/debug/rezolus view "$SAVE_RESP" \
     --listen 127.0.0.1:$PORT_ROUNDTRIP \
     > "$LOGDIR/roundtrip.log" 2>&1 &
 PID_ROUNDTRIP=$!
-trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_ROUNDTRIP 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_NWAY $PID_PROXY $PID_ROUNDTRIP 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 
 wait_for_port $PORT_ROUNDTRIP || {
     echo "--- log for round-trip viewer ---"
@@ -225,22 +254,25 @@ wait_for_port $PORT_ROUNDTRIP || {
     exit 1
 }
 
-ROUNDTRIP_RESP="$LOGDIR/two-file-save-2.parquet.ab.tar"
+# Reloaded as a compare: two captures, and the anchor carries the selection.
+rtcaps=$(curl -fsS "http://127.0.0.1:$PORT_ROUNDTRIP/api/v1/captures")
+eq "round-trip captures count" "$(echo "$rtcaps" | jq -r 'length')" "2" "$LOGDIR/roundtrip.log"
+rtsel=$(curl -fsS "http://127.0.0.1:$PORT_ROUNDTRIP/api/v1/selection")
+echo "$rtsel" | jq -e '.entries | length > 0' >/dev/null \
+    || fail "round-trip: saved selection did not survive" "$(echo "$rtsel" | head -c 160)" "non-empty .entries" "$LOGDIR/roundtrip.log"
+
+# Saving again still yields a valid 2-recording .rez.
+ROUNDTRIP_RESP="$LOGDIR/two-file-save-2.rez"
 curl -fsS -X POST \
     -H 'Content-Type: application/json' \
     -d '{"entries":[{"chartId":"smoke","section":"overview","sectionName":"Overview","groupName":"smoke","promql_query":"cpu_cores","chartOpts":{}}],"trim_columns":false}' \
     "http://127.0.0.1:$PORT_ROUNDTRIP/api/v1/save_with_selection" \
     -o "$ROUNDTRIP_RESP"
-
-# Reload-then-save should carry the synthesizer's first-pass aliases.
-first_baseline_alias=$(tar xfO "$SAVE_RESP" ab.json | jq -r .baseline.alias)
-first_experiment_alias=$(tar xfO "$SAVE_RESP" ab.json | jq -r .experiment.alias)
-roundtrip_baseline_alias=$(tar xfO "$ROUNDTRIP_RESP" ab.json | jq -r .baseline.alias)
-roundtrip_experiment_alias=$(tar xfO "$ROUNDTRIP_RESP" ab.json | jq -r .experiment.alias)
-eq "round-trip baseline alias preserved" \
-    "$roundtrip_baseline_alias" "$first_baseline_alias" "$LOGDIR/roundtrip.log"
-eq "round-trip experiment alias preserved" \
-    "$roundtrip_experiment_alias" "$first_experiment_alias" "$LOGDIR/roundtrip.log"
+rt_meta=$(./target/debug/rezolus recording metadata -i "$ROUNDTRIP_RESP" 2>&1)
+case "$rt_meta" in
+    *"2 recording(s)"*) : ;;
+    *) fail "round-trip re-save: not a 2-recording .rez" "$rt_meta" "2 recording(s)" "$LOGDIR/roundtrip.log" ;;
+esac
 
 kill $PID_ROUNDTRIP 2>/dev/null || true
 wait $PID_ROUNDTRIP 2>/dev/null || true
