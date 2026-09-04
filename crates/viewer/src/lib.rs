@@ -18,9 +18,6 @@ mod report_save;
 /// The anchor capture's id — what an absent `?capture=` resolves to, never
 /// renamed. Mirrors the server registry's `BASELINE_ID`.
 const BASELINE_ID: &str = "baseline";
-/// The conventional id of the first non-anchor capture (the classic A/B
-/// experiment). Mirrors the server registry's `EXPERIMENT_ID`.
-const EXPERIMENT_ID: &str = "experiment";
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -79,15 +76,6 @@ fn classify_sources(
         service_names,
         Some(filename_stem),
     )
-}
-
-/// Render a recording's labels for a message: `k=v, k=v` in key order.
-fn render_labels(labels: &std::collections::BTreeMap<String, String>) -> String {
-    labels
-        .iter()
-        .map(|(k, v)| format!("{k}={v}"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 /// Open every recording of a `.rez` held as bytes.
@@ -725,11 +713,10 @@ impl WasmCaptureRegistry {
     /// Attach a capture under the given slot ("baseline" or "experiment").
     /// Replaces any previously attached capture in that slot.
     ///
-    /// A multi-recording `.rez` is the exception: it carries both sides of a
-    /// comparison itself, so it fills BOTH slots and the requested one is
-    /// ignored. That is the same mapping `rezolus view` makes for the same
-    /// file — the alternative, loading one arm into one slot, would show an
-    /// A/B archive as a single capture with no sign that half of it is missing.
+    /// A multi-recording `.rez` is the exception: it carries a whole
+    /// comparison itself, so it attaches EVERY recording (under the shared
+    /// id/alias scheme) and the requested slot id is ignored. That is the same
+    /// mapping `rezolus view` makes for the same file.
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         self.notices.clear();
         if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
@@ -768,38 +755,21 @@ impl WasmCaptureRegistry {
         pool: Arc<BufferPool>,
         filename: &str,
     ) -> Result<(), JsValue> {
-        let total = recordings.len();
-        let mut recordings = recordings;
-        let extra: Vec<String> = recordings
-            .split_off(2)
-            .into_iter()
-            .map(|(labels, _)| render_labels(&labels))
-            .collect();
-        let shown: Vec<std::collections::BTreeMap<String, String>> =
+        // Attach EVERY recording, each under the shared id/alias scheme — the
+        // same one the server viewer uses, so an archive names its captures
+        // identically wherever it is opened. The browser has no `--baseline`/
+        // `--experiment` selectors, so the whole archive is always shown, in
+        // manifest order: recording 0 is `baseline`, 1 is `experiment`, the
+        // rest are named-or-positional.
+        let labels: Vec<std::collections::BTreeMap<String, String>> =
             recordings.iter().map(|(l, _)| l.clone()).collect();
-        let alias_key = dashboard::capture_alias::discriminating_alias_key(&shown);
+        let identities = dashboard::capture_alias::assign_capture_identities(&labels, &labels);
 
-        let mut it = recordings.into_iter();
-        for (id, fallback) in [(BASELINE_ID, "baseline"), (EXPERIMENT_ID, "experiment")] {
-            let (labels, reader) = it.next().expect("split_off(2) leaves exactly two");
-            let alias = alias_key
-                .as_ref()
-                .and_then(|k| labels.get(k))
-                .cloned()
-                .unwrap_or_else(|| fallback.to_string());
+        for ((_, reader), identity) in recordings.into_iter().zip(identities) {
             let mut viewer =
                 Viewer::from_source(Arc::new(reader), Arc::clone(&pool), Bytes::new(), filename);
-            viewer.set_alias(Some(alias));
-            self.set_capture(id, viewer);
-        }
-
-        if !extra.is_empty() {
-            self.notices.push(format!(
-                "{filename} holds {total} recordings; showing the first two. Not shown: {}. \
-                 Pick different ones with `rezolus view {filename} --baseline k=v --experiment \
-                 k=v`.",
-                extra.join("; ")
-            ));
+            viewer.set_alias(Some(identity.alias));
+            self.set_capture(&identity.id, viewer);
         }
         Ok(())
     }
@@ -831,6 +801,26 @@ impl WasmCaptureRegistry {
     /// Whether a capture is currently attached in the given slot.
     pub fn has(&self, capture: &str) -> bool {
         self.slot(capture).is_some()
+    }
+
+    /// The attached captures as JSON `[{ "id", "alias" }]`, anchor first, in
+    /// display order. The frontend enumerates this to know what to overlay —
+    /// the browser analogue of the server's `/api/v1/captures`.
+    pub fn captures(&self) -> String {
+        let mut list: Vec<serde_json::Value> = Vec::new();
+        let entry = |id: &str, viewer: &Viewer| {
+            serde_json::json!({
+                "id": id,
+                "alias": viewer.alias.clone().unwrap_or_else(|| id.to_string()),
+            })
+        };
+        if let Some(b) = self.baseline.as_ref() {
+            list.push(entry(BASELINE_ID, b));
+        }
+        for (id, viewer) in &self.others {
+            list.push(entry(id, viewer));
+        }
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
     }
 
     pub fn metadata(&self, capture: &str) -> Result<String, JsValue> {
@@ -1367,7 +1357,7 @@ mod tests {
     /// because an archive whose third arm is silently missing looks exactly
     /// like an archive with two arms.
     #[test]
-    fn recordings_beyond_the_first_two_are_reported_not_dropped() {
+    fn every_recording_of_a_multi_recording_rez_attaches() {
         let mut reg = WasmCaptureRegistry::new();
         reg.attach(
             "baseline",
@@ -1380,19 +1370,24 @@ mod tests {
         )
         .unwrap();
 
-        let notices: Vec<String> = serde_json::from_str(&reg.notices()).unwrap();
-        assert_eq!(notices.len(), 1, "{notices:?}");
-        assert!(notices[0].contains("3 recordings"), "{}", notices[0]);
+        // No "some recordings not shown" notice any more — every recording is
+        // attached under the shared id scheme, ready for an N-way overlay.
+        assert_eq!(reg.notices(), "[]");
+        let captures: Vec<serde_json::Value> = serde_json::from_str(&reg.captures()).unwrap();
+        let ids: Vec<&str> = captures.iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["baseline", "experiment", "envoy"]);
+        // Each is its own capture with its own metadata, identity intact.
         assert!(
-            notices[0].contains("source=envoy"),
-            "the notice must name what is NOT shown: {}",
-            notices[0]
+            reg.file_metadata_json("baseline")
+                .unwrap()
+                .contains("redis")
         );
         assert!(
-            !notices[0].contains("source=redis"),
-            "and not the ones that are: {}",
-            notices[0]
+            reg.file_metadata_json("experiment")
+                .unwrap()
+                .contains("valkey")
         );
+        assert!(reg.file_metadata_json("envoy").unwrap().contains("envoy"));
     }
 
     /// An archive that was never finalized must SAY so.

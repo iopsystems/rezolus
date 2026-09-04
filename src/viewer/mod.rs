@@ -810,61 +810,54 @@ fn init_file_mode_rez(
         std::process::exit(1);
     });
 
-    // The alias label names a recording against whatever it could be confused
-    // with.
+    // Display order: the anchor (baseline) first, its conventional A/B partner
+    // (experiment) second, and — when no recording was explicitly selected —
+    // every other recording after, in manifest order.
     //
-    // Showing TWO: that is each other. A label can fail to tell three
-    // recordings apart while telling the chosen two apart perfectly (two hosts
-    // running the same service, plus a third recording of one of them), and
-    // scoping the choice to the archive would fall back to
-    // "baseline"/"experiment" for a pair the labels describe exactly.
-    //
-    // Showing ONE out of several: the confusion is with the arms left behind.
-    // The window says `fleet.rez`, so aliasing the single shown recording
-    // "baseline" would leave nothing on screen saying WHICH arm of that
-    // archive is being read — the same unattributed-answer failure the
-    // selector exists to prevent. A single-recording archive keeps the
-    // positional name (a hindsight snapshot's `{source: rezolus}` is not a
-    // useful title).
-    let shown: Vec<BTreeMap<String, String>> = std::iter::once(b_idx)
-        .chain(e_idx)
-        .map(|i| all_labels[i].clone())
-        .collect();
-    let alias_key = if shown.len() < 2 && n > 1 {
-        discriminating_alias_key(&all_labels)
-    } else {
-        discriminating_alias_key(&shown)
-    };
-    let alias_of = |labels: &BTreeMap<String, String>, fallback: &str| -> String {
-        alias_key
-            .as_ref()
-            .and_then(|k| labels.get(k))
-            .cloned()
-            .unwrap_or_else(|| fallback.to_string())
-    };
+    // `--baseline`/`--experiment` are SELECTORS: giving them shows exactly the
+    // chosen recordings (the subset-view #1120 introduced, when only two could
+    // show). Giving NEITHER shows the whole archive, which is the N-way
+    // default. The two-slot ids stay wire-stable for the A/B path either way.
+    let selected = !config.baseline_recording.is_empty() || !config.experiment_recording.is_empty();
+    let mut order: Vec<usize> = vec![b_idx];
+    order.extend(e_idx);
+    if !selected {
+        order.extend((0..n).filter(|i| *i != b_idx && e_idx != Some(*i)));
+    }
 
-    // Take the two chosen recordings out by index. `Option::take` rather than
-    // `Vec::remove` because the indices are arbitrary now: removing one would
-    // shift the other.
+    // Ids and aliases from the shared scheme, over the recordings AS SHOWN, so
+    // one archive names its captures identically here and in the browser.
+    let ordered_labels: Vec<BTreeMap<String, String>> =
+        order.iter().map(|&i| all_labels[i].clone()).collect();
+    let identities =
+        dashboard::capture_alias::assign_capture_identities(&ordered_labels, &all_labels);
+
     let mut slots: Vec<Option<(BTreeMap<String, String>, crate::rez_reader::RezReader)>> =
         readers.into_iter().map(Some).collect();
-    let (b_labels, b_reader) = slots[b_idx].take().expect("baseline index is in range");
-    // A selected recording that holds no rows renders an empty dashboard.
-    // That is the truthful outcome — an endpoint that was scraped and reported
-    // nothing is itself a finding — but it looks identical to a failed load,
-    // so say which it is.
-    if b_reader.is_empty() {
-        warn!(
-            "recording {} holds no rows; its dashboard will be empty",
-            crate::mcp::render_labels(&b_labels)
-        );
-    }
+
+    // A recording that holds no rows renders an empty dashboard — the truthful
+    // outcome for an endpoint scraped but silent, but it looks like a failed
+    // load, so say which it is.
+    let warn_if_empty = |labels: &BTreeMap<String, String>,
+                         reader: &crate::rez_reader::RezReader| {
+        if reader.is_empty() {
+            warn!(
+                "recording {} holds no rows; its dashboard will be empty",
+                crate::mcp::render_labels(labels)
+            );
+        }
+    };
+
+    // The anchor (order[0]) becomes the AppState's baseline capture.
+    let (b_labels, b_reader) = slots[order[0]].take().expect("anchor index is in range");
+    warn_if_empty(&b_labels, &b_reader);
     let b_systeminfo = b_reader.metadata_get("systeminfo");
     let b_file_meta = file_meta_json(&b_reader);
+    // A CLI --baseline-alias still wins over the label-derived one.
     let b_alias = config
         .baseline_alias
         .clone()
-        .unwrap_or_else(|| alias_of(&b_labels, "baseline"));
+        .unwrap_or_else(|| identities[0].alias.clone());
 
     let state = AppState::with_pool(
         std::sync::Arc::new(b_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
@@ -876,34 +869,20 @@ fn init_file_mode_rez(
     state.captures.set_baseline_file_metadata(b_file_meta);
     state.captures.set_baseline_alias(Some(b_alias));
 
-    if let Some(e_idx) = e_idx {
-        let (e_labels, e_reader) = slots[e_idx].take().expect("experiment index is in range");
-        if e_reader.is_empty() {
-            warn!(
-                "recording {} holds no rows; its dashboard will be empty",
-                crate::mcp::render_labels(&e_labels)
-            );
-        }
-        let e_systeminfo = e_reader.metadata_get("systeminfo");
-        let e_file_meta = file_meta_json(&e_reader);
-        let e_alias = alias_of(&e_labels, "experiment");
-        state.captures.attach_experiment(
-            std::sync::Arc::new(e_reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
-            e_systeminfo,
-            e_file_meta,
-            Some(e_alias),
+    // Every other recording attaches under its own id — the first is
+    // `experiment` (the classic A/B second arm), the rest named-or-positional.
+    for (pos, &idx) in order.iter().enumerate().skip(1) {
+        let (labels, reader) = slots[idx].take().expect("index is in range");
+        warn_if_empty(&labels, &reader);
+        let systeminfo = reader.metadata_get("systeminfo");
+        let file_meta = file_meta_json(&reader);
+        state.captures.attach_capture(
+            &identities[pos].id,
+            std::sync::Arc::new(reader) as std::sync::Arc<dyn metriken_query::MetricsSource>,
+            systeminfo,
+            file_meta,
+            Some(identities[pos].alias.clone()),
         );
-        if n > 2 && config.baseline_recording.is_empty() && config.experiment_recording.is_empty() {
-            // Only when the pair was NOT chosen: telling a caller how to pick
-            // recordings it just picked is noise, and the warning exists to
-            // flag a choice made for them.
-            warn!(
-                "{n}-recording .rez: showing the first two as baseline/experiment \
-                 (simultaneous N-way faceting is not yet supported). Choose which two with \
-                 {BASELINE_FLAG}/{EXPERIMENT_FLAG}:\n{}",
-                crate::mcp::describe_candidates(&all_labels, &[], BASELINE_SYNTAX),
-            );
-        }
     }
 
     info!("Generating dashboards...");
@@ -1639,7 +1618,7 @@ mod tests {
     /// still loads recordings 0 and 1. This also drives the warning that lists
     /// the archive, which only runs on this path.
     #[test]
-    fn without_flags_a_three_recording_archive_still_loads_the_first_two() {
+    fn without_flags_a_three_recording_archive_attaches_every_recording() {
         use crate::viewer::capture_registry::CaptureId;
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
@@ -1667,6 +1646,22 @@ mod tests {
             state.captures.alias(CaptureId::Experiment).as_deref(),
             Some("valkey"),
         );
+        // The third recording is no longer dropped: it attaches under its own
+        // named id (the discriminating `source` value), so the whole archive
+        // is available for an N-way overlay.
+        assert_eq!(
+            state.captures.capture_ids(),
+            vec![
+                "baseline".to_string(),
+                "experiment".to_string(),
+                "envoy".to_string(),
+            ],
+        );
+        assert_eq!(
+            state.captures.alias_by_id("envoy").as_deref(),
+            Some("envoy")
+        );
+        assert!(state.captures.get_by_id("envoy").is_some());
     }
 
     /// A label that cannot tell the whole archive apart can still tell the
