@@ -68,9 +68,17 @@ Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-ta
   `--ab` flag help, and the examples now lead with the preferred 2-recording
   `.rez` A/B form and mark the tarball legacy (for parquet-only inputs). Slows
   growth of the tarball corpus while the deeper workstreams below land.
-- **`.rez` manifest carries selection + events** — Open. `KEY_SELECTION`/`KEY_EVENTS`
-  are parquet footer keys today; in a `.rez` they are a catalog `UPDATE`, the shape
-  `annotate` established in #1073.
+- **`.rez` manifest carries selection + events** — Storage + read DONE; the
+  Save-as-Report *writer* of selection is the only piece left (it rides the
+  column-trim item below, since a saved report also projects columns).
+  `KEY_SELECTION`/`KEY_EVENTS` now live in each recording's manifest metadata
+  (`BTreeMap` catalog column), written via the `#1073` `UPDATE` shape:
+  `annotate <file>.rez --event/--add-events/--clear-events` embeds events, and
+  both viewer backends read them — the server's `init_file_mode_rez` fills
+  `state.selection` from the anchor and events ride `file_metadata`; the WASM
+  `Viewer` already read both from `file_metadata`, so it needed no change.
+  Remaining: a Save-as-Report path that emits a `.rez` (writes `KEY_SELECTION`
+  into the manifest), which is the write half and depends on column trim.
 - **Column-level trim for `.rez`** — Open. `filter` drops whole tables by sampler;
   Save-as-Report needs per-column projection, which means decode → project →
   re-encode segments. The one item that breaks the verbatim-BLOB-copy property

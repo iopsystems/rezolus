@@ -1311,6 +1311,52 @@ mod tests {
         std::fs::read(&path).unwrap()
     }
 
+    /// Selection and events embedded in a `.rez` recording's manifest are
+    /// surfaced by the WASM backend with no rez-specific code: `Viewer` reads
+    /// the whole `reader.file_metadata()` map, so `selection()` and
+    /// `file_metadata_json()` return them the moment the manifest carries the
+    /// keys — the browser-side half of the parity with the server's
+    /// `init_file_mode_rez`.
+    #[test]
+    fn a_rez_with_manifest_selection_and_events_surfaces_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fleet.rez");
+        rez::rez::recorder_tests_support::multi_recording_v3_rez(
+            &path,
+            &[("redis", "web-01"), ("valkey", "web-01")],
+        );
+        // Embed into the anchor recording's manifest (id order is stable).
+        {
+            let db = rez::rez_sqlite::RezDb::open(&path).unwrap();
+            let recs = db.read_recordings().unwrap();
+            let mut md = recs[0].meta.metadata.clone();
+            md.insert(
+                "selection".to_string(),
+                r#"{"entries":[{"query":"cpu_usage"}]}"#.to_string(),
+            );
+            md.insert(
+                "events".to_string(),
+                r#"{"events":[{"timestamp":1000000000,"description":"rollout"}]}"#.to_string(),
+            );
+            db.update_recording_metadata(recs[0].id, &md).unwrap();
+        }
+        let bytes = std::fs::read(&path).unwrap();
+
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &bytes, "fleet.rez").unwrap();
+
+        assert!(
+            reg.selection("baseline")
+                .is_some_and(|s| s.contains("cpu_usage")),
+            "baseline selection must surface from the manifest"
+        );
+        let fm = reg.file_metadata_json("baseline").unwrap();
+        assert!(
+            fm.contains("rollout"),
+            "baseline events must ride file_metadata: {fm}"
+        );
+    }
+
     /// A `.rez` carrying two recordings IS a comparison, so it fills both
     /// slots — the same mapping `rezolus view` makes for the same file.
     /// Loading one arm into one slot would show an A/B archive as a single
