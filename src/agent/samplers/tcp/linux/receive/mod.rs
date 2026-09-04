@@ -1,5 +1,5 @@
 //! Collects TCP Receive stats using BPF and traces:
-//! * `tcp_rcv_established`
+//! * `tcp_rcv_established` (fentry when the kernel has BTF, else kprobe)
 //!
 //! And produces these stats:
 //! * `tcp/receive/jitter`
@@ -36,6 +36,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
     )
     .histogram("srtt", &TCP_SRTT, &SRTT_ACQ)
     .histogram("jitter", &TCP_JITTER, &JITTER_ACQ)
+    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
+    .disabled_programs(if kernel_has_btf() {
+        &["tcp_rcv_kprobe"]
+    } else {
+        &["tcp_rcv_fentry"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -61,8 +67,8 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} tcp_rcv() BPF instruction count: {}",
-            self.progs.tcp_rcv_kprobe.insn_cnt()
+            "{NAME} tcp_rcv_established_fentry() BPF instruction count: {}",
+            self.progs.tcp_rcv_fentry.insn_cnt()
         );
     }
 }
