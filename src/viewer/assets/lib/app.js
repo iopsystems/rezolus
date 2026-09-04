@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, setGpuVendors, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -329,6 +329,10 @@ const loadSection = async (section) => {
         // `gpus` carries the (vendor, id) pairs the selector filters on. Older
         // recordings have only `ids`; the selector falls back to those.
         gpuEntries = Array.isArray(gpuSel.gpus) ? gpuSel.gpus.slice() : [];
+        // Tell the data layer which vendors the host has, so per-GPU row and
+        // series labels can be qualified wherever an id alone is ambiguous —
+        // including in a chart that happens to show only one vendor's GPU.
+        setGpuVendors(gpuEntries.map((g) => g.vendor));
     }
 
     const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);

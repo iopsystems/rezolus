@@ -160,3 +160,47 @@ test('heatmap rows: a single GPU still yields one labelled row', () => {
     // must label correctly rather than fall through to the index.
     assert.deepEqual(heatmapRowLabels([series('intel', '0')]), ['0']);
 });
+
+// Whether a row label needs its vendor is a property of the HOST, not of one
+// query's result. On hyb — an NVIDIA card plus an Intel iGPU — no metric name
+// is published by both vendors, so every per-GPU chart returns a single vendor.
+// Deciding per-result therefore left every row reading a bare "0", which does
+// not tell the reader which of the host's two GPUs it is.
+const rowLabelsFor = (results, recordingVendors) => {
+    const ids = results.map((i) => i.metric && i.metric.id);
+    const nums = ids.map((v) => parseInt(v, 10));
+    const usable = nums.every((v) => !Number.isNaN(v)) && new Set(nums).size === nums.length;
+    const own = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
+    const ambiguousHost = new Set(recordingVendors || []).size > 1;
+    const qualify = ambiguousHost || own.size > 1;
+    const out = [];
+    results.forEach((item, idx) => {
+        const m = item.metric || {};
+        const row = usable ? nums[idx] : idx;
+        out[row] = m.id == null
+            ? String(row)
+            : (qualify && m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
+    });
+    return out;
+};
+
+test('a single-vendor result on a MIXED-vendor host is still qualified', () => {
+    // The reported case: hyb's "GPU % (Per-GPU)" holds only the NVIDIA GPU,
+    // because only NVIDIA publishes gpu_utilization there.
+    assert.deepEqual(
+        rowLabelsFor([series('nvidia', '0')], ['nvidia', 'intel']),
+        ['nvidia 0'],
+    );
+});
+
+test('a single-vendor host stays unqualified', () => {
+    assert.deepEqual(rowLabelsFor([series('amd', '0'), series('amd', '1')], ['amd', 'amd']),
+        ['0', '1']);
+});
+
+test('with no recording-wide vendors, the result decides', () => {
+    // Fallback path: metadata not yet loaded.
+    assert.deepEqual(rowLabelsFor([series('nvidia', '0'), series('intel', '0')], []),
+        ['nvidia 0', 'intel 0']);
+    assert.deepEqual(rowLabelsFor([series('intel', '0')], []), ['0']);
+});

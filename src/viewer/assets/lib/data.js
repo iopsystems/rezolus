@@ -384,6 +384,21 @@ const applyDisplayToPlot = (plot, decoded) => {
             : (series.length > 1 ? 'multi' : 'line'));
 };
 
+// Vendors of every GPU in the recording, from the GPU section's metadata.
+// Whether a row label needs qualifying is a property of the HOST, not of one
+// query's result: on a host with an NVIDIA card and an Intel iGPU, a chart
+// showing only the NVIDIA GPU still needs to say "nvidia 0", because a bare
+// "0" does not tell the reader which of the host's two GPUs it is.
+let _gpuVendors = [];
+
+const setGpuVendors = (vendors) => {
+    _gpuVendors = Array.isArray(vendors) ? vendors.filter(Boolean) : [];
+};
+
+// True when the recording has GPUs from more than one vendor, so an id alone
+// is ambiguous anywhere it appears.
+const gpuVendorsAreAmbiguous = () => new Set(_gpuVendors).size > 1;
+
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
 // GPUs to filter the GPU section by; [] = all. Each entry is a
@@ -584,7 +599,11 @@ export const promqlResultToHeatmapTriples = (results) => {
     const vendors = new Set(
         results.map((item) => item.metric && item.metric.vendor).filter(Boolean),
     );
-    const qualifyVendor = vendors.size > 1;
+    // Qualify whenever the RECORDING spans vendors, not just this result: a
+    // chart holding only one vendor's GPU still needs to name it on a host
+    // where an id alone is ambiguous. Falls back to the result's own vendors
+    // when the recording-wide list has not been populated.
+    const qualifyVendor = gpuVendorsAreAmbiguous() || vendors.size > 1;
 
     // Indexed by ROW, not by result order: when ids are usable a row is the id
     // value itself, and rows for absent ids stay unlabelled.
@@ -743,7 +762,7 @@ const applyResultToPlot = (plot, result) => {
                         .map((item) => item.metric && item.metric.vendor)
                         .filter(Boolean),
                 );
-                const qualifyGpuVendor = gpuVendors.size > 1;
+                const qualifyGpuVendor = gpuVendorsAreAmbiguous() || gpuVendors.size > 1;
 
                 result.data.result.forEach((item, idx) => {
                     if (item.values && Array.isArray(item.values)) {
@@ -1271,6 +1290,8 @@ export {
     getSelectedNode,
     setSelectedGpus,
     getSelectedGpus,
+    setGpuVendors,
+    gpuVendorsAreAmbiguous,
     applyGpuSelection,
     setSelectedInstance,
     getSelectedInstance,
