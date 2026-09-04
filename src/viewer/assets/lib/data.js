@@ -384,21 +384,6 @@ const applyDisplayToPlot = (plot, decoded) => {
             : (series.length > 1 ? 'multi' : 'line'));
 };
 
-// Vendors of every GPU in the recording, from the GPU section's metadata.
-// Whether a row label needs qualifying is a property of the HOST, not of one
-// query's result: on a host with an NVIDIA card and an Intel iGPU, a chart
-// showing only the NVIDIA GPU still needs to say "nvidia 0", because a bare
-// "0" does not tell the reader which of the host's two GPUs it is.
-let _gpuVendors = [];
-
-const setGpuVendors = (vendors) => {
-    _gpuVendors = Array.isArray(vendors) ? vendors.filter(Boolean) : [];
-};
-
-// True when the recording has GPUs from more than one vendor, so an id alone
-// is ambiguous anywhere it appears.
-const gpuVendorsAreAmbiguous = () => new Set(_gpuVendors).size > 1;
-
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
 // GPUs to filter the GPU section by; [] = all. Each entry is a
@@ -593,17 +578,19 @@ export const promqlResultToHeatmapTriples = (results) => {
     // identify the series, and each row carries its own label.
     const ids = results.map((item) => item.metric && item.metric.id);
     const numericIds = ids.map((v) => parseInt(v, 10));
+    // Ids index rows only when they are unique AND dense from 0. A sparse set
+    // leaves empty rows: sky publishes VRAM for its discrete GPU (id=1) and not
+    // its integrated one, so indexing by id drew a blank row 0 above the only
+    // real row. Falling back to result order packs the rows that exist.
     const idsUsable = numericIds.every((v) => !Number.isNaN(v))
-        && new Set(numericIds).size === numericIds.length;
+        && new Set(numericIds).size === numericIds.length
+        && Math.max(...numericIds) === numericIds.length - 1;
 
-    const vendors = new Set(
-        results.map((item) => item.metric && item.metric.vendor).filter(Boolean),
-    );
-    // Qualify whenever the RECORDING spans vendors, not just this result: a
-    // chart holding only one vendor's GPU still needs to name it on a host
-    // where an id alone is ambiguous. Falls back to the result's own vendors
-    // when the recording-wide list has not been populated.
-    const qualifyVendor = gpuVendorsAreAmbiguous() || vendors.size > 1;
+    // The vendor is always shown when a series carries one. An id is only
+    // meaningful within a vendor — every vendor's sampler numbers its devices
+    // from 0 — so "nvidia 0" identifies a GPU where "0" merely indexes one.
+    // Showing it unconditionally also keeps a chart's labels stable when the
+    // set of GPUs in a result changes.
 
     // Indexed by ROW, not by result order: when ids are usable a row is the id
     // value itself, and rows for absent ids stay unlabelled.
@@ -613,7 +600,7 @@ export const promqlResultToHeatmapTriples = (results) => {
         const row = idsUsable ? numericIds[idx] : idx;
         rowLabels[row] = m.id == null
             ? `${row}`
-            : (qualifyVendor && m.vendor ? `${m.vendor} ${m.id}` : `${m.id}`);
+            : (m.vendor ? `${m.vendor} ${m.id}` : `${m.id}`);
     });
 
     results.forEach((item, idx) => {
@@ -757,12 +744,6 @@ const applyResultToPlot = (plot, result) => {
                 // spans vendors; on a single-vendor host "intel GPU 0" is noise
                 // where "GPU 0" says the same thing. Decided over the whole
                 // result set, so every line in one chart is named consistently.
-                const gpuVendors = new Set(
-                    result.data.result
-                        .map((item) => item.metric && item.metric.vendor)
-                        .filter(Boolean),
-                );
-                const qualifyGpuVendor = gpuVendorsAreAmbiguous() || gpuVendors.size > 1;
 
                 result.data.result.forEach((item, idx) => {
                     if (item.values && Array.isArray(item.values)) {
@@ -770,9 +751,7 @@ const applyResultToPlot = (plot, result) => {
                         if (item.metric) {
                             const { id, vendor } = item.metric;
                             if (id !== undefined && vendor !== undefined) {
-                                seriesName = qualifyGpuVendor
-                                    ? `${vendor} GPU ${id}`
-                                    : `GPU ${id}`;
+                                seriesName = `${vendor} ${id}`;
                             } else {
                                 for (const [key, value] of Object.entries(item.metric)) {
                                     if (key !== '__name__') {
@@ -1290,8 +1269,6 @@ export {
     getSelectedNode,
     setSelectedGpus,
     getSelectedGpus,
-    setGpuVendors,
-    gpuVendorsAreAmbiguous,
     applyGpuSelection,
     setSelectedInstance,
     getSelectedInstance,

@@ -87,120 +87,66 @@ test('per-GPU groupings are exempt from the selection filter', () => {
     assert.ok(!re.test('sum by (vendor) (gpu_utilization)'));
 });
 
-// Series naming for per-GPU charts. The vendor is shown only when the result
-// spans vendors: on a single-vendor host "intel GPU 0" is noise where "GPU 0"
-// says the same thing, but with two vendors both numbering from 0 the vendor
-// is the only thing telling the lines apart.
-//
-// Mirrors the logic in data.js; the vendor-spanning case cannot be produced by
-// any host available here (it needs a discrete Intel GPU alongside another
-// vendor publishing a shared metric name), so it is covered here instead.
-const nameSeries = (results) => {
-    const vendors = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
-    const qualify = vendors.size > 1;
-    return results.map((i) => {
-        const { id, vendor } = i.metric;
-        if (id !== undefined && vendor !== undefined) {
-            return qualify ? `${vendor} GPU ${id}` : `GPU ${id}`;
-        }
-        return null;
-    });
-};
-
+// Per-GPU labels always carry the vendor. An id is only meaningful within a
+// vendor — every vendor's sampler numbers its devices from 0 — so "nvidia 0"
+// identifies a GPU where "0" merely indexes one. Showing it unconditionally
+// also keeps a chart's labels stable when the set of GPUs in a result changes.
 const series = (vendor, id) => ({ metric: { vendor, id } });
 
-test('one vendor: series are named by id alone', () => {
-    assert.deepEqual(nameSeries([series('amd', '0'), series('amd', '1')]),
-        ['GPU 0', 'GPU 1']);
-});
+const seriesName = (item) => {
+    const { id, vendor } = item.metric;
+    if (id === undefined || vendor === undefined) return null;
+    return `${vendor} ${id}`;
+};
 
-test('two vendors sharing an id: the vendor disambiguates', () => {
-    assert.deepEqual(nameSeries([series('nvidia', '0'), series('intel', '0')]),
-        ['nvidia GPU 0', 'intel GPU 0']);
-});
-
-test('a series with no vendor label falls back rather than throwing', () => {
-    // The macOS GPU sampler sets no vendor on any of its metrics.
-    assert.deepEqual(nameSeries([{ metric: { id: '0' } }]), [null]);
-});
-
-// Heatmap row layout. Rows were indexed by parseInt(id), so two GPUs sharing an
-// id — an NVIDIA card and an Intel iGPU, both id="0" — landed on the same row,
-// one silently overwriting the other. Rows now fall back to result order when
-// the ids do not uniquely identify the series, and each row carries a label.
 const heatmapRowLabels = (results) => {
     const ids = results.map((i) => i.metric && i.metric.id);
     const nums = ids.map((v) => parseInt(v, 10));
-    const usable = nums.every((v) => !Number.isNaN(v)) && new Set(nums).size === nums.length;
-    const vendors = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
-    const qualify = vendors.size > 1;
+    const usable = nums.every((v) => !Number.isNaN(v))
+        && new Set(nums).size === nums.length
+        && Math.max(...nums) === nums.length - 1;
     const out = [];
     results.forEach((item, idx) => {
         const m = item.metric || {};
         const row = usable ? nums[idx] : idx;
-        out[row] = m.id == null
-            ? String(row)
-            : (qualify && m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
+        out[row] = m.id == null ? String(row) : (m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
     });
     return out;
 };
 
-test('heatmap rows: one vendor keeps bare ids', () => {
-    assert.deepEqual(heatmapRowLabels([series('amd', '0'), series('amd', '1')]), ['0', '1']);
+test('series names carry the vendor on a single-vendor host too', () => {
+    assert.equal(seriesName(series('intel', '1')), 'intel 1');
+    assert.equal(seriesName(series('amd', '0')), 'amd 0');
 });
 
-test('heatmap rows: two GPUs sharing an id get distinct rows, vendor-qualified', () => {
+test('heatmap rows carry the vendor on a single-vendor host too', () => {
+    // The reported case: sky is Intel-only, and its rows read "intel 0"/"intel 1"
+    // rather than a bare "0"/"1".
+    assert.deepEqual(heatmapRowLabels([series('intel', '0'), series('intel', '1')]),
+        ['intel 0', 'intel 1']);
+});
+
+test('heatmap rows: two GPUs sharing an id get distinct rows', () => {
+    // Rows were indexed by parseInt(id), so two GPUs both at id="0" landed on
+    // the same row, one silently overwriting the other.
     const rows = heatmapRowLabels([series('nvidia', '0'), series('intel', '0')]);
     assert.equal(rows.length, 2, 'both GPUs must occupy their own row');
     assert.deepEqual(rows, ['nvidia 0', 'intel 0']);
 });
 
-test('heatmap rows: a single GPU still yields one labelled row', () => {
-    // A per-entity chart is a heatmap even with one entity, so the one-row case
-    // must label correctly rather than fall through to the index.
-    assert.deepEqual(heatmapRowLabels([series('intel', '0')]), ['0']);
+test('a series with no vendor label falls back rather than throwing', () => {
+    // The macOS GPU sampler sets no vendor on any of its metrics.
+    assert.equal(seriesName({ metric: { id: '0' } }), null);
+    assert.deepEqual(heatmapRowLabels([{ metric: { id: '0' } }]), ['0']);
 });
 
-// Whether a row label needs its vendor is a property of the HOST, not of one
-// query's result. On hyb — an NVIDIA card plus an Intel iGPU — no metric name
-// is published by both vendors, so every per-GPU chart returns a single vendor.
-// Deciding per-result therefore left every row reading a bare "0", which does
-// not tell the reader which of the host's two GPUs it is.
-const rowLabelsFor = (results, recordingVendors) => {
-    const ids = results.map((i) => i.metric && i.metric.id);
-    const nums = ids.map((v) => parseInt(v, 10));
-    const usable = nums.every((v) => !Number.isNaN(v)) && new Set(nums).size === nums.length;
-    const own = new Set(results.map((i) => i.metric && i.metric.vendor).filter(Boolean));
-    const ambiguousHost = new Set(recordingVendors || []).size > 1;
-    const qualify = ambiguousHost || own.size > 1;
-    const out = [];
-    results.forEach((item, idx) => {
-        const m = item.metric || {};
-        const row = usable ? nums[idx] : idx;
-        out[row] = m.id == null
-            ? String(row)
-            : (qualify && m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
-    });
-    return out;
-};
-
-test('a single-vendor result on a MIXED-vendor host is still qualified', () => {
-    // The reported case: hyb's "GPU % (Per-GPU)" holds only the NVIDIA GPU,
-    // because only NVIDIA publishes gpu_utilization there.
-    assert.deepEqual(
-        rowLabelsFor([series('nvidia', '0')], ['nvidia', 'intel']),
-        ['nvidia 0'],
-    );
+test('a single GPU still yields one labelled row', () => {
+    assert.deepEqual(heatmapRowLabels([series('intel', '0')]), ['intel 0']);
 });
 
-test('a single-vendor host stays unqualified', () => {
-    assert.deepEqual(rowLabelsFor([series('amd', '0'), series('amd', '1')], ['amd', 'amd']),
-        ['0', '1']);
-});
-
-test('with no recording-wide vendors, the result decides', () => {
-    // Fallback path: metadata not yet loaded.
-    assert.deepEqual(rowLabelsFor([series('nvidia', '0'), series('intel', '0')], []),
-        ['nvidia 0', 'intel 0']);
-    assert.deepEqual(rowLabelsFor([series('intel', '0')], []), ['0']);
+test('a sparse id set packs its rows instead of leaving a gap', () => {
+    // sky publishes VRAM for its discrete GPU (id=1) but not its integrated
+    // one, so indexing rows by id drew a blank row 0 above the only real row.
+    assert.deepEqual(heatmapRowLabels([series('intel', '1')]), ['intel 1']);
+    assert.deepEqual(heatmapRowLabels([series('amd', '2')]), ['amd 2']);
 });
