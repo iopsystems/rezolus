@@ -455,10 +455,14 @@ pub fn command() -> Command {
                      For a parquet file that means metric COLUMNS: the KPI set comes from the\n\
                      file's embedded annotation (or a matching built-in template), and --queries\n\
                      overrides it.\n\n\
-                     For a .rez archive it means whole SAMPLERS instead, listed with --samplers\n\
-                     (which is required there, and ignored for parquet) — a .rez is all-rezolus\n\
-                     data, so there is no KPI column set to filter against. Either container\n\
-                     works and the output is always v3 (SQLite).\n\n\
+                     For a .rez archive there is no KPI column set to filter against (it is\n\
+                     all-rezolus data), so you name what to keep directly: --samplers keeps whole\n\
+                     SAMPLERS (a sampler's group tables go together) and --metrics keeps metric\n\
+                     COLUMNS (re-encoding each table's segments, always keeping the timestamp and\n\
+                     acquisition-window sidecars; a table left with none of the kept metrics is\n\
+                     dropped). Use either alone or together; at least one is required, and both\n\
+                     are ignored for parquet. Either container works and the output is always v3\n\
+                     (SQLite).\n\n\
                      By default the input is rewritten in place; pass -o/--output to write a new\n\
                      file and leave the original untouched.\n\n\
                      EXAMPLES:\n    \
@@ -469,7 +473,9 @@ pub fn command() -> Command {
                      # Filter to the columns a custom KPI set needs\n    \
                      rezolus recording filter rezolus.parquet --queries ext.json -o slim.parquet\n\n    \
                      # Keep only two samplers of a .rez, writing a slimmed copy\n    \
-                     rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez",
+                     rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez\n\n    \
+                     # Keep only specific metric columns of a .rez\n    \
+                     rezolus recording filter out.rez --metrics cpu_usage,cpu_frequency -o slim.rez",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -507,7 +513,15 @@ pub fn command() -> Command {
                     clap::Arg::new("samplers")
                         .long("samplers")
                         .value_name("A,B,...")
-                        .help("For .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (required for .rez, ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. Either container works; the output is always v3 (SQLite)")
+                        .help("For .rez archives: comma-separated sampler names to KEEP; every other sampler's tables are dropped (ignored for parquet). Filtering is by sampler, so a sampler's group tables go together. Either container works; the output is always v3 (SQLite)")
+                        .value_parser(value_parser!(String))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("metrics")
+                        .long("metrics")
+                        .value_name("A,B,...")
+                        .help("For .rez archives: comma-separated metric names to KEEP as COLUMNS; every other metric's columns are dropped and re-encoded (ignored for parquet). Timestamp and acquisition-window sidecars are always kept; a table left with none of the kept metrics is dropped. Combine with --samplers, or use either alone (at least one is required for a .rez)")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Set),
                 ),
