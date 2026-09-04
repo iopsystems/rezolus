@@ -76,13 +76,26 @@ Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-ta
   `annotate <file>.rez --event/--add-events/--clear-events` embeds events, and
   both viewer backends read them — the server's `init_file_mode_rez` fills
   `state.selection` from the anchor and events ride `file_metadata`; the WASM
-  `Viewer` already read both from `file_metadata`, so it needed no change.
-  Remaining: a Save-as-Report path that emits a `.rez` (writes `KEY_SELECTION`
-  into the manifest), which is the write half and depends on column trim.
-- **Column-level trim for `.rez`** — Open. `filter` drops whole tables by sampler;
-  Save-as-Report needs per-column projection, which means decode → project →
-  re-encode segments. The one item that breaks the verbatim-BLOB-copy property
-  `rez_v3_rewrite` has held since #1073 — write it knowing that.
+  `Viewer` already read both from `file_metadata`, so it needed no change. The
+  Save-as-Report *writer* now emits a `.rez` on the SERVER (see below).
+- **Column-level trim for `.rez`** — DONE. `rez_v3_rewrite::project_segment_columns`
+  decodes → projects → re-encodes a segment (`rez::segment_writer_props()`,
+  reusing the segment's `SegmentMeta` since a projection changes neither rows
+  nor windows); `CopySpec.keep_metrics` threads it through the single copy path.
+  Exposed as `filter <file>.rez --metrics a,b,c` (composes with `--samplers`),
+  with an empty-archive guard. The one operation that breaks the
+  verbatim-BLOB-copy property, as flagged.
+- **Save-as-Report emits a `.rez` (server)** — DONE for the server; WASM is a
+  follow-up. `save_with_selection` detects a `.rez` source and builds a trimmed
+  `.rez` (`report_save_rez::build_rez_report`): it trims to the union of every
+  attached capture's queried columns, embeds `KEY_SELECTION`/`KEY_EVENTS` and
+  stamps `KEY_REPORT=trimmed` on the anchor manifest, and `init_file_mode_rez`
+  reads that marker back so the report reloads as a report. **WASM follow-up:**
+  the browser viewer cannot build a `.rez` — the trim/assembly path is under
+  `rez`'s `write` feature (it pulls `metriken`, no wasm32), so the WASM
+  Save-as-Report still can't target `.rez`. Closing that needs a metriken-free,
+  reader-available trim+assemble path (the WAL-tail materialization is the one
+  piece that currently needs `metriken`).
 - **Windowless `.rez` tables (non-rezolus sides)** — Open. Ingest is close (the
   recorder already converts Prometheus scrapes to Snapshots; `demote_from_rez`
   documents the refusal as policy, `src/recorder/mod.rs:744-760`). The reader must

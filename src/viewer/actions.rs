@@ -811,6 +811,61 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         let experiment_path = state.resolve_experiment_parquet_path();
         let experiment_data = state.captures.get(CaptureId::Experiment);
 
+        // `.rez` source: save a trimmed `.rez` report (single recording or a
+        // 2-recording A/B stay one archive), NOT a parquet or a
+        // `.parquet.ab.tar`. Server-only — the browser viewer can't run the
+        // write-gated trim path yet. This must come before the compare/single
+        // branches below, which assume a parquet source and would fail trying
+        // to reparse the SQLite container as parquet.
+        if crate::recorder::rez::detect_rez_format(&path)
+            .map(|f| f != crate::recorder::rez::RezFormat::NotRez)
+            .unwrap_or(false)
+        {
+            // Union the kept columns across every attached capture — the anchor
+            // as baseline, the rest as experiment — so a 2-recording A/B keeps
+            // both sides' queried metrics. A slightly looser set than a
+            // per-recording trim, but never lossy.
+            let keep: Option<std::collections::BTreeSet<String>> = if trim_columns {
+                let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                for (i, id) in state.captures.capture_ids().into_iter().enumerate() {
+                    if let Some(source) = state.captures.get_by_id(&id) {
+                        let side = if i == 0 {
+                            ::report_save::Side::Baseline
+                        } else {
+                            ::report_save::Side::Experiment
+                        };
+                        set.extend(::report_save::resolve_kept_columns(
+                            &payload,
+                            source.as_ref(),
+                            side,
+                        ));
+                    }
+                }
+                Some(set)
+            } else {
+                None
+            };
+            let events_json = if payload.events.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
+            };
+            let result = tokio::task::spawn_blocking({
+                let source = path.clone();
+                let body = selection_json.clone();
+                move || {
+                    super::report_save_rez::build_rez_report(
+                        &source,
+                        keep.as_ref(),
+                        &body,
+                        events_json.as_deref(),
+                    )
+                }
+            })
+            .await;
+            return finalize_rez_report(result);
+        }
+
         // Compare mode: experiment attached -> tarball with manifest
         // (loaded or synthesized from per-slot runtime state).
         if let (Some(experiment_path), Some(experiment_data)) = (experiment_path, experiment_data) {
@@ -909,6 +964,13 @@ fn finalize_report_attachment_tarball(
     result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
 ) -> Response {
     finalize_attachment(result, "rezolus-report.parquet.ab.tar", tar_attachment)
+}
+
+fn finalize_rez_report(
+    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
+) -> Response {
+    // A `.rez` is an opaque binary blob, same content-type as the parquet path.
+    finalize_attachment(result, "rezolus-report.rez", parquet_attachment)
 }
 
 /// Convert a `spawn_blocking` outcome into a download Response, logging
