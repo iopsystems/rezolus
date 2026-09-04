@@ -116,6 +116,24 @@ let experimentAlias = null;
 export const getBaselineAlias = () => baselineAlias;
 export const getExperimentAlias = () => experimentAlias;
 
+// Every attached capture as `[{id, alias}]`, for the compare badge to list
+// N (not just baseline + experiment). Populated from `/api/v1/captures`
+// whenever compare mode is (re)established; empty otherwise.
+let compareCaptures = [];
+const refreshCompareCaptures = async () => {
+    if (!compareMode) {
+        compareCaptures = [];
+        return;
+    }
+    try {
+        const caps = await ViewerApi.getCaptures();
+        compareCaptures = Array.isArray(caps) ? caps : [];
+    } catch {
+        compareCaptures = [];
+    }
+    m.redraw();
+};
+
 // Compare-mode per-chart toggles + anchors live in `notebookStore` so
 // they persist across page reloads. See selection_migration.js for the
 // schema. The accessors below read-through to the store.
@@ -208,6 +226,7 @@ const attachExperiment = async (file) => {
     experimentAlias = expMeta?.data?.alias || null;
     experimentAttached = true;
     compareMode = true;
+    refreshCompareCaptures();
 
     applyMultiNodeInfo(expFileMeta);
     clearViewerCaches();
@@ -236,6 +255,7 @@ const detachExperiment = async () => {
     experimentAlias = null;
     experimentAttached = false;
     compareMode = false;
+    compareCaptures = [];
 
     applyMultiNodeInfo(null);
     clearViewerCaches();
@@ -671,6 +691,7 @@ const topNavAttrs = (data, sectionRoute, extra) => buildTopNavAttrs({
         experimentFilename,
         baselineAlias,
         experimentAlias,
+        captures: compareCaptures,
         onLoadBaseline: onUploadParquet ? (file) => onUploadParquet(file) : null,
         onLoadExperiment: onUploadParquet ? (file) => { loadExperiment(file); } : null,
         ...(extra || {}),
@@ -933,6 +954,7 @@ const initDashboard = (config = {}) => {
     // reported compare_mode=true).
     compareMode = config.compareMode === true;
     experimentAttached = compareMode;
+    refreshCompareCaptures();
     combinedAB = config.combinedAB === true;
     reportMode = config.reportMode === true;
     experimentSystemInfo = config.experimentSystemInfo || null;
@@ -984,6 +1006,7 @@ const initDashboard = (config = {}) => {
             experimentFilename,
             baselineAlias,
             experimentAlias,
+            captures: compareCaptures,
             // The WASM viewer has no onUploadParquet handler — that path
             // is how the site viewer loads its initial parquet on its own.
             // Use its absence as the "WASM mode" signal and hide both

@@ -2,6 +2,7 @@ import { TimeRangeBar, GranularitySelector, TimeModeSelector } from './controls.
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
+import { compareBadgeRows } from '../charts/compare.js';
 
 const formatSize = (bytes) => {
     if (!bytes) return '';
@@ -58,6 +59,42 @@ const TopNav = {
             compareMode && (() => {
                 const baselineLabel = attrs.baselineAlias || 'baseline';
                 const experimentLabel = attrs.experimentAlias || 'experiment';
+
+                // N-way (> 2 captures, from a multi-recording `.rez`): list
+                // every capture, each dot colored to match its overlay line.
+                // Extra arms carry no filename and no Load button — they came
+                // from inside the archive, not an attach. The ≤ 2 path below is
+                // the unchanged A/B badge (filenames + Load/Replace buttons).
+                const caps = attrs.captures || [];
+                if (caps.length > 2) {
+                    const rows = compareBadgeRows(caps, {
+                        baselineAlias: attrs.baselineAlias,
+                        experimentAlias: attrs.experimentAlias,
+                        baselineFilename: attrs.filename,
+                        experimentFilename: attrs.experimentFilename,
+                    });
+                    const dot = (color) => m('span.compare-dot', { style: { color } }, '●');
+                    return m('details.compare-badge', [
+                        m('summary.compare-badge-summary', {
+                            title: `Comparing ${rows.length} captures`,
+                        }, rows.map((r) => m('span.compare-badge-chip', { key: r.id }, [
+                            dot(r.color),
+                            m('span.compare-badge-label', r.label),
+                        ]))),
+                        m('div.compare-capture-list', rows.map((r) => m('div.compare-capture', { key: r.id }, [
+                            m('div.compare-capture-info', [
+                                m('div.compare-capture-head', [
+                                    dot(r.color),
+                                    m('span.compare-capture-label', r.label),
+                                ]),
+                                m('div.compare-capture-name', {
+                                    title: r.filename || 'From the loaded archive',
+                                }, r.filename || '—'),
+                            ]),
+                        ]))),
+                    ]);
+                }
+
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
                     m('div.compare-capture-info', [
                         m('div.compare-capture-head', [
