@@ -67,6 +67,18 @@ const ViewerApi = {
         registry.detach('experiment');
     },
 
+    // The attached captures, anchor first: `[{ id, alias }, ...]`. Mirrors the
+    // server copy's `/api/v1/captures`; the WASM registry answers directly.
+    async getCaptures() {
+        if (!registry || typeof registry.captures !== 'function') return [];
+        try {
+            const parsed = JSON.parse(registry.captures());
+            return Array.isArray(parsed) ? parsed : [];
+        } catch (_) {
+            return [];
+        }
+    },
+
     async getMetadata(captureId = 'baseline') {
         ensureAttached(captureId);
         const response = JSON.parse(registry.metadata(captureId));

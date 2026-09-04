@@ -34,6 +34,12 @@ const ViewerApi = {
         return backendRequest({ method: 'GET', url: '/api/v1/mode' });
     },
 
+    // The attached captures, anchor first: `[{ id, alias }, ...]`. The N-way
+    // overlay enumerates this to know what to draw. Mirrored in the WASM copy.
+    async getCaptures() {
+        return backendRequest({ method: 'GET', url: '/api/v1/captures' });
+    },
+
     async getMetadata(captureId = 'baseline') {
         return backendRequest({ method: 'GET', url: `/api/v1/metadata${captureQS(captureId)}` });
     },

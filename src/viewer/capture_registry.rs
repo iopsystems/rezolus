@@ -124,10 +124,7 @@ impl CaptureRegistry {
 
     /// Every attached capture's id, anchor first, in display order.
     ///
-    /// Consumed by the `/api/v1/captures` listing and the N-way frontend (PR 2+
-    /// of the N-way-compare plan); the storage generalization lands first, on
-    /// its own, so it can be reviewed and tested in isolation.
-    #[allow(dead_code)]
+    /// Consumed by the `/api/v1/captures` listing (and the N-way frontend).
     pub fn capture_ids(&self) -> Vec<String> {
         let mut ids = vec![BASELINE_ID.to_string()];
         ids.extend(self.others.read().iter().map(|(id, _)| id.clone()));
