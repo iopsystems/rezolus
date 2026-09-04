@@ -275,8 +275,14 @@ static __noinline int handle_new_task(struct task_struct* task) {
 // count the CPU usage by tracking the per-task utime/stime. The user time includes both the
 // CPUTIME_NICE and CPUTIME_USER. The system time includes CPUTIME_SYSTEM, CPUTIME_SOFTIRQ and
 // CPUTIME_IRQ.
-SEC("kprobe/cpuacct_account_field")
-int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index, u64 delta) {
+// fentry/kprobe twins share this handler; only the attach mechanism differs.
+// fentry is the cheaper dispatch (see
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
+// kprobe twin is the CO-RE-only fallback and one is disabled at load time on
+// kernel_has_btf() (see disabled_programs/required_programs in mod.rs). Only
+// `task` is used -- the kernel bumps task->utime/stime before calling
+// cpuacct_account_field, so we read those rather than the passed index/delta.
+static __always_inline int handle_cpuacct_account_field(struct task_struct* task) {
     u32 cpu, idx;
     u64 curr_utime, curr_stime;
     u64 *last_utime, *last_stime;
@@ -373,6 +379,16 @@ int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index
     }
 
     return 0;
+}
+
+SEC("fentry/cpuacct_account_field")
+int BPF_PROG(cpuacct_account_field_fentry, struct task_struct* task, u32 index, u64 delta) {
+    return handle_cpuacct_account_field(task);
+}
+
+SEC("kprobe/cpuacct_account_field")
+int BPF_KPROBE(cpuacct_account_field_kprobe, struct task_struct* task, u32 index, u64 delta) {
+    return handle_cpuacct_account_field(task);
 }
 
 static __always_inline int account__sched_process_exit(u64* ctx) {
