@@ -136,6 +136,15 @@ caps1=$(curl -fsS "http://127.0.0.1:$PORT_FILE/api/v1/captures")
 eq "single-file captures"    "$(echo "$caps1" | jq -r 'length')"       "1"        "$LOGDIR/file.log"
 eq "single-file id"          "$(echo "$caps1" | jq -r '.[0].id')"      "baseline" "$LOGDIR/file.log"
 
+# Named-id resolution: `?capture=experiment` must answer about the experiment,
+# and an UNKNOWN id must error rather than silently returning the baseline
+# (the pre-fix behavior, when CaptureId::parse_opt collapsed unknowns).
+expmeta=$(curl -fsS "http://127.0.0.1:$PORT_AB/api/v1/metadata?capture=experiment")
+eq "experiment metadata status" "$(echo "$expmeta" | jq -r .status)" "success" "$LOGDIR/ab.log"
+unknown=$(curl -fsS "http://127.0.0.1:$PORT_AB/api/v1/metadata?capture=nope")
+eq "unknown capture errors"  "$(echo "$unknown" | jq -r .status)"     "error"    "$LOGDIR/ab.log"
+eq "unknown capture type"    "$(echo "$unknown" | jq -r .errorType)"  "capture_not_found" "$LOGDIR/ab.log"
+
 mode=$(mode_at $PORT_PROXY)
 eq "proxy url_loading"       "$(echo "$mode" | jq -r .url_loading)"  "proxy"    "$LOGDIR/proxy.log"
 
