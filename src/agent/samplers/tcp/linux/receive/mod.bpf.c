@@ -35,8 +35,12 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS);
 } srtt SEC(".maps");
 
-SEC("kprobe/tcp_rcv_established")
-int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
+// fentry/kprobe twins share this handler; only the attach mechanism differs.
+// fentry is the cheaper dispatch (see
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
+// kprobe twin is the CO-RE-only fallback and one is disabled at load time on
+// kernel_has_btf() (see disabled_programs in mod.rs).
+static __always_inline int handle_tcp_rcv_established(struct sock* sk) {
     struct tcp_sock* ts;
     u32 mdev_us, srtt_us;
     u64 mdev_ns, srtt_ns;
@@ -58,6 +62,16 @@ int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
     histogram_incr(&jitter, HISTOGRAM_POWER, mdev_ns);
 
     return 0;
+}
+
+SEC("fentry/tcp_rcv_established")
+int BPF_PROG(tcp_rcv_fentry, struct sock* sk) {
+    return handle_tcp_rcv_established(sk);
+}
+
+SEC("kprobe/tcp_rcv_established")
+int BPF_KPROBE(tcp_rcv_kprobe, struct sock* sk) {
+    return handle_tcp_rcv_established(sk);
 }
 
 char LICENSE[] SEC("license") = "GPL";
