@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html class="light" lang="en"><head>
+<html class="light" lang="zh-Hans"><head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Usage - Rezolus Docs</title>
+<title>使用 - Rezolus 文档</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
@@ -48,14 +48,14 @@
 <!-- Nav -->
 <nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
 <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
-<a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<a href="/zh/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
 <div class="hidden md:flex items-center gap-8 text-base font-medium">
-<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
-<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">文档</a>
 <a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
-<a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/docs/usage.html">中文</a>
+<a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/usage.html">English</a>
 </div>
-<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Open menu"
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="打开菜单"
 class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
 <span class="material-symbols-outlined" data-icon="menu">menu</span>
 </button>
@@ -63,15 +63,15 @@ class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg te
 <div id="nav-menu" hidden
 class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
 <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
-<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="usage.html">Usage</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="usage.html">使用</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
-<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/docs/usage.html">中文</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/usage.html">English</a>
 </div>
 </div>
 </nav>
@@ -84,24 +84,24 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </div>
 <nav class="flex-1 space-y-6 overflow-y-auto text-sm">
 <div class="space-y-1">
-<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
-<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
-<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="usage.html">Usage</a>
-<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#long-running">Long-running</a>
-<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#one-off">One-off</a>
-<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#offline">Offline analysis</a>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">入门</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="usage.html">使用</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#long-running">长期运行</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#one-off">一次性</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#offline">离线分析</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Core Concepts</h4>
-<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
-<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
-<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
-<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">核心概念</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">采样器</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">类型</a>
 </div>
 <div class="space-y-1">
-<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Reference</h4>
-<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
-<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">参考</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
 </div>
 </nav>
 </aside>
@@ -109,38 +109,38 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <!-- Content -->
 <main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
 
-<h1 class="text-4xl font-extrabold tracking-tight mb-12">Usage</h1>
+<h1 class="text-4xl font-extrabold tracking-tight mb-12">使用</h1>
 
 <!-- Long-running -->
 <section class="mb-16" id="long-running">
-<h2 class="text-xl font-bold mb-2">Long-running</h2>
-<p class="text-base text-slate-500 dark:text-slate-400 mb-8">Continuous deployments that observe a system over its lifetime.</p>
+<h2 class="text-xl font-bold mb-2">长期运行</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-8">持续部署，在系统的整个生命周期内观测它。</p>
 
 <div class="space-y-10">
 
 <!-- Agent + Prometheus -->
 <div>
-<h3 class="text-base font-bold mb-3">Run the agent and scrape with Prometheus</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Standard always-on monitoring. The agent collects via eBPF and exposes its data to the exporter, which serves Prometheus on <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">:4242</code>.</p>
+<h3 class="text-base font-bold mb-3">运行 agent，并用 Prometheus 抓取</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">标准的常开式监控。agent 通过 eBPF 采集，并把数据提供给 exporter，由它以 Prometheus 格式提供在 <code class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-sm">:4242</code>.</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-500 text-sm"># systemd-installed: both services are already enabled</div>
+<div class="text-slate-500 text-sm"># 通过 systemd 安装：两个服务都已启用</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl start rezolus rezolus-exporter</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Point Prometheus at :4242 and wire Grafana to that source</div>
+<div class="mt-3 text-slate-500 text-sm"># 让 Prometheus 指向 :4242，并把 Grafana 接到该数据源</div>
 </div>
 </div>
 </div>
 
 <!-- Hindsight -->
 <div>
-<h3 class="text-base font-bold mb-3">Keep a rolling buffer with Hindsight</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">For systems where you can't predict when something will go wrong. Hindsight maintains a rolling on-disk ring buffer of high-resolution snapshots; when an incident hits, trigger a snapshot and load the surrounding time window in the viewer.</p>
+<h3 class="text-base font-bold mb-3">用 Hindsight 维护滚动缓冲区</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">适用于无法预测何时会出问题的系统。Hindsight 在磁盘上维护高分辨率快照的滚动环形缓冲区；故障发生时触发一次快照，就能在 Viewer 中加载事发前后的时间窗口。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo systemctl start rezolus-hindsight</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Trigger a snapshot on demand (signal or HTTP)</div>
+<div class="mt-3 text-slate-500 text-sm"># 按需触发快照（信号或 HTTP）</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo pkill -HUP -f rezolus-hindsight</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Or via the HTTP API for scripted triggers</div>
+<div class="mt-3 text-slate-500 text-sm"># 或通过 HTTP API 触发，便于脚本调用</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">curl -X POST http://localhost:4243/snapshot</code></div>
 </div>
 </div>
@@ -148,8 +148,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- OTel ingest -->
 <div>
-<h3 class="text-base font-bold mb-3">Combine your own metrics</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Pull metrics from your application's OpenTelemetry/Prometheus endpoint into the same recording as the rezolus system metrics. Useful for correlating service-level KPIs (request rate, p99 latency) with kernel-level events.</p>
+<h3 class="text-base font-bold mb-3">合并你自己的度量</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">把应用自身 OpenTelemetry/Prometheus 端点的度量，拉进与 rezolus 系统度量同一份记录里。便于把服务级 KPI（请求速率、p99 延迟）与内核级事件关联起来。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="flex items-center px-4 py-2 bg-slate-800">
 <span class="text-xs font-mono opacity-50 uppercase tracking-widest">rezolus-record.toml</span>
@@ -161,7 +161,7 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 <div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># rezolus agent</span></div>
 <div><span class="text-blue-400">url</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
 <div><span class="text-blue-400">source</span> = <span class="text-green-400">"rezolus"</span></div>
-<div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># your service's /metrics</span></div>
+<div class="mt-3"><span class="text-purple-400">[[endpoints]]</span>  <span class="text-slate-600"># 你自己服务的 /metrics</span></div>
 <div><span class="text-blue-400">url</span> = <span class="text-green-400">"http://127.0.0.1:9090/metrics"</span></div>
 <div><span class="text-blue-400">source</span> = <span class="text-green-400">"my-service"</span></div>
 <div><span class="text-blue-400">role</span> = <span class="text-green-400">"service"</span></div>
@@ -180,20 +180,20 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- One-off -->
 <section class="mb-16" id="one-off">
-<h2 class="text-xl font-bold mb-2">One-off</h2>
-<p class="text-base text-slate-500 dark:text-slate-400 mb-8">Ad-hoc captures and live connections for a specific investigation.</p>
+<h2 class="text-xl font-bold mb-2">一次性</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-8">针对某次具体排查的临时采集与实时连接。</p>
 
 <div class="space-y-10">
 
 <!-- Single recording -->
 <div>
-<h3 class="text-base font-bold mb-3">Capture a recording for performance analysis</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Run a workload while recording at a high enough resolution to catch what you're looking for. The output parquet is self-contained &mdash; open it later, share it, archive it.</p>
+<h3 class="text-base font-bold mb-3">采集一份用于性能分析的记录</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">在跑负载的同时以足够高的分辨率记录，才能抓到你要找的东西。产出的 parquet 是自包含的——之后可以随时打开、分享、归档。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-500 text-sm"># Record 60s at 100ms intervals against a running agent</div>
+<div class="text-slate-500 text-sm"># 以 100ms 间隔，对运行中的 agent 记录 60 秒</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -i 100ms -d 60s -o run-1.rez</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Open it in the viewer</div>
+<div class="mt-3 text-slate-500 text-sm"># 在 Viewer 中打开</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view run-1.rez</code></div>
 </div>
 </div>
@@ -201,12 +201,12 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- A/B compare -->
 <div>
-<h3 class="text-base font-bold mb-3">A/B comparison</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Compare two recordings side-by-side &mdash; before/after a change, baseline vs. experiment, or two different machines. The viewer renders each chart twice and surfaces deltas.</p>
+<h3 class="text-base font-bold mb-3">A/B 对比</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">并排比较两份记录——变更前后、基线与实验组，或者两台不同的机器。Viewer 会把每张图渲染两次，并把差异呈现出来。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view baseline.parquet experiment.parquet</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Aliases for clearer labels in the UI</div>
+<div class="mt-3 text-slate-500 text-sm"># 用别名让界面上的标签更清晰</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view before=run-a.parquet after=run-b.parquet</code></div>
 </div>
 </div>
@@ -214,8 +214,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- Live tail -->
 <div>
-<h3 class="text-base font-bold mb-3">Live-tail a remote agent</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Skip the recording step and stream straight from an agent into a browser dashboard. Best for quick checks against a remote host where you don't want to save anything to disk.</p>
+<h3 class="text-base font-bold mb-3">实时跟看远程 agent</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">跳过记录步骤，直接把 agent 的数据流式送进浏览器仪表盘。适合对远程主机做快速检查，又不想在磁盘上留下任何东西。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://agent-host:4241</code></div>
@@ -228,15 +228,15 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- Offline / read-time -->
 <section class="mb-16" id="offline">
-<h2 class="text-xl font-bold mb-2">Offline analysis</h2>
-<p class="text-base text-slate-500 dark:text-slate-400 mb-8">Things you do after the data is already captured &mdash; in the viewer or via the MCP server.</p>
+<h2 class="text-xl font-bold mb-2">离线分析</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-8">数据采集完成之后要做的事——在 Viewer 里，或者通过 MCP 服务器。</p>
 
 <div class="space-y-10">
 
 <!-- A/B compare (again) -->
 <div>
-<h3 class="text-base font-bold mb-3">A/B comparison</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Same workflow as in the one-off case: any two recordings can be compared, regardless of when or how they were captured. Useful when you already have an archive of runs and want to spot regressions between specific pairs.</p>
+<h3 class="text-base font-bold mb-3">A/B 对比</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">与一次性场景中的流程相同：任意两份记录都可以比较，无论它们何时采集、如何采集。当你已经积累了一批运行记录，想在特定两次之间找出回归时尤其有用。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view 2025-12-01.parquet 2026-01-15.parquet</code></div>
@@ -246,25 +246,25 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 
 <!-- Per-cgroup -->
 <div>
-<h3 class="text-base font-bold mb-3">Per-cgroup / container drill-down</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">CPU, Scheduler, and Syscall samplers emit per-cgroup metrics. In the viewer, switch the cgroup selector to a specific container to see only its CPU usage, runqueue latency, syscall mix &mdash; isolating one tenant on a noisy host.</p>
+<h3 class="text-base font-bold mb-3">按 cgroup / 容器下钻</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">CPU、调度器与系统调用采样器会输出按 cgroup 划分的度量。在 Viewer 中把 cgroup 选择器切到某个容器，就只看它的 CPU 使用率、运行队列延迟与系统调用构成——把单个租户从嘈杂的主机上隔离出来。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view recording.parquet</code></div>
-<div class="mt-3 text-slate-500 text-sm"># In the viewer: Cgroups section → pick a container → all charts re-scope</div>
+<div class="mt-3 text-slate-500 text-sm"># 在 Viewer 中：Cgroups 区域 → 选择一个容器 → 所有图表随之切换范围</div>
 </div>
 </div>
 </div>
 
 <!-- MCP -->
 <div>
-<h3 class="text-base font-bold mb-3">AI-assisted analysis with MCP</h3>
-<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">Point the MCP server at a recording and ask an LLM-driven client to investigate. Built-in tools cover anomaly detection (MAD / CUSUM / FFT), metric correlation, and arbitrary PromQL queries against the recording.</p>
+<h3 class="text-base font-bold mb-3">用 MCP 做 AI 辅助分析</h3>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-3">把 MCP 服务器指向一份记录，让 LLM 驱动的客户端去调查。内置工具涵盖异常检测（MAD / CUSUM / FFT）、度量相关性分析，以及针对该记录的任意 PromQL 查询。</p>
 <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
 <div class="p-5 font-mono text-base leading-8">
-<div class="text-slate-500 text-sm"># One-shot CLI mode</div>
+<div class="text-slate-500 text-sm"># 一次性 CLI 模式</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies recording.parquet</code></div>
-<div class="mt-3 text-slate-500 text-sm"># Or run as a stdio server for Claude Desktop / Cursor</div>
+<div class="mt-3 text-slate-500 text-sm"># 或作为 stdio 服务器运行，供 Claude Desktop / Cursor 使用</div>
 <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp</code></div>
 </div>
 </div>
@@ -274,8 +274,8 @@ class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dar
 </section>
 
 <div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
-<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Installation</a>
-<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Architecture &rarr;</a>
+<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">← 安装</a>
+<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">架构 →</a>
 </div>
 
 </main>
@@ -287,7 +287,7 @@ const navToggle = document.getElementById('nav-toggle');
 const navMenu = document.getElementById('nav-menu');
 const setNav = (open) => {
     navToggle.setAttribute('aria-expanded', String(open));
-    navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    navToggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
     navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
     navMenu.hidden = !open;
 };
