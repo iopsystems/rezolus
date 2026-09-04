@@ -30,7 +30,7 @@ pub fn command() -> Command {
              SUBCOMMANDS:\n    \
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
-             combine    Merge multiple files (multi-node / multi-instance) or build an A/B tarball\n    \
+             combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .rez, or build a legacy A/B tarball\n    \
              convert    Turn a raw msgpack recording (from `record -o out.raw`) into parquet\n    \
              filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
              upgrade    Convert a v1/v2 (tar) `.rez` archive to the v3 (SQLite) container\n\n\
@@ -166,34 +166,36 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("combine")
-                .about("Combine recordings: multi-node/multi-instance parquet, an A/B tarball, or a multi-recording .rez")
+                .about("Combine recordings: multi-node/multi-instance parquet, a multi-recording .rez, or an A/B tarball (legacy)")
                 .long_about(
                     "Merge two or more parquet recordings into a single file. Requires at least\n\
                      two inputs and an output path (-o).\n\n\
                      Default (row-merge): joins the inputs on timestamp into one recording — use\n\
                      it to stitch together multiple rezolus nodes and/or per-instance service\n\
                      files so the viewer shows them together.\n\n\
-                     --ab (tarball): instead of row-merging, packages exactly two captures\n\
-                     unmodified into a combined-A/B tarball for the viewer's compare mode. The\n\
-                     output should end in `.parquet.ab.tar`, and you map each side with\n\
+                     A/B compare — PREFER `.rez`: given `.rez` inputs and a `.rez` output,\n\
+                     combine assembles them into one multi-recording archive, and the viewer\n\
+                     renders a 2-recording `.rez` as a baseline/experiment comparison. This is\n\
+                     the recommended A/B form: it keeps each side's per-sampler cadence and real\n\
+                     acquisition windows, and identifies the sides by their LABEL SETS rather\n\
+                     than a `baseline=<source>` mapping you must look up. Single-recording v1/v2\n\
+                     tar inputs are upgraded to v3 on the way in, so the output is always v3.\n\n\
+                     --ab (tarball, legacy): for PARQUET inputs with no `.rez` form, packages\n\
+                     exactly two captures unmodified into a combined-A/B tarball. The output\n\
+                     should end in `.parquet.ab.tar`, and you map each side with\n\
                      `baseline=<src> experiment=<src>` where <src> is a file's embedded SOURCE\n\
                      NAME (not its filename) — set with `annotate --source`, seen with\n\
-                     `recording metadata --field source`. In the example below a.parquet's source\n\
-                     is `redis` and b.parquet's is `valkey`.\n\n\
-                     .rez inputs: given single-recording `.rez` archives and a `.rez` output,\n\
-                     combine assembles them into one multi-recording `.rez` (for multi-host or\n\
-                     A/B), preserving each recording's labels. Either container works, and\n\
-                     they mix freely: each v1/v2 tar input is upgraded to v3 on the way in, so\n\
-                     the assembled output is always v3 (SQLite).\n\n\
+                     `recording metadata --field source`. The `.rez` form above is preferred for\n\
+                     rezolus captures; the tarball is kept for inputs that only exist as parquet.\n\n\
                      EXAMPLES:\n    \
                      # Row-merge a rezolus agent file with a service file\n    \
                      rezolus recording combine rezolus.parquet service.parquet -o combined.parquet\n\n    \
                      # Merge several rezolus nodes, pinning which one the viewer shows first\n    \
                      rezolus recording combine node1.parquet node2.parquet -o cluster.parquet --pinned node1\n\n    \
-                     # Package two captures as an A/B tarball for compare mode\n    \
-                     rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar\n\n    \
-                     # Assemble two single-recording .rez into one multi-recording .rez\n    \
-                     rezolus recording combine baseline.rez experiment.rez -o ab.rez",
+                     # A/B compare two rezolus captures (PREFERRED): a 2-recording .rez\n    \
+                     rezolus recording combine baseline.rez experiment.rez -o ab.rez\n\n    \
+                     # A/B tarball (legacy) — only for inputs that exist as parquet\n    \
+                     rezolus recording combine a.parquet b.parquet --ab baseline=redis experiment=valkey -o out.parquet.ab.tar",
                 )
                 .arg(
                     clap::Arg::new("FILES")
@@ -227,13 +229,16 @@ pub fn command() -> Command {
                     clap::Arg::new("ab")
                         .long("ab")
                         .help(
-                            "Package two captures into a combined-A/B tarball \
-                             instead of row-merging into one parquet. The output \
-                             path should end in `.parquet.ab.tar`. Requires \
-                             exactly two input files. Pass `baseline=<src> \
-                             experiment=<src>` mapping each side to one of \
-                             the inputs' source names; the captures are stored \
-                             unmodified next to an `ab.json` manifest.",
+                            "Legacy A/B form: package two captures into a \
+                             combined-A/B tarball instead of row-merging into one \
+                             parquet. Prefer assembling a 2-recording `.rez` \
+                             (`combine baseline.rez experiment.rez -o ab.rez`) for \
+                             rezolus captures; use `--ab` only for parquet inputs \
+                             with no `.rez` form. The output path should end in \
+                             `.parquet.ab.tar`. Requires exactly two input files. \
+                             Pass `baseline=<src> experiment=<src>` mapping each \
+                             side to one of the inputs' source names; the captures \
+                             are stored unmodified next to an `ab.json` manifest.",
                         )
                         .value_parser(value_parser!(String))
                         .num_args(2)
