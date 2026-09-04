@@ -1,6 +1,6 @@
-//! Collects TCP stats using BPF and traces:
-//! * `tcp_sendmsg`
-//! * `tcp_cleanup_rbuf`
+//! Collects TCP stats using BPF and traces `tcp_sendmsg` and `tcp_cleanup_rbuf`,
+//! via fentry when the kernel has BTF (cheaper dispatch) and kprobe otherwise
+//! (the CO-RE-only fallback).
 //!
 //! And produces these stats:
 //! * `tcp/receive/bytes`
@@ -51,6 +51,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // doc comment.
     .histogram("rx_size", &TCP_RX_SIZE, &SIZES_ACQ)
     .histogram("tx_size", &TCP_TX_SIZE, &SIZES_ACQ)
+    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
+    .disabled_programs(if kernel_has_btf() {
+        &["tcp_sendmsg_kprobe", "tcp_cleanup_rbuf_kprobe"]
+    } else {
+        &["tcp_sendmsg_fentry", "tcp_cleanup_rbuf_fentry"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -77,12 +83,12 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} tcp_sendmsg() BPF instruction count: {}",
-            self.progs.tcp_sendmsg.insn_cnt()
+            "{NAME} tcp_sendmsg_fentry() BPF instruction count: {}",
+            self.progs.tcp_sendmsg_fentry.insn_cnt()
         );
         debug!(
-            "{NAME} tcp_cleanup_rbuf() BPF instruction count: {}",
-            self.progs.tcp_cleanup_rbuf.insn_cnt()
+            "{NAME} tcp_cleanup_rbuf_fentry() BPF instruction count: {}",
+            self.progs.tcp_cleanup_rbuf_fentry.insn_cnt()
         );
     }
 }
