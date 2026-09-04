@@ -61,6 +61,27 @@ pub const MAX_PID: usize = 4194304;
 /// Rezolus-specific msgpack endpoint.
 ///
 /// This is the default mode for running Rezolus.
+/// Turn on host-wide BPF run-time statistics and return the fd that keeps them
+/// on. The kernel refcounts this: statistics stay enabled while any process
+/// holds such an fd and turn off when the last one closes, so holding it for
+/// the agent's lifetime (and closing it on exit) is what makes the setting
+/// self-scoped rather than a persistent sysctl. `BPF_ENABLE_STATS` is a
+/// bpf(2) command since Linux 5.8, matching the CO-RE baseline (principle 2);
+/// on an older or restrictive kernel the call fails and the caller degrades to
+/// stats-absent.
+#[cfg(target_os = "linux")]
+fn enable_bpf_run_stats() -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // Safety: FFI call with a plain enum arg; returns a new fd or -1/errno.
+    let fd = unsafe { libbpf_sys::bpf_enable_stats(libbpf_sys::BPF_STATS_RUN_TIME) };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        // Safety: `fd` is a fresh, owned fd returned by the kernel.
+        Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) })
+    }
+}
+
 pub fn run(config: PathBuf) {
     record_agent_start();
 
@@ -77,6 +98,33 @@ pub fn run(config: PathBuf) {
 
     #[cfg(target_os = "linux")]
     config.scheduler().apply();
+
+    // BPF run-time stats are host-wide (one global kernel switch), so they are
+    // opt-in. When enabled, acquire a BPF_ENABLE_STATS fd and hold it for the
+    // agent's lifetime: while any process holds such an fd the kernel keeps
+    // run-time accounting on, and dropping it on exit turns it back off,
+    // leaving no persistent `kernel.bpf_stats_enabled` sysctl behind. The
+    // binding lives to the end of `run()` (which never returns), so the fd
+    // stays open for the whole process. See `General::bpf_stats`.
+    #[cfg(target_os = "linux")]
+    let _bpf_stats_fd = if config.general().bpf_stats() {
+        match enable_bpf_run_stats() {
+            Ok(fd) => {
+                info!(
+                    "bpf_stats=true: enabled host-wide BPF run-time statistics;                      rezolus_bpf_run_time/count will populate. This taxes EVERY BPF                      program on the host, not just Rezolus's."
+                );
+                Some(fd)
+            }
+            Err(e) => {
+                warn!(
+                    "bpf_stats=true but BPF_ENABLE_STATS failed ({e});                      rezolus_bpf_run_time/count will be absent"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let _log_drain = configure_logging(config.log().level().to_tracing_level());
 

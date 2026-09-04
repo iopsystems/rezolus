@@ -63,6 +63,13 @@ pub struct General {
     // CPUs the reservation applies to (see `reserved_pmu_cpus`)
     #[serde(default)]
     reserved_pmu_cpus: Option<String>,
+
+    // enable host-wide BPF run-time statistics (see `bpf_stats`)
+    // Only consulted on Linux, where BPF runs; the field exists on every
+    // platform so the config shape is identical.
+    #[serde(default)]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    bpf_stats: bool,
 }
 
 /// Written out rather than derived, because a derived `Default` would ignore
@@ -85,6 +92,7 @@ impl Default for General {
             reserved_pmu_counters: 0,
             pmu_priority: Vec::new(),
             reserved_pmu_cpus: None,
+            bpf_stats: false,
         }
     }
 }
@@ -150,6 +158,24 @@ impl General {
     /// wanted them.
     pub fn reserved_pmu_cpus(&self) -> Option<&str> {
         self.reserved_pmu_cpus.as_deref()
+    }
+
+    /// Whether to enable host-wide BPF run-time statistics so
+    /// `rezolus_bpf_run_time` / `rezolus_bpf_run_count` populate.
+    ///
+    /// Off by default, and deliberately. The kernel exposes run-time stats
+    /// through a single global switch (`bpf_stats_enabled_key`): turning it on
+    /// -- whether via the `kernel.bpf_stats_enabled` sysctl or the
+    /// `BPF_ENABLE_STATS` fd this agent uses -- adds two `ktime` reads to
+    /// EVERY BPF program run on the host, not just Rezolus's. On a box running
+    /// XDP at line rate, cilium, or other heavy BPF, that is a real per-event
+    /// tax on programs the agent does not own. The fd form scopes the *when*
+    /// (it is released on agent exit, leaving no persistent setting) but not
+    /// the *whom*, so enabling stays opt-in. Leave it off unless you are
+    /// actively investigating sampler overhead. (See issue #1047.)
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn bpf_stats(&self) -> bool {
+        self.bpf_stats
     }
 
     pub fn listen(&self) -> SocketAddr {
