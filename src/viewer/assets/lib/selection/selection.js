@@ -770,7 +770,7 @@ const saveToParquet = async (store, attrs) => {
         // actually produced (handles users keeping the default in either
         // mode + handles users editing the prefix without re-typing the
         // extension). Skips swap if the user typed a custom extension.
-        const knownExts = ['.parquet.ab.tar', '.ab.tar', '.parquet'];
+        const knownExts = ['.rez', '.parquet.ab.tar', '.ab.tar', '.parquet'];
         let finalName = filename;
         if (extension) {
             for (const ext of knownExts) {

@@ -176,12 +176,10 @@ const ViewerApi = {
     async saveWithSelection(payload) {
         ensureAttached('baseline');
         const bytes = registry.save_with_selection(JSON.stringify(payload));
-        const hasExperiment = registry.has('experiment');
-        return {
-            bytes,
-            mime: hasExperiment ? 'application/x-tar' : 'application/octet-stream',
-            extension: hasExperiment ? '.parquet.ab.tar' : '.parquet',
-        };
+        // The registry decides the output shape: `.rez` for a `.rez` source or
+        // a parquet compare, `.parquet` for a single parquet.
+        const extension = registry.report_extension();
+        return { bytes, mime: 'application/octet-stream', extension };
     },
 };
 

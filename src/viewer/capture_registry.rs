@@ -125,13 +125,6 @@ impl CaptureRegistry {
         self.get_by_id(id.id())
     }
 
-    /// Returns the display filename for the given capture.
-    /// Reads it from the data source's `filename()` method — no separate
-    /// storage needed since the reader/store carries the name.
-    pub fn filename(&self, id: CaptureId) -> String {
-        self.filename_by_id(id.id())
-    }
-
     pub fn filename_by_id(&self, id: &str) -> String {
         self.with_slot(id, |slot| slot.data.read().filename())
             .flatten()
@@ -150,13 +143,6 @@ impl CaptureRegistry {
     pub fn file_metadata_by_id(&self, id: &str) -> Option<String> {
         self.with_slot(id, |slot| slot.file_metadata.read().clone())
             .flatten()
-    }
-
-    /// Display alias for the given capture, when one was provided on the
-    /// command line (or via attach). None = fall back to the identifier
-    /// name on the UI side.
-    pub fn alias(&self, id: CaptureId) -> Option<String> {
-        self.alias_by_id(id.id())
     }
 
     pub fn alias_by_id(&self, id: &str) -> Option<String> {
@@ -277,9 +263,8 @@ mod tests {
     fn the_experiment_id_and_enum_resolve_to_one_slot() {
         let reg = registry();
         reg.attach_experiment(store("exp.parquet"), None, None, Some("valkey".into()));
-        assert_eq!(reg.alias(CaptureId::Experiment).as_deref(), Some("valkey"));
         assert_eq!(reg.alias_by_id(EXPERIMENT_ID).as_deref(), Some("valkey"));
-        assert_eq!(reg.filename(CaptureId::Experiment), "exp.parquet");
+        assert_eq!(reg.filename_by_id(EXPERIMENT_ID), "exp.parquet");
         assert!(reg.get(CaptureId::Experiment).is_some());
     }
 

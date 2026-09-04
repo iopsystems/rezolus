@@ -1285,7 +1285,7 @@ mod tests {
         assert_eq!(
             state
                 .captures
-                .alias(crate::viewer::capture_registry::CaptureId::Baseline)
+                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
                 .as_deref(),
             Some("baseline"),
         );
@@ -1614,7 +1614,6 @@ mod tests {
     /// regardless would still produce two populated dashboards.
     #[test]
     fn selected_recordings_fill_the_ab_slots() {
-        use crate::viewer::capture_registry::CaptureId;
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
         crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
@@ -1643,11 +1642,17 @@ mod tests {
 
         assert!(state.captures.experiment_attached());
         assert_eq!(
-            state.captures.alias(CaptureId::Baseline).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
+                .as_deref(),
             Some("envoy"),
         );
         assert_eq!(
-            state.captures.alias(CaptureId::Experiment).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::EXPERIMENT_ID)
+                .as_deref(),
             Some("valkey"),
         );
         // Aliases come from the labels; the per-recording metadata is written
@@ -1668,7 +1673,6 @@ mod tests {
     /// A baseline selector alone loads one capture and attaches no experiment.
     #[test]
     fn a_baseline_selector_alone_leaves_the_experiment_slot_empty() {
-        use crate::viewer::capture_registry::CaptureId;
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
         crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
@@ -1697,7 +1701,10 @@ mod tests {
         // so a generic alias would leave nothing on screen saying which of the
         // archive's recordings is being read.
         assert_eq!(
-            state.captures.alias(CaptureId::Baseline).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
+                .as_deref(),
             Some("valkey"),
         );
     }
@@ -1707,7 +1714,6 @@ mod tests {
     /// the archive, which only runs on this path.
     #[test]
     fn without_flags_a_three_recording_archive_attaches_every_recording() {
-        use crate::viewer::capture_registry::CaptureId;
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
         crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
@@ -1727,11 +1733,17 @@ mod tests {
 
         assert!(state.captures.experiment_attached());
         assert_eq!(
-            state.captures.alias(CaptureId::Baseline).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
+                .as_deref(),
             Some("redis"),
         );
         assert_eq!(
-            state.captures.alias(CaptureId::Experiment).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::EXPERIMENT_ID)
+                .as_deref(),
             Some("valkey"),
         );
         // The third recording is no longer dropped: it attaches under its own
@@ -1757,7 +1769,6 @@ mod tests {
     /// this pair "baseline"/"experiment" despite `host` naming them exactly.
     #[test]
     fn aliases_come_from_the_recordings_shown_not_the_whole_archive() {
-        use crate::viewer::capture_registry::CaptureId;
         let dir = tempfile::tempdir().unwrap();
         let rez_path = dir.path().join("fleet.rez");
         crate::recorder::rez::recorder_tests_support::multi_recording_v3_rez(
@@ -1790,11 +1801,17 @@ mod tests {
         let state = super::init_file_mode(&config, &rez_path, &registry, pool);
 
         assert_eq!(
-            state.captures.alias(CaptureId::Baseline).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::BASELINE_ID)
+                .as_deref(),
             Some("web-01"),
         );
         assert_eq!(
-            state.captures.alias(CaptureId::Experiment).as_deref(),
+            state
+                .captures
+                .alias_by_id(crate::viewer::capture_registry::EXPERIMENT_ID)
+                .as_deref(),
             Some("web-02"),
         );
     }

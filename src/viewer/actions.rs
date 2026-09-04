@@ -28,11 +28,6 @@ use super::report_save;
 use super::state::{ApiResponse, AppState, LazySectionStore};
 use ::dashboard;
 
-// MetricsSource::source() may be a JSON array (multi-source) or a single label.
-fn parse_source_field(raw: &str) -> Vec<String> {
-    serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| vec![raw.to_string()])
-}
-
 // ── Snapshot ingest (live mode) ───────────────────────────────────────
 
 /// Background task that polls a live agent and ingests snapshots.
@@ -805,9 +800,6 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
         };
         let baseline_data = state.baseline_data();
         let trim_columns = payload.trim_columns;
-        // Bind to a local so the temporary read guard from .read() doesn't
-        // extend through the `if let` body and trip Send across the await.
-        let ab_manifest_runtime = state.combined_ab_marker.read().clone();
         let experiment_path = state.resolve_experiment_parquet_path();
         let experiment_data = state.captures.get(CaptureId::Experiment);
 
@@ -866,46 +858,65 @@ pub async fn save_with_selection(State(state): State<Arc<AppState>>, body: Strin
             return finalize_rez_report(result);
         }
 
-        // Compare mode: experiment attached -> tarball with manifest
-        // (loaded or synthesized from per-slot runtime state).
+        // Compare mode (two parquet sources): assemble a 2-recording `.rez`
+        // report, one recording per side, instead of a `.parquet.ab.tar`. A
+        // `.rez` source never reaches here — it returned above. Labels come
+        // from each parquet's own source metadata, so there is no manifest to
+        // synthesize.
         if let (Some(experiment_path), Some(experiment_data)) = (experiment_path, experiment_data) {
-            let manifest = ab_manifest_runtime.unwrap_or_else(|| {
-                let baseline_alias = state.captures.alias(CaptureId::Baseline);
-                let experiment_alias = state.captures.alias(CaptureId::Experiment);
-                let baseline_filename = state.captures.filename(CaptureId::Baseline);
-                let experiment_filename = state.captures.filename(CaptureId::Experiment);
-                let baseline_sources = parse_source_field(&baseline_data.source());
-                let experiment_sources = parse_source_field(&experiment_data.source());
-                let category = state.category_name.read().clone();
-                crate::parquet_metadata::synthesize_ab_manifest(
-                    baseline_alias.as_deref(),
-                    &baseline_filename,
-                    &baseline_sources,
-                    experiment_alias.as_deref(),
-                    &experiment_filename,
-                    &experiment_sources,
-                    category.as_deref(),
-                )
-            });
+            let baseline_keep: Option<std::collections::BTreeSet<String>> =
+                trim_columns.then(|| {
+                    ::report_save::resolve_kept_columns(
+                        &payload,
+                        baseline_data.as_ref(),
+                        ::report_save::Side::Baseline,
+                    )
+                    .into_iter()
+                    .collect()
+                });
+            let experiment_keep: Option<std::collections::BTreeSet<String>> =
+                trim_columns.then(|| {
+                    ::report_save::resolve_kept_columns(
+                        &payload,
+                        experiment_data.as_ref(),
+                        ::report_save::Side::Experiment,
+                    )
+                    .into_iter()
+                    .collect()
+                });
+            let events_json = if payload.events.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
+            };
             let result = tokio::task::spawn_blocking({
                 let baseline_path = path.clone();
                 let body = selection_json.clone();
-                move || {
-                    report_save::save_combined_ab_tarball(
-                        &baseline_path,
-                        &experiment_path,
-                        &payload,
-                        &body,
-                        &manifest,
+                move || -> Result<Vec<u8>, String> {
+                    let baseline_bytes = std::fs::read(&baseline_path)
+                        .map_err(|e| format!("failed to read baseline: {e}"))?;
+                    let experiment_bytes = std::fs::read(&experiment_path)
+                        .map_err(|e| format!("failed to read experiment: {e}"))?;
+                    let sides = [
+                        ::report_save::ParquetReportSide {
+                            bytes: &baseline_bytes,
+                            keep_metrics: baseline_keep.as_ref(),
+                        },
+                        ::report_save::ParquetReportSide {
+                            bytes: &experiment_bytes,
+                            keep_metrics: experiment_keep.as_ref(),
+                        },
+                    ];
+                    ::report_save::build_rez_report_from_parquets(
+                        &sides,
                         trim_columns,
-                        baseline_data.as_ref(),
-                        experiment_data.as_ref(),
+                        &body,
+                        events_json.as_deref(),
                     )
-                    .map_err(|e| e.to_string())
                 }
             })
             .await;
-            return finalize_report_attachment_tarball(result);
+            return finalize_rez_report(result);
         }
 
         // Single-capture save.
@@ -960,12 +971,6 @@ fn finalize_report_attachment(
     finalize_attachment(result, "rezolus-report.parquet", parquet_attachment)
 }
 
-fn finalize_report_attachment_tarball(
-    result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
-) -> Response {
-    finalize_attachment(result, "rezolus-report.parquet.ab.tar", tar_attachment)
-}
-
 fn finalize_rez_report(
     result: Result<Result<Vec<u8>, String>, tokio::task::JoinError>,
 ) -> Response {
@@ -994,18 +999,6 @@ fn finalize_attachment(
             server_error("internal error")
         }
     }
-}
-
-fn tar_attachment(filename: &str, body: Vec<u8>) -> Response {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "application/x-tar")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{filename}\""),
-        )
-        .body(Body::from(body))
-        .unwrap()
 }
 
 #[cfg(test)]
