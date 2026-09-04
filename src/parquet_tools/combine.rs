@@ -211,6 +211,14 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // All-parquet inputs with a `.rez` OUTPUT: ingest each parquet as its own
+    // windowless recording (one archive, a recording per input) — the `.rez`
+    // form that replaces `combine --ab` for a rezolus-vs-rezolus comparison.
+    // Inputs are detected by content above; the output is chosen by extension.
+    if output.extension().and_then(|e| e.to_str()) == Some("rez") {
+        return combine_parquet_to_rez(&files, output);
+    }
+
     let mut inputs = load_inputs(&files)?;
 
     let ab_raw: Vec<String> = args
@@ -356,6 +364,45 @@ fn combine_rez_v3(
         "wrote {} with {} recording(s) from {} input(s)",
         output.display(),
         recordings,
+        files.len()
+    );
+    Ok(())
+}
+
+/// Assemble a multi-recording v3 `.rez` from plain `.parquet` inputs: each
+/// input becomes one windowless recording (see `combine_rez_ingest`). This is
+/// the parquet analogue of `combine_rez_v3` — one archive, a recording per
+/// input — for a comparison whose sides only exist as parquet.
+fn combine_parquet_to_rez(
+    files: &[PathBuf],
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use super::combine_rez_ingest::ingest_parquet_as_recording;
+    use crate::recorder::rez_sqlite::RezDb;
+
+    // A `.rez` output must not already exist, matching the recorder's refusal:
+    // silently overwriting a long-lived capture is the failure mode to avoid.
+    if output.exists() {
+        return Err(format!(
+            "{} already exists; refusing to overwrite it",
+            output.display()
+        )
+        .into());
+    }
+
+    let mut dst = RezDb::create(output)?;
+    let mut tables = 0usize;
+    dst.transaction(|tx| {
+        for file in files {
+            tables += ingest_parquet_as_recording(file, tx).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })?;
+    println!(
+        "wrote {} with {} recording(s) ({} sampler table(s)) from {} parquet input(s)",
+        output.display(),
+        files.len(),
+        tables,
         files.len()
     );
     Ok(())
@@ -2963,5 +3010,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `combine a.parquet b.parquet -o out.rez` assembles a multi-recording
+    /// `.rez`, one recording per parquet, labelled from each file's source —
+    /// the `.rez` replacement for `combine --ab`.
+    #[test]
+    fn combine_parquet_inputs_into_a_multi_recording_rez() {
+        let (_t1, p1) = make_test_file(
+            &[100 * SEC, 200 * SEC],
+            "m1",
+            &[Some(1), Some(2)],
+            "redis",
+            "1000",
+        );
+        let (_t2, p2) = make_test_file(
+            &[100 * SEC, 200 * SEC],
+            "m2",
+            &[Some(3), Some(4)],
+            "valkey",
+            "1000",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("ab.rez");
+
+        combine_parquet_to_rez(&[p1, p2], &out).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 2, "one recording per parquet input");
+        let sources: std::collections::BTreeSet<String> = recs
+            .iter()
+            .filter_map(|r| r.meta.labels.get("source").cloned())
+            .collect();
+        assert_eq!(
+            sources,
+            ["redis".to_string(), "valkey".to_string()]
+                .into_iter()
+                .collect(),
+            "recordings are labelled from each parquet's source"
+        );
+        // Each metric has no `sampler` metadata, so it lands in one
+        // `unattributed` table per recording, carrying its rows.
+        for r in &recs {
+            assert!(
+                db.total_rows(r.id, "unattributed").unwrap() > 0,
+                "the ingested recording kept its rows"
+            );
+        }
+    }
+
+    /// A `.rez` output that already exists is not silently overwritten — the
+    /// same guard the recorder and `filter` carry.
+    #[test]
+    fn combine_parquet_to_rez_refuses_to_overwrite() {
+        let (_t1, p1) = make_test_file(&[100 * SEC], "m1", &[Some(1)], "redis", "1000");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("ab.rez");
+        std::fs::write(&out, b"existing").unwrap();
+
+        let err = combine_parquet_to_rez(&[p1], &out).unwrap_err().to_string();
+        assert!(
+            err.contains("already exists"),
+            "explains the refusal: {err}"
+        );
     }
 }
