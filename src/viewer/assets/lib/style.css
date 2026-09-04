@@ -52,6 +52,14 @@
     --compare-baseline-bg: rgba(46, 91, 255, 0.08);
     --compare-experiment: #00C46A;
     --compare-experiment-bg: rgba(0, 196, 106, 0.08);
+    /* N-way overlay: colors for a 3rd-and-beyond capture (baseline/experiment
+       keep the two above). Match charts/compare.js CAPTURE_PALETTE. */
+    --compare-capture-3: #FF8A00;
+    --compare-capture-4: #B45BFF;
+    --compare-capture-5: #FF4D6D;
+    --compare-capture-6: #00B8D9;
+    --compare-capture-7: #F5C518;
+    --compare-capture-8: #8C6E5D;
 
     /* Status colors */
     --success: #3fb950;
