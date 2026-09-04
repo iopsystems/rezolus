@@ -377,7 +377,7 @@ fn combine_parquet_to_rez(
     files: &[PathBuf],
     output: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use super::combine_rez_ingest::ingest_parquet_as_recording;
+    use crate::recorder::parquet_ingest::ingest_parquet_bytes;
     use crate::recorder::rez_sqlite::RezDb;
 
     // A `.rez` output must not already exist, matching the recorder's refusal:
@@ -390,11 +390,18 @@ fn combine_parquet_to_rez(
         .into());
     }
 
+    // Read each input to bytes up front (the ingest is bytes-based, shared with
+    // the browser report path), so the transaction below is pure catalog work.
+    let inputs: Vec<Vec<u8>> = files
+        .iter()
+        .map(|f| std::fs::read(f).map_err(|e| format!("failed to read {}: {e}", f.display())))
+        .collect::<Result<_, _>>()?;
+
     let mut dst = RezDb::create(output)?;
     let mut tables = 0usize;
     dst.transaction(|tx| {
-        for file in files {
-            tables += ingest_parquet_as_recording(file, tx).map_err(|e| e.to_string())?;
+        for bytes in &inputs {
+            tables += ingest_parquet_bytes(bytes, tx, None)?;
         }
         Ok(())
     })?;

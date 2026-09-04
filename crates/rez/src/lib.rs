@@ -9,6 +9,9 @@
 //! Nothing here knows about samplers, endpoints, or the CLI — it speaks in
 //! recordings, tables, segments, and bytes.
 
+/// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
+/// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
+pub mod parquet_ingest;
 pub mod reader;
 pub mod rez;
 pub mod rez_sqlite;
@@ -16,8 +19,13 @@ pub mod rez_sqlite;
 /// Nothing ships that writes this container any more.
 #[cfg(any(test, feature = "test-support"))]
 pub mod rez_stream;
-/// v3 rewrite tooling (`combine`/`filter`/`upgrade`), which writes archives.
-#[cfg(feature = "write")]
+/// v3 rewrite tooling (`combine`/`filter`/`upgrade`) and report assembly.
+///
+/// Not behind `write`: everything here is metriken-free (catalog `UPDATE`s,
+/// verbatim BLOB copies, arrow-level segment projection, WAL-tail
+/// materialization), so the browser viewer can assemble/trim a `.rez` report
+/// in the reader build. The metriken-dependent ingest (agent snapshot → rows)
+/// lives in `rez_v3_writer`, which stays `write`-gated.
 pub mod rez_v3_rewrite;
 /// The v3 streaming writer.
 #[cfg(feature = "write")]

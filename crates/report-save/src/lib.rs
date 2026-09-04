@@ -364,6 +364,107 @@ fn append_tar_entry<W: std::io::Write>(
     Ok(())
 }
 
+// ── `.rez` reports ───────────────────────────────────────────────────
+//
+// A `.rez` source (or a parquet compare) saves to a `.rez` report rather than
+// a trimmed parquet or a `.parquet.ab.tar`. Everything here is built IN MEMORY
+// (`RezDb::create_in_memory` → `serialize`) and metriken-free, so the browser
+// viewer runs it too. `keep_metrics` is the resolved column set the caller
+// derived from the selection (via [`resolve_kept_columns`]); the caller owns
+// column resolution because only it has the `MetricsSource`.
+
+/// Embed the selection / events / report marker onto the anchor recording (the
+/// first in catalog order — the baseline slot). `trimmed` stamps `KEY_REPORT`
+/// so a reloaded archive opens straight to the Report view; an untrimmed save
+/// carries the selection but no marker, matching the parquet footer path.
+fn embed_rez_report_markers(
+    db: &rez::rez_sqlite::RezDb,
+    trimmed: bool,
+    selection_json: &str,
+    events_json: Option<&str>,
+) -> Result<(), String> {
+    let recordings = db.read_recordings()?;
+    let anchor = recordings.first().ok_or_else(|| {
+        "report has no recordings (source was empty or fully trimmed)".to_string()
+    })?;
+    let mut metadata = anchor.meta.metadata.clone();
+    metadata.insert(KEY_SELECTION.to_string(), selection_json.to_string());
+    if trimmed {
+        metadata.insert(KEY_REPORT.to_string(), REPORT_VALUE_TRIMMED.to_string());
+    }
+    match events_json {
+        Some(events) => {
+            metadata.insert(KEY_EVENTS.to_string(), events.to_string());
+        }
+        // A save with no events must not leave a stale payload behind.
+        None => {
+            metadata.remove(KEY_EVENTS);
+        }
+    }
+    db.update_recording_metadata(anchor.id, &metadata)
+}
+
+/// Build a `.rez` report from a `.rez` source's bytes: copy every recording
+/// (trimming to `keep_metrics` when `Some`) and embed the selection. Returns
+/// the new archive's bytes.
+pub fn build_rez_report_from_rez(
+    source_bytes: &[u8],
+    keep_metrics: Option<&BTreeSet<String>>,
+    selection_json: &str,
+    events_json: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    use rez::rez_sqlite::RezDb;
+    use rez::rez_v3_rewrite::{copy_recordings_into, CopySpec};
+
+    let src = RezDb::open_bytes(source_bytes.to_vec())?;
+    let mut dst = RezDb::create_in_memory()?;
+    dst.transaction(|tx| {
+        src.read_snapshot(|src| {
+            copy_recordings_into(
+                src,
+                tx,
+                &CopySpec {
+                    keep_metrics,
+                    ..CopySpec::everything()
+                },
+            )
+            .map(|_| ())
+        })
+    })?;
+    embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
+    dst.serialize()
+}
+
+/// One side of a parquet compare: its bytes and the columns to keep (`None`
+/// keeps all — an untrimmed save).
+pub struct ParquetReportSide<'a> {
+    pub bytes: &'a [u8],
+    pub keep_metrics: Option<&'a BTreeSet<String>>,
+}
+
+/// Build a `.rez` report by ingesting parquet sides, each as one windowless
+/// recording — the `.rez` replacement for a `.parquet.ab.tar`. `trimmed`
+/// stamps the report marker (true when the sides were column-projected).
+pub fn build_rez_report_from_parquets(
+    sides: &[ParquetReportSide<'_>],
+    trimmed: bool,
+    selection_json: &str,
+    events_json: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    use rez::parquet_ingest::ingest_parquet_bytes;
+    use rez::rez_sqlite::RezDb;
+
+    let mut dst = RezDb::create_in_memory()?;
+    dst.transaction(|tx| {
+        for side in sides {
+            ingest_parquet_bytes(side.bytes, tx, side.keep_metrics)?;
+        }
+        Ok(())
+    })?;
+    embed_rez_report_markers(&dst, trimmed, selection_json, events_json)?;
+    dst.serialize()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -807,5 +908,126 @@ mod tests {
             let parsed: serde_json::Value = serde_json::from_str(val).unwrap();
             assert_eq!(parsed["events"].as_array().unwrap().len(), 1);
         }
+    }
+
+    // ── `.rez` report builders ──
+
+    fn rez_test_parquet(source: &str, sampler: &str, metric: &str) -> Vec<u8> {
+        use arrow::array::UInt64Array;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let tsf =
+            Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([(
+                "metric_type".to_string(),
+                "timestamp".to_string(),
+            )]));
+        let durf = Field::new("duration", DataType::UInt64, true).with_metadata(HashMap::from([(
+            "metric_type".to_string(),
+            "duration".to_string(),
+        )]));
+        let mf = Field::new(metric, DataType::UInt64, true).with_metadata(HashMap::from([
+            ("metric_type".to_string(), "counter".to_string()),
+            ("sampler".to_string(), sampler.to_string()),
+        ]));
+        let schema = Arc::new(Schema::new(vec![tsf, durf, mf]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(vec![1000u64, 2000, 3000])),
+                Arc::new(UInt64Array::from(vec![Some(5u64), Some(5), Some(5)])),
+                Arc::new(UInt64Array::from(vec![1u64, 2, 3])),
+            ],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue {
+                key: "source".to_string(),
+                value: Some(source.to_string()),
+            }]))
+            .build();
+        let mut buf = Vec::new();
+        {
+            let mut w = ArrowWriter::try_new(&mut buf, schema, Some(props)).unwrap();
+            w.write(&batch).unwrap();
+            w.close().unwrap();
+        }
+        buf
+    }
+
+    /// A parquet compare assembles a 2-recording `.rez` report; when trimmed it
+    /// stamps the report marker and embeds the selection on the anchor.
+    #[test]
+    fn parquet_compare_builds_a_two_recording_rez_report() {
+        use rez::rez_sqlite::RezDb;
+        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
+        let b = rez_test_parquet("valkey", "cpu_usage", "cpu_cycles");
+        let sides = [
+            ParquetReportSide {
+                bytes: &a,
+                keep_metrics: None,
+            },
+            ParquetReportSide {
+                bytes: &b,
+                keep_metrics: None,
+            },
+        ];
+        let out = build_rez_report_from_parquets(&sides, true, r#"{"entries":[]}"#, None).unwrap();
+
+        let db = RezDb::open_bytes(out).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 2, "one recording per parquet side");
+        let anchor = &recs[0].meta.metadata;
+        assert_eq!(
+            anchor.get(KEY_SELECTION).map(String::as_str),
+            Some(r#"{"entries":[]}"#)
+        );
+        assert_eq!(
+            anchor.get(KEY_REPORT).map(String::as_str),
+            Some(REPORT_VALUE_TRIMMED)
+        );
+    }
+
+    /// The from-rez builder trims a `.rez` source and re-embeds a new
+    /// selection; here the source is itself built by the parquet path, so the
+    /// two shared builders round-trip together.
+    #[test]
+    fn from_rez_trims_and_reembeds_selection() {
+        use rez::rez_sqlite::RezDb;
+        let a = rez_test_parquet("redis", "cpu_usage", "cpu_cycles");
+        let source = build_rez_report_from_parquets(
+            &[ParquetReportSide {
+                bytes: &a,
+                keep_metrics: None,
+            }],
+            false,
+            "{}",
+            None,
+        )
+        .unwrap();
+        // Untrimmed parquet build carries no report marker.
+        {
+            let db = RezDb::open_bytes(source.clone()).unwrap();
+            assert!(!db.read_recordings().unwrap()[0]
+                .meta
+                .metadata
+                .contains_key(KEY_REPORT));
+        }
+
+        let keep: BTreeSet<String> = ["cpu_cycles".to_string()].into_iter().collect();
+        let out =
+            build_rez_report_from_rez(&source, Some(&keep), r#"{"entries":[1]}"#, None).unwrap();
+        let db = RezDb::open_bytes(out).unwrap();
+        let md = &db.read_recordings().unwrap()[0].meta.metadata;
+        assert_eq!(
+            md.get(KEY_SELECTION).map(String::as_str),
+            Some(r#"{"entries":[1]}"#)
+        );
+        assert_eq!(
+            md.get(KEY_REPORT).map(String::as_str),
+            Some(REPORT_VALUE_TRIMMED)
+        );
     }
 }
