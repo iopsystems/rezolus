@@ -25,23 +25,30 @@ fn dispatch_format(path: &Path) -> RezFormat {
 pub(super) fn run(args: &ArgMatches, registry: &TemplateRegistry) {
     let path = args.get_one::<PathBuf>("FILE").unwrap();
 
-    // `.rez` archives: drop whole per-sampler tables by --samplers (the
-    // KPI-column filter no-ops on all-rezolus .rez data).
+    // `.rez` archives: keep whole per-sampler tables by --samplers, and/or trim
+    // metric COLUMNS by --metrics. `--samplers` picks which tables survive;
+    // `--metrics` projects the columns inside the surviving ones.
     match dispatch_format(path) {
         format @ (RezFormat::V3Sqlite | RezFormat::V2Tar) => {
-            let list = args.get_one::<String>("samplers").unwrap_or_else(|| {
+            let csv = |name: &str| -> Option<std::collections::BTreeSet<String>> {
+                args.get_one::<String>(name).map(|list| {
+                    list.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+            };
+            let samplers = csv("samplers");
+            let metrics = csv("metrics");
+            if samplers.is_none() && metrics.is_none() {
                 eprintln!(
-                    "error: filtering a .rez requires --samplers <a,b,...> (samplers to keep)"
+                    "error: filtering a .rez requires --samplers <a,b,...> (samplers to keep) \
+                     and/or --metrics <a,b,...> (metric columns to keep)"
                 );
                 std::process::exit(1);
-            });
-            let keep: std::collections::BTreeSet<String> = list
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect();
+            }
             let output = args.get_one::<PathBuf>("output").map(|p| p.as_path());
-            let result = filter_rez_any(path, format, &keep, output);
+            let result = filter_rez_any(path, format, samplers.as_ref(), metrics.as_ref(), output);
             if let Err(e) = result {
                 eprintln!("error: failed to filter .rez: {e}");
                 std::process::exit(1);
@@ -159,11 +166,12 @@ pub(super) fn filter_parquet_file(
 fn filter_rez_any(
     path: &Path,
     format: RezFormat,
-    keep: &std::collections::BTreeSet<String>,
+    keep_samplers: Option<&std::collections::BTreeSet<String>>,
+    keep_metrics: Option<&std::collections::BTreeSet<String>>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if format != RezFormat::V2Tar {
-        return filter_rez_v3(path, keep, output);
+        return filter_rez_v3(path, keep_samplers, keep_metrics, output);
     }
     let staging = tempfile::tempdir()?;
     let staged = staging.path().join("upgraded.rez");
@@ -174,14 +182,25 @@ fn filter_rez_any(
     );
     // `output` defaults to the input, so an in-place filter of a tar archive
     // replaces it with the v3 equivalent.
-    filter_rez_v3(&staged, keep, Some(output.unwrap_or(path)))
+    filter_rez_v3(
+        &staged,
+        keep_samplers,
+        keep_metrics,
+        Some(output.unwrap_or(path)),
+    )
 }
 
-/// Drop whole samplers from a v3 (SQLite) `.rez`.
+/// Filter a v3 (SQLite) `.rez` by sampler and/or by metric column.
 ///
-/// Filters by *sampler*, not by table key: under V3 one sampler owns several
-/// `<sampler>/<group>` tables, and "drop cpu_usage" has to mean all of its
-/// groups. Kept tables' segment BLOBs are copied verbatim.
+/// `keep_samplers` drops whole samplers by *sampler*, not by table key: under
+/// V3 one sampler owns several `<sampler>/<group>` tables, and "drop cpu_usage"
+/// has to mean all of its groups. Kept tables' segment BLOBs are copied
+/// verbatim.
+///
+/// `keep_metrics` trims metric COLUMNS inside the surviving tables — the one
+/// operation that re-encodes segments (`project_segment_columns`), keeping the
+/// timestamp/offset/window sidecars. A surviving table with none of the kept
+/// metrics is dropped entirely rather than reduced to bare sidecars.
 ///
 /// Writing a new archive rather than issuing a `DELETE` is deliberate, but NOT
 /// because a delete would strand the freed pages — these archives are created
@@ -202,7 +221,8 @@ fn filter_rez_any(
 ///    reach a segment — has one implementation rather than two.
 fn filter_rez_v3(
     path: &Path,
-    keep: &std::collections::BTreeSet<String>,
+    keep_samplers: Option<&std::collections::BTreeSet<String>>,
+    keep_metrics: Option<&std::collections::BTreeSet<String>>,
     output: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez::table_sampler;
@@ -222,23 +242,25 @@ fn filter_rez_v3(
             present.insert(table_sampler(&table).to_string());
         }
     }
-    let unmatched: Vec<&str> = keep
-        .iter()
-        .map(String::as_str)
-        .filter(|s| !present.contains(*s))
-        .collect();
-    if !unmatched.is_empty() {
-        return Err(format!(
-            "no sampler named {} in {}; it holds: {}",
-            unmatched.join(", "),
-            path.display(),
-            present
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>()
-                .join(", "),
-        )
-        .into());
+    if let Some(keep) = keep_samplers {
+        let unmatched: Vec<&str> = keep
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !present.contains(*s))
+            .collect();
+        if !unmatched.is_empty() {
+            return Err(format!(
+                "no sampler named {} in {}; it holds: {}",
+                unmatched.join(", "),
+                path.display(),
+                present
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+            .into());
+        }
     }
 
     // Staged beside the destination so the rename that publishes it is atomic
@@ -257,7 +279,8 @@ fn filter_rez_v3(
     dst.transaction(|tx| {
         src.read_snapshot(|src| {
             let spec = CopySpec {
-                keep_samplers: Some(keep),
+                keep_samplers,
+                keep_metrics,
                 ..CopySpec::everything()
             };
             copy_recordings_into(src, tx, &spec)?;
@@ -269,6 +292,19 @@ fn filter_rez_v3(
     }
     drop(dst);
     drop(src);
+
+    // A metric filter can empty the archive (no table held any kept metric).
+    // `dest` defaults to the input, so publishing that would overwrite a
+    // capture with nothing — the same footgun the sampler guard prevents, but
+    // only detectable after the projection ran.
+    if kept == 0 {
+        return Err(format!(
+            "filtering {} kept no tables — refusing to overwrite it with an empty archive; \
+             check the --metrics / --samplers names",
+            path.display(),
+        )
+        .into());
+    }
     std::fs::rename(&staged, dest)?;
 
     println!(
@@ -586,7 +622,7 @@ mod tests {
 
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        filter_rez_v3(&path, &keep, Some(&out)).unwrap();
+        filter_rez_v3(&path, Some(&keep), None, Some(&out)).unwrap();
 
         let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
         let recordings = db.read_recordings().unwrap();
@@ -603,6 +639,83 @@ mod tests {
         );
     }
 
+    /// `--metrics` keeps only tables that hold a kept metric. In this fixture
+    /// each sampler table carries a single metric named by its index, so
+    /// keeping "0" keeps the first sampler's table and drops the rest — a
+    /// table with none of the kept metrics projects to no value column and is
+    /// dropped whole, and the kept table keeps its rows.
+    #[test]
+    fn filter_rez_v3_metrics_keeps_only_tables_with_a_kept_metric() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage", "scheduler", "network"], 6);
+        let out = dir.path().join("slim.rez");
+
+        let metrics: std::collections::BTreeSet<String> = ["0".to_string()].into_iter().collect();
+        filter_rez_v3(&path, None, Some(&metrics), Some(&out)).unwrap();
+
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        assert_eq!(
+            db.all_samplers(recordings[0].id).unwrap(),
+            vec!["cpu_usage".to_string()],
+            "only the table holding metric \"0\" survives"
+        );
+        assert!(
+            db.total_rows(recordings[0].id, "cpu_usage").unwrap() > 0,
+            "the kept table keeps its rows through the re-encode"
+        );
+    }
+
+    /// The output must still open and query after a column re-encode — the
+    /// projected segment has to be a valid `.rez` the reader accepts, not just
+    /// a smaller blob. Round-trips through `RezReader` and reads the metric.
+    #[test]
+    fn filter_rez_v3_metrics_output_is_readable() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage", "scheduler"], 6);
+        let out = dir.path().join("slim.rez");
+
+        let metrics: std::collections::BTreeSet<String> = ["0".to_string()].into_iter().collect();
+        filter_rez_v3(&path, None, Some(&metrics), Some(&out)).unwrap();
+
+        let pool = metriken_query::BufferPool::new(8 * 1024 * 1024);
+        let readers = crate::rez_reader::RezReader::open_recordings(&out, pool).unwrap();
+        assert_eq!(readers.len(), 1);
+        let (_labels, reader) = &readers[0];
+        assert!(
+            reader.metric_metadata().contains_key("0"),
+            "the kept metric is still readable after the re-encode"
+        );
+    }
+
+    /// A `--metrics` value that matches nothing must not empty the archive in
+    /// place — the same footgun the sampler guard prevents, but only detectable
+    /// after the projection runs (kept == 0).
+    #[test]
+    fn filter_rez_v3_metrics_that_match_nothing_are_rejected() {
+        use crate::recorder::rez::recorder_tests_support::populated_v3_rez;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("full.rez");
+        populated_v3_rez(&path, "baseline", &["cpu_usage"], 4);
+
+        let metrics: std::collections::BTreeSet<String> =
+            ["not_a_metric".to_string()].into_iter().collect();
+        let err = filter_rez_v3(&path, None, Some(&metrics), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("empty"), "explains the refusal: {err}");
+
+        // Input untouched.
+        let db = crate::recorder::rez_sqlite::RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(db.all_samplers(recordings[0].id).unwrap().len(), 1);
+    }
+
     /// A typo'd sampler name must not be read as "keep nothing". `--output`
     /// defaults to the INPUT, so this once overwrote a long-lived capture in
     /// place with an archive holding no metrics at all.
@@ -615,7 +728,9 @@ mod tests {
 
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usge".to_string()].into_iter().collect();
-        let err = filter_rez_v3(&path, &keep, None).unwrap_err().to_string();
+        let err = filter_rez_v3(&path, Some(&keep), None, None)
+            .unwrap_err()
+            .to_string();
         assert!(
             err.contains("cpu_usge"),
             "the error must name the typo: {err}"
@@ -639,7 +754,7 @@ mod tests {
             ["cpu_usage".to_string()].into_iter().collect();
         assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
 
-        filter_rez_any(&path, RezFormat::V2Tar, &keep, Some(&out)).unwrap();
+        filter_rez_any(&path, RezFormat::V2Tar, Some(&keep), None, Some(&out)).unwrap();
 
         assert_eq!(
             detect_rez_format(&out).unwrap(),
@@ -669,8 +784,14 @@ mod tests {
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usge".to_string()].into_iter().collect();
 
-        let err = filter_rez_any(&path, crate::recorder::rez::RezFormat::V2Tar, &keep, None)
-            .expect_err("an unmatched sampler name must be an error, not an empty archive");
+        let err = filter_rez_any(
+            &path,
+            crate::recorder::rez::RezFormat::V2Tar,
+            Some(&keep),
+            None,
+            None,
+        )
+        .expect_err("an unmatched sampler name must be an error, not an empty archive");
         let msg = err.to_string();
         assert!(
             msg.contains("cpu_usge"),
@@ -720,7 +841,7 @@ mod tests {
         let out = d.path().join("slim.rez");
         let keep: std::collections::BTreeSet<String> =
             ["cpu_usage".to_string()].into_iter().collect();
-        filter_rez_any(&path, rez::RezFormat::V2Tar, &keep, Some(&out)).unwrap();
+        filter_rez_any(&path, rez::RezFormat::V2Tar, Some(&keep), None, Some(&out)).unwrap();
 
         // The output is v3, so the assertions are about its catalog rather
         // than tar entries — but the property under test is the same one: a

@@ -29,6 +29,13 @@ pub struct CopySpec<'a> {
     /// Extra metadata merged into each copied recording's own, overwriting on
     /// key collision. `annotate` embeds KPIs this way; the others pass `None`.
     pub metadata_extra: Option<&'a BTreeMap<String, String>>,
+    /// When set, project each copied segment's parquet down to the columns for
+    /// these metrics (plus the mandatory timestamp / offset / acquisition-window
+    /// sidecars), decoding and re-encoding it. `None` is the fast path — segment
+    /// BLOBs pass through byte-identical. This is the ONE copy that touches
+    /// segment bytes; see [`project_segment_columns`]. A table left with no
+    /// value column (it holds none of the kept metrics) is dropped.
+    pub keep_metrics: Option<&'a BTreeSet<String>>,
 }
 
 impl CopySpec<'_> {
@@ -39,6 +46,7 @@ impl CopySpec<'_> {
             end: u64::MAX,
             keep_samplers: None,
             metadata_extra: None,
+            keep_metrics: None,
         }
     }
 }
@@ -92,8 +100,23 @@ pub fn copy_recordings_into(
             // the copy's own numbering has to be dense and start at zero.
             let mut seq = 0u64;
             for segment in src.segments_overlapping(rec.id, &table, spec.start, spec.end)? {
-                tx.insert_segment(id, &table, seq, &segment.meta, &segment.bytes)?;
-                seq += 1;
+                match spec.keep_metrics {
+                    // Column trim re-encodes; a table with none of the kept
+                    // metrics projects to no value column and is dropped (its
+                    // segments simply never inserted). Row count, timestamps
+                    // and windows are unchanged by a projection, so the
+                    // segment's own `meta` is reused verbatim.
+                    Some(keep) => {
+                        if let Some(projected) = project_segment_columns(&segment.bytes, keep)? {
+                            tx.insert_segment(id, &table, seq, &segment.meta, &projected)?;
+                            seq += 1;
+                        }
+                    }
+                    None => {
+                        tx.insert_segment(id, &table, seq, &segment.meta, &segment.bytes)?;
+                        seq += 1;
+                    }
+                }
             }
 
             // The unsealed tail is the newest data in the archive and the only
@@ -123,7 +146,17 @@ pub fn copy_recordings_into(
                     first_ts: materialized.first_ts,
                     last_ts: last.ts,
                 };
-                tx.insert_segment(id, &table, seq, &meta, &materialized.bytes)?;
+                match spec.keep_metrics {
+                    Some(keep) => {
+                        if let Some(projected) = project_segment_columns(&materialized.bytes, keep)?
+                        {
+                            tx.insert_segment(id, &table, seq, &meta, &projected)?;
+                        }
+                    }
+                    None => {
+                        tx.insert_segment(id, &table, seq, &meta, &materialized.bytes)?;
+                    }
+                }
             }
         }
 
@@ -134,6 +167,126 @@ pub fn copy_recordings_into(
         }
     }
     Ok(copied)
+}
+
+/// Columns every projection keeps regardless of which metrics are requested:
+/// the timestamp, the wall-clock offset sidecar, and the table-level
+/// acquisition-window pair (the BARE `:window_*`, which a V3 group table
+/// applies to all of its metrics). Dropping any of these breaks the reader's
+/// ability to place rows in time or band a rate.
+fn is_structural_column(name: &str) -> bool {
+    name == "timestamp"
+        || name == crate::rez::WALL_OFFSET_COLUMN
+        || name == crate::rez::WINDOW_BEGIN_COLUMN
+        || name == crate::rez::WINDOW_WIDTH_COLUMN
+}
+
+/// The metric a per-metric window sidecar (`<m>:window_begin` /
+/// `<m>:window_width`, a V2-derived table) belongs to. `None` for the bare
+/// table-level pair (empty prefix) and for non-window columns.
+fn per_metric_window_owner(name: &str) -> Option<&str> {
+    name.strip_suffix(":window_begin")
+        .or_else(|| name.strip_suffix(":window_width"))
+        .filter(|base| !base.is_empty())
+}
+
+/// A column carrying actual metric values — not timestamp, offset, or any
+/// window sidecar. The presence of at least one decides whether a table
+/// survives a metric projection at all.
+fn is_value_column(name: &str) -> bool {
+    !is_structural_column(name) && per_metric_window_owner(name).is_none()
+}
+
+/// Whether a column survives a projection down to `keep_metrics`. Structural
+/// columns always do; a per-metric window rides its metric; a value column is
+/// matched by exact name, by the base before `:` (`foo` for `foo:buckets`), or
+/// by the `metric` metadata fallback (Prometheus numeric-id columns).
+fn keep_rez_column(f: &arrow::datatypes::Field, keep_metrics: &BTreeSet<String>) -> bool {
+    let name = f.name();
+    if is_structural_column(name) {
+        return true;
+    }
+    if let Some(metric) = per_metric_window_owner(name) {
+        return keep_metrics.contains(metric);
+    }
+    keep_metrics.contains(name)
+        || name
+            .split_once(':')
+            .is_some_and(|(base, _)| keep_metrics.contains(base))
+        || f.metadata()
+            .get("metric")
+            .is_some_and(|m| keep_metrics.contains(m))
+}
+
+/// Project one segment's parquet down to the columns for `keep_metrics` plus
+/// the structural sidecars, decoding and re-encoding it with
+/// `rez::segment_writer_props()` so the result is indistinguishable from a
+/// natively-sealed segment (LZ4_RAW, no dictionary, default row groups — NOT
+/// report-save's ZSTD).
+///
+/// A column projection changes neither the row count nor the timestamps nor
+/// the windows, so the caller reuses the segment's existing `SegmentMeta`
+/// unchanged. Returns `None` when no value column survives — the table holds
+/// none of the kept metrics and should be dropped rather than reduced to bare
+/// structural columns.
+///
+/// This is the one place the rewrite tools decode a segment: `combine`,
+/// `filter --samplers` and `annotate` all move BLOBs verbatim, but a
+/// per-column trim cannot.
+pub fn project_segment_columns(
+    bytes: &[u8],
+    keep_metrics: &BTreeSet<String>,
+) -> Result<Option<Vec<u8>>, String> {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::ArrowWriter;
+
+    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(bytes))
+        .map_err(|e| format!("failed to open a segment for projection: {e}"))?;
+    let schema = builder.schema().clone();
+
+    let mut indices: Vec<usize> = Vec::new();
+    let mut has_value = false;
+    for (i, f) in schema.fields().iter().enumerate() {
+        if keep_rez_column(f, keep_metrics) {
+            indices.push(i);
+            has_value |= is_value_column(f.name());
+        }
+    }
+    if !has_value {
+        return Ok(None);
+    }
+
+    let projected_schema = std::sync::Arc::new(
+        schema
+            .project(&indices)
+            .map_err(|e| format!("failed to project a segment schema: {e}"))?,
+    );
+    let reader = builder
+        .build()
+        .map_err(|e| format!("failed to read a segment for projection: {e}"))?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut writer = ArrowWriter::try_new(
+            &mut buf,
+            projected_schema,
+            Some(crate::rez::segment_writer_props()),
+        )
+        .map_err(|e| format!("failed to open a projected segment writer: {e}"))?;
+        for batch in reader {
+            let batch = batch.map_err(|e| format!("failed to read a segment batch: {e}"))?;
+            let projected = batch
+                .project(&indices)
+                .map_err(|e| format!("failed to project a segment batch: {e}"))?;
+            writer
+                .write(&projected)
+                .map_err(|e| format!("failed to write a projected segment batch: {e}"))?;
+        }
+        writer
+            .close()
+            .map_err(|e| format!("failed to finalize a projected segment: {e}"))?;
+    }
+    Ok(Some(buf))
 }
 
 /// One segment's catalog facts, read from the parquet itself.
@@ -265,6 +418,7 @@ pub fn upgrade_tar_to_v3(src: &Path, dest: &Path) -> Result<usize, String> {
 #[cfg(test)]
 mod tests {
     use crate::rez_sqlite::RezDb;
+    use std::collections::BTreeSet;
 
     /// Every table in the v3 schema is either copied by
     /// [`super::copy_recordings_into`] or deliberately not carried, and this
@@ -384,5 +538,184 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── column projection ──
+
+    /// Build a segment parquet with two value columns, the table-level window
+    /// pair, timestamp and wall-offset — a minimal V3 group table shape — and
+    /// return its bytes plus the row count.
+    fn two_metric_segment() -> (Vec<u8>, usize) {
+        use arrow::array::{Int64Array, UInt64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let rows = 4usize;
+        let ts: Vec<u64> = (0..rows as u64).map(|i| 1_000 + i).collect();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("timestamp", DataType::UInt64, false),
+            Field::new(crate::rez::WALL_OFFSET_COLUMN, DataType::Int64, true),
+            Field::new(crate::rez::WINDOW_BEGIN_COLUMN, DataType::Int64, true),
+            Field::new(crate::rez::WINDOW_WIDTH_COLUMN, DataType::UInt64, true),
+            Field::new("cpu_usage_busy", DataType::UInt64, true),
+            Field::new("cpu_usage_ops", DataType::UInt64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(ts.clone())),
+                Arc::new(Int64Array::from(vec![0i64; rows])),
+                Arc::new(Int64Array::from(
+                    ts.iter().map(|&t| t as i64).collect::<Vec<_>>(),
+                )),
+                Arc::new(UInt64Array::from(vec![50u64; rows])),
+                Arc::new(UInt64Array::from(vec![7u64; rows])),
+                Arc::new(UInt64Array::from(vec![9u64; rows])),
+            ],
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut w =
+                ArrowWriter::try_new(&mut buf, schema, Some(crate::rez::segment_writer_props()))
+                    .unwrap();
+            w.write(&batch).unwrap();
+            w.close().unwrap();
+        }
+        (buf, rows)
+    }
+
+    fn segment_columns(bytes: &[u8]) -> Vec<String> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        let b =
+            ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(bytes)).unwrap();
+        b.schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    /// A projection keeps the requested metric's value column plus every
+    /// structural sidecar (timestamp, wall-offset, the table-level window
+    /// pair), drops the unrequested metric, and preserves the row count.
+    #[test]
+    fn projecting_keeps_requested_metric_and_all_structural_columns() {
+        let (bytes, rows) = two_metric_segment();
+        let keep: BTreeSet<String> = ["cpu_usage_ops".to_string()].into_iter().collect();
+
+        let projected = super::project_segment_columns(&bytes, &keep)
+            .unwrap()
+            .expect("a kept metric survives, so the table is not dropped");
+        let cols = segment_columns(&projected);
+
+        assert!(
+            cols.contains(&"cpu_usage_ops".to_string()),
+            "kept: {cols:?}"
+        );
+        assert!(
+            !cols.contains(&"cpu_usage_busy".to_string()),
+            "the unrequested metric is dropped: {cols:?}"
+        );
+        for structural in [
+            "timestamp",
+            crate::rez::WALL_OFFSET_COLUMN,
+            crate::rez::WINDOW_BEGIN_COLUMN,
+            crate::rez::WINDOW_WIDTH_COLUMN,
+        ] {
+            assert!(
+                cols.contains(&structural.to_string()),
+                "structural column {structural} must survive: {cols:?}"
+            );
+        }
+
+        // Row count is unchanged by a column projection.
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(projected))
+            .unwrap()
+            .build()
+            .unwrap();
+        let got: usize = reader.map(|b| b.unwrap().num_rows()).sum();
+        assert_eq!(got, rows, "projection drops columns, never rows");
+    }
+
+    /// A table holding none of the kept metrics projects to no value column and
+    /// is signalled for dropping (`None`) rather than reduced to bare sidecars.
+    #[test]
+    fn projecting_a_table_with_no_kept_metric_returns_none() {
+        let (bytes, _) = two_metric_segment();
+        let keep: BTreeSet<String> = ["something_else".to_string()].into_iter().collect();
+        assert!(
+            super::project_segment_columns(&bytes, &keep)
+                .unwrap()
+                .is_none(),
+            "no value column survives, so the table is dropped"
+        );
+    }
+
+    /// A per-metric window sidecar (`<m>:window_begin`) rides its metric: kept
+    /// when the metric is kept, dropped when it is not.
+    #[test]
+    fn projecting_keeps_per_metric_window_only_for_kept_metrics() {
+        use arrow::array::{Int64Array, UInt64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use std::sync::Arc;
+
+        let rows = 3usize;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("timestamp", DataType::UInt64, false),
+            Field::new("a", DataType::UInt64, true),
+            Field::new("a:window_begin", DataType::Int64, true),
+            Field::new("a:window_width", DataType::UInt64, true),
+            Field::new("b", DataType::UInt64, true),
+            Field::new("b:window_begin", DataType::Int64, true),
+            Field::new("b:window_width", DataType::UInt64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt64Array::from(vec![1u64, 2, 3])),
+                Arc::new(UInt64Array::from(vec![10u64; rows])),
+                Arc::new(Int64Array::from(vec![0i64; rows])),
+                Arc::new(UInt64Array::from(vec![5u64; rows])),
+                Arc::new(UInt64Array::from(vec![20u64; rows])),
+                Arc::new(Int64Array::from(vec![0i64; rows])),
+                Arc::new(UInt64Array::from(vec![5u64; rows])),
+            ],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        {
+            let mut w =
+                ArrowWriter::try_new(&mut buf, schema, Some(crate::rez::segment_writer_props()))
+                    .unwrap();
+            w.write(&batch).unwrap();
+            w.close().unwrap();
+        }
+
+        let keep: BTreeSet<String> = ["a".to_string()].into_iter().collect();
+        let projected = super::project_segment_columns(&buf, &keep)
+            .unwrap()
+            .unwrap();
+        let cols = segment_columns(&projected);
+        assert!(cols.contains(&"a".to_string()));
+        assert!(
+            cols.contains(&"a:window_begin".to_string()),
+            "kept metric's window rides it: {cols:?}"
+        );
+        assert!(cols.contains(&"a:window_width".to_string()));
+        assert!(
+            !cols.contains(&"b".to_string()),
+            "dropped metric gone: {cols:?}"
+        );
+        assert!(
+            !cols.contains(&"b:window_begin".to_string()),
+            "a dropped metric's window is dropped too: {cols:?}"
+        );
     }
 }
