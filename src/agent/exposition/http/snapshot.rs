@@ -204,11 +204,33 @@ fn metric_metadata(
 /// window — previously silently absent (`PackedCounters::refresh()` is a
 /// no-op, so there was nothing to stamp a per-metric window from) — pinned
 /// by `v2_output_is_unchanged_except_windows_for_a_migrated_packed_metric`.
+/// Serialises the snapshot builders under `cargo test`.
+///
+/// `create`/`create_v3` are the sole writers of reader-stamped group window
+/// slots (a reader-stamped group's window IS the builder's own read of it —
+/// see `AcquisitionGroup::set_reader_stamped`), and each such slot is a single
+/// static shared by the whole process. In production one snapshot builder runs
+/// at a time, so the single-writer invariant the seqlock's `debug_assert`
+/// guards (see `timing.rs`) holds. The test harness runs many builder tests on
+/// parallel threads, and once any test latches a group reader-stamped, every
+/// subsequent `create_v3` walk acquires that shared slot — so two overlapping
+/// builder calls trip the assert. This lock restores the production invariant
+/// (one builder at a time) for tests without touching the hot path: it is
+/// `#[cfg(test)]`, so production compiles nothing. Poison is recovered rather
+/// than propagated, so a test that panics mid-build does not cascade-fail the
+/// rest. (See issue #1130.)
+#[cfg(test)]
+static BUILDER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn create(
     timestamp: SystemTime,
     duration: Duration,
     external_metrics: Vec<ExternalMetric>,
 ) -> Snapshot {
+    #[cfg(test)]
+    let _serialize = BUILDER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = SnapshotV2 {
         systemtime: timestamp,
         duration,
@@ -1569,6 +1591,13 @@ fn create_v3(
     external_metrics: Vec<ExternalMetric>,
     cache: &mut SkeletonCache,
 ) -> Snapshot {
+    // See BUILDER_TEST_LOCK: serialise builder calls under `cargo test` so the
+    // shared reader-stamped slots keep their single-writer invariant.
+    #[cfg(test)]
+    let _serialize = BUILDER_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let sampler_mods = crate::agent::samplers::sampler_modules();
     let group_registry = group_registry();
 
@@ -4210,6 +4239,44 @@ mod tests {
             "each tick's bracket begins no earlier than the previous tick's — \
              tick 2: {window2:?}, tick 1: {window1:?}"
         );
+    }
+
+    // Concurrent snapshot builders over a reader-stamped group must not panic.
+    // This is a smoke test of the concurrency contract `BUILDER_TEST_LOCK`
+    // upholds (issue #1130), not a deterministic reproduction: the flake is a
+    // collision inside the window slot's ~ns write critical section, so it
+    // cannot be triggered reliably or cheaply -- 32 barrier-synced threads
+    // hammering `create_v3` reproduced the exact "single writer" assert only
+    // ~1-in-3 without the lock, and serialise to minutes WITH it. The fix's real
+    // guarantee is structural (create/create_v3 are the sole writers of these
+    // shared slots and now run one-at-a-time under test, restoring the
+    // production single-writer invariant); this keeps the path exercised and
+    // catches a gross regression (deadlock, panic) fast.
+    #[test]
+    fn concurrent_builders_over_a_reader_stamped_group_do_not_panic() {
+        V3_READER_STAMPED_GROUP.set_reader_stamped();
+        V3_READER_STAMPED_COUNTERS
+            .set_metadata(1, [("cgroup".to_string(), "/smoke".to_string())].into());
+        V3_READER_STAMPED_COUNTERS.add(1, 1);
+
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let mut cache = SkeletonCache::new();
+                    for _ in 0..25 {
+                        let _ = create_v3(
+                            SystemTime::now(),
+                            Duration::from_secs(1),
+                            vec![],
+                            &mut cache,
+                        );
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("a concurrent builder panicked");
+        }
     }
 
     // Regression fixture for a real bug caught while building this wave: a
