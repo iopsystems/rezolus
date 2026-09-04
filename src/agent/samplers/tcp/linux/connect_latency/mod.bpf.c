@@ -81,18 +81,39 @@ cleanup:
     return 0;
 }
 
+// fentry/kprobe twins share trace_connect()/handle_tcp_rcv_state_process(); only
+// the attach mechanism differs. fentry is the cheaper dispatch (see
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
+// kprobe twins are the CO-RE-only fallback and one set is disabled at load time
+// on kernel_has_btf() (see disabled_programs in mod.rs).
+
+SEC("fentry/tcp_v4_connect")
+int BPF_PROG(tcp_v4_connect_fentry, struct sock* sk) {
+    return trace_connect(sk);
+}
+
 SEC("kprobe/tcp_v4_connect")
-int BPF_KPROBE(tcp_v4_connect, struct sock* sk) {
+int BPF_KPROBE(tcp_v4_connect_kprobe, struct sock* sk) {
+    return trace_connect(sk);
+}
+
+SEC("fentry/tcp_v6_connect")
+int BPF_PROG(tcp_v6_connect_fentry, struct sock* sk) {
     return trace_connect(sk);
 }
 
 SEC("kprobe/tcp_v6_connect")
-int BPF_KPROBE(tcp_v6_connect, struct sock* sk) {
+int BPF_KPROBE(tcp_v6_connect_kprobe, struct sock* sk) {
     return trace_connect(sk);
 }
 
+SEC("fentry/tcp_rcv_state_process")
+int BPF_PROG(tcp_rcv_state_process_fentry, struct sock* sk) {
+    return handle_tcp_rcv_state_process(ctx, sk);
+}
+
 SEC("kprobe/tcp_rcv_state_process")
-int BPF_KPROBE(tcp_rcv_state_process, struct sock* sk) {
+int BPF_KPROBE(tcp_rcv_state_process_kprobe, struct sock* sk) {
     return handle_tcp_rcv_state_process(ctx, sk);
 }
 
