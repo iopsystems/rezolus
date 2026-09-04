@@ -56,6 +56,7 @@ pub fn app(livereload: LiveReloadLayer, app_state: AppState) -> Router {
         .route("/selection", get(selection_handler))
         .route("/sections", get(sections_handler))
         .route("/file_metadata", get(file_metadata_handler))
+        .route("/captures", get(captures_handler))
         .route("/metrics", get(metrics_handler))
         .route("/timestamps", get(timestamps_handler))
         .route(
@@ -263,6 +264,33 @@ async fn file_metadata_handler(
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         body,
+    )
+        .into_response()
+}
+
+/// The attached captures, anchor first, in display order:
+/// `[{ "id": "baseline", "alias": "redis" }, ...]`.
+///
+/// The frontend enumerates this to know what an N-way overlay should draw.
+/// The browser's `WasmCaptureRegistry::captures()` is the same contract; this
+/// is the server side of it.
+async fn captures_handler(State(state): State<Arc<AppState>>) -> Response {
+    let list: Vec<serde_json::Value> = state
+        .captures
+        .capture_ids()
+        .into_iter()
+        .map(|id| {
+            let alias = state
+                .captures
+                .alias_by_id(&id)
+                .unwrap_or_else(|| id.clone());
+            serde_json::json!({ "id": id, "alias": alias })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string()),
     )
         .into_response()
 }

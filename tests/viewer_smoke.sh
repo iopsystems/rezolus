@@ -126,6 +126,16 @@ eq "file mode loaded"        "$(echo "$mode" | jq -r .loaded)"       "true"     
 mode=$(mode_at $PORT_AB)
 eq "A/B compare_mode"        "$(echo "$mode" | jq -r .compare_mode)" "true"     "$LOGDIR/ab.log"
 
+echo "==> /api/v1/captures lists the attached captures"
+caps=$(curl -fsS "http://127.0.0.1:$PORT_AB/api/v1/captures")
+eq "A/B captures count"      "$(echo "$caps" | jq -r 'length')"        "2"        "$LOGDIR/ab.log"
+eq "A/B first capture id"    "$(echo "$caps" | jq -r '.[0].id')"       "baseline" "$LOGDIR/ab.log"
+eq "A/B second capture id"   "$(echo "$caps" | jq -r '.[1].id')"       "experiment" "$LOGDIR/ab.log"
+# A single-file server lists exactly the baseline.
+caps1=$(curl -fsS "http://127.0.0.1:$PORT_FILE/api/v1/captures")
+eq "single-file captures"    "$(echo "$caps1" | jq -r 'length')"       "1"        "$LOGDIR/file.log"
+eq "single-file id"          "$(echo "$caps1" | jq -r '.[0].id')"      "baseline" "$LOGDIR/file.log"
+
 mode=$(mode_at $PORT_PROXY)
 eq "proxy url_loading"       "$(echo "$mode" | jq -r .url_loading)"  "proxy"    "$LOGDIR/proxy.log"
 
