@@ -383,6 +383,91 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
     })();
 };
 
+// Time range from a capture's /metadata payload, or null. Mirrors the inline
+// range computation the experiment fetch uses; shared by the extra-capture
+// fetch below.
+const rangeFromMeta = (meta) => {
+    const data = meta?.data ?? meta;
+    const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
+    const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
+    if (minT == null || maxT == null) return null;
+    const start = Number(minT);
+    const end = Number(maxT);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    return {
+        start, end,
+        step: Math.max(1, Math.floor((end - start) / 500)),
+        interval: Math.max(1, Number(data.interval) || 1),
+    };
+};
+
+// Fetch every capture BEYOND baseline+experiment, for an N-way overlay.
+//
+// Additive and deliberately separate from `fetchExperimentResult`: the
+// baseline/experiment path (and with it every two-capture strategy — diff,
+// side-by-side, spectrum) is left exactly as it was, and this only adds the
+// extra arms an overlay draws. With a plain A/B `getCaptures()` returns just
+// baseline+experiment, so `extraCaptures` stays empty and nothing changes.
+const fetchExtraCaptures = (vnode) => {
+    const { spec, sectionRoute } = vnode.attrs;
+    if (!spec.promql_query) return;
+    (async () => {
+        try {
+            const caps = await ViewerApi.getCaptures();
+            const extras = (Array.isArray(caps) ? caps : []).filter(
+                (c) => c.id !== CAPTURE_BASELINE && c.id !== CAPTURE_EXPERIMENT,
+            );
+            if (extras.length === 0) {
+                vnode.state.extraCaptures = [];
+                return;
+            }
+            const baseQuery = spec.promql_query_experiment || spec.promql_query;
+            const query = buildEffectiveQuery(
+                { ...spec, promql_query: baseQuery },
+                { sectionRoute, crossCapture: true },
+            );
+            if (query == null) {
+                vnode.state.extraCaptures = [];
+                return;
+            }
+            const displayStyle = resolvedStyle(spec);
+            const wantBoxplot = displayStyle === 'line' || displayStyle === 'scatter';
+            const pts = (Array.isArray(spec.boxplot) && spec.boxplot[0]?.t?.length)
+                ? spec.boxplot[0].t.length : 500;
+
+            const out = [];
+            for (const cap of extras) {
+                let range;
+                try {
+                    range = rangeFromMeta(await ViewerApi.getMetadata(cap.id));
+                } catch (_) { range = null; }
+                if (!range) continue;
+                const step = effectiveExperimentStep(vnode.attrs, range);
+                let result;
+                try {
+                    result = await queryRangeForCapture(cap.id, query, range.start, range.end, step);
+                } catch (_) { continue; }
+                let boxplot = null;
+                if (wantBoxplot) {
+                    try {
+                        boxplot = await queryRangeDisplayForCapture(
+                            cap.id, query, range.start, range.end, Math.max(1, range.interval || 1), pts,
+                        );
+                    } catch (_) { /* leave null → raw-matrix fallback */ }
+                }
+                out.push({ id: cap.id, alias: cap.alias, result, boxplot });
+            }
+            vnode.state.extraCaptures = out;
+            // Invalidate the memoized extra caps so view() re-extracts.
+            vnode.state._capExtrasResult = null;
+            m.redraw();
+        } catch (e) {
+            // An overlay's extra arms failing must not break the A/B view.
+            console.error('[compare] extra captures failed', e);
+        }
+    })();
+};
+
 export const CompareChartWrapper = {
     oninit(vnode) {
         vnode.state.experimentResult = null;
@@ -392,8 +477,12 @@ export const CompareChartWrapper = {
         // and re-fetches when they diverge (granularity selector change).
         vnode.state._lastFetchedStep = null;
         vnode.state._fetchInFlight = false;
-        // Kick off the initial fetch.
+        // N-way overlay: any captures beyond baseline+experiment. Empty for a
+        // plain A/B, so the two-capture paths below are unaffected.
+        vnode.state.extraCaptures = [];
+        // Kick off the initial fetches.
         fetchExperimentResult(vnode);
+        fetchExtraCaptures(vnode);
     },
 
     view(vnode) {
@@ -406,6 +495,7 @@ export const CompareChartWrapper = {
             if (want > 0 && vnode.state._lastFetchedStep != null
                 && want !== vnode.state._lastFetchedStep) {
                 fetchExperimentResult(vnode);
+                fetchExtraCaptures(vnode);
             }
         }
 
@@ -439,6 +529,24 @@ export const CompareChartWrapper = {
         }
         const baselineCap = vnode.state._baselineCap;
         const experimentCap = vnode.state._experimentCap;
+
+        // N-way overlay: extract the extra captures (memoized on the fetched
+        // array's identity). `extractExperimentCapture` stamps id=experiment,
+        // so restore each extra's own id/alias — the overlay colors and names
+        // by them. Empty for a plain A/B.
+        if (vnode.state._capExtrasResult !== vnode.state.extraCaptures) {
+            vnode.state._capExtrasResult = vnode.state.extraCaptures;
+            vnode.state._extraCaps = (vnode.state.extraCaptures || []).map((ex) => {
+                const cap = extractExperimentCapture(spec, ex.result, {
+                    ...captureExtractOpts,
+                    boxplot: ex.boxplot,
+                });
+                cap.id = ex.id;
+                cap.alias = ex.alias;
+                return cap;
+            });
+        }
+        const extraCaps = vnode.state._extraCaps || [];
 
         // Compare-mode spectrum fetch: when a percentile chart has a
         // Full or Tail toggle on, we need the full/tail spectrum data
@@ -494,7 +602,7 @@ export const CompareChartWrapper = {
 
         const result = renderCompareChart({
             spec,
-            captures: [baselineCap, experimentCap],
+            captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
             toggles: toggles || {},
             setChartToggle,
