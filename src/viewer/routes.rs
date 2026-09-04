@@ -32,7 +32,7 @@ use dashboard::display_wire;
 use metriken_query::{QueryError, QueryResult};
 
 use super::actions;
-use super::capture_registry::{self, CaptureId};
+use super::capture_registry::{self};
 use super::state::{self, ApiResponse, AppState, CaptureParam};
 
 #[cfg(not(feature = "developer-mode"))]
@@ -218,7 +218,7 @@ async fn systeminfo_handler(
     State(state): State<Arc<AppState>>,
     Query(p): Query<CaptureParam>,
 ) -> Response {
-    match state.captures.systeminfo(p.capture_id()) {
+    match state.captures.systeminfo_by_id(p.capture_str()) {
         Some(json) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],
@@ -242,13 +242,10 @@ async fn selection_handler(State(state): State<Arc<AppState>>) -> Response {
 }
 
 /// Navigation list + global capture params; no section bodies.
-async fn sections_handler(
-    State(state): State<Arc<AppState>>,
-    Query(p): Query<CaptureParam>,
-) -> Json<serde_json::Value> {
+async fn sections_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "status": "success",
-        "data": state.sections_metadata(p.capture_id()),
+        "data": state.sections_metadata(),
     }))
 }
 
@@ -258,7 +255,7 @@ async fn file_metadata_handler(
 ) -> Response {
     let body = state
         .captures
-        .file_metadata(p.capture_id())
+        .file_metadata_by_id(p.capture_str())
         .unwrap_or_else(|| "{}".to_string());
     (
         StatusCode::OK,
@@ -309,14 +306,17 @@ async fn metrics_handler(
     State(state): State<Arc<AppState>>,
     Query(p): Query<MetricsParam>,
 ) -> Response {
-    let capture_id = CaptureId::parse_opt(p.capture.as_deref());
-    let Some(data) = state.captures.get(capture_id) else {
+    let capture_id = p
+        .capture
+        .as_deref()
+        .unwrap_or(capture_registry::BASELINE_ID);
+    let Some(data) = state.captures.get_by_id(capture_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let source = p.source.clone().unwrap_or_else(|| data.source());
     let descriptions = state
         .captures
-        .file_metadata(capture_id)
+        .file_metadata_by_id(capture_id)
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .map(|v| dashboard::metric_catalog::resolve_descriptions(&v, &source))
         .unwrap_or_default();
@@ -346,8 +346,11 @@ async fn timestamps_handler(
     State(state): State<Arc<AppState>>,
     Query(p): Query<MetricsParam>,
 ) -> Response {
-    let capture_id = CaptureId::parse_opt(p.capture.as_deref());
-    let Some(data) = state.captures.get(capture_id) else {
+    let capture_id = p
+        .capture
+        .as_deref()
+        .unwrap_or(capture_registry::BASELINE_ID);
+    let Some(data) = state.captures.get_by_id(capture_id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let source = p.source.clone().unwrap_or_else(|| data.source());
@@ -395,10 +398,10 @@ fn run_query<F>(state: &AppState, capture: Option<&str>, f: F) -> Json<ApiRespon
 where
     F: FnOnce(&dyn metriken_query::MetricsSource) -> Result<QueryResult, QueryError>,
 {
-    let capture = CaptureId::parse_opt(capture);
-    let Some(data) = state.captures.get(capture) else {
+    let capture = capture.unwrap_or(capture_registry::BASELINE_ID);
+    let Some(data) = state.captures.get_by_id(capture) else {
         return ApiResponse::err(
-            format!("capture '{capture:?}' not attached"),
+            format!("capture '{capture}' not attached"),
             "capture_not_found",
         );
     };
@@ -438,10 +441,13 @@ async fn range_query(
 /// `dashboard::display_wire` so the WASM viewer produces byte-identical bodies.
 /// Non-`Series` results (scalar/vector) fall back to JSON.
 fn range_query_display(state: &AppState, params: &RangeQueryParams) -> Response {
-    let capture = CaptureId::parse_opt(params.capture.as_deref());
-    let Some(data) = state.captures.get(capture) else {
+    let capture = params
+        .capture
+        .as_deref()
+        .unwrap_or(capture_registry::BASELINE_ID);
+    let Some(data) = state.captures.get_by_id(capture) else {
         return ApiResponse::<serde_json::Value>::err(
-            format!("capture '{capture:?}' not attached"),
+            format!("capture '{capture}' not attached"),
             "capture_not_found",
         )
         .into_response();
@@ -504,10 +510,10 @@ async fn metadata(
     State(state): State<Arc<AppState>>,
     Query(p): Query<CaptureParam>,
 ) -> Json<ApiResponse<serde_json::Value>> {
-    let capture = p.capture_id();
-    let Some(data) = state.captures.get(capture) else {
+    let capture = p.capture_str();
+    let Some(data) = state.captures.get_by_id(capture) else {
         return ApiResponse::err(
-            format!("capture {capture:?} not attached"),
+            format!("capture '{capture}' not attached"),
             "capture_not_found",
         );
     };
@@ -522,17 +528,17 @@ async fn metadata(
     } else {
         0.0
     };
-    let filename = state.captures.filename(capture);
+    let filename = state.captures.filename_by_id(capture);
     let mut meta = serde_json::json!({
         "minTime": min_time,
         "maxTime": max_time,
         "interval": interval,
         "filename": filename,
     });
-    if let Some(alias) = state.captures.alias(capture) {
+    if let Some(alias) = state.captures.alias_by_id(capture) {
         meta["alias"] = serde_json::json!(alias);
     }
-    if matches!(capture, capture_registry::CaptureId::Baseline) {
+    if capture == capture_registry::BASELINE_ID {
         if let Some(checksum) = &*state.file_checksum.read() {
             meta["fileChecksum"] = serde_json::json!(checksum);
         }

@@ -32,20 +32,6 @@ pub enum CaptureId {
 }
 
 impl CaptureId {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            BASELINE_ID => Some(CaptureId::Baseline),
-            EXPERIMENT_ID => Some(CaptureId::Experiment),
-            _ => None,
-        }
-    }
-
-    /// Parse an optional `?capture=…` query param. Missing or unknown
-    /// values resolve to the default (Baseline).
-    pub fn parse_opt(s: Option<&str>) -> Self {
-        s.and_then(Self::parse).unwrap_or_default()
-    }
-
     /// The wire id for this capture.
     pub fn id(self) -> &'static str {
         match self {
@@ -161,10 +147,6 @@ impl CaptureRegistry {
             .flatten()
     }
 
-    pub fn file_metadata(&self, id: CaptureId) -> Option<String> {
-        self.file_metadata_by_id(id.id())
-    }
-
     pub fn file_metadata_by_id(&self, id: &str) -> Option<String> {
         self.with_slot(id, |slot| slot.file_metadata.read().clone())
             .flatten()
@@ -272,13 +254,6 @@ mod tests {
 
     fn registry() -> CaptureRegistry {
         CaptureRegistry::new(store("base.parquet"), None, None, Some("base".into()))
-    }
-
-    #[test]
-    fn parse_capture_id() {
-        assert_eq!(CaptureId::parse("baseline"), Some(CaptureId::Baseline));
-        assert_eq!(CaptureId::parse("experiment"), Some(CaptureId::Experiment));
-        assert_eq!(CaptureId::parse("unknown"), None);
     }
 
     #[test]

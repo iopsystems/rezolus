@@ -211,7 +211,7 @@ impl AppState {
     }
 
     /// Build the navigation + global params payload for `/api/v1/sections`.
-    pub fn sections_metadata(&self, _capture: CaptureId) -> serde_json::Value {
+    pub fn sections_metadata(&self) -> serde_json::Value {
         let store = self.sections.read();
         let sections_array: Vec<serde_json::Value> = store
             .sections()
@@ -282,8 +282,16 @@ pub struct CaptureParam {
 }
 
 impl CaptureParam {
-    pub fn capture_id(&self) -> CaptureId {
-        CaptureId::parse_opt(self.capture.as_deref())
+    /// The raw wire id, defaulting to the anchor when absent.
+    ///
+    /// A string, never the `CaptureId` enum: an archive attaches captures
+    /// under named ids (`envoy`), so a request for `capture=envoy` must
+    /// resolve the `envoy` recording, not collapse an unknown id to the
+    /// baseline. The registry's `*_by_id` accessors take this string.
+    pub fn capture_str(&self) -> &str {
+        self.capture
+            .as_deref()
+            .unwrap_or(super::capture_registry::BASELINE_ID)
     }
 }
 

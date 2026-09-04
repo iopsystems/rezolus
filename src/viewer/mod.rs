@@ -1567,11 +1567,11 @@ mod tests {
         // reader landed in each slot.
         let b_meta = state
             .captures
-            .file_metadata(CaptureId::Baseline)
+            .file_metadata_by_id("baseline")
             .unwrap_or_default();
         let e_meta = state
             .captures
-            .file_metadata(CaptureId::Experiment)
+            .file_metadata_by_id("experiment")
             .unwrap_or_default();
         assert!(b_meta.contains("envoy"), "baseline metadata: {b_meta}");
         assert!(e_meta.contains("valkey"), "experiment metadata: {e_meta}");
@@ -1602,7 +1602,7 @@ mod tests {
         assert!(!state.captures.experiment_attached());
         let b_meta = state
             .captures
-            .file_metadata(CaptureId::Baseline)
+            .file_metadata_by_id("baseline")
             .unwrap_or_default();
         assert!(b_meta.contains("valkey"), "baseline metadata: {b_meta}");
         // Named, not "baseline": the window title is the archive's filename,
