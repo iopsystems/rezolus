@@ -256,7 +256,12 @@ const ViewerApi = {
             throw new Error(`save failed (HTTP ${resp.status})${detail ? `: ${detail}` : ''}`);
         }
         const mime = resp.headers.get('content-type') || 'application/octet-stream';
-        const extension = mime.includes('x-tar') ? '.parquet.ab.tar' : '.parquet';
+        // The server names the download (rezolus-report.rez for a .rez source
+        // or a compare, .parquet for a single parquet); trust its extension
+        // rather than guessing from the MIME, which is octet-stream for both.
+        const disposition = resp.headers.get('content-disposition') || '';
+        const named = /filename="?([^"]+)"?/.exec(disposition)?.[1] || '';
+        const extension = named.endsWith('.rez') ? '.rez' : '.parquet';
         const bytes = new Uint8Array(await resp.arrayBuffer());
         return { bytes, mime, extension };
     },

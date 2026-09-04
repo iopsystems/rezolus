@@ -85,17 +85,19 @@ Source: [retire the `.parquet.ab.tar` container](journal/2026-08-27-retire-ab-ta
   Exposed as `filter <file>.rez --metrics a,b,c` (composes with `--samplers`),
   with an empty-archive guard. The one operation that breaks the
   verbatim-BLOB-copy property, as flagged.
-- **Save-as-Report emits a `.rez` (server)** — DONE for the server; WASM is a
-  follow-up. `save_with_selection` detects a `.rez` source and builds a trimmed
-  `.rez` (`report_save_rez::build_rez_report`): it trims to the union of every
-  attached capture's queried columns, embeds `KEY_SELECTION`/`KEY_EVENTS` and
-  stamps `KEY_REPORT=trimmed` on the anchor manifest, and `init_file_mode_rez`
-  reads that marker back so the report reloads as a report. **WASM follow-up:**
-  the browser viewer cannot build a `.rez` — the trim/assembly path is under
-  `rez`'s `write` feature (it pulls `metriken`, no wasm32), so the WASM
-  Save-as-Report still can't target `.rez`. Closing that needs a metriken-free,
-  reader-available trim+assemble path (the WAL-tail materialization is the one
-  piece that currently needs `metriken`).
+- **Save-as-Report emits a `.rez` (both backends)** — DONE. A `.rez` source and
+  a parquet **compare** now save a `.rez` on the server AND in the browser; only
+  a single parquet still saves a parquet (the tarball only ever existed for the
+  compare case). The trim/assemble path was made reader-available and shared
+  (`report_save::build_rez_report_from_rez` / `build_rez_report_from_parquets`,
+  in-memory via `RezDb::create_in_memory`/`serialize`; `rez_v3_rewrite` was
+  metriken-free all along, its `write` gate lifted). Both viewer backends embed
+  `KEY_SELECTION`/`KEY_EVENTS` and stamp `KEY_REPORT=trimmed` on the anchor, and
+  `init_file_mode_rez` reads the marker back. The viewer-side `.parquet.ab.tar`
+  **writers** are retired (server `save_combined_ab_tarball` glue + the WASM
+  equivalent gone). Read compat (`ab_extract`) and the CLI `combine --ab` stay
+  for a later cleanup; the shared crate's now-unused `save_combined_ab_tarball`
+  is a small follow-up removal.
 - **Windowless `.rez` tables (non-rezolus sides)** — Open. Ingest is close (the
   recorder already converts Prometheus scrapes to Snapshots; `demote_from_rez`
   documents the refusal as policy, `src/recorder/mod.rs:744-760`). The reader must

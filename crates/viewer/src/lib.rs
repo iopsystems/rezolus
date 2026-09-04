@@ -122,34 +122,6 @@ fn incomplete_notice(
     ))
 }
 
-/// Build a synthetic `AbContainers` manifest from two attached viewers
-/// at Save-as-Report time. The WASM viewer's compare mode loads two
-/// independent parquets (no real tar manifest involved), so we
-/// reconstruct one from each slot's alias + source field.
-fn synthesize_manifest(baseline: &Viewer, experiment: &Viewer) -> report_save::AbContainers {
-    let to_sources = |raw: &str| -> Vec<String> {
-        serde_json::from_str::<Vec<String>>(raw).unwrap_or_else(|_| vec![raw.to_string()])
-    };
-    report_save::AbContainers {
-        version: report_save::AbContainers::SCHEMA_VERSION,
-        baseline: report_save::AbSide {
-            alias: baseline
-                .alias
-                .clone()
-                .unwrap_or_else(|| "baseline".to_string()),
-            sources: to_sources(&baseline.reader.source()),
-        },
-        experiment: report_save::AbSide {
-            alias: experiment
-                .alias
-                .clone()
-                .unwrap_or_else(|| "experiment".to_string()),
-            sources: to_sources(&experiment.reader.source()),
-        },
-        category: None,
-    }
-}
-
 #[wasm_bindgen]
 pub struct Viewer {
     /// The loaded capture. Type-erased because a capture is a parquet file or
@@ -697,6 +669,12 @@ pub struct WasmCaptureRegistry {
     /// browser, so it is returned instead of dropped: an archive whose third
     /// arm is silently missing looks exactly like an archive with two arms.
     notices: Vec<String>,
+    /// The uploaded `.rez` archive's own bytes, when the loaded dataset is a
+    /// `.rez` (single or multi-recording). Retained because a Save-as-Report
+    /// from a `.rez` source builds its report by trimming THIS archive — the
+    /// per-capture `Viewer`s hold no source bytes for a `.rez`. `None` for a
+    /// parquet dataset, where each capture carries its own parquet bytes.
+    rez_source: Option<Bytes>,
 }
 
 #[wasm_bindgen]
@@ -707,6 +685,7 @@ impl WasmCaptureRegistry {
             baseline: None,
             others: Vec::new(),
             notices: Vec::new(),
+            rez_source: None,
         }
     }
 
@@ -720,6 +699,10 @@ impl WasmCaptureRegistry {
     pub fn attach(&mut self, capture: &str, data: &[u8], filename: &str) -> Result<(), JsValue> {
         self.notices.clear();
         if rez::rez::detect_rez_format_bytes(data) != rez::rez::RezFormat::NotRez {
+            // Retain the archive bytes: a Save-as-Report from a `.rez` source
+            // trims THIS archive rather than reassembling from per-capture
+            // parquet bytes (which a `.rez` capture does not have).
+            self.rez_source = Some(Bytes::copy_from_slice(data));
             let pool = BufferPool::new(WASM_CACHE_SIZE_BYTES);
             let recordings = open_rez(data, Arc::clone(&pool))?;
             self.notices
@@ -737,6 +720,9 @@ impl WasmCaptureRegistry {
             self.set_capture(capture, viewer);
             return Ok(());
         }
+        // A parquet capture: the dataset is parquet-backed, so a report is
+        // assembled from per-capture parquet bytes, not a `.rez` source.
+        self.rez_source = None;
         let viewer = Viewer::new(data, filename)?;
         self.set_capture(capture, viewer);
         Ok(())
@@ -1028,6 +1014,7 @@ impl WasmCaptureRegistry {
     /// each side trimmed independently. The JS caller wraps the bytes
     /// in a Blob and triggers a download — no HTTP needed.
     pub fn save_with_selection(&self, payload_json: &str) -> Result<Vec<u8>, JsValue> {
+        use std::collections::BTreeSet;
         let payload: report_save::ReportPayload = serde_json::from_str(payload_json)
             .map_err(|e| JsValue::from_str(&format!("invalid selection payload: {e}")))?;
 
@@ -1036,21 +1023,74 @@ impl WasmCaptureRegistry {
             .as_ref()
             .ok_or_else(|| JsValue::from_str("no baseline capture attached"))?;
 
-        match self.experiment() {
-            Some(experiment) => {
-                let manifest = synthesize_manifest(baseline, experiment);
-                report_save::save_combined_ab_tarball(
-                    baseline.source_bytes.clone(),
-                    experiment.source_bytes.clone(),
+        let events_json = if payload.events.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&serde_json::json!({ "events": &payload.events })).ok()
+        };
+
+        // `.rez` source (single or A/B): trim the archive itself and embed the
+        // selection — the same output the server produces for a `.rez` source.
+        if let Some(rez_bytes) = &self.rez_source {
+            let keep: Option<BTreeSet<String>> = payload.trim_columns.then(|| {
+                let mut set: BTreeSet<String> = ::report_save::resolve_kept_columns(
                     &payload,
-                    payload_json,
                     baseline.reader.as_ref(),
-                    experiment.reader.as_ref(),
-                    &manifest,
+                    ::report_save::Side::Baseline,
+                )
+                .into_iter()
+                .collect();
+                for (_, viewer) in &self.others {
+                    set.extend(::report_save::resolve_kept_columns(
+                        &payload,
+                        viewer.reader.as_ref(),
+                        ::report_save::Side::Experiment,
+                    ));
+                }
+                set
+            });
+            return ::report_save::build_rez_report_from_rez(
+                rez_bytes,
+                keep.as_ref(),
+                payload_json,
+                events_json.as_deref(),
+            )
+            .map_err(|e| JsValue::from_str(&e));
+        }
+
+        match self.experiment() {
+            // Parquet compare: assemble a 2-recording `.rez` report (one
+            // recording per side), replacing the `.parquet.ab.tar`.
+            Some(experiment) => {
+                let resolve = |viewer: &Viewer, side| -> Option<BTreeSet<String>> {
+                    payload.trim_columns.then(|| {
+                        ::report_save::resolve_kept_columns(&payload, viewer.reader.as_ref(), side)
+                            .into_iter()
+                            .collect()
+                    })
+                };
+                let baseline_keep = resolve(baseline, ::report_save::Side::Baseline);
+                let experiment_keep = resolve(experiment, ::report_save::Side::Experiment);
+                let sides = [
+                    ::report_save::ParquetReportSide {
+                        bytes: &baseline.source_bytes,
+                        keep_metrics: baseline_keep.as_ref(),
+                    },
+                    ::report_save::ParquetReportSide {
+                        bytes: &experiment.source_bytes,
+                        keep_metrics: experiment_keep.as_ref(),
+                    },
+                ];
+                ::report_save::build_rez_report_from_parquets(
+                    &sides,
                     payload.trim_columns,
+                    payload_json,
+                    events_json.as_deref(),
                 )
                 .map_err(|e| JsValue::from_str(&e))
             }
+            // A single parquet stays a parquet report — the tarball only ever
+            // existed for the compare case.
             None => report_save::save_single_parquet(
                 baseline.source_bytes.clone(),
                 &payload,
@@ -1059,6 +1099,17 @@ impl WasmCaptureRegistry {
                 payload.trim_columns,
             )
             .map_err(|e| JsValue::from_str(&e)),
+        }
+    }
+
+    /// The download extension a Save-as-Report produces for the loaded dataset:
+    /// `.rez` for a `.rez` source or a parquet compare, `.parquet` for a single
+    /// parquet. The JS adapter uses it to name the download.
+    pub fn report_extension(&self) -> String {
+        if self.rez_source.is_some() || !self.others.is_empty() {
+            ".rez".to_string()
+        } else {
+            ".parquet".to_string()
         }
     }
 
@@ -1639,5 +1690,44 @@ mod tests {
         let ctx: dashboard::dashboard::DashboardContext = Default::default();
         let json = serde_json::to_string(&ctx.sections).unwrap();
         assert_eq!(json, "[]");
+    }
+
+    /// A `.rez` source saves a `.rez` report: the archive is trimmed/copied in
+    /// the browser (no filesystem) and the selection is embedded. This is the
+    /// browser half of the server's `.rez` Save-as-Report.
+    #[test]
+    fn a_rez_source_saves_a_rez_report() {
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach(
+            "baseline",
+            &rez_bytes(&[("redis", "web-01"), ("valkey", "web-01")]),
+            "fleet.rez",
+        )
+        .unwrap();
+        assert_eq!(reg.report_extension(), ".rez");
+
+        // trim_columns=false keeps every column, so the report is a full copy
+        // with the selection embedded — no query engine needed for the test.
+        let out = reg
+            .save_with_selection(r#"{"entries":[],"trim_columns":false}"#)
+            .unwrap();
+        let db = rez::rez_sqlite::RezDb::open_bytes(out).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 2, "the report keeps both recordings");
+        assert!(
+            recs[0].meta.metadata.contains_key("selection"),
+            "the selection is embedded on the anchor"
+        );
+    }
+
+    /// A single parquet still reports `.parquet`; only a `.rez` source or a
+    /// compare produces `.rez`.
+    #[test]
+    fn report_extension_tracks_the_source_kind() {
+        // A 1-recording `.rez` is still a `.rez` source.
+        let mut reg = WasmCaptureRegistry::new();
+        reg.attach("baseline", &rez_bytes(&[("redis", "web-01")]), "one.rez")
+            .unwrap();
+        assert_eq!(reg.report_extension(), ".rez");
     }
 }
