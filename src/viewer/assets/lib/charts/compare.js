@@ -38,7 +38,7 @@
 //   anchors: { baseline: ms, experiment: ms }  — subtracted from each
 //            capture's timestamps to produce a relative (`+Xs`) x-axis.
 
-import { nullDiff, intersectLabels, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './util/compare_math.js';
+import { nullDiff, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectrum } from './util/compare_math.js';
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { ensureHeatmapMatrix } from './util/heatmap_data.js';
 import { resolvedStyle } from './metric_types.js';
@@ -55,6 +55,39 @@ const cssColor = (name, fallback) => {
 };
 export const BASELINE_COLOR = cssColor('--compare-baseline', '#2E5BFF');
 export const EXPERIMENT_COLOR = cssColor('--compare-experiment', '#00C46A');
+
+// Colors for a 3rd-and-beyond capture in an N-way overlay. baseline and
+// experiment keep their signature blue/green (so a plain A/B looks exactly as
+// before); every extra draws from this categorical sequence, by the order it
+// was attached. Chosen for contrast against each other and the two fixed hues.
+const CAPTURE_PALETTE = [
+    cssColor('--compare-capture-3', '#FF8A00'), // orange
+    cssColor('--compare-capture-4', '#B45BFF'), // violet
+    cssColor('--compare-capture-5', '#FF4D6D'), // rose
+    cssColor('--compare-capture-6', '#00B8D9'), // cyan
+    cssColor('--compare-capture-7', '#F5C518'), // amber
+    cssColor('--compare-capture-8', '#8C6E5D'), // brown
+];
+
+// The overlay color for a capture. baseline/experiment are fixed by id;
+// `extraIndex` is the capture's 0-based position among the NON-fixed ones.
+export const captureColorFor = (id, extraIndex) => {
+    if (id === CAPTURE_BASELINE) return BASELINE_COLOR;
+    if (id === CAPTURE_EXPERIMENT) return EXPERIMENT_COLOR;
+    return CAPTURE_PALETTE[extraIndex % CAPTURE_PALETTE.length];
+};
+
+// A stable id -> color map for a set of captures, so a capture keeps its color
+// across every sub-chart regardless of which labels it happens to carry.
+const captureColors = (captures) => {
+    let extra = 0;
+    return new Map(
+        captures.map((c) => {
+            const isFixed = c.id === CAPTURE_BASELINE || c.id === CAPTURE_EXPERIMENT;
+            return [c.id, captureColorFor(c.id, isFixed ? -1 : extra++)];
+        }),
+    );
+};
 
 /**
  * Format a relative offset in milliseconds as `+Xs`, `+XmYs`, or `+XhYm`.
@@ -152,9 +185,9 @@ const anchorSecondsFor = (anchors, id, timeDataSec) => {
  * capture is unusable — the caller can then render baseline-only.
  */
 const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
-    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
-    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
-    if (!baseline || !experiment) return false;
+    // Overlay needs at least two captures; with only the anchor, the caller
+    // renders the baseline single-chart instead.
+    if (!captures || captures.length < 2) return false;
 
     // Build one overlay entry per capture. When the capture carries a decimated
     // boxplot (min/max envelope), the entry is drawn ENTIRELY from it — median +
@@ -197,10 +230,14 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
         return null;
     };
 
-    const seriesList = [
-        entryFor(baseline, labelFor(captureLabels, CAPTURE_BASELINE), BASELINE_COLOR),
-        entryFor(experiment, labelFor(captureLabels, CAPTURE_EXPERIMENT), EXPERIMENT_COLOR),
-    ].filter(Boolean);
+    // One overlay entry per capture, in the order given (anchor first). A plain
+    // A/B is baseline+experiment with their signature colors; extras follow
+    // from the palette. `divergenceBand` shades the gap only for exactly two
+    // (`divergenceBandFor` returns null otherwise), so it is a no-op for N > 2.
+    const colors = captureColors(captures);
+    const seriesList = captures
+        .map((cap) => entryFor(cap, cap.alias || labelFor(captureLabels, cap.id), colors.get(cap.id)))
+        .filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
 
     return {
@@ -454,40 +491,36 @@ const splitScatterToSubgroup = ({ spec, captures, anchors, captureLabels }) =>
     });
 
 const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFor: _labelFor, seriesType = 'line' }) => {
-    const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
-    const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
-    if (!baseline || !experiment) return FALLBACK;
-
-    const mapA = baseline.seriesMap || new Map();
-    const mapB = experiment.seriesMap || new Map();
-    const labelsA = new Set(mapA.keys());
-    const labelsB = new Set(mapB.keys());
-    const shared = [...intersectLabels(labelsA, labelsB)].sort();
+    if (!captures || captures.length < 2) return FALLBACK;
     const asScatter = seriesType === 'scatter';
+    const colors = captureColors(captures);
+
+    // Every series label present in ANY capture (a union, not the pairwise
+    // intersection the two-capture path used): a per-CPU or per-cgroup label
+    // present in three of four arms should still draw those three, overlaid,
+    // rather than vanish because one arm lacks it.
+    const allLabels = new Set();
+    for (const cap of captures) {
+        for (const k of (cap.seriesMap || new Map()).keys()) allLabels.add(k);
+    }
+    const shared = [...allLabels].sort();
 
     const specs = shared.map((label) => {
-        const a = mapA.get(label);
-        const b = mapB.get(label);
-        const baseSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, a.timeData);
-        const expSec = anchorSecondsFor(anchors, CAPTURE_EXPERIMENT, b.timeData);
-        const multiSeries = [
-            {
-                name: labelFor(captureLabels, CAPTURE_BASELINE),
-                color: BASELINE_COLOR,
-                timeData: rebase(a.timeData, baseSec),
-                valueData: a.valueData,
-                fill: false,
-                scatter: asScatter,
-            },
-            {
-                name: labelFor(captureLabels, CAPTURE_EXPERIMENT),
-                color: EXPERIMENT_COLOR,
-                timeData: rebase(b.timeData, expSec),
-                valueData: b.valueData,
-                fill: false,
-                scatter: asScatter,
-            },
-        ];
+        const multiSeries = captures
+            .map((cap) => {
+                const r = (cap.seriesMap || new Map()).get(label);
+                if (!r) return null;
+                const sec = anchorSecondsFor(anchors, cap.id, r.timeData);
+                return {
+                    name: cap.alias || labelFor(captureLabels, cap.id),
+                    color: colors.get(cap.id),
+                    timeData: rebase(r.timeData, sec),
+                    valueData: r.valueData,
+                    fill: false,
+                    scatter: asScatter,
+                };
+            })
+            .filter(Boolean);
         return {
             ...stripDisplay(spec),
             opts: {
