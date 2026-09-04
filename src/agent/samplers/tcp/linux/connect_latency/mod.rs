@@ -1,7 +1,6 @@
 //! Collects TCP packet latency stats using BPF and traces:
-//! * `tcp_v4_connect`
-//! * `tcp_v6_connect`
-//! * `tcp_rcv_state_process`
+//! * `tcp_v4_connect`, `tcp_v6_connect`, `tcp_rcv_state_process`
+//!   (fentry when the kernel has BTF, else kprobe)
 //! * `tcp_destroy_sock`
 //!
 //! And produces these stats:
@@ -37,6 +36,20 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .histogram("latency", &TCP_CONNECT_LATENCY, &LATENCY_ACQ)
+    // Prefer fentry (cheaper dispatch); fall back to kprobe without BTF.
+    .disabled_programs(if kernel_has_btf() {
+        &[
+            "tcp_v4_connect_kprobe",
+            "tcp_v6_connect_kprobe",
+            "tcp_rcv_state_process_kprobe",
+        ]
+    } else {
+        &[
+            "tcp_v4_connect_fentry",
+            "tcp_v6_connect_fentry",
+            "tcp_rcv_state_process_fentry",
+        ]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -61,12 +74,12 @@ impl SkelExt for ModSkel<'_> {
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
         debug!(
-            "{NAME} tcp_v4_connect() BPF instruction count: {}",
-            self.progs.tcp_v4_connect.insn_cnt()
+            "{NAME} tcp_v4_connect_fentry() BPF instruction count: {}",
+            self.progs.tcp_v4_connect_fentry.insn_cnt()
         );
         debug!(
-            "{NAME} tcp_rcv_state_process() BPF instruction count: {}",
-            self.progs.tcp_rcv_state_process.insn_cnt()
+            "{NAME} tcp_rcv_state_process_fentry() BPF instruction count: {}",
+            self.progs.tcp_rcv_state_process_fentry.insn_cnt()
         );
     }
 }
