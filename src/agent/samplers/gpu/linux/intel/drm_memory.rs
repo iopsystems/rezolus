@@ -119,6 +119,16 @@ impl Vram {
 pub struct DrmDevice {
     file: File,
     label: String,
+    /// Scratch for the query reply, reused across calls.
+    ///
+    /// The reply is small and fixed for a given device (a 16-byte header plus
+    /// 88 bytes per memory region — 192 bytes on an Arc A770), but it is read
+    /// once per sampling interval for the life of the agent. Allocating it per
+    /// call is bounded churn rather than a leak, since the buffer is an owned
+    /// local that drops at return; holding one buffer simply keeps that off the
+    /// allocator entirely (principle 13 — userspace overhead is part of the
+    /// budget).
+    buffer: Vec<u64>,
 }
 
 impl DrmDevice {
@@ -149,7 +159,11 @@ impl DrmDevice {
             if bdf == pci_address {
                 let path = Path::new("/dev/dri").join(&name);
                 let file = File::open(&path).ok()?;
-                return Some(Self { file, label: name });
+                return Some(Self {
+                    file,
+                    label: name,
+                    buffer: Vec::new(),
+                });
             }
         }
 
@@ -170,7 +184,7 @@ impl DrmDevice {
     /// Returns `None` when the GPU has no device-local memory (an integrated
     /// GPU), when the ioctl is unavailable, or when allocation accounting is not
     /// available to this process (see the privilege note in the module docs).
-    pub fn vram(&self) -> Option<Vram> {
+    pub fn vram(&mut self) -> Option<Vram> {
         let regions = self.query_memory_regions()?;
 
         regions.iter().find_map(|region| {
@@ -194,7 +208,7 @@ impl DrmDevice {
 
     /// Issue the two-step query (ask for length, then fetch) and return the
     /// region array.
-    fn query_memory_regions(&self) -> Option<Vec<MemoryRegionInfo>> {
+    fn query_memory_regions(&mut self) -> Option<Vec<MemoryRegionInfo>> {
         // Step 1: length probe. `length = 0` asks the kernel how many bytes the
         // reply needs.
         let mut item = DrmI915QueryItem {
@@ -216,15 +230,21 @@ impl DrmDevice {
             return None;
         }
 
-        // Step 2: fetch into a buffer the kernel sized for us. The buffer is
-        // `u64`-aligned because both structs are 8-byte aligned.
+        // Step 2: fetch into a buffer the kernel sized for us, reusing the
+        // scratch allocation. `u64`-backed because both structs are 8-byte
+        // aligned. `resize` only reallocates when the reply grows, which after
+        // the first call it does not — the region set is fixed per device.
         let words = length.div_ceil(std::mem::size_of::<u64>());
-        let mut buffer: Vec<u64> = vec![0; words];
+        self.buffer.clear();
+        self.buffer.resize(words, 0);
 
-        item.data_ptr = buffer.as_mut_ptr() as u64;
+        item.data_ptr = self.buffer.as_mut_ptr() as u64;
+        // SAFETY of the pointer: the ioctl is synchronous and `self.buffer`
+        // outlives it, so the kernel never writes through a dangling pointer.
         if !self.query(&mut item) {
             return None;
         }
+        let buffer = &self.buffer;
 
         // SAFETY: `buffer` is at least `length` bytes, 8-byte aligned, and the
         // kernel has just written a `drm_i915_query_memory_regions` into it.

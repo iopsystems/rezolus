@@ -513,7 +513,7 @@ impl Gpu {
             .pci_address
             .as_deref()
             .and_then(DrmDevice::for_pci_address)
-            .filter(|drm| {
+            .and_then(|mut drm| {
                 let ok = drm.vram().is_some();
                 if !ok {
                     debug!(
@@ -523,7 +523,7 @@ impl Gpu {
                         drm.label()
                     );
                 }
-                ok
+                ok.then_some(drm)
             });
 
         if drm.is_some() {
@@ -578,7 +578,7 @@ impl Gpu {
 
         // VRAM is a separate ioctl on the DRM node, and unlike the PMU counters
         // it is an instantaneous gauge in bytes.
-        if let Some(drm) = self.drm.as_ref() {
+        if let Some(drm) = self.drm.as_mut() {
             if let Some(vram) = drm.vram() {
                 let _ = GPU_MEMORY_USED.set(self.id, vram.used_bytes() as i64);
                 let _ = GPU_MEMORY_FREE.set(self.id, vram.free_bytes as i64);
