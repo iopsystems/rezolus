@@ -289,6 +289,17 @@ pub struct TemplateRegistry {
     categories: HashMap<String, CategoryExtension>,
 }
 
+/// Rezolus's service extension templates, baked in from `config/templates/`.
+///
+/// The path escapes the crate directory because the templates are shared with
+/// the static-site build, the packaging scripts, and the pre-commit checks,
+/// which all address them at the repository root; moving the directory to keep
+/// the `include_dir!` local would break those. A git dependency clones the
+/// whole repository, so the relative path resolves for external consumers too.
+#[cfg(not(target_arch = "wasm32"))]
+static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/../../config/templates");
+
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_TEMPLATES_DIR: &str = "config/templates";
 #[cfg(not(target_arch = "wasm32"))]
@@ -316,6 +327,23 @@ impl TemplateRegistry {
                 Self::empty()
             }
         }
+    }
+
+    /// The registry of Rezolus's own service templates, baked in at compile
+    /// time.
+    ///
+    /// This lives here rather than in the binary crate so the templates travel
+    /// with `dashboard` itself: a consumer that depends on this crate (the wasm
+    /// viewer, or an external tool pulling it in as a git dependency) gets the
+    /// same ten services and one category the `rezolus` binary renders, with no
+    /// way for the two to drift.
+    ///
+    /// A template that fails to parse is a build-time authoring error, not a
+    /// runtime condition, so callers that want to keep going on a bad template
+    /// should use [`TemplateRegistry::from_embedded`] and handle the error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn embedded() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::from_embedded(&EMBEDDED_TEMPLATES)
     }
 
     /// Parse every `*.json` file in an embedded `include_dir::Dir` as
@@ -688,6 +716,74 @@ mod tests {
         assert!(
             msg.contains("member_titles") && msg.contains("tensorrt"),
             "got: {msg}",
+        );
+    }
+
+    /// Every shipped template parses and is reachable by service name.
+    ///
+    /// `embedded()` is what external consumers get, so a template that fails to
+    /// parse -- or a `config/templates/` file that stops being picked up because
+    /// the `include_dir!` path drifted -- must fail here rather than silently
+    /// serving a shorter service list than the binary does.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_embedded_templates_all_parse() {
+        let registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+
+        // Named services, not just a non-empty map: these are the routes the
+        // viewer offers, and losing one is a regression a count would hide.
+        for service in [
+            "cachecannon",
+            "llm-perf",
+            "sglang",
+            "sglang-decode",
+            "sglang-prefill",
+            "sglang-router",
+            "valkey",
+            "vllm",
+            "vllm-decode",
+            "vllm-prefill",
+        ] {
+            assert!(
+                registry.get(service).is_some(),
+                "{service} template is not registered"
+            );
+        }
+
+        // `inference-library` is a category, not a service, so it is indexed
+        // separately -- asserting it through `get` would wrongly pass only if
+        // categories leaked into the service map.
+        assert!(
+            registry.get_category("inference-library").is_some(),
+            "the inference-library category is not registered"
+        );
+        assert!(
+            registry.get("inference-library").is_none(),
+            "a category must not be indexed as a service"
+        );
+    }
+
+    /// The `include_dir!` path is relative and escapes the crate directory, so
+    /// it is the kind of thing that breaks quietly. This pins it to the same
+    /// directory the rest of the repo addresses.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_embedded_set_matches_the_templates_directory() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/templates");
+        let on_disk = std::fs::read_dir(&dir)
+            .expect("config/templates must exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count();
+
+        assert_eq!(
+            EMBEDDED_TEMPLATES
+                .files()
+                .filter(|f| f.path().extension().is_some_and(|x| x == "json"))
+                .count(),
+            on_disk,
+            "the embedded set and {} have diverged",
+            dir.display()
         );
     }
 }

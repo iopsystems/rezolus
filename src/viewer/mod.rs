@@ -52,16 +52,17 @@ use state::AppState;
 /// viewer (`rezolus view`) and `rezolus parquet annotate/filter` call
 /// this. Precedence: explicit `--templates <path>` > env var /
 /// `config/templates/` default (developer-mode or explicit path only).
-/// Release builds fall back to templates baked into the binary via
-/// `include_dir!`; developer-mode reads from disk so template edits
-/// don't require a rebuild.
+/// Release builds fall back to the templates baked into the `dashboard`
+/// crate via `include_dir!`, so the binary and any other consumer of that
+/// crate render the same set; developer-mode reads from disk so template
+/// edits don't require a rebuild.
 pub fn load_template_registry(cli_path: Option<&Path>) -> TemplateRegistry {
     if cli_path.is_some() {
         return TemplateRegistry::resolve_and_load(cli_path);
     }
     #[cfg(not(feature = "developer-mode"))]
     {
-        TemplateRegistry::from_embedded(&crate::EMBEDDED_TEMPLATES).unwrap_or_else(|e| {
+        TemplateRegistry::embedded().unwrap_or_else(|e| {
             warn!("failed to parse embedded templates: {e}");
             TemplateRegistry::empty()
         })
