@@ -14,23 +14,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="$SCRIPT_DIR/../../site/viewer/pkg"
-TEMPLATES_DIR="$SCRIPT_DIR/../../config/templates"
+TEMPLATES_DIR="$SCRIPT_DIR/../dashboard/templates"
 SITE_TEMPLATES_DIR="$SCRIPT_DIR/../../site/viewer/templates"
 MANIFEST_PATH="$SITE_TEMPLATES_DIR/manifest.json"
 
-# Ensure each config/templates/*.json has a matching symlink under
+# Ensure each crates/dashboard/templates/*.json has a matching symlink under
 # site/viewer/templates/ so the pages-deploy `cp -rL` step picks it up.
-# Without this, adding a template to config/templates/ silently 404s in
+# Without this, adding a template to crates/dashboard/templates/ silently 404s in
 # the deployed viewer (the manifest below lists it but the file is gone).
 for src in "$TEMPLATES_DIR"/*.json; do
     name=$(basename "$src")
     link="$SITE_TEMPLATES_DIR/$name"
     if [ ! -L "$link" ] && [ ! -e "$link" ]; then
-        ln -s "../../../config/templates/$name" "$link"
+        ln -s "../../../crates/dashboard/templates/$name" "$link"
     fi
 done
 
-# Regenerate the static-site templates manifest from config/templates/*.json
+# Regenerate the static-site templates manifest from the crate's templates
 # so the WASM viewer picks up new templates without manual JS edits.
 (
     cd "$TEMPLATES_DIR"

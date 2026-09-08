@@ -51,7 +51,7 @@ use state::AppState;
 /// Shared entry point for loading the template registry. Both the
 /// viewer (`rezolus view`) and `rezolus parquet annotate/filter` call
 /// this. Precedence: explicit `--templates <path>` > env var /
-/// `config/templates/` default (developer-mode or explicit path only).
+/// `crates/dashboard/templates/` default (developer-mode or explicit path only).
 /// Release builds fall back to the templates baked into the `dashboard`
 /// crate via `include_dir!`, so the binary and any other consumer of that
 /// crate render the same set; developer-mode reads from disk so template

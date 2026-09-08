@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 publish = false
+# Declares `templates/` as a rebuild trigger; see the file for why.
+build = "build.rs"
 
 [dependencies]
 metriken-query.workspace = true

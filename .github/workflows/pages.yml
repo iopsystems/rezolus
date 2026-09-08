@@ -8,7 +8,7 @@ on:
       - 'src/viewer/assets/lib/**'
       - 'crates/viewer/**'
       - 'crates/dashboard/**'
-      - 'config/templates/**'
+      - 'crates/dashboard/templates/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/pages.yml'

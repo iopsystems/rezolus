@@ -37,6 +37,6 @@ and a clang that can target wasm32 (Apple's cannot; Homebrew LLVM can, and the
 script finds it automatically).
 
 `viewer/lib/` and `viewer/templates/` are symlinks into `src/viewer/assets/lib/`
-and `config/templates/` — edit the real files there, never the links. A missing
+and `crates/dashboard/templates/` — edit the real files there, never the links. A missing
 link 404s silently in the deployed viewer, which is what the
 `sync-viewer-symlinks` skill and its CI check exist to catch.
