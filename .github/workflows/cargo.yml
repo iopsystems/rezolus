@@ -186,7 +186,7 @@ jobs:
         run: |
           missing=$(git status --porcelain site/viewer/templates/ | awk '$1 == "??" {print $2}')
           if [ -n "$missing" ]; then
-            echo "::error::config/templates/ entries are missing symlinks under site/viewer/templates/. Add them so the static-site viewer can serve the JSON:"
+            echo "::error::crates/dashboard/templates/ entries are missing symlinks under site/viewer/templates/. Add them so the static-site viewer can serve the JSON:"
             echo "$missing" | sed 's/^/  /'
             exit 1
           fi

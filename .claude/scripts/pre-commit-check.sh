@@ -15,7 +15,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 SRC="$ROOT/src/viewer/assets/lib"
 SITE="$ROOT/site/viewer/lib"
-TEMPLATES_SRC="$ROOT/config/templates"
+TEMPLATES_SRC="$ROOT/crates/dashboard/templates"
 TEMPLATES_SITE="$ROOT/site/viewer/templates"
 
 # Files in site/viewer/lib/ that are standalone (not symlinked)
@@ -77,7 +77,7 @@ check_symlinks() {
 # ── 3b. Check template symlinks ────────────────────────────────────
 
 check_template_symlinks() {
-    # Every config/templates/*.json must have a matching symlink in
+    # Every crates/dashboard/templates/*.json must have a matching symlink in
     # site/viewer/templates/ so the static-site `cp -rL` step picks it
     # up. Without this, the deployed manifest lists templates whose
     # JSON files 404 in the browser.
@@ -86,7 +86,7 @@ check_template_symlinks() {
         base="$(basename "$src_file")"
         link="$TEMPLATES_SITE/$base"
         if [ ! -L "$link" ]; then
-            errors+=("missing symlink: site/viewer/templates/$base — run: ln -s ../../../config/templates/$base $link")
+            errors+=("missing symlink: site/viewer/templates/$base — run: ln -s ../../../crates/dashboard/templates/$base $link")
         fi
     done
 }

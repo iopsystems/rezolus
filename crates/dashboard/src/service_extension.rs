@@ -289,8 +289,20 @@ pub struct TemplateRegistry {
     categories: HashMap<String, CategoryExtension>,
 }
 
+/// Rezolus's service extension templates, baked in at compile time.
+///
+/// These live inside the crate rather than at the repository root so the
+/// package is self-contained: a path escaping `CARGO_MANIFEST_DIR` resolves
+/// for a git dependency (cargo clones the whole repository) but not for a
+/// vendored or packaged tree, where cargo copies only the package's own
+/// files -- `cargo vendor` then fails with a proc-macro panic. The static
+/// site symlinks to these files from `site/viewer/templates/`.
 #[cfg(not(target_arch = "wasm32"))]
-const DEFAULT_TEMPLATES_DIR: &str = "config/templates";
+static EMBEDDED_TEMPLATES: include_dir::Dir<'_> =
+    include_dir::include_dir!("$CARGO_MANIFEST_DIR/templates");
+
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_TEMPLATES_DIR: &str = "crates/dashboard/templates";
 #[cfg(not(target_arch = "wasm32"))]
 const TEMPLATES_ENV_VAR: &str = "REZOLUS_TEMPLATES";
 
@@ -298,7 +310,7 @@ impl TemplateRegistry {
     /// Resolve the template directory from (in priority order):
     /// 1. Explicit CLI `--templates` path
     /// 2. `REZOLUS_TEMPLATES` environment variable
-    /// 3. Default: `config/templates/`
+    /// 3. Default: `crates/dashboard/templates/`
     #[cfg(not(target_arch = "wasm32"))]
     pub fn resolve_and_load(cli_path: Option<&Path>) -> Self {
         let dir = cli_path
@@ -316,6 +328,23 @@ impl TemplateRegistry {
                 Self::empty()
             }
         }
+    }
+
+    /// The registry of Rezolus's own service templates, baked in at compile
+    /// time.
+    ///
+    /// This lives here rather than in the binary crate so the templates travel
+    /// with `dashboard` itself: a consumer that depends on this crate (the wasm
+    /// viewer, or an external tool pulling it in as a git dependency) gets the
+    /// same ten services and one category the `rezolus` binary renders, with no
+    /// way for the two to drift.
+    ///
+    /// A template that fails to parse is a build-time authoring error, not a
+    /// runtime condition, so callers that want to keep going on a bad template
+    /// should use [`TemplateRegistry::from_embedded`] and handle the error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn embedded() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::from_embedded(&EMBEDDED_TEMPLATES)
     }
 
     /// Parse every `*.json` file in an embedded `include_dir::Dir` as
@@ -419,6 +448,40 @@ impl TemplateRegistry {
     /// Look up a template by service name or alias.
     pub fn get(&self, source: &str) -> Option<&ServiceExtension> {
         self.templates.get(source)
+    }
+
+    /// Insert a service template, under its `service_name` and every alias.
+    ///
+    /// Lets a consumer layer templates of its own over [`embedded`] without
+    /// rebuilding the registry from scratch, which is otherwise impossible:
+    /// the embedded set can be read but not extended, so a downstream tool
+    /// shipping one extra service had to choose between its own template and
+    /// Rezolus's.
+    ///
+    /// Returns the keys that were displaced, in insertion order. Overwriting
+    /// is the point of layering, so this is not an error -- but shadowing a
+    /// Rezolus service is the specific hazard layering creates, and
+    /// [`load`](Self::load) rejects a duplicate key outright, so silently
+    /// dropping the collision here would make the two paths disagree about
+    /// something worth knowing. An empty return means nothing was shadowed.
+    ///
+    /// [`embedded`]: TemplateRegistry::embedded
+    #[must_use = "a non-empty result means this template shadowed an existing one"]
+    pub fn insert_template(&mut self, ext: ServiceExtension) -> Vec<String> {
+        let mut displaced = Vec::new();
+
+        for key in ext
+            .aliases
+            .iter()
+            .cloned()
+            .chain(std::iter::once(ext.service_name.clone()))
+        {
+            if self.templates.insert(key.clone(), ext.clone()).is_some() {
+                displaced.push(key);
+            }
+        }
+
+        displaced
     }
 
     /// Insert a category into the registry's categories map. Used by the
@@ -688,6 +751,122 @@ mod tests {
         assert!(
             msg.contains("member_titles") && msg.contains("tensorrt"),
             "got: {msg}",
+        );
+    }
+
+    /// Every shipped template parses and is reachable by service name.
+    ///
+    /// `embedded()` is what external consumers get, so a template that fails to
+    /// parse -- or a `templates/` file that stops being picked up because the
+    /// `include_dir!` path drifted -- must fail here rather than silently
+    /// serving a shorter service list than the binary does.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_embedded_templates_all_parse() {
+        let registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+
+        // Named services, not just a non-empty map: these are the routes the
+        // viewer offers, and losing one is a regression a count would hide.
+        for service in [
+            "cachecannon",
+            "llm-perf",
+            "sglang",
+            "sglang-decode",
+            "sglang-prefill",
+            "sglang-router",
+            "valkey",
+            "vllm",
+            "vllm-decode",
+            "vllm-prefill",
+        ] {
+            assert!(
+                registry.get(service).is_some(),
+                "{service} template is not registered"
+            );
+        }
+
+        // `inference-library` is a category, not a service, so it is indexed
+        // separately -- asserting it through `get` would wrongly pass only if
+        // categories leaked into the service map.
+        assert!(
+            registry.get_category("inference-library").is_some(),
+            "the inference-library category is not registered"
+        );
+        assert!(
+            registry.get("inference-library").is_none(),
+            "a category must not be indexed as a service"
+        );
+    }
+
+    /// The `include_dir!` path is relative and escapes the crate directory, so
+    /// it is the kind of thing that breaks quietly. This pins it to the same
+    /// directory the rest of the repo addresses.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_embedded_set_matches_the_templates_directory() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("templates");
+        let on_disk = std::fs::read_dir(&dir)
+            .expect("the crate's templates directory must exist")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .count();
+
+        assert_eq!(
+            EMBEDDED_TEMPLATES
+                .files()
+                .filter(|f| f.path().extension().is_some_and(|x| x == "json"))
+                .count(),
+            on_disk,
+            "the embedded set and {} have diverged",
+            dir.display()
+        );
+    }
+
+    /// A consumer can layer its own template over the embedded set without
+    /// losing Rezolus's, which is the whole point of exposing `embedded()`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_template_can_be_layered_over_the_embedded_set() {
+        let mut registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+
+        let displaced = registry.insert_template(ServiceExtension {
+            service_name: "rpc-perf".to_string(),
+            aliases: vec!["rpcperf".to_string()],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: Vec::new(),
+        });
+
+        assert!(registry.get("rpc-perf").is_some(), "the added template");
+        assert!(registry.get("rpcperf").is_some(), "its alias");
+        assert!(
+            registry.get("cachecannon").is_some(),
+            "Rezolus's own templates must survive"
+        );
+        assert!(
+            displaced.is_empty(),
+            "rpc-perf shadowed nothing, got {displaced:?}"
+        );
+    }
+
+    /// Shadowing an existing service is reported rather than silent.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn layering_over_an_existing_service_reports_what_it_displaced() {
+        let mut registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+
+        let displaced = registry.insert_template(ServiceExtension {
+            service_name: "valkey".to_string(),
+            aliases: vec!["cachecannon".to_string()],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: Vec::new(),
+        });
+
+        assert_eq!(
+            displaced,
+            vec!["cachecannon".to_string(), "valkey".to_string()],
+            "both the alias collision and the name collision are reported"
         );
     }
 }
