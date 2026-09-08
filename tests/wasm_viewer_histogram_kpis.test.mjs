@@ -29,7 +29,10 @@ test('static WASM viewer keeps vLLM latency histograms available', () => {
     const registry = new WasmCaptureRegistry();
     const parquet = fs.readFileSync(path.join(repoRoot, 'site/viewer/data/vllm.parquet'));
     const template = JSON.parse(
-        fs.readFileSync(path.join(repoRoot, 'config/templates/vllm.json'), 'utf8'),
+        fs.readFileSync(
+            path.join(repoRoot, 'crates/dashboard/templates/vllm.json'),
+            'utf8',
+        ),
     );
 
     registry.attach('baseline', new Uint8Array(parquet), 'vllm.parquet');

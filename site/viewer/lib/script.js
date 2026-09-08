@@ -51,7 +51,7 @@ let loadedTemplatesJson = null;
 
 const loadTemplates = async () => {
     // Source of truth is `templates/manifest.json`, regenerated from
-    // `config/templates/*.json` by `crates/viewer/build.sh` and the
+    // `crates/dashboard/templates/*.json` by `crates/viewer/build.sh` and the
     // pages-deploy workflow. Adding/removing a template doesn't require
     // editing this file.
     let templateNames = [];
