@@ -449,6 +449,23 @@ impl TemplateRegistry {
         self.templates.get(source)
     }
 
+    /// Insert a service template, under its `service_name` and every alias.
+    /// Overwrites any existing entry with the same key.
+    ///
+    /// Lets a consumer layer templates of its own over [`embedded`] without
+    /// rebuilding the registry from scratch, which is otherwise impossible:
+    /// the embedded set can be read but not extended, so a downstream tool
+    /// shipping one extra service had to choose between its own template and
+    /// Rezolus's ten.
+    ///
+    /// [`embedded`]: TemplateRegistry::embedded
+    pub fn insert_template(&mut self, ext: ServiceExtension) {
+        for alias in ext.aliases.clone() {
+            self.templates.insert(alias, ext.clone());
+        }
+        self.templates.insert(ext.service_name.clone(), ext);
+    }
+
     /// Insert a category into the registry's categories map. Used by the
     /// WASM viewer where categories arrive via `init_templates` rather
     /// than the disk loader. Overwrites any existing category with the
@@ -784,6 +801,29 @@ mod tests {
             on_disk,
             "the embedded set and {} have diverged",
             dir.display()
+        );
+    }
+
+    /// A consumer can layer its own template over the embedded set without
+    /// losing Rezolus's, which is the whole point of exposing `embedded()`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_template_can_be_layered_over_the_embedded_set() {
+        let mut registry = TemplateRegistry::embedded().expect("shipped templates must parse");
+
+        registry.insert_template(ServiceExtension {
+            service_name: "rpc-perf".to_string(),
+            aliases: vec!["rpcperf".to_string()],
+            service_metadata: HashMap::new(),
+            slo: None,
+            kpis: Vec::new(),
+        });
+
+        assert!(registry.get("rpc-perf").is_some(), "the added template");
+        assert!(registry.get("rpcperf").is_some(), "its alias");
+        assert!(
+            registry.get("cachecannon").is_some(),
+            "Rezolus's own templates must survive"
         );
     }
 }
