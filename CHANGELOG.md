@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.19.1] - 2026-09-09
+
 ### Added
 
 - Agent: block IO latency is now split into its three phases, each a histogram
@@ -24,6 +26,21 @@
   rendering unchanged. External consumers that query `blockio_latency` by name
   — Prometheus rules, Grafana dashboards, saved PromQL — need updating.
   (#1054, #1124)
+
+### Fixed
+
+- Exporter: `/metrics/binary` served zero bytes when the agent could not be
+  reached. To a scraper that only reads the body that is the same as an empty
+  snapshot, but not to a consumer that probes the endpoint to decide what it
+  speaks: zero bytes are not a msgpack document, so the probe concluded the
+  endpoint was Prometheus and fell through to the text route. `rezolus record`
+  probes exactly that way, so pointed at an exporter whose source had not come
+  up yet it reported `detected Prometheus`, refused with `.rez requires a
+  rezolus (msgpack) endpoint`, and recorded nothing for the whole run — even
+  when the source appeared seconds later. It now serves a valid msgpack
+  document carrying no metrics, which is both true and recoverable: the
+  consumer keeps its connection and picks up real data the moment the agent
+  appears. An empty body *from* the agent is normalized the same way. (#1176)
 
 ## [5.19.0] - 2026-08-31
 
@@ -1171,7 +1188,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.19.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.19.1...HEAD
+[5.19.1]: https://github.com/iopsystems/rezolus/compare/v5.19.0...v5.19.1
 [5.19.0]: https://github.com/iopsystems/rezolus/compare/v5.18.0...v5.19.0
 [5.18.0]: https://github.com/iopsystems/rezolus/compare/v5.17.0...v5.18.0
 [5.17.0]: https://github.com/iopsystems/rezolus/compare/v5.16.2...v5.17.0
