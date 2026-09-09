@@ -51,10 +51,12 @@ in `src/viewer/` show up before review.
 - **Live mode** (`rezolus view <agent-url>`) — needs an actual rezolus
   agent listening, not reproducible without one.
 - **Browser-rendered UI** — the script only asserts on backend payload
-  shape. Visual regressions in the dashboard need eyeball verification.
+  shape. For the rendered page, use the `viewer-render` skill: it drives a
+  headless browser and asserts on geometry, computed colours, wrap points
+  and console errors.
 - **Compare-mode UI rendering** — the experiment attach/detach assertion
   only checks the API flag flip; the rendered side-by-side view isn't
-  exercised.
+  exercised. Again `viewer-render`.
 
 ## Requirements
 
