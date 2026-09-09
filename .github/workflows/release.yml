@@ -25,9 +25,7 @@ jobs:
     strategy:
       matrix:
         include:
-          # debian
-          - { distro: debian, release: bullseye, arch: x86_64 }
-          - { distro: debian, release: bullseye, arch: arm64 }
+          # debian -- bullseye dropped, EOL (see CHANGELOG 5.19.1)
           - { distro: debian, release: bookworm, arch: x86_64 }
           - { distro: debian, release: bookworm, arch: arm64 }
           - { distro: debian, release: trixie, arch: x86_64 }

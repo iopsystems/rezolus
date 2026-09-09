@@ -14,7 +14,7 @@ The install script will add our repositories and install Rezolus using your
 package manager.
 
 **Supported distributions:**
-- Debian: 13 (trixie/stable), 12 (bookworm/oldstable), 11 (bullseye/oldoldstable)
+- Debian: 13 (trixie/stable), 12 (bookworm/oldstable)
 - Ubuntu: 20.04 (focal), 22.04 (jammy), 24.04 (noble)
 - Enterprise Linux 9 and 10 (Rocky Linux, AlmaLinux, RHEL, CentOS Stream, Oracle Linux)
 - Amazon Linux: 2023
