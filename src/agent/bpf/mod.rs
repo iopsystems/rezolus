@@ -24,6 +24,52 @@ pub fn kernel_has_btf() -> bool {
     *HAS_BTF.get_or_init(|| Path::new("/sys/kernel/btf/vmlinux").exists())
 }
 
+/// Returns true if the running kernel's BTF describes every one of `names` as a
+/// function — i.e. an `fentry`/`fexit` program may name it as an attach target.
+///
+/// [`kernel_has_btf`] answers a different, weaker question: "is there a vmlinux
+/// BTF at all". A trampoline program additionally needs ITS OWN target in that
+/// BTF, and libbpf resolves `attach_btf_id` at LOAD time — so a missing target
+/// is a load failure, which [`BpfBuilder`] treats as fatal for the whole
+/// skeleton (`set_failed`, and `rezolus status` then exits non-zero). A kprobe's
+/// equivalent miss is an ENOENT at ATTACH, which is tolerated and reported as
+/// unsupported.
+///
+/// That difference matters for any hook sitting behind a kernel config option:
+/// `cpu_bandwidth`'s three targets are all inside `CONFIG_CFS_BANDWIDTH`, so
+/// choosing its trampoline twins on `kernel_has_btf()` alone would turn "this
+/// kernel does not implement CFS bandwidth control" into a failed sampler.
+/// Selecting on this function instead falls back to the kprobe twins, which miss
+/// gracefully.
+///
+/// Not cached: callers ask once, at sampler init, and each call parses vmlinux
+/// BTF. Returns false when there is no kernel BTF to consult.
+pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
+    if !kernel_has_btf() {
+        return false;
+    }
+
+    let Ok(btf) = libbpf_rs::btf::Btf::from_vmlinux() else {
+        return false;
+    };
+
+    // Every name is checked, not just up to the first miss: when a sampler is
+    // about to fall back, the useful debug output names all of what is absent.
+    let mut all = true;
+
+    for name in names {
+        if btf
+            .type_by_name::<libbpf_rs::btf::types::Func<'_>>(name)
+            .is_none()
+        {
+            debug!("kernel BTF has no function `{name}`");
+            all = false;
+        }
+    }
+
+    all
+}
+
 pub trait OpenSkelExt {
     /// When called, the SkelBuilder should log instruction counts for each of
     /// the programs within the skeleton. Log level should be debug.

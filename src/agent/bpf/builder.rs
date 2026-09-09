@@ -593,14 +593,37 @@ where
             // (leaving all others at their default). Used to drop the unused
             // tp_btf/raw_tp variant based on in-kernel BTF availability.
             if let Some(ref disabled) = self.disabled_programs {
+                let mut matched: HashSet<String> = HashSet::new();
+
                 for mut prog in open_skel.open_object_mut().progs_mut() {
-                    let prog_name = prog.name().to_string_lossy();
-                    if disabled.contains(prog_name.as_ref()) {
+                    let prog_name = prog.name().to_string_lossy().to_string();
+                    if disabled.contains(prog_name.as_str()) {
                         debug!(
                             "{} disabling autoload for program: {}",
                             self.name, prog_name
                         );
                         prog.set_autoload(false);
+                        matched.insert(prog_name);
+                    }
+                }
+
+                // Guard against typos, the same way declared probe intents and
+                // labels are guarded below — but the consequence here is worse
+                // than a no-op override. A name matching no program leaves BOTH
+                // twins of that hook autoloaded, and two attached twins each run
+                // the shared handler: every `array_add` in it is applied twice,
+                // silently doubling the counter. Debug-only; names are
+                // stringly-typed.
+                #[cfg(debug_assertions)]
+                {
+                    for declared in disabled.iter() {
+                        debug_assert!(
+                            matched.contains(*declared),
+                            "{}: disabled_programs names '{}', which is not a program in this \
+                             skeleton — its twin would stay autoloaded and double-count",
+                            self.name,
+                            declared,
+                        );
                     }
                 }
             }
