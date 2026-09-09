@@ -1092,11 +1092,25 @@
 }
 .compare-badge-summary::-webkit-details-marker { display: none; }
 .compare-badge-summary::marker { content: ''; }
+/* N-way (> 2 captures): a static chip strip, not an expandable dropdown —
+   same pill look as the collapsed A/B summary, but nothing to open into. */
+.compare-badge-nway {
+    gap: 8px;
+    padding: 4px 8px;
+    background: var(--compare-baseline-bg);
+    border-radius: 4px;
+    flex-wrap: wrap;
+}
 .compare-badge-chip {
     display: inline-flex;
     align-items: center;
     gap: 4px;
 }
+/* The `+N` chip standing in for the captures past BADGE_CHIP_LIMIT; its title
+   names them. Dimmer than a capture label so it reads as a count, but
+   --fg-secondary rather than --fg-muted: muted is the disabled tier (#484f58 on
+   the dark badge ground) and this is meant to be read. */
+.compare-badge-more .compare-badge-label { color: var(--fg-secondary); }
 .compare-badge-chip + .compare-badge-chip {
     padding-left: 8px;
     border-left: 1px solid var(--border-subtle);

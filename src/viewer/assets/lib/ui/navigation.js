@@ -83,6 +83,7 @@ const createMainComponent = ({
                     experimentFilename: badgeAttrs?.experimentFilename,
                     baselineAlias: badgeAttrs?.baselineAlias,
                     experimentAlias: badgeAttrs?.experimentAlias,
+                    captures: badgeAttrs?.captures,
                     onLoadBaseline: badgeAttrs?.onLoadBaseline,
                     onLoadExperiment: badgeAttrs?.onLoadExperiment,
                 },
