@@ -84,13 +84,19 @@ Example: `/release minor`
 
 8. **Push and create PR**:
 
-   IMPORTANT: The PR title must start with `release: prepare v` so the
-   `tag-release.yml` workflow fires after merge. When the PR is
-   squash-merged (the repo default), the squash commit takes the PR
-   title as its message, and the workflow guard checks
-   `startsWith(head_commit.message, 'release: prepare v')`. A title like
-   `release: v${NEW_VERSION}` would NOT match and the tag/release would
-   be silently skipped.
+   IMPORTANT: The PR title must name the version being released. When the PR
+   is squash-merged (the repo default), the squash commit takes the PR title
+   as its message, and that message is what the tag workflow checks.
+
+   Both `release: prepare v${NEW_VERSION}` and `release: v${NEW_VERSION}` are
+   accepted. What is not accepted is a title naming a version other than the
+   one in `Cargo.toml` — that fails the run with an error rather than skipping
+   it quietly, so a retitled or rebased release PR cannot tag the wrong
+   version.
+
+   The guard is not in this repository. `.github/workflows/tag-release.yml`
+   calls the shared workflow at `brayniac/rust-workflows@v1`, which is where
+   the accepted forms and the version check live.
 
    ```bash
    git push -u origin release/v${NEW_VERSION}
@@ -126,10 +132,16 @@ Example: `/release minor`
 
 When the PR is merged to main, the following workflow chain runs automatically:
 
-1. **`tag-release.yml`** (triggered by push to main with release commit message):
-   - Detects the version from Cargo.toml
+1. **`tag-release.yml`** (triggered by every push to main) — an eight-line
+   caller for the shared workflow at `brayniac/rust-workflows@v1`, which:
+   - Stops unless the head commit names a release, logging why. An ordinary
+     push therefore produces a green run saying "not a release commit" rather
+     than no run at all, which is how you tell a failed release apart from a
+     commit that was never a release.
+   - Reads the version from Cargo.toml
+   - Fails the run if the commit does not name that version
    - Creates and pushes the git tag `vX.Y.Z`
-   - Bumps to next dev version (e.g., `5.5.1-alpha.0`) and pushes to main
+   - Bumps to next dev version (e.g., `5.19.2-alpha.0`) and pushes to main
 
 2. **`release.yml`** (triggered by the tag push):
    - Builds .deb packages for all supported distros and architectures
@@ -144,3 +156,18 @@ When the PR is merged to main, the following workflow chain runs automatically:
 - **cargo-release not installed**: `cargo install cargo-release`
 - **gh CLI not installed**: `brew install gh` or see https://cli.github.com/
 - **Not authenticated with gh**: `gh auth login`
+- **The release merged but no tag appeared**: check the run, not the merge.
+
+  ```bash
+  git fetch --tags upstream && git tag --sort=-creatordate | head -3
+  gh run list --repo iopsystems/rezolus --workflow tag-release.yml --limit 5
+  ```
+
+  A run always exists, so read what it says. `Head commit is not a release
+  commit` means the squash message did not name the version — check the PR
+  title. A failure at `Verify the commit names this version` means the title
+  and `Cargo.toml` disagree. No run at all means the caller is not wired up,
+  which is a `.github/workflows/tag-release.yml` problem, not a release one.
+
+  Sort tags by date: `v5.9.1` sorts after `v5.19.1` lexically, so a plain
+  `git tag | tail` will tell you the newest tag is missing when it is not.
