@@ -42,6 +42,19 @@
   consumer keeps its connection and picks up real data the moment the agent
   appears. An empty body *from* the agent is normalized the same way. (#1176)
 
+### Removed
+
+- **Debian 11 (bullseye) packages are no longer published.** Debian 11 has
+  reached end of life: `bullseye-security` was last signed on 2026-08-31 and
+  its `Release` file expired on 2026-09-07. apt refuses an expired `Release`,
+  so `apt-get update` fails inside the build container and cannot be made to
+  succeed without disabling the freshness check — which would mean shipping
+  packages built against an archive that receives no further security updates.
+  Debian 11 users should stay on 5.19.0 or upgrade to bookworm or trixie. The
+  install script and the supported-distribution list are updated to match, so
+  it reports the release as unsupported rather than adding a repository that
+  has no packages for it.
+
 ## [5.19.0] - 2026-08-31
 
 ### Changed
