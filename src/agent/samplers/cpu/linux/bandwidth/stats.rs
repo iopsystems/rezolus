@@ -70,7 +70,7 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "cgroup_cpu_bandwidth_quota",
-    description = "The CPU bandwidth quota assigned to the cgroup in nanoseconds",
+    description = "The CPU bandwidth quota assigned to the cgroup in nanoseconds, or -1 when the cgroup has no quota (cpu.max = max)",
     metadata = { unit = "nanoseconds" }
 )]
 pub static CGROUP_CPU_BANDWIDTH_QUOTA: GaugeGroup = GaugeGroup::new(MAX_CGROUPS);

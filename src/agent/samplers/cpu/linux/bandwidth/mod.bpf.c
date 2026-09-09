@@ -105,9 +105,10 @@ struct {
 
 // fentry/kprobe twins share these handlers; only the attach mechanism differs.
 // fentry is the cheaper dispatch (see
-// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs BTF, so the
-// kprobe twins are the CO-RE-only fallback and one set is disabled at load time
-// on kernel_has_btf() (see disabled_programs in mod.rs).
+// docs/journal/2026-09-04-fentry-vs-kprobe-dispatch.md) but needs the target in
+// the kernel's own BTF -- not merely a kernel that has BTF -- so the kprobe
+// twins are the CO-RE-only fallback and one set is disabled at load time (see
+// disabled_programs in mod.rs).
 
 static __always_inline int handle_tg_set_cfs_bandwidth(struct task_group* tg, u64 period,
                                                        u64 quota) {
@@ -145,6 +146,10 @@ static __always_inline int handle_tg_set_cfs_bandwidth(struct task_group* tg, u6
         // arg1 (the period) to a pointer and dereferenced it, reading 0
         // (issue #1166). fentry receives these typed; the kprobe reads
         // PARM2/PARM3.
+        //
+        // quota is passed through as-is, RUNTIME_INF (u64 ~0) included -- that
+        // is how the kernel spells "no limit", and userspace maps it to a
+        // sentinel rather than to a nanosecond count. See handle_bandwidth_info.
         bw_info->quota = quota;
         bw_info->period = period;
         bpf_ringbuf_submit(bw_info, 0);
@@ -246,6 +251,26 @@ static __always_inline int handle_unthrottle_cfs_rq(struct cfs_rq* cfs_rq) {
     return 0;
 }
 
+// Entry, not exit, and deliberately so.
+//
+// tg_set_cfs_bandwidth VALIDATES what it is handed -- it returns -EINVAL for the
+// root task group, for an out-of-range period or quota, and when the
+// __cfs_schedulable hierarchy check rejects the request. Reading the args at
+// entry therefore records what userspace ASKED for, where an fexit twin could
+// check the return value and record only what was applied.
+//
+// fexit is not usable here. Its return value sits at arg slot `nr_args`, so a
+// program declaring the modern 4-arg signature reads slot 4 -- and `burst` was
+// only added to this function in 5.14 (f4183717b370). On a 3-arg kernel, which
+// includes 5.10 LTS and so a large part of any real fleet, slot 4 is past the
+// end and the verifier rejects the program at LOAD. That is fatal for the whole
+// skeleton, costing the throttling counters too, to avoid recording the rare
+// rejected cpu.max write. Not a trade worth making.
+//
+// The unused `burst` below is safe for the opposite reason: nothing reads it, so
+// clang emits no load for that slot and the verifier never checks it against the
+// target's arity. Naming it keeps the prototype honest against the kernel
+// signature without depending on it.
 SEC("fentry/tg_set_cfs_bandwidth")
 int BPF_PROG(tg_set_cfs_bandwidth_fentry, struct task_group* tg, u64 period, u64 quota, u64 burst) {
     return handle_tg_set_cfs_bandwidth(tg, period, quota);
