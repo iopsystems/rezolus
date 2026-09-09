@@ -27,7 +27,16 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          sudo apt update
+          # The runner image ships a Google Chrome apt source we do not use.
+          # While Google republishes, its Packages index and Release file
+          # disagree, and `apt-get update` exits non-zero on ANY failed index --
+          # failing the job even though it already ignored the bad one and every
+          # package we install comes from the Ubuntu archive. Drop the source we
+          # do not need rather than ignore all failures, which would hide a real
+          # archive outage as a confusing "package not found" later.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
           sudo apt-get -y install libelf-dev
       - name: cargo check
         run: |
@@ -46,7 +55,10 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          sudo apt update
+          # Drop the unused Chrome apt source; see the note in `check`.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
           sudo apt-get -y install libelf-dev
       # Reporting, not gating: this feeds GitHub code scanning, and its exit
       # status is `sarif-fmt`'s rather than clippy's because of the pipe. Left
@@ -85,7 +97,10 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          sudo apt update
+          # Drop the unused Chrome apt source; see the note in `check`.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
           sudo apt-get -y install libelf-dev
       - name: clippy (deny warnings)
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -159,7 +174,12 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --version ^0.14 --locked
       - name: Install wabt
-        run: sudo apt-get update && sudo apt-get -y install wabt
+        run: |
+          # Drop the unused Chrome apt source; see the note in `check`.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
+          sudo apt-get -y install wabt
       # The `.rez` reader has to keep compiling for the browser. Its default
       # feature set does NOT: the ingest half pulls `metriken`, whose registry
       # declares a `linkme` distributed slice, and `linkme` has no wasm32
@@ -267,7 +287,10 @@ jobs:
         if: ${{ matrix.os != 'macos-latest' }}
         shell: bash
         run: |
-          sudo apt update
+          # Drop the unused Chrome apt source; see the note in `check`.
+          sudo rm -f /etc/apt/sources.list.d/google-chrome.list \
+                     /etc/apt/sources.list.d/google-chrome.sources
+          sudo apt-get update
           sudo apt-get -y install libelf-dev
           rustup component add rustfmt
 
