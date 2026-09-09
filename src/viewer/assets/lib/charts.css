@@ -1107,8 +1107,10 @@
     gap: 4px;
 }
 /* The `+N` chip standing in for the captures past BADGE_CHIP_LIMIT; its title
-   names them. Muted so it reads as a count, not another capture. */
-.compare-badge-more .compare-badge-label { color: var(--fg-muted); }
+   names them. Dimmer than a capture label so it reads as a count, but
+   --fg-secondary rather than --fg-muted: muted is the disabled tier (#484f58 on
+   the dark badge ground) and this is meant to be read. */
+.compare-badge-more .compare-badge-label { color: var(--fg-secondary); }
 .compare-badge-chip + .compare-badge-chip {
     padding-left: 8px;
     border-left: 1px solid var(--border-subtle);
