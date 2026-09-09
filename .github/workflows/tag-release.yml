@@ -6,90 +6,13 @@ on:
   push:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-
-# Required permissions for creating tags and pushing version bumps
-permissions:
-  contents: write
-
 jobs:
   tag-release:
-    name: Tag release and bump dev version
-    runs-on: ubuntu-latest
-    # Only run on the upstream repo when the commit message starts with "release: prepare v"
-    if: "${{ github.repository == 'iopsystems/rezolus' && startsWith(github.event.head_commit.message, 'release: prepare v') }}"
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          # Use PAT to allow pushing past branch protection
-          token: ${{ secrets.RELEASE_TOKEN }}
-
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Extract version
-        id: version
-        run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Detected version: $VERSION"
-
-      - name: Check if tag exists
-        id: check_tag
-        run: |
-          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag v${{ steps.version.outputs.version }} already exists"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create and push tag
-        if: steps.check_tag.outputs.exists == 'false'
-        run: |
-          git tag -a "v${{ steps.version.outputs.version }}" -m "Release v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
-          echo "Created and pushed tag v${{ steps.version.outputs.version }}"
-
-      - name: Install Rust
-        if: steps.check_tag.outputs.exists == 'false'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-release
-        if: steps.check_tag.outputs.exists == 'false'
-        run: cargo install cargo-release --locked
-
-      - name: Bump to next dev version
-        if: steps.check_tag.outputs.exists == 'false'
-        run: |
-          # Calculate next dev version (patch bump + alpha.0)
-          VERSION="${{ steps.version.outputs.version }}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-          NEXT_DEV="${MAJOR}.${MINOR}.$((PATCH + 1))-alpha.0"
-          echo "Bumping to next dev version: $NEXT_DEV"
-
-          # Update Cargo.toml and Cargo.lock
-          cargo release version "$NEXT_DEV" --execute --no-confirm
-
-          # Commit and push
-          git add -A
-          git commit -m "chore: begin next development iteration (${NEXT_DEV})"
-          git push origin main
-
-      - name: Summary
-        run: |
-          echo "## Release Tagged" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.check_tag.outputs.exists }}" == "true" ]; then
-            echo "Tag v${{ steps.version.outputs.version }} already existed, skipped." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- Created tag: v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Bumped to next dev version" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "The release workflow will now build packages, create the GitHub release, and update Homebrew." >> $GITHUB_STEP_SUMMARY
-          fi
+    uses: brayniac/rust-workflows/.github/workflows/tag-release.yml@v1
+    secrets: inherit
+    with:
+      # rezolus pushes the next development version straight to main rather
+      # than opening a bump PR for it.
+      dev-bump: direct
+      # A fork's main must not tag.
+      only-repository: iopsystems/rezolus
