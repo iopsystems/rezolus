@@ -128,7 +128,11 @@ const refreshCompareCaptures = async () => {
     try {
         const caps = await ViewerApi.getCaptures();
         compareCaptures = Array.isArray(caps) ? caps : [];
-    } catch {
+    } catch (e) {
+        // Falling back leaves the badge on its A/B rendering, which looks
+        // deliberate rather than degraded — so say what happened. An N-way
+        // archive silently showing two of its arms is the confusing case.
+        console.warn('compare badge: could not list captures', e);
         compareCaptures = [];
     }
     m.redraw();

@@ -1106,6 +1106,9 @@
     align-items: center;
     gap: 4px;
 }
+/* The `+N` chip standing in for the captures past BADGE_CHIP_LIMIT; its title
+   names them. Muted so it reads as a count, not another capture. */
+.compare-badge-more .compare-badge-label { color: var(--fg-muted); }
 .compare-badge-chip + .compare-badge-chip {
     padding-left: 8px;
     border-left: 1px solid var(--border-subtle);

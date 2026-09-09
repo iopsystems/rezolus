@@ -8,8 +8,16 @@ import assert from 'node:assert/strict';
 // palette falls back to its literals (same shim the other compare tests use).
 globalThis.document = globalThis.document || { documentElement: {} };
 globalThis.getComputedStyle = globalThis.getComputedStyle || (() => ({ getPropertyValue: () => '' }));
-const { renderCompareChart, captureColorFor, compareBadgeRows, BASELINE_COLOR, EXPERIMENT_COLOR } =
-    await import('../src/viewer/assets/lib/charts/compare.js');
+const {
+    renderCompareChart,
+    captureColorFor,
+    captureColors,
+    compareBadgeRows,
+    splitBadgeRows,
+    BADGE_CHIP_LIMIT,
+    BASELINE_COLOR,
+    EXPERIMENT_COLOR,
+} = await import('../src/viewer/assets/lib/charts/compare.js');
 const { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } = await import('../src/viewer/assets/lib/data.js');
 
 const line = (id, alias, base) => ({
@@ -106,4 +114,45 @@ test('compareBadgeRows falls back to alias then id for labels', () => {
     );
     assert.equal(rows[0].label, 'base');
     assert.equal(rows[1].label, 'weird');
+});
+
+// The point of the badge is that a dot matches its line, so assert it against
+// the map the OVERLAY builds rather than against a hand-written palette index.
+// Checking `captureColorFor(id, n)` with literal `n` would pass just as happily
+// if the two walks drifted apart.
+test('badge dots come from the same map the overlay draws with', () => {
+    const caps = [
+        { id: CAPTURE_BASELINE, alias: 'redis' },
+        { id: CAPTURE_EXPERIMENT, alias: 'valkey' },
+        { id: 'envoy', alias: 'envoy' },
+        { id: 'nginx', alias: 'nginx' },
+        { id: 'haproxy', alias: 'haproxy' },
+    ];
+    const overlay = captureColors(caps);
+    for (const row of compareBadgeRows(caps, {})) {
+        assert.equal(row.color, overlay.get(row.id), `${row.id} dot matches its line`);
+    }
+});
+
+test('splitBadgeRows folds the tail into +N only when that saves room', () => {
+    const rows = (n) => Array.from({ length: n }, (_, i) => ({ id: `c${i}` }));
+
+    // At and just over the limit, everything is drawn: a `+1` chip is as wide
+    // as the single chip it would hide.
+    for (const n of [1, BADGE_CHIP_LIMIT, BADGE_CHIP_LIMIT + 1]) {
+        const { shown, hidden } = splitBadgeRows(rows(n));
+        assert.equal(shown.length, n, `${n} rows all shown`);
+        assert.equal(hidden.length, 0);
+    }
+
+    // Beyond that it folds, and nothing is lost — hidden rows are named in the
+    // chip's tooltip.
+    const { shown, hidden } = splitBadgeRows(rows(BADGE_CHIP_LIMIT + 4));
+    assert.equal(shown.length, BADGE_CHIP_LIMIT);
+    assert.equal(hidden.length, 4);
+    assert.deepEqual(
+        [...shown, ...hidden].map((r) => r.id),
+        rows(BADGE_CHIP_LIMIT + 4).map((r) => r.id),
+        'split preserves order and loses nothing',
+    );
 });

@@ -2,7 +2,7 @@ import { TimeRangeBar, GranularitySelector, TimeModeSelector } from './controls.
 import { notebookStore, reportStore, loadedSelectionStore, importSelection } from '../selection/selection.js';
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
-import { compareBadgeRows } from '../charts/compare.js';
+import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
 
 const formatSize = (bytes) => {
     if (!bytes) return '';
@@ -72,12 +72,24 @@ const TopNav = {
                         baselineAlias: attrs.baselineAlias,
                         experimentAlias: attrs.experimentAlias,
                     });
-                    return m('div.compare-badge.compare-badge-nway', {
-                        title: `Comparing ${rows.length} captures`,
-                    }, rows.map((r) => m('span.compare-badge-chip', { key: r.id }, [
+                    const { shown, hidden } = splitBadgeRows(rows);
+                    // Each label is width-capped and ellipsized, and unlike the
+                    // A/B badge there is no dropdown card holding the full text
+                    // — so the label carries its own title or a truncated alias
+                    // is unrecoverable.
+                    const chips = shown.map((r) => m('span.compare-badge-chip', { key: r.id }, [
                         m('span.compare-dot', { style: { color: r.color } }, '●'),
-                        m('span.compare-badge-label', r.label),
-                    ])));
+                        m('span.compare-badge-label', { title: r.label }, r.label),
+                    ]));
+                    if (hidden.length) {
+                        chips.push(m('span.compare-badge-chip.compare-badge-more', {
+                            key: '__more',
+                            title: hidden.map((r) => r.label).join(', '),
+                        }, m('span.compare-badge-label', `+${hidden.length}`)));
+                    }
+                    return m('div.compare-badge.compare-badge-nway', {
+                        title: `Comparing ${rows.length} captures: ${rows.map((r) => r.label).join(', ')}`,
+                    }, chips);
                 }
 
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
