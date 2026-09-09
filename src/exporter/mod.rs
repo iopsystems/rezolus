@@ -8,6 +8,7 @@ use metriken_exposition::SnapshotV2;
 use metriken_exposition::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::time::Duration;
 use std::time::SystemTime;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -205,15 +206,57 @@ async fn root() -> String {
     format!("Rezolus {version} Exporter\nFor information, see: https://rezolus.com\n")
 }
 
+/// A valid msgpack document carrying no metrics.
+///
+/// Served whenever the agent's body cannot be obtained. The obvious thing to
+/// return is no bytes at all, and for a scraper that only ever reads the body
+/// that is indistinguishable from this. It is not indistinguishable to a
+/// consumer that *probes* the endpoint to decide what protocol it speaks: a
+/// zero-byte body is not a msgpack document, so the probe concludes this is
+/// not a msgpack endpoint and falls through to the Prometheus route this
+/// exporter also serves.
+///
+/// `rezolus record` probes exactly that way. Pointed at an exporter whose
+/// source was not up yet, it reported `detected Prometheus`, refused with
+/// `.rez requires a rezolus (msgpack) endpoint`, and wrote nothing -- for the
+/// entire run, even though the source came up seconds later and the exporter
+/// served real snapshots from then on. One unavailable moment at startup cost
+/// the whole recording, and the failure named the wrong cause.
+///
+/// An empty snapshot says "I am a msgpack endpoint and I have nothing for you
+/// yet", which is both true and recoverable: the consumer keeps its
+/// connection, decodes empty samples, and picks up real data the moment the
+/// agent appears.
+fn empty_snapshot() -> Vec<u8> {
+    let snapshot = Snapshot::V2(SnapshotV2 {
+        systemtime: SystemTime::now(),
+        duration: Duration::ZERO,
+        metadata: HashMap::new(),
+        counters: Vec::new(),
+        gauges: Vec::new(),
+        histograms: Vec::new(),
+    });
+
+    // Encoding a struct of empty vecs cannot fail, but an exporter that is
+    // already coping with an unreachable agent must not panic on the fallback
+    // path -- serving nothing is worse than serving an empty document, but it
+    // beats taking the process down.
+    rmp_serde::encode::to_vec(&snapshot).unwrap_or_default()
+}
+
 // for convenience, this proxies the msgpack from Rezolus Agent
 async fn msgpack(State(state): State<Arc<AppState>>) -> Vec<u8> {
     if let Ok(response) = state.client.get(state.mpk_url.clone()).send().await {
         if let Ok(body) = response.bytes().await {
-            return body.to_vec();
+            // An empty body from the agent is passed on as an empty snapshot
+            // for the same reason: it is not a msgpack document either.
+            if !body.is_empty() {
+                return body.to_vec();
+            }
         }
     }
 
-    Vec::new()
+    empty_snapshot()
 }
 
 async fn json(State(state): State<Arc<AppState>>) -> String {
@@ -226,4 +269,38 @@ async fn json(State(state): State<Arc<AppState>>) -> String {
     }
 
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The regression: the fallback body must be a msgpack document, not
+    /// nothing. A consumer probing this endpoint decides what protocol it
+    /// speaks from these bytes, and zero of them reads as "not msgpack" --
+    /// which sent `rezolus record` to the Prometheus route and cost it the
+    /// whole recording.
+    #[test]
+    fn the_unavailable_body_is_still_msgpack() {
+        let body = empty_snapshot();
+
+        assert!(
+            !body.is_empty(),
+            "an unreachable agent must still yield a msgpack document"
+        );
+
+        let decoded: Snapshot = rmp_serde::from_slice(&body)
+            .expect("the fallback body must decode as a snapshot, not merely be non-empty");
+
+        match decoded {
+            Snapshot::V2(s) => {
+                // Empty, not fabricated: saying "nothing yet" is recoverable,
+                // inventing a sample is not.
+                assert!(s.counters.is_empty(), "must not invent counters");
+                assert!(s.gauges.is_empty(), "must not invent gauges");
+                assert!(s.histograms.is_empty(), "must not invent histograms");
+            }
+            other => panic!("expected a V2 snapshot, got {other:?}"),
+        }
+    }
 }
