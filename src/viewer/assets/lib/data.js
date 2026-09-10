@@ -629,6 +629,12 @@ export const promqlResultToLinePair = (results) => {
         // Optional rate()/histogram value band, parallel to valueData; null
         // for non-rate queries. Lets compare/experiment captures carry a band.
         intervals: parseIntervals(first),
+        // Likewise the interpolated flags. This function rebuilds a series from
+        // a hand-picked field list, so anything not named here is dropped even
+        // though the wire carried it — and the drop is invisible to every check
+        // except rendering the chart. That is exactly how compare mode ended up
+        // with no dashed overlay while the response was perfectly correct.
+        interpolated: parseInterpolated(first),
     };
 };
 

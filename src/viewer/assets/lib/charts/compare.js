@@ -285,6 +285,12 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
                 // Value band rides parallel to valueData (time-independent), so
                 // the time rebase leaves it untouched. Undefined for non-rate.
                 intervals: cap.intervals,
+                // Also parallel to valueData and time-independent, so the
+                // rebase above leaves it alone. Per-capture on purpose: two
+                // recordings have holes at different times, which is precisely
+                // why a shaded time region can't express this and a per-series
+                // overlay can.
+                interpolated: cap.interpolated,
                 fill: false,
             };
         }

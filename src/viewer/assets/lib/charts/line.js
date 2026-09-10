@@ -24,6 +24,7 @@ import {
     buildEnvelopeLines,
     buildDivergenceBand,
     buildInterpolatedOverlay,
+    isStranded,
 } from './boxplot.js';
 import { chartSwatches, renderSwatchRow, SWATCH_ROW_HEIGHT } from './swatches.js';
 import { executePromQLRangeQuery, applyResultToPlot } from '../data.js';
@@ -134,7 +135,28 @@ export function configureLineChart(chart) {
         const zippedRaw = s.timeData.map((t, i) => {
             if (interp && interp[i]) return [t * 1000, null, null];
             const [v, raw] = clampToRange(s.valueData[i], range);
-            return [t * 1000, v, raw];
+            const point = [t * 1000, v, raw];
+            // A measured point with holes on both sides has no segment to draw.
+            // Under `step: 'start'` it survives as a stub, but its uncertainty
+            // band renders a narrow vertical sliver that outshouts it — the
+            // chart ends up drawing most attention to the interval at the one
+            // x-position where there IS a measurement. Give it a dot so the
+            // sample reads as a sample. (insertGapNulls handles object-form
+            // items, so this stays compatible with the gap pass below.)
+            // Sized and outlined to read OVER its own uncertainty band. A
+            // single-point band is drawn by echarts as a filled column (an area
+            // series with one non-null point), and a 4px dot disappears inside
+            // it — leaving the interval louder than the measurement at the one
+            // x-position that actually has data. The band is real and stays;
+            // the dot just has to win.
+            return isStranded(interp, i, s.timeData.length)
+                ? {
+                    value: point,
+                    symbol: 'circle',
+                    symbolSize: 7,
+                    itemStyle: { color: s.color, borderColor: COLORS.bgCard, borderWidth: 1.5 },
+                }
+                : point;
         });
 
         // Scatter-mode series: faded connecting line underneath + crisp
@@ -170,11 +192,20 @@ export function configureLineChart(chart) {
         }
 
         const zipped = insertGapNulls(zippedRaw, chart.interval);
+        // `showSymbol: false` suppresses symbols for the WHOLE series, so a
+        // per-item `symbol` on a stranded point is ignored under it. Switching
+        // to `symbol: 'none'` keeps every ordinary point unmarked while letting
+        // an item override — but only bother when a stranded point exists, so
+        // no other chart's symbol behaviour changes.
+        const hasStranded = Boolean(interp)
+            && zippedRaw.some((d) => d && !Array.isArray(d) && d.symbol);
         const base = {
             data: zipped,
             type: 'line',
             name: s.name,
-            showSymbol: false,
+            ...(hasStranded
+                ? { showSymbol: true, symbol: 'none' }
+                : { showSymbol: false }),
             sampling: 'lttb',
             emphasis: { focus: 'series' },
             step: 'start',

@@ -184,3 +184,72 @@ test('both render paths style a hole identically', () => {
     assert.deepEqual(viaMatrix.lineStyle, viaDisplay.lineStyle);
     assert.equal(viaMatrix.silent, viaDisplay.silent);
 });
+
+// --- stranded measured points, and the compare-mode path ------------------
+//
+// Both found by systemslab-e3 rendering the feature against its own chart
+// stack, after I shipped it. The shared theme: a hole adjacent to another hole
+// (or to the series edge) is the case a single-gap fixture never produces, and
+// a hand-picked field list drops data that the wire carried correctly.
+
+const { isStranded } = await import('../src/viewer/assets/lib/charts/boxplot.js');
+const { promqlResultToLinePair } = await import('../src/viewer/assets/lib/data.js');
+
+test('isStranded finds measured points with holes on both sides', () => {
+    //            0      1     2      3     4      5
+    const f = [false, true, false, true, false, false];
+    assert.equal(isStranded(f, 2, 6), true, 'index 2 sits between two holes');
+    assert.equal(isStranded(f, 4, 6), false, 'index 4 has a measured neighbour');
+    assert.equal(isStranded(f, 1, 6), false, 'an interpolated point is never stranded');
+});
+
+test('isStranded treats the series edges as missing neighbours', () => {
+    assert.equal(isStranded([false, true, true], 0, 3), true, 'first point, hole after');
+    assert.equal(isStranded([true, true, false], 2, 3), true, 'last point, hole before');
+    assert.equal(isStranded([false, false, true], 0, 3), false, 'first point, measured after');
+    assert.equal(isStranded(null, 0, 3), false, 'no flags at all');
+});
+
+test('the two-hole case: one observed sample between two holes keeps a symbol', () => {
+    // The exact shape that produced the bug: 22..29 and 31..37 unobserved,
+    // leaving index 30 as the ONLY measured sample in the region. A single
+    // contiguous hole never exercises this, which is why it shipped.
+    const n = 60;
+    const flags = Array.from({ length: n }, (_, i) =>
+        (i >= 22 && i < 30) || (i >= 31 && i < 38));
+    assert.equal(flags[30], false, 'index 30 is the observed sample');
+    assert.equal(isStranded(flags, 30, n), true);
+    // and its neighbours are not, so exactly one dot appears here
+    assert.equal(isStranded(flags, 29, n), false);
+    assert.equal(isStranded(flags, 38, n), false);
+    assert.equal(flags.filter((_, i) => isStranded(flags, i, n)).length, 1);
+});
+
+test('a single contiguous hole strands nothing — the control case', () => {
+    // Renders correctly today, and is the reference the failing case is read
+    // against. Kept so a future change can't "fix" the two-hole case by
+    // sprinkling dots everywhere.
+    const n = 60;
+    const flags = Array.from({ length: n }, (_, i) => i >= 24 && i < 36);
+    assert.equal(flags.filter((_, i) => isStranded(flags, i, n)).length, 0);
+});
+
+test('promqlResultToLinePair carries interpolated, not just intervals', () => {
+    // The compare-mode drop: this function rebuilds a series from a hand-picked
+    // field list, so a field absent from that list vanishes despite arriving on
+    // the wire — with a green build and a correct response.
+    const pair = promqlResultToLinePair([{
+        values: [[1, '10'], [2, '20'], [3, '30']],
+        bands: [[9, 11], null, [29, 31]],
+        interpolated: [false, true, false],
+    }]);
+    assert.deepEqual(pair.interpolated, [false, true, false]);
+    assert.equal(pair.intervals.length, 3);
+    assert.equal(pair.intervals[1], null, 'no band where interpolated');
+});
+
+test('promqlResultToLinePair leaves interpolated null for a plain series', () => {
+    const pair = promqlResultToLinePair([{ values: [[1, '10'], [2, '20']] }]);
+    assert.equal(pair.interpolated, null);
+    assert.equal(pair.intervals, null);
+});
