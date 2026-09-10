@@ -116,6 +116,14 @@ export const decodeDisplayBinary = (buf) => {
             out.uncHi = new Float64Array(buf, off, s.n);
             off += s.n * 8;
         }
+        // Then, if flagged, one more column marking the points that span a
+        // stretch the producer never read. Read AFTER the unc columns because
+        // the encoder writes it last; reading it earlier would silently
+        // misalign every series that carries both.
+        if (s.interp) {
+            out.interpCol = new Float64Array(buf, off, s.n);
+            off += s.n * 8;
+        }
         return out;
     });
     return { resultType: header.resultType, budget: header.budget, series };
@@ -339,6 +347,26 @@ export const displayIntervals = (s) => {
     return any ? out : null;
 };
 
+// Convert a decoded display series' interpolated column into the boolean array
+// parseInterpolated produces on the matrix path, so line.js consumes one shape
+// regardless of which path fetched the data. Returns null when the series has
+// no interpolated points — the renderer treats null and all-false alike, but
+// returning null keeps `plot.interpolated` falsy so nothing downstream has to
+// distinguish "no flag sent" from "flag sent, all clear".
+export const displayInterpolated = (s) => {
+    if (!s || !s.interpCol) return null;
+    let any = false;
+    const out = new Array(s.interpCol.length);
+    for (let i = 0; i < s.interpCol.length; i++) {
+        // The encoder writes exactly 1.0 or 0.0, but decimation upstream could
+        // in principle produce a fraction; treat anything non-zero as set
+        // rather than testing equality against 1.
+        out[i] = s.interpCol[i] !== 0;
+        if (out[i]) any = true;
+    }
+    return any ? out : null;
+};
+
 // Store a decoded display response on the plot. `data` carries the median
 // line(s) so all existing chart machinery (axis extent, zoom, no-data
 // detection, change-detection) works unchanged; `boxplot` carries the
@@ -352,6 +380,10 @@ const applyDisplayToPlot = (plot, decoded) => {
         plot.series_metrics = [];
         plot.intervals = null;
         plot.series_intervals = [];
+        // Cleared with the rest: an empty response after a series that had a
+        // hole would otherwise leave the flag set, and line.js would index a
+        // stale array against the next render's timestamps.
+        plot.interpolated = null;
         return;
     }
     const timestamps = Array.from(series[0].t);
@@ -376,6 +408,11 @@ const applyDisplayToPlot = (plot, decoded) => {
         plot.intervals = displayIntervals(series[0]);
         plot.series_intervals = [];
     }
+    // The dashed interpolated overlay is a single-series line affordance, the
+    // same as `intervals` above: line.js reads `plot.interpolated`, and multi
+    // and scatter have no overlay to draw. Cleared in the multi case so a
+    // previous single-series render cannot leave a stale flag behind.
+    plot.interpolated = series.length > 1 ? null : displayInterpolated(series[0]);
     // Resolve the render style the same way the JSON path does: percentile
     // histograms → scatter, single line-ish → line, multi line-ish → multi.
     plot._resolvedStyle = plot.opts?.style
@@ -545,7 +582,14 @@ export const promqlResultToHeatmapTriples = (results) => {
 // and drop malformed pairs to null. Returns null when nothing is usable
 // so callers can treat "has a band" as a simple truthiness check.
 export const parseIntervals = (sample) => {
-    const iv = sample && sample.intervals;
+    // `bands` is the lossless form: present when ANY value has a band, with a
+    // null entry where one does not (a point interpolated across a stretch the
+    // producer never read). `intervals` is all-or-nothing and goes absent for
+    // the whole series as soon as one point lacks a band, so prefer `bands`
+    // where the producer offers it and fall back for older responses. Per-entry
+    // nulls need no special handling — the loop below already maps a malformed
+    // or missing pair to null, and `buildBandSeries` already draws a gap there.
+    const iv = (sample && (sample.bands || sample.intervals)) || null;
     if (!Array.isArray(iv) || iv.length === 0) return null;
     const out = iv.map((pair) => {
         if (!Array.isArray(pair) || pair.length < 2) return null;
@@ -555,6 +599,22 @@ export const parseIntervals = (sample) => {
         return lo <= hi ? [lo, hi] : [hi, lo];
     });
     return out.some((p) => p !== null) ? out : null;
+};
+
+// Parse a series' optional `interpolated` field into a boolean array parallel
+// to `values`, or `null` when absent.
+//
+// A true entry marks a value the producer did not observe the interval of: the
+// series was null across a stretch, and rate() spanned it because the total is
+// known even though its distribution inside is not. Such a point carries no
+// band — an uncertainty interval answers "how precisely do we know the average
+// over THIS interval", and for an interval nobody watched that is not a number
+// — so this is the only thing distinguishing it from a measured point. Charts
+// render it differently rather than letting it pass as observed.
+export const parseInterpolated = (sample) => {
+    const flags = sample && sample.interpolated;
+    if (!Array.isArray(flags) || flags.length === 0) return null;
+    return flags.some(Boolean) ? flags.map(Boolean) : null;
 };
 
 // Convert the first series in a PromQL range-query result into a pair
@@ -691,8 +751,12 @@ const applyResultToPlot = (plot, result) => {
                 plot.data = [timestamps, values];
                 // Optional rate() uncertainty band, parallel to values.
                 plot.intervals = parseIntervals(sample);
+                // Which of those values the producer never observed the
+                // interval of; see parseInterpolated.
+                plot.interpolated = parseInterpolated(sample);
             } else {
                 plot.data = [];
+                plot.interpolated = null;
             }
             // Line-style plots have no series legend; clear any stale entries
             // from a prior multi-series render so legends don't "ghost".
