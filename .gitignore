@@ -11,5 +11,6 @@ site/viewer/templates/manifest.json
 **/*.rs.bk
 .worktrees/
 results/
-# default `rezolus record` output file (repo root only)
+# default `rezolus record` output files (repo root only)
+/rezolus.rez
 /rezolus.parquet
