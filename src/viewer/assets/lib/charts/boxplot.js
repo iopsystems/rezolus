@@ -16,6 +16,23 @@ const zipMs = (t, col) => {
     return out;
 };
 
+// True when index `i` holds a MEASURED value whose neighbours are both missing
+// (interpolated, or off the end of the series).
+//
+// Such a point is why cutting interpolated values out of a line is not quite
+// free: a lone point on a `symbol: 'none'` line has no segment to draw, so the
+// one sample actually observed there renders as nothing (display path) or as a
+// stub dominated by its own uncertainty band (plain-line path, which uses
+// `step: 'start'`). Either way the chart de-emphasises the only real
+// measurement in the region — the exact inversion of what the interpolated
+// flag is for. Callers give these points their own symbol.
+export function isStranded(flags, i, n) {
+    if (!flags || flags[i]) return false;
+    const prevGone = i === 0 || flags[i - 1];
+    const nextGone = i === n - 1 || flags[i + 1];
+    return Boolean(prevGone && nextGone);
+}
+
 // Build the dashed, desaturated overlay that redraws the stretches of a series
 // the producer never observed, or `[]` when there are none.
 //
@@ -211,16 +228,9 @@ export function buildBoxplotSeries(s, opts = {}) {
             for (let i = 0; i < median.length; i++) {
                 if (interp[i]) median[i] = [median[i][0], null];
             }
-            // Cutting points out can strand a MEASURED point between two holes,
-            // and a lone point on a `symbol: 'none'` line draws nothing at all —
-            // so the one sample that was actually observed there would vanish,
-            // which is the exact inversion of what this feature is for. Give
-            // just those points a visible dot.
+            // Stranded measured points get their own dot; see isStranded.
             for (let i = 0; i < median.length; i++) {
-                if (interp[i]) continue;
-                const prevGone = i === 0 || interp[i - 1];
-                const nextGone = i === median.length - 1 || interp[i + 1];
-                if (prevGone && nextGone) {
+                if (isStranded(interp, i, median.length)) {
                     median[i] = { value: median[i], symbol: 'circle', symbolSize: 4 };
                 }
             }

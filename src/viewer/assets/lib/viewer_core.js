@@ -33,6 +33,9 @@ const extractBaselineCapture = (spec, options = {}) => {
             // rate()/histogram value band (parallel to valueData), populated by
             // applyResultToPlot's single-series path; null for non-rate queries.
             cap.intervals = spec.intervals || null;
+            // Parallel to valueData like intervals; drives the dashed overlay
+            // for this capture.
+            cap.interpolated = spec.interpolated || null;
         } else {
             cap.timeData = [];
             cap.valueData = [];
@@ -109,6 +112,7 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
         cap.timeData = pair.timeData;
         cap.valueData = pair.valueData;
         cap.intervals = pair.intervals || null;
+        cap.interpolated = pair.interpolated || null;
         // Decimated boxplot columns (fetched separately via display mode) for
         // the compare envelope — null when the fetch failed or is pending.
         cap.boxplot = Array.isArray(options.boxplot) ? (options.boxplot[0] || null) : null;
