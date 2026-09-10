@@ -1141,10 +1141,16 @@ struct GroupDecision {
 /// a sampler allowed only part of the machine has — and that set is rarely a
 /// prefix.
 ///
-/// The distinction is not cosmetic. A registered `CounterGroup` slot that is
-/// never written reads as `0`, not as absent, so declaring a prefix that
-/// overstates the population publishes zeros for indices nothing measured — a
-/// wrong value where the honest answer is no value at all.
+/// The distinction is not cosmetic, though what it costs depends on the
+/// group's backing. metriken 0.11 gave an OWNED `CounterGroup` a `u64::MAX`
+/// unwritten sentinel, so an over-declared prefix there publishes `None` —
+/// honest, if noisy: columns that are always null. An EXTERNALLY backed group
+/// (a BPF mmap) cannot carry a sentinel, because the kernel zero-fills that
+/// memory, so an over-declared prefix still publishes `0` for indices nothing
+/// measured — a wrong value where the honest answer is no value at all. Those
+/// are exactly the per-CPU and per-cgroup groups a partial reservation
+/// under-populates, so declaring the real membership still matters most
+/// precisely where it always did.
 enum MemberIter<'a> {
     Prefix(std::ops::Range<usize>),
     Set(std::slice::Iter<'a, usize>),
@@ -3668,18 +3674,23 @@ mod tests {
     }
 
     // Same shape (2 entries), same write pattern (only index 0 touched) —
-    // one declared, one not. `CounterGroup`'s backing array zero-initializes
-    // eagerly across ALL entries the moment any one index is written, so
-    // index 1 reads `Some(0)` in both fixtures either way: the metriken
-    // group API gives no way to independently distinguish "a member that is
-    // genuinely present and reads zero" from "a phantom slot that merely
-    // exists because the backing array got initialized" once that's
-    // happened. What this test honestly pins is the observable CONTRACT
-    // difference the V3 design layers on top of that identical reading: a
-    // declared group reports index 1 as `Some(0)` (registration membership,
-    // no sentinel skip) while an otherwise-identical undeclared group
-    // suppresses it entirely (V2's transitional value-sentinel skip,
-    // default groups only).
+    // one declared, one not.
+    //
+    // metriken 0.11 gave `CounterGroup` the `u64::MAX` unwritten sentinel that
+    // `GaugeGroup` always had, so an untouched index now reads `None` rather
+    // than the `Some(0)` the eagerly zero-initialized array used to give. That
+    // removes the ambiguity this test used to work around: "a member that is
+    // genuinely present and reads zero" and "a phantom slot that merely exists
+    // because the backing array got initialized" are now distinguishable at the
+    // group API, so the V3 walk can report the second as absent instead of
+    // publishing a zero a consumer cannot tell from a measurement.
+    //
+    // The CONTRACT difference this pins is unchanged in shape: a declared group
+    // walks its registered membership and emits index 1 (now honestly `None`),
+    // while an otherwise-identical undeclared group suppresses the entry
+    // entirely (V2's transitional value-sentinel skip, default groups only).
+    // Registration membership is still what decides whether the entry appears
+    // at all — the sentinel only decides what it says.
     static V3_DECLARED_COUNTER_GROUP: AcquisitionGroup =
         AcquisitionGroup::new("unattributed", "counter_group_probe");
 
@@ -3735,9 +3746,9 @@ mod tests {
             "index 0 nonzero as written"
         );
         assert_eq!(
-            declared.counters[idx1],
-            Some(0),
-            "index 1 included as an honest Some(0), not suppressed"
+            declared.counters[idx1], None,
+            "index 1 is included by registration but reads as absent, not as a \
+             zero a consumer would take for a measurement (metriken 0.11 sentinel)"
         );
 
         let default_group = s
@@ -4663,10 +4674,13 @@ mod tests {
     /// This is what keeps a partially-allocated sampler honest. A group whose
     /// members are, say, CPUs 16-31 cannot say so with a bound — a bound means
     /// "the first N" — so it would have to declare 0..32 and let the CPUs it
-    /// never wrote publish `0`. An unwritten `CounterGroup` slot reads as zero,
-    /// not as absent, so that is a wrong value rather than missing data: a
-    /// consumer summing across the machine would understate it and see nothing
-    /// wrong.
+    /// never wrote speak for themselves. For the BPF-backed (externally backed)
+    /// groups this applies to, an untouched slot still reads `0`: the kernel
+    /// zero-fills that mmap and no sentinel can live in it. That is a wrong
+    /// value rather than missing data — a consumer summing across the machine
+    /// would understate it and see nothing wrong. (metriken 0.11 fixed the
+    /// OWNED case with a `u64::MAX` sentinel; externally backed groups are why
+    /// declaring the real member set still matters.)
     #[test]
     fn an_explicit_member_set_walks_only_its_own_indices() {
         // A bound: the dense prefix, as before.

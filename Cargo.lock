@@ -1092,7 +1092,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2196,9 +2196,9 @@ dependencies = [
 
 [[package]]
 name = "metriken"
-version = "0.10.1"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "674854d8e0c525f2630a859e4bfe6ca5f452d27e38592079950e3d396fa7f358"
+checksum = "e1a910ef0aa1172fc039d2d52c1e64d2343b16dd3f4d3f3ac9deb9adeb4c52f2"
 dependencies = [
  "histogram",
  "metriken-core",
@@ -2234,9 +2234,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-exposition"
-version = "0.19.0"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27254ab0c2cb71085b17be543db1970d11bde2144b78ed82ccdee0a35001d4eb"
+checksum = "33c17f43240c2b358eecd68ea26e5080d214987c309d8031526f971818df4eb5"
 dependencies = [
  "arrow",
  "chrono",
@@ -2249,9 +2249,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf46a291ac1421b5992c6080fc9af6bcc6dd3a7fbb6e9e179ef41dd88762c4e8"
+checksum = "49d7eb6704ca2d779622605a0323a318961cdd4c3e1c8f0192bde8d9646a59c3"
 dependencies = [
  "arrow",
  "bytes",
@@ -2358,7 +2358,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3167,7 +3167,7 @@ dependencies = [
  "errno 0.3.14",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3224,7 +3224,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3694,10 +3694,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4381,7 +4381,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
