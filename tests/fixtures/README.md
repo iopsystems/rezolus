@@ -65,3 +65,12 @@ regenerate — a decoder is about to start reading the wrong columns.
 (e.g. a service consuming the display endpoint directly) can assert against this
 file without reimplementing the encoder — which is the point, since a
 reimplementation is exactly what drifts.
+
+**Read it by URL; don't vendor a copy.** Fetching it from `main` means a
+deliberate wire change breaks the external decoder's test at the same moment it
+breaks ours — which is the entire value. A vendored copy goes stale silently,
+and worse, it arrives *without this README*: the regeneration warning gets
+separated from the bytes it guards, which is the same failure the warning is
+about. That is why the warning is duplicated into the JSON's own `_comment`
+field, so a raw fetch carries it too. If you genuinely must vendor, copy that
+field along with the bytes.
