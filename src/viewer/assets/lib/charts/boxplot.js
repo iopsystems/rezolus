@@ -16,6 +16,52 @@ const zipMs = (t, col) => {
     return out;
 };
 
+// Build the dashed, desaturated overlay that redraws the stretches of a series
+// the producer never observed, or `[]` when there are none.
+//
+// Shared by both render paths on purpose: the matrix path (line.js, a plain
+// line) and the display path (buildBoxplotSeries, a median line over bands)
+// must draw a hole identically, or the same recording tells two different
+// visual stories depending on which path happened to fetch it. That is the bug
+// this whole feature exists to fix, so the styling lives in exactly one place.
+//
+// `t` is in seconds; the returned data is in ms like every other series here.
+// The run is extended one point either side so the segment joins the measured
+// line rather than floating detached.
+export function buildInterpolatedOverlay({ t, values, flags, name, color, z = 3 }) {
+    if (!Array.isArray(flags) || flags.length !== t.length) return [];
+    if (!flags.some(Boolean)) return [];
+
+    const pts = new Array(t.length);
+    let any = false;
+    for (let i = 0; i < t.length; i++) {
+        // A point is drawn when it is interpolated or neighbours one — the
+        // neighbour is the anchor; everything else is a null so echarts breaks
+        // the line rather than connecting across measured ground.
+        if (flags[i] || flags[i - 1] || flags[i + 1]) {
+            pts[i] = [t[i] * 1000, values[i]];
+            if (flags[i]) any = true;
+        } else {
+            pts[i] = [t[i] * 1000, null];
+        }
+    }
+    if (!any) return [];
+
+    return [{
+        type: 'line',
+        name,
+        data: pts,
+        showSymbol: false,
+        symbol: 'none',
+        silent: true,
+        z,
+        connectNulls: false,
+        tooltip: { show: false },
+        lineStyle: { color, width: 2, opacity: 0.35, type: 'dashed' },
+        areaStyle: undefined,
+    }];
+}
+
 const zipDiffMs = (t, base, top) => {
     const n = t.length;
     const out = new Array(n);
@@ -67,9 +113,19 @@ export function buildBoxplotSeries(s, opts = {}) {
         noMedian = false,
         // Draw-order offset so a caller with N series can stack them
         // consistently: a higher zBase draws on top. Series' internal levels
-        // span zBase+1..zBase+3, so callers should stride zBase by ≥4.
+        // span zBase+1..zBase+3, so callers should stride zBase by ≥4. (The
+        // interpolated overlay shares +3 with the median and relies on array
+        // order, precisely to keep that span three levels wide.)
         zBase = 0,
+        // Per-point flags marking values that span time nobody observed. When
+        // set, those points are cut out of the median line and redrawn as a
+        // dashed overlay, exactly as the plain-line path does.
+        interpolated = null,
     } = opts;
+
+    const interp = Array.isArray(interpolated) && interpolated.length === s.t.length
+        ? interpolated
+        : null;
 
     // Invisible baseline line that only establishes the stack floor. Hidden
     // from the tooltip so only the median row shows.
@@ -146,10 +202,33 @@ export function buildBoxplotSeries(s, opts = {}) {
     }
     // robust median line on top (skipped when the caller draws its own line)
     if (!noMedian) {
+        // Interpolated points are removed from the median line and left to the
+        // overlay. Drawing both put a 0.35-opacity dash directly over a solid
+        // line of the same colour, which reads as the solid line — the overlay
+        // was invisible until the nominal stopped covering it.
+        const median = zipMs(s.t, s.median);
+        if (interp) {
+            for (let i = 0; i < median.length; i++) {
+                if (interp[i]) median[i] = [median[i][0], null];
+            }
+            // Cutting points out can strand a MEASURED point between two holes,
+            // and a lone point on a `symbol: 'none'` line draws nothing at all —
+            // so the one sample that was actually observed there would vanish,
+            // which is the exact inversion of what this feature is for. Give
+            // just those points a visible dot.
+            for (let i = 0; i < median.length; i++) {
+                if (interp[i]) continue;
+                const prevGone = i === 0 || interp[i - 1];
+                const nextGone = i === median.length - 1 || interp[i + 1];
+                if (prevGone && nextGone) {
+                    median[i] = { value: median[i], symbol: 'circle', symbolSize: 4 };
+                }
+            }
+        }
         out.push({
             name,
             type: 'line',
-            data: zipMs(s.t, s.median),
+            data: median,
             symbol: 'none',
             lineStyle: { color: lineColor, width: 1.5 },
             // Legend/tooltip markers read `itemStyle.color`, NOT `lineStyle.color`
@@ -157,8 +236,25 @@ export function buildBoxplotSeries(s, opts = {}) {
             // so the legend swatch wouldn't match the drawn line.
             itemStyle: { color: lineColor },
             emphasis: { focus: 'series' },
+            // Explicit: the nulls punched above must render as breaks, not be
+            // bridged. echarts defaults this to false, but the median line is
+            // the one series here whose nulls now carry meaning.
+            connectNulls: false,
             z: zBase + 3,
         });
+        // ...and the dashed overlay redraws what was just cut. Same z as the
+        // median rather than zBase+4: the levels here are documented as
+        // zBase+1..+3 with callers striding zBase by 4, and +4 would sit inside
+        // the NEXT series' range. Equal z is enough — echarts draws later array
+        // entries on top, and this is pushed after the median.
+        out.push(...buildInterpolatedOverlay({
+            t: s.t,
+            values: s.median,
+            flags: interp,
+            name,
+            color: lineColor,
+            z: zBase + 3,
+        }));
     }
     return out;
 }
