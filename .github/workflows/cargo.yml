@@ -327,7 +327,13 @@ jobs:
           cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/release/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
-          ./target/release/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
+          ./target/release/rezolus record --duration 30s --url http://127.0.0.1:4241 -o rezolus.parquet
+          test -s rezolus.parquet
+          # default output format: no -o means rezolus.rez, which exercises the
+          # v3 SQLite writer, finalization, and reading the archive back
+          ./target/release/rezolus record --duration 10s --url http://127.0.0.1:4241
+          test -s rezolus.rez
+          ./target/release/rezolus recording metadata -i rezolus.rez
           # wrap mode: record a command against the live agent for its lifetime
           ./target/release/rezolus record --url http://127.0.0.1:4241 -o wrap.parquet -- sleep 3
           test -s wrap.parquet
@@ -348,7 +354,13 @@ jobs:
           cargo build ${{ env.FEATURE_FLAGS }} --locked ${{ env.FLAGS }}
           sudo ./target/debug/rezolus config/agent.toml & echo $! > agent.pid
           sleep 15
-          ./target/debug/rezolus record --duration 30s http://127.0.0.1:4241 rezolus.parquet
+          ./target/debug/rezolus record --duration 30s --url http://127.0.0.1:4241 -o rezolus.parquet
+          test -s rezolus.parquet
+          # default output format: no -o means rezolus.rez, which exercises the
+          # v3 SQLite writer, finalization, and reading the archive back
+          ./target/debug/rezolus record --duration 10s --url http://127.0.0.1:4241
+          test -s rezolus.rez
+          ./target/debug/rezolus recording metadata -i rezolus.rez
           # wrap mode: record a command against the live agent for its lifetime
           ./target/debug/rezolus record --url http://127.0.0.1:4241 -o wrap.parquet -- sleep 3
           test -s wrap.parquet

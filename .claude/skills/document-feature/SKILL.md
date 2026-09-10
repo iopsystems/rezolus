@@ -35,12 +35,12 @@ the feature, each paired with the **exact correct invocation**. For example:
 
 ```
 Task: record from a Prometheus endpoint for 5 minutes, tagging the source as "llm-perf"
-Cmd:  rezolus record --metadata source=llm-perf --duration 5m http://host:9090/metrics out.parquet
+Cmd:  rezolus record --metadata source=llm-perf --duration 5m --url http://host:9090/metrics -o out.parquet
 ```
 
 **Cover the command's distinct modes, not just the happy path.** If the command
 has mutually-exclusive input modes, output formats, or a flag that changes the
-shape of the run (e.g. `record`'s positional-URL vs `--endpoint` vs `--config`,
+shape of the run (e.g. `record`'s `--url` vs `--endpoint` vs `--config`,
 or `--separate`), give each its own task. This matters because the blind sims in
 step 3 are your strongest signal, and a sim can only exercise a surface you wrote
 a task for — if every task is single-endpoint, the sims stay silent on the
