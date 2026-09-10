@@ -1,5 +1,40 @@
 ## [Unreleased]
 
+## [5.20.0] - 2026-09-10
+
+### Added
+
+- Viewer: stretches of time the producer never observed are drawn as a dashed,
+  band-less segment rather than in the same ink as measured data. `rate()`
+  across a hole has a value but no honest uncertainty bound, and was previously
+  indistinguishable from a real point. Applies to both the display and matrix
+  paths, and per-capture in A/B compare. (#1193, #1199)
+- Viewer: the compare badge lists every capture in an N-way comparison, not
+  just the first two. (#1172)
+
+### Changed
+
+- **`cgroup_cpu_bandwidth_quota` and `cgroup_cpu_bandwidth_period` now report
+  real values instead of `0`.** The `tg_set_cfs_bandwidth` kprobe read `PARM2`
+  as a pointer when the kernel passes a `u64`, which faulted on modern kernels.
+  Anything that encoded the zero — a dashboard panel, an alert threshold — will
+  see these series move. The sampler also gains fentry twins, with the kprobes
+  kept as the CO-RE-only fallback. (#1166, #1168)
+- **An unwritten counter-group entry now reads as absent rather than zero**, so
+  a sampler that populates part of a group no longer publishes phantom zero
+  series for the rest. Externally-backed (BPF mmap) groups are deliberately
+  unaffected: that memory is kernel zero-filled and cannot carry a sentinel.
+  (#1188, #1190)
+- Debian 11 packages are no longer published. The distribution is end-of-life.
+  (#1179)
+- Dependencies: `metriken` 0.11.0, `metriken-exposition` 0.20.0,
+  `metriken-query` 0.23.0, plus 11 routine updates. (#1174, #1188, #1190)
+
+### Fixed
+
+- Viewer: a single hole no longer strips the uncertainty band from an entire
+  decimated series. (#1193)
+
 ## [5.19.1] - 2026-09-09
 
 ### Added
@@ -1201,7 +1236,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.19.1...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.20.0...HEAD
+[5.20.0]: https://github.com/iopsystems/rezolus/compare/v5.19.1...v5.20.0
 [5.19.1]: https://github.com/iopsystems/rezolus/compare/v5.19.0...v5.19.1
 [5.19.0]: https://github.com/iopsystems/rezolus/compare/v5.18.0...v5.19.0
 [5.18.0]: https://github.com/iopsystems/rezolus/compare/v5.17.0...v5.18.0
