@@ -193,7 +193,8 @@ particular part implements.
 
 Note that `package` energy excludes DRAM, so it is not a whole-system figure.
 These PMUs are typically unavailable in virtualized environments, where the
-sampler disables itself.
+sampler reports itself unsupported rather than disabled -- nobody turned it
+off, the hardware simply is not there.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

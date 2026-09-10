@@ -175,10 +175,21 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let mut readers = discover();
 
     if readers.is_empty() {
-        // None of the PMUs are present. This is the normal case under
-        // virtualization, so it is not an error.
-        debug!("{NAME}: no energy or c-state PMUs available, disabling sampler");
-        return Ok(None);
+        // None of the PMUs are present -- the normal case under virtualization,
+        // where the host does not pass RAPL or the cstate PMUs through.
+        //
+        // `Unsupported`, not `Ok(None)`: the latter lands in `set_disabled()`,
+        // which is the same state `enabled = false` produces, so every VM would
+        // report `cpu_power` as turned off by config and send an operator
+        // looking for the setting that did it. Hardware absence is what
+        // `Unsupported` exists to say. Same call as `cpu_l3` makes for a part
+        // with no L3 domains.
+        debug!("{NAME}: no energy or c-state PMUs available");
+
+        return Err(crate::agent::sampler_status::Unsupported(
+            "no energy or c-state PMUs available".to_string(),
+        )
+        .into());
     }
 
     // Membership comes from registration, not values (principle 18). Declare
@@ -230,9 +241,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // `core_cstate_residency` is written by every core-scope level reader, so
     // its population is the union of the level groups' -- the one place a
     // union is the right answer, because here every member really is written.
-    // Its window is not stamped separately: the readers that feed it are
-    // bracketed by their own level groups, and `set_member_set` sorts and
-    // de-duplicates, so the repeated core ids collapse.
+    // `set_member_set` sorts and de-duplicates, so the repeated core ids
+    // collapse. Its window is stamped by an outer bracket in `refresh` that
+    // spans every level read -- see there for why the union is the honest span
+    // for a summed metric.
     let total_members: Vec<usize> = CORE_CSTATE_LEVEL_ACQ_GROUPS
         .iter()
         .filter_map(|acq| acq.member_set())
@@ -287,6 +299,22 @@ impl PowerInner {
     // `cpu_l3`/`cpu_dtlb`, which applies here for the same reason it does
     // there now that each bracket really is one group's own read section.
     fn refresh(&mut self) {
+        // `core_cstate_residency` is written by the core-scope level readers
+        // rather than by a group of its own, so nothing in the loop below would
+        // ever bracket it: `AcquisitionGroup::window()` would return `None` for
+        // the life of the process and every row of that metric would carry a
+        // null window, leaving the dashboard's headline "Total C-State
+        // Residency" plot without the uncertainty band all eight of its
+        // per-level siblings have.
+        //
+        // One outer bracket over the whole sweep is the honest window for it:
+        // the metric is a sum across levels, so the union of the level reads is
+        // exactly the span its value describes. It is wider than any single
+        // level's own bracket, which is correct -- the summed value really was
+        // assembled over that whole span.
+        let total = CPU_POWER_CORE_CSTATE_ACQ.acquire();
+        let mut total_wrote = false;
+
         for group in self.groups.iter_mut() {
             let guard = group.acq.acquire();
 
@@ -348,9 +376,27 @@ impl PowerInner {
 
             if wrote {
                 guard.finish();
+
+                // Only the core-scope levels feed the summed metric, so only
+                // they may stamp its window. A package level writing is not
+                // evidence that `core_cstate_residency` advanced.
+                if CORE_CSTATE_LEVEL_ACQ_GROUPS
+                    .iter()
+                    .any(|acq| std::ptr::eq(*acq, group.acq))
+                {
+                    total_wrote = true;
+                }
             } else {
                 guard.discard();
             }
+        }
+
+        // Same rule as the per-group brackets: a window over counters nothing
+        // wrote would publish a fresh span for a value still reading 0.
+        if total_wrote {
+            total.finish();
+        } else {
+            total.discard();
         }
     }
 }
@@ -461,7 +507,7 @@ impl Index {
     /// reader is built for it: keeping one would cost a `read()` syscall per
     /// refresh, forever, for a value that is discarded every time. Declining
     /// the counter makes the ceiling visible as absent data instead.
-    fn resolve(self, pmu: &str, event: &str, cpu: usize, ordinal: usize) -> Option<usize> {
+    fn resolve(self, cpu: usize, ordinal: usize) -> Option<usize> {
         let (index, limit) = match self {
             Index::Cpu => (cpu, MAX_CPUS),
             Index::Ordinal => (ordinal, MAX_PACKAGES),
@@ -469,16 +515,40 @@ impl Index {
         };
 
         if index >= limit {
-            warn!(
-                "{NAME}: {pmu}/{event} on cpu{cpu} maps to index {index}, \
-                 beyond the metric group's {limit} entries; this series will not be reported"
-            );
-
             return None;
         }
 
         Some(index)
     }
+
+    /// The capacity this index space is bounded by, for the over-capacity
+    /// summary its callers emit.
+    fn limit(self) -> usize {
+        match self {
+            Index::Cpu => MAX_CPUS,
+            Index::Ordinal => MAX_PACKAGES,
+            Index::Zero => 1,
+        }
+    }
+}
+
+/// Warn once for a `(pmu, event)` whose cpumask ran past the metric group.
+///
+/// Called after the cpumask walk rather than inside it. `Index::Cpu` is used
+/// across every core-scope cpumask entry and every exposed level, so warning
+/// per `(pmu, event, cpu)` triple would emit one line per level per core on a
+/// host with ids past the ceiling -- hundreds of lines carrying one fact. The
+/// count and the ceiling say the same thing in one line.
+fn warn_over_capacity(pmu: &str, event: &str, index: Index, skipped: usize, total: usize) {
+    if skipped == 0 {
+        return;
+    }
+
+    warn!(
+        "{NAME}: {pmu}/{event}: {skipped} of {total} cpumask entries map beyond \
+         the metric group's {} entries; those series will not be reported",
+        index.limit()
+    );
 }
 
 /// Open one energy counter per CPU in the PMU's cpumask.
@@ -503,8 +573,11 @@ fn open_energy(
         Index::Cpu | Index::Ordinal => &cpus[..],
     };
 
+    let mut skipped = 0;
+
     for (ordinal, &cpu) in cpus.iter().enumerate() {
-        let Some(resolved) = index.resolve(pmu, event, cpu, ordinal) else {
+        let Some(resolved) = index.resolve(cpu, ordinal) else {
+            skipped += 1;
             continue;
         };
 
@@ -526,6 +599,8 @@ fn open_energy(
             previous: None,
         });
     }
+
+    warn_over_capacity(pmu, event, index, skipped, cpus.len());
 }
 
 /// Open every `cN-residency` event the PMU exposes, on every CPU in its
@@ -550,8 +625,11 @@ fn open_cstate(
             continue;
         };
 
+        let mut skipped = 0;
+
         for (ordinal, &cpu) in cpus.iter().enumerate() {
-            let Some(resolved) = index.resolve(pmu, &event, cpu, ordinal) else {
+            let Some(resolved) = index.resolve(cpu, ordinal) else {
+                skipped += 1;
                 continue;
             };
 
@@ -572,6 +650,8 @@ fn open_cstate(
                 previous: None,
             });
         }
+
+        warn_over_capacity(pmu, &event, index, skipped, cpus.len());
     }
 }
 
@@ -626,9 +706,38 @@ fn open_counter(pmu: &str, event: &str, cpu: usize) -> Option<perf_event::Counte
 /// Absence means the event is not exposed by this PMU, which is the normal way
 /// an unsupported domain presents itself.
 fn event_scale(pmu: &str, event: &str) -> Option<f64> {
-    let mut builder = Dynamic::builder(pmu).ok()?;
+    // Every failure here drops a whole energy domain, so each one says why.
+    // Silence was the worst case: `scale()` returns `Ok(None)` when the
+    // `.scale` sidecar is merely absent, so an event the PMU really does
+    // expose could disappear with no diagnostic at all, leaving "why is
+    // cpu_dram_energy missing on this box?" unanswerable from the logs.
+    let mut builder = match Dynamic::builder(pmu) {
+        Ok(b) => b,
+        Err(e) => {
+            debug!("{NAME}: {pmu} pmu unavailable: {e}");
+            return None;
+        }
+    };
 
-    builder.event(event).ok()?.scale().ok().flatten()
+    let event_builder = match builder.event(event) {
+        Ok(b) => b,
+        Err(e) => {
+            debug!("{NAME}: {pmu}/{event} not exposed: {e}");
+            return None;
+        }
+    };
+
+    match event_builder.scale() {
+        Ok(Some(scale)) => Some(scale),
+        Ok(None) => {
+            debug!("{NAME}: {pmu}/{event} has no .scale sidecar; skipping domain");
+            None
+        }
+        Err(e) => {
+            debug!("{NAME}: {pmu}/{event} scale unreadable: {e}");
+            None
+        }
+    }
 }
 
 /// Enumerate the `cN-residency` events a c-state PMU exposes, as
@@ -706,4 +815,73 @@ fn cpumask(pmu: &str) -> Vec<usize> {
     // an unreadable or unparseable cpumask lands in the same place an absent
     // PMU does -- no counters for it.
     crate::agent::pmu::parse_cpu_list(&raw).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `Index::resolve` is the whole multi-socket story in one pure function:
+    // it is what decides that a two-socket host's `0,64` cpumask becomes
+    // package ordinals 0 and 1 rather than metric indices 0 and 64. That path
+    // has no hardware here to exercise it, which is exactly why it is worth
+    // testing directly.
+
+    #[test]
+    fn ordinal_indexes_by_cpumask_position_not_cpu_id() {
+        // The two-socket case: cpu ids are sparse, ordinals are not. Indexing
+        // by cpu id would write package 1 at index 64, past MAX_PACKAGES, and
+        // the series would vanish.
+        assert_eq!(Index::Ordinal.resolve(0, 0), Some(0));
+        assert_eq!(Index::Ordinal.resolve(64, 1), Some(1));
+    }
+
+    #[test]
+    fn cpu_indexes_by_cpu_id_not_position() {
+        // Core scope is the mirror image: a hybrid part's core-scope cpumask
+        // skips SMT siblings (`0,2,4,...`), and the metric is indexed by the
+        // core's own id, so position must not be substituted for it.
+        assert_eq!(Index::Cpu.resolve(0, 0), Some(0));
+        assert_eq!(Index::Cpu.resolve(12, 6), Some(12));
+    }
+
+    #[test]
+    fn zero_collapses_every_entry_to_one_index() {
+        // Host scope: one quantity however many cpumask entries name it.
+        assert_eq!(Index::Zero.resolve(0, 0), Some(0));
+        assert_eq!(Index::Zero.resolve(64, 1), Some(0));
+    }
+
+    #[test]
+    fn an_index_past_its_group_capacity_is_declined() {
+        // Declined rather than clamped or warned-and-kept: a reader built here
+        // would cost a `read()` every refresh forever for a value metriken
+        // drops on write. Absent data is the honest outcome.
+        assert_eq!(Index::Ordinal.resolve(0, MAX_PACKAGES), None);
+        assert_eq!(
+            Index::Ordinal.resolve(0, MAX_PACKAGES - 1),
+            Some(MAX_PACKAGES - 1)
+        );
+
+        assert_eq!(Index::Cpu.resolve(MAX_CPUS, 0), None);
+        assert_eq!(Index::Cpu.resolve(MAX_CPUS - 1, 0), Some(MAX_CPUS - 1));
+    }
+
+    #[test]
+    fn limit_matches_the_capacity_resolve_enforces() {
+        // The over-capacity summary reports `limit()`; if it disagreed with the
+        // bound `resolve` applies, the log would name the wrong ceiling.
+        //
+        // `Index::Zero` is excluded deliberately rather than overlooked: it
+        // discards both arguments and always yields 0, so it cannot exceed its
+        // capacity of 1 and has no over-capacity case to summarise.
+        for index in [Index::Cpu, Index::Ordinal] {
+            let limit = index.limit();
+            assert_eq!(index.resolve(limit, limit), None);
+            assert!(index.resolve(limit - 1, limit - 1).is_some());
+        }
+
+        assert_eq!(Index::Zero.limit(), 1);
+        assert_eq!(Index::Zero.resolve(usize::MAX, usize::MAX), Some(0));
+    }
 }
