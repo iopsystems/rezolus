@@ -143,10 +143,14 @@ pub(crate) struct AcquisitionGroup {
     /// `member_bound` says "the first N indices"; some groups populate an
     /// arbitrary subset instead — a sampler allowed only part of the machine
     /// populates the CPUs it was allowed, which is rarely `0..n`. Declaring the
-    /// prefix anyway would leave the rest registered-but-never-written, and a
-    /// registered `CounterGroup` slot reads as `0`, not as absent. That is a
-    /// wrong value rather than missing data, which is the failure this whole
-    /// area exists to remove.
+    /// prefix anyway leaves the rest registered-but-never-written, and what
+    /// that publishes depends on the backing: an OWNED `CounterGroup` reads
+    /// `None` since metriken 0.11's `u64::MAX` sentinel, but an EXTERNALLY
+    /// backed one (a BPF mmap, which the kernel zero-fills and which therefore
+    /// cannot hold a sentinel) still reads `0`. That is a wrong value rather
+    /// than missing data, and BPF-backed per-CPU/per-cgroup groups are exactly
+    /// the ones a partial reservation under-populates — so this is the failure
+    /// this area exists to remove.
     member_set: OnceLock<Vec<usize>>,
     // Init-time flag: true means this group's acquisition IS the exposition
     // read itself (mmap-direct `PackedCounters`), not a sampler `refresh()`.

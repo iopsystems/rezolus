@@ -652,17 +652,22 @@ recording (single iGPU, 55 min at 1 s).
   read per tick, so per principles 13/16/17 it needs a *measured* per-refresh
   number. Failing that, stamp the SoC `compatible` string into snapshot metadata
   so a consumer can at least tell which generation produced a zero.
-- **`GPU_ENERGY_CONSUMPTION` can publish a fabricated zero** — Open,
-  pre-existing, adjacent to #1108 and the same bug class. It is a `CounterGroup`
-  (`stats.rs`), and metriken's `CounterGroup::value()` has **no** sentinel: it
-  returns `Some(0)` for an unwritten slot as soon as *any* index in that group
-  has been written. So on a mixed multi-GPU host where `total_energy_consumption()`
-  succeeds for device 0 and fails for device 1, device 1 publishes a constant-zero
-  energy counter that reads as a real measurement. Cannot fire on a single-GPU
-  host (the group stays uninitialised and reads `None`), which is why #1108's
-  Tegra target does not hit it. Contrast `GaugeGroup`, which uses an `i64::MIN`
-  sentinel and correctly yields `None`. *Fix:* track written membership
-  explicitly, or move the metric to a gauge-like sentinel representation.
+- **`GPU_ENERGY_CONSUMPTION` can publish a fabricated zero** — **Closed** by
+  metriken 0.11. It is a `CounterGroup` (`stats.rs`), and `CounterGroup::value()`
+  used to have **no** sentinel: it returned `Some(0)` for an unwritten slot as
+  soon as *any* index in that group had been written. So on a mixed multi-GPU
+  host where `total_energy_consumption()` succeeds for device 0 and fails for
+  device 1, device 1 published a constant-zero energy counter that read as a real
+  measurement. `GaugeGroup` never had the problem — it has always used an
+  `i64::MIN` sentinel and correctly yielded `None` — and that asymmetry was the
+  trap: which group type a metric happened to use silently decided whether a
+  partially-populated group was a bug. metriken 0.11 gives an owned
+  `CounterGroup` the same treatment with `u64::MAX`
+  (iopsystems/metriken#143), so an unwritten entry now reads `None`.
+  *Still open for externally backed groups:* a BPF mmap is kernel zero-filled
+  and cannot hold a sentinel, so an unwritten slot there still reads `0`.
+  Membership for those comes from the map's registered entries rather than from
+  value presence, which is what `set_member_set` exists to declare.
 - **Per-device Tegra discrimination** — Open. `is_tegra_soc()` reads
   `/proc/device-tree/compatible`, a *host* property, but "no real PCIe link / no
   utilization counters" is a *device* property. A Tegra board carrying a discrete
