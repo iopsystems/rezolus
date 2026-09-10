@@ -594,6 +594,13 @@ export const promqlResultToHeatmapTriples = (results) => {
 
     // Indexed by ROW, not by result order: when ids are usable a row is the id
     // value itself, and rows for absent ids stay unlabelled.
+    //
+    // Only returned when a label actually differs from its row index. A CPU
+    // heatmap's labels are "0", "1", "2" — identical to the indices they sit
+    // at — and handing those to the renderer made it treat the rows as
+    // self-describing, dropping the "CPU" y-axis title and rendering tooltips
+    // as "2" instead of "CPU 2". That regressed every per-CPU, softirq and
+    // scheduler heatmap on every host, GPU or not.
     const rowLabels = [];
     results.forEach((item, idx) => {
         const m = item.metric || {};
@@ -616,8 +623,14 @@ export const promqlResultToHeatmapTriples = (results) => {
             triples.push([ti, y, v]);
         }
     });
+    // A label that equals its own row index tells the renderer nothing, so the
+    // whole array is withheld and the entity-titled default stands.
+    const rowLabelsAreInformative = rowLabels.some(
+        (label, row) => label != null && label !== String(row),
+    );
+
     return {
-        rowLabels,
+        rowLabels: rowLabelsAreInformative ? rowLabels : null,
         timestamps,
         triples,
         minValue: Number.isFinite(minValue) ? minValue : null,
@@ -715,7 +728,9 @@ const applyResultToPlot = (plot, result) => {
                 plot.data = triples;
                 plot.time_data = timestamps;
                 // Per-row names, so a GPU heatmap can say "nvidia 0" / "intel 0"
-                // where the bare id would be ambiguous.
+                // where the bare id would be ambiguous. `null` for rows that
+                // merely restate their index (a CPU heatmap), which leaves the
+                // renderer's entity title and "CPU 2" tooltips intact.
                 plot.row_labels = rowLabels;
                 plot.min_value = minValue != null ? minValue : Infinity;
                 plot.max_value = maxValue != null ? maxValue : -Infinity;

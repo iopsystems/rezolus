@@ -15,8 +15,12 @@
 //!
 //! So an integrated GPU is the bare `i915`, while a discrete card is
 //! `i915_<pci-address>` with colons replaced by underscores (e.g. an Arc A770 at
-//! `0000:04:00.0` becomes `i915_0000_04_00.0`). The newer `xe` driver follows the
-//! same convention with an `xe` prefix, so both are matched here.
+//! `0000:04:00.0` becomes `i915_0000_04_00.0`).
+//!
+//! Only `i915` is matched. The newer `xe` driver names its PMU the same way but
+//! exposes a different event vocabulary, so recognising it here would produce a
+//! confusing permissions error rather than working support — see
+//! [`parse_pmu_name`].
 //!
 //! Everything about a PMU is read from sysfs rather than hardcoded:
 //!
@@ -53,7 +57,8 @@ pub struct GpuPmu {
     pub perf_type: u32,
     /// PCI address (`0000:04:00.0`) for a discrete GPU, `None` when integrated.
     pub pci_address: Option<String>,
-    /// Kernel driver backing this PMU (`i915` or `xe`).
+    /// Kernel driver backing this PMU. Always `i915` today; see
+    /// [`parse_pmu_name`] on why `xe` is not matched.
     pub driver: String,
     /// Events keyed by sysfs event name (`ccs0-busy`, `actual-frequency`, ...).
     pub events: HashMap<String, PmuEvent>,
@@ -113,8 +118,21 @@ fn discover_in(dir: &Path) -> Vec<GpuPmu> {
 /// Accepts the bare driver name (integrated) and `<driver>_<pci>` (discrete).
 /// The PCI portion has its colons replaced with underscores by the kernel; we
 /// restore them so the label matches what `lspci`/sysfs report elsewhere.
+///
+/// **i915 only.** The `xe` driver exposes a different event vocabulary — this
+/// sampler looks for `<engine>-busy` and `actual-frequency`/`requested-frequency`,
+/// which are i915's names. Matching `xe` here would let discovery succeed and
+/// every `Gpu::new` then fail with `NotFound`, so the sampler would report
+/// "no PMU counters could be opened (needs CAP_PERFMON ...)" — blaming
+/// permissions for a driver mismatch, on hardware where `xe` is the default
+/// (Lunar Lake, Battlemage). Naming only what is actually supported makes an
+/// xe host report `Unsupported` with an accurate reason instead.
+///
+/// Supporting xe means reading its own event names and its config-bit engine
+/// encoding; that is a separate change, and one that needs xe hardware to
+/// verify rather than to guess at.
 fn parse_pmu_name(name: &str) -> Option<(&'static str, Option<String>)> {
-    for driver in ["i915", "xe"] {
+    for driver in ["i915"] {
         if name == driver {
             return Some((driver, None));
         }
@@ -245,7 +263,9 @@ mod tests {
     #[test]
     fn parses_integrated_pmu_name() {
         assert_eq!(parse_pmu_name("i915"), Some(("i915", None)));
-        assert_eq!(parse_pmu_name("xe"), Some(("xe", None)));
+        // `xe` is deliberately NOT matched: its event vocabulary differs, and
+        // accepting it here would surface a permissions error instead.
+        assert_eq!(parse_pmu_name("xe"), None);
     }
 
     #[test]
@@ -255,10 +275,7 @@ mod tests {
             parse_pmu_name("i915_0000_04_00.0"),
             Some(("i915", Some("0000:04:00.0".to_string())))
         );
-        assert_eq!(
-            parse_pmu_name("xe_0000_03_00.0"),
-            Some(("xe", Some("0000:03:00.0".to_string())))
-        );
+        assert_eq!(parse_pmu_name("xe_0000_03_00.0"), None);
     }
 
     #[test]

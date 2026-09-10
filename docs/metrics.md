@@ -253,7 +253,7 @@ consumption, and thermal conditions.
 
 ### gpu_intel_pmu
 
-Produces Intel GPU metrics from the i915/xe PMU via `perf_event_open`, the same
+Produces Intel GPU metrics from the i915 PMU via `perf_event_open`, the same
 data source `intel_gpu_top` reads. Covers both integrated GPUs and discrete Arc
 cards: each GPU registers its own PMU, which the sampler discovers from sysfs
 along with the engine set that GPU actually exposes (a discrete card has a

@@ -216,7 +216,7 @@ enabled = false
 # workloads, so use with care on production hosts.
 # gpu_perf_level = "stable_std"
 
-# Produces Intel GPU metrics from the i915/xe PMU via perf_event_open: per-engine
+# Produces Intel GPU metrics from the i915 PMU via perf_event_open: per-engine
 # busy time and actual/requested frequency, plus VRAM usage via the DRM query
 # ioctl. Covers both integrated GPUs and discrete Arc cards, which register as
 # separate PMUs; each is discovered from sysfs along with its engine set, so no

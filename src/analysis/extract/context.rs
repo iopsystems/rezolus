@@ -302,7 +302,7 @@ const BPF_SAMPLERS: &[&str] = &[
 /// - `gpu_memory_utilization`, `gpu_pcie_throughput`, `gpu_temperature`:
 ///   shared between `gpu_amd_smi` and `gpu_nvidia` only (no macOS/`gpu_apple`
 ///   equivalent — `gpu/macos/stats.rs` declares no metric under these names;
-///   and the i915/xe PMU exposes no memory-controller or PCIe counter).
+///   and the i915 PMU exposes no memory-controller or PCIe counter).
 /// - `rezolus_bpf_run_count`, `rezolus_bpf_run_time`: see [`BPF_SAMPLERS`].
 ///
 /// Sorted alphabetically by name; each candidate list sorted alphabetically

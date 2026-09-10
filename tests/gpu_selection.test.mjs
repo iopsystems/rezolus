@@ -5,7 +5,7 @@
 // silently plots the wrong device's data, which is why it is tested here.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyGpuSelection } from '../src/viewer/assets/lib/data.js';
+import { applyGpuSelection, promqlResultToHeatmapTriples } from '../src/viewer/assets/lib/data.js';
 
 const Q = 'sum(gpu_memory{state="used"})';
 
@@ -89,64 +89,46 @@ test('per-GPU groupings are exempt from the selection filter', () => {
 
 // Per-GPU labels always carry the vendor. An id is only meaningful within a
 // vendor — every vendor's sampler numbers its devices from 0 — so "nvidia 0"
-// identifies a GPU where "0" merely indexes one. Showing it unconditionally
-// also keeps a chart's labels stable when the set of GPUs in a result changes.
-const series = (vendor, id) => ({ metric: { vendor, id } });
+// identifies a GPU where "0" merely indexes one.
+//
+// These exercise the SHIPPED `promqlResultToHeatmapTriples`, not a copy of it.
+// An earlier version of this file re-implemented the labelling locally, which
+// let a regression through: the real function returned labels for CPU-shaped
+// results too ("0", "1", "2"), and the renderer read that as "these rows name
+// themselves" and dropped the "CPU" y-axis title on every host. A local copy
+// cannot catch that; importing does.
+const series = (vendor, id) => ({ metric: { vendor, id }, values: [[0, '1']] });
+const rowsOf = (results) => promqlResultToHeatmapTriples(results).rowLabels;
 
-const seriesName = (item) => {
-    const { id, vendor } = item.metric;
-    if (id === undefined || vendor === undefined) return null;
-    return `${vendor} ${id}`;
-};
-
-const heatmapRowLabels = (results) => {
-    const ids = results.map((i) => i.metric && i.metric.id);
-    const nums = ids.map((v) => parseInt(v, 10));
-    const usable = nums.every((v) => !Number.isNaN(v))
-        && new Set(nums).size === nums.length
-        && Math.max(...nums) === nums.length - 1;
-    const out = [];
-    results.forEach((item, idx) => {
-        const m = item.metric || {};
-        const row = usable ? nums[idx] : idx;
-        out[row] = m.id == null ? String(row) : (m.vendor ? `${m.vendor} ${m.id}` : String(m.id));
-    });
-    return out;
-};
-
-test('series names carry the vendor on a single-vendor host too', () => {
-    assert.equal(seriesName(series('intel', '1')), 'intel 1');
-    assert.equal(seriesName(series('amd', '0')), 'amd 0');
-});
-
-test('heatmap rows carry the vendor on a single-vendor host too', () => {
-    // The reported case: sky is Intel-only, and its rows read "intel 0"/"intel 1"
-    // rather than a bare "0"/"1".
-    assert.deepEqual(heatmapRowLabels([series('intel', '0'), series('intel', '1')]),
+test('rows carry the vendor on a single-vendor host too', () => {
+    assert.deepEqual(rowsOf([series('intel', '0'), series('intel', '1')]),
         ['intel 0', 'intel 1']);
 });
 
-test('heatmap rows: two GPUs sharing an id get distinct rows', () => {
+test('two GPUs sharing an id get distinct rows', () => {
     // Rows were indexed by parseInt(id), so two GPUs both at id="0" landed on
     // the same row, one silently overwriting the other.
-    const rows = heatmapRowLabels([series('nvidia', '0'), series('intel', '0')]);
+    const rows = rowsOf([series('nvidia', '0'), series('intel', '0')]);
     assert.equal(rows.length, 2, 'both GPUs must occupy their own row');
     assert.deepEqual(rows, ['nvidia 0', 'intel 0']);
 });
 
-test('a series with no vendor label falls back rather than throwing', () => {
-    // The macOS GPU sampler sets no vendor on any of its metrics.
-    assert.equal(seriesName({ metric: { id: '0' } }), null);
-    assert.deepEqual(heatmapRowLabels([{ metric: { id: '0' } }]), ['0']);
-});
-
-test('a single GPU still yields one labelled row', () => {
-    assert.deepEqual(heatmapRowLabels([series('intel', '0')]), ['intel 0']);
-});
-
 test('a sparse id set packs its rows instead of leaving a gap', () => {
-    // sky publishes VRAM for its discrete GPU (id=1) but not its integrated
-    // one, so indexing rows by id drew a blank row 0 above the only real row.
-    assert.deepEqual(heatmapRowLabels([series('intel', '1')]), ['intel 1']);
-    assert.deepEqual(heatmapRowLabels([series('amd', '2')]), ['amd 2']);
+    // VRAM is discrete-only, so a host whose discrete GPU is id=1 yields only
+    // that series; indexing by id drew a blank row 0 above the real one.
+    assert.deepEqual(rowsOf([series('intel', '1')]), ['intel 1']);
+});
+
+test('a CPU-shaped result yields no labels, so the axis keeps its title', () => {
+    // The regression this file previously missed. Labels equal to their own row
+    // index tell the renderer nothing; handing them over made it drop the "CPU"
+    // y-axis title and render tooltips as "2" instead of "CPU 2".
+    const cpu = [{ metric: { id: '0' }, values: [[0, '1']] },
+                 { metric: { id: '1' }, values: [[0, '2']] },
+                 { metric: { id: '2' }, values: [[0, '3']] }];
+    assert.equal(rowsOf(cpu), null);
+});
+
+test('a series with no id at all is left to the renderer', () => {
+    assert.equal(rowsOf([{ metric: {}, values: [[0, '1']] }]), null);
 });

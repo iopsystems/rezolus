@@ -827,7 +827,13 @@ mod intel {
                 continue;
             }
 
-            let target = std::fs::canonicalize(entry.path().join("device")).ok()?;
+            // `continue`, not `?`: readdir order is arbitrary, and one
+            // render node whose `device` link will not resolve (a virtual or
+            // half-torn-down node) must not end the scan before the real card
+            // is reached.
+            let Ok(target) = std::fs::canonicalize(entry.path().join("device")) else {
+                continue;
+            };
             if target.file_name().and_then(|s| s.to_str()) == Some(pci_bus_id) {
                 return File::open(Path::new("/dev/dri").join(&name)).ok();
             }

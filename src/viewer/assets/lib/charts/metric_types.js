@@ -56,20 +56,18 @@ export function resolveStyle(type_, subtype, result) {
 
     // gauge or delta_counter: infer from result shape.
     //
-    // A per-entity result (one series per CPU/GPU, carrying an `id`) renders as
-    // a heatmap — including when there is only ONE such entity. Requiring two
-    // made a chart's type depend on how many devices happened to be present:
-    // the same "Per-GPU" chart drew a heatmap on a two-GPU host and a line
-    // chart on a one-GPU host, and on a mixed-vendor host most per-GPU charts
-    // fell back to lines because only one vendor publishes each metric name.
-    // A one-row heatmap is the honest rendering of "per-entity, one entity".
-    const series = result?.data?.result;
-    if (series?.length >= 1) {
-        const first = series[0];
+    // A single series stays a LINE. A one-row heatmap encodes its value as
+    // colour and drops the y-axis, so it is strictly less readable than the
+    // line it would replace — and this function governs every gauge plot, not
+    // just GPU ones, so a 1-vCPU VM or a single-NIC host would lose its line
+    // charts too. A plot that wants a heatmap regardless declares it via
+    // `PlotOpts::style`, which `data.js` honours ahead of this inference.
+    if (result?.data?.result?.length > 1) {
+        const first = result.data.result[0];
         if (first.metric && first.metric.id != null) {
             return 'heatmap';
         }
-        if (series.length > 1) return 'multi';
+        return 'multi';
     }
     return 'line';
 }

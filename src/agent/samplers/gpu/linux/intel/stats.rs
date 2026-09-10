@@ -2,7 +2,7 @@
 //!
 //! Two sources, and the distinction matters for how each is consumed:
 //!
-//! **Perf events (counters).** Everything read from the i915/xe PMU is a
+//! **Perf events (counters).** Everything read from the i915 PMU is a
 //! **monotonically cumulative counter**, so it is published raw and the viewer
 //! derives the interesting quantity as a rate:
 //!

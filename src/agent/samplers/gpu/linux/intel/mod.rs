@@ -1,4 +1,4 @@
-//! Collects Intel GPU telemetry from the i915/xe PMU via `perf_event_open(2)`.
+//! Collects Intel GPU telemetry from the i915 PMU via `perf_event_open(2)`.
 //!
 //! This covers both integrated GPUs and discrete cards (Arc), which register
 //! separate PMUs under `/sys/bus/event_source/devices/` (see [`pmu`]). It is the
@@ -172,7 +172,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     if pmus.is_empty() {
         debug!("{NAME}: no Intel GPU PMUs found");
         return Err(crate::agent::sampler_status::Unsupported(
-            "no Intel GPU i915/xe PMU found".to_string(),
+            "no Intel GPU i915 PMU found".to_string(),
         )
         .into());
     }
@@ -224,24 +224,34 @@ fn init(config: Arc<Config>) -> SamplerResult {
         .into());
     }
 
-    // Real membership, not backing capacity, and one set per index space (see
-    // the groups' doc comment in `stats`).
+    // Real membership, and one set per index space (see the groups' doc
+    // comment in `stats`). Both are explicit sets built from the entries whose
+    // counters actually opened.
     //
-    // Engine entries are sparse: each GPU owns a `MAX_ENGINES`-wide block and
-    // uses only the leading part of it, so a prefix bound would declare the
-    // gaps as members. The explicit set does not.
+    // A prefix bound would be wrong for either. Engine entries are sparse:
+    // each GPU owns a `MAX_ENGINES`-wide block and uses only the leading part.
+    // And GPU ids are NOT dense — `id` comes from enumerating every discovered
+    // PMU, while only the GPUs whose `Gpu::new` succeeded are kept, so one
+    // failure leaves a survivor whose id exceeds `gpus.len()`. Bounding by the
+    // count then drops that GPU's series entirely and declares a phantom
+    // all-zero member at index 0 for a device that does not exist.
     let mut engine_members: Vec<usize> = Vec::new();
+    let mut device_members: Vec<usize> = Vec::new();
+
     for gpu in gpus.iter() {
+        device_members.push(gpu.id);
         for offset in 0..gpu.engines.len() {
-            engine_members.push(engine_index(gpu.id, offset));
+            let index = engine_index(gpu.id, offset);
+            if gpu.live_indices.contains(&index) {
+                engine_members.push(index);
+            }
         }
     }
-    engine_members.sort_unstable();
-    GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&engine_members);
 
-    // Per-GPU entries are indexed by GPU id, which `init` assigns densely from
-    // 0, so a prefix bound is exactly right here.
-    GPU_INTEL_PMU_DEVICE_ACQ.set_member_bound(gpus.len());
+    engine_members.sort_unstable();
+    device_members.sort_unstable();
+    GPU_INTEL_PMU_ENGINE_ACQ.set_member_set(&engine_members);
+    GPU_INTEL_PMU_DEVICE_ACQ.set_member_set(&device_members);
 
     let interval = config
         .sampler_interval(NAME)
@@ -377,6 +387,10 @@ struct Gpu {
     members: Vec<TrackedCounter>,
     /// Engine names in index order, for diagnostics.
     engines: Vec<String>,
+    /// Metric indices whose perf counter actually opened. The member sets are
+    /// built from these rather than from what sysfs advertised, so a rejected
+    /// or unopenable event never becomes a declared, permanently-null member.
+    live_indices: std::collections::BTreeSet<usize>,
     /// Global event names opened for this GPU, for diagnostics.
     globals: Vec<String>,
     /// DRM render node for VRAM accounting. `None` when the GPU has no
@@ -471,6 +485,15 @@ impl Gpu {
 
         leader.enable_group()?;
 
+        // Only entries whose counter actually opened get identity metadata and
+        // group membership. Tagging every *discovered* engine instead declared
+        // members that can never be written — a permanently-null series for an
+        // event the unit check rejected or `build_with_group` refused — which
+        // is the same phantom the two-group split exists to prevent.
+        let mut live_indices: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+        live_indices.insert(leader_index);
+        live_indices.extend(members.iter().map(|m| m.index));
+
         let label = pmu.device_label();
 
         // Distinguishes an integrated GPU from a discrete card (e.g. Arc), which
@@ -485,6 +508,9 @@ impl Gpu {
         // device and engine they belong to, not just an opaque index.
         for (offset, engine) in engines.iter().enumerate() {
             let metric_index = engine_index(id, offset);
+            if !live_indices.contains(&metric_index) {
+                continue;
+            }
             for (_, metric, _) in ENGINE_SAMPLES {
                 metric.insert_metadata(metric_index, "id".to_string(), id.to_string());
                 metric.insert_metadata(metric_index, "device".to_string(), label.clone());
@@ -543,6 +569,7 @@ impl Gpu {
             engines,
             globals,
             drm,
+            live_indices,
         })
     }
 
