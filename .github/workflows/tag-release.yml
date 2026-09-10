@@ -9,7 +9,12 @@ on:
 jobs:
   tag-release:
     uses: brayniac/rust-workflows/.github/workflows/tag-release.yml@v1
-    secrets: inherit
+    # By name, not `secrets: inherit`: GitHub only carries inherited secrets
+    # between repositories in the same organization, and the shared workflow
+    # lives under a different owner. With `inherit` the token arrives empty
+    # and checkout fails after the gate has already passed.
+    secrets:
+      RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
     with:
       # rezolus pushes the next development version straight to main rather
       # than opening a bump PR for it.
