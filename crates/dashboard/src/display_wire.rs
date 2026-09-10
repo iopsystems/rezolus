@@ -217,6 +217,91 @@ pub fn encode_heatmap_binary(hm: &HistogramHeatmapResult) -> Vec<u8> {
     buf
 }
 
+/// The canonical mixed-flag body used to pin the display-binary layout across
+/// languages.
+///
+/// The layout's whole risk is that the two optional column groups are read in
+/// the wrong order, or read for a series that did not flag them: nothing fails
+/// loudly, the *later* series in the buffer just decode into the wrong bytes.
+/// A decoder that gets it wrong still returns plausible numbers.
+///
+/// Rust and JS each had tests for this, but each tested against its own
+/// hand-written mirror of the other side — so the two could drift together and
+/// stay green. This fixture is the shared artifact instead: one buffer produced
+/// by the real encoder, checked in as hex alongside its expected decode, that
+/// every implementation asserts against. A third consumer (systemslab, if it
+/// adopts the binary path) can use the same file without reimplementing the
+/// encoder to test its decoder.
+///
+/// Deliberate properties, each catching a distinct mistake:
+/// - all four flag combinations appear (`unc` only, `interp` only, both, neither)
+/// - the series have DIFFERENT point counts, so a decoder that assumes a uniform
+///   stride misaligns rather than coincidentally working
+/// - "both" is first, so an off-by-one propagates through everything after it
+/// - every column holds distinct values, so a swap shows up as wrong data rather
+///   than as plausible-looking numbers
+/// - `unc` is partial within a series (some points `None`), which is the real
+///   shape a hole produces
+pub mod fixture {
+    use std::collections::HashMap;
+
+    use metriken_query::Reducer;
+    use metriken_query::display::{DisplaySeries, EnvPoint};
+
+    /// Budget recorded in the fixture's header.
+    pub const BUDGET: u32 = 500;
+
+    fn series(name: &str, points: Vec<EnvPoint>) -> DisplaySeries {
+        DisplaySeries {
+            metric: HashMap::from([("__name__".to_string(), name.to_string())]),
+            points,
+            native_interval: 1.0,
+            raw_points: 1000,
+            reducer: Reducer::Boxplot,
+            band: [0.25, 0.75],
+            decimated: true,
+        }
+    }
+
+    /// The four series described above, in the order they appear in the body.
+    pub fn mixed_flags() -> Vec<DisplaySeries> {
+        let p = |t: f64, v: f64| EnvPoint::new(t, v - 2.0, v - 1.0, v, v + 1.0, v + 2.0);
+        vec![
+            // both flags, 4 points, and the band is present on only some of
+            // them — the shape a hole actually produces.
+            series(
+                "both",
+                vec![
+                    p(10.0, 100.0).with_band(Some((90.0, 110.0))),
+                    p(11.0, 200.0).with_interpolated(true),
+                    p(12.0, 300.0).with_interpolated(true),
+                    p(13.0, 400.0).with_band(Some((390.0, 410.0))),
+                ],
+            ),
+            // unc only, 2 points
+            series(
+                "unc_only",
+                vec![
+                    p(20.0, 500.0).with_band(Some((490.0, 510.0))),
+                    p(21.0, 600.0).with_band(Some((590.0, 610.0))),
+                ],
+            ),
+            // interp only, 3 points
+            series(
+                "interp_only",
+                vec![
+                    p(30.0, 700.0),
+                    p(31.0, 800.0).with_interpolated(true),
+                    p(32.0, 900.0),
+                ],
+            ),
+            // neither, 2 points — the plain case, last, so it only decodes
+            // correctly if every series before it was sized right.
+            series("neither", vec![p(40.0, 1000.0), p(41.0, 1100.0)]),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -315,6 +400,106 @@ mod tests {
         assert_eq!(header["series"][0]["unc"], serde_json::json!(false));
         assert_eq!(cols.len(), 7);
         assert_eq!(cols[6], vec![1.0]);
+    }
+
+    /// Path to the cross-language golden, relative to this crate.
+    const FIXTURE: &str = "../../tests/fixtures/display_wire_mixed.json";
+
+    fn to_hex(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+        }
+        s
+    }
+
+    /// Encode the shared fixture and pin it against the checked-in golden.
+    ///
+    /// This is also the generator: `UPDATE_FIXTURES=1 cargo test -p dashboard`
+    /// rewrites the file. Regenerating is the correct response to a DELIBERATE
+    /// layout change — and the diff is then the review artifact, showing exactly
+    /// which bytes moved. It is the wrong response to a surprise; if this fails
+    /// and you did not mean to change the wire, a decoder somewhere is about to
+    /// start reading the wrong columns.
+    #[test]
+    fn the_shared_fixture_matches_the_encoder() {
+        let body = encode_display_binary(&fixture::mixed_flags(), fixture::BUDGET);
+        let (header, cols) = decode(&body);
+
+        // The expected decode travels WITH the bytes so a consumer in another
+        // language has something to assert against without reimplementing the
+        // encoder — which is the whole point, since a reimplementation is
+        // exactly what drifts.
+        let mut expected = Vec::new();
+        let mut c = 0usize;
+        for s in header["series"].as_array().unwrap() {
+            let n = 6
+                + if s["unc"].as_bool().unwrap() { 2 } else { 0 }
+                + if s["interp"].as_bool().unwrap() { 1 } else { 0 };
+            let names: Vec<&str> = ["t", "min", "lo", "median", "hi", "max"]
+                .into_iter()
+                .chain(if s["unc"].as_bool().unwrap() {
+                    vec!["uncLo", "uncHi"]
+                } else {
+                    vec![]
+                })
+                // Named `interpCol` rather than `interp` so it cannot collide
+                // with the header FLAG of the same name — and it matches what
+                // data.js calls the decoded column.
+                .chain(if s["interp"].as_bool().unwrap() {
+                    vec!["interpCol"]
+                } else {
+                    vec![]
+                })
+                .collect();
+            let mut m = serde_json::Map::new();
+            m.insert("name".into(), s["metric"]["__name__"].clone());
+            m.insert("n".into(), s["n"].clone());
+            m.insert("unc".into(), s["unc"].clone());
+            m.insert("interp".into(), s["interp"].clone());
+            for (name, col) in names.iter().zip(cols[c..c + n].iter()) {
+                // NaN has no JSON form; it marks a point with no band, so it is
+                // written as null and the consumer treats a non-finite edge as
+                // "no band" exactly as it does when decoding the raw f64.
+                let vals: Vec<serde_json::Value> = col
+                    .iter()
+                    .map(|v| {
+                        if v.is_finite() {
+                            serde_json::json!(v)
+                        } else {
+                            serde_json::Value::Null
+                        }
+                    })
+                    .collect();
+                m.insert((*name).to_string(), serde_json::Value::Array(vals));
+            }
+            expected.push(serde_json::Value::Object(m));
+            c += n;
+        }
+
+        let doc = serde_json::json!({
+            "_comment": "Generated by dashboard::display_wire tests                 (UPDATE_FIXTURES=1 cargo test -p dashboard). Do not hand-edit.",
+            "_layout": "[u32 LE headerLen][JSON header][pad to 8B][f64 LE columns].                 Per series: t,min,lo,median,hi,max, then uncLo,uncHi iff header                 `unc`, then interp iff header `interp`. Read the flags in that                 order; a decoder that does not will silently misalign every                 later series.",
+            "budget": fixture::BUDGET,
+            "hex": to_hex(&body),
+            "expected": expected,
+        });
+        let rendered = format!("{}\n", serde_json::to_string_pretty(&doc).unwrap());
+
+        if std::env::var("UPDATE_FIXTURES").is_ok() {
+            std::fs::write(FIXTURE, &rendered).unwrap();
+            return;
+        }
+        let on_disk = std::fs::read_to_string(FIXTURE).unwrap_or_else(|e| {
+            panic!("{FIXTURE} unreadable ({e}); regenerate with UPDATE_FIXTURES=1")
+        });
+        assert_eq!(
+            on_disk, rendered,
+            "display-binary layout no longer matches the shared fixture. If the \
+             change was deliberate, regenerate with UPDATE_FIXTURES=1 and review \
+             the diff; otherwise a decoder is about to read the wrong columns."
+        );
     }
 
     #[test]
