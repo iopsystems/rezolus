@@ -467,6 +467,7 @@ mod tests {
         "gpu_amd_pmu",
         "gpu_amd_smi",
         "gpu_apple",
+        "gpu_intel_pmu",
         "gpu_nvidia",
         "memory_meminfo",
         "memory_vmstat",

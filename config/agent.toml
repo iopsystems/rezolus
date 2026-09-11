@@ -232,6 +232,29 @@ enabled = false
 # workloads, so use with care on production hosts.
 # gpu_perf_level = "stable_std"
 
+# Produces Intel GPU metrics from the i915 PMU via perf_event_open: per-engine
+# busy time and actual/requested frequency, plus VRAM usage via the DRM query
+# ioctl. Covers both integrated GPUs and discrete Arc cards, which register as
+# separate PMUs; each is discovered from sysfs along with its engine set, so no
+# per-model configuration is needed. This is the same data source intel_gpu_top
+# reads. Requires CAP_PERFMON (or kernel.perf_event_paranoid <= 2); disabled
+# automatically on hosts with no Intel GPU or insufficient permissions.
+#
+# VRAM is discrete-only: an integrated GPU has no device-local memory region, so
+# it publishes no gpu_memory series.
+#
+# Note: the PMU values are cumulative counters, so both are consumed as rates —
+# `rate(gpu_engine_busy_time) * 100` is engine utilization in percent, and
+# `rate(gpu_frequency_sample)` is average MHz. Pair them: the PMU reports
+# occupancy, not efficiency, so frequency is what separates "busy but
+# downclocked" from genuinely saturated.
+[samplers.gpu_intel_pmu]
+# Reads touch the driver (a perf group read takes a driver lock; VRAM is an
+# ioctl), so they run on their own cadence rather than at the scrape rate, and
+# are dispatched off the async worker. Default 1s, matching intel_gpu_top's own
+# sampling period. Cached values are served between reads.
+# interval = "1s"
+
 # Memory utilization from /proc/meminfo
 [samplers.memory_meminfo]
 

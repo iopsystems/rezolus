@@ -322,10 +322,10 @@ fn collect_nics() -> Vec<NicSummary> {
 }
 
 fn collect_gpus() -> Vec<GpuSummary> {
-    // Prefer the library-based hwinfo collector (NVIDIA via NVML + AMD via ROCm
-    // SMI, with total memory and richer detail). Fall back to scraping the
-    // NVIDIA proc interface when the vendor libraries aren't installed.
-    let gpus: Vec<GpuSummary> = crate::hwinfo::gpu::get_gpus()
+    // Every backend lives in `hwinfo::gpu`, including NVIDIA's /proc fallback
+    // for hosts without NVML — this is a straight projection, with no
+    // vendor-specific rescue left at this layer.
+    crate::hwinfo::gpu::get_gpus()
         .into_iter()
         .map(|g| GpuSummary {
             index: g.index,
@@ -334,68 +334,13 @@ fn collect_gpus() -> Vec<GpuSummary> {
             memory_bytes: g.memory_bytes,
             driver: g.driver,
             numa_node: g.numa_node,
+            pci_bus_id: g.pci_bus_id,
+            architecture: g.architecture,
+            pcie_gen: g.pcie_gen,
+            pcie_width: g.pcie_width,
+            cores: g.cores,
         })
-        .collect();
-
-    if gpus.is_empty() {
-        collect_nvidia_gpus()
-    } else {
-        gpus
-    }
-}
-
-fn collect_nvidia_gpus() -> Vec<GpuSummary> {
-    let gpu_dir = Path::new("/proc/driver/nvidia/gpus");
-    if !gpu_dir.exists() {
-        return Vec::new();
-    }
-
-    let mut gpus = Vec::new();
-
-    let driver = read_string("/proc/driver/nvidia/version")
-        .ok()
-        .and_then(|v| {
-            // First line typically: "NVRM version: NVIDIA UNIX ... <version> ..."
-            v.lines().next().and_then(|line| {
-                line.split_whitespace()
-                    .position(|w| w.starts_with("5") || w.starts_with("4") || w.starts_with("3"))
-                    .and_then(|pos| line.split_whitespace().nth(pos))
-                    .map(|s| s.to_string())
-            })
-        });
-
-    if let Ok(entries) = fs::read_dir(gpu_dir) {
-        for (index, entry) in entries.flatten().enumerate() {
-            let info_path = entry.path().join("information");
-            if let Ok(contents) = fs::read_to_string(&info_path) {
-                let mut name = None;
-
-                for line in contents.lines() {
-                    if let Some(val) = line.strip_prefix("Model:") {
-                        name = Some(val.trim().to_string());
-                    }
-                }
-
-                // Try to get NUMA node from the PCI device sysfs path.
-                // /proc/driver/nvidia/gpus/<pci_addr>/information
-                // -> /sys/bus/pci/devices/<pci_addr>/numa_node
-                let pci_addr = entry.file_name().to_string_lossy().to_string();
-                let numa_node =
-                    read_usize(format!("/sys/bus/pci/devices/{pci_addr}/numa_node")).ok();
-
-                gpus.push(GpuSummary {
-                    index,
-                    name,
-                    vendor: "nvidia".to_string(),
-                    memory_bytes: None,
-                    driver: driver.clone(),
-                    numa_node,
-                });
-            }
-        }
-    }
-
-    gpus
+        .collect()
 }
 
 // Simple sysfs reading helpers (standalone, not using hwinfo::util to keep

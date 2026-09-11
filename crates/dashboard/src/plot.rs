@@ -438,6 +438,16 @@ pub struct PlotOpts {
     format: FormatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
+    /// Force a chart style instead of inferring one from the result shape.
+    ///
+    /// The frontend's `resolveStyle` picks a style from how many series come
+    /// back, which makes a chart's type depend on how many entities the host
+    /// happens to have — a per-entity chart drawn as a heatmap on a two-device
+    /// host becomes a line chart on a one-device host. A plot that is
+    /// per-entity by construction says so here, and `data.js` honours it ahead
+    /// of the inference.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    style: Option<String>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -481,6 +491,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            style: None,
         }
     }
 
@@ -495,6 +506,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            style: None,
         }
     }
 
@@ -516,6 +528,7 @@ impl PlotOpts {
             percentiles: None,
             format: FormatConfig::new(unit),
             description: None,
+            style: None,
         }
     }
 
@@ -565,6 +578,13 @@ impl PlotOpts {
     /// Set the entity each heatmap row represents in tooltips (e.g. "GPU").
     pub fn with_row_label<T: Into<String>>(mut self, row_label: T) -> Self {
         self.format.row_label = Some(row_label.into());
+        self
+    }
+
+    /// Force this plot's chart style, overriding the frontend's inference from
+    /// the result shape. See [`PlotOpts::style`].
+    pub fn with_style<T: Into<String>>(mut self, style: T) -> Self {
+        self.style = Some(style.into());
         self
     }
 

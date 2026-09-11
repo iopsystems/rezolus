@@ -423,18 +423,73 @@ const applyDisplayToPlot = (plot, decoded) => {
 
 let _selectedNode = null;
 let _selectedInstances = {};  // { serviceName: instanceId | null }
-let _selectedGpus = [];        // GPU `id`s to filter the GPU section by; [] = all
+// GPUs to filter the GPU section by; [] = all. Each entry is a
+// {vendor, id} pair — see setSelectedGpus.
+let _selectedGpus = [];
 
 const setSelectedNode = (node) => { _selectedNode = node; };
 const getSelectedNode = () => _selectedNode;
 
 // When non-empty, the GPU section's non-per-GPU charts are filtered to these
-// GPU `id`s. Empty means show the aggregate (avg/sum across all GPUs). Per-GPU
+// GPUs. Empty means show the aggregate (avg/sum across all GPUs). Per-GPU
 // charts (those with `by (id)`) always show all GPUs and ignore this.
-const setSelectedGpus = (ids) => {
-    _selectedGpus = Array.isArray(ids) ? ids.map(String) : [];
+//
+// A GPU is identified by `(vendor, id)`, not `id` alone: every vendor's sampler
+// numbers its own devices from 0, so a host with an NVIDIA card and an Intel
+// iGPU has two different GPUs both labelled `id="0"`. Filtering on the id alone
+// would silently pull in the other vendor's series.
+//
+// Accepts either the {vendor, id} objects the selector passes, or bare ids
+// (older callers, and recordings whose sampler sets no vendor — the Apple GPU
+// sampler declares none). A bare id becomes {id} with no vendor, which filters
+// on the id alone exactly as before.
+const setSelectedGpus = (gpus) => {
+    _selectedGpus = Array.isArray(gpus)
+        ? gpus.map((g) => (g !== null && typeof g === 'object')
+            ? { vendor: g.vendor != null ? String(g.vendor) : null, id: String(g.id) }
+            : { vendor: null, id: String(g) })
+        : [];
 };
 const getSelectedGpus = () => _selectedGpus;
+
+/// Build the label selector for the current GPU selection and apply it to `q`.
+///
+/// Selections within one vendor collapse to a single `id=~"a|b"` matcher. A
+/// selection spanning vendors cannot: `vendor=~"a|b", id=~"0|1"` is a cross
+/// product that would also match (vendor a, id 1) — a GPU the user did not
+/// pick. PromQL has no OR over label matchers, so the query is instead widened
+/// per vendor only when that is exact, and otherwise left to the id matcher
+/// alone (the pre-existing behaviour, which over-matches rather than dropping
+/// data).
+const applyGpuSelection = (q, selected) => {
+    const vendors = new Set(selected.map((g) => g.vendor));
+    const ids = [...new Set(selected.map((g) => g.id))];
+
+    // One vendor (or none recorded): vendor pins the family, ids pick within it.
+    if (vendors.size === 1) {
+        const vendor = [...vendors][0];
+        if (vendor) q = injectLabel(q, 'vendor', vendor);
+        return ids.length === 1
+            ? injectLabel(q, 'id', ids[0])
+            : injectLabelRegex(q, 'id', ids.join('|'));
+    }
+
+    // Spanning vendors. If every selected vendor is fully represented at every
+    // selected id, the cross product is exactly the selection and both matchers
+    // are safe.
+    const known = [...vendors].filter(Boolean);
+    const exact = known.length === vendors.size
+        && known.every((v) => ids.every((id) =>
+            selected.some((g) => g.vendor === v && g.id === id)));
+
+    if (exact) {
+        q = injectLabelRegex(q, 'vendor', known.join('|'));
+    }
+
+    return ids.length === 1
+        ? injectLabel(q, 'id', ids[0])
+        : injectLabelRegex(q, 'id', ids.join('|'));
+};
 
 const setSelectedInstance = (serviceName, instanceId) => {
     _selectedInstances[serviceName] = instanceId;
@@ -549,12 +604,51 @@ export const promqlResultToHeatmapTriples = (results) => {
     const triples = [];
     let minValue = Infinity;
     let maxValue = -Infinity;
+
+    // Row labels, parallel to the row indices below. An `id` alone does not
+    // identify a GPU — every vendor's sampler numbers its devices from 0, so a
+    // host with an NVIDIA card and an Intel iGPU has two series both at id=0.
+    // Indexing rows by parseInt(id) would stack them on the same row, one
+    // silently overwriting the other.
+    //
+    // So rows are laid out by result order whenever the ids do not uniquely
+    // identify the series, and each row carries its own label.
+    const ids = results.map((item) => item.metric && item.metric.id);
+    const numericIds = ids.map((v) => parseInt(v, 10));
+    // Ids index rows only when they are unique AND dense from 0. A sparse set
+    // leaves empty rows: sky publishes VRAM for its discrete GPU (id=1) and not
+    // its integrated one, so indexing by id drew a blank row 0 above the only
+    // real row. Falling back to result order packs the rows that exist.
+    const idsUsable = numericIds.every((v) => !Number.isNaN(v))
+        && new Set(numericIds).size === numericIds.length
+        && Math.max(...numericIds) === numericIds.length - 1;
+
+    // The vendor is always shown when a series carries one. An id is only
+    // meaningful within a vendor — every vendor's sampler numbers its devices
+    // from 0 — so "nvidia 0" identifies a GPU where "0" merely indexes one.
+    // Showing it unconditionally also keeps a chart's labels stable when the
+    // set of GPUs in a result changes.
+
+    // Indexed by ROW, not by result order: when ids are usable a row is the id
+    // value itself, and rows for absent ids stay unlabelled.
+    //
+    // Only returned when a label actually differs from its row index. A CPU
+    // heatmap's labels are "0", "1", "2" — identical to the indices they sit
+    // at — and handing those to the renderer made it treat the rows as
+    // self-describing, dropping the "CPU" y-axis title and rendering tooltips
+    // as "2" instead of "CPU 2". That regressed every per-CPU, softirq and
+    // scheduler heatmap on every host, GPU or not.
+    const rowLabels = [];
     results.forEach((item, idx) => {
-        let y = idx;
-        if (item.metric && item.metric.id != null) {
-            const parsed = parseInt(item.metric.id, 10);
-            if (!Number.isNaN(parsed)) y = parsed;
-        }
+        const m = item.metric || {};
+        const row = idsUsable ? numericIds[idx] : idx;
+        rowLabels[row] = m.id == null
+            ? `${row}`
+            : (m.vendor ? `${m.vendor} ${m.id}` : `${m.id}`);
+    });
+
+    results.forEach((item, idx) => {
+        const y = idsUsable ? numericIds[idx] : idx;
         for (const [ts, rawVal] of item.values || []) {
             const ti = timestampToIndex.get(ts);
             if (ti === undefined) continue;
@@ -566,7 +660,14 @@ export const promqlResultToHeatmapTriples = (results) => {
             triples.push([ti, y, v]);
         }
     });
+    // A label that equals its own row index tells the renderer nothing, so the
+    // whole array is withheld and the entity-titled default stands.
+    const rowLabelsAreInformative = rowLabels.some(
+        (label, row) => label != null && label !== String(row),
+    );
+
     return {
+        rowLabels: rowLabelsAreInformative ? rowLabels : null,
         timestamps,
         triples,
         minValue: Number.isFinite(minValue) ? minValue : null,
@@ -688,10 +789,15 @@ const applyResultToPlot = (plot, result) => {
 
         if (hasMultipleSeries) {
             if (style === 'heatmap') {
-                const { timestamps, triples, minValue, maxValue } =
+                const { timestamps, triples, minValue, maxValue, rowLabels } =
                     promqlResultToHeatmapTriples(result.data.result);
                 plot.data = triples;
                 plot.time_data = timestamps;
+                // Per-row names, so a GPU heatmap can say "nvidia 0" / "intel 0"
+                // where the bare id would be ambiguous. `null` for rows that
+                // merely restate their index (a CPU heatmap), which leaves the
+                // renderer's entity title and "CPU 2" tooltips intact.
+                plot.row_labels = rowLabels;
                 plot.min_value = minValue != null ? minValue : Infinity;
                 plot.max_value = maxValue != null ? maxValue : -Infinity;
             } else {
@@ -709,14 +815,30 @@ const applyResultToPlot = (plot, result) => {
                 const seriesIntervals = [];
                 let timestamps = null;
 
+                // A GPU is identified by (vendor, id): every vendor's sampler
+                // numbers its devices from 0, so a host with an NVIDIA card and
+                // an Intel iGPU has two GPUs both labelled id="0". Naming a
+                // series by whichever label iterates first would render both as
+                // "0" — two indistinguishable lines.
+                //
+                // The vendor is only worth showing when the result actually
+                // spans vendors; on a single-vendor host "intel GPU 0" is noise
+                // where "GPU 0" says the same thing. Decided over the whole
+                // result set, so every line in one chart is named consistently.
+
                 result.data.result.forEach((item, idx) => {
                     if (item.values && Array.isArray(item.values)) {
                         let seriesName = 'Series ' + (idx + 1);
                         if (item.metric) {
-                            for (const [key, value] of Object.entries(item.metric)) {
-                                if (key !== '__name__') {
-                                    seriesName = value;
-                                    break;
+                            const { id, vendor } = item.metric;
+                            if (id !== undefined && vendor !== undefined) {
+                                seriesName = `${vendor} ${id}`;
+                            } else {
+                                for (const [key, value] of Object.entries(item.metric)) {
+                                    if (key !== '__name__') {
+                                        seriesName = value;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -862,13 +984,12 @@ const createDataApi = ({
         // On the GPU section, filter the non-per-GPU charts to the selected GPU
         // `id`s. Per-GPU charts group `by (id)` to draw one line per GPU and
         // must always show all GPUs, so they are exempt. Empty selection = all.
-        if (_selectedGpus.length > 0 && sectionRoute === '/gpu' && !/by\s*\(\s*id\s*\)/.test(q)) {
-            if (_selectedGpus.length === 1) {
-                q = injectLabel(q, 'id', _selectedGpus[0]);
-            } else {
-                // Match any of the selected ids via a regex label selector.
-                q = injectLabelRegex(q, 'id', _selectedGpus.join('|'));
-            }
+        // Per-GPU charts group by id (and by vendor, since an id is only
+        // unique within one vendor) to draw one line per GPU; they must show
+        // every GPU regardless of the selection, so they are exempt.
+        if (_selectedGpus.length > 0 && sectionRoute === '/gpu'
+            && !/by\s*\(\s*id\s*[,)]/.test(q)) {
+            q = applyGpuSelection(q, _selectedGpus);
         }
         if (injectTopologyLabels && serviceName) {
             const inst = _selectedInstances[serviceName];
@@ -1233,6 +1354,7 @@ export {
     getSelectedNode,
     setSelectedGpus,
     getSelectedGpus,
+    applyGpuSelection,
     setSelectedInstance,
     getSelectedInstance,
     injectLabel,

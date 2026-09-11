@@ -105,8 +105,15 @@ const renderSingleNodeInfo = (info, CpuTopology, formatBytes) => {
                 m('table.sysinfo-table', m('tbody',
                     info.gpus.map((gpu) => m('tr', [
                         m('td.sysinfo-label', gpu.name || gpu.vendor),
+                        // Absent memory means UNKNOWN, not integrated. The
+                        // NVIDIA /proc fallback (used when the driver is
+                        // present but NVML is not) reports no memory at all,
+                        // and labelling those discrete cards "integrated" was
+                        // simply wrong. `architecture` says it when the
+                        // collector actually determined it.
                         m('td.sysinfo-value', [
-                            gpu.memory_bytes ? formatBytes(gpu.memory_bytes) : '',
+                            gpu.memory_bytes ? formatBytes(gpu.memory_bytes)
+                                : (gpu.architecture || ''),
                             gpu.driver ? ` (${gpu.driver})` : '',
                         ].join('')),
                     ])),

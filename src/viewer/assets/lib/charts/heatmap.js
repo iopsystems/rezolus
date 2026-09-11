@@ -80,7 +80,14 @@ export function configureHeatmap(chart) {
     const resolutionStore = createHeatmapResolutionStore(data, timeData, emitNullCells);
     chart.heatmapResolutionStore = resolutionStore;
     const yCount = resolutionStore.yCount;
-    const continuousCpuIds = Array.from({ length: yCount }, (_, i) => i);
+    // Per-row names when the data supplies them (a GPU heatmap on a
+    // mixed-vendor host needs "nvidia 0" / "intel 0", since the bare id is
+    // ambiguous); otherwise the row index, as before.
+    const suppliedRowLabels = chart.spec.row_labels;
+    const continuousCpuIds = Array.from({ length: yCount }, (_, i) =>
+        (suppliedRowLabels && suppliedRowLabels[i] != null)
+            ? String(suppliedRowLabels[i])
+            : i);
     if (continuousCpuIds.length !== resolutionStore.cpuIds.length) {
         console.error('CPU IDs are not continuous', resolutionStore.cpuIds);
     }
@@ -126,6 +133,15 @@ export function configureHeatmap(chart) {
         // If this is a downsampled data point, `value` is the max value.
         // Otherwise, it's just the value, with `minValue` being null.
         const [time, cpu, timeIndex, minVal, value] = params.data;
+        // Row name for the tooltip: the supplied label where there is one, so a
+        // mixed-vendor GPU chart reads "GPU nvidia 0" rather than two rows both
+        // claiming to be "GPU 0".
+        // A supplied label already names the entity, so the rowEntity prefix is
+        // dropped for it — "GPU nvidia 0" reads as noise. Numeric rows keep it,
+        // so a CPU heatmap still says "CPU 12".
+        const rowName = (suppliedRowLabels && suppliedRowLabels[cpu] != null)
+            ? String(suppliedRowLabels[cpu])
+            : `${rowEntity} ${cpu}`;
 
         // In compare mode, time is already the post-anchor relative ms
         // value (the rebase happens before the chart is fed). Use the
@@ -143,7 +159,7 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                ${rowEntity} ${cpu}
+                                ${rowName}
                             </span>
                             <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fgMuted};">
                                 no data
@@ -172,7 +188,7 @@ export function configureHeatmap(chart) {
                         </div>
                         <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 4px;">
                             <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                                ${rowEntity} ${cpu}
+                                ${rowName}
                             </span>
                         </div>
                         <div style="display: grid; grid-template-columns: max-content max-content; gap: 2px 12px; ${FONTS.cssMono} font-size: ${FONTS.tooltipValue.fontSize}px;">
@@ -211,7 +227,7 @@ export function configureHeatmap(chart) {
                     </div>
                     <div style="display: flex; align-items: center; gap: 12px;">
                         <span style="background: ${COLORS.accentSubtle}; padding: 3px 8px; border-radius: 4px; ${FONTS.cssMono} font-size: ${FONTS.tooltipTimestamp.fontSize}px; color: ${COLORS.accent};">
-                            ${rowEntity} ${cpu}
+                            ${rowName}
                         </span>
                         ${label}
                         <span style="${FONTS.cssMono} font-weight: ${FONTS.tooltipValue.fontWeight}; font-size: ${FONTS.tooltipValue.fontSize}px; color: ${COLORS.fg};">
@@ -222,11 +238,18 @@ export function configureHeatmap(chart) {
                 </div>`;
     };
 
+    // Rows that supply their own labels are self-describing — "nvidia 0"
+    // already names the entity — so the axis name is dropped for them. It only
+    // repeated the entity, and being positioned with a fixed gap sized for
+    // short numeric labels ("0", "12"), it rendered on top of the wider text.
+    // Numeric rows keep the name, since "0" alone does not say what it counts.
     const yAxis = {
         type: 'category',
-        name: yAxisLabel || 'CPU',
-        nameLocation: 'middle',
-        nameGap: 40,
+        ...(suppliedRowLabels ? {} : {
+            name: yAxisLabel || 'CPU',
+            nameLocation: 'middle',
+            nameGap: 40,
+        }),
         nameTextStyle: {
             color: COLORS.fg,
             ...FONTS.legend,
