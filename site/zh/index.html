@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html class="light" lang="en">
+<html class="light" lang="zh-Hans">
 
 <head>
     <meta charset="utf-8" />
     <meta content="width=device-width, initial-scale=1.0" name="viewport" />
-    <title>Rezolus - High-Resolution Systems &amp; Performance Telemetry</title>
+    <title>Rezolus - 高分辨率系统与性能遥测</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <meta name="description"
-        content="Rezolus is a high-resolution systems &amp; performance telemetry agent using eBPF for low-overhead instrumentation on Linux." />
+        content="Rezolus 是一个高分辨率的系统与性能遥测代理，在 Linux 上使用 eBPF 实现低开销观测。" />
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Jost:wght@100..900&amp;family=JetBrains+Mono:wght@700&amp;display=swap"
@@ -223,20 +223,20 @@
     <nav
         class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
         <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
-            <a href="/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
+            <a href="/zh/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
             <div class="hidden md:flex items-center gap-6 text-base font-semibold nav-links">
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#use-cases">Use Cases</a>
+                    href="#use-cases">应用场景</a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#features">Features</a>
+                    href="#features">功能</a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#quickstart">Quick Start</a>
+                    href="#quickstart">快速上手</a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="docs/installation.html">Docs</a>
+                    href="/zh/docs/installation.html">文档</a>
                 <a class="inline-flex items-center gap-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="viewer/" target="_blank" rel="noopener">Viewer<span class="material-symbols-outlined text-[14px] opacity-70" data-icon="open_in_new">open_in_new</span></a>
+                    href="/viewer/" target="_blank" rel="noopener">Viewer<span class="material-symbols-outlined text-[14px] opacity-70" data-icon="open_in_new">open_in_new</span></a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="/zh/">中文</a>
+                    href="/">English</a>
             </div>
             <div class="flex items-center gap-2">
                 <a href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener"
@@ -244,7 +244,7 @@
                     GitHub<span class="material-symbols-outlined text-[14px] opacity-80" data-icon="open_in_new">open_in_new</span>
                 </a>
                 <button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu"
-                    aria-label="Open menu"
+                    aria-label="打开菜单"
                     class="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
                     <span class="material-symbols-outlined" data-icon="menu">menu</span>
                 </button>
@@ -254,18 +254,18 @@
             class="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
             <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-base font-semibold">
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#use-cases">Use Cases</a>
+                    href="#use-cases">应用场景</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#features">Features</a>
+                    href="#features">功能</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="#quickstart">Quick Start</a>
+                    href="#quickstart">快速上手</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="docs/installation.html">Docs</a>
+                    href="/zh/docs/installation.html">文档</a>
                 <a class="py-3 inline-flex items-center gap-1 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="viewer/" target="_blank" rel="noopener">Viewer<span
+                    href="/viewer/" target="_blank" rel="noopener">Viewer<span
                         class="material-symbols-outlined text-[14px] opacity-70" data-icon="open_in_new">open_in_new</span></a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
-                    href="/zh/">中文</a>
+                    href="/">English</a>
             </div>
         </div>
     </nav>
@@ -275,21 +275,21 @@
         <div class="max-w-3xl mx-auto text-center">
             <h1
                 class="hero-title text-5xl md:text-7xl tracking-tight text-slate-800 dark:text-white mb-8 leading-[1.05]">
-                High-resolution<br />systems &amp; performance<br />telemetry
+                高分辨率<br />系统与性能<br />遥测
             </h1>
             <p
                 class="text-[22px] md:text-2xl text-slate-600 dark:text-slate-300 leading-relaxed mb-12 max-w-2xl mx-auto">
-                eBPF-powered telemetry with near-zero runtime overhead. Use fine-grained CPU, GPU, scheduler, SSD,
+                基于 eBPF 的遥测，运行时开销接近于零。用细粒度的 CPU、GPU、调度器、SSD、网络与系统调用度量，把真实存在的问题暴露出来。
                 network, and syscall metrics to surface real issues.
             </p>
             <div class="flex flex-col sm:flex-row items-center justify-center gap-4">
                 <a href="#quickstart"
                     class="bg-primary dark:bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-bold no-underline hover:opacity-90 transition-opacity">
-                    Get Started
+                    开始使用
                 </a>
-                <a href="docs/architecture.html"
+                <a href="/zh/docs/architecture.html"
                     class="border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 bg-white/70 dark:bg-slate-900/60 px-10 py-4 rounded-lg text-lg font-bold no-underline hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
-                    How It Works
+                    工作原理
                 </a>
             </div>
         </div>
@@ -299,9 +299,9 @@
     <section class="py-24 px-6 paper-major" id="use-cases">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-20 card-surface bare">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Where
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">微秒决定成败的地方
                     microseconds make or break the product</h2>
-                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">Most off-the-shelf telemetry is built for
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">大多数现成的遥测方案是为 Web 服务设计的——毫秒级延迟和分钟级平均值就够用了。而这个世界的其余部分，需要更好的测量。
                     web services, where millisecond latencies and minutely averages are acceptable. The rest of the world needs better measurement.</p>
             </div>
 
@@ -314,9 +314,9 @@
                             <span class="material-symbols-outlined text-blue-600 dark:text-blue-400"
                                 data-icon="candlestick_chart">candlestick_chart</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">High-frequency trading</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">高频交易</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Everything about the application has been optimized to a T. But you still need to be sure that nothing in the environment could ruin the day. Rezolus uses the world's fastest histogram to catch the smallest delay.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">应用本身已经优化到极致，但你仍然需要确认：环境里没有任何东西会毁掉这一天。Rezolus 用世界上最快的直方图，捕捉最细微的延迟。</p>
                 </div>
 
                 <div>
@@ -326,9 +326,9 @@
                             <span class="material-symbols-outlined text-green-600 dark:text-green-400"
                                 data-icon="directions_car">directions_car</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Autonomous systems</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">自动驾驶系统</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Perception and planning loops stick to a strict deadline. Rezolus runs well on embedded systems and monitors the possible sources of contention: scheduler, GPU, block I/O, locks, with recall in hindsight.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">感知与规划循环有严格的截止时间。Rezolus 在嵌入式系统上运行良好，持续监控可能的争用来源：调度器、GPU、块 I/O、锁，并支持事后回溯。</p>
                 </div>
 
                 <div>
@@ -338,9 +338,9 @@
                             <span class="material-symbols-outlined text-purple-600 dark:text-purple-400"
                                 data-icon="precision_manufacturing">precision_manufacturing</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Industrial control &amp; robotics</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">工业控制与机器人</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">On a real-time kernel the chase is often down to the last cycle. Run-queue delay, involuntary context switches, CPU migrations, and TLB shootdowns are all included out of the box.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">在实时内核上，排查往往要追到最后一个周期。运行队列延迟、非自愿上下文切换、CPU 迁移、TLB 击落，开箱即有。</p>
                 </div>
 
                 <div>
@@ -350,9 +350,9 @@
                             <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
                                 data-icon="database">database</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Storage &amp; database appliances</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">存储与数据库设备</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Complex workloads stress systems in unpredictable ways. Capture both workload characteristics and device runtime behavior in their full dynamic range with histograms, plus drive health and temperature info for debugging.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">复杂负载会以难以预料的方式给系统施压。用直方图完整记录负载特征与设备运行行为的动态范围，另有硬盘健康与温度信息可供排查。</p>
                 </div>
 
                 <div>
@@ -362,9 +362,9 @@
                             <span class="material-symbols-outlined text-rose-600 dark:text-rose-400"
                                 data-icon="cloud_off">cloud_off</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Air-gapped &amp; edge</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">离线与边缘环境</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Local-first design fit inside one static binary. No time-series database, nothing phoning home, no need for third-party dashboards. Recordings land on local disk, and the viewer opens them readily in your browser.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">本地优先的设计，装进一个静态二进制文件。不需要时序数据库，不向外回传，也不依赖第三方仪表盘。记录直接落在本地磁盘，Viewer 在浏览器里就能打开。</p>
                 </div>
 
                 <div>
@@ -374,24 +374,24 @@
                             <span class="material-symbols-outlined text-cyan-600 dark:text-cyan-400"
                                 data-icon="router">router</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Network &amp; ISP infrastructure</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">网络与运营商基础设施</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Light enough to provide fine-grain visibility into a box that runs close to line rate. Interface and ethtool counters sit alongside per-CPU scheduler and PMU behavior, so the box can speak to you when something is not right.</p>
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">足够轻量，可以对逼近线速运行的设备提供细粒度的可见性。接口与 ethtool 计数器，加上每 CPU 的调度器与 PMU 行为，让设备在出问题时能开口说话。</p>
                 </div>
 
             </div>
 
             <div class="mt-10 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 bg-white dark:bg-slate-800">
-                <h3 class="text-lg italic font-normal text-slate-900 dark:text-white mb-4">Why it is safe to leave running</h3>
+                <h3 class="text-lg italic font-normal text-slate-900 dark:text-white mb-4">为什么可以一直开着</h3>
                 <ul class="space-y-3 list-disc pl-5 marker:text-slate-400 dark:marker:text-slate-600">
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
-                            class="font-bold text-slate-900 dark:text-white">Just a metrics agent.</span> Quantified
+                            class="font-bold text-slate-900 dark:text-white">只是一个度量采集代理。</span> 每次刷新的开销可量化、有上界。
                         and bounded per-refresh cost.</li>
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
-                            class="font-bold text-slate-900 dark:text-white">Runs on a vanilla modern kernel.</span>
-                        CO-RE eBPF &mdash; no module, no patch.</li>
+                            class="font-bold text-slate-900 dark:text-white">运行在原版的现代内核上。</span>
+                        CO-RE eBPF——不装模块，不打补丁。</li>
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
-                            class="font-bold text-slate-900 dark:text-white">Local first.</span> Hindsight in a buffer,
+                            class="font-bold text-slate-900 dark:text-white">本地优先。</span> Hindsight 常驻缓冲区，按需记录。
                         record on demand.</li>
                 </ul>
             </div>
@@ -402,9 +402,9 @@
     <section class="py-24 px-6" id="features">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-20 card-surface bare">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Six
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">六个工具，一个二进制
                     tools, one binary</h2>
-                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Full
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">从采集到分析的完整可观测性工作流。可以单独使用，也可以接入 OTel。
                     observability workflow from collection to analysis. Use it alone or integrate with OTel. </p>
             </div>
 
@@ -419,7 +419,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Agent</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Collects system metrics via
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">通过 eBPF 采集系统度量，开销接近于零。以 HTTP 暴露数据，供下游消费。
                         eBPF with near-zero overhead. Exposes data over HTTP for downstream consumers.</p>
                 </div>
 
@@ -432,7 +432,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Exporter</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Serves Prometheus-compatible
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">提供 Prometheus 兼容的度量，直方图分位数可配置，开箱即可被抓取。
                         metrics with configurable histogram percentiles. Scrape-ready.</p>
                 </div>
 
@@ -445,7 +445,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Recorder</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Captures high-fidelity
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">把高保真的度量快照写入 Parquet 文件，用于基准测试与性能分析。
                         metric
                         snapshots to Parquet files for benchmarking and performance analysis.</p>
                 </div>
@@ -459,11 +459,11 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Hindsight</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Maintains a rolling ring
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">在磁盘上维护滚动环形缓冲区。通过信号或 HTTP 触发快照，用于事后分析。
                         buffer on disk. Trigger snapshots via signal or HTTP for post-incident analysis.</p>
                 </div>
 
-                <a href="viewer/" class="no-underline block">
+                <a href="/viewer/" class="no-underline block">
                     <div class="flex items-center gap-3 mb-3">
                         <div
                             class="w-12 h-12 rounded-xl bg-rose-100 dark:bg-rose-900/40 flex items-center justify-center">
@@ -472,7 +472,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">Viewer</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Interactive web dashboard
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">支持 PromQL 的交互式 Web 仪表盘。浏览已有记录，或从运行中的 agent 实时读取。
                         with
                         PromQL support. Explore recordings or stream live from a running agent.</p>
                 </a>
@@ -486,7 +486,7 @@
                         </div>
                         <h3 class="text-lg font-bold text-slate-900 dark:text-white">MCP Server</h3>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI-guided analysis tools.
+                    <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI 引导的分析工具。用 PromQL 查询记录、检测异常、关联度量。
                         Query recordings with PromQL, detect anomalies, and correlate metrics.</p>
                 </div>
 
@@ -498,7 +498,7 @@
     <section class="py-24 px-6 bg-white dark:bg-slate-900" id="quickstart">
         <div class="max-w-2xl mx-auto">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Up and
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">几秒钟就能跑起来
                     running in seconds</h2>
             </div>
 
@@ -520,7 +520,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             1</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install and start</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">安装并启动</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -534,12 +534,12 @@
                             </div>
                         </div>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 mb-3">This adds the package repo, installs
+                    <p class="text-base text-slate-600 dark:text-slate-300 mb-3">这会添加软件包仓库、安装 Rezolus，并把 agent 作为 systemd 服务启动。支持 Debian、Ubuntu、Rocky Linux 和 Amazon Linux。
                         Rezolus, and starts the agent as a systemd service. Supports Debian, Ubuntu, Rocky Linux, and
                         Amazon Linux.</p>
                     <div class="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
                         <span class="material-symbols-outlined text-sm">info</span>
-                        <span class="text-slate-600 dark:text-slate-500">Run as root or with sudo</span>
+                        <span class="text-slate-600 dark:text-slate-500">需要 root 权限，或使用 sudo 运行</span>
                     </div>
                 </div>
 
@@ -548,7 +548,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Explore your metrics</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览你的度量</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -557,21 +557,21 @@
                             <div class="w-3 h-3 rounded-full bg-green-500/50"></div>
                         </div>
                         <div class="p-6 font-mono text-sm leading-8">
-                            <div class="text-slate-500 text-xs"># Open the interactive dashboard</div>
+                            <div class="text-slate-500 text-xs"># 打开交互式仪表盘</div>
                             <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code
                                     class="text-green-400">rezolus view http://localhost:4241</code></div>
                         </div>
                     </div>
-                    <p class="text-base text-slate-600 dark:text-slate-300 mt-3">Streams live metrics from the agent
+                    <p class="text-base text-slate-600 dark:text-slate-300 mt-3">把 agent 的实时度量接入交互式 Web 仪表盘。agent 监听在
                         into
                         an interactive web dashboard. The agent listens on <code
-                            class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">0.0.0.0:4241</code>, so
+                            class="bg-slate-100 dark:bg-slate-800 px-1 py-0.5 rounded text-xs">0.0.0.0:4241</code>，因此你也可以让 Viewer 指向远程主机。
                         you can also point the viewer at a remote host.</p>
                 </div>
 
-                <p class="text-sm text-slate-500 dark:text-slate-400">Requires Linux kernel 5.8+ and root. See <a
-                        href="docs/installation.html" class="text-blue-600 dark:text-blue-400 underline">full
-                        installation docs</a> for building from source or managing services individually.</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">需要 Linux 内核 5.8 及以上，以及 root 权限。参见 <a
+                        href="/zh/docs/installation.html" class="text-blue-600 dark:text-blue-400 underline">完整安装文档
+                        installation docs</a> ，了解如何从源码构建或单独管理各项服务。</p>
             </div>
 
             <!-- macOS flow -->
@@ -582,7 +582,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             1</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">安装</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -597,7 +597,7 @@
                     </div>
                     <div
                         class="mt-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
-                        <p class="text-base text-amber-800 dark:text-amber-300"><strong>Note:</strong> The macOS agent
+                        <p class="text-base text-amber-800 dark:text-amber-300"><strong>注意：</strong> macOS 上的 agent 只采集基础的 CPU 与 Apple GPU 度量。基于 eBPF 的采样器（调度器、块 I/O、TCP、系统调用）需要 Linux。可以用 Viewer 和 Recorder 连接远程的 Linux agent。
                             collects basic CPU and Apple GPU metrics only. eBPF-based samplers (scheduler, block I/O,
                             TCP, syscall) require Linux. Use the viewer and recorder to work with remote Linux
                             agents.</p>
@@ -609,7 +609,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Explore local or remote metrics</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">浏览本地或远程的度量</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -618,10 +618,10 @@
                             <div class="w-3 h-3 rounded-full bg-green-500/50"></div>
                         </div>
                         <div class="p-6 font-mono text-sm leading-8">
-                            <div class="text-slate-500 text-xs"># View a remote Linux host's metrics from your Mac</div>
+                            <div class="text-slate-500 text-xs"># 在 Mac 上查看远程 Linux 主机的度量</div>
                             <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code
                                     class="text-green-400">rezolus view http://&lt;remote-host&gt;:4241</code></div>
-                            <div class="text-slate-500 text-xs mt-3"># Or run the agent locally (CPU metrics only)</div>
+                            <div class="text-slate-500 text-xs mt-3"># 或者在本地运行 agent（仅 CPU 度量）</div>
                             <div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code
                                     class="text-green-400">sudo rezolus /etc/rezolus/agent.toml</code></div>
                         </div>
@@ -637,14 +637,14 @@
     <section class="py-24 px-6">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-16 card-surface">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">What it
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">它测量什么
                     measures</h2>
-                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Covering
+                <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">覆盖完整的 Linux 性能栈，也可以接入你自己的度量。
                     the full Linux performance stack. Plus bring your own metrics.</p>
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-3 gap-4 paper-fill">
-                <a href="docs/telemetry.html#cpu"
+                <a href="/zh/docs/telemetry.html#cpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
@@ -652,9 +652,9 @@
                                 data-icon="memory">memory</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">CPU</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">使用率、频率、性能计数器、缓存、TLB</p>
                 </a>
-                <a href="docs/telemetry.html#gpu"
+                <a href="/zh/docs/telemetry.html#gpu"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
@@ -662,29 +662,29 @@
                                 data-icon="developer_board">developer_board</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">GPU</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA and Apple Silicon metrics</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA 与 Apple Silicon 度量</p>
                 </a>
-                <a href="docs/telemetry.html#memory"
+                <a href="/zh/docs/telemetry.html#memory"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="dynamic_form">dynamic_form</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Memory</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">内存</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Usage, vmstat, NUMA allocations</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">使用量、vmstat、NUMA 分配</p>
                 </a>
-                <a href="docs/telemetry.html#network"
+                <a href="/zh/docs/telemetry.html#network"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="lan">lan</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Network</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">网络</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Traffic, errors, ethtool counters</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">流量、错误、ethtool 计数器</p>
                 </a>
-                <a href="docs/telemetry.html#tcp"
+                <a href="/zh/docs/telemetry.html#tcp"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
@@ -692,39 +692,39 @@
                                 data-icon="cable">cable</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">TCP</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Connect latency, jitter, retransmits</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">连接延迟、抖动、重传</p>
                 </a>
-                <a href="docs/telemetry.html#blockio"
+                <a href="/zh/docs/telemetry.html#blockio"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="storage">storage</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Block I/O</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">块 I/O</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Latency distributions, request counts</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">延迟分布、请求数</p>
                 </a>
-                <a href="docs/telemetry.html#scheduler"
+                <a href="/zh/docs/telemetry.html#scheduler"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="schedule">schedule</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Scheduler</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">调度器</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Runqueue latency, context switches</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">运行队列延迟、上下文切换</p>
                 </a>
-                <a href="docs/telemetry.html#syscall"
+                <a href="/zh/docs/telemetry.html#syscall"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="terminal">terminal</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Syscall</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-white">系统调用</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Counts and latency by type</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">按类型统计次数与延迟</p>
                 </a>
-                <a href="docs/telemetry.html#rezolus"
+                <a href="/zh/docs/telemetry.html#rezolus"
                     class="group p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3 mb-2">
                         <div class="text-2xl leading-none"><span
@@ -732,13 +732,13 @@
                                 data-icon="speed">speed</span></div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">Rezolus</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Self-monitoring: CPU, memory, I/O</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">自监控：CPU、内存、I/O</p>
                 </a>
             </div>
         </div>
             <div class="mt-12 text-center text-lg font-medium text-slate-700 dark:text-slate-200 space-y-3">
-                <p><span class="text-blue-700 dark:text-blue-400 font-bold">CPU, Scheduler, and Syscall</span> metrics are also reported <em>per cgroup (container)</em>.</p>
-                <p>Bring your own metrics by ingesting from any <span class="text-blue-700 dark:text-blue-400 font-bold">OpenTelemetry</span> endpoint.</p>
+                <p><span class="text-blue-700 dark:text-blue-400 font-bold">CPU、调度器与系统调用</span> 度量还会 <em>按 cgroup（容器）分别上报</em>.</p>
+                <p>也可以从任意 <span class="text-blue-700 dark:text-blue-400 font-bold">OpenTelemetry</span> 端点接入你自己的度量。</p>
             </div>
 
     </section>
@@ -748,71 +748,71 @@
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-16">
                 <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">
-                    Documentation</h2>
-                <p class="text-xl text-slate-600 dark:text-slate-300">Everything you need to deploy and operate Rezolus.
+                    文档</h2>
+                <p class="text-xl text-slate-600 dark:text-slate-300">部署与运维 Rezolus 所需的一切。
                 </p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <a href="docs/installation.html"
+                <a href="/zh/docs/installation.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="download">download</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Installation</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">安装</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Packages, source builds, platform support</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">软件包、源码构建、平台支持</p>
                 </a>
-                                <a href="docs/usage.html"
+                                <a href="/zh/docs/usage.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="rocket_launch">rocket_launch</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Usage</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">使用</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Long-running, one-off, and offline analysis</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">长期运行、一次性采集与离线分析</p>
                 </a>
-                <a href="docs/architecture.html"
+                <a href="/zh/docs/architecture.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="account_tree">account_tree</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Architecture</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">架构</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Modes, samplers, eBPF integration</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">运行模式、采样器、eBPF 集成</p>
                 </a>
-                                <a href="docs/telemetry.html"
+                                <a href="/zh/docs/telemetry.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="insights">insights</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Metrics</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">度量</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Samplers and metric types, one by one</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">逐个说明采样器与度量类型</p>
                 </a>
-                <a href="docs/cli.html"
+                <a href="/zh/docs/cli.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="terminal">terminal</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">CLI 与配置</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">Commands, flags, TOML config reference</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">命令、参数、TOML 配置参考</p>
                 </a>
-                <a href="docs/api.html"
+                <a href="/zh/docs/api.html"
                     class="group flex flex-col gap-2 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 transition-colors no-underline">
                     <div class="flex items-center gap-3">
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="api">api</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">API Reference</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">API 参考</h3>
                     </div>
-                    <p class="text-base text-slate-500 dark:text-slate-400">HTTP endpoints for every mode</p>
+                    <p class="text-base text-slate-500 dark:text-slate-400">各运行模式的 HTTP 端点</p>
                 </a>
             </div>
         </div>
@@ -823,7 +823,7 @@
         <div class="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-8 card-surface">
             <div>
                 <div class="text-lg font-bold text-slate-900 dark:text-white mb-1">Rezolus</div>
-                <p class="text-base text-slate-500 dark:text-slate-400">MIT or Apache-2.0</p>
+                <p class="text-base text-slate-500 dark:text-slate-400">MIT 或 Apache-2.0</p>
             </div>
             <div class="flex gap-8 text-sm text-slate-500 dark:text-slate-400">
                 <a class="hover:text-blue-500 transition-colors no-underline"
@@ -841,7 +841,7 @@
         const navMenu = document.getElementById('nav-menu');
         const setNav = (open) => {
             navToggle.setAttribute('aria-expanded', String(open));
-            navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+            navToggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
             navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
             navMenu.hidden = !open;
         };
