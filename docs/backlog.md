@@ -611,6 +611,21 @@ Page 0x02 (`nvme.rs`) — no kernel module.
 - **Hotplug discovery** — Open. Phase 1 discovers drives once at startup; drives
   added later are missed. *Reopen:* if hotplug matters.
 
+## Agent — filesystem sampler
+
+Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-filesystem-sampler.md).
+
+- **Network mounts** — By design. Never sampled: `statvfs` on a `hard` NFS/CIFS
+  mount blocks until the server answers and the timeout is a mount option the
+  agent cannot set. Reopen only on real demand (#1202); an opt-in needs its own
+  blocking budget (bounded thread, per-mount deadline). The TODO sits in the
+  sampler's module doc (`src/agent/samplers/filesystem/linux/mod.rs`).
+- **Event-driven mount-table rescan** — Idea. `poll()` on the mountinfo
+  descriptor reports `POLLPRI` on change; a sweep could rescan only then.
+  Reopen if a many-thousand-mount host shows the per-sweep parse mattering.
+- **`MAX_MOUNTS` = 64** — By design. Mounts past the cap are dropped and
+  counted in a warning. Reopen if a real host exceeds it.
+
 ## Agent — NVIDIA GPU sampler
 
 Source: PR #1108 (Tegra placeholder gating), grounded in a measured Tegra

@@ -1,5 +1,17 @@
 ## [Unreleased]
 
+### Added
+
+- Agent: a `filesystem` sampler reports total, free and available bytes and
+  total and free inodes for every locally mounted filesystem, labeled by
+  `mount`, `fstype` and `device`. The mount table is re-read on each sweep, so
+  a filesystem mounted after startup appears on its own. Local filesystems
+  only: network filesystems, FUSE and autofs are never sampled, because a
+  `statvfs` on a hard network mount blocks until the server answers. Sweeps
+  run at most once per `[samplers.filesystem] interval` (default 60s), off the
+  scrape cycle. The viewer gains a Filesystem section with one line per mount.
+  (#1202)
+
 ## [5.20.0] - 2026-09-10
 
 ### Added

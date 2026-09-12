@@ -200,6 +200,17 @@ enabled = true
 [samplers.drivehealth]
 # interval = "60s"
 
+# Reports total, free and available bytes and total and free inodes for every
+# locally mounted filesystem, one statvfs per mount, labeled by mount point,
+# filesystem type and device. The mount table is re-read on each sweep so a
+# filesystem mounted after startup is picked up. Local only: network
+# filesystems (NFS, CIFS, Ceph, ...), FUSE and autofs are never sampled, since
+# a statvfs on a hard network mount blocks until the server answers. Occupancy
+# moves slowly, so sweeps are throttled to `interval` (default 60s) and run off
+# the scrape/TTL cycle.
+[samplers.filesystem]
+# interval = "60s"
+
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
 # requires Turing+ GPU and is only available when built with --features cupti.
