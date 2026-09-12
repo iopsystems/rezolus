@@ -62,6 +62,15 @@ enum Msg {
         seed: Box<ManifestSeed>,
         reply: SyncSender<Result<i64, String>>,
     },
+    /// Reopen an existing recording for a new writer session: verify it,
+    /// clear `complete`, record the session, and hand back what the handle
+    /// needs (its labels for the stagger key, the newest row it must stay
+    /// after).
+    ResumeRecording {
+        recording_id: i64,
+        clock_anchor_wall_ns: u64,
+        reply: SyncSender<Result<Resumed, String>>,
+    },
     /// One tick's WAL rows for EVERY recording in the archive, across all
     /// their samplers — one transaction, and therefore one fsync at
     /// `synchronous=FULL`.
@@ -196,6 +205,27 @@ impl RezArchive {
         Self::create_inner(path, checkpoint_every, Some(busy_timeout))
     }
 
+    /// Reopen an existing `.rez` to append to it.
+    ///
+    /// The file is not changed by opening; a recording is changed only by
+    /// [`resume_recording`](Self::resume_recording), which is what a caller
+    /// that wants to continue one calls next. Numbering (`seq`) and the
+    /// clock-offset series continue from what the file holds. There must be
+    /// no other writer of this file.
+    pub fn open(path: &Path) -> Result<Self, String> {
+        Self::open_checkpointing_every(path, CHECKPOINT_INTERVAL)
+    }
+
+    /// [`open`](Self::open) with the WAL checkpoint cadence chosen by the
+    /// caller.
+    pub fn open_checkpointing_every(
+        path: &Path,
+        checkpoint_every: Duration,
+    ) -> Result<Self, String> {
+        let db = RezDb::open_for_write(path)?;
+        Self::spawn(db, path, checkpoint_every, false)
+    }
+
     fn create_inner(
         path: &Path,
         checkpoint_every: Duration,
@@ -205,7 +235,18 @@ impl RezArchive {
         if let Some(timeout) = busy_timeout {
             db.set_busy_timeout(timeout)?;
         }
+        Self::spawn(db, path, checkpoint_every, true)
+    }
 
+    /// Start the writer thread over an open connection. `created` says
+    /// whether the file is ours to remove if the spawn fails: a file we just
+    /// created is; one we reopened is not.
+    fn spawn(
+        db: RezDb,
+        path: &Path,
+        checkpoint_every: Duration,
+        created: bool,
+    ) -> Result<Self, String> {
         // Bound 1, as in v2: the hand-off blocks while the writer is busy,
         // which is the intended backpressure signal. One slot for the archive
         // rather than per recording, deliberately — the writer is a single
@@ -229,8 +270,11 @@ impl RezArchive {
             Ok(thread) => thread,
             Err(e) => {
                 // The closure was dropped with the failed spawn, and the
-                // connection with it, so the file is closed and ours to remove.
-                RezDb::remove_archive(path);
+                // connection with it, so the file is closed and ours to remove
+                // — if we made it. A reopened archive is left as it was.
+                if created {
+                    RezDb::remove_archive(path);
+                }
                 return Err(format!("failed to spawn the .rez writer thread: {e}"));
             }
         };
@@ -276,7 +320,58 @@ impl RezArchive {
             stagger_key,
             err: Arc::clone(&self.err),
             path: self.path.clone(),
+            floor_ts: None,
         })
+    }
+
+    /// Continue an existing recording in a reopened archive, as a new writer
+    /// session.
+    ///
+    /// The recording's `complete` flag is cleared, the session is recorded
+    /// (`WRITER_SESSIONS_KEY`, plus a `writer_session` timeline event at the
+    /// new anchor), and the handle refuses any tick stamped at or before the
+    /// newest row the previous session left — the returned `last_ts` — so a
+    /// clock that went backwards across the restart is an error, not a
+    /// silent primary-key collision or a timeline that runs backwards.
+    ///
+    /// `clock_anchor_wall_ns` is THIS session's anchor: the resuming process
+    /// has a fresh monotonic clock, so its rows are `anchor + elapsed` from a
+    /// new wall reading, not from the recording's original anchor. Rows stay
+    /// `timestamp + :wall_offset = wall` either way.
+    pub fn resume_recording(
+        &mut self,
+        recording_id: i64,
+        clock_anchor_wall_ns: u64,
+    ) -> Result<(RecordingWriter, Option<u64>), String> {
+        let Some(tx) = self.tx.as_ref() else {
+            return Err("the .rez writer thread has already been joined".to_string());
+        };
+        let (reply_tx, reply_rx) = sync_channel(0);
+        if tx
+            .send(Msg::ResumeRecording {
+                recording_id,
+                clock_anchor_wall_ns,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err(self.take_error());
+        }
+        let resumed = match reply_rx.recv() {
+            Ok(resumed) => resumed?,
+            Err(_) => return Err(self.take_error()),
+        };
+        Ok((
+            RecordingWriter {
+                tx: tx.clone(),
+                recording_id,
+                stagger_key: crate::seal_policy::recording_stagger_key(&resumed.labels),
+                err: Arc::clone(&self.err),
+                path: self.path.clone(),
+                floor_ts: resumed.last_ts,
+            },
+            resumed.last_ts,
+        ))
     }
 
     /// The archive being written — valid and readable while it is written.
@@ -438,6 +533,14 @@ impl Drop for RezArchive {
     }
 }
 
+/// What the writer thread answers a `ResumeRecording` with.
+struct Resumed {
+    labels: BTreeMap<String, String>,
+    /// The newest row timestamp the recording holds, segments and WAL
+    /// together; `None` for a recording with no rows.
+    last_ts: Option<u64>,
+}
+
 /// One recording's handle onto a shared archive writer.
 ///
 /// Cheap and cloneable-in-spirit: it is a sender plus an id. Dropping it
@@ -446,6 +549,9 @@ impl Drop for RezArchive {
 pub struct RecordingWriter {
     tx: SyncSender<Msg>,
     recording_id: i64,
+    /// Set on a resumed recording: every row this session commits must be
+    /// stamped after it. See `RezArchive::resume_recording`.
+    floor_ts: Option<u64>,
     /// This recording's stagger identity — its canonical label set. Held here
     /// so the seal policy can desync tables ACROSS recordings as well as
     /// within one; see `stagger_bucket`.
@@ -455,6 +561,16 @@ pub struct RecordingWriter {
     /// holding only a recording can still name its file — one `PathBuf` per
     /// recording, against an archive that holds at most a handful.
     path: PathBuf,
+}
+
+impl std::fmt::Debug for RecordingWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordingWriter")
+            .field("recording_id", &self.recording_id)
+            .field("path", &self.path)
+            .field("floor_ts", &self.floor_ts)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RecordingWriter {
@@ -471,6 +587,12 @@ impl RecordingWriter {
     /// The `recordings` row this handle appends to.
     pub fn recording_id(&self) -> i64 {
         self.recording_id
+    }
+
+    /// The newest row timestamp a previous writer session left, when this
+    /// handle resumed a recording; every tick must be stamped after it.
+    pub fn floor_ts(&self) -> Option<u64> {
+        self.floor_ts
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -739,6 +861,91 @@ fn commit_tick(
     }
 }
 
+/// Append a writer session to a recording's `WRITER_SESSIONS_KEY` metadata
+/// — and, for a resume, a `writer_session` timeline event at the new anchor.
+fn record_session(
+    db: &RezDb,
+    recording_id: i64,
+    clock_anchor_wall_ns: u64,
+    resumed_after_ts: Option<Option<u64>>,
+) -> Result<(), DbError> {
+    let session = db.mint_uuid()?;
+    let metadata = db.recording_metadata(recording_id)?;
+    let mut sessions: Vec<serde_json::Value> = metadata
+        .get(crate::rez::WRITER_SESSIONS_KEY)
+        .and_then(|v| serde_json::from_str(v).ok())
+        .unwrap_or_default();
+    let mut entry = serde_json::json!({
+        "session": session,
+        "clock_anchor_wall_ns": clock_anchor_wall_ns,
+    });
+    let mut patch = BTreeMap::new();
+    if let Some(after) = resumed_after_ts {
+        entry["resumed_after_ts"] = serde_json::json!(after);
+        let mut events: serde_json::Value = metadata
+            .get("events")
+            .and_then(|v| serde_json::from_str(v).ok())
+            .unwrap_or_else(|| serde_json::json!({ "events": [] }));
+        if !events["events"].is_array() {
+            events["events"] = serde_json::json!([]);
+        }
+        events["events"]
+            .as_array_mut()
+            .expect("just ensured")
+            .push(serde_json::json!({
+                "timestamp": clock_anchor_wall_ns,
+                "description": "recording resumed by a new writer session",
+                "kind": "writer_session",
+                "details": match after {
+                    Some(ts) => format!("previous session's last row at {ts}"),
+                    None => "previous session left no rows".to_string(),
+                },
+                "id": format!("writer_session:{session}"),
+            }));
+        patch.insert("events".to_string(), events.to_string());
+    }
+    sessions.push(entry);
+    patch.insert(
+        crate::rez::WRITER_SESSIONS_KEY.to_string(),
+        serde_json::Value::Array(sessions).to_string(),
+    );
+    db.patch_recording_metadata(recording_id, &patch)
+}
+
+/// The writer-thread half of `RezArchive::resume_recording`.
+fn resume_recording(
+    db: &mut RezDb,
+    recording_id: i64,
+    clock_anchor_wall_ns: u64,
+) -> Result<Resumed, DbError> {
+    let Some(rec) = db
+        .read_recordings()?
+        .into_iter()
+        .find(|r| r.id == recording_id)
+    else {
+        return Err(DbError::other(format!(
+            "no recording with id {recording_id} to resume"
+        )));
+    };
+    let (_, last_ts) = db.recording_time_span(recording_id)?;
+    if let Some(last) = last_ts {
+        if clock_anchor_wall_ns <= last {
+            return Err(DbError::other(format!(
+                "cannot resume recording {recording_id}: the new session's clock anchor \
+                 {clock_anchor_wall_ns} is not after its newest row at {last} — the wall \
+                 clock went backwards across the restart, and rows would collide or run \
+                 backwards"
+            )));
+        }
+    }
+    db.transaction(|tx| tx.mark_incomplete(recording_id))?;
+    record_session(db, recording_id, clock_anchor_wall_ns, Some(last_ts))?;
+    Ok(Resumed {
+        labels: rec.meta.labels,
+        last_ts,
+    })
+}
+
 /// An encoded segment waiting to be inserted.
 struct Encoded {
     sampler: String,
@@ -801,10 +1008,14 @@ fn writer_loop(
     // because `seq` is scoped to a recording's sampler in the `segments` table:
     // two recordings of the same host have the same sampler names and each
     // needs its own sequence.
-    let mut next_seq: BTreeMap<(i64, String), u64> = BTreeMap::new();
+    //
+    // Seeded from the file: on a freshly created archive both are empty, on a
+    // reopened one they continue where the previous writer stopped, which is
+    // what keeps a resumed table's `seq` from colliding with its own past.
+    let mut next_seq: BTreeMap<(i64, String), u64> = db.next_seqs()?;
     // Timestamps each recording's `clock_offsets` series already carries. Only
     // finalize reads it, but it has to be maintained as batches seal.
-    let mut observed: BTreeMap<i64, BTreeSet<u64>> = BTreeMap::new();
+    let mut observed: BTreeMap<i64, BTreeSet<u64>> = db.observed_clock_offsets()?;
     // How many recordings were opened, and how many closed cleanly. Reclaim at
     // exit only when they match: an unclean exit is the recovery artifact and
     // must not pay for a vacuum on the way down.
@@ -847,7 +1058,10 @@ fn writer_loop(
                 let _ = reply.send(());
             }
             Ok(Msg::AddRecording { seed, reply }) => {
-                let inserted = db.insert_recording(&seed);
+                let inserted = db.insert_recording(&seed).and_then(|id| {
+                    record_session(db, id, seed.clock_anchor_wall_ns, None)?;
+                    Ok(id)
+                });
                 // A failed insert is reported to the caller and does NOT kill
                 // the writer: an archive's other recordings are still valid,
                 // and the caller decides whether to give up.
@@ -855,6 +1069,17 @@ fn writer_loop(
                     added += 1;
                 }
                 let _ = reply.send(inserted.map_err(String::from));
+            }
+            Ok(Msg::ResumeRecording {
+                recording_id,
+                clock_anchor_wall_ns,
+                reply,
+            }) => {
+                let resumed = resume_recording(db, recording_id, clock_anchor_wall_ns);
+                if resumed.is_ok() {
+                    added += 1;
+                }
+                let _ = reply.send(resumed.map_err(String::from));
             }
             Ok(Msg::Wal { ticks }) => commit_tick(db, &ticks, &mut health)?,
             #[cfg(any(test, feature = "test-support"))]
@@ -1387,6 +1612,17 @@ impl StreamRecorderV3 {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<Vec<WalRow>, String> {
+        // A resumed recording must only move forward from what the previous
+        // session left. The anchor was checked at resume; this is the per-tick
+        // half, against a caller whose clock has since gone backwards.
+        if let Some(floor) = self.handle.floor_ts() {
+            if anchored_ts <= floor {
+                return Err(format!(
+                    "tick stamped {anchored_ts} is not after the resumed recording's newest \
+                     row at {floor}; refusing to write a timeline that runs backwards"
+                ));
+            }
+        }
         // Identity first, on every format: it is a property of the tick, not
         // of the rows, and it has to be recorded whether or not this tick's
         // rows dedup away.
@@ -3058,6 +3294,152 @@ mod tests {
         assert_eq!(db.read_wal(rid, "cpu_usage").unwrap().len(), 1);
         drop(rec);
         drop(archive);
+    }
+
+    fn tick_snap(ts: u64) -> Snapshot {
+        snap(ts, vec![counter("cpu_cycles", "cpu_usage", ts, None)])
+    }
+
+    fn sessions_of(db: &RezDb, rid: i64) -> Vec<serde_json::Value> {
+        let md = db.recording_metadata(rid).unwrap();
+        serde_json::from_str(&md[crate::rez::WRITER_SESSIONS_KEY]).unwrap()
+    }
+
+    /// A finalized archive reopens, a recording resumes as a second writer
+    /// session, and everything continues rather than collides: `seq` picks
+    /// up after the last sealed segment, the clock-offset series keeps its
+    /// old timestamps, `complete` goes down and comes back up, and the
+    /// session and its discontinuity are recorded where a reader looks.
+    #[test]
+    fn an_archive_reopens_and_a_resumed_recording_continues_its_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resume.rez");
+        let (archive, mut rec, rid) = recorder(&path, policy(1));
+        for ts in [1_000, 2_000] {
+            rec.ingest(&tick_snap(ts), ts, 0).unwrap();
+            rec.maybe_seal().unwrap();
+        }
+        archive.finalize_single_rec(rec, (2_000, 0)).unwrap();
+        {
+            let db = RezDb::open(&path).unwrap();
+            assert!(db.read_recordings().unwrap()[0].complete);
+            assert_eq!(sessions_of(&db, rid).len(), 1, "one session so far");
+            assert_eq!(db.read_segment_meta(rid, "cpu_usage").unwrap().len(), 2);
+        }
+
+        // A new process: new archive handle, new anchor, same recording.
+        let mut archive = RezArchive::open(&path).unwrap();
+        let (writer, last_ts) = archive.resume_recording(rid, 10_000).unwrap();
+        assert_eq!(last_ts, Some(2_000));
+        assert_eq!(writer.floor_ts(), Some(2_000));
+        {
+            // Resumed: no longer complete, second session on record, and
+            // the discontinuity is an event at the new anchor.
+            let db = RezDb::open(&path).unwrap();
+            assert!(!db.read_recordings().unwrap()[0].complete);
+            let sessions = sessions_of(&db, rid);
+            assert_eq!(sessions.len(), 2);
+            assert_eq!(sessions[1]["clock_anchor_wall_ns"], 10_000);
+            assert_eq!(sessions[1]["resumed_after_ts"], 2_000);
+            assert_ne!(sessions[0]["session"], sessions[1]["session"]);
+            let md = db.recording_metadata(rid).unwrap();
+            let events: serde_json::Value = serde_json::from_str(&md["events"]).unwrap();
+            let events = events["events"].as_array().unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0]["kind"], "writer_session");
+            assert_eq!(events[0]["timestamp"], 10_000);
+        }
+        let mut rec = StreamRecorderV3::with_policy(writer, policy(1));
+        for ts in [11_000, 12_000] {
+            rec.ingest(&tick_snap(ts), ts, 0).unwrap();
+            rec.maybe_seal().unwrap();
+        }
+        archive.finalize_single_rec(rec, (12_000, 0)).unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        assert!(db.read_recordings().unwrap()[0].complete, "finalized again");
+        let seqs: Vec<u64> = db
+            .read_segment_meta(rid, "cpu_usage")
+            .unwrap()
+            .into_iter()
+            .map(|(seq, _)| seq)
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![0, 1, 2, 3],
+            "the sequence continued, no collision"
+        );
+        assert_eq!(db.total_rows(rid, "cpu_usage").unwrap(), 4);
+        // Both sessions' finalize observations are in the series, once each.
+        let offsets: Vec<u64> = db
+            .read_clock_offsets(rid)
+            .unwrap()
+            .into_iter()
+            .map(|(ts, _)| ts)
+            .collect();
+        assert!(
+            offsets.contains(&2_000) && offsets.contains(&12_000),
+            "{offsets:?}"
+        );
+        assert_eq!(
+            offsets.iter().filter(|&&t| t == 2_000).count(),
+            1,
+            "the reopened writer seeded `observed` from the file"
+        );
+        // And the reader sees one continuous table.
+        let pool = metriken_query::BufferPool::new(64 * 1024 * 1024);
+        let readers = crate::reader::RezReader::open_recordings(&path, pool).unwrap();
+        assert_eq!(readers.len(), 1);
+    }
+
+    /// The wall clock going backwards across a restart would put the new
+    /// session's rows before the old session's. Refused at resume (the
+    /// anchor) and per tick (the floor), never written.
+    #[test]
+    fn a_resumed_recording_refuses_to_run_backwards() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resume.rez");
+        let (archive, mut rec, rid) = recorder(&path, never_seals());
+        rec.ingest(&tick_snap(5_000), 5_000, 0).unwrap();
+        archive.finalize_single_rec(rec, (5_000, 0)).unwrap();
+
+        let mut archive = RezArchive::open(&path).unwrap();
+        let err = archive.resume_recording(rid, 5_000).unwrap_err();
+        assert!(err.contains("went backwards"), "{err}");
+        // Refused before anything changed.
+        assert!(RezDb::open(&path).unwrap().read_recordings().unwrap()[0].complete);
+
+        let (writer, _) = archive.resume_recording(rid, 6_000).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        let err = rec.ingest(&tick_snap(4_000), 4_000, 0).unwrap_err();
+        assert!(err.contains("runs backwards"), "{err}");
+        rec.ingest(&tick_snap(6_001), 6_001, 0).unwrap();
+        archive.finalize_single_rec(rec, (6_001, 0)).unwrap();
+        assert_eq!(
+            RezDb::open(&path)
+                .unwrap()
+                .total_rows(rid, "cpu_usage")
+                .unwrap()
+                + RezDb::open(&path)
+                    .unwrap()
+                    .live_wal(rid, "cpu_usage")
+                    .unwrap()
+                    .len() as u64,
+            2
+        );
+    }
+
+    #[test]
+    fn resume_refuses_a_recording_that_is_not_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("resume.rez");
+        let (archive, rec, _rid) = recorder(&path, never_seals());
+        archive.finalize_single_rec(rec, (1, 0)).unwrap();
+        let mut archive = RezArchive::open(&path).unwrap();
+        let err = archive.resume_recording(999, 1_000).unwrap_err();
+        assert!(err.contains("no recording with id 999"), "{err}");
+        // The writer is still usable: a fresh recording can be added.
+        archive.add_recording(seed()).unwrap();
     }
 
     /// One row per sampler per tick, every sampler's window advancing each

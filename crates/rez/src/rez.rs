@@ -60,6 +60,16 @@ pub const PRODUCER_EPOCH_KEY: &str = "producer_epoch";
 /// event (kind `producer_epoch`) so a viewer shows the discontinuity.
 pub const PRODUCER_EPOCHS_KEY: &str = "producer_epochs";
 
+/// Recording-metadata key: every writer session that appended to this
+/// recording, in order, as a JSON array of `{"session": <uuid>,
+/// "clock_anchor_wall_ns": <anchor>, "resumed_after_ts": <ts>}` — the last
+/// field only on a session that reopened the archive (`RezArchive::open` +
+/// `resume_recording`), naming the newest row the previous session left.
+/// One entry means the recording was written in one go. A resume is also a
+/// timeline event of kind `writer_session` at the new session's anchor, so a
+/// viewer shows where one writer stopped and the next began.
+pub const WRITER_SESSIONS_KEY: &str = "writer_sessions";
+
 /// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezManifest {

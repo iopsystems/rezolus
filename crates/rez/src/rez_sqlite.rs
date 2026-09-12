@@ -12,7 +12,7 @@
 //! streaming writer, so the surface is wider than today's callers use.
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::OpenOptions;
 use std::path::Path;
 
@@ -548,6 +548,18 @@ impl RezDb {
 
     /// Open an existing `.rez`, reapplying the per-connection pragmas.
     pub fn open(path: &Path) -> Result<Self, OpenError> {
+        Self::open_with_cache(path, READER_CACHE_SIZE_KIB)
+    }
+
+    /// Open an existing `.rez` to APPEND to it — the writer's half of
+    /// `open`. Same gate, the writer's (smaller) page cache. There must be
+    /// exactly one writing connection to a file; the caller is the writer
+    /// thread that owns it.
+    pub fn open_for_write(path: &Path) -> Result<Self, OpenError> {
+        Self::open_with_cache(path, WRITER_CACHE_SIZE_KIB)
+    }
+
+    fn open_with_cache(path: &Path, cache_size_kib: i32) -> Result<Self, OpenError> {
         let what = path.display().to_string();
         // No `SQLITE_OPEN_CREATE`: opening a `.rez` that is not there is an
         // error, not an empty new recording.
@@ -576,7 +588,7 @@ impl RezDb {
         // (hindsight's staged dump) take it too, deliberately: they are
         // short-lived, offline and bounded by the dump, so no long-running
         // process holds it.
-        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)
+        db.apply_connection_pragmas(cache_size_kib)
             .map_err(|error| OpenError::Db {
                 what: what.clone(),
                 error: error.to_string(),
@@ -1589,6 +1601,61 @@ impl RezDb {
         self.transaction(|tx| tx.mark_complete(recording_id))
     }
 
+    /// The next `seq` for every table that has sealed at least once:
+    /// `MAX(seq) + 1` per `(recording_id, sampler)`. What a writer reopening
+    /// an archive seeds its numbering from, so it continues the sequence
+    /// rather than colliding with it.
+    pub fn next_seqs(&self) -> Result<BTreeMap<(i64, String), u64>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT recording_id, sampler, MAX(seq) + 1 FROM segments \
+                 GROUP BY recording_id, sampler",
+            )
+            .map_err(DbError::wrap("failed to query segment sequences"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    (row.get::<_, i64>(0)?, row.get::<_, String>(1)?),
+                    row.get::<_, i64>(2)? as u64,
+                ))
+            })
+            .map_err(DbError::wrap("failed to query segment sequences"))?;
+        let mut out = BTreeMap::new();
+        for row in rows {
+            let (key, next) = row.map_err(DbError::wrap("failed to read a segment sequence"))?;
+            out.insert(key, next);
+        }
+        Ok(out)
+    }
+
+    /// Every timestamp each recording's `clock_offsets` series already
+    /// carries. The reopening writer's seed for the set finalize consults so
+    /// it never writes two offsets at one timestamp.
+    pub fn observed_clock_offsets(&self) -> Result<BTreeMap<i64, BTreeSet<u64>>, DbError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT recording_id, ts FROM clock_offsets")
+            .map_err(DbError::wrap("failed to query clock offsets"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)? as u64))
+            })
+            .map_err(DbError::wrap("failed to query clock offsets"))?;
+        let mut out: BTreeMap<i64, BTreeSet<u64>> = BTreeMap::new();
+        for row in rows {
+            let (rid, ts) = row.map_err(DbError::wrap("failed to read a clock offset"))?;
+            out.entry(rid).or_default().insert(ts);
+        }
+        Ok(out)
+    }
+
+    /// A fresh v4 UUID from the connection's random source. Public so the
+    /// writer can name a session with the same kind of id a recording gets.
+    pub fn mint_uuid(&self) -> Result<String, DbError> {
+        mint_uuid(&self.conn)
+    }
+
     /// Every user table in this database, by name — SQLite's own internal
     /// tables (`sqlite_*`) excluded.
     ///
@@ -1818,6 +1885,27 @@ impl RezTx<'_> {
             .map_err(DbError::wrap(format!(
                 "failed to mark recording {recording_id} complete"
             )))?;
+        Ok(())
+    }
+
+    /// The inverse of `mark_complete`, for a recording a new writer session
+    /// is about to append to: it is no longer finished. `Err` if there is no
+    /// such recording.
+    pub fn mark_incomplete(&self, recording_id: i64) -> Result<(), DbError> {
+        let changed = self
+            .tx
+            .execute(
+                "UPDATE recordings SET complete = 0 WHERE id = ?1",
+                [recording_id],
+            )
+            .map_err(DbError::wrap(format!(
+                "failed to reopen recording {recording_id}"
+            )))?;
+        if changed == 0 {
+            return Err(DbError::other(format!(
+                "no recording with id {recording_id}"
+            )));
+        }
         Ok(())
     }
 }

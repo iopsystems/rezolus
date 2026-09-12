@@ -109,6 +109,9 @@ target/release/rezolus recording snapshot live.rez -o incident.rez     # complet
 #   a recording's metadata also carries the agent's producer_epoch (one id per agent process, i.e.
 #   per counter epoch) and a producer_epochs history; an epoch change mid-recording is a counter
 #   reset and lands as a timeline event of kind producer_epoch;
+#   an archive can be reopened for append (RezArchive::open + resume_recording): seq and clock
+#   offsets continue, the session is recorded under writer_sessions with a writer_session event,
+#   and a tick at or before the previous session's newest row is refused;
 #   v1/v2 tar inputs are upgraded to v3 on the way in, so containers can be mixed freely;
 #   combine a.parquet b.parquet -o out.rez ingests parquet inputs too (one recording each, split by
 #   sampler); a parquet has no acquisition windows, so those recordings are WINDOWLESS (no rate band).

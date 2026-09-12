@@ -596,6 +596,14 @@ there, not here).
   name catalog at write time (also the read-path entry's last fixed open cost).
   *Reopen:* the first Prometheus recording whose series appear after the first
   seal.
+- **Hindsight: resume its buffer across an agent restart** — Open. The crate
+  primitive exists (`RezArchive::open` + `resume_recording`, journal item 7);
+  hindsight still creates its buffer in a `TempDir` beside the output
+  (`src/hindsight/mod.rs`) and drops it on exit. Keeping it at a stable path
+  and resuming on start retains a previous run's buffer — what an incident
+  wants — but changes what `duration` bounds across runs and what a clean
+  exit removes; decide those, then wire it. *Reopen:* the first incident
+  whose evidence was lost to an agent restart.
 - **Readers open `READ_WRITE`** — Open. `RezDb::open` (`rez_sqlite.rs:351`)
   has no read-only form, so a read mutates a finished archive on close and a
   read-only mount may fail. Add `open_read_only` (`immutable=1` when no writer

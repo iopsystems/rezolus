@@ -133,7 +133,9 @@ CREATE TABLE schema_version(version INTEGER NOT NULL);
   listed in §7.
 - **`complete`** is `1` only after a clean finalize. `0` means data after the
   last row may be missing. Copies preserve it, except a hindsight dump, which
-  is a complete artifact of a perpetually-live buffer and says so.
+  is a complete artifact of a perpetually-live buffer and says so. A writer
+  that reopens the archive and resumes the recording (§10.1) clears it, and
+  its own finalize sets it again.
 - **`clock_anchor_wall_ns`** pins the timeline, see §8.
 
 ### 3.2 `segments` and the table key
@@ -336,7 +338,8 @@ unchanged schema but must never trust a `None` without an anchor.
 | `descriptions` | recorder | JSON map, metric name → help text. |
 | `producer_epoch` | recorder, from the producer | The producer's **current counter epoch**: an opaque id the producer regenerates whenever its cumulative counters start from zero (for a rezolus agent, once per process). Two recordings with equal epochs over overlapping time observe **one** monotonic series — mergeable, never summable. Absent means unknown. |
 | `producer_epochs` | recorder | JSON array `[{"epoch": id, "from_ts": ts}, …]`, every epoch this recording observed in order; the last is the current one. A length above 1 is a counter reset the reader can see rather than infer. |
-| `events` | recorder, `annotate` | JSON `{"events": [Event, …]}`, `Event` as in `crates/dashboard/src/events.rs`. The recorder writes one per epoch change (`kind: "producer_epoch"`, `id: "producer_epoch:<new>"`). |
+| `writer_sessions` | writer | JSON array `[{"session": uuid, "clock_anchor_wall_ns": n, "resumed_after_ts": ts?}, …]`, one per writer session that appended to the recording, in order. One entry means the recording was written in one go; a later entry is a resume (§10.1), and its `clock_anchor_wall_ns` is *that* session's anchor. |
+| `events` | recorder, writer, `annotate` | JSON `{"events": [Event, …]}`, `Event` as in `crates/dashboard/src/events.rs`. The recorder writes one per epoch change (`kind: "producer_epoch"`, `id: "producer_epoch:<new>"`); the writer writes one per resume (`kind: "writer_session"`, `id: "writer_session:<session>"`, at the new anchor). |
 | `service_queries` | `annotate --queries` | Service-extension KPI definitions. |
 | `selection`, `report` | viewer save | A saved selection; a trimmed report marker. |
 
@@ -385,6 +388,26 @@ has no WAL of its own to lose.
 `combine` refuses two recordings with equal `uuid` and, unless told
 otherwise, two with identical `labels`.
 
+### 10.1 Reopening for append
+
+An archive can be reopened by a later writer (`RezArchive::open`) and a
+recording in it resumed (`resume_recording`) as a **new writer session**.
+Nothing about the rows changes shape; four things are guaranteed:
+
+- Segment numbering continues from `MAX(seq) + 1` per table, and the
+  clock-offset series keeps what it had.
+- The session's clock anchor must be later than the recording's newest row
+  (segments and WAL together), and every row the session commits must be
+  later still. A wall clock that went backwards across a restart is refused
+  at resume and per tick, never written.
+- The session is recorded under `writer_sessions` with its own anchor and the
+  timestamp it resumed after, and as a `writer_session` event at the anchor.
+- `complete` is cleared at resume and set by the session's finalize.
+
+Row timestamps in the new session are the new anchor plus the new process's
+monotonic elapsed time, so `timestamp + :wall_offset` stays the wall clock;
+the gap between sessions is real time during which nothing was recorded.
+
 ## 11. Compatibility
 
 - **What bumps the conventions version (`SCHEMA_VERSION`, `user_version`).**
@@ -393,8 +416,9 @@ otherwise, two with identical `labels`.
   encodings; a change to the live-WAL rule; a catalog column a reader must
   understand to be correct. A reader refuses a version above its own.
 - **What does not.** A nullable column added to `recordings` that an old
-  reader can ignore (`uuid` was added this way); a new reserved metadata key;
-  a new event kind. Old copiers drop what they do not know, which degrades to
+  reader can ignore (`uuid` was added this way); a new reserved metadata key
+  (`producer_epoch`, `writer_sessions` were added this way); a new event
+  kind. Old copiers drop what they do not know, which degrades to
   "unknown", never to wrong.
 - **Field metadata is open.** A reader must ignore keys it does not know and
   a writer may add any.

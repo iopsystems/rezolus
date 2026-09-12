@@ -1,8 +1,8 @@
 # `.rez` format hardening — identity, versioning, and a reader that is atomic against its writer
 
 - **Opened:** 2026-09-11
-- **Status:** OPEN — review complete, intent landed pre-build. Work items
-  below are ordered and will be closed out one at a time in this entry.
+- **Status:** **IMPLEMENTED** (all seven items, PR #1201). Deferred items
+  are in `docs/backlog.md` under "`.rez` — format hardening".
 - **Arc:** follows the [SQLite container](2026-08-12-rez-sqlite-container.md),
   the [read-path fix](2026-08-27-rez-vs-parquet-read-path.md), and
   [multi-endpoint record](2026-08-28-multi-endpoint-rez-record.md). Those built
@@ -293,6 +293,33 @@ host+overlap heuristics, which is no worse than today.
    `MAX(seq)`, re-anchor the clock, record the session. This is what lets
    hindsight survive an agent restart (today its buffer lives in a `TempDir`,
    `src/hindsight/mod.rs:170`).
+   **DONE in the crate; hindsight wiring deferred.** `RezArchive::open`
+   (`RezDb::open_for_write`, the same format gate as a reader) spawns the
+   writer over the existing file; `writer_loop` seeds `next_seq` from
+   `RezDb::next_seqs` (`MAX(seq)+1` per table) and `observed` from
+   `observed_clock_offsets`, so a resumed table continues its sequence and
+   finalize never writes a second offset at an old timestamp.
+   `resume_recording(id, anchor)` runs on the writer thread: it refuses an
+   anchor at or before the recording's newest row ("the wall clock went
+   backwards across the restart"), clears `complete`, appends a
+   `writer_sessions` entry with the new anchor and `resumed_after_ts`, writes
+   a `writer_session` event at the anchor, and returns a handle carrying
+   `floor_ts`; `StreamRecorderV3::stage` refuses any tick at or before it.
+   Every recording now records its first session at insert, so
+   `writer_sessions` has one entry for a recording written in one go. The
+   resuming process uses its OWN wall reading as the anchor — its monotonic
+   clock restarted — and rows keep `timestamp + :wall_offset = wall`. Tests:
+   a finalized archive reopens, resumes, seals twice more (seqs `0..=3`,
+   rows 4, one offset at the old finalize, `complete` down then up, two
+   sessions, one event) and reads as one table; a backwards anchor and a
+   backwards tick are refused before anything is written; a missing
+   recording is refused and the writer stays usable. Spec §10.1.
+   **Not done:** hindsight still creates its buffer in a `TempDir` and drops
+   it on exit; keeping it at a stable path and resuming on start is a
+   hindsight behavior change (a stale buffer from a previous run is then
+   retained — desirable for an incident, but it changes what `duration`
+   bounds and what a clean exit removes) and goes to the backlog with the
+   crate primitive now available.
 
 Items 3 (retention anchor loss) and the remaining "smaller" findings are
 tracked in the backlog rather than sequenced here; they are real but none
