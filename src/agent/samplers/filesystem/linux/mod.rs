@@ -514,7 +514,7 @@ mod tests {
         vacate(slot);
         for group in GROUPS {
             assert_eq!(group.value(slot), None, "value must read absent, not zero");
-            assert!(group.load_metadata(slot).map_or(true, |m| m.is_empty()));
+            assert!(group.load_metadata(slot).is_none_or(|m| m.is_empty()));
         }
     }
 
