@@ -228,16 +228,12 @@ counters are always maintained by the controller.
 
 ## Filesystem
 
-Metrics related to how full each locally mounted filesystem is.
+Metrics related to filesystem occupancy.
 
 ### filesystem
 
 Reports total, free and available bytes and total and free inodes for every
-**locally mounted** filesystem, from one `statvfs` per mount. Occupancy has no
-BPF or perf hook — the superblock counters are reachable only through
-`statvfs`, and the set of mounts only through the mount table — so this is a
-deliberate procfs exception in `docs/principles.md`, documented in the sampler
-module.
+**locally mounted** filesystem, from one `statvfs` per mount.
 
 The mount table (`/proc/self/mountinfo`) is re-read on every sweep, so a
 filesystem mounted after the agent started is picked up, and one that is
@@ -263,7 +259,7 @@ local filesystems): a 330–570 µs sweep once per interval, most of it the
 kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 
 `filesystem_available` is the number `df` reports as available and the one a
-full-disk alert should watch; `filesystem_free` also counts the blocks reserved
+one to alert on; `filesystem_free` also counts the blocks reserved
 for the superuser. Inode exhaustion is the other way a disk fills, and comes
 from the same call.
 

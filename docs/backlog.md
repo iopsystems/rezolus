@@ -617,9 +617,9 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
 
 - **Network mounts** — By design. Never sampled: `statvfs` on a `hard` NFS/CIFS
   mount blocks until the server answers and the timeout is a mount option the
-  agent cannot set. Reopen only on real demand (#1202); an opt-in needs its own
-  blocking budget (bounded thread, per-mount deadline). The TODO sits in the
-  sampler's module doc (`src/agent/samplers/filesystem/linux/mod.rs`).
+  agent cannot set. Reopen on demand for them; an opt-in needs its own blocking
+  budget (bounded thread, per-mount deadline). The sampler's module doc
+  (`src/agent/samplers/filesystem/linux/mod.rs`) points here.
 - **Event-driven mount-table rescan** — Idea. `poll()` on the mountinfo
   descriptor reports `POLLPRI` on change; a sweep could rescan only then.
   Reopen if a many-thousand-mount host shows the per-sweep parse mattering.

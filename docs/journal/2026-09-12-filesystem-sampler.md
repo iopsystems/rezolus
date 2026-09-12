@@ -121,10 +121,14 @@ built.
 
 ## Results
 
-Shipped in the PR closing #1202: `src/agent/samplers/filesystem/`
+Shipped in the PR closing #1202. Principal files: `src/agent/samplers/filesystem/`
 (`linux/mod.rs` sampler and slot logic, `linux/mounts.rs` mount-table parser
-and classifier, `linux/stats.rs` metrics), `crates/dashboard/src/dashboard/filesystem.rs`,
-`config/agent.toml`, `docs/metrics.md`, `src/analysis/extract/context.rs`.
+and classifier, `linux/stats.rs` metrics) and
+`crates/dashboard/src/dashboard/filesystem.rs`; registration in
+`src/agent/samplers/mod.rs`, `crates/dashboard/src/dashboard/mod.rs` and the
+analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
+`config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
+`docs/backlog.md` and the `reviewing-samplers` skill.
 Tests: 11 on the parser and classifier (fixture lines for nfs, cifs,
 fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair), 7 on slot
 assignment, `statvfs`, vacate/label and the end-to-end sweep against the real

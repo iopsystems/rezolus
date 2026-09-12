@@ -7,14 +7,14 @@ use linkme::distributed_slice;
 /// cap are dropped by the sweep (logged once per sweep with the count).
 pub const MAX_MOUNTS: usize = 64;
 
-// Registered here (not in `linux/mod.rs`) because this file is also
-// `include!`d directly on non-Linux platforms (see `filesystem/mod.rs`'s
-// `#[cfg(not(target_os = "linux"))] mod stats` fallback) to keep metric
-// identity stable across platforms. Same cross-platform-name mechanism as
-// `drivehealth` and the BPF samplers — see
+// This group must stay in `stats.rs`, not `linux/mod.rs`: this file is the
+// one `include!`d on non-Linux platforms (see `filesystem/mod.rs`), and a
+// group registered under a name the platform never produces is a group
+// `create_v3`'s routing can never find. Same cross-platform-name mechanism
+// as `drivehealth` and the BPF samplers — see
 // `crate::agent::samplers::bpf_sampler_name`'s doc comment.
 //
-/// ONE group for the whole sweep: the mount-table read plus every
+/// One group for the whole sweep: the mount-table read plus every
 /// `statvfs` and the per-mount `set()` calls that follow, bracketed inside
 /// the sweep in `linux/mod.rs`, which is this group's single writer. The
 /// five metrics below are five fields of one `statvfs` answer per mount —
@@ -45,7 +45,7 @@ pub static FILESYSTEM_FREE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
 
 #[metric(
     name = "filesystem_available",
-    description = "Bytes an unprivileged process can still write on a locally mounted filesystem (f_bavail * f_frsize). This is the number `df` reports as available and the one a full-disk alert should watch.",
+    description = "Bytes an unprivileged process can still write on a locally mounted filesystem (f_bavail * f_frsize). This is the number `df` reports as available and the one to alert on.",
     metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_AVAILABLE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);

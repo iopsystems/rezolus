@@ -19,12 +19,10 @@
 //! the sweep is bounded by construction, which is what lets it run at all
 //! without a per-call deadline. `df -l` draws the same line.
 //!
-//! Network mounts stay out of scope until there is real demand
-//! (iopsystems/rezolus#1202).
-//! TODO(#1202): a per-type or per-mount opt-in for network mounts, if asked
-//! for. It would need its own blocking budget (a bounded thread and a
-//! deadline per mount), since the classification above is the only thing
-//! that keeps this sweep from parking a thread on a dead NFS server.
+//! Network mounts stay out of scope until there is demand for them. An
+//! opt-in must bring its own blocking budget — a bounded thread and a
+//! deadline per mount — because the classification above is the only thing
+//! keeping this sweep off a dead NFS server. See `docs/backlog.md`.
 //!
 //! # Why procfs, and why its own cadence
 //!
@@ -37,18 +35,11 @@
 //! The mount table is re-read on every sweep, not once at startup as
 //! `drivehealth` enumerates drives, because a filesystem mounted after the
 //! agent started and then filling up is exactly the case this metric exists
-//! for. Measured (release build, 87-line mount table, 3 local filesystems):
-//! the whole sweep is 330–570 µs wall time on the blocking-pool thread —
-//! 220–350 µs reading the table (the kernel generates the 12 KB text on
-//! each open), 100–200 µs parsing and classifying it, 11–50 µs for the three
-//! `statvfs` calls and the `set()`s. A hot loop in a test process does the
-//! same work in about 100 µs; the agent's number is a cold thread waking
-//! once a minute, which is the number that matters. It grows with the mount
-//! table — a container host with thousands of overlay mounts pays a few
-//! milliseconds to read and parse it — but never with the number of
-//! `statvfs` calls, since those mounts are filtered out first. If that ever
-//! matters, `poll()` on the mountinfo descriptor reports `POLLPRI` when the
-//! mount table changes, so a sweep could rescan only when something moved.
+//! for. A sweep costs a few hundred µs, most of it the kernel generating the
+//! mount table on each open; the cost grows with the size of that table, not
+//! with the number of `statvfs` calls, since the mounts a container host has
+//! thousands of are filtered out before any call. Measured by phase in
+//! `docs/journal/2026-09-12-filesystem-sampler.md`.
 //!
 //! Even so the sweep does not run on the scrape/TTL sample cycle (principle
 //! 17): `refresh()` does a cheap time check and, at most once per `interval`
@@ -133,8 +124,10 @@ pub struct Usage {
     pub free_inodes: u64,
 }
 
-/// `statvfs` on `path`. Only ever called on a mount [`MountEntry::is_local`]
-/// has accepted, which is what bounds it (see the module doc).
+/// `statvfs` on `path`. Callers must pass only a mount
+/// [`MountEntry::is_local`] has accepted: on anything else this call can
+/// block for as long as the mount's options allow, with no deadline
+/// available to the caller (see the module doc).
 pub fn read_usage(path: &str) -> std::io::Result<Usage> {
     let c_path = CString::new(path)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in path"))?;
@@ -221,7 +214,7 @@ impl Slots {
     }
 
     /// One past the highest occupied slot: the member bound the snapshot walk
-    /// should use.
+    /// uses.
     pub fn bound(&self) -> usize {
         self.occupied
             .iter()
@@ -233,14 +226,10 @@ impl Slots {
 /// State one sweep hands the next: the slot map, and the buffer the mount
 /// table is read into.
 ///
-/// The buffer is reused on purpose. `/proc/self/mountinfo` reports a zero
-/// size, so `std::fs::read_to_string` into a fresh `String` grows by doubling
-/// from 32 bytes and issues a dozen `read()`s for a 12 KB table (13 under
-/// `strace`, 30–150 µs each). A buffer that already holds the previous
-/// table's capacity reads it in one call. Measured, this did not move the
-/// sweep's wall time — the read phase is dominated by the kernel generating
-/// the table once per open, not by the number of `read()`s — so it is kept
-/// for the allocation it saves, not as an optimization that was proven.
+/// The buffer is reused for the allocation it saves, not for speed: measured,
+/// it did not move the sweep's wall time. `/proc/self/mountinfo` reports a
+/// zero size, so reading into a fresh `String` doubles from 32 bytes and
+/// issues a dozen `read()`s where a warm buffer takes one.
 struct SweepState {
     slots: Slots,
     table: String,
@@ -383,8 +372,9 @@ fn sweep(state: &mut SweepState) -> usize {
     }
 
     // The bound follows the population, up and down, so a snapshot walks
-    // only the slots that can hold a member. Written by this sweep task
-    // alone, before the window is stamped.
+    // only the slots that can hold a member. This sweep task is its only
+    // writer, and the store must stay above the `finish()` below: a window
+    // stamped first is a window a snapshot can read against a stale bound.
     FILESYSTEM_SWEEP_ACQ.set_member_bound(slots.bound());
 
     if published > 0 {
@@ -413,8 +403,7 @@ impl Sampler for Filesystem {
     }
 
     async fn refresh(&self) {
-        // Throttle: dispatch a sweep at most once per `interval`. Cheap time
-        // check on the scrape path.
+        // Scoped so the lock is dropped before the dispatch below.
         {
             let mut last = self.last_read.lock().unwrap();
             match *last {
@@ -493,8 +482,8 @@ mod tests {
 
     #[test]
     fn a_vacated_slot_reads_as_absent_with_no_labels() {
-        // Slot 63 is the top of the range and no sweep on a real host will
-        // reach it, so it is free to use without racing the sweep tests.
+        // The top slot: no sweep on a real host has enough mounts to reach
+        // it, so this test cannot race the ones that sweep for real.
         let slot = MAX_MOUNTS - 1;
         let mount = MountEntry {
             mount_point: "/scratch".to_string(),
