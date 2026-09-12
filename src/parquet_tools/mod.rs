@@ -231,6 +231,17 @@ pub fn command() -> Command {
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
+                    clap::Arg::new("allow-duplicate-labels")
+                        .long("allow-duplicate-labels")
+                        .help(
+                            "For .rez inputs: assemble recordings whose label sets are \
+                             identical, even though no --recording/--baseline selector \
+                             will then be able to tell them apart. Two copies of the SAME \
+                             recording (equal uuid) are refused regardless.",
+                        )
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
                     clap::Arg::new("pinned")
                         .long("pinned")
                         .help("Default rezolus node to display in the viewer (node name or filename)")

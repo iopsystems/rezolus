@@ -82,7 +82,9 @@ pub fn copy_recordings_into(
                 meta.metadata.insert(k.clone(), v.clone());
             }
         }
-        let id = tx.insert_recording(&meta)?;
+        // The copy IS the recording — same identity, so a later `combine`
+        // can tell "this again" from "another one with the same labels".
+        let id = tx.insert_recording_with_uuid(&meta, rec.uuid.as_deref())?;
         if rec.complete {
             tx.mark_complete(id)?;
         }

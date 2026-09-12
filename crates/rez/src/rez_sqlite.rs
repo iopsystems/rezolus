@@ -152,6 +152,9 @@ pub struct RecordingMeta {
 pub struct RecordingRow {
     pub id: i64,
     pub meta: RecordingMeta,
+    /// The recording's identity across files — see the `uuid` column. `None`
+    /// for an archive written before the column existed.
+    pub uuid: Option<String>,
     /// Whether the recording was cleanly finalized. This is what replaced the
     /// `.partial` filename convention: a `.rez` is a valid file from creation,
     /// so "was it finished" has to be a queryable property.
@@ -694,20 +697,31 @@ impl RezDb {
             .map_err(|e| format!("failed to set pragma {name}: {e}"))
     }
 
-    /// Start a recording, returning its id.
+    /// Start a recording, returning its id. The recording is minted a fresh
+    /// UUID; a COPY of an existing recording goes through
+    /// [`RezTx::insert_recording_with_uuid`] so it keeps the one it has.
     pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
-        insert_recording_sql(&self.conn, meta)
+        insert_recording_sql(&self.conn, meta, None)
     }
 
     /// Every recording in the file, in insertion order. A `.rez` may hold
     /// several (multi-host, or an A/B pair).
     pub fn read_recordings(&self) -> Result<Vec<RecordingRow>, String> {
+        // The `uuid` column arrived after the first v3 archives were written,
+        // and a column an old file does not have cannot be named in a SELECT
+        // without erroring. Ask the schema first; the answer is per-file and
+        // one `PRAGMA` away.
+        let uuid_col = if has_column(&self.conn, "recordings", "uuid")? {
+            "uuid"
+        } else {
+            "NULL"
+        };
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, labels, metadata, complete, clock_anchor_wall_ns \
-                 FROM recordings ORDER BY id",
-            )
+            .prepare(&format!(
+                "SELECT id, labels, metadata, complete, clock_anchor_wall_ns, {uuid_col} \
+                 FROM recordings ORDER BY id"
+            ))
             .map_err(|e| format!("failed to query recordings: {e}"))?;
         let rows = stmt
             .query_map([], |row| {
@@ -717,16 +731,18 @@ impl RezDb {
                     row.get::<_, String>(2)?,
                     row.get::<_, i64>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(|e| format!("failed to query recordings: {e}"))?;
 
         let mut out = Vec::new();
         for row in rows {
-            let (id, labels, metadata, complete, anchor) =
+            let (id, labels, metadata, complete, anchor, uuid) =
                 row.map_err(|e| format!("failed to read recording: {e}"))?;
             out.push(RecordingRow {
                 id,
+                uuid,
                 meta: RecordingMeta {
                     labels: serde_json::from_str(&labels)
                         .map_err(|e| format!("recording {id} has invalid labels: {e}"))?,
@@ -1497,7 +1513,19 @@ impl RezTx<'_> {
     /// selected, and either the whole file is that recording or there is no
     /// file at all.
     pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
-        insert_recording_sql(&self.tx, meta)
+        insert_recording_sql(&self.tx, meta, None)
+    }
+
+    /// Insert a recording that already has an identity — a copy. `None`
+    /// (the source predates the column) mints a fresh one, so two copies of
+    /// such a source are not claimed to be the same recording; they are
+    /// merely not known to be different, which is what an absent id means.
+    pub fn insert_recording_with_uuid(
+        &self,
+        meta: &RecordingMeta,
+        uuid: Option<&str>,
+    ) -> Result<i64, String> {
+        insert_recording_sql(&self.tx, meta, uuid)
     }
 
     /// Insert one sealed segment's bytes and catalog facts.
@@ -1571,18 +1599,70 @@ impl RezTx<'_> {
 
 /// Shared by `RezDb::insert_recording` (its own commit) and
 /// `RezTx::insert_recording` (part of a batch).
-fn insert_recording_sql(conn: &Connection, meta: &RecordingMeta) -> Result<i64, String> {
+fn insert_recording_sql(
+    conn: &Connection,
+    meta: &RecordingMeta,
+    uuid: Option<&str>,
+) -> Result<i64, String> {
     let labels = serde_json::to_string(&meta.labels)
         .map_err(|e| format!("failed to encode recording labels: {e}"))?;
     let metadata = serde_json::to_string(&meta.metadata)
         .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
+    let uuid = match uuid {
+        Some(u) => u.to_string(),
+        None => mint_uuid(conn)?,
+    };
     conn.execute(
-        "INSERT INTO recordings(labels, metadata, complete, clock_anchor_wall_ns) \
-         VALUES (?1, ?2, 0, ?3)",
-        rusqlite::params![labels, metadata, meta.clock_anchor_wall_ns as i64],
+        "INSERT INTO recordings(labels, metadata, complete, clock_anchor_wall_ns, uuid) \
+         VALUES (?1, ?2, 0, ?3, ?4)",
+        rusqlite::params![labels, metadata, meta.clock_anchor_wall_ns as i64, uuid],
     )
     .map_err(|e| format!("failed to insert recording: {e}"))?;
     Ok(conn.last_insert_rowid())
+}
+
+/// A fresh random (version 4) UUID, in the canonical 8-4-4-4-12 form.
+///
+/// From SQLite's own `randomblob`, deliberately: the reader build has no
+/// random source of its own on wasm32 (no `getrandom` without a `js`
+/// feature), and this crate takes no dependency it does not need. SQLite is
+/// already here, its PRNG is seeded from the OS, and 16 random bytes with the
+/// version and variant bits set is all a v4 UUID is.
+fn mint_uuid(conn: &Connection) -> Result<String, String> {
+    let mut b: Vec<u8> = conn
+        .query_row("SELECT randomblob(16)", [], |row| row.get(0))
+        .map_err(|e| format!("failed to mint a recording uuid: {e}"))?;
+    if b.len() != 16 {
+        return Err(format!("randomblob(16) returned {} bytes", b.len()));
+    }
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    Ok(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    ))
+}
+
+/// Whether `table` has a column named `column`, per the file's own schema.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("failed to inspect {table}: {e}"))?;
+    let names = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("failed to inspect {table}: {e}"))?;
+    for name in names {
+        let name = name.map_err(|e| format!("failed to inspect {table}: {e}"))?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Shared by `RezDb::insert_segment` (its own commit) and
@@ -1621,7 +1701,13 @@ CREATE TABLE recordings(
   labels TEXT NOT NULL,               -- JSON
   metadata TEXT NOT NULL,             -- JSON
   complete INTEGER NOT NULL DEFAULT 0,
-  clock_anchor_wall_ns INTEGER NOT NULL
+  clock_anchor_wall_ns INTEGER NOT NULL,
+  -- The recording's identity across files: minted at insert, carried
+  -- verbatim by every copy (combine/filter/dump), so whether two archives
+  -- hold the same recording is a comparison rather than a guess from
+  -- labels. NULL only in archives written before the column existed;
+  -- readers treat that as unknown.
+  uuid TEXT
 );
 CREATE TABLE segments(
   recording_id INTEGER NOT NULL REFERENCES recordings(id),
@@ -2211,6 +2297,60 @@ mod tests {
         let err = RezDb::open_bytes(bytes).unwrap_err();
         assert!(matches!(err, OpenError::NotRez { .. }), "{err}");
         assert!(err.to_string().contains("recording snapshot"), "{err}");
+    }
+
+    #[test]
+    fn a_recording_is_minted_a_v4_uuid_and_a_copy_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let meta = RecordingMeta {
+            labels: Default::default(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 0,
+        };
+        db.insert_recording(&meta).unwrap();
+        db.insert_recording(&meta).unwrap();
+        let rows = db.read_recordings().unwrap();
+        let a = rows[0].uuid.clone().expect("minted");
+        let b = rows[1].uuid.clone().expect("minted");
+        assert_ne!(a, b, "two inserts, two identities");
+        // Canonical v4 shape: 36 chars, version nibble 4, variant 10xx.
+        for u in [&a, &b] {
+            assert_eq!(u.len(), 36, "{u}");
+            assert_eq!(u.as_bytes()[14], b'4', "{u}");
+            assert!(matches!(u.as_bytes()[19], b'8' | b'9' | b'a' | b'b'), "{u}");
+            assert!(u.chars().all(|c| c == '-' || c.is_ascii_hexdigit()), "{u}");
+        }
+        // A copy carries the identity it was given, verbatim.
+        let id = db
+            .transaction(|tx| tx.insert_recording_with_uuid(&meta, Some(&a)))
+            .unwrap();
+        let rows = db.read_recordings().unwrap();
+        let copied = rows.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(copied.uuid.as_deref(), Some(a.as_str()));
+    }
+
+    #[test]
+    fn an_archive_without_the_uuid_column_reads_as_unknown_identity() {
+        // Every v3 archive written before the column existed. It must still
+        // open and list its recordings; their identity is simply unknown.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.rez");
+        drop(RezDb::create(&path).unwrap());
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("ALTER TABLE recordings DROP COLUMN uuid;")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO recordings(labels, metadata, complete, clock_anchor_wall_ns) \
+             VALUES ('{}', '{}', 1, 0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let db = RezDb::open(&path).unwrap();
+        let rows = db.read_recordings().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].uuid, None);
     }
 
     #[test]

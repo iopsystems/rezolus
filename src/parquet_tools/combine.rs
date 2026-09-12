@@ -188,6 +188,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let output = args.get_one::<PathBuf>("output").unwrap();
     let bypass_time_check = args.get_flag("bypass-time-check");
+    let allow_duplicate_labels = args.get_flag("allow-duplicate-labels");
     let pinned = args.get_one::<String>("pinned");
 
     // `.rez` inputs: assemble a multi-recording archive (label-set model).
@@ -207,7 +208,7 @@ pub(super) fn run(args: &ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
             // A v1/v2 input is upgraded to v3 on the way in, so the output is
             // always v3 and mixing containers needs no special case: by the
             // time anything is assembled, every input is the same shape.
-            return combine_rez_v3(&files, &formats, output);
+            return combine_rez_v3(&files, &formats, output, allow_duplicate_labels);
         }
     }
 
@@ -321,6 +322,7 @@ fn combine_rez_v3(
     files: &[PathBuf],
     formats: &[crate::recorder::rez::RezFormat],
     output: &std::path::Path,
+    allow_duplicate_labels: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::recorder::rez::RezFormat;
     use crate::recorder::rez_sqlite::RezDb;
@@ -342,6 +344,44 @@ fn combine_rez_v3(
     }
     if upgraded > 0 {
         println!("upgraded {upgraded} tar (v1/v2) input(s) to v3 for the assembly");
+    }
+
+    // Identity check before anything is written. Two recordings with the same
+    // uuid ARE the same recording — the same file given twice, or a copy of
+    // one already in another input — and assembling both doubles every
+    // counter it holds. Two recordings with identical LABELS are only
+    // indistinguishable: nothing downstream (`--recording`, `--baseline`,
+    // the A/B slots) can name one without the other, so that is refused too
+    // unless the caller says they know.
+    let mut seen: Vec<(PathBuf, crate::recorder::rez_sqlite::RecordingRow)> = Vec::new();
+    for (file, opened) in files.iter().zip(&opened) {
+        for rec in RezDb::open(opened)?.read_recordings()? {
+            let labels = crate::recorder::rez::recording_dir_slug(&rec.meta.labels);
+            for (other_file, other) in &seen {
+                if let (Some(a), Some(b)) = (&rec.uuid, &other.uuid) {
+                    if a == b {
+                        return Err(format!(
+                            "{} and {} hold the same recording ({labels}, uuid {a}); \
+                             assembling it twice would double every value it holds",
+                            other_file.display(),
+                            file.display(),
+                        )
+                        .into());
+                    }
+                }
+                if rec.meta.labels == other.meta.labels && !allow_duplicate_labels {
+                    return Err(format!(
+                        "{} and {} each hold a recording labeled [{labels}], and nothing \
+                         downstream can tell them apart — give one a distinguishing \
+                         label (`record --label`), or pass --allow-duplicate-labels",
+                        other_file.display(),
+                        file.display(),
+                    )
+                    .into());
+                }
+            }
+            seen.push((file.clone(), rec));
+        }
     }
 
     let mut dst = RezDb::create(output)?;
@@ -2878,10 +2918,19 @@ mod tests {
         files: &[PathBuf],
         output: &std::path::Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        run_combine_with(files, output, &[])
+    }
+
+    fn run_combine_with(
+        files: &[PathBuf],
+        output: &std::path::Path,
+        extra: &[&str],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut args: Vec<String> = vec!["parquet".to_string(), "combine".to_string()];
         args.extend(files.iter().map(|f| f.to_string_lossy().into_owned()));
         args.push("-o".to_string());
         args.push(output.to_string_lossy().into_owned());
+        args.extend(extra.iter().map(|s| s.to_string()));
         let matches = crate::parquet_tools::command()
             .try_get_matches_from(args)
             .unwrap();
@@ -3022,6 +3071,105 @@ mod tests {
     /// `combine a.parquet b.parquet -o out.rez` assembles a multi-recording
     /// `.rez`, one recording per parquet, labelled from each file's source —
     /// the `.rez` replacement for `combine --ab`.
+    /// A v3 archive holding one recording with the given labels and no
+    /// tables — identity is a catalog property, so no data is needed to test
+    /// it.
+    fn v3_with_labels(dir: &std::path::Path, name: &str, source: &str) -> PathBuf {
+        use crate::recorder::rez_sqlite::{RecordingMeta, RezDb};
+        let p = dir.join(name);
+        let db = RezDb::create(&p).unwrap();
+        let mut db = db;
+        let id = db
+            .insert_recording(&RecordingMeta {
+                labels: [("source".to_string(), source.to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: Default::default(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        db.mark_complete(id).unwrap();
+        p
+    }
+
+    /// The same recording twice — the same file, or a copy of it — is the
+    /// case that summed one producer's counters as two. Its uuid is what
+    /// makes that a comparison, and the refusal holds even when the caller
+    /// waives the label check, because equal uuid is not "indistinguishable",
+    /// it is "identical".
+    #[test]
+    fn combine_rez_refuses_the_same_recording_twice() {
+        let d = tempfile::tempdir().unwrap();
+        let a = v3_with_labels(d.path(), "a.rez", "redis");
+        // A copy made the supported way carries the identity across.
+        let copy = d.path().join("a-copy.rez");
+        crate::recorder::rez_sqlite::RezDb::open(&a)
+            .unwrap()
+            .vacuum_into(&copy)
+            .unwrap();
+
+        for pair in [vec![a.clone(), a.clone()], vec![a.clone(), copy.clone()]] {
+            for extra in [&[][..], &["--allow-duplicate-labels"][..]] {
+                let out = d.path().join("out.rez");
+                let err = run_combine_with(&pair, &out, extra)
+                    .unwrap_err()
+                    .to_string();
+                assert!(err.contains("same recording"), "{err}");
+                assert!(err.contains("uuid"), "{err}");
+                assert!(!out.exists(), "refused before anything was written");
+            }
+        }
+    }
+
+    /// Two DIFFERENT recordings that happen to carry identical labels are
+    /// refused by default — no selector could name one — and assembled on
+    /// request.
+    #[test]
+    fn combine_rez_refuses_identical_label_sets_unless_allowed() {
+        let d = tempfile::tempdir().unwrap();
+        let a = v3_with_labels(d.path(), "a.rez", "redis");
+        let b = v3_with_labels(d.path(), "b.rez", "redis");
+        let out = d.path().join("out.rez");
+        let err = run_combine(&[a.clone(), b.clone()], &out)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("tell them apart"), "{err}");
+        assert!(err.contains("--allow-duplicate-labels"), "{err}");
+        assert!(!out.exists());
+
+        run_combine_with(&[a, b], &out, &["--allow-duplicate-labels"]).unwrap();
+        let db = crate::recorder::rez_sqlite::RezDb::open(&out).unwrap();
+        let recs = db.read_recordings().unwrap();
+        assert_eq!(recs.len(), 2);
+        assert_ne!(
+            recs[0].uuid, recs[1].uuid,
+            "distinct recordings, distinct ids"
+        );
+        assert!(recs.iter().all(|r| r.uuid.is_some()));
+    }
+
+    /// Distinct labels, distinct recordings: the identity check has nothing
+    /// to say, and each recording's uuid survives the assembly verbatim.
+    #[test]
+    fn combine_rez_carries_each_recordings_uuid_through() {
+        let d = tempfile::tempdir().unwrap();
+        let a = v3_with_labels(d.path(), "a.rez", "redis");
+        let b = v3_with_labels(d.path(), "b.rez", "valkey");
+        let ids = |p: &PathBuf| -> Vec<Option<String>> {
+            crate::recorder::rez_sqlite::RezDb::open(p)
+                .unwrap()
+                .read_recordings()
+                .unwrap()
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect()
+        };
+        let before: Vec<_> = ids(&a).into_iter().chain(ids(&b)).collect();
+        let out = d.path().join("out.rez");
+        run_combine(&[a, b], &out).unwrap();
+        assert_eq!(ids(&out), before);
+    }
+
     #[test]
     fn combine_parquet_inputs_into_a_multi_recording_rez() {
         let (_t1, p1) = make_test_file(

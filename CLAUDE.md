@@ -104,6 +104,8 @@ target/release/rezolus recording snapshot live.rez -o incident.rez     # complet
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);
 # combine a.rez b.rez -o out.rez assembles single-recording .rez into a multi-recording .rez (multi-host/A/B);
+#   every recording carries a uuid (minted at record time, kept by every copy): combine refuses two
+#   recordings with the same uuid outright, and identical label sets unless --allow-duplicate-labels;
 #   v1/v2 tar inputs are upgraded to v3 on the way in, so containers can be mixed freely;
 #   combine a.parquet b.parquet -o out.rez ingests parquet inputs too (one recording each, split by
 #   sampler); a parquet has no acquisition windows, so those recordings are WINDOWLESS (no rate band).

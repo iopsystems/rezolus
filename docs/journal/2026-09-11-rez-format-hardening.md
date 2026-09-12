@@ -192,6 +192,24 @@ host+overlap heuristics, which is no worse than today.
 3. Add a `uuid` column to `recordings`, preserved through every copy; refuse
    identical label sets in `combine_rez_v3` unless `--allow-duplicate-labels`,
    and refuse identical UUIDs outright. Test: `combine a.rez a.rez` fails.
+   **DONE.** `recordings.uuid TEXT`, a v4 UUID minted at insert from SQLite's
+   own `randomblob(16)` (no new dependency, and it works in the wasm reader
+   build, which has no random source of its own). `copy_recordings_into`
+   carries it verbatim via `RezTx::insert_recording_with_uuid`; `VACUUM INTO`
+   copies it as data, so hindsight dumps and `recording snapshot` keep it.
+   `read_recordings` probes the schema and reports `None` for archives
+   written before the column — an additive, nullable column, so
+   `SCHEMA_VERSION` stays 3 and old readers ignore it (an old *copier* drops
+   it, which degrades to "unknown", not to wrong). `combine` now refuses two
+   recordings with equal uuid unconditionally ("assembling it twice would
+   double every value") and identical label sets unless
+   `--allow-duplicate-labels`; the check runs before the output is created.
+   `recording metadata` prints the uuid (text and JSON). Tests: minting shape
+   and uniqueness, copy preservation, a pre-column archive reads as unknown,
+   and three `combine` cases (same file twice and a `VACUUM INTO` copy,
+   identical labels with and without the flag, distinct uuids carried
+   through). Selection by uuid (`--recording uuid=…`, A/B slots) is left to
+   the backlog.
 4. Emit a producer epoch from the agent into snapshot metadata; record it and
    its changes. Test: a restarted agent's epoch change lands as a discontinuity
    the reader can enumerate.

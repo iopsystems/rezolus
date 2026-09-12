@@ -377,6 +377,9 @@ struct V3Recording {
     /// `recording_dir_slug(&labels)` — so the viewer's per-capture name
     /// (`rez_reader.rs`, which made the same choice) and this line agree.
     name: String,
+    /// The recording's identity across files; `None` for an archive written
+    /// before the column existed.
+    uuid: Option<String>,
     labels: BTreeMap<String, String>,
     metadata: BTreeMap<String, String>,
     complete: bool,
@@ -418,6 +421,7 @@ fn read_v3_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
         }
         out.push(V3Recording {
             name: crate::recorder::rez::recording_dir_slug(&rec.meta.labels),
+            uuid: rec.uuid,
             labels: rec.meta.labels,
             metadata: rec.meta.metadata,
             complete: rec.complete,
@@ -457,6 +461,9 @@ fn describe_v3_string(recordings: &[V3Recording]) -> String {
     for rec in recordings {
         let labels: Vec<String> = rec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let _ = writeln!(out, "  recording {} [{}]", rec.name, labels.join(", "));
+        if let Some(uuid) = &rec.uuid {
+            let _ = writeln!(out, "    uuid {uuid}");
+        }
         // Deliberately NOT v2's wording. v2 recovered a `.partial` up to its
         // last checkpoint, and everything after it was gone; v3 commits every
         // tick to the WAL, so the loss is bounded by one sampling interval for
@@ -502,6 +509,7 @@ fn v3_json(recordings: &[V3Recording]) -> serde_json::Value {
         "container": "sqlite",
         "recordings": recordings.iter().map(|rec| serde_json::json!({
             "name": rec.name,
+            "uuid": rec.uuid,
             "labels": rec.labels,
             "metadata": rec.metadata,
             "complete": rec.complete,
