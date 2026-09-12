@@ -212,16 +212,16 @@ play, which by default means `rezolus.rez`.
 | Extension | What it is | When |
 | --- | --- | --- |
 | `.rez` | **Default.** A per-sampler archive: one table per sampler, each at its own cadence, carrying the acquisition windows the query engine uses to bound `rate()`. Holds one *recording* per endpoint. | Recording one or more Rezolus agents. Prefer it. |
-| `.parquet` | One columnar table on a single uniform clock. | A Prometheus source, a run mixing Prometheus and Rezolus endpoints, or other parquet tooling. |
+| `.parquet` | One columnar table on a single uniform clock. | Other parquet tooling, or `--separate` (one file per endpoint). |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
 Passing a `--format` that contradicts the extension (say `--format parquet` with
-`-o out.rez`) is an error rather than a silent choice between them. And because
-`.rez` needs every endpoint to be a Rezolus (msgpack) one, a run that chose *no*
-format at all — no `--format`, no `-o` — falls back to `rezolus.parquet` and says
-so when an endpoint turns out to be Prometheus. The *number* of endpoints never
-causes that fallback. Pass `--format rez` to make `.rez` a requirement instead,
-so the same situation is an error and nothing is recorded.
+`-o out.rez`) is an error rather than a silent choice between them. A `.rez`
+takes any number of endpoints, Rezolus or Prometheus: a Prometheus scrape is one
+request and one response, so it becomes one acquisition group per target,
+windowed by the real HTTP round trip. Neither the source nor the endpoint count
+changes the format; only `--separate` does, since one archive cannot be one file
+per endpoint.
 
 A `.rez` output path must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file. A
@@ -277,10 +277,16 @@ rezolus record \
 
 If two recordings end up with identical labels, the recorder warns at startup:
 nothing downstream can tell them apart, and they will also seal their segments
-in lockstep. Every endpoint must be a Rezolus (msgpack) endpoint — a Prometheus
-one in the mix means parquet (see [Output formats](#output-formats)).
-`--separate` does not apply to `.rez`, which already keeps each endpoint as its
-own recording inside the one archive.
+in lockstep. Prometheus endpoints can be in the mix (see
+[Output formats](#output-formats)). `--separate` does not apply to `.rez`, which
+already keeps each endpoint as its own recording inside the one archive.
+
+Every recording carries a `uuid` and the agent's `producer_epoch` — one id per
+agent process, which is one counter epoch — so a later `combine` can refuse
+the same recording twice, and two recordings of one agent can be recognized as
+observations of the same series rather than summed. An agent restart
+mid-recording lands as a timeline event. The format is specified in
+[`docs/rez-format.md`](docs/rez-format.md).
 
 #### `.rez` durability
 
@@ -347,24 +353,38 @@ The same web dashboard is also available as a browser-only static site under
 [`crates/viewer`](crates/viewer) WASM module. It runs the PromQL query engine
 client-side, so parquet files never leave the browser.
 
-### Parquet Tools
+### Recording Tools
 
-File operations for parquet recordings:
+File operations for recordings, `.rez` or parquet:
 
-- **Metadata** — inspect file-level and column-level metadata, geometry, and
-  schema.
+- **Metadata** — inspect a `.rez` catalog (recordings, labels, uuid, tables
+  and their cadence) or a parquet's file-level and column-level metadata.
 - **Annotate** — embed service extension KPI definitions for custom viewer
-  dashboards.
-- **Combine** — merge a Rezolus parquet with service-level parquet files,
-  joining on timestamps to produce a unified multi-source recording, or package
-  two captures as an A/B tarball for the viewer's compare mode.
+  dashboards, or timeline events.
+- **Combine** — assemble several `.rez` archives into one multi-recording
+  `.rez` (the A/B and multi-host form; refuses the same recording twice), merge
+  a Rezolus parquet with service-level parquet files by timestamp, or ingest
+  parquet inputs into a `.rez`.
 - **Convert** — turn a raw msgpack recording (from `record -o out.raw`) into
   parquet. The input may be plain or zstd-compressed; which one it is is
   detected from the file's contents, not its name.
-- **Filter** — drop metric columns not referenced by a file's service extension
-  KPIs, shrinking the recording.
+- **Filter** — on a `.rez`, keep only the named samplers and/or metric columns;
+  on a parquet, drop metric columns not referenced by its service extension
+  KPIs.
+- **Snapshot** — an exact copy of a `.rez` still being written (a plain `cp`
+  misses whatever is in SQLite's sidecar).
+- **Upgrade** — convert a `.rez` written by an older release (tar container)
+  to the current one.
 
 ```bash
+rezolus recording metadata -i out.rez
+rezolus recording combine baseline.rez experiment.rez -o ab.rez
+rezolus recording filter out.rez --samplers cpu_usage,scheduler -o slim.rez
+rezolus recording filter out.rez --metrics cpu_usage,cpu_frequency -o slim.rez
+rezolus recording annotate out.rez --queries ext.json
+rezolus recording annotate out.rez --event 'time=2026-05-12T15:23Z,kind=deploy,description=rollout'
+rezolus recording snapshot live.rez -o incident.rez
+rezolus recording upgrade old.rez
 rezolus recording metadata -i rezolus.parquet
 rezolus recording annotate rezolus.parquet --queries ext.json
 rezolus recording combine rezolus.parquet service.parquet -o combined.parquet

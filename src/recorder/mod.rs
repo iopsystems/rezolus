@@ -71,14 +71,13 @@ pub fn command() -> Command {
              .rez      (default) A per-sampler archive: one table per sampler, each at its own\n    \
              \x20         cadence, carrying the window each read covered so PromQL rate()\n    \
              \x20         queries in `rezolus view` and `rezolus mcp` can report uncertainty\n    \
-             \x20         bounds instead of a bare number. Every endpoint must be a rezolus\n    \
-             \x20         (msgpack) one; several of them become one archive holding a\n    \
+             \x20         bounds instead of a bare number. Takes any number of endpoints,\n    \
+             \x20         rezolus or Prometheus; several become one archive holding a\n    \
              \x20         recording each, which is what `rezolus view` reads as an A/B or\n    \
              \x20         multi-host comparison. Prefer it.\n    \
-             .parquet  One columnar table on a single uniform clock. Use it for a Prometheus\n    \
-             \x20         source, for a run mixing Prometheus and rezolus endpoints, or for\n    \
-             \x20         other parquet tooling. (Several rezolus endpoints do NOT need\n    \
-             \x20         parquet — .rez holds them as separate recordings.)\n    \
+             .parquet  One columnar table on a single uniform clock. Use it for other\n    \
+             \x20         parquet tooling, or with --separate (one file per endpoint, which\n    \
+             \x20         a single archive cannot be).\n    \
              .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
              \x20         is converted to snapshots on the way in, so either source works).\n    \
              \x20         Cheapest thing the recorder can do: it appends and never rewrites.\n    \

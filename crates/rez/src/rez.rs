@@ -1,12 +1,20 @@
-//! The `.rez` per-sampler archive: an uncompressed tar of `manifest.json` plus
-//! one parquet table per sampler. See the Stage-3 plan header for the format
-//! decisions.
+//! The `.rez` archive's table model and the legacy tar container.
 //!
-//! A table is one or more parquet *segments* (schema v2), so an archive is
-//! either written whole (`manifest.json` first, then `<dir>/<sampler>.parquet`)
-//! or streamed (segments interleaved with checkpoint manifests, the last of
-//! which may be missing entirely on an unclean kill). Reading tolerates a
-//! truncated tail; see `read_archive_reader`.
+//! The format is specified in `docs/rez-format.md`. What lives here:
+//!
+//! * The **table model** every container shares — `RezTable`/`RezColumn`,
+//!   the parquet segment encoding (`table_to_batch`, `write_table_parquet`,
+//!   `segment_writer_props`), the column-naming constants, the builders that
+//!   turn snapshot cells into tables, and the reserved metadata keys
+//!   (`PRODUCER_EPOCH_KEY`, …).
+//! * Format detection by content (`detect_rez_format`), for both containers.
+//! * The **v1/v2 tar container**: `manifest.json` plus one parquet table per
+//!   sampler, possibly streamed as segments with checkpoint manifests. It is
+//!   read and upgraded (`rez_v3_rewrite::upgrade_tar_to_v3`), never written;
+//!   `read_archive_reader` tolerates a truncated tail.
+//!
+//! The current container is SQLite — `rez_sqlite` (catalog), `rez_v3_writer`
+//! (streaming writer), `wal` (live rows), `reader` (the `MetricsSource`).
 
 use std::collections::BTreeMap;
 

@@ -237,6 +237,26 @@ host+overlap heuristics, which is no worse than today.
    belongs to systemslab and is not done here.
 5. Write `docs/rez-format.md` as a specification with a conventions version;
    fix the stale module doc, `docs/parquet_metadata.md`, and README.
+   **DONE.** `docs/rez-format.md` specifies the container (detection by
+   header stamp, SQLite geometry, the sidecar), the five catalog tables and
+   what each column means, the table-key `/` rule, the live-WAL predicate,
+   the segment encoding (column order, both window shapes, value-column
+   naming and required field metadata, histogram lists), both WAL row
+   encodings as positional msgpack with the anchoring rules, the reserved
+   metadata keys including the identity keys, the anchored time model,
+   retention and its known anchor-loss limit, what copies preserve, and the
+   compatibility rule for what bumps `SCHEMA_VERSION` versus what is
+   additive. Every claim was checked against the code before it was
+   written; one was corrected in the process (histogram lists are dense,
+   not sparse). Stale text fixed: `rez.rs`'s module doc described a tar;
+   `docs/parquet_metadata.md`'s `.rez` section described the manifest and
+   omitted `--metrics`, events, `snapshot`, `upgrade`; README's output-format
+   paragraphs and multi-endpoint section said Prometheus forces parquet
+   (only `--separate` demotes, since #1191); `record --help` said the same
+   in its format table while contradicting itself two paragraphs later;
+   CLAUDE.md's recorder paragraph carried the same stale fallback. README's
+   tools section now lists `snapshot`, `upgrade`, and the `.rez` forms of
+   `filter`/`annotate`/`combine`. `tests/help_text.rs` passes.
 6. Replace `String` errors with a `thiserror` enum; let `writer_loop` retry the
    retryable class and isolate a constraint failure to the recording it
    belongs to.

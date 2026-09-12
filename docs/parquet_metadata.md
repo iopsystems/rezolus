@@ -6,11 +6,11 @@ Rezolus recordings carry metadata in one of two places depending on format:
   The canonical key list lives in
   [src/parquet_metadata.rs](../src/parquet_metadata.rs); most of this doc
   describes those keys.
-- **`.rez`** — a tar archive (one recording per directory, one parquet table
-  per sampler) whose metadata lives in a top-level `manifest.json`, not in
-  parquet footers. See [`.rez` archives](#rez-archives-metadata-lives-in-the-manifest)
-  below for the mapping; schema lives in
-  [src/recorder/rez.rs](../src/recorder/rez.rs).
+- **`.rez`** — a SQLite container holding one or more recordings, each with
+  its own `labels` and `metadata` maps in the catalog (the `recordings`
+  table), not in parquet footers. See [`.rez` archives](#rez-archives-metadata-lives-in-the-catalog)
+  below for the mapping, and [rez-format.md](rez-format.md) for the format
+  itself.
 
 The viewer, MCP, and downstream tools rely on this metadata to interpret the
 data, distinguish recordings, build dashboards, and combine files.
@@ -34,37 +34,46 @@ target/release/rezolus recording metadata -i file.rez
 target/release/rezolus recording metadata -i file.rez --json   # full manifest JSON
 ```
 
-## `.rez` archives: metadata lives in the manifest
+## `.rez` archives: metadata lives in the catalog
 
-The `.rez` format ([src/recorder/rez.rs](../src/recorder/rez.rs),
-[src/rez_reader.rs](../src/rez_reader.rs)) is the recorder's per-sampler
-archive: `manifest.json` plus `<dir>/<sampler>.parquet` tables per recording.
-A recording is one endpoint on one host; a multi-recording `.rez` is the
-viewer's A/B input. Producing one requires a rezolus/msgpack endpoint, so
-`source` is always `rezolus` today.
+The `.rez` format ([docs/rez-format.md](rez-format.md); code in
+[crates/rez](../crates/rez)) is the recorder's per-sampler archive: a SQLite
+file whose `recordings` table holds one row per recording, each with a
+`labels` map, a `metadata` map, a `uuid`, and a `complete` flag, and whose
+`segments`/`wal` tables hold the per-table parquet data. A recording is one
+endpoint observed over one span; a multi-recording `.rez` is the viewer's A/B
+or multi-host input. Rezolus agents and Prometheus targets both record into
+it (a Prometheus scrape becomes one acquisition group per target).
 
-Each manifest recording carries two maps:
+Each recording carries two maps:
 
-- **`labels`** — the recording's identity for grouping/aliasing:
+- **`labels`** — the recording's name for selection and aliasing:
   `source` and `host` (auto-populated; `host` from the agent's systeminfo
   hostname) plus any `record --label k=v` (last wins). The viewer's A/B
-  aliases baseline/experiment from `arm`/`host` labels. This replaces the
-  parquet-combine `node`/`instance`/`pinned_node` machinery — `.rez` has no
-  column renaming and no pinned node; label sets distinguish recordings.
+  aliases baseline/experiment from `arm`/`host` labels; MCP's `--recording
+  k=v` and the viewer's `--baseline`/`--experiment` select by them. This
+  replaces the parquet-combine `node`/`instance`/`pinned_node` machinery —
+  `.rez` has no column renaming and no pinned node. Labels need not be
+  unique; a recording's *identity* is its `uuid`.
 - **`metadata`** — mirrors the keys the parquet writer would put in a
-  footer: `sampling_interval_ms`, `source`, `systeminfo`, `descriptions`,
-  plus any `record --metadata k=v`.
+  footer (`sampling_interval_ms`, `source`, `systeminfo`, `descriptions`,
+  any `record --metadata k=v`) plus the `.rez`-only identity keys
+  `producer_epoch`/`producer_epochs` and, when present, `events` and
+  `service_queries`. The full reserved-key list is in
+  [rez-format.md §7](rez-format.md#7-reserved-metadata-keys).
 
 Structural differences from a single parquet file:
 
-- **Per-sampler cadence.** Each table records at its own rate and carries
-  `cadence_ns` in its manifest index — the recording-level
-  `sampling_interval_ms` is the agent snapshot interval, not a promise about
-  every table (e.g. a throttled expensive sampler runs slower).
-- **Acquisition-window sidecars.** Every metric column has
-  `<metric>:window_begin` / `<metric>:window_width` companions; the query
-  engine consumes them for `rate()`/`irate()` uncertainty bounds and readers
-  must not treat `:window_*` columns as metrics.
+- **Per-sampler cadence.** Each table records at its own rate — the
+  recording-level `sampling_interval_ms` is the agent snapshot interval, not a
+  promise about every table (e.g. a throttled expensive sampler runs slower).
+  `recording metadata` reports each table's observed cadence.
+- **Acquisition windows.** A group table (`<sampler>/<group>`, from a V3
+  agent) carries one `:window_begin`/`:window_width` pair for the row; a
+  sampler table carries a `<metric>:window_begin`/`<metric>:window_width`
+  pair per metric column. The query engine consumes them for
+  `rate()`/`irate()` uncertainty bounds; readers must not treat `:window_*`
+  columns as metrics.
 - **Reader-stamped (packed cgroup/task) windows are exposition-derived, not
   a staleness claim.** For mmap-direct cgroup/task counters
   (`cgroup_cpu_usage`, `task_cpu_usage`, and similar `PackedCounters`-backed
@@ -72,25 +81,23 @@ Structural differences from a single parquet file:
   value out of the BPF map, not any property of when the underlying BPF
   counter last changed — an artifact of how the value is exposed. It is a
   deliberate upper bound on the read span, honest in the same "never
-  under-states uncertainty" direction as every other acquisition window,
-  and (since the builder marks the window's end immediately after reading
-  a group's members, not at eventual publish time) reflects the group's
-  own read span rather than whole-walk time — not a claim that the
-  counter is only that fresh. Spans vary by group: sparse task metrics on
-  the v2 format include a capacity walk and read millisecond-scale.
-- **Raw timestamps survive combining.** `parquet combine` on `.rez` inputs
-  assembles recordings **verbatim** (rows untouched, `dir`s deduped) — unlike
-  `.parquet` combine, nothing is quantized, so windows and sampling-jitter
-  fidelity are preserved. Mixing `.rez` and `.parquet` inputs is rejected.
+  under-states uncertainty" direction as every other acquisition window.
+- **Raw timestamps survive combining.** `recording combine` on `.rez` inputs
+  copies segments **verbatim** — unlike `.parquet` combine, nothing is
+  quantized, so windows and sampling-jitter fidelity are preserved. Mixing
+  `.rez` and `.parquet` inputs is rejected; all-parquet inputs with a `.rez`
+  output are ingested as windowless recordings.
 
-Tool surface on a `.rez` (all four subcommands accept it):
+Tool surface on a `.rez`:
 
 | Command | `.rez` behavior |
 |---------|-----------------|
-| `parquet metadata` | Describes the manifest (`--json` for full JSON); `--file`/`--field` don't apply. |
-| `parquet annotate` | Requires `--queries <ext.json>` (no built-in template flow); embeds the validated `ServiceExtension` into **every** recording's manifest. The parquet-only flags (`--source`, `--node`, `--systeminfo`, events) don't apply. |
-| `parquet combine` | Assembles single-recording `.rez` inputs into one multi-recording `.rez` (verbatim; label-set model). |
-| `parquet filter` | Requires `--samplers a,b,...` — drops whole per-sampler tables not listed (the KPI-column filter no-ops on all-rezolus data). |
+| `recording metadata` | Describes the catalog: recordings (labels, uuid, completeness, clock), tables with rows/segments/cadence (`--json` for JSON); `--file`/`--field` don't apply. |
+| `recording annotate` | `--queries <ext.json>` embeds the validated `ServiceExtension` into **every** recording's metadata; `--event`/`--add-events`/`--clear-events` manage timeline events. The parquet-only flags (`--source`, `--node`, `--systeminfo`) don't apply. |
+| `recording combine` | Assembles `.rez` inputs into one multi-recording `.rez` (verbatim). Refuses two recordings with the same `uuid`, and identical label sets unless `--allow-duplicate-labels`. |
+| `recording filter` | `--samplers a,b,...` drops whole tables of unlisted samplers (a sampler's group tables go together); `--metrics x,y` keeps only those metric columns, re-encoding segments. At least one is required. |
+| `recording snapshot` | An exact copy of an archive still being written, read through the SQLite sidecar. |
+| `recording upgrade` | Converts a v1/v2 tar archive to the current container. |
 
 ## Single-source vs combined files
 
