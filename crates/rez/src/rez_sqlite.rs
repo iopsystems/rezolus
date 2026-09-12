@@ -99,7 +99,7 @@ pub const APPLICATION_ID: u32 = 0x5245_5A00;
 /// Typed, so a caller can tell "this is not a `.rez` at all" (fall through to
 /// another format, or say so) from "this is a `.rez` this build cannot read"
 /// (tell the user to upgrade) from an I/O or SQLite failure. Converts into
-/// `String` so the crate's `Result<_, String>` callers keep their `?`.
+/// `String` so the crate's `Result<_, DbError>` callers keep their `?`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenError {
     /// A file that is not a `.rez`: not SQLite, another application's
@@ -135,6 +135,138 @@ impl std::error::Error for OpenError {}
 impl From<OpenError> for String {
     fn from(e: OpenError) -> Self {
         e.to_string()
+    }
+}
+
+/// A failure of the container itself — SQLite, or the JSON around it.
+///
+/// Carries SQLite's result code when there is one, because the WRITER has to
+/// tell three situations apart that a `String` collapsed into one: a lock or
+/// a full disk that may clear (`is_retryable`), a constraint violation that
+/// is one recording's bad tick and nobody else's (`is_constraint`), and
+/// everything else, which is a bug or a corrupt file and must stop the
+/// writer rather than be papered over. Converts to `String` so the crate's
+/// `Result<_, DbError>` callers keep their `?`, and from `String` so a
+/// transaction body can still `?` a string-erroring helper.
+#[derive(Debug, Clone)]
+pub struct DbError {
+    /// SQLite's primary result code, when the failure was SQLite's.
+    pub code: Option<rusqlite::ErrorCode>,
+    /// The extended code, for diagnostics.
+    pub extended_code: Option<i32>,
+    pub message: String,
+}
+
+impl DbError {
+    /// A failure that is not SQLite's: an encoding error, a violated
+    /// expectation. Never retryable.
+    pub fn other(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            extended_code: None,
+            message: message.into(),
+        }
+    }
+
+    /// `map_err` adapter: prefix `context` to the error, keeping the SQLite
+    /// code when the source has one.
+    pub fn wrap<E: IntoDbError>(context: impl Into<String>) -> impl FnOnce(E) -> DbError {
+        let context = context.into();
+        move |e| {
+            let mut err = e.into_db_error();
+            err.message = format!("{context}: {}", err.message);
+            err
+        }
+    }
+
+    /// A lock, a full disk, an interrupted call, memory pressure: conditions
+    /// that can clear on their own, so a writer should try again before
+    /// giving up on the tick.
+    pub fn is_retryable(&self) -> bool {
+        use rusqlite::ErrorCode::*;
+        matches!(
+            self.code,
+            Some(
+                DatabaseBusy
+                    | DatabaseLocked
+                    | DiskFull
+                    | SystemIoFailure
+                    | OutOfMemory
+                    | OperationInterrupted
+                    | SchemaChanged
+            )
+        )
+    }
+
+    /// A uniqueness or other constraint violation: the row is wrong, the
+    /// database is fine. For a batched tick that means one recording's rows
+    /// are bad and the others' are not.
+    pub fn is_constraint(&self) -> bool {
+        matches!(self.code, Some(rusqlite::ErrorCode::ConstraintViolation))
+    }
+}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DbError {}
+
+impl From<DbError> for String {
+    fn from(e: DbError) -> Self {
+        e.message
+    }
+}
+
+impl From<String> for DbError {
+    fn from(message: String) -> Self {
+        DbError::other(message)
+    }
+}
+
+impl From<OpenError> for DbError {
+    fn from(e: OpenError) -> Self {
+        DbError::other(e.to_string())
+    }
+}
+
+impl From<rusqlite::Error> for DbError {
+    fn from(e: rusqlite::Error) -> Self {
+        e.into_db_error()
+    }
+}
+
+/// What [`DbError::wrap`] accepts: anything that knows whether it carries a
+/// SQLite result code.
+pub trait IntoDbError {
+    fn into_db_error(self) -> DbError;
+}
+
+impl IntoDbError for rusqlite::Error {
+    fn into_db_error(self) -> DbError {
+        let (code, extended_code) = match &self {
+            rusqlite::Error::SqliteFailure(e, _) => (Some(e.code), Some(e.extended_code)),
+            _ => (None, None),
+        };
+        DbError {
+            code,
+            extended_code,
+            message: self.to_string(),
+        }
+    }
+}
+
+impl IntoDbError for serde_json::Error {
+    fn into_db_error(self) -> DbError {
+        DbError::other(self.to_string())
+    }
+}
+
+impl IntoDbError for DbError {
+    fn into_db_error(self) -> DbError {
+        self
     }
 }
 
@@ -243,7 +375,7 @@ impl RezDb {
     /// Fails if `path` already exists: a `.rez` is valid from creation, so there
     /// is no `.partial` staging file standing between a new recording and a
     /// previous one.
-    pub fn create(path: &Path) -> Result<Self, String> {
+    pub fn create(path: &Path) -> Result<Self, DbError> {
         Self::create_with_page_size(path, PAGE_SIZE)
     }
 
@@ -258,9 +390,9 @@ impl RezDb {
     /// (`auto_vacuum`, `journal_mode=WAL`) — those bound a long-lived file's
     /// footprint and durability, neither of which a transient in-memory image
     /// serialized straight to bytes has any use for.
-    pub fn create_in_memory() -> Result<Self, String> {
+    pub fn create_in_memory() -> Result<Self, DbError> {
         let conn = Connection::open_in_memory()
-            .map_err(|e| format!("failed to open an in-memory database: {e}"))?;
+            .map_err(DbError::wrap("failed to open an in-memory database"))?;
         let db = RezDb {
             conn,
             #[cfg(any(test, feature = "test-support"))]
@@ -270,13 +402,13 @@ impl RezDb {
         db.apply_connection_pragmas(WRITER_CACHE_SIZE_KIB)?;
         db.conn
             .execute_batch(SCHEMA_SQL)
-            .map_err(|e| format!("failed to create .rez schema: {e}"))?;
+            .map_err(DbError::wrap("failed to create .rez schema"))?;
         db.conn
             .execute(
                 "INSERT INTO schema_version(version) VALUES (?1)",
                 [SCHEMA_VERSION],
             )
-            .map_err(|e| format!("failed to record .rez schema version: {e}"))?;
+            .map_err(DbError::wrap("failed to record .rez schema version"))?;
         db.stamp_header()?;
         Ok(db)
     }
@@ -284,11 +416,11 @@ impl RezDb {
     /// Serialize the whole database to bytes — the inverse of
     /// [`open_bytes`](Self::open_bytes). Used to hand a report `.rez` built in
     /// memory back to a caller (a browser download) without a filesystem.
-    pub fn serialize(&self) -> Result<Vec<u8>, String> {
+    pub fn serialize(&self) -> Result<Vec<u8>, DbError> {
         let data = self
             .conn
             .serialize(rusqlite::MAIN_DB)
-            .map_err(|e| format!("failed to serialize .rez: {e}"))?;
+            .map_err(DbError::wrap("failed to serialize .rez"))?;
         Ok(data.to_vec())
     }
 
@@ -334,7 +466,7 @@ impl RezDb {
     /// even if the `page_size` pragma is never issued or is issued too late.
     /// Only `create` (and that test) should call this — the page size is not a
     /// caller's choice.
-    fn create_with_page_size(path: &Path, page_size: u32) -> Result<Self, String> {
+    fn create_with_page_size(path: &Path, page_size: u32) -> Result<Self, DbError> {
         // Claim the path atomically rather than testing `exists()` — this is
         // also what stops SQLite from silently adopting a file that appeared
         // between the check and the open. A zero-length file is a valid empty
@@ -362,7 +494,7 @@ impl RezDb {
     /// Everything `create_with_page_size` does after claiming the path. Split
     /// out so a failure in any of it has one cleanup site rather than one per
     /// `?`.
-    fn init_created(path: &Path, page_size: u32) -> Result<Self, String> {
+    fn init_created(path: &Path, page_size: u32) -> Result<Self, DbError> {
         // No `SQLITE_OPEN_CREATE`: the file above is the only one this may
         // adopt. No `SQLITE_OPEN_URI` either, so a path that happens to begin
         // with `file:` stays a filename.
@@ -402,13 +534,13 @@ impl RezDb {
 
         db.conn
             .execute_batch(SCHEMA_SQL)
-            .map_err(|e| format!("failed to create .rez schema: {e}"))?;
+            .map_err(DbError::wrap("failed to create .rez schema"))?;
         db.conn
             .execute(
                 "INSERT INTO schema_version(version) VALUES (?1)",
                 [SCHEMA_VERSION],
             )
-            .map_err(|e| format!("failed to record .rez schema version: {e}"))?;
+            .map_err(DbError::wrap("failed to record .rez schema version"))?;
         db.stamp_header()?;
 
         Ok(db)
@@ -447,7 +579,7 @@ impl RezDb {
         db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)
             .map_err(|error| OpenError::Db {
                 what: what.clone(),
-                error,
+                error: error.to_string(),
             })?;
         Ok(db)
     }
@@ -519,7 +651,7 @@ impl RezDb {
         db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)
             .map_err(|error| OpenError::Db {
                 what: what.clone(),
-                error,
+                error: error.to_string(),
             })?;
         Ok(db)
     }
@@ -528,7 +660,7 @@ impl RezDb {
     /// "this is a `.rez`", `user_version` says which schema. Both are header
     /// fields, so `looks_like_v3` can read them from the first 100 bytes and
     /// `VACUUM INTO` carries them into every snapshot.
-    fn stamp_header(&self) -> Result<(), String> {
+    fn stamp_header(&self) -> Result<(), DbError> {
         self.set_pragma("application_id", APPLICATION_ID)?;
         self.set_pragma("user_version", SCHEMA_VERSION)
     }
@@ -569,7 +701,8 @@ impl RezDb {
             Err(e) => return Err(db_err(format!("failed to read application_id: {e}"))),
         };
         let found = if app == i64::from(APPLICATION_ID) {
-            self.pragma_i64("user_version").map_err(db_err)?
+            self.pragma_i64("user_version")
+                .map_err(|e| db_err(e.to_string()))?
         } else if app == 0 {
             let has_table = |name: &str| -> Result<bool, OpenError> {
                 self.conn
@@ -629,7 +762,7 @@ impl RezDb {
     /// Best-effort is the right contract: the caller is bounding how STALE a
     /// copy of the archive can be, not demanding an exact one. `rezolus
     /// recording snapshot` is the exact one.
-    pub fn checkpoint_passive(&self) -> Result<(), String> {
+    pub fn checkpoint_passive(&self) -> Result<(), DbError> {
         // `execute_batch`, not `pragma_query`: rusqlite QUOTES the pragma name
         // it is given, so `pragma_query(None, "wal_checkpoint(PASSIVE)", ..)`
         // asks for a pragma literally named `wal_checkpoint(PASSIVE)`. SQLite
@@ -639,7 +772,17 @@ impl RezDb {
         // cadence that silently never ran.
         self.conn
             .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")
-            .map_err(|e| format!("failed to checkpoint the WAL: {e}"))
+            .map_err(DbError::wrap("failed to checkpoint the WAL"))
+    }
+
+    /// How long a write waits on another connection's lock before failing
+    /// with `SQLITE_BUSY`. rusqlite's default is 5 s. Exposed so a test can
+    /// make the writer's retry path reachable in milliseconds rather than
+    /// seconds; production keeps the default.
+    pub fn set_busy_timeout(&self, timeout: std::time::Duration) -> Result<(), DbError> {
+        self.conn
+            .busy_timeout(timeout)
+            .map_err(DbError::wrap("failed to set busy_timeout"))
     }
 
     /// The pragmas that live on the connection, not in the file. Applied by
@@ -650,7 +793,7 @@ impl RezDb {
     /// `READER_CACHE_SIZE_KIB` and `WRITER_CACHE_SIZE_KIB`. Everything else here
     /// is a property of the file's durability contract and is identical on
     /// every connection.
-    fn apply_connection_pragmas(&self, cache_size_kib: i32) -> Result<(), String> {
+    fn apply_connection_pragmas(&self, cache_size_kib: i32) -> Result<(), DbError> {
         // FULL, not NORMAL: it survives power loss, not merely process death,
         // and on the combined workload it is no worse at any percentile that
         // threatens the tick budget — the tail is checkpoint and prune work,
@@ -680,33 +823,35 @@ impl RezDb {
 
     /// `PRAGMA journal_mode = WAL`. Separate because, unlike the others, it
     /// answers with a row, which `pragma_update` rejects.
-    fn set_journal_mode_wal(&self) -> Result<(), String> {
+    fn set_journal_mode_wal(&self) -> Result<(), DbError> {
         let mode: String = self
             .conn
             .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))
-            .map_err(|e| format!("failed to set journal_mode=WAL: {e}"))?;
+            .map_err(DbError::wrap("failed to set journal_mode=WAL"))?;
         if !mode.eq_ignore_ascii_case("wal") {
-            return Err(format!("journal_mode is {mode}, expected wal"));
+            return Err(DbError::other(format!(
+                "journal_mode is {mode}, expected wal"
+            )));
         }
         Ok(())
     }
 
-    fn set_pragma<V: rusqlite::ToSql>(&self, name: &str, value: V) -> Result<(), String> {
+    fn set_pragma<V: rusqlite::ToSql>(&self, name: &str, value: V) -> Result<(), DbError> {
         self.conn
             .pragma_update(None, name, value)
-            .map_err(|e| format!("failed to set pragma {name}: {e}"))
+            .map_err(DbError::wrap(format!("failed to set pragma {name}")))
     }
 
     /// Start a recording, returning its id. The recording is minted a fresh
     /// UUID; a COPY of an existing recording goes through
     /// [`RezTx::insert_recording_with_uuid`] so it keeps the one it has.
-    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
+    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, DbError> {
         insert_recording_sql(&self.conn, meta, None)
     }
 
     /// Every recording in the file, in insertion order. A `.rez` may hold
     /// several (multi-host, or an A/B pair).
-    pub fn read_recordings(&self) -> Result<Vec<RecordingRow>, String> {
+    pub fn read_recordings(&self) -> Result<Vec<RecordingRow>, DbError> {
         // The `uuid` column arrived after the first v3 archives were written,
         // and a column an old file does not have cannot be named in a SELECT
         // without erroring. Ask the schema first; the answer is per-file and
@@ -722,7 +867,7 @@ impl RezDb {
                 "SELECT id, labels, metadata, complete, clock_anchor_wall_ns, {uuid_col} \
                  FROM recordings ORDER BY id"
             ))
-            .map_err(|e| format!("failed to query recordings: {e}"))?;
+            .map_err(DbError::wrap("failed to query recordings"))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -734,20 +879,21 @@ impl RezDb {
                     row.get::<_, Option<String>>(5)?,
                 ))
             })
-            .map_err(|e| format!("failed to query recordings: {e}"))?;
+            .map_err(DbError::wrap("failed to query recordings"))?;
 
         let mut out = Vec::new();
         for row in rows {
             let (id, labels, metadata, complete, anchor, uuid) =
-                row.map_err(|e| format!("failed to read recording: {e}"))?;
+                row.map_err(DbError::wrap("failed to read recording"))?;
             out.push(RecordingRow {
                 id,
                 uuid,
                 meta: RecordingMeta {
                     labels: serde_json::from_str(&labels)
-                        .map_err(|e| format!("recording {id} has invalid labels: {e}"))?,
-                    metadata: serde_json::from_str(&metadata)
-                        .map_err(|e| format!("recording {id} has invalid metadata: {e}"))?,
+                        .map_err(DbError::wrap(format!("recording {id} has invalid labels")))?,
+                    metadata: serde_json::from_str(&metadata).map_err(DbError::wrap(format!(
+                        "recording {id} has invalid metadata"
+                    )))?,
                     // Round-trips through INTEGER; wall-clock nanoseconds stay
                     // inside i64 until the year 2262.
                     clock_anchor_wall_ns: anchor as u64,
@@ -786,20 +932,20 @@ impl RezDb {
 
     pub fn transaction<T>(
         &mut self,
-        f: impl FnOnce(&RezTx<'_>) -> Result<T, String>,
-    ) -> Result<T, String> {
+        f: impl FnOnce(&RezTx<'_>) -> Result<T, DbError>,
+    ) -> Result<T, DbError> {
         let tx = RezTx {
             tx: self
                 .conn
                 .transaction()
-                .map_err(|e| format!("failed to begin transaction: {e}"))?,
+                .map_err(DbError::wrap("failed to begin transaction"))?,
         };
         // `?` drops `tx` on the error path, and `Transaction`'s drop behavior
         // is rollback — so a failure partway through leaves nothing behind.
         let out = f(&tx)?;
         tx.tx
             .commit()
-            .map_err(|e| format!("failed to commit transaction: {e}"))?;
+            .map_err(DbError::wrap("failed to commit transaction"))?;
         #[cfg(any(test, feature = "test-support"))]
         self.commits.set(self.commits.get() + 1);
         Ok(out)
@@ -814,7 +960,7 @@ impl RezDb {
         seq: u64,
         meta: &SegmentMeta,
         bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         insert_segment_sql(&self.conn, recording_id, sampler, seq, meta, bytes)
     }
 
@@ -843,14 +989,16 @@ impl RezDb {
         &self,
         recording_id: i64,
         sampler: &str,
-    ) -> Result<Vec<(u64, SegmentMeta)>, String> {
+    ) -> Result<Vec<(u64, SegmentMeta)>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT seq, rows, first_ts, last_ts FROM segments \
                  WHERE recording_id = ?1 AND sampler = ?2 ORDER BY seq",
             )
-            .map_err(|e| format!("failed to query segment meta for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query segment meta for {sampler}"
+            )))?;
         let rows = stmt
             .query_map(rusqlite::params![recording_id, sampler], |r| {
                 Ok((
@@ -862,9 +1010,13 @@ impl RezDb {
                     },
                 ))
             })
-            .map_err(|e| format!("failed to read segment meta for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to read segment meta for {sampler}"
+            )))?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("failed to read segment meta for {sampler}: {e}"))
+            .map_err(DbError::wrap(format!(
+                "failed to read segment meta for {sampler}"
+            )))
     }
 
     /// One segment's payload, by sequence number — for the reader's name probe,
@@ -874,23 +1026,29 @@ impl RezDb {
         recording_id: i64,
         sampler: &str,
         seq: u64,
-    ) -> Result<Option<Vec<u8>>, String> {
+    ) -> Result<Option<Vec<u8>>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT bytes FROM segments \
                  WHERE recording_id = ?1 AND sampler = ?2 AND seq = ?3",
             )
-            .map_err(|e| format!("failed to query segment bytes for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query segment bytes for {sampler}"
+            )))?;
         let mut rows = stmt
             .query(rusqlite::params![recording_id, sampler, seq as i64])
-            .map_err(|e| format!("failed to read segment bytes for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to read segment bytes for {sampler}"
+            )))?;
         match rows.next() {
             Ok(Some(r)) => Ok(Some(r.get(0).map_err(|e| {
                 format!("failed to read segment bytes for {sampler}: {e}")
             })?)),
             Ok(None) => Ok(None),
-            Err(e) => Err(format!("failed to read segment bytes for {sampler}: {e}")),
+            Err(e) => Err(DbError::wrap(format!(
+                "failed to read segment bytes for {sampler}"
+            ))(e)),
         }
     }
 
@@ -898,14 +1056,16 @@ impl RezDb {
         &self,
         recording_id: i64,
         sampler: &str,
-    ) -> Result<Vec<SegmentRow>, String> {
+    ) -> Result<Vec<SegmentRow>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT seq, rows, first_ts, last_ts, bytes FROM segments \
                  WHERE recording_id = ?1 AND sampler = ?2 ORDER BY seq",
             )
-            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query segments for {sampler}"
+            )))?;
         Self::collect_segments(&mut stmt, rusqlite::params![recording_id, sampler], sampler)
     }
 
@@ -915,7 +1075,7 @@ impl RezDb {
         stmt: &mut rusqlite::Statement<'_>,
         params: &[&dyn rusqlite::ToSql],
         sampler: &str,
-    ) -> Result<Vec<SegmentRow>, String> {
+    ) -> Result<Vec<SegmentRow>, DbError> {
         let rows = stmt
             .query_map(params, |row| {
                 Ok((
@@ -926,12 +1086,15 @@ impl RezDb {
                     row.get::<_, Vec<u8>>(4)?,
                 ))
             })
-            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query segments for {sampler}"
+            )))?;
 
         let mut out = Vec::new();
         for row in rows {
-            let (seq, n_rows, first_ts, last_ts, bytes) =
-                row.map_err(|e| format!("failed to read segment row for {sampler}: {e}"))?;
+            let (seq, n_rows, first_ts, last_ts, bytes) = row.map_err(DbError::wrap(format!(
+                "failed to read segment row for {sampler}"
+            )))?;
             out.push(SegmentRow {
                 // Round-trips through INTEGER, same as elsewhere in this
                 // file: these stay inside i64 for any recording anyone will
@@ -965,7 +1128,7 @@ impl RezDb {
         sampler: &str,
         start: u64,
         end: u64,
-    ) -> Result<Vec<SegmentRow>, String> {
+    ) -> Result<Vec<SegmentRow>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -973,7 +1136,9 @@ impl RezDb {
                  WHERE recording_id = ?1 AND sampler = ?2 \
                    AND last_ts >= ?3 AND first_ts <= ?4 ORDER BY seq",
             )
-            .map_err(|e| format!("failed to query segments for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query segments for {sampler}"
+            )))?;
         // Clamped, not cast: `u64::MAX as i64` is -1, which would silently
         // select nothing at all for an unbounded upper edge.
         let params = rusqlite::params![
@@ -999,11 +1164,11 @@ impl RezDb {
     /// transaction.
     pub fn read_snapshot<T>(
         &self,
-        f: impl FnOnce(&Self) -> Result<T, String>,
-    ) -> Result<T, String> {
+        f: impl FnOnce(&Self) -> Result<T, DbError>,
+    ) -> Result<T, DbError> {
         self.conn
             .execute_batch("BEGIN DEFERRED")
-            .map_err(|e| format!("failed to open a read snapshot: {e}"))?;
+            .map_err(DbError::wrap("failed to open a read snapshot"))?;
         let out = f(self);
         // Read-only either way, so the outcome of ending it cannot change what
         // was read; the snapshot simply has to be released.
@@ -1016,7 +1181,7 @@ impl RezDb {
     /// Sum of `rows` across every segment for `(recording_id, sampler)`. Does
     /// not include WAL rows — callers combining sealed and unsealed row
     /// counts must add `live_wal().len()` themselves.
-    pub fn total_rows(&self, recording_id: i64, sampler: &str) -> Result<u64, String> {
+    pub fn total_rows(&self, recording_id: i64, sampler: &str) -> Result<u64, DbError> {
         let total: i64 = self
             .conn
             .query_row(
@@ -1024,7 +1189,7 @@ impl RezDb {
                 rusqlite::params![recording_id, sampler],
                 |row| row.get(0),
             )
-            .map_err(|e| format!("failed to sum rows for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!("failed to sum rows for {sampler}")))?;
         Ok(total as u64)
     }
 
@@ -1032,19 +1197,19 @@ impl RezDb {
     /// alphabetically. A sampler with only unsealed WAL rows and no sealed
     /// segment yet will NOT appear here — use `all_samplers` for "every
     /// sampler this recording has ever seen".
-    pub fn samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+    pub fn samplers(&self, recording_id: i64) -> Result<Vec<String>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT DISTINCT sampler FROM segments WHERE recording_id = ?1 ORDER BY sampler",
             )
-            .map_err(|e| format!("failed to query samplers: {e}"))?;
+            .map_err(DbError::wrap("failed to query samplers"))?;
         let rows = stmt
             .query_map([recording_id], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("failed to query samplers: {e}"))?;
+            .map_err(DbError::wrap("failed to query samplers"))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| format!("failed to read sampler name: {e}"))?);
+            out.push(row.map_err(DbError::wrap("failed to read sampler name"))?);
         }
         Ok(out)
     }
@@ -1058,7 +1223,7 @@ impl RezDb {
     /// this module is the only place that knows the schema well enough to
     /// look at both tables. Recovery/inventory callers should call this, not
     /// `samplers()`, when they need to know which tables exist at all.
-    pub fn all_samplers(&self, recording_id: i64) -> Result<Vec<String>, String> {
+    pub fn all_samplers(&self, recording_id: i64) -> Result<Vec<String>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
@@ -1067,15 +1232,15 @@ impl RezDb {
                  SELECT sampler FROM wal WHERE recording_id = ?1 \
                  ORDER BY sampler",
             )
-            .map_err(|e| format!("failed to query all_samplers: {e}"))?;
+            .map_err(DbError::wrap("failed to query all_samplers"))?;
         // `?1` is the SAME parameter both times it appears (SQLite numbers
         // parameters, not occurrences), so this binds once, not twice.
         let rows = stmt
             .query_map([recording_id], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("failed to query all_samplers: {e}"))?;
+            .map_err(DbError::wrap("failed to query all_samplers"))?;
         let mut out = Vec::new();
         for row in rows {
-            out.push(row.map_err(|e| format!("failed to read sampler name: {e}"))?);
+            out.push(row.map_err(DbError::wrap("failed to read sampler name"))?);
         }
         Ok(out)
     }
@@ -1095,7 +1260,7 @@ impl RezDb {
     /// through. `&mut self` makes "don't open a nested transaction while one
     /// is outstanding" a compile error for that caller instead of a runtime
     /// one. Reads stay on `&self`.
-    pub fn insert_wal_rows(&mut self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
+    pub fn insert_wal_rows(&mut self, recording_id: i64, rows: &[WalRow]) -> Result<(), DbError> {
         self.transaction(|tx| tx.insert_wal_rows(recording_id, rows))
     }
 
@@ -1109,7 +1274,7 @@ impl RezDb {
     /// atomic across recordings: a crash cannot leave one endpoint's row for
     /// tick N present and another's missing, which is the state a reader
     /// comparing two arms would have to interpret.
-    pub fn insert_wal_rows_batch(&mut self, ticks: &[(i64, Vec<WalRow>)]) -> Result<(), String> {
+    pub fn insert_wal_rows_batch(&mut self, ticks: &[(i64, Vec<WalRow>)]) -> Result<(), DbError> {
         self.transaction(|tx| {
             for (recording_id, rows) in ticks {
                 tx.insert_wal_rows(*recording_id, rows)?;
@@ -1121,14 +1286,14 @@ impl RezDb {
     /// Every WAL row for `(recording_id, sampler)`, sealed or not, oldest
     /// first. Recovery should use `live_wal` instead — this is the raw table,
     /// kept for inspection and for the WAL tests to compare against.
-    pub fn read_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+    pub fn read_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT sampler, ts, wall_offset, row FROM wal \
                  WHERE recording_id = ?1 AND sampler = ?2 ORDER BY ts",
             )
-            .map_err(|e| format!("failed to query WAL for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!("failed to query WAL for {sampler}")))?;
         Self::collect_wal_rows(&mut stmt, recording_id, sampler)
     }
 
@@ -1157,14 +1322,16 @@ impl RezDb {
     ///
     /// This turns the prune into a pure background optimisation with no
     /// correctness role.
-    pub fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, String> {
+    pub fn live_wal(&self, recording_id: i64, sampler: &str) -> Result<Vec<WalRow>, DbError> {
         let mut stmt = self
             .conn
             .prepare(&format!(
                 "SELECT sampler, ts, wall_offset, row FROM wal \
                  WHERE {LIVE_WAL_PREDICATE} ORDER BY ts"
             ))
-            .map_err(|e| format!("failed to query live WAL for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query live WAL for {sampler}"
+            )))?;
         Self::collect_wal_rows(&mut stmt, recording_id, sampler)
     }
 
@@ -1173,13 +1340,15 @@ impl RezDb {
     /// share `LIVE_WAL_PREDICATE`, so the depth cannot drift from the rows the
     /// reader replays); this is the aggregate form, for callers that want the
     /// number rather than the payload.
-    pub fn live_wal_span(&self, recording_id: i64, sampler: &str) -> Result<Span, String> {
+    pub fn live_wal_span(&self, recording_id: i64, sampler: &str) -> Result<Span, DbError> {
         self.query_span(
             &format!("SELECT COUNT(*), MIN(ts), MAX(ts) FROM wal WHERE {LIVE_WAL_PREDICATE}"),
             recording_id,
             sampler,
         )
-        .map_err(|e| format!("failed to measure the live WAL for {sampler}: {e}"))
+        .map_err(DbError::wrap(format!(
+            "failed to measure the live WAL for {sampler}"
+        )))
     }
 
     /// A sampler's sealed segments as the CATALOG sees them: how many segments,
@@ -1187,7 +1356,7 @@ impl RezDb {
     /// `parquet metadata` describes a 197 MB archive from this, and pulling
     /// `bytes` back only to discard it is exactly the cost the catalog exists to
     /// avoid.
-    pub fn segment_span(&self, recording_id: i64, sampler: &str) -> Result<(u64, Span), String> {
+    pub fn segment_span(&self, recording_id: i64, sampler: &str) -> Result<(u64, Span), DbError> {
         let segments: i64 = self
             .conn
             .query_row(
@@ -1195,7 +1364,9 @@ impl RezDb {
                 rusqlite::params![recording_id, sampler],
                 |row| row.get(0),
             )
-            .map_err(|e| format!("failed to count segments for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to count segments for {sampler}"
+            )))?;
         let span = self
             .query_span(
                 "SELECT COALESCE(SUM(rows), 0), MIN(first_ts), MAX(last_ts) FROM segments \
@@ -1203,7 +1374,9 @@ impl RezDb {
                 recording_id,
                 sampler,
             )
-            .map_err(|e| format!("failed to measure the segments of {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to measure the segments of {sampler}"
+            )))?;
         Ok((segments as u64, span))
     }
 
@@ -1226,7 +1399,7 @@ impl RezDb {
         stmt: &mut rusqlite::Statement<'_>,
         recording_id: i64,
         sampler: &str,
-    ) -> Result<Vec<WalRow>, String> {
+    ) -> Result<Vec<WalRow>, DbError> {
         let rows = stmt
             .query_map(rusqlite::params![recording_id, sampler], |row| {
                 Ok((
@@ -1236,11 +1409,14 @@ impl RezDb {
                     row.get::<_, Vec<u8>>(3)?,
                 ))
             })
-            .map_err(|e| format!("failed to query WAL rows for {sampler}: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to query WAL rows for {sampler}"
+            )))?;
         let mut out = Vec::new();
         for row in rows {
-            let (sampler, ts, wall_offset, data) =
-                row.map_err(|e| format!("failed to read WAL row for {sampler}: {e}"))?;
+            let (sampler, ts, wall_offset, data) = row.map_err(DbError::wrap(format!(
+                "failed to read WAL row for {sampler}"
+            )))?;
             out.push(WalRow {
                 sampler,
                 ts: ts as u64,
@@ -1266,13 +1442,13 @@ impl RezDb {
         recording_id: i64,
         sampler: &str,
         upto_ts: u64,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, DbError> {
         self.conn
             .execute(
                 "DELETE FROM wal WHERE recording_id = ?1 AND sampler = ?2 AND ts <= ?3",
                 rusqlite::params![recording_id, sampler, upto_ts as i64],
             )
-            .map_err(|e| format!("failed to prune WAL for {sampler}: {e}"))
+            .map_err(DbError::wrap(format!("failed to prune WAL for {sampler}")))
     }
 
     /// **Retention.** Drop every segment that lies wholly before `cutoff_ts`,
@@ -1298,7 +1474,7 @@ impl RezDb {
     /// and it only stops it if the two land together: a straddling row has
     /// `ts <= last_ts < cutoff_ts`, so the WAL delete provably covers every row
     /// the segment delete un-shadows.
-    pub fn evict_before(&mut self, recording_id: i64, cutoff_ts: u64) -> Result<Evicted, String> {
+    pub fn evict_before(&mut self, recording_id: i64, cutoff_ts: u64) -> Result<Evicted, DbError> {
         self.evict(
             recording_id,
             "DELETE FROM segments WHERE recording_id = ?1 AND last_ts < ?2",
@@ -1313,17 +1489,17 @@ impl RezDb {
         segments_sql: &str,
         wal_sql: &str,
         cutoff_ts: u64,
-    ) -> Result<Evicted, String> {
+    ) -> Result<Evicted, DbError> {
         self.transaction(|tx| {
             let params = rusqlite::params![recording_id, cutoff_ts as i64];
             let segments = tx
                 .tx
                 .execute(segments_sql, params)
-                .map_err(|e| format!("failed to evict segments: {e}"))?;
+                .map_err(DbError::wrap("failed to evict segments"))?;
             let wal_rows = tx
                 .tx
                 .execute(wal_sql, params)
-                .map_err(|e| format!("failed to evict WAL rows: {e}"))?;
+                .map_err(DbError::wrap("failed to evict WAL rows"))?;
             Ok(Evicted { segments, wal_rows })
         })
     }
@@ -1343,14 +1519,14 @@ impl RezDb {
     /// `pages` says. That is not a slow reclaim, it is no reclaim at all: at
     /// one page per retention pass a hindsight buffer would never work off a
     /// spike.
-    pub fn incremental_vacuum(&self, pages: u32) -> Result<(), String> {
-        let fail = |e| format!("failed to reclaim {pages} pages: {e}");
+    pub fn incremental_vacuum(&self, pages: u32) -> Result<(), DbError> {
+        let fail = || DbError::wrap(format!("failed to reclaim {pages} pages"));
         let mut stmt = self
             .conn
             .prepare(&format!("PRAGMA incremental_vacuum({pages})"))
-            .map_err(fail)?;
-        let mut rows = stmt.query([]).map_err(fail)?;
-        while rows.next().map_err(fail)?.is_some() {}
+            .map_err(fail())?;
+        let mut rows = stmt.query([]).map_err(fail())?;
+        while rows.next().map_err(fail())?.is_some() {}
         Ok(())
     }
 
@@ -1366,13 +1542,16 @@ impl RezDb {
     /// A plain file copy is NOT an equivalent: in WAL mode the main database
     /// file lags every commit since the last checkpoint, so copying it alone
     /// silently loses the most recent ticks.
-    pub fn vacuum_into(&self, dest: &Path) -> Result<(), String> {
-        let dest = dest
-            .to_str()
-            .ok_or_else(|| format!("dump destination {} is not valid UTF-8", dest.display()))?;
+    pub fn vacuum_into(&self, dest: &Path) -> Result<(), DbError> {
+        let dest = dest.to_str().ok_or_else(|| {
+            DbError::other(format!(
+                "dump destination {} is not valid UTF-8",
+                dest.display()
+            ))
+        })?;
         self.conn
             .execute("VACUUM INTO ?1", [dest])
-            .map_err(|e| format!("failed to write the dump to {dest}: {e}"))?;
+            .map_err(DbError::wrap(format!("failed to write the dump to {dest}")))?;
         Ok(())
     }
 
@@ -1383,7 +1562,7 @@ impl RezDb {
     pub fn recording_time_span(
         &self,
         recording_id: i64,
-    ) -> Result<(Option<u64>, Option<u64>), String> {
+    ) -> Result<(Option<u64>, Option<u64>), DbError> {
         self.conn
             .query_row(
                 "SELECT MIN(first_ts), MAX(last_ts) FROM ( \
@@ -1398,13 +1577,15 @@ impl RezDb {
                     ))
                 },
             )
-            .map_err(|e| format!("failed to measure recording {recording_id}: {e}"))
+            .map_err(DbError::wrap(format!(
+                "failed to measure recording {recording_id}"
+            )))
     }
 
     /// Mark a recording cleanly finalized, outside any batch. The dump uses
     /// it: a copy taken at time T is a finished artifact even though the
     /// buffer it came from is still running.
-    pub fn mark_complete(&mut self, recording_id: i64) -> Result<(), String> {
+    pub fn mark_complete(&mut self, recording_id: i64) -> Result<(), DbError> {
         self.transaction(|tx| tx.mark_complete(recording_id))
     }
 
@@ -1416,18 +1597,18 @@ impl RezDb {
     /// table added here without being handled there would vanish silently
     /// from every rewritten archive.
     #[cfg(test)]
-    pub fn user_table_names(&self) -> Result<Vec<String>, String> {
+    pub fn user_table_names(&self) -> Result<Vec<String>, DbError> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
             )
-            .map_err(|e| format!("failed to list tables: {e}"))?;
+            .map_err(DbError::wrap("failed to list tables"))?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))
-            .map_err(|e| format!("failed to list tables: {e}"))?;
+            .map_err(DbError::wrap("failed to list tables"))?;
         rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("failed to list tables: {e}"))
+            .map_err(DbError::wrap("failed to list tables"))
     }
 
     /// Replace one recording's metadata map.
@@ -1440,7 +1621,7 @@ impl RezDb {
     pub fn recording_metadata(
         &self,
         recording_id: i64,
-    ) -> Result<BTreeMap<String, String>, String> {
+    ) -> Result<BTreeMap<String, String>, DbError> {
         let encoded: String = self
             .conn
             .query_row(
@@ -1448,9 +1629,12 @@ impl RezDb {
                 [recording_id],
                 |row| row.get(0),
             )
-            .map_err(|e| format!("failed to read metadata of recording {recording_id}: {e}"))?;
-        serde_json::from_str(&encoded)
-            .map_err(|e| format!("recording {recording_id} has invalid metadata: {e}"))
+            .map_err(DbError::wrap(format!(
+                "failed to read metadata of recording {recording_id}"
+            )))?;
+        serde_json::from_str(&encoded).map_err(DbError::wrap(format!(
+            "recording {recording_id} has invalid metadata"
+        )))
     }
 
     /// Merge `patch` into a recording's metadata: keys in the patch replace
@@ -1461,7 +1645,7 @@ impl RezDb {
         &self,
         recording_id: i64,
         patch: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let mut metadata = self.recording_metadata(recording_id)?;
         for (k, v) in patch {
             metadata.insert(k.clone(), v.clone());
@@ -1473,57 +1657,60 @@ impl RezDb {
         &self,
         recording_id: i64,
         metadata: &BTreeMap<String, String>,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         let encoded = serde_json::to_string(metadata)
-            .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
+            .map_err(DbError::wrap("failed to encode recording metadata"))?;
         let changed = self
             .conn
             .execute(
                 "UPDATE recordings SET metadata = ?1 WHERE id = ?2",
                 rusqlite::params![encoded, recording_id],
             )
-            .map_err(|e| format!("failed to update recording metadata: {e}"))?;
+            .map_err(DbError::wrap("failed to update recording metadata"))?;
         if changed == 0 {
-            return Err(format!("no recording with id {recording_id}"));
+            return Err(DbError::other(format!(
+                "no recording with id {recording_id}"
+            )));
         }
         Ok(())
     }
 
-    pub fn pragma_u32(&self, name: &str) -> Result<u32, String> {
+    pub fn pragma_u32(&self, name: &str) -> Result<u32, DbError> {
         let value = self.pragma_i64(name)?;
-        u32::try_from(value).map_err(|_| format!("pragma {name} is {value}, not a u32"))
+        u32::try_from(value)
+            .map_err(|_| DbError::other(format!("pragma {name} is {value}, not a u32")))
     }
 
     /// Signed, because `cache_size` is negative when denominated in kibibytes.
-    pub fn pragma_i64(&self, name: &str) -> Result<i64, String> {
+    pub fn pragma_i64(&self, name: &str) -> Result<i64, DbError> {
         self.conn
             .pragma_query_value(None, name, |row| row.get(0))
-            .map_err(|e| format!("failed to read pragma {name}: {e}"))
+            .map_err(DbError::wrap(format!("failed to read pragma {name}")))
     }
 
     /// The recording's `(ts, offset_ns)` clock observations, oldest first.
-    pub fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, String> {
+    pub fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, DbError> {
         let mut stmt = self
             .conn
             .prepare("SELECT ts, offset_ns FROM clock_offsets WHERE recording_id = ?1 ORDER BY ts")
-            .map_err(|e| format!("failed to query clock offsets: {e}"))?;
+            .map_err(DbError::wrap("failed to query clock offsets"))?;
         let rows = stmt
             .query_map([recording_id], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(|e| format!("failed to query clock offsets: {e}"))?;
+            .map_err(DbError::wrap("failed to query clock offsets"))?;
         let mut out = Vec::new();
         for row in rows {
-            let (ts, offset) = row.map_err(|e| format!("failed to read clock offset: {e}"))?;
+            let (ts, offset) = row.map_err(DbError::wrap("failed to read clock offset"))?;
             out.push((ts as u64, offset));
         }
         Ok(out)
     }
 
-    pub fn pragma_string(&self, name: &str) -> Result<String, String> {
+    pub fn pragma_string(&self, name: &str) -> Result<String, DbError> {
         self.conn
             .pragma_query_value(None, name, |row| row.get(0))
-            .map_err(|e| format!("failed to read pragma {name}: {e}"))
+            .map_err(DbError::wrap(format!("failed to read pragma {name}")))
     }
 }
 
@@ -1545,7 +1732,7 @@ impl RezTx<'_> {
     /// recorded: the ranged dump writes a recording row and every segment it
     /// selected, and either the whole file is that recording or there is no
     /// file at all.
-    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, String> {
+    pub fn insert_recording(&self, meta: &RecordingMeta) -> Result<i64, DbError> {
         insert_recording_sql(&self.tx, meta, None)
     }
 
@@ -1557,7 +1744,7 @@ impl RezTx<'_> {
         &self,
         meta: &RecordingMeta,
         uuid: Option<&str>,
-    ) -> Result<i64, String> {
+    ) -> Result<i64, DbError> {
         insert_recording_sql(&self.tx, meta, uuid)
     }
 
@@ -1574,19 +1761,19 @@ impl RezTx<'_> {
         seq: u64,
         meta: &SegmentMeta,
         bytes: &[u8],
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         insert_segment_sql(&self.tx, recording_id, sampler, seq, meta, bytes)
     }
 
     /// Insert every WAL row for one tick — one sampler each, typically.
-    pub fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), String> {
+    pub fn insert_wal_rows(&self, recording_id: i64, rows: &[WalRow]) -> Result<(), DbError> {
         let mut stmt = self
             .tx
             .prepare(
                 "INSERT INTO wal(recording_id, sampler, ts, wall_offset, row) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )
-            .map_err(|e| format!("failed to prepare WAL insert: {e}"))?;
+            .map_err(DbError::wrap("failed to prepare WAL insert"))?;
         for r in rows {
             stmt.execute(rusqlite::params![
                 recording_id,
@@ -1595,7 +1782,10 @@ impl RezTx<'_> {
                 r.wall_offset,
                 r.row,
             ])
-            .map_err(|e| format!("failed to insert WAL row for {}: {e}", r.sampler))?;
+            .map_err(DbError::wrap(format!(
+                "failed to insert WAL row for {}",
+                r.sampler
+            )))?;
         }
         Ok(())
     }
@@ -1606,26 +1796,28 @@ impl RezTx<'_> {
         recording_id: i64,
         ts: u64,
         offset_ns: i64,
-    ) -> Result<(), String> {
+    ) -> Result<(), DbError> {
         self.tx
             .execute(
                 "INSERT INTO clock_offsets(recording_id, ts, offset_ns) VALUES (?1, ?2, ?3)",
                 rusqlite::params![recording_id, ts as i64, offset_ns],
             )
-            .map_err(|e| format!("failed to insert clock offset: {e}"))?;
+            .map_err(DbError::wrap("failed to insert clock offset"))?;
         Ok(())
     }
 
     /// Mark the recording cleanly finalized. This is what replaced the
     /// `.partial` filename convention: the file is valid from creation, so
     /// "was it finished" is a queryable property instead of a name.
-    pub fn mark_complete(&self, recording_id: i64) -> Result<(), String> {
+    pub fn mark_complete(&self, recording_id: i64) -> Result<(), DbError> {
         self.tx
             .execute(
                 "UPDATE recordings SET complete = 1 WHERE id = ?1",
                 [recording_id],
             )
-            .map_err(|e| format!("failed to mark recording {recording_id} complete: {e}"))?;
+            .map_err(DbError::wrap(format!(
+                "failed to mark recording {recording_id} complete"
+            )))?;
         Ok(())
     }
 }
@@ -1636,11 +1828,11 @@ fn insert_recording_sql(
     conn: &Connection,
     meta: &RecordingMeta,
     uuid: Option<&str>,
-) -> Result<i64, String> {
+) -> Result<i64, DbError> {
     let labels = serde_json::to_string(&meta.labels)
-        .map_err(|e| format!("failed to encode recording labels: {e}"))?;
+        .map_err(DbError::wrap("failed to encode recording labels"))?;
     let metadata = serde_json::to_string(&meta.metadata)
-        .map_err(|e| format!("failed to encode recording metadata: {e}"))?;
+        .map_err(DbError::wrap("failed to encode recording metadata"))?;
     let uuid = match uuid {
         Some(u) => u.to_string(),
         None => mint_uuid(conn)?,
@@ -1650,7 +1842,7 @@ fn insert_recording_sql(
          VALUES (?1, ?2, 0, ?3, ?4)",
         rusqlite::params![labels, metadata, meta.clock_anchor_wall_ns as i64, uuid],
     )
-    .map_err(|e| format!("failed to insert recording: {e}"))?;
+    .map_err(DbError::wrap("failed to insert recording"))?;
     Ok(conn.last_insert_rowid())
 }
 
@@ -1661,12 +1853,15 @@ fn insert_recording_sql(
 /// feature), and this crate takes no dependency it does not need. SQLite is
 /// already here, its PRNG is seeded from the OS, and 16 random bytes with the
 /// version and variant bits set is all a v4 UUID is.
-fn mint_uuid(conn: &Connection) -> Result<String, String> {
+fn mint_uuid(conn: &Connection) -> Result<String, DbError> {
     let mut b: Vec<u8> = conn
         .query_row("SELECT randomblob(16)", [], |row| row.get(0))
-        .map_err(|e| format!("failed to mint a recording uuid: {e}"))?;
+        .map_err(DbError::wrap("failed to mint a recording uuid"))?;
     if b.len() != 16 {
-        return Err(format!("randomblob(16) returned {} bytes", b.len()));
+        return Err(DbError::other(format!(
+            "randomblob(16) returned {} bytes",
+            b.len()
+        )));
     }
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
@@ -1682,15 +1877,15 @@ fn mint_uuid(conn: &Connection) -> Result<String, String> {
 }
 
 /// Whether `table` has a column named `column`, per the file's own schema.
-fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, DbError> {
     let mut stmt = conn
         .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| format!("failed to inspect {table}: {e}"))?;
+        .map_err(DbError::wrap(format!("failed to inspect {table}")))?;
     let names = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("failed to inspect {table}: {e}"))?;
+        .map_err(DbError::wrap(format!("failed to inspect {table}")))?;
     for name in names {
-        let name = name.map_err(|e| format!("failed to inspect {table}: {e}"))?;
+        let name = name.map_err(DbError::wrap(format!("failed to inspect {table}")))?;
         if name == column {
             return Ok(true);
         }
@@ -1708,7 +1903,7 @@ fn insert_segment_sql(
     seq: u64,
     meta: &SegmentMeta,
     bytes: &[u8],
-) -> Result<(), String> {
+) -> Result<(), DbError> {
     conn.execute(
         "INSERT INTO segments(recording_id, sampler, seq, rows, first_ts, last_ts, bytes) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1722,7 +1917,9 @@ fn insert_segment_sql(
             bytes,
         ],
     )
-    .map_err(|e| format!("failed to insert segment {sampler}#{seq}: {e}"))?;
+    .map_err(DbError::wrap(format!(
+        "failed to insert segment {sampler}#{seq}"
+    )))?;
     Ok(())
 }
 
@@ -2386,6 +2583,61 @@ mod tests {
         assert_eq!(rows[0].uuid, None);
     }
 
+    /// The writer's whole recovery policy rests on this classification:
+    /// what to retry, what to isolate to one recording, what to stop on.
+    #[test]
+    fn db_error_classifies_sqlite_result_codes() {
+        let sqlite = |code: i32| {
+            DbError::from(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(code),
+                None,
+            ))
+        };
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_LOCKED,
+            rusqlite::ffi::SQLITE_FULL,
+            rusqlite::ffi::SQLITE_IOERR,
+            rusqlite::ffi::SQLITE_NOMEM,
+            rusqlite::ffi::SQLITE_INTERRUPT,
+        ] {
+            let e = sqlite(code);
+            assert!(e.is_retryable(), "{code}: {e}");
+            assert!(!e.is_constraint(), "{code}: {e}");
+        }
+        let constraint = sqlite(rusqlite::ffi::SQLITE_CONSTRAINT);
+        assert!(constraint.is_constraint());
+        assert!(!constraint.is_retryable());
+        for code in [
+            rusqlite::ffi::SQLITE_CORRUPT,
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_MISUSE,
+        ] {
+            let e = sqlite(code);
+            assert!(!e.is_retryable() && !e.is_constraint(), "{code}: {e}");
+        }
+        // Not SQLite's at all: never retried.
+        let other = DbError::other("bad json");
+        assert!(!other.is_retryable() && !other.is_constraint());
+        // Context wraps keep the code.
+        let wrapped = DbError::wrap("inserting")(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            None,
+        ));
+        assert!(wrapped.is_retryable());
+        assert!(wrapped.to_string().starts_with("inserting: "), "{wrapped}");
+        // And the extended code is kept for diagnostics.
+        let ext = DbError::from(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY),
+            None,
+        ));
+        assert!(ext.is_constraint());
+        assert_eq!(
+            ext.extended_code,
+            Some(rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY)
+        );
+    }
+
     #[test]
     fn create_refuses_an_existing_file() {
         // A .rez is valid from creation, so there is no .partial to protect a
@@ -2410,7 +2662,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(already_exists.kind(), std::io::ErrorKind::AlreadyExists);
         assert!(
-            err.contains(&already_exists.to_string()),
+            err.message.contains(&already_exists.to_string()),
             "{err:?} should carry the AlreadyExists error from create_new"
         );
     }
@@ -2757,7 +3009,7 @@ mod tests {
             )
             .expect_err("a PRIMARY KEY collision must fail the whole call");
         assert!(
-            err.to_lowercase().contains("unique") || err.to_lowercase().contains("constraint"),
+            err.is_constraint(),
             "{err:?} should name the PK collision, not some other failure"
         );
 
@@ -2814,7 +3066,7 @@ mod tests {
             })
             .expect_err("a PRIMARY KEY collision must fail the whole batch");
         assert!(
-            err.to_lowercase().contains("unique") || err.to_lowercase().contains("constraint"),
+            err.is_constraint(),
             "{err:?} should name the PK collision, not some other failure"
         );
         assert_eq!(

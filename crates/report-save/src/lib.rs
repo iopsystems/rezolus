@@ -402,6 +402,7 @@ fn embed_rez_report_markers(
         }
     }
     db.update_recording_metadata(anchor.id, &metadata)
+        .map_err(String::from)
 }
 
 /// Build a `.rez` report from a `.rez` source's bytes: copy every recording
@@ -429,10 +430,11 @@ pub fn build_rez_report_from_rez(
                 },
             )
             .map(|_| ())
+            .map_err(rez::rez_sqlite::DbError::from)
         })
     })?;
     embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
-    dst.serialize()
+    dst.serialize().map_err(String::from)
 }
 
 /// One side of a parquet compare: its bytes and the columns to keep (`None`
@@ -462,7 +464,7 @@ pub fn build_rez_report_from_parquets(
         Ok(())
     })?;
     embed_rez_report_markers(&dst, trimmed, selection_json, events_json)?;
-    dst.serialize()
+    dst.serialize().map_err(String::from)
 }
 
 #[cfg(test)]

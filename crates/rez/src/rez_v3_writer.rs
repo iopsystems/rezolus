@@ -27,7 +27,7 @@ use metriken_exposition::{GroupSchema, GroupSnapshot, Snapshot};
 use tracing::warn;
 
 use super::rez::{dedup_key, entries_approx_bytes, group_approx_bytes, group_by_sampler};
-use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
+use super::rez_sqlite::{DbError, RecordingMeta, RezDb, SegmentMeta, WalRow};
 use super::seal_policy::{SealPolicy, SegmentAccount};
 use super::wal::{
     encode_wal_group_row, encode_wal_row, materialize_wal_tail, WalCell, WalGroupRow, WalValue,
@@ -178,7 +178,33 @@ impl RezArchive {
         path: &Path,
         checkpoint_every: Duration,
     ) -> Result<Self, String> {
+        Self::create_inner(path, checkpoint_every, None)
+    }
+
+    /// [`create_checkpointing_every`](Self::create_checkpointing_every) with
+    /// the writer connection's `busy_timeout` chosen by the caller.
+    ///
+    /// Exists so the writer's retry path is testable: with rusqlite's 5 s
+    /// default, a test that holds the write lock from a second connection
+    /// would wait five seconds per attempt to see the writer notice.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn create_with_busy_timeout(
+        path: &Path,
+        checkpoint_every: Duration,
+        busy_timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::create_inner(path, checkpoint_every, Some(busy_timeout))
+    }
+
+    fn create_inner(
+        path: &Path,
+        checkpoint_every: Duration,
+        busy_timeout: Option<Duration>,
+    ) -> Result<Self, String> {
         let db = RezDb::create(path)?;
+        if let Some(timeout) = busy_timeout {
+            db.set_busy_timeout(timeout)?;
+        }
 
         // Bound 1, as in v2: the hand-off blocks while the writer is busy,
         // which is the intended backpressure signal. One slot for the archive
@@ -594,6 +620,125 @@ fn take_writer_error(slot: &ErrorSlot) -> String {
         })
 }
 
+/// Backoff between attempts at a container operation that failed with a
+/// condition that can clear on its own (`DbError::is_retryable`): another
+/// connection's lock, a full disk, an interrupted call. Three attempts over
+/// ~310 ms, on the writer thread — which backpressures the scrape loop
+/// through the bound-1 channel for that long, a bounded cost against losing
+/// the tick.
+const RETRY_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(10),
+    Duration::from_millis(50),
+    Duration::from_millis(250),
+];
+
+/// How many consecutive ticks the writer may drop before it gives up. A lock
+/// or a full disk that clears within a few seconds costs those ticks and
+/// nothing else; one that does not clear is a failure the recorder must
+/// report rather than a recording that silently holds nothing.
+const MAX_CONSECUTIVE_DROPPED_TICKS: u32 = 30;
+
+/// Run `op`, retrying on a retryable failure per [`RETRY_BACKOFF`]. Any other
+/// failure — and a retryable one that outlasts the schedule — is returned as
+/// is, for the caller to classify.
+fn with_retries<T>(what: &str, mut op: impl FnMut() -> Result<T, DbError>) -> Result<T, DbError> {
+    let mut attempt = 0usize;
+    loop {
+        match op() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.is_retryable() && attempt < RETRY_BACKOFF.len() => {
+                warn!(
+                    "{what} failed ({e}); retrying in {:?}",
+                    RETRY_BACKOFF[attempt]
+                );
+                std::thread::sleep(RETRY_BACKOFF[attempt]);
+                attempt += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// What the writer tracks to decide between "warn and carry on" and "stop".
+#[derive(Default)]
+struct WriterHealth {
+    consecutive_dropped: u32,
+    /// Recordings already warned about for a colliding tick, so a producer
+    /// that repeats a timestamp every tick does not log every tick.
+    warned_collisions: BTreeSet<i64>,
+}
+
+impl WriterHealth {
+    fn committed(&mut self) {
+        self.consecutive_dropped = 0;
+    }
+
+    /// A tick was dropped after retries. `Err` once that has happened
+    /// [`MAX_CONSECUTIVE_DROPPED_TICKS`] times in a row.
+    fn dropped(&mut self, e: &DbError) -> Result<(), String> {
+        self.consecutive_dropped += 1;
+        warn!(
+            "a tick was dropped after retries ({e}); {} consecutive",
+            self.consecutive_dropped
+        );
+        if self.consecutive_dropped >= MAX_CONSECUTIVE_DROPPED_TICKS {
+            return Err(format!(
+                "the .rez writer dropped {} consecutive ticks; last error: {e}",
+                self.consecutive_dropped
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Commit one tick's rows for every recording in the archive.
+///
+/// The whole tick is one transaction on the happy path (one fsync). When that
+/// fails on a constraint — a recording repeating a `(sampler, ts)` it already
+/// committed, which the `wal` primary key refuses — the failure is ONE
+/// recording's, so the tick is re-committed per recording and only the
+/// colliding one loses its rows. Before this, the batched commit meant one
+/// endpoint's bad tick failed every endpoint in the archive, permanently.
+fn commit_tick(
+    db: &mut RezDb,
+    ticks: &[(i64, Vec<WalRow>)],
+    health: &mut WriterHealth,
+) -> Result<(), String> {
+    match with_retries("committing a tick", || db.insert_wal_rows_batch(ticks)) {
+        Ok(()) => {
+            health.committed();
+            Ok(())
+        }
+        Err(e) if e.is_constraint() => {
+            let mut any = false;
+            for (recording_id, rows) in ticks {
+                match with_retries("committing a recording's tick", || {
+                    db.insert_wal_rows(*recording_id, rows)
+                }) {
+                    Ok(()) => any = true,
+                    Err(e) if e.is_constraint() => {
+                        if health.warned_collisions.insert(*recording_id) {
+                            warn!(
+                                "recording {recording_id}: a tick was dropped because its rows \
+                                 collide with rows already committed ({e}); later collisions \
+                                 for this recording are not logged"
+                            );
+                        }
+                    }
+                    Err(e) if e.is_retryable() => health.dropped(&e)?,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            if any {
+                health.committed();
+            }
+            Ok(())
+        }
+        Err(e) if e.is_retryable() => health.dropped(&e),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// An encoded segment waiting to be inserted.
 struct Encoded {
     sampler: String,
@@ -669,6 +814,7 @@ fn writer_loop(
     // checkpoint, including ones taken while idle — the guarantee is about
     // elapsed time, not about arriving messages.
     let mut last_checkpoint = Instant::now();
+    let mut health = WriterHealth::default();
 
     loop {
         // `recv_timeout`, not `recv`: a writer with nothing to do still has to
@@ -708,9 +854,9 @@ fn writer_loop(
                 if inserted.is_ok() {
                     added += 1;
                 }
-                let _ = reply.send(inserted);
+                let _ = reply.send(inserted.map_err(String::from));
             }
-            Ok(Msg::Wal { ticks }) => db.insert_wal_rows_batch(&ticks)?,
+            Ok(Msg::Wal { ticks }) => commit_tick(db, &ticks, &mut health)?,
             #[cfg(any(test, feature = "test-support"))]
             Ok(Msg::Commits(reply)) => {
                 let _ = reply.send(db.commits());
@@ -719,22 +865,53 @@ fn writer_loop(
                 recording_id,
                 batch,
             }) => {
-                if let Some(ts) = seal_batch(db, recording_id, &mut next_seq, batch)? {
-                    observed.entry(recording_id).or_default().insert(ts);
+                // A seal that cannot commit is DEFERRED, not lost: its rows are
+                // still in the WAL, `seal_batch` re-reads them on retry, and
+                // if every retry fails they stay live and go out with the
+                // next batch that seals this table. Nothing has to be undone.
+                match with_retries("sealing a segment batch", || {
+                    seal_batch(db, recording_id, &mut next_seq, batch.clone())
+                }) {
+                    Ok(Some(ts)) => {
+                        observed.entry(recording_id).or_default().insert(ts);
+                    }
+                    Ok(None) => {}
+                    Err(e) if e.is_retryable() => warn!(
+                        "seal of {} table(s) for recording {recording_id} deferred ({e}); \
+                         their rows stay in the WAL and seal with the next batch",
+                        batch.len()
+                    ),
+                    Err(e) => return Err(e.into()),
                 }
             }
             Ok(Msg::Evict {
                 recording_id,
                 cutoff_ts,
             }) => {
-                db.evict_before(recording_id, cutoff_ts)?;
-                reclaim_if_fragmented(db)?;
+                // Retention that cannot run now runs next tick with a later
+                // cutoff; deferring it costs a tick's worth of extra bytes.
+                match with_retries("retention", || db.evict_before(recording_id, cutoff_ts)) {
+                    Ok(_) => reclaim_if_fragmented(db)?,
+                    Err(e) if e.is_retryable() => {
+                        warn!("retention for recording {recording_id} deferred ({e})")
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
             Ok(Msg::UpdateMetadata {
                 recording_id,
                 patch,
             }) => {
-                db.patch_recording_metadata(recording_id, &patch)?;
+                match with_retries("updating recording metadata", || {
+                    db.patch_recording_metadata(recording_id, &patch)
+                }) {
+                    Ok(()) => {}
+                    Err(e) if e.is_retryable() => warn!(
+                        "metadata update for recording {recording_id} dropped ({e}); keys: {:?}",
+                        patch.keys().collect::<Vec<_>>()
+                    ),
+                    Err(e) => return Err(e.into()),
+                }
             }
             Ok(Msg::Finalize {
                 recording_id,
@@ -750,11 +927,13 @@ fn writer_loop(
                 let novel = !observed
                     .get(&recording_id)
                     .is_some_and(|o| o.contains(&clock_offset.0));
-                db.transaction(|tx| {
-                    if novel {
-                        tx.insert_clock_offset(recording_id, clock_offset.0, clock_offset.1)?;
-                    }
-                    tx.mark_complete(recording_id)
+                with_retries("finalizing a recording", || {
+                    db.transaction(|tx| {
+                        if novel {
+                            tx.insert_clock_offset(recording_id, clock_offset.0, clock_offset.1)?;
+                        }
+                        tx.mark_complete(recording_id)
+                    })
                 })?;
                 finalized += 1;
                 // Deliberately NOT returning here, and not reclaiming yet. An
@@ -837,7 +1016,7 @@ fn should_reclaim(free_pages: u32, pages: u32) -> bool {
 /// `u32::MAX` is "as many as the free list holds" — `incremental_vacuum` stops
 /// when it runs out.
 fn reclaim_all(db: &RezDb) -> Result<(), String> {
-    db.incremental_vacuum(u32::MAX)
+    Ok(db.incremental_vacuum(u32::MAX)?)
 }
 
 /// Encode one batch's segments, insert them — with the batch's clock
@@ -848,7 +1027,7 @@ fn seal_batch(
     recording_id: i64,
     next_seq: &mut BTreeMap<(i64, String), u64>,
     batch: Vec<String>,
-) -> Result<Option<u64>, String> {
+) -> Result<Option<u64>, DbError> {
     // Read and encode BEFORE the transaction opens. Both are proportional to
     // segment size and would hold the write lock for their whole duration.
     //
@@ -879,7 +1058,7 @@ fn seal_batch(
         // itself skipped. `first_ts`/`rows` are NOT this simple — see below.
         let (last_ts, wall_offset) = (last.ts, last.wall_offset);
         let Some(tail) = materialize_wal_tail(&sampler, &rows)
-            .map_err(|e| format!("failed to encode a {sampler} segment: {e}"))?
+            .map_err(|e| DbError::other(format!("failed to encode a {sampler} segment: {e}")))?
         else {
             continue;
         };
@@ -888,15 +1067,19 @@ fn seal_batch(
         if observation.is_none_or(|(seen, _)| last_ts >= seen) {
             observation = Some((last_ts, wall_offset));
         }
-        // Bumped before the commit, which is safe only because the writer
-        // exits on its first error: no later batch ever reuses this map.
-        // Keyed by recording as well as sampler: `segments.seq` is scoped to
+        // Read here, advanced only after the commit below succeeds: a batch
+        // that fails and is retried must reuse the same numbers, or the
+        // table's sequence would carry a hole per failed attempt. Keyed by
+        // recording as well as sampler: `segments.seq` is scoped to
         // `(recording_id, sampler)`, so two recordings of the same host must
         // not share a counter.
-        let seq = next_seq.entry((recording_id, sampler.clone())).or_insert(0);
+        let seq = next_seq
+            .get(&(recording_id, sampler.clone()))
+            .copied()
+            .unwrap_or(0);
         encoded.push(Encoded {
             sampler,
-            seq: *seq,
+            seq,
             meta: SegmentMeta {
                 // From `tail`, NOT `rows.len()`/`rows.first().ts`: a V3
                 // group table's leading un-anchored rows (skipped, see
@@ -914,7 +1097,6 @@ fn seal_batch(
             },
             bytes: tail.bytes,
         });
-        *seq += 1;
     }
 
     // ONE transaction for the whole batch. The fleet seals 12 tables in
@@ -936,6 +1118,9 @@ fn seal_batch(
         }
         Ok(())
     })?;
+    for e in &encoded {
+        next_seq.insert((recording_id, e.sampler.clone()), e.seq + 1);
+    }
 
     // OUTSIDE the transaction, deliberately: a quiet sampler accumulates
     // thousands of rows before it seals, so pruning inside the seal commit puts
@@ -2763,6 +2948,116 @@ mod tests {
         assert!(!md.contains_key(crate::rez::PRODUCER_EPOCH_KEY));
         assert!(!md.contains_key(crate::rez::PRODUCER_EPOCHS_KEY));
         assert!(!md.contains_key("events"));
+    }
+
+    /// A recording repeating a `(sampler, ts)` it already committed is that
+    /// recording's bad tick and nobody else's. The batched commit used to
+    /// turn it into a dead writer for every recording in the archive; now the
+    /// colliding rows are dropped and the other recording's land, and the
+    /// writer keeps going.
+    #[test]
+    fn a_recordings_colliding_tick_is_dropped_without_taking_the_archive_down() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("two.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let wa = archive.add_recording(seed()).unwrap();
+        let wb = archive.add_recording(seed()).unwrap();
+        let (a, b) = (wa.recording_id(), wb.recording_id());
+        let mut ra = StreamRecorderV3::new(wa);
+        let mut rb = StreamRecorderV3::new(wb);
+        let tick = |ts: u64| snap(ts, vec![counter("cpu_cycles", "cpu_usage", ts, None)]);
+
+        let rows_a = ra.stage(&tick(1_000), 1_000, 0).unwrap();
+        let rows_b = rb.stage(&tick(1_000), 1_000, 0).unwrap();
+        assert!(!rows_a.is_empty() && !rows_b.is_empty());
+        // `WalRow` is deliberately not `Clone`; the collision is built by hand.
+        let again_a: Vec<WalRow> = rows_a
+            .iter()
+            .map(|r| WalRow {
+                sampler: r.sampler.clone(),
+                ts: r.ts,
+                wall_offset: r.wall_offset,
+                row: r.row.clone(),
+            })
+            .collect();
+        archive.wal_tick(vec![(a, rows_a), (b, rows_b)]).unwrap();
+
+        // Tick 2: A repeats ts 1000 (collides with its own row), B is fine.
+        let rows_b2 = rb.stage(&tick(2_000), 2_000, 0).unwrap();
+        archive.wal_tick(vec![(a, again_a), (b, rows_b2)]).unwrap();
+
+        // Tick 3: a normal tick for both. The writer must still be alive.
+        let rows_a3 = ra.stage(&tick(3_000), 3_000, 0).unwrap();
+        let rows_b3 = rb.stage(&tick(3_000), 3_000, 0).unwrap();
+        archive.wal_tick(vec![(a, rows_a3), (b, rows_b3)]).unwrap();
+        ra.sync().unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        let ts_of = |rid: i64| -> Vec<u64> {
+            db.read_wal(rid, "cpu_usage")
+                .unwrap()
+                .into_iter()
+                .map(|r| r.ts)
+                .collect()
+        };
+        assert_eq!(
+            ts_of(a),
+            vec![1_000, 3_000],
+            "A lost only its colliding tick"
+        );
+        assert_eq!(ts_of(b), vec![1_000, 2_000, 3_000], "B lost nothing");
+        drop(rb);
+        drop(ra);
+        drop(archive);
+    }
+
+    /// Another connection holding the write lock is a condition that clears,
+    /// so the writer retries it rather than dying on it. The writer's
+    /// `busy_timeout` is shortened to make the wait observable in
+    /// milliseconds; the retry schedule is what carries it past the lock.
+    #[test]
+    fn a_busy_database_is_retried_rather_than_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.rez");
+        let mut archive = RezArchive::create_with_busy_timeout(
+            &path,
+            Duration::from_secs(10),
+            Duration::from_millis(20),
+        )
+        .unwrap();
+        let writer = archive.add_recording(seed()).unwrap();
+        let rid = writer.recording_id();
+        let mut rec = StreamRecorderV3::new(writer);
+
+        // Hold the write lock from a second connection for longer than the
+        // busy timeout plus the first two retries, and release it before the
+        // schedule runs out.
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let lock_path = path.clone();
+        let holder = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(&lock_path).unwrap();
+            conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(150));
+            conn.execute_batch("COMMIT").unwrap();
+        });
+        locked_rx.recv().unwrap();
+
+        rec.ingest(
+            &snap(1_000, vec![counter("cpu_cycles", "cpu_usage", 1, None)]),
+            1_000,
+            0,
+        )
+        .unwrap();
+        // Blocks until the tick is committed — i.e. until a retry got past
+        // the lock. A writer that died would make this an `Err`.
+        rec.sync().unwrap();
+        holder.join().unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(db.read_wal(rid, "cpu_usage").unwrap().len(), 1);
+        drop(rec);
+        drop(archive);
     }
 
     /// One row per sampler per tick, every sampler's window advancing each

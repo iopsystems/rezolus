@@ -397,6 +397,7 @@ fn copy_range(
             Ok(())
         })
     })
+    .map_err(String::from)
 }
 
 #[cfg(test)]

@@ -260,6 +260,35 @@ host+overlap heuristics, which is no worse than today.
 6. Replace `String` errors with a `thiserror` enum; let `writer_loop` retry the
    retryable class and isolate a constraint failure to the recording it
    belongs to.
+   **DONE, scoped to the container boundary.** Every `RezDb`/`RezTx` method
+   now returns `DbError { code: Option<rusqlite::ErrorCode>, extended_code,
+   message }` — plain `std::error::Error`, no `thiserror` (the crate takes no
+   new dependency) — with `From<DbError> for String` and `From<String> for
+   DbError` so the rest of the crate and the binary keep their `?` unchanged;
+   the crate's other `String`/`Box<dyn Error>` signatures are left as they
+   are, because the value was at the writer, where the SQLite code was being
+   stringified away. `is_retryable()` is BUSY/LOCKED/FULL/IOERR/NOMEM/
+   INTERRUPT/SCHEMA; `is_constraint()` is CONSTRAINT; anything else stops the
+   writer as before. The writer loop: a tick, seal, retention, metadata
+   update or finalize that fails retryably is retried three times over
+   ~310 ms (on the writer thread, so the bound-1 channel backpressures the
+   scrape loop for that long); a tick that still fails is dropped with a
+   warning, and 30 consecutive drops stop the writer with the last error; a
+   seal that still fails is deferred — its rows stay in the WAL and go out
+   with the next batch, and `seq` is now advanced only after the commit so a
+   retried batch reuses its numbers; retention and metadata updates that
+   still fail are logged and skipped. A tick that fails on a **constraint**
+   (one recording repeating a `(sampler, ts)`) is re-committed per recording
+   and only the colliding recording's rows are dropped, warned once per
+   recording. Tests: the classifier over the SQLite codes;
+   `a_recordings_colliding_tick_is_dropped_without_taking_the_archive_down`
+   (two recordings, one collides, the other's rows land, the writer answers
+   a third tick); `a_busy_database_is_retried_rather_than_fatal` (a second
+   connection holds `BEGIN IMMEDIATE` for 150 ms against a 20 ms
+   `busy_timeout`, via a test-only `create_with_busy_timeout`). Both fail on
+   the old single-`?` commit path — run as a negative control before
+   committing. `open_read_only` and the remaining `String`/`Box` signatures
+   stay on the backlog.
 7. `RezArchive::open` for append with a session marker: seed `next_seq` from
    `MAX(seq)`, re-anchor the clock, record the session. This is what lets
    hindsight survive an agent restart (today its buffer lives in a `TempDir`,
