@@ -77,9 +77,66 @@ const _: () = assert!(
     "the writer's page cache must be smaller than the reader's"
 );
 
-/// v3. Written once at creation; a reader that finds anything else should
-/// refuse the file rather than guess.
-const SCHEMA_VERSION: i64 = 3;
+/// v3. Written once at creation, into BOTH the `schema_version` table and the
+/// file header's `user_version` field; [`RezDb::open`] and
+/// [`RezDb::open_bytes`] refuse a file whose version is newer than this rather
+/// than guess at its schema.
+pub const SCHEMA_VERSION: i64 = 3;
+
+/// `PRAGMA application_id`, stamped into the SQLite file header at creation:
+/// the ASCII bytes `REZ\0`. It is what makes a `.rez` recognizable as a `.rez`
+/// and not merely as a SQLite database — `looks_like_v3` reads it from the
+/// first 100 bytes without opening the file, and `open` refuses a SQLite
+/// database that carries some other application's id.
+///
+/// Archives written before the stamp existed carry SQLite's default of `0`.
+/// Those still open: `check_format` falls back to the `schema_version` TABLE
+/// for them, which every v3 archive has always had.
+pub const APPLICATION_ID: u32 = 0x5245_5A00;
+
+/// Why a file could not be opened as a `.rez`.
+///
+/// Typed, so a caller can tell "this is not a `.rez` at all" (fall through to
+/// another format, or say so) from "this is a `.rez` this build cannot read"
+/// (tell the user to upgrade) from an I/O or SQLite failure. Converts into
+/// `String` so the crate's `Result<_, String>` callers keep their `?`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenError {
+    /// A file that is not a `.rez`: not SQLite, another application's
+    /// database, or a copy taken from under a writer that carries no catalog.
+    NotRez { what: String, reason: String },
+    /// A `.rez` whose schema version this build does not read.
+    Unsupported { what: String, found: i64 },
+    /// SQLite or I/O failure while opening or inspecting the file.
+    Db { what: String, error: String },
+}
+
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::NotRez { what, reason } => write!(f, "{what}: not a .rez archive: {reason}"),
+            OpenError::Unsupported { what, found } if *found > SCHEMA_VERSION => write!(
+                f,
+                "{what}: unsupported .rez schema version {found} (this build reads up to \
+                 version {SCHEMA_VERSION}); upgrade rezolus to read this archive"
+            ),
+            OpenError::Unsupported { what, found } => write!(
+                f,
+                "{what}: .rez schema version {found} is older than any this build has \
+                 written (version {SCHEMA_VERSION}) and cannot be read"
+            ),
+            OpenError::Db { what, error } => write!(f, "{what}: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {}
+
+impl From<OpenError> for String {
+    fn from(e: OpenError) -> Self {
+        e.to_string()
+    }
+}
 
 /// One recording's identity: everything known when the recording starts.
 #[derive(Clone)]
@@ -168,6 +225,14 @@ pub struct RezDb {
     commits: std::cell::Cell<u64>,
 }
 
+impl std::fmt::Debug for RezDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RezDb")
+            .field("path", &self.conn.path())
+            .finish_non_exhaustive()
+    }
+}
+
 impl RezDb {
     /// Create a new `.rez` at `path`, applying the pragmas that can only be set
     /// on a database that does not yet exist, then installing the schema.
@@ -209,6 +274,7 @@ impl RezDb {
                 [SCHEMA_VERSION],
             )
             .map_err(|e| format!("failed to record .rez schema version: {e}"))?;
+        db.stamp_header()?;
         Ok(db)
     }
 
@@ -340,21 +406,31 @@ impl RezDb {
                 [SCHEMA_VERSION],
             )
             .map_err(|e| format!("failed to record .rez schema version: {e}"))?;
+        db.stamp_header()?;
 
         Ok(db)
     }
 
     /// Open an existing `.rez`, reapplying the per-connection pragmas.
-    pub fn open(path: &Path) -> Result<Self, String> {
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
+        let what = path.display().to_string();
         // No `SQLITE_OPEN_CREATE`: opening a `.rez` that is not there is an
         // error, not an empty new recording.
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|e| format!("failed to open {}: {e}", path.display()))?;
+        let conn =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE).map_err(|e| {
+                OpenError::Db {
+                    what: what.clone(),
+                    error: format!("failed to open: {e}"),
+                }
+            })?;
         let db = RezDb {
             conn,
             #[cfg(any(test, feature = "test-support"))]
             commits: std::cell::Cell::new(0),
         };
+        // Before any pragma that writes: a foreign or newer file must be
+        // refused untouched.
+        db.check_format(&what, false)?;
         // `page_size`, `auto_vacuum` and `journal_mode` persist in the file;
         // these do not, and forgetting them silently downgrades durability
         // (synchronous falls back to NORMAL) on every subsequent write.
@@ -365,7 +441,11 @@ impl RezDb {
         // (hindsight's staged dump) take it too, deliberately: they are
         // short-lived, offline and bounded by the dump, so no long-running
         // process holds it.
-        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
+        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)
+            .map_err(|error| OpenError::Db {
+                what: what.clone(),
+                error,
+            })?;
         Ok(db)
     }
 
@@ -391,8 +471,9 @@ impl RezDb {
     /// never has — and it is not where a `.rez`'s own liveness lives: unsealed
     /// rows are rows of the `wal` TABLE, inside this image, and
     /// `materialize_wal_tail` reads them like any other.
-    pub fn open_bytes(bytes: Vec<u8>) -> Result<Self, String> {
+    pub fn open_bytes(bytes: Vec<u8>) -> Result<Self, OpenError> {
         const HEADER: &[u8] = b"SQLite format 3\0";
+        let what = "<bytes>".to_string();
         const JOURNAL_MODE_ROLLBACK: u8 = 1;
         // Byte 19 is the read version; a value above 2 means a format this
         // SQLite cannot read, and quietly stamping it down to 1 would turn
@@ -401,15 +482,20 @@ impl RezDb {
 
         let mut bytes = bytes;
         if bytes.len() < 20 || !bytes.starts_with(HEADER) {
-            return Err("not a v3 (SQLite) .rez archive".to_string());
+            return Err(OpenError::NotRez {
+                what,
+                reason: "not a SQLite database".to_string(),
+            });
         }
         if bytes[18] == FILE_FORMAT_WAL && bytes[19] == FILE_FORMAT_WAL {
             bytes[18] = JOURNAL_MODE_ROLLBACK;
             bytes[19] = JOURNAL_MODE_ROLLBACK;
         }
 
-        let mut conn = Connection::open_in_memory()
-            .map_err(|e| format!("failed to open an in-memory database: {e}"))?;
+        let mut conn = Connection::open_in_memory().map_err(|e| OpenError::Db {
+            what: what.clone(),
+            error: format!("failed to open an in-memory database: {e}"),
+        })?;
         // `deserialize_read_exact` copies from the reader into SQLite's own
         // allocation, so the caller's `Vec` is dropped here rather than leaked
         // for the connection's lifetime.
@@ -417,41 +503,115 @@ impl RezDb {
         // Read-only: nothing here writes, and SQLite then never has to grow
         // its own copy of the image.
         conn.deserialize_read_exact(rusqlite::MAIN_DB, &mut bytes.as_slice(), len, true)
-            .map_err(|e| format!("failed to read the .rez archive: {e}"))?;
+            .map_err(|e| OpenError::Db {
+                what: what.clone(),
+                error: format!("failed to read the .rez archive: {e}"),
+            })?;
         let db = RezDb {
             conn,
             #[cfg(any(test, feature = "test-support"))]
             commits: std::cell::Cell::new(0),
         };
-        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
-
-        // A `.rez` always has a `recordings` table. Its absence has one
-        // overwhelmingly likely cause worth naming: the bytes are a plain copy
-        // of an archive a writer still held. SQLite commits into a `-wal`
-        // SIDECAR, a second file that a single blob does not carry, so such a
-        // copy can be a valid SQLite database with none of the archive in it.
-        // Left as bare "no such table: recordings", that reads like a corrupt
-        // file rather than a copy taken the wrong way.
-        let has_catalog: bool = db
-            .conn
-            .query_row(
-                "select count(*) from sqlite_master where type = 'table' and name = 'recordings'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|n| n > 0)
-            .map_err(|e| format!("failed to inspect the archive: {e}"))?;
-        if !has_catalog {
-            return Err(
-                "not a .rez archive, or a copy taken while it was still being \
-                        written — an archive's most recent pages live in a `-wal` sidecar \
-                        that a single copied file does not carry. Take the copy with \
-                        `rezolus recording snapshot <archive> -o out.rez`, which reads \
-                        through the sidecar without stopping the recorder"
-                    .to_string(),
-            );
-        }
+        db.check_format(&what, true)?;
+        db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)
+            .map_err(|error| OpenError::Db {
+                what: what.clone(),
+                error,
+            })?;
         Ok(db)
+    }
+
+    /// Write the format stamp into the file header: `application_id` says
+    /// "this is a `.rez`", `user_version` says which schema. Both are header
+    /// fields, so `looks_like_v3` can read them from the first 100 bytes and
+    /// `VACUUM INTO` carries them into every snapshot.
+    fn stamp_header(&self) -> Result<(), String> {
+        self.set_pragma("application_id", APPLICATION_ID)?;
+        self.set_pragma("user_version", SCHEMA_VERSION)
+    }
+
+    /// Refuse anything that is not a `.rez` this build can read.
+    ///
+    /// Three cases, decided from the header stamp:
+    ///
+    /// * `application_id == APPLICATION_ID` — a stamped archive. Its
+    ///   `user_version` must be exactly a version this build reads.
+    /// * `application_id == 0` — SQLite's default, which every `.rez` written
+    ///   before the stamp existed carries. The `schema_version` TABLE decides
+    ///   instead; its absence (with no `recordings` table either) has one
+    ///   overwhelmingly likely cause worth naming for the bytes path: a plain
+    ///   copy of an archive a writer still held, whose pages are in a `-wal`
+    ///   sidecar the copy does not carry.
+    /// * anything else — some other application's SQLite database.
+    ///
+    /// Reads only; a foreign or newer file is refused untouched.
+    fn check_format(&self, what: &str, from_bytes: bool) -> Result<(), OpenError> {
+        let db_err = |error: String| OpenError::Db {
+            what: what.to_string(),
+            error,
+        };
+        let app = match self
+            .conn
+            .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
+        {
+            Ok(v) => v,
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::NotADatabase =>
+            {
+                return Err(OpenError::NotRez {
+                    what: what.to_string(),
+                    reason: "not a SQLite database".to_string(),
+                });
+            }
+            Err(e) => return Err(db_err(format!("failed to read application_id: {e}"))),
+        };
+        let found = if app == i64::from(APPLICATION_ID) {
+            self.pragma_i64("user_version").map_err(db_err)?
+        } else if app == 0 {
+            let has_table = |name: &str| -> Result<bool, OpenError> {
+                self.conn
+                    .query_row(
+                        "select count(*) from sqlite_master where type = 'table' and name = ?1",
+                        [name],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|n| n > 0)
+                    .map_err(|e| db_err(format!("failed to inspect the archive: {e}")))
+            };
+            if !has_table("recordings")? || !has_table("schema_version")? {
+                let reason = if from_bytes {
+                    "no catalog. Either this is not a .rez, or it is a copy taken while it \
+                     was still being written — an archive's most recent pages live in a \
+                     `-wal` sidecar that a single copied file does not carry. Take the copy \
+                     with `rezolus recording snapshot <archive> -o out.rez`, which reads \
+                     through the sidecar without stopping the recorder"
+                } else {
+                    "a SQLite database with no .rez catalog"
+                };
+                return Err(OpenError::NotRez {
+                    what: what.to_string(),
+                    reason: reason.to_string(),
+                });
+            }
+            self.conn
+                .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                    row.get::<_, Option<i64>>(0)
+                })
+                .map_err(|e| db_err(format!("failed to read the schema version: {e}")))?
+                .unwrap_or(0)
+        } else {
+            return Err(OpenError::NotRez {
+                what: what.to_string(),
+                reason: format!("a SQLite database of another application (id {app:#x})"),
+            });
+        };
+        if found != SCHEMA_VERSION {
+            return Err(OpenError::Unsupported {
+                what: what.to_string(),
+                found,
+            });
+        }
+        Ok(())
     }
 
     /// Copy what the `-wal` sidecar holds into the archive itself, best-effort.
@@ -1861,6 +2021,196 @@ mod tests {
 
         assert_eq!(db.total_rows(r1, "cpu_usage").unwrap(), 1);
         assert_eq!(db.samplers(r1).unwrap(), vec!["cpu_usage"]);
+    }
+
+    /// A bare SQLite database with a table of its own: what `.rez` detection
+    /// must NOT accept.
+    fn foreign_sqlite(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch("CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT);")
+            .unwrap();
+    }
+
+    /// Rewrite the header stamp of an archive created by this build, to model
+    /// an archive written by another one. `application_id`/`user_version` are
+    /// plain header fields, so a raw connection can set them.
+    fn restamp(path: &Path, application_id: i64, user_version: i64) {
+        let conn = Connection::open(path).unwrap();
+        conn.pragma_update(None, "application_id", application_id)
+            .unwrap();
+        conn.pragma_update(None, "user_version", user_version)
+            .unwrap();
+    }
+
+    #[test]
+    fn create_stamps_the_header_with_the_application_id_and_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        let db = RezDb::create(&path).unwrap();
+        assert_eq!(db.pragma_u32("application_id").unwrap(), APPLICATION_ID);
+        assert_eq!(db.pragma_i64("user_version").unwrap(), SCHEMA_VERSION);
+        // And in memory, the browser's report path.
+        let mem = RezDb::create_in_memory().unwrap();
+        assert_eq!(mem.pragma_u32("application_id").unwrap(), APPLICATION_ID);
+        assert_eq!(mem.pragma_i64("user_version").unwrap(), SCHEMA_VERSION);
+        // The stamp is in the header, so the 100-byte sniff sees it without
+        // opening the file.
+        drop(db);
+        assert_eq!(
+            crate::rez::detect_rez_format(&path).unwrap(),
+            crate::rez::RezFormat::V3Sqlite
+        );
+        let bytes = mem.serialize().unwrap();
+        assert!(crate::rez::looks_like_v3(&bytes));
+    }
+
+    #[test]
+    fn a_snapshot_carries_the_header_stamp() {
+        // `VACUUM INTO` is how hindsight and `recording snapshot` copy an
+        // archive; the stamp must survive it or every snapshot would open as a
+        // pre-stamp archive and lose the version gate.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        let db = RezDb::create(&path).unwrap();
+        let copy = dir.path().join("copy.rez");
+        db.vacuum_into(&copy).unwrap();
+        let copy = RezDb::open(&copy).unwrap();
+        assert_eq!(copy.pragma_u32("application_id").unwrap(), APPLICATION_ID);
+        assert_eq!(copy.pragma_i64("user_version").unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn open_refuses_a_newer_schema_version_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.rez");
+        drop(RezDb::create(&path).unwrap());
+        restamp(&path, i64::from(APPLICATION_ID), SCHEMA_VERSION + 1);
+        // Detection still says "a .rez" — the sniff cannot read a version it
+        // does not know — and open is where the refusal lands, by message.
+        assert_eq!(
+            crate::rez::detect_rez_format(&path).unwrap(),
+            crate::rez::RezFormat::V3Sqlite
+        );
+        let err = RezDb::open(&path).unwrap_err();
+        assert_eq!(
+            err,
+            OpenError::Unsupported {
+                what: path.display().to_string(),
+                found: SCHEMA_VERSION + 1
+            }
+        );
+        assert!(err.to_string().contains("upgrade rezolus"), "{err}");
+
+        // The bytes path refuses the same file the same way.
+        let bytes = std::fs::read(&path).unwrap();
+        assert!(matches!(
+            RezDb::open_bytes(bytes).unwrap_err(),
+            OpenError::Unsupported { found, .. } if found == SCHEMA_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn open_refuses_another_applications_sqlite_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("places.sqlite");
+        foreign_sqlite(&path);
+        // An UNSTAMPED foreign database carries SQLite's default id of 0 —
+        // the same value every pre-stamp `.rez` carries — so the header sniff
+        // cannot tell them apart and says "a .rez". `open` then looks for the
+        // catalog and refuses. That is the documented limit of the sniff.
+        assert_eq!(
+            crate::rez::detect_rez_format(&path).unwrap(),
+            crate::rez::RezFormat::V3Sqlite
+        );
+        let err = RezDb::open(&path).unwrap_err();
+        assert!(matches!(err, OpenError::NotRez { .. }), "{err}");
+        assert!(err.to_string().contains("no .rez catalog"), "{err}");
+        assert!(matches!(
+            RezDb::open_bytes(std::fs::read(&path).unwrap()).unwrap_err(),
+            OpenError::NotRez { .. }
+        ));
+
+        // With an explicit foreign id, likewise — that is the case the id
+        // field exists for.
+        let stamped = dir.path().join("other.db");
+        foreign_sqlite(&stamped);
+        restamp(&stamped, 0x4142_4344, 7);
+        assert_eq!(
+            crate::rez::detect_rez_format(&stamped).unwrap(),
+            crate::rez::RezFormat::NotRez
+        );
+        let err = RezDb::open(&stamped).unwrap_err();
+        assert!(matches!(err, OpenError::NotRez { .. }), "{err}");
+        assert!(err.to_string().contains("another application"), "{err}");
+    }
+
+    #[test]
+    fn open_refuses_a_file_that_is_not_sqlite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(
+            &path,
+            b"this is not a database, and is longer than a header\n".repeat(4),
+        )
+        .unwrap();
+        let err = RezDb::open(&path).unwrap_err();
+        assert!(matches!(err, OpenError::NotRez { .. }), "{err}");
+        assert!(matches!(
+            RezDb::open_bytes(std::fs::read(&path).unwrap()).unwrap_err(),
+            OpenError::NotRez { .. }
+        ));
+    }
+
+    #[test]
+    fn a_pre_stamp_archive_still_opens() {
+        // Every `.rez` written before the header stamp carries
+        // `application_id = 0`; the `schema_version` table it has always had
+        // is what vouches for it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.rez");
+        drop(RezDb::create(&path).unwrap());
+        restamp(&path, 0, 0);
+        assert_eq!(
+            crate::rez::detect_rez_format(&path).unwrap(),
+            crate::rez::RezFormat::V3Sqlite
+        );
+        RezDb::open(&path).expect("a pre-stamp v3 archive opens");
+        RezDb::open_bytes(std::fs::read(&path).unwrap()).expect("and from bytes");
+
+        // ...but its TABLE version is still gated.
+        Connection::open(&path)
+            .unwrap()
+            .execute(
+                "UPDATE schema_version SET version = ?1",
+                [SCHEMA_VERSION + 1],
+            )
+            .unwrap();
+        assert!(matches!(
+            RezDb::open(&path).unwrap_err(),
+            OpenError::Unsupported { found, .. } if found == SCHEMA_VERSION + 1
+        ));
+    }
+
+    #[test]
+    fn open_bytes_names_a_copy_taken_from_under_a_writer() {
+        // A raw copy of a live archive before its first checkpoint: SQLite's
+        // header page, no stamp, no catalog — everything is in the sidecar the
+        // copy does not carry. The message has to say so, because "not a
+        // .rez" would send the operator looking at the wrong thing.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("copy.rez");
+        // `journal_mode=WAL` writes the header page and nothing else; every
+        // later commit goes to the sidecar until a checkpoint. A copy of the
+        // main file taken in that window is exactly this: one valid page, no
+        // stamp, no catalog.
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        drop(conn);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len(), PAGE_SIZE as usize, "header page only");
+        let err = RezDb::open_bytes(bytes).unwrap_err();
+        assert!(matches!(err, OpenError::NotRez { .. }), "{err}");
+        assert!(err.to_string().contains("recording snapshot"), "{err}");
     }
 
     #[test]

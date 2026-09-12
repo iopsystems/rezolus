@@ -1044,20 +1044,40 @@ pub fn detect_rez_format_bytes(bytes: &[u8]) -> RezFormat {
     }
 }
 
-/// True when `bytes` starts with SQLite's file header — a v3 `.rez` container.
+/// The SQLite file header is the first 100 bytes of every database file;
+/// `application_id` is the big-endian u32 at offset 68.
+const SQLITE_HEADER_LEN: usize = 100;
+const SQLITE_APPLICATION_ID_OFFSET: usize = 68;
+
+/// True when `bytes` is a v3 `.rez` container: a SQLite file whose header
+/// carries the `.rez` application id — or SQLite's default of `0`, which every
+/// archive written before the stamp existed carries. Some other application's
+/// SQLite database is NOT a `.rez`, however it is named.
+///
+/// A header-only answer, so it cannot tell a stamped archive of a NEWER schema
+/// from one this build reads; `RezDb::open` decides that, with a message that
+/// says to upgrade. Nor can it tell a pre-stamp archive from a plain copy of a
+/// live one whose catalog is still in the `-wal` sidecar; `open` names that
+/// case too.
 pub fn looks_like_v3(bytes: &[u8]) -> bool {
-    bytes.len() >= SQLITE_MAGIC.len() && &bytes[..SQLITE_MAGIC.len()] == SQLITE_MAGIC
+    if bytes.len() < SQLITE_HEADER_LEN || &bytes[..SQLITE_MAGIC.len()] != SQLITE_MAGIC {
+        return false;
+    }
+    let mut id = [0u8; 4];
+    id.copy_from_slice(&bytes[SQLITE_APPLICATION_ID_OFFSET..SQLITE_APPLICATION_ID_OFFSET + 4]);
+    let id = u32::from_be_bytes(id);
+    id == crate::rez_sqlite::APPLICATION_ID || id == 0
 }
 
 pub fn detect_rez_format(path: &Path) -> Result<RezFormat, RezError> {
     let mut file = std::fs::File::open(path)?;
-    let mut header = [0u8; 16];
-    let is_sqlite = match file.read_exact(&mut header) {
-        Ok(()) => &header == SQLITE_MAGIC,
+    let mut header = [0u8; SQLITE_HEADER_LEN];
+    let is_v3 = match file.read_exact(&mut header) {
+        Ok(()) => looks_like_v3(&header),
         Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => false,
         Err(e) => return Err(e.into()),
     };
-    if is_sqlite {
+    if is_v3 {
         return Ok(RezFormat::V3Sqlite);
     }
     if is_rez_path(path)? {

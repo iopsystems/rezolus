@@ -161,6 +161,20 @@ host+overlap heuristics, which is no worse than today.
 1. Stamp `application_id` and check `schema_version` on open, with a typed
    error. Refuse newer. Test: a v3 file with `schema_version = 4` is refused
    by message; a non-rez SQLite file is refused as not-a-rez.
+   **DONE.** `RezDb::create` stamps `application_id = 0x5245_5A00` (`REZ\0`)
+   and `user_version = 3` into the header; `open`/`open_bytes` return a typed
+   `OpenError { NotRez | Unsupported | Db }` (`From<OpenError> for String`
+   keeps every caller's `?`), and `check_format` decides from the stamp:
+   stamped → `user_version` must equal the build's; id `0` (every archive
+   written before this) → the `schema_version` table decides, and a missing
+   catalog names the copied-from-under-a-writer case; any other id → not a
+   `.rez`. `looks_like_v3` now reads the id from the 100-byte header, so
+   `detect_rez_format` says `NotRez` for a stamped foreign database without
+   opening it. One limit, documented and tested: an *unstamped* foreign SQLite
+   file (id 0) is indistinguishable from a pre-stamp archive at the header, so
+   detection says v3 and `open` refuses. Seven tests in `rez_sqlite::tests`,
+   including that `VACUUM INTO` carries the stamp (hindsight's dump and
+   `recording snapshot` depend on it).
 2. Wrap the reader's per-table fetch and the open-time probe in
    `read_snapshot`. Test: a seal committed between the two reads by a second
    connection leaves the table complete.
