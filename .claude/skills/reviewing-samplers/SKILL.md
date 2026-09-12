@@ -26,7 +26,8 @@ Not for: viewer/recorder/parquet-only changes that don't touch a sampler's refre
 3. **Cadence (Principle 17).** Does `refresh()` read a non-mmap, cost-bearing source (sysfs device command, ioctl, SMI/library call, page-table walk)? If so, require: its own bounded re-read interval (configurable), reads dispatched **off** the async worker (`spawn_blocking`/background), and the principle-10 departure documented in the module. A synchronous device read on the sample cycle is a fail.
 4. **Data-source justification (Principle 15).** A per-refresh sysfs/procfs parse must be a genuine exception (no BPF/perf hook) *and* commented as such in the module.
 5. **Robust to absence.** No device / no permission → the sampler emits zero series and never errors the agent. Linux-only samplers compile a metric-only no-op elsewhere.
-6. **Verdict.** GO / NO-GO stated with the *measured numbers* and the specific failing checklist items — never adjectives. The number lands in the effort's journal close-out (see the engineering-journal skill).
+6. **Displayed ("you record it, you display it").** Every new metric has a viewer card: a section or card in `crates/dashboard/src/dashboard/`, with a generator test naming the metric in a query. A sampler PR without its dashboard change is incomplete, not a follow-up. Label-keyed metrics chart via `sum by (<label>)`. (Principles checklist.)
+7. **Verdict.** GO / NO-GO stated with the *measured numbers* and the specific failing checklist items — never adjectives. The number lands in the effort's journal close-out (see the engineering-journal skill).
 
 ## Measurement recipe
 
@@ -57,6 +58,7 @@ Measure at the **worst case the fleet will hit** — max drive / CPU / process /
 
 - About to approve with "looks bounded" / "should be cheap" and **no measured µs number**.
 - The refresh reads sysfs/ioctl/SMI/`/proc` but you didn't check cadence (Principle 17).
+- The PR adds a metric and touches nothing under `crates/dashboard/` — recorded, never displayed.
 - Treating a legitimate principle-15 exception as automatically cheap — that is the one case where nothing else will catch the cost.
 - Reporting a *target* ("< 100 µs") instead of a *measurement*.
 

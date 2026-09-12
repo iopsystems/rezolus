@@ -700,6 +700,16 @@ change. Each item is a yes/no question, or "justify in a comment."
   similar). Never for per-measurement events. (Principle 3.)
 - **Shared headers.** Use `cgroup.h`, `task.h`, `helpers.h`,
   `histogram.h`. Do not duplicate `clz()`, cgroup-walk logic, etc.
+- **You record it, you display it.** Every metric a sampler adds is plotted
+  in the viewer in the same change: a dashboard section (or a card in an
+  existing one) in `crates/dashboard/src/dashboard/`, with a test that the
+  generated queries name the metric. A metric that only exists in a
+  recording is a metric nobody looks at until an incident, and the first
+  time someone reaches for it is the worst time to discover it was never
+  charted (#1185 is the standing example: six TCP metrics collected by
+  default and never plotted). Label-keyed metrics (per device, mount,
+  interface) chart through `sum by (<label>)` so the viewer draws one line
+  per entity without per-entity configuration.
   (Principle 12.)
 - **Userspace cost.** Will the new userspace refresh path be O(active
   keys), bounded constant, or O(N) in some workload-driven metric? Prefer

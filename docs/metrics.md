@@ -21,6 +21,8 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_usage](#cpu_usage)
 - [Drive](#drive)
   - [drivehealth](#drivehealth)
+- [Filesystem](#filesystem)
+  - [filesystem](#filesystem-1)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
 - [Memory](#memory)
@@ -223,6 +225,55 @@ counters are always maintained by the controller.
 | `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+
+## Filesystem
+
+Metrics related to how full each locally mounted filesystem is.
+
+### filesystem
+
+Reports total, free and available bytes and total and free inodes for every
+**locally mounted** filesystem, from one `statvfs` per mount. Occupancy has no
+BPF or perf hook — the superblock counters are reachable only through
+`statvfs`, and the set of mounts only through the mount table — so this is a
+deliberate procfs exception in `docs/principles.md`, documented in the sampler
+module.
+
+The mount table (`/proc/self/mountinfo`) is re-read on every sweep, so a
+filesystem mounted after the agent started is picked up, and one that is
+unmounted drops out. A filesystem mounted more than once (bind mounts, btrfs
+subvolumes) is reported once, under its shortest mount point.
+
+**Local only.** Block-backed filesystems with a `/dev` source, plus `zfs`, are
+sampled. Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `ceph`,
+`glusterfs`, ...), every FUSE filesystem, autofs triggers and the kernel's
+pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
+are never touched. A `statvfs` on a `hard` network mount blocks until the
+server answers, with no timeout the agent can set, and one on an autofs trigger
+starts a mount attempt; local filesystems answer from in-memory superblock
+counters and issue no I/O, which is what bounds the sweep. Network mounts stay
+out of scope until there is demand for them (#1202).
+
+Occupancy moves slowly, so sweeps are throttled and run off the scrape/TTL
+sample cycle: at most once per `interval` the sampler dispatches the sweep to a
+blocking thread pool and returns immediately; the gauges keep their last value
+between sweeps. The cadence defaults to 60s and is configurable via `interval`
+in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
+local filesystems): a 330–570 µs sweep once per interval, most of it the
+kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
+
+`filesystem_available` is the number `df` reports as available and the one a
+full-disk alert should watch; `filesystem_free` also counts the blocks reserved
+for the superuser. Inode exhaustion is the other way a disk fills, and comes
+from the same call.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `device` (major:minor) |
+| `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `device` |
+| `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
+| `filesystem_inodes_total` | Inodes the filesystem can hold (0 when allocated dynamically) | `mount`, `fstype`, `device` |
+| `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
 
 ## GPU
 
