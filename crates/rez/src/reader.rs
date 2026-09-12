@@ -796,57 +796,76 @@ impl RezReader {
         let db = shared.lock().unwrap_or_else(|e| e.into_inner());
         let mut out = Vec::new();
 
-        for (recording, rec) in db.read_recordings()?.into_iter().enumerate() {
+        // Two phases on purpose. SQLite is serial (one connection, and
+        // `rusqlite::Connection` is not `Sync`) but cheap; parsing a segment
+        // footer is the expensive half and is independent per table. Measured
+        // at ~0.45 ms per table before splitting them — linear in TABLE
+        // COUNT, not archive bytes, so it is the cost that grows as samplers
+        // and acquisition groups multiply.
+        //
+        // Phase one is ONE read snapshot for the whole archive. Every catalog
+        // question here — which tables exist, which segment to probe, the
+        // span of the sealed part and of the live tail — has to be answered
+        // about the same instant, or a seal landing between two of them makes
+        // the answers disagree: a table whose probe segment was read before a
+        // seal but whose span was read after it, say. `BEGIN DEFERRED` pins
+        // that instant and never blocks the writer.
+        type CatalogPass = Vec<(usize, crate::rez_sqlite::RecordingRow, Vec<PendingProbe>)>;
+        let catalog: CatalogPass = db.read_snapshot(|db| {
+            let mut catalog = Vec::new();
+            for (recording, rec) in db.read_recordings()?.into_iter().enumerate() {
+                let mut pending: Vec<PendingProbe> = Vec::new();
+                for sampler in db.all_samplers(rec.id)? {
+                    let metas = db.read_segment_meta(rec.id, &sampler)?;
+
+                    // The probe segment is the first SEALED one — or, when a
+                    // table has none, its materialized WAL tail. A quiet
+                    // sampler in a live hindsight buffer is exactly that: rows
+                    // in the WAL, no seal yet. Skipping it here would make it
+                    // invisible to the reader, which the eager path never did
+                    // because `table_segments` splices the tail in.
+                    let probe_bytes = match metas.first() {
+                        Some((seq, _)) => db.read_segment_bytes(rec.id, &sampler, *seq)?,
+                        None => materialize_wal_tail(&sampler, &db.live_wal(rec.id, &sampler)?)
+                            .map_err(|e| e.to_string())?
+                            .map(|t| t.bytes),
+                    };
+                    // Nothing sealed and nothing live: the table has no rows
+                    // at all, so there is nothing to open. Same skip as the
+                    // eager path.
+                    let Some(bytes) = probe_bytes else {
+                        continue;
+                    };
+
+                    // Span from the catalog, widened by the live WAL: a
+                    // hindsight buffer's newest rows are unsealed, and a span
+                    // that stopped at the last seal would report the archive
+                    // as ending before its most recent data. No BLOB is read
+                    // for either.
+                    let (_, sealed) = db.segment_span(rec.id, &sampler)?;
+                    let wal = db.live_wal_span(rec.id, &sampler)?;
+                    let span = match (
+                        sealed.first_ts.into_iter().chain(wal.first_ts).min(),
+                        sealed.last_ts.into_iter().chain(wal.last_ts).max(),
+                    ) {
+                        (Some(b), Some(e)) => Some((b, e)),
+                        _ => None,
+                    };
+
+                    pending.push((sampler, bytes, span));
+                }
+                catalog.push((recording, rec, pending));
+            }
+            Ok(catalog)
+        })?;
+
+        for (recording, rec, pending) in catalog {
             if !rec.complete {
                 tracing::warn!(
                     "recording {} was not cleanly finalized; it was recovered up to its \
-                     last checkpoint and data after that may be missing",
+                     last committed tick and data after that may be missing",
                     rez::recording_dir_slug(&rec.meta.labels)
                 );
-            }
-            // Two phases on purpose. SQLite is serial (one connection, and
-            // `rusqlite::Connection` is not `Sync`) but cheap; parsing a
-            // segment footer is the expensive half and is independent per
-            // table. Measured at ~0.45 ms per table before splitting them —
-            // linear in TABLE COUNT, not archive bytes, so it is the cost that
-            // grows as samplers and acquisition groups multiply.
-            let mut pending: Vec<PendingProbe> = Vec::new();
-
-            for sampler in db.all_samplers(rec.id)? {
-                let metas = db.read_segment_meta(rec.id, &sampler)?;
-
-                // The probe segment is the first SEALED one — or, when a table
-                // has none, its materialized WAL tail. A quiet sampler in a
-                // live hindsight buffer is exactly that: rows in the WAL, no
-                // seal yet. Skipping it here would make it invisible to the
-                // reader, which the eager path never did because
-                // `table_segments` splices the tail in.
-                let probe_bytes = match metas.first() {
-                    Some((seq, _)) => db.read_segment_bytes(rec.id, &sampler, *seq)?,
-                    None => materialize_wal_tail(&sampler, &db.live_wal(rec.id, &sampler)?)?
-                        .map(|t| t.bytes),
-                };
-                // Nothing sealed and nothing live: the table has no rows at
-                // all, so there is nothing to open. Same skip as the eager path.
-                let Some(bytes) = probe_bytes else {
-                    continue;
-                };
-
-                // Span from the catalog, widened by the live WAL: a hindsight
-                // buffer's newest rows are unsealed, and a span that stopped at
-                // the last seal would report the archive as ending before its
-                // most recent data. No BLOB is read for either.
-                let (_, sealed) = db.segment_span(rec.id, &sampler)?;
-                let wal = db.live_wal_span(rec.id, &sampler)?;
-                let span = match (
-                    sealed.first_ts.into_iter().chain(wal.first_ts).min(),
-                    sealed.last_ts.into_iter().chain(wal.last_ts).max(),
-                ) {
-                    (Some(b), Some(e)) => Some((b, e)),
-                    _ => None,
-                };
-
-                pending.push((sampler, bytes, span));
             }
 
             // Phase two: parse the footers. One probe per table, independent.
@@ -1506,12 +1525,36 @@ fn table_segments(
     recording_id: i64,
     sampler: &str,
 ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
-    let mut segments: Vec<Vec<u8>> = db
-        .read_segments(recording_id, sampler)?
-        .into_iter()
-        .map(|s| s.bytes)
-        .collect();
-    if let Some(tail) = materialize_wal_tail(sampler, &db.live_wal(recording_id, sampler)?)? {
+    table_segments_with(db, recording_id, sampler, &|| {})
+}
+
+/// `table_segments`, with a hook that fires between the two catalog reads.
+///
+/// The sealed segments and the live WAL are read in ONE snapshot, and the
+/// hook is why that is a test rather than an argument. Without the snapshot
+/// they were two autocommit statements, and a seal committing between them
+/// — the writer inserting a segment and pruning the rows it covers — left
+/// the reader with neither: the segment was not in the first read, and
+/// `live_wal`'s watermark (`ts > MAX(last_ts)`) hid the rows from the
+/// second. The seam then read as a hole, on exactly the archive a viewer
+/// polls: a hindsight buffer, whose `SegmentSource::Db` reopens the file
+/// per query. `between` runs inside the snapshot, after the first read, and
+/// is `&|| {}` in production; the test seals from a second connection there
+/// and asserts the rows are still all present.
+fn table_segments_with(
+    db: &RezDb,
+    recording_id: i64,
+    sampler: &str,
+    between: &dyn Fn(),
+) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+    let (sealed, wal) = db.read_snapshot(|db| {
+        let sealed = db.read_segments(recording_id, sampler)?;
+        between();
+        let wal = db.live_wal(recording_id, sampler)?;
+        Ok((sealed, wal))
+    })?;
+    let mut segments: Vec<Vec<u8>> = sealed.into_iter().map(|s| s.bytes).collect();
+    if let Some(tail) = materialize_wal_tail(sampler, &wal)? {
         segments.push(tail.bytes);
     }
     Ok(segments)
@@ -1922,6 +1965,94 @@ mod tests {
     /// archive's own unsealed rows, which live in the `wal` TABLE inside the
     /// image: a hindsight snapshot's newest data is exactly there, and
     /// silently reading only sealed segments would under-report the window an
+    /// The seam between sealed segments and the live WAL is read in one
+    /// snapshot. This seals from a SECOND connection between the two reads —
+    /// the exact interleaving a hindsight writer produces under a polling
+    /// viewer — and asserts no row goes missing. With the two reads as
+    /// separate autocommits, the segment was invisible to the first and its
+    /// rows were hidden from the second by the watermark: three rows in, zero
+    /// out.
+    #[test]
+    fn a_seal_committed_between_the_two_reads_does_not_open_a_hole() {
+        use crate::rez::recorder_tests_support::{counter, snap};
+        use crate::rez_sqlite::SegmentMeta;
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("live.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let rid = writer.recording_id();
+        let mut rec = StreamRecorderV3::new(writer);
+        for t in 0..3u64 {
+            let ts = 1_000_000_000 * (t + 1);
+            rec.ingest(
+                &snap(ts, vec![counter("cpu_cycles", "cpu_usage", t, None)]),
+                ts,
+                0,
+            )
+            .unwrap();
+        }
+        // Committed, unsealed: three rows in the `wal` table, no segment.
+        rec.sync().unwrap();
+
+        let reader_conn = RezDb::open(&path).unwrap();
+        let seal_from_a_second_connection = || {
+            // What the writer's seal does, on its own connection: encode the
+            // live rows into a segment, insert it, prune the rows it covers.
+            let mut w = RezDb::open(&path).unwrap();
+            let rows = w.live_wal(rid, "cpu_usage").unwrap();
+            assert_eq!(rows.len(), 3, "the seal has the whole tail to take");
+            let tail = materialize_wal_tail("cpu_usage", &rows).unwrap().unwrap();
+            let last_ts = rows.iter().map(|r| r.ts).max().unwrap();
+            let meta = SegmentMeta {
+                rows: tail.rows,
+                first_ts: tail.first_ts,
+                last_ts,
+            };
+            w.transaction(|tx| tx.insert_segment(rid, "cpu_usage", 0, &meta, &tail.bytes))
+                .unwrap();
+            w.prune_wal(rid, "cpu_usage", last_ts).unwrap();
+        };
+        let segments = table_segments_with(
+            &reader_conn,
+            rid,
+            "cpu_usage",
+            &seal_from_a_second_connection,
+        )
+        .unwrap();
+
+        // The snapshot pinned the pre-seal state: the rows arrive as the WAL
+        // tail. (After the snapshot ends a fresh read would get them as the
+        // segment instead; either way, all three.)
+        let rows: i64 = segments
+            .iter()
+            .map(|bytes| {
+                parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                    bytes::Bytes::from(bytes.clone()),
+                )
+                .unwrap()
+                .metadata()
+                .file_metadata()
+                .num_rows()
+            })
+            .sum();
+        assert_eq!(rows, 3, "every row is present across the seam");
+
+        // And the seal did land — this was a real interleaving, not a no-op.
+        let after = RezDb::open(&path).unwrap();
+        assert_eq!(after.read_segment_meta(rid, "cpu_usage").unwrap().len(), 1);
+        assert!(after.live_wal(rid, "cpu_usage").unwrap().is_empty());
+        drop(rec);
+        drop(archive);
+    }
+
     /// incident is in.
     #[test]
     fn a_live_wal_tail_survives_the_trip_through_bytes() {

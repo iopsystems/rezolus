@@ -178,6 +178,17 @@ host+overlap heuristics, which is no worse than today.
 2. Wrap the reader's per-table fetch and the open-time probe in
    `read_snapshot`. Test: a seal committed between the two reads by a second
    connection leaves the table complete.
+   **DONE.** `table_segments` reads segments and WAL in one `BEGIN DEFERRED`
+   snapshot (`table_segments_with` carries a between-reads hook, `&|| {}` in
+   production); `from_v3_db`'s whole catalog phase — every recording's table
+   list, probe segment, sealed span and live span — is one snapshot, so no
+   two answers can straddle a seal. Test
+   `a_seal_committed_between_the_two_reads_does_not_open_a_hole` seals from
+   a second connection inside the hook and asserts all three rows survive.
+   Negative control run before committing: on the two-statement form the
+   test reads **0 of 3 rows** — the finding, reproduced exactly. The
+   incomplete-recording warning now says "last committed tick" rather than
+   the tar-era "last checkpoint".
 3. Add a `uuid` column to `recordings`, preserved through every copy; refuse
    identical label sets in `combine_rez_v3` unless `--allow-duplicate-labels`,
    and refuse identical UUIDs outright. Test: `combine a.rez a.rez` fails.
