@@ -81,6 +81,14 @@ enum Msg {
     /// Retention: drop everything wholly older than `cutoff_ts`, then trickle
     /// freed pages back if the free list has grown. Only hindsight sends this.
     Evict { recording_id: i64, cutoff_ts: u64 },
+    /// Merge keys into one recording's metadata. What the recorder learns
+    /// only from the ticks themselves lands here — the producer epoch, and
+    /// the discontinuity events a change of it produces — rather than waiting
+    /// for finalize, which a kill never reaches.
+    UpdateMetadata {
+        recording_id: i64,
+        patch: BTreeMap<String, String>,
+    },
     /// One recording's last clock observation; marks *that* recording complete.
     ///
     /// Does NOT stop the writer: an archive may hold several recordings and the
@@ -491,6 +499,15 @@ impl RecordingWriter {
         })
     }
 
+    /// Merge `patch` into this recording's metadata. Fire-and-forget like the
+    /// rest; ordered with the ticks around it by the channel.
+    pub fn update_metadata(&mut self, patch: BTreeMap<String, String>) -> Result<(), String> {
+        self.send(Msg::UpdateMetadata {
+            recording_id: self.recording_id,
+            patch,
+        })
+    }
+
     /// Block until everything handed off so far has been committed.
     ///
     /// **The one place the writer is not fire-and-forget, and it exists because
@@ -712,6 +729,12 @@ fn writer_loop(
             }) => {
                 db.evict_before(recording_id, cutoff_ts)?;
                 reclaim_if_fragmented(db)?;
+            }
+            Ok(Msg::UpdateMetadata {
+                recording_id,
+                patch,
+            }) => {
+                db.patch_recording_metadata(recording_id, &patch)?;
             }
             Ok(Msg::Finalize {
                 recording_id,
@@ -999,6 +1022,14 @@ pub struct StreamRecorderV3 {
     warned: HashSet<String>,
     /// Schema-hash cache hit/miss counts, exposed for tests.
     schema_stats: SchemaCacheStats,
+    /// The producer epochs this recording has observed, oldest first, each
+    /// with the anchored timestamp of the first tick that carried it. The
+    /// last is the current one. See `PRODUCER_EPOCH_KEY`.
+    epochs: Vec<(String, u64)>,
+    /// The timeline events an epoch change produced, accumulated so the
+    /// `events` metadata value can be rewritten whole on each change (the
+    /// recorder is the only writer of a live recording's metadata).
+    epoch_events: Vec<serde_json::Value>,
     handle: RecordingWriter,
     policy: SealPolicy,
 }
@@ -1042,6 +1073,8 @@ impl StreamRecorderV3 {
             segment_schema: BTreeMap::new(),
             warned: HashSet::new(),
             schema_stats: SchemaCacheStats::default(),
+            epochs: Vec::new(),
+            epoch_events: Vec::new(),
             handle,
             policy,
         }
@@ -1096,6 +1129,55 @@ impl StreamRecorderV3 {
         self.handle.wal(rows)
     }
 
+    /// Record the producer epoch a tick carries. The first one seen names
+    /// the recording's producer; a different one later is a counter reset,
+    /// written as both a machine-readable history (`producer_epochs`) and a
+    /// timeline event, so a viewer shows the discontinuity where it happened
+    /// and a merge tool can tell which rows share a monotonic series.
+    ///
+    /// Persisted immediately through the writer, in order with the tick's
+    /// rows, rather than at finalize: a recording that is killed still has to
+    /// say which epoch its rows belong to.
+    fn observe_producer_epoch(&mut self, epoch: &str, anchored_ts: u64) -> Result<(), String> {
+        if self.epochs.last().is_some_and(|(e, _)| e == epoch) {
+            return Ok(());
+        }
+        let previous = self.epochs.last().map(|(e, _)| e.clone());
+        self.epochs.push((epoch.to_string(), anchored_ts));
+
+        let mut patch = BTreeMap::new();
+        patch.insert(
+            crate::rez::PRODUCER_EPOCH_KEY.to_string(),
+            epoch.to_string(),
+        );
+        let history: Vec<serde_json::Value> = self
+            .epochs
+            .iter()
+            .map(|(e, ts)| serde_json::json!({ "epoch": e, "from_ts": ts }))
+            .collect();
+        patch.insert(
+            crate::rez::PRODUCER_EPOCHS_KEY.to_string(),
+            serde_json::Value::Array(history).to_string(),
+        );
+        if let Some(previous) = previous {
+            // The event shape is `dashboard::events::Event`, written here as
+            // JSON so this crate does not take that dependency; `id` is what
+            // lets a later `annotate --add-events` merge dedupe it.
+            self.epoch_events.push(serde_json::json!({
+                "timestamp": anchored_ts,
+                "description": "producer restarted: cumulative counters reset",
+                "kind": "producer_epoch",
+                "details": format!("epoch {previous} -> {epoch}"),
+                "id": format!("producer_epoch:{epoch}"),
+            }));
+            patch.insert(
+                "events".to_string(),
+                serde_json::json!({ "events": self.epoch_events }).to_string(),
+            );
+        }
+        self.handle.update_metadata(patch)
+    }
+
     /// Build this tick's WAL rows for THIS recording without committing them.
     ///
     /// The archive-level half of [`ingest`](Self::ingest): a caller holding
@@ -1120,6 +1202,17 @@ impl StreamRecorderV3 {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<Vec<WalRow>, String> {
+        // Identity first, on every format: it is a property of the tick, not
+        // of the rows, and it has to be recorded whether or not this tick's
+        // rows dedup away.
+        let epoch = match snapshot {
+            Snapshot::V2(v2) => v2.metadata.get(crate::rez::PRODUCER_EPOCH_KEY),
+            Snapshot::V3(v3) => v3.metadata.get(crate::rez::PRODUCER_EPOCH_KEY),
+            _ => None,
+        };
+        if let Some(epoch) = epoch {
+            self.observe_producer_epoch(epoch, anchored_ts)?;
+        }
         // Native V3 ingest is keyed by GROUP, not sampler, and its WAL payload
         // shape (`WalGroupRow`) differs entirely from V1/V2's `WalCell`s — so
         // it is its own path rather than a fork inside the loop below.
@@ -2565,6 +2658,111 @@ mod tests {
         let (archive, writer) = RezArchive::single(path, seed()).unwrap();
         let rid = writer.recording_id();
         (archive, StreamRecorderV3::with_policy(writer, policy), rid)
+    }
+
+    /// A V2 snapshot carrying a producer epoch in its top-level metadata,
+    /// with one advancing counter so the tick is never deduped away.
+    fn epoch_snap(ts: u64, epoch: Option<&str>) -> Snapshot {
+        let mut metadata: HashMap<String, String> = HashMap::new();
+        if let Some(e) = epoch {
+            metadata.insert(crate::rez::PRODUCER_EPOCH_KEY.to_string(), e.to_string());
+        }
+        Snapshot::V2(SnapshotV2 {
+            systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts),
+            duration: Duration::ZERO,
+            metadata,
+            counters: vec![counter(
+                "cpu_cycles",
+                "cpu_usage",
+                ts,
+                Some(Window::new(ts - 1, ts)),
+            )],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+    }
+
+    /// The producer epoch is recorded from the first tick, and a change of it
+    /// mid-recording is written as a history entry AND a timeline event —
+    /// persisted through the writer as it happens, not at finalize, so a
+    /// killed recording still says which epoch its rows belong to.
+    #[test]
+    fn a_producer_epoch_change_is_recorded_as_a_discontinuity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let (archive, mut rec, rid) = recorder(&path, never_seals());
+
+        rec.ingest(&epoch_snap(1_000, Some("epoch-a")), 1_000, 0)
+            .unwrap();
+        rec.ingest(&epoch_snap(2_000, Some("epoch-a")), 2_000, 0)
+            .unwrap();
+        // Committed but not finalized: what a kill would leave behind.
+        rec.sync().unwrap();
+        let md = RezDb::open(&path).unwrap().recording_metadata(rid).unwrap();
+        assert_eq!(
+            md.get(crate::rez::PRODUCER_EPOCH_KEY).map(String::as_str),
+            Some("epoch-a")
+        );
+        let history: serde_json::Value =
+            serde_json::from_str(&md[crate::rez::PRODUCER_EPOCHS_KEY]).unwrap();
+        assert_eq!(
+            history,
+            serde_json::json!([{ "epoch": "epoch-a", "from_ts": 1_000 }])
+        );
+        assert!(!md.contains_key("events"), "no change yet, so no event");
+
+        // The producer restarts: a new epoch on the third tick.
+        rec.ingest(&epoch_snap(3_000, Some("epoch-b")), 3_000, 0)
+            .unwrap();
+        rec.sync().unwrap();
+        let md = RezDb::open(&path).unwrap().recording_metadata(rid).unwrap();
+        assert_eq!(
+            md.get(crate::rez::PRODUCER_EPOCH_KEY).map(String::as_str),
+            Some("epoch-b")
+        );
+        let history: serde_json::Value =
+            serde_json::from_str(&md[crate::rez::PRODUCER_EPOCHS_KEY]).unwrap();
+        assert_eq!(
+            history,
+            serde_json::json!([
+                { "epoch": "epoch-a", "from_ts": 1_000 },
+                { "epoch": "epoch-b", "from_ts": 3_000 },
+            ])
+        );
+        let events: serde_json::Value = serde_json::from_str(&md["events"]).unwrap();
+        let events = events["events"].as_array().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["timestamp"], 3_000);
+        assert_eq!(events[0]["kind"], "producer_epoch");
+        assert_eq!(events[0]["id"], "producer_epoch:epoch-b");
+        assert!(events[0]["details"]
+            .as_str()
+            .unwrap()
+            .contains("epoch-a -> epoch-b"));
+
+        // Finalize keeps all of it.
+        archive.finalize_single_rec(rec, (3_000, 0)).unwrap();
+        let md = RezDb::open(&path).unwrap().recording_metadata(rid).unwrap();
+        assert_eq!(
+            md.get(crate::rez::PRODUCER_EPOCH_KEY).map(String::as_str),
+            Some("epoch-b")
+        );
+    }
+
+    /// A producer that says nothing about its epoch (an older agent, a
+    /// Prometheus target) leaves no identity keys behind: absent means
+    /// unknown, and unknown must not be spelled as some default value.
+    #[test]
+    fn no_producer_epoch_writes_no_identity_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let (archive, mut rec, rid) = recorder(&path, never_seals());
+        rec.ingest(&epoch_snap(1_000, None), 1_000, 0).unwrap();
+        archive.finalize_single_rec(rec, (1_000, 0)).unwrap();
+        let md = RezDb::open(&path).unwrap().recording_metadata(rid).unwrap();
+        assert!(!md.contains_key(crate::rez::PRODUCER_EPOCH_KEY));
+        assert!(!md.contains_key(crate::rez::PRODUCER_EPOCHS_KEY));
+        assert!(!md.contains_key("events"));
     }
 
     /// One row per sampler per tick, every sampler's window advancing each

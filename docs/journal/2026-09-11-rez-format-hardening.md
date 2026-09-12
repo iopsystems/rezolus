@@ -213,6 +213,28 @@ host+overlap heuristics, which is no worse than today.
 4. Emit a producer epoch from the agent into snapshot metadata; record it and
    its changes. Test: a restarted agent's epoch change lands as a discontinuity
    the reader can enumerate.
+   **DONE.** The agent mints one v4 UUID per process
+   (`exposition::http::snapshot::producer_epoch`, 16 bytes from
+   `/dev/urandom`, a pid+time fallback) and carries it in every V2 and V3
+   snapshot's top-level metadata under `producer_epoch` — the counter epoch
+   *is* the process for rezolus, since every counter it exposes lives in it.
+   `StreamRecorderV3::stage` reads it on every tick, so the recorder and
+   hindsight get it without a line of their own: the first sighting writes
+   `producer_epoch` and a `producer_epochs` history
+   (`[{"epoch","from_ts"}]`) into the recording's metadata; a change appends
+   to the history and writes a timeline event (`kind: producer_epoch`,
+   `id: producer_epoch:<new>`, the shape `dashboard::events::Event` reads) so
+   the viewer draws the discontinuity where it happened. Persisted through a
+   new writer message (`Msg::UpdateMetadata` → `patch_recording_metadata`),
+   in order with the ticks, not at finalize — a killed recording still names
+   its epoch. Absent means unknown: a producer that sends no epoch (older
+   agent, Prometheus target) leaves no keys behind. Keys are constants in
+   `rez::rez` (`PRODUCER_EPOCH_KEY`, `PRODUCER_EPOCHS_KEY`) so the spec and
+   both crates cite one name. Tests: the agent's epoch is constant across
+   snapshots in a process and v4-shaped; the writer records first sighting,
+   change (history + event), and finalize; no-epoch writes nothing. The
+   consumer half — merging two recordings of one epoch into one series —
+   belongs to systemslab and is not done here.
 5. Write `docs/rez-format.md` as a specification with a conventions version;
    fix the stale module doc, `docs/parquet_metadata.md`, and README.
 6. Replace `String` errors with a `thiserror` enum; let `writer_loop` retry the

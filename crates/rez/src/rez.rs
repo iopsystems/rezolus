@@ -33,6 +33,25 @@ pub const WALL_OFFSET_COLUMN: &str = ":wall_offset";
 pub const WINDOW_BEGIN_COLUMN: &str = ":window_begin";
 pub const WINDOW_WIDTH_COLUMN: &str = ":window_width";
 
+/// Recording-metadata key: the observed producer's current **counter epoch**.
+///
+/// A producer (an agent process) mints an opaque id whenever its cumulative
+/// counters start from zero — at process start, for rezolus — and carries it
+/// in every snapshot's top-level metadata. The recorder copies it here, so
+/// two recordings carrying the same epoch over overlapping time are two
+/// observations of ONE monotonic series (mergeable; never summable), and a
+/// change of epoch mid-recording is a counter reset a reader can see rather
+/// than infer from a value going backwards. OpenTelemetry's
+/// `start_time_unix_nano` is the precedent. Absent means unknown.
+pub const PRODUCER_EPOCH_KEY: &str = "producer_epoch";
+
+/// Recording-metadata key: every epoch this recording observed, in order, as
+/// a JSON array of `{"epoch": <id>, "from_ts": <first row timestamp>}`. The
+/// current epoch is its last element and is also under
+/// [`PRODUCER_EPOCH_KEY`]. A change is additionally recorded as a timeline
+/// event (kind `producer_epoch`) so a viewer shows the discontinuity.
+pub const PRODUCER_EPOCHS_KEY: &str = "producer_epochs";
+
 /// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RezManifest {

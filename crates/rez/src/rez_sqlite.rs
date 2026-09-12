@@ -1436,6 +1436,39 @@ impl RezDb {
     /// column: `annotate` changes it and nothing else, and rewriting an
     /// archive's every segment BLOB to edit one JSON string would make a
     /// cheap operation cost the size of the recording.
+    /// One recording's metadata map, as stored.
+    pub fn recording_metadata(
+        &self,
+        recording_id: i64,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let encoded: String = self
+            .conn
+            .query_row(
+                "SELECT metadata FROM recordings WHERE id = ?1",
+                [recording_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("failed to read metadata of recording {recording_id}: {e}"))?;
+        serde_json::from_str(&encoded)
+            .map_err(|e| format!("recording {recording_id} has invalid metadata: {e}"))
+    }
+
+    /// Merge `patch` into a recording's metadata: keys in the patch replace
+    /// the stored value, everything else is kept. Read-modify-write on this
+    /// connection, so it belongs to whoever owns the connection — the writer
+    /// thread, during a recording.
+    pub fn patch_recording_metadata(
+        &self,
+        recording_id: i64,
+        patch: &BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let mut metadata = self.recording_metadata(recording_id)?;
+        for (k, v) in patch {
+            metadata.insert(k.clone(), v.clone());
+        }
+        self.update_recording_metadata(recording_id, &metadata)
+    }
+
     pub fn update_recording_metadata(
         &self,
         recording_id: i64,

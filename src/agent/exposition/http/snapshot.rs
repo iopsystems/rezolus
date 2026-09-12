@@ -222,6 +222,53 @@ fn metric_metadata(
 #[cfg(test)]
 static BUILDER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// This process's **producer epoch**: an opaque id for the lifetime of its
+/// cumulative counters, carried in every snapshot's top-level metadata under
+/// `rez::rez::PRODUCER_EPOCH_KEY`.
+///
+/// Every counter this agent exposes — BPF map, `/proc` delta, perf event —
+/// lives in this process and starts from zero with it, so the epoch is minted
+/// once per process. A consumer holding two recordings with the same epoch
+/// over overlapping time has two observations of ONE monotonic series (never
+/// two series to sum); a recording that sees the epoch change has seen a
+/// restart, i.e. a counter reset, at that tick. Prometheus has no equivalent
+/// and infers resets from a value going backwards, which misses any reset
+/// that lands above the previous value; OpenTelemetry carries
+/// `start_time_unix_nano` for the same reason.
+///
+/// Random rather than time-derived so two agents started in the same
+/// nanosecond on one host — or one host's clock stepping back across a
+/// restart — cannot collide. Bytes come from the OS; if it has none to give,
+/// the fallback still differs per process and per start.
+pub fn producer_epoch() -> &'static str {
+    static EPOCH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(|| {
+        let mut b = [0u8; 16];
+        let from_os = std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut b))
+            .is_ok();
+        if !from_os {
+            let nanos = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let seed = nanos ^ ((std::process::id() as u128) << 96);
+            b.copy_from_slice(&seed.to_le_bytes());
+        }
+        b[6] = (b[6] & 0x0f) | 0x40;
+        b[8] = (b[8] & 0x3f) | 0x80;
+        let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        format!(
+            "{}-{}-{}-{}-{}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    })
+}
+
 fn create(
     timestamp: SystemTime,
     duration: Duration,
@@ -237,6 +284,10 @@ fn create(
         metadata: [
             ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
             ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            (
+                ::rez::rez::PRODUCER_EPOCH_KEY.to_string(),
+                producer_epoch().to_string(),
+            ),
         ]
         .into(),
         counters: Vec::new(),
@@ -2500,6 +2551,10 @@ fn create_v3(
         metadata: [
             ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
             ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            (
+                ::rez::rez::PRODUCER_EPOCH_KEY.to_string(),
+                producer_epoch().to_string(),
+            ),
         ]
         .into(),
         groups: group_snapshots,
@@ -2510,6 +2565,30 @@ fn create_v3(
 mod tests {
     use super::*;
     use crate::agent::external_metrics::{ExternalMetric, ExternalMetricValue};
+
+    /// Every snapshot names its producer epoch, and it is the same id for the
+    /// life of the process — that constancy is the whole contract: two scrapes
+    /// of one agent must compare equal, and only a restart changes it.
+    #[test]
+    fn every_snapshot_carries_the_process_producer_epoch() {
+        let a = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let b = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let epoch_of = |s: &Snapshot| match s {
+            Snapshot::V2(v2) => v2.metadata[::rez::rez::PRODUCER_EPOCH_KEY].clone(),
+            Snapshot::V3(v3) => v3.metadata[::rez::rez::PRODUCER_EPOCH_KEY].clone(),
+            _ => panic!("unexpected format"),
+        };
+        let ea = epoch_of(&a);
+        assert_eq!(ea, epoch_of(&b));
+        assert_eq!(ea, producer_epoch());
+        // Canonical v4 UUID shape.
+        assert_eq!(ea.len(), 36, "{ea}");
+        assert_eq!(ea.as_bytes()[14], b'4', "{ea}");
+        assert!(
+            matches!(ea.as_bytes()[19], b'8' | b'9' | b'a' | b'b'),
+            "{ea}"
+        );
+    }
     use metriken::metric;
     use metriken::Window;
     use std::time::{Duration, SystemTime};
