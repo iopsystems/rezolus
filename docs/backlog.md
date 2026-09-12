@@ -576,6 +576,49 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   arms were finalized; hindsight reads a buffer with a live WAL tail, which
   materializes differently. *Reopen:* measure alongside the first fix.
 
+## `.rez` — format hardening (identity, versioning, reader atomicity)
+
+Source: [`.rez` format hardening](journal/2026-09-11-rez-format-hardening.md)
+(review landed 2026-09-11; items 1–7 are sequenced in the entry and close out
+there, not here).
+
+- **Retention can evict a WAL span's metadata anchor** — Open. `evict_before`
+  (`crates/rez/src/rez_sqlite.rs:1125`) deletes by timestamp; a group table then
+  drops the un-anchored rows (`wal.rs:371`) and a V2 sampler table keeps them
+  with empty metadata (`wal.rs:214`). Nothing enforces hindsight `duration` >
+  `SealPolicy::max_age`. Candidates: clamp `max_age` ≤ `lookback/2`, anchor-aware
+  eviction, or force-seal a span whose anchor would go. *Reopen:* any hindsight
+  config with `duration` under 10 min.
+- **Routing catalog probed from the first segment only** — Open.
+  `TableReader::names` (`crates/rez/src/reader.rs:276`) assumes segments share
+  a schema; the writer supports drift inside a table, so a metric first seen
+  after seal 0 is unroutable. Probe first+last footers, or persist a per-table
+  name catalog at write time (also the read-path entry's last fixed open cost).
+  *Reopen:* the first Prometheus recording whose series appear after the first
+  seal.
+- **Readers open `READ_WRITE`** — Open. `RezDb::open` (`rez_sqlite.rs:351`)
+  has no read-only form, so a read mutates a finished archive on close and a
+  read-only mount may fail. Add `open_read_only` (`immutable=1` when no writer
+  exists); sequenced after the typed-error item.
+- **`lib.rs` facade, `RezArchive` name collision, test-only `pub` items** —
+  Open. Two unrelated public `RezArchive` types (`rez.rs:603`,
+  `rez_v3_writer.rs:140`); no re-exports; `read_table_parquet`/`RezRecorder`
+  documented as test-only but public. *Reopen:* with the first external
+  consumer.
+- **Metriken-free `TableWriter`** — Open. A bare writer must hand-track `seq`,
+  `SegmentMeta`, and clock offsets. *Reopen:* same trigger.
+- **Smaller confirmed items** — Open, batch when convenient: `annotate` on a
+  multi-recording `.rez` is one autocommit per recording
+  (`src/parquet_tools/annotate.rs:415`); `upgrade_tar_to_v3` marks complete
+  outside its transaction; in-place `filter`/`upgrade` renames leave the
+  source's `-wal` sidecar in place; `parquet_ingest` trusts a sorted timestamp
+  column and lets a `sampler` value with `/` masquerade as a group table;
+  `RezReader::interval()` fabricates `1.0` when unknown (`reader.rs:1424`);
+  `SegmentSource::Bytes` clones every segment (browser upload resident 3×);
+  `metric_metadata()` fetches every BLOB to read one footer; routing refusals
+  surface as `QueryError::ParseError`; dead `CopySpec::metadata_extra` and a
+  stale `rez_v3_rewrite.rs` header claiming annotate uses it.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
