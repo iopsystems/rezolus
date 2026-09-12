@@ -244,7 +244,9 @@ subvolumes) is reported once, under its shortest mount point.
 sampled. Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `ceph`,
 `glusterfs`, ...), every FUSE filesystem, autofs triggers and the kernel's
 pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
-are never touched. A `statvfs` on a `hard` network mount blocks until the
+are never touched. Neither is a local filesystem that another mount covers — an
+NFS share mounted over `/data`, or over a directory above it — since its path
+now leads to the mount on top. A `statvfs` on a `hard` network mount blocks until the
 server answers, with no timeout the agent can set, and one on an autofs trigger
 starts a mount attempt; local filesystems answer from in-memory superblock
 counters and issue no I/O, which is what bounds the sweep. Network mounts stay

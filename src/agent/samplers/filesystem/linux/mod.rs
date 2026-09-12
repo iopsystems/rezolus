@@ -10,6 +10,17 @@
 //! (`nfs`, `cifs`, `ceph`, ...), every FUSE filesystem, autofs triggers and
 //! the kernel's pseudo-filesystems are never touched.
 //!
+//! Neither is a local mount that another mount covers — one stacked on the
+//! same path, or mounted on a directory above it — because a path resolves to
+//! the mount on top, and `statvfs` on the path of an ext4 mount with an NFS
+//! share stacked over it reaches the share ([`mounts::local_mounts`]). The
+//! call goes through a descriptor whose mount id must match the table's, so
+//! a mount that replaced the sampled one since the table was read is never
+//! published. That check follows the path lookup rather than preventing it: a
+//! network mount stacked over a local path between the table read and the
+//! open can still park the sweep thread, and every later sweep is skipped
+//! while it stays parked.
+//!
 //! The reason is the failure mode, not the value. `statvfs` on a network
 //! mount is an RPC, and on a `hard` mount (the default) it blocks until the
 //! server answers, with no timeout the calling process can set — the
@@ -75,6 +86,7 @@ use metriken::GaugeGroup;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -124,17 +136,56 @@ pub struct Usage {
     pub free_inodes: u64,
 }
 
-/// `statvfs` on `path`. Callers must pass only a mount
-/// [`MountEntry::is_local`] has accepted: on anything else this call can
+/// `fstatvfs` on the filesystem mounted at `path`, refused unless `path`
+/// still resolves to mount `mount_id`. Callers must pass only a mount that
+/// [`mounts::local_mounts`] returned: for anything else the path lookup can
 /// block for as long as the mount's options allow, with no deadline
 /// available to the caller (see the module doc).
-pub fn read_usage(path: &str) -> std::io::Result<Usage> {
+pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     let c_path = CString::new(path)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in path"))?;
+    // SAFETY: `c_path` is a valid NUL-terminated string.
+    let raw = unsafe {
+        libc::open(
+            c_path.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `open` just returned this descriptor, and nothing else owns it.
+    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+
+    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: `fd` is open, an empty path with `AT_EMPTY_PATH` names it, and
+    // `stx` is a properly sized, writable `statx`.
+    let rc = unsafe {
+        libc::statx(
+            fd.as_raw_fd(),
+            c"".as_ptr(),
+            libc::AT_EMPTY_PATH,
+            libc::STATX_MNT_ID,
+            &mut stx,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Matched on mount id, not `st_dev`: btrfs reports `st_dev` per
+    // subvolume, which need not equal the device mountinfo names. Kernels
+    // before 5.8 report no mount id, leaving the table's cover check as the
+    // only guard.
+    if stx.stx_mask & libc::STATX_MNT_ID != 0 && stx.stx_mnt_id != mount_id {
+        return Err(std::io::Error::other(format!(
+            "{path} now resolves to mount {}, not mount {mount_id}",
+            stx.stx_mnt_id
+        )));
+    }
+
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: `c_path` is a valid NUL-terminated string and `st` is a
-    // properly sized, writable `statvfs` the call fills on success.
-    let rc = unsafe { libc::statvfs(c_path.as_ptr(), &mut st) };
+    // SAFETY: `fd` is open and `st` is a properly sized, writable `statvfs`.
+    let rc = unsafe { libc::fstatvfs(fd.as_raw_fd(), &mut st) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -155,13 +206,14 @@ pub fn read_usage(path: &str) -> std::io::Result<Usage> {
 pub struct Slots {
     by_device: HashMap<String, usize>,
     occupied: Vec<Option<String>>,
+    /// The `(mount, fstype)` labels last applied to each slot.
+    labeled: Vec<Option<(String, String)>>,
 }
 
-/// What changed in one [`Slots::assign`]: which devices took which slots, which
-/// slots were vacated, and how many mounts did not fit.
+/// What changed in one [`Slots::assign`]: which slots were vacated, and how
+/// many mounts did not fit.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Assignment {
-    pub placed: Vec<(String, usize)>,
     pub freed: Vec<usize>,
     pub dropped: usize,
 }
@@ -171,6 +223,7 @@ impl Slots {
         Self {
             by_device: HashMap::new(),
             occupied: vec![None; capacity],
+            labeled: vec![None; capacity],
         }
     }
 
@@ -186,6 +239,7 @@ impl Slots {
                 if !devices.contains(device) {
                     self.by_device.remove(device);
                     *held = None;
+                    self.labeled[slot] = None;
                     outcome.freed.push(slot);
                 }
             }
@@ -200,7 +254,6 @@ impl Slots {
                 Some(slot) => {
                     self.occupied[slot] = Some(device.clone());
                     self.by_device.insert(device.clone(), slot);
-                    outcome.placed.push((device.clone(), slot));
                 }
                 None => outcome.dropped += 1,
             }
@@ -211,6 +264,22 @@ impl Slots {
 
     pub fn slot_of(&self, device: &str) -> Option<usize> {
         self.by_device.get(device).copied()
+    }
+
+    /// Whether `slot` needs labeling for `mount`, recording that it now has
+    /// it. True on a slot's first mount, and again whenever a retained slot's
+    /// selected mount point or type changes: a filesystem remounted elsewhere,
+    /// or its shortest bind alias gone while a longer one remains.
+    pub fn relabel(&mut self, slot: usize, mount: &MountEntry) -> bool {
+        let current = (mount.mount_point.as_str(), mount.fstype.as_str());
+        let applied = self.labeled[slot]
+            .as_ref()
+            .map(|(point, fstype)| (point.as_str(), fstype.as_str()));
+        if applied == Some(current) {
+            return false;
+        }
+        self.labeled[slot] = Some((mount.mount_point.clone(), mount.fstype.clone()));
+        true
     }
 
     /// One past the highest occupied slot: the member bound the snapshot walk
@@ -333,11 +402,6 @@ fn sweep(state: &mut SweepState) -> usize {
     for slot in &assignment.freed {
         vacate(*slot);
     }
-    for (device, slot) in &assignment.placed {
-        if let Some(mount) = mounts.iter().find(|m| &m.device == device) {
-            label(*slot, mount);
-        }
-    }
     if assignment.dropped > 0 {
         warn!(
             "{NAME}: {} local filesystem(s) beyond the {MAX_MOUNTS}-mount cap are not sampled",
@@ -350,7 +414,10 @@ fn sweep(state: &mut SweepState) -> usize {
         let Some(slot) = slots.slot_of(&mount.device) else {
             continue;
         };
-        match read_usage(&mount.mount_point) {
+        if slots.relabel(slot, mount) {
+            label(slot, mount);
+        }
+        match read_usage(&mount.mount_point, mount.id) {
             Ok(usage) => {
                 let _ = FILESYSTEM_TOTAL.set(slot, gauge(usage.total_bytes));
                 let _ = FILESYSTEM_FREE.set(slot, gauge(usage.free_bytes));
@@ -360,9 +427,9 @@ fn sweep(state: &mut SweepState) -> usize {
                 published += 1;
             }
             Err(e) => {
-                // Unmounted between the table read and the call, or not
-                // ours to read. Absent beats stale: unset rather than keep
-                // the previous sweep's numbers under a fresh window.
+                // Unmounted or replaced between the table read and the call,
+                // or not ours to read. Absent beats stale: unset rather than
+                // keep the previous sweep's numbers under a fresh window.
                 debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
                 for group in GROUPS {
                     let _ = group.set(slot, i64::MIN);
@@ -437,17 +504,14 @@ mod tests {
     fn slots_are_stable_for_a_mount_that_stays_and_reused_for_one_that_goes() {
         let mut slots = Slots::new(4);
         let first = slots.assign(&["259:2".to_string(), "8:1".to_string()]);
-        assert_eq!(
-            first.placed,
-            vec![("259:2".to_string(), 0), ("8:1".to_string(), 1)]
-        );
+        assert_eq!(slots.slot_of("259:2"), Some(0));
+        assert_eq!(slots.slot_of("8:1"), Some(1));
         assert!(first.freed.is_empty());
         assert_eq!(slots.bound(), 2);
 
         // `/` (259:2) stays, the xfs disk (8:1) is unmounted, a USB stick (8:17) appears.
         let second = slots.assign(&["259:2".to_string(), "8:17".to_string()]);
         assert_eq!(second.freed, vec![1]);
-        assert_eq!(second.placed, vec![("8:17".to_string(), 1)]);
         assert_eq!(slots.slot_of("259:2"), Some(0));
         assert_eq!(slots.slot_of("8:17"), Some(1));
         assert_eq!(slots.bound(), 2);
@@ -466,14 +530,24 @@ mod tests {
     fn mounts_past_the_capacity_are_dropped_and_counted() {
         let mut slots = Slots::new(2);
         let outcome = slots.assign(&["a".to_string(), "b".to_string(), "c".to_string()]);
-        assert_eq!(outcome.placed.len(), 2);
+        assert_eq!(slots.bound(), 2);
         assert_eq!(outcome.dropped, 1);
         assert_eq!(slots.slot_of("c"), None);
     }
 
+    /// `/` as the real mount table describes it.
+    fn root_mount() -> MountEntry {
+        let table = std::fs::read_to_string(MOUNTINFO).unwrap();
+        local_mounts(&table)
+            .into_iter()
+            .find(|m| m.mount_point == "/")
+            .expect("/ is a local mount")
+    }
+
     #[test]
     fn statvfs_on_the_root_filesystem_reports_a_consistent_shape() {
-        let usage = read_usage("/").expect("statvfs on / works on any Linux host");
+        let root = root_mount();
+        let usage = read_usage("/", root.id).expect("statvfs on / works on any Linux host");
         assert!(usage.total_bytes > 0);
         assert!(usage.free_bytes <= usage.total_bytes);
         assert!(usage.available_bytes <= usage.free_bytes);
@@ -486,6 +560,8 @@ mod tests {
         // it, so this test cannot race the ones that sweep for real.
         let slot = MAX_MOUNTS - 1;
         let mount = MountEntry {
+            id: 900,
+            parent: 1,
             mount_point: "/scratch".to_string(),
             fstype: "xfs".to_string(),
             source: "/dev/sdz1".to_string(),
@@ -560,7 +636,7 @@ mod tests {
             let mounts = local_mounts(&table);
             let t2 = Instant::now();
             for m in &mounts {
-                let _ = read_usage(&m.mount_point);
+                let _ = read_usage(&m.mount_point, m.id);
             }
             let t3 = Instant::now();
             mounts_seen = mounts.len();
@@ -582,6 +658,87 @@ mod tests {
 
     #[test]
     fn statvfs_on_a_missing_path_is_an_error_not_a_zero() {
-        assert!(read_usage("/definitely/not/a/mount/point").is_err());
+        assert!(read_usage("/definitely/not/a/mount/point", 0).is_err());
+    }
+
+    /// Needs a kernel that reports `STATX_MNT_ID` (5.8+); older ones skip the
+    /// check by design, and this test would fail there.
+    #[test]
+    fn a_path_resolving_to_a_different_mount_is_refused() {
+        let root = root_mount();
+        let err = read_usage("/", root.id.wrapping_add(1 << 40))
+            .expect_err("a mount id mismatch must refuse");
+        assert!(err.to_string().contains("now resolves to mount"), "{err}");
+    }
+
+    fn ext4_at(point: &str) -> MountEntry {
+        MountEntry {
+            id: 40,
+            parent: 22,
+            mount_point: point.to_string(),
+            fstype: "ext4".to_string(),
+            source: "/dev/sda1".to_string(),
+            device: "8:1".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_retained_slot_is_relabeled_when_its_mount_point_moves() {
+        let mut slots = Slots::new(4);
+        slots.assign(&["8:1".to_string()]);
+        let slot = slots.slot_of("8:1").unwrap();
+        assert!(slots.relabel(slot, &ext4_at("/old")), "first mount labels");
+        assert!(
+            !slots.relabel(slot, &ext4_at("/old")),
+            "unchanged keeps labels"
+        );
+
+        let moved = slots.assign(&["8:1".to_string()]);
+        assert!(moved.freed.is_empty());
+        assert_eq!(slots.slot_of("8:1"), Some(slot), "the slot is retained");
+        assert!(
+            slots.relabel(slot, &ext4_at("/new")),
+            "a moved mount relabels"
+        );
+    }
+
+    #[test]
+    fn losing_the_selected_bind_alias_relabels_onto_the_one_that_remains() {
+        let both = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 8:1 / /a rw - ext4 /dev/sda1 rw
+41 22 8:1 / /mnt/longer rw - ext4 /dev/sda1 rw";
+        let one = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+41 22 8:1 / /mnt/longer rw - ext4 /dev/sda1 rw";
+        let sweep_labels = |slots: &mut Slots, text: &str| -> (bool, String) {
+            let mounts = local_mounts(text);
+            let devices: Vec<String> = mounts.iter().map(|m| m.device.clone()).collect();
+            slots.assign(&devices);
+            let sda1 = mounts.into_iter().find(|m| m.device == "8:1").unwrap();
+            let slot = slots.slot_of("8:1").unwrap();
+            (slots.relabel(slot, &sda1), sda1.mount_point)
+        };
+
+        let mut slots = Slots::new(4);
+        assert_eq!(sweep_labels(&mut slots, both), (true, "/a".to_string()));
+        assert_eq!(sweep_labels(&mut slots, both), (false, "/a".to_string()));
+        assert_eq!(
+            sweep_labels(&mut slots, one),
+            (true, "/mnt/longer".to_string())
+        );
+    }
+
+    #[test]
+    fn a_reused_slot_is_labeled_afresh() {
+        let mut slots = Slots::new(4);
+        slots.assign(&["8:1".to_string()]);
+        assert!(slots.relabel(0, &ext4_at("/data")));
+        slots.assign(&[]);
+        slots.assign(&["8:1".to_string()]);
+        assert!(
+            slots.relabel(0, &ext4_at("/data")),
+            "a vacated slot's labels were cleared, so it must label again"
+        );
     }
 }

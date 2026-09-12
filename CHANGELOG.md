@@ -6,8 +6,9 @@
   total and free inodes for every locally mounted filesystem, labeled by
   `mount`, `fstype` and `device`. The mount table is re-read on each sweep, so
   a filesystem mounted after startup appears on its own. Local filesystems
-  only: network filesystems, FUSE and autofs are never sampled, because a
-  `statvfs` on a hard network mount blocks until the server answers. Sweeps
+  only: network filesystems, FUSE and autofs are never sampled, and neither is a
+  local filesystem another mount covers, because a `statvfs` that reaches a
+  hard network mount blocks until the server answers. Sweeps
   run at most once per `[samplers.filesystem] interval` (default 60s), off the
   scrape cycle. The viewer gains a Filesystem section with one line per mount.
   (#1202)

@@ -625,6 +625,11 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
   Reopen if a many-thousand-mount host shows the per-sweep parse mattering.
 - **`MAX_MOUNTS` = 64** — By design. Mounts past the cap are dropped and
   counted in a warning. Reopen if a real host exceeds it.
+- **A network mount stacked mid-sweep** — Accepted. Covered local mounts are
+  dropped and a changed mount id refuses publication, but a network mount
+  stacked over a local path between the table read and the `open` can still
+  park the sweep thread on the lookup. Reopen if a sweep is ever observed
+  parked in `open`.
 
 ## Agent — NVIDIA GPU sampler
 

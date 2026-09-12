@@ -11,6 +11,11 @@ use std::collections::HashMap;
 /// One line of `/proc/self/mountinfo`, reduced to what the sweep needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountEntry {
+    /// The mount's id: unique within the table, and what `statx` reports as
+    /// `stx_mnt_id` for a path on this mount.
+    pub id: u64,
+    /// The id of the mount this one is mounted on.
+    pub parent: u64,
     /// Where the filesystem is mounted, with `\NNN` octal escapes decoded.
     pub mount_point: String,
     /// The filesystem type as the kernel names it (`ext4`, `nfs4`, `fuse.sshfs`).
@@ -120,6 +125,8 @@ fn parse_line(line: &str) -> Option<MountEntry> {
         return None;
     }
     Some(MountEntry {
+        id: fields[0].parse().ok()?,
+        parent: fields[1].parse().ok()?,
         device: fields[2].to_string(),
         mount_point: unescape(fields[4]),
         fstype: fields[sep + 1].to_string(),
@@ -160,26 +167,78 @@ fn octal(digits: &[u8]) -> Option<u8> {
 
 /// The local filesystems in a mount table, one entry per filesystem.
 ///
+/// A local mount that another mount covers is dropped first ([`covered`]): a
+/// path resolves to the mount on top, so `statvfs` on the path of an ext4
+/// mount with an NFS share stacked over it reaches the NFS share.
+///
 /// A filesystem mounted more than once (bind mounts, btrfs subvolumes on one
 /// device) shares a `major:minor` id and reports the same occupancy at every
-/// mount, so it is kept once, under its shortest mount point. The result is
-/// sorted by mount point so slot assignment upstream is deterministic.
+/// mount, so it is kept once, under its shortest uncovered mount point. The
+/// result is sorted by mount point so slot assignment upstream is
+/// deterministic.
 pub fn local_mounts(text: &str) -> Vec<MountEntry> {
+    let table = parse_mountinfo(text);
+    let parent_of: HashMap<u64, u64> = table.iter().map(|m| (m.id, m.parent)).collect();
+    let mut at_path: HashMap<&str, Vec<u64>> = HashMap::new();
+    for m in &table {
+        at_path
+            .entry(m.mount_point.as_str())
+            .or_default()
+            .push(m.id);
+    }
+
     let mut by_device: HashMap<String, MountEntry> = HashMap::new();
-    for entry in parse_mountinfo(text)
-        .into_iter()
-        .filter(MountEntry::is_local)
+    for entry in table
+        .iter()
+        .filter(|m| m.is_local() && !covered(m, &parent_of, &at_path))
     {
         match by_device.get(&entry.device) {
             Some(kept) if kept.mount_point.len() <= entry.mount_point.len() => {}
             _ => {
-                by_device.insert(entry.device.clone(), entry);
+                by_device.insert(entry.device.clone(), entry.clone());
             }
         }
     }
     let mut mounts: Vec<MountEntry> = by_device.into_values().collect();
     mounts.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
     mounts
+}
+
+/// True when a mount other than `mount` sits at its path or at a directory
+/// above it, and is not one of the mounts `mount` was mounted on.
+///
+/// A mount at or above the path is either beneath `mount` — reachable by
+/// following parent ids, since a mount's parent is the mount holding its
+/// mount point — or was mounted there afterwards, and path resolution meets
+/// it first. Fail-closed: a parent missing from the table shortens the chain,
+/// which can only exclude more mounts, never sample a covered one.
+fn covered(
+    mount: &MountEntry,
+    parent_of: &HashMap<u64, u64>,
+    at_path: &HashMap<&str, Vec<u64>>,
+) -> bool {
+    let mut beneath = Vec::new();
+    let mut id = mount.parent;
+    // Bounded by the table size, so a cyclic parent chain cannot loop.
+    for _ in 0..=parent_of.len() {
+        if id == mount.id || beneath.contains(&id) {
+            break;
+        }
+        beneath.push(id);
+        match parent_of.get(&id) {
+            Some(&parent) => id = parent,
+            None => break,
+        }
+    }
+
+    let path = mount.mount_point.as_str();
+    let at_or_above = std::iter::once("/")
+        .chain(path.match_indices('/').skip(1).map(|(i, _)| &path[..i]))
+        .chain(std::iter::once(path));
+    at_or_above
+        .filter_map(|p| at_path.get(p))
+        .flatten()
+        .any(|&other| other != mount.id && !beneath.contains(&other))
 }
 
 #[cfg(test)]
@@ -194,6 +253,7 @@ mod tests {
         let entries = parse_mountinfo(ROOT);
         assert_eq!(entries.len(), 1);
         let m = &entries[0];
+        assert_eq!((m.id, m.parent), (22, 1));
         assert_eq!(m.mount_point, "/");
         assert_eq!(m.fstype, "ext4");
         assert_eq!(m.source, "/dev/nvme0n1p2");
@@ -224,6 +284,8 @@ mod tests {
 
     fn entry(fstype: &str, source: &str) -> MountEntry {
         MountEntry {
+            id: 2,
+            parent: 1,
             mount_point: "/x".to_string(),
             fstype: fstype.to_string(),
             source: source.to_string(),
@@ -309,5 +371,61 @@ mod tests {
         let mounts = local_mounts(text);
         let points: Vec<&str> = mounts.iter().map(|m| m.mount_point.as_str()).collect();
         assert_eq!(points, vec!["/", "/data"]);
+    }
+
+    fn points(text: &str) -> Vec<String> {
+        local_mounts(text)
+            .into_iter()
+            .map(|m| m.mount_point)
+            .collect()
+    }
+
+    /// Codex's review fixture, verbatim: both mounts' parents are absent from
+    /// the table, which must not stop the NFS share from counting as cover.
+    #[test]
+    fn a_local_mount_with_a_network_mount_stacked_on_it_is_not_sampled() {
+        let text = "\
+40 22 8:1 / /data rw - ext4 /dev/sda1 rw
+41 40 0:40 / /data rw - nfs4 nas:/export rw";
+        assert!(points(text).is_empty());
+    }
+
+    #[test]
+    fn a_local_mount_under_a_later_mount_on_a_parent_directory_is_not_sampled() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 8:1 / /data/sub rw - ext4 /dev/sda1 rw
+41 22 0:40 / /data rw - nfs4 nas:/export rw";
+        assert_eq!(points(text), vec!["/"]);
+    }
+
+    #[test]
+    fn a_local_mount_stacked_on_top_is_sampled_with_the_mounts_inside_it() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 0:40 / /data rw - nfs4 nas:/export rw
+41 40 8:1 / /data rw - ext4 /dev/sda1 rw
+42 41 8:2 / /data/sub rw - xfs /dev/sdb1 rw";
+        assert_eq!(points(text), vec!["/", "/data", "/data/sub"]);
+    }
+
+    /// `/data` is a string prefix of `/database`, not a directory above it.
+    #[test]
+    fn cover_is_by_directory_not_by_string_prefix() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 8:1 / /database rw - ext4 /dev/sda1 rw
+41 22 0:40 / /data rw - nfs4 nas:/export rw";
+        assert_eq!(points(text), vec!["/", "/database"]);
+    }
+
+    #[test]
+    fn a_covered_bind_alias_yields_to_a_longer_uncovered_one() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+50 22 8:1 / /a rw - ext4 /dev/sda1 rw
+51 22 8:1 / /mnt/longer rw - ext4 /dev/sda1 rw
+52 50 0:40 / /a rw - nfs4 nas:/export rw";
+        assert_eq!(points(text), vec!["/", "/mnt/longer"]);
     }
 }

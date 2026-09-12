@@ -43,8 +43,23 @@ starts a mount attempt. Local filesystems answer from in-memory superblock
 counters and issue no I/O. So classification is the only thing that bounds
 the sweep, and it is done from a local kernel read that blocks on nothing.
 `df -l` draws the same line. Network mounts stay out of scope until someone
-asks; the opt-in TODO lives in the sampler's module doc, not scattered
-through the read path.
+asks; the reopen condition lives in `docs/backlog.md`, pointed at from the
+sampler's module doc rather than scattered through the read path.
+
+**A local mount that something covers is not sampled.** Found in review (Codex,
+round 1 of the branch's local review thread): classifying by type alone let an
+ext4 mount at `/data` through with an NFS share stacked on it, and
+`statvfs("/data")` resolves to the share — no race needed, and a dead server
+would have hung the inline startup sweep. `mountinfo` keeps both entries, so
+the fix is structural: each mount's id and parent id are kept, and a local
+mount is dropped when any mount at its path or at a directory above it is not
+in its own parent chain (`mounts::covered`), since a mount's parent is the
+mount holding its mount point. The read then goes through an `O_PATH`
+descriptor whose `statx` mount id must equal the table's, so numbers from a
+mount that replaced the sampled one are never published. It matches on mount
+id rather than `st_dev` because btrfs reports `st_dev` per subvolume. The check
+follows the path lookup instead of preventing it; that residual is in
+*Deferred*.
 
 **Rescan the mount table every sweep.** `drivehealth` enumerates once at
 startup. This sampler cannot: a filesystem mounted after the agent started and
@@ -92,6 +107,12 @@ the environment, not the code: a `spawn_blocking` thread waking once per
 interval runs cold — caches, clock — where the hot loop does not. The cold
 number is the one production pays, so it is the one reported.
 
+After the cover fix (see *Decisions*), the same test in a release build: read
+62 µs, parse and classify including the cover check 65 µs, and 6 µs for three
+`open` + `statx` + `fstatvfs` reads — about 2 µs a mount. There is no release
+run of the pre-fix code to subtract, so this records the fixed cost rather
+than a delta; every phase is within the cold sweep range in the table below.
+
 One thing tried and measured as no gain: pre-sizing and reusing the read
 buffer. A fresh `String` makes `read_to_string` probe a zero-size procfs
 file in doubling 32-byte chunks (13 `read()`s under `strace`); the reused
@@ -129,10 +150,13 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 11 on the parser and classifier (fixture lines for nfs, cifs,
-fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair), 7 on slot
-assignment, `statvfs`, vacate/label and the end-to-end sweep against the real
-mount table, 3 on the dashboard section.
+Tests: 16 on the parser and classifier (fixture lines for nfs, cifs,
+fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and five cover
+cases: a share stacked on a local mount, one mounted on a directory above it,
+a local mount stacked on top, `/data` against `/database`, and a covered bind
+alias), 11 on slot assignment and relabeling, `statvfs` and its mount-id
+refusal, vacate/label and the end-to-end sweep against the real mount table,
+3 on the dashboard section.
 
 ## Deferred / reopen
 
@@ -146,3 +170,9 @@ mount table, 3 on the dashboard section.
   interval.
 - **`MAX_MOUNTS` = 64** — By design. Mounts beyond the cap are dropped and
   counted in a warning per sweep. Reopen if a real host exceeds it.
+- **A network mount stacked mid-sweep** — Accepted. Covered mounts are dropped
+  from the table and a changed mount id refuses publication, but a network
+  mount stacked over a local path between the table read and the `open` can
+  still park the sweep thread on the lookup, and later sweeps skip while it
+  stays parked. No unprivileged interface reaches a mount by id without a
+  path. Reopen if a sweep is ever observed parked in `open`.
