@@ -225,16 +225,23 @@ impl AcquisitionGroup {
     /// group that has one set, instead of the full `entries()`, so an
     /// ~18-CPU host does not emit 1024 mostly-empty slots per tick.
     ///
-    /// Expected to be called exactly once, at sampler init, before any
-    /// snapshot walk reads it — the population is boot-fixed (CPUs coming
-    /// online later are still within the possible-CPU bound computed at
-    /// init). This is not a documented multi-writer API: a second call
-    /// silently overwrites the first (last-write-wins), which is fine for
-    /// the single-init contract but would not be safe as a runtime toggle.
-    // Only called from `CpuCounters::new`, Linux-only; see the note on
-    // `GroupWindowSlot::store`. `member_bound()` itself (the read side) is
-    // NOT guarded the same way — the V3 snapshot builder reads it
-    // unconditionally on every platform, whether or not anything ever set it.
+    /// Callers must store the bound before the window is stamped, so a
+    /// snapshot never walks a bound its values do not match. One writer per
+    /// group: a concurrent second call silently overwrites the first
+    /// (last-write-wins), which is safe for a group's own sampler revising
+    /// its population and is not a runtime toggle.
+    ///
+    /// Most callers set it once at init from a boot-fixed population
+    /// (`possible_cpus()`, drive discovery at startup). Some revise it as
+    /// the population changes — the GPU samplers on device discovery, the
+    /// `filesystem` sweep on each rescan — and the V3 schema hash then
+    /// changes with membership, which is the honest report of a device or
+    /// mount appearing.
+    // `bound_groups_without_a_live_sampler` calls this on every platform, so
+    // the `allow(dead_code)` below is now vestigial; see the note on
+    // `GroupWindowSlot::store` for why it was added. `member_bound()` itself
+    // (the read side) is NOT guarded the same way — the V3 snapshot builder
+    // reads it unconditionally, whether or not anything ever set it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);

@@ -272,7 +272,7 @@ from the same call.
 | `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `device` (major:minor) |
 | `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `device` |
 | `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
-| `filesystem_inodes_total` | Inodes the filesystem can hold (0 when allocated dynamically) | `mount`, `fstype`, `device` |
+| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; 0 on btrfs and vfat | `mount`, `fstype`, `device` |
 | `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
 
 ## GPU

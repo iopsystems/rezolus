@@ -52,7 +52,7 @@ pub static FILESYSTEM_AVAILABLE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
 
 #[metric(
     name = "filesystem_inodes_total",
-    description = "The number of inodes a locally mounted filesystem can hold (f_files). Zero on filesystems that allocate inodes dynamically.",
+    description = "The number of inodes a locally mounted filesystem reports it can hold (f_files). Fixed at mkfs time on ext4; an estimate that moves with free space on XFS and ZFS, which allocate inodes on demand; zero on btrfs and vfat, which report no inode limit.",
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_INODES_TOTAL: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);

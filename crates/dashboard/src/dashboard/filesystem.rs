@@ -56,7 +56,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         let usage = inodes.subgroup("Usage");
         usage.describe(
             "Inodes per filesystem. A filesystem full of small files runs out of these before \
-             it runs out of bytes; filesystems that allocate inodes dynamically report zero.",
+             it runs out of bytes. ext4 fixes the count at mkfs time; XFS and ZFS report an \
+             estimate that moves with free space; btrfs and vfat report zero.",
         );
         usage.plot_promql(
             PlotOpts::gauge("Free Inodes", "inodes-free", Unit::Count),
