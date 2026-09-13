@@ -200,7 +200,7 @@ enabled = true
 [samplers.drivehealth]
 # interval = "60s"
 
-# Filesystem capacity and free space; see docs/metrics.md#filesystem.
+# Filesystem space and inode usage; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems.
 [samplers.filesystem]

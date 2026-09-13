@@ -79,10 +79,13 @@ its labels cleared, and the slot is reused. The group's member bound is set
 by the sweep task — the group's single writer — to one past the highest
 occupied slot before the window is stamped, so a three-mount host is walked
 as three members, not `MAX_MOUNTS` (64). This is a per-sweep write to a bound
-that `timing.rs` documents as single-init; the store is a relaxed atomic read
-once per walk by a single reader, and a membership change is an honest schema
+that `timing.rs` documented as single-init when this sampler was written; it
+now requires only a single writer. A membership change is an honest schema
 change (a mount appeared or went away), so the V3 schema-hash churn it causes
-is the truth, not noise. Flagged in the PR for the maintainer's ruling.
+is the truth, not noise. The store is not atomic with a snapshot: the builder
+reads the bound separately for each of the five gauge families, so a sweep
+landing mid-snapshot can give them different bounds. Flagged in the PR for the
+maintainer's ruling.
 
 **Dashboard.** A Filesystem section with `sum by (mount)` over each gauge, so
 the viewer's multi-series chart names one line per mount and mounts that

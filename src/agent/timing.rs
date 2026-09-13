@@ -231,9 +231,9 @@ impl AcquisitionGroup {
     ///
     /// Takes precedence over [`set_member_bound`](Self::set_member_bound) — a
     /// bound describes a prefix, and a caller that knows the exact set knows
-    /// strictly more. Same single-init contract as the bound: called once at
-    /// sampler init, before any snapshot walk reads it. A second call is
-    /// ignored rather than racing, since the population is fixed at init.
+    /// strictly more. Call it once, at sampler init, before any snapshot walk
+    /// reads it: the set is stored once, and a second call is ignored rather
+    /// than racing.
     ///
     /// Indices are sorted and de-duplicated, so the walk stays in index order
     /// regardless of the order the caller discovered them in.
@@ -568,8 +568,8 @@ mod tests {
         assert_eq!(group.member_bound(), None, "unset bound is unbounded");
         group.set_member_bound(3);
         assert_eq!(group.member_bound(), Some(3));
-        // Last-write-wins, per the single-init contract documented on
-        // `set_member_bound`.
+        // A later store replaces the bound; samplers revise it as membership
+        // changes.
         group.set_member_bound(5);
         assert_eq!(group.member_bound(), Some(5));
     }

@@ -23,9 +23,9 @@
 //!
 //! # Cadence and publication
 //!
-//! Filesystem capacity comes from filesystem statistics rather than a BPF
-//! event stream (principle 15 in `docs/principles.md`). Rescanning the table
-//! each sweep discovers mounts added after startup. The initial sweep runs
+//! Superblock counters have no BPF or perf hook, so the sweep reads procfs
+//! and `fstatvfs`: a principle 15 exception (`docs/principles.md`).
+//! Rescanning the table each sweep discovers mounts added after startup. The initial sweep runs
 //! inline; consumer-driven `refresh()` dispatches subsequent sweeps to the
 //! blocking pool, at most once per configured interval (60s by default).
 //!
@@ -33,7 +33,8 @@
 //! groups with one acquisition window, stamped after successful publication;
 //! an empty or failed sweep leaves the previous window unchanged. This is
 //! principle 18's device-sweep shape. [`Slots`] owns membership and labels;
-//! the member bound limits snapshot traversal to the occupied prefix.
+//! the member bound limits snapshot traversal to slots below the highest
+//! occupied one, where vacant slots read as absent.
 //! Window publication does not make values, labels and membership atomic.
 //!
 //! Phase measurements and scale limits live in
