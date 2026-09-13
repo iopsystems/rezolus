@@ -171,12 +171,16 @@ pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
 
 /// The mounts in `table` that `keep` accepts and path lookup reaches.
 ///
-/// Resolution starts at the root mount, the one at `/` whose parent is not in
-/// the table. At each mount point along a path it enters the mount attached
-/// there and climbs any stack on that point, since a mount made over another
-/// takes it as parent. A mount is visible when resolving its own path ends on
-/// it. With no single root, or two mounts attached to one parent at one point,
-/// resolution stops, and nothing at or below the ambiguity is returned.
+/// Resolution starts at the one parent id the table references but does not
+/// list: the mount holding the process root, which `mountinfo` omits because
+/// it is not reachable from that root. On a host it is the parent of the `/`
+/// row; a chroot of a plain directory has no `/` row at all. A mount that is
+/// its own parent starts resolution the same way. At each mount point along a
+/// path, resolution enters the mount attached there and climbs any stack on
+/// that point, since a mount made over another takes it as parent. A mount is
+/// visible when resolving its own path ends on it. With no single start, or two
+/// mounts attached to one parent at one point, resolution stops, and nothing at
+/// or below the ambiguity is returned.
 fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<MountEntry> {
     let ids: HashSet<u64> = table.iter().map(|m| m.id).collect();
     // Must index every mount, whatever `keep` accepts: an excluded type can
@@ -188,24 +192,33 @@ fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<Moun
             .or_default()
             .push(m.id);
     }
-    let roots: Vec<u64> = table
+    let starts: Vec<u64> = table
         .iter()
-        .filter(|m| m.mount_point == "/" && (m.parent == m.id || !ids.contains(&m.parent)))
-        .map(|m| m.id)
+        .filter_map(|m| {
+            if m.parent == m.id {
+                Some(m.id)
+            } else if !ids.contains(&m.parent) {
+                Some(m.parent)
+            } else {
+                None
+            }
+        })
+        .collect::<HashSet<u64>>()
+        .into_iter()
         .collect();
-    let &[root] = roots.as_slice() else {
+    let &[start] = starts.as_slice() else {
         return Vec::new();
     };
     table
         .iter()
-        .filter(|m| keep(m) && resolve(&m.mount_point, root, &attached) == Some(m.id))
+        .filter(|m| keep(m) && resolve(&m.mount_point, start, &attached) == Some(m.id))
         .cloned()
         .collect()
 }
 
 /// The mount a lookup of `path` ends on, or `None` past an ambiguous step.
-fn resolve(path: &str, root: u64, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<u64> {
-    let mut current = climb(root, "/", attached)?;
+fn resolve(path: &str, start: u64, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<u64> {
+    let mut current = climb(start, "/", attached)?;
     let points = path
         .match_indices('/')
         .skip(1)
@@ -404,12 +417,30 @@ mod tests {
         );
     }
 
-    /// With no root mount at `/` to resolve from, nothing is sampled.
+    /// A chroot of a plain directory omits the containing mount and every `/`
+    /// row; the mounts below still resolve from that omitted parent.
     #[test]
-    fn a_table_without_a_root_mount_samples_nothing() {
+    fn a_chroot_table_without_a_root_row_still_samples_local_mounts() {
+        let text = "\
+40 22 8:1 / /data rw - ext4 /dev/sda1 rw
+41 22 0:3 / /proc rw - proc proc rw";
+        assert_eq!(points(text), vec!["/data"]);
+    }
+
+    #[test]
+    fn a_chroot_table_still_excludes_a_covered_mount() {
         let text = "\
 40 22 8:1 / /data rw - ext4 /dev/sda1 rw
 41 40 0:40 / /data rw - nfs4 nas:/export rw";
+        assert!(points(text).is_empty());
+    }
+
+    /// Two parents referenced but not listed leave the process root unknown.
+    #[test]
+    fn two_omitted_parents_sample_nothing() {
+        let text = "\
+40 22 8:1 / /data rw - ext4 /dev/sda1 rw
+50 23 8:2 / /srv rw - ext4 /dev/sdb1 rw";
         assert!(points(text).is_empty());
     }
 

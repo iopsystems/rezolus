@@ -52,9 +52,11 @@ ext4 mount at `/data` through with an NFS share stacked on it, and
 `statvfs("/data")` resolves to the share — no race needed, and a dead server
 would have hung the inline startup sweep. `mountinfo` keeps both entries, so
 the fix is structural: each mount's id and parent id are kept, and only mounts
-that path lookup reaches are sampled (`mounts::visible_mounts`). Resolution
-starts at the root mount and, at each mount point along a path, enters the
-mount attached there and climbs any stack on it, as the kernel does. A first
+that path lookup reaches are sampled (`mounts::visible`). Resolution starts at
+the one parent id the table references but does not list — the mount holding
+the process root, so a chroot table with no `/` row still resolves (round 5) —
+and, at each mount point along a path, enters the mount attached there and
+climbs any stack on it, as the kernel does. A first
 version instead dropped a local mount when any mount at or above its path was
 outside its own parent chain; round 3 showed that a *hidden* mount then
 suppressed the visible one at the same path — an old `/data/sub` under a
@@ -163,12 +165,12 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 19 on the parser and classifier (fixture lines for nfs, cifs,
-fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and eight
-visibility cases: a share stacked on a local mount, one mounted on a directory
-above it, a local mount stacked on top, `/data` against `/database`, a covered
-bind alias, a hidden tree under a replacement tree, a table with no root mount,
-and an ambiguous attachment), 12 on slot assignment and relabeling, `statvfs`,
+Tests: 21 on the parser and classifier (fixture lines for nfs, cifs,
+fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and ten visibility
+cases: a share stacked on a local mount, one mounted on a directory above it, a
+local mount stacked on top, `/data` against `/database`, a covered bind alias, a
+hidden tree under a replacement tree, a chroot table with no `/` row, a covered
+mount in a chroot table, two omitted parents, and an ambiguous attachment), 12 on slot assignment and relabeling, `statvfs`,
 its mount-id refusal and a regular-file read, vacate/label and the end-to-end
 sweep against a readable local mount, 3 on the dashboard section.
 
