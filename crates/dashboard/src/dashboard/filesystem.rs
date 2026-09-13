@@ -1,4 +1,4 @@
-//! Group filesystem gauges by mount for the viewer's per-mount series.
+//! One line per filesystem, named by its `mount` label.
 
 use crate::MetricsSource;
 use crate::plot::*;
@@ -70,6 +70,22 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         view.group(inodes);
     }
 
+    if has_metric(data, "filesystem_readonly") {
+        let mut state = Group::new("State", "state");
+
+        let readonly = state.subgroup("Read-only");
+        readonly.describe(
+            "1 while a filesystem is read-only: mounted that way, or flipped by an error such as \
+             ext4 errors=remount-ro. A full filesystem stays writable; its writes fail instead.",
+        );
+        readonly.plot_promql(
+            PlotOpts::gauge("Read-only", "readonly", Unit::Count),
+            by_mount("filesystem_readonly"),
+        );
+
+        view.group(state);
+    }
+
     view
 }
 
@@ -109,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn one_line_per_mount_through_sum_by_mount() {
+    fn one_line_per_filesystem_through_sum_by_mount() {
         let view = generate(
             &store_with(&["filesystem_total", "filesystem_available"]),
             vec![],
@@ -138,6 +154,18 @@ mod tests {
         assert!(json(&with).contains(
             "sum by (mount) (filesystem_inodes_free) / sum by (mount) (filesystem_inodes_total)"
         ));
+    }
+
+    #[test]
+    fn read_only_card_appears_only_when_the_recording_has_the_metric() {
+        let without = generate(&store_with(&["filesystem_total"]), vec![]);
+        assert!(!json(&without).contains("filesystem_readonly"));
+
+        let with = generate(
+            &store_with(&["filesystem_total", "filesystem_readonly"]),
+            vec![],
+        );
+        assert!(json(&with).contains("sum by (mount) (filesystem_readonly)"));
     }
 
     #[test]

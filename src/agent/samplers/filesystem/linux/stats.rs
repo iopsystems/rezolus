@@ -7,7 +7,7 @@ use linkme::distributed_slice;
 pub const MAX_MOUNTS: usize = 64;
 
 // Must remain in stats.rs so non-Linux builds register the group too.
-/// Shared window for discovery and the five gauge families; see linux/mod.rs.
+/// Shared window for discovery and every gauge family; see linux/mod.rs.
 pub static FILESYSTEM_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     // Must match metric attribution on non-Linux as well as Linux.
     crate::agent::samplers::bpf_sampler_name("filesystem"),
@@ -51,3 +51,10 @@ pub static FILESYSTEM_INODES_TOTAL: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_INODES_FREE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
+
+#[metric(
+    name = "filesystem_readonly",
+    description = "1 when a locally mounted filesystem is read-only, 0 when it is writable. Reports the superblock's flag, set by a read-only mount or by an error such as ext4 errors=remount-ro. A read-only bind of a writable filesystem reads 0, and a full filesystem stays writable.",
+    metadata = { acq_group = "filesystem_sweep" }
+)]
+pub static FILESYSTEM_READONLY: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);

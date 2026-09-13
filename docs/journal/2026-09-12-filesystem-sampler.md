@@ -2,8 +2,8 @@
 
 - **Opened:** 2026-09-12
 - **Status:** **SHIPPED, measured.** A `filesystem` sampler reports total, free
-  and available bytes and total and free inodes per locally mounted
-  filesystem (iopsystems/rezolus#1202). Measured sweep cost and the scope
+  and available bytes, total and free inodes, and read-only state per locally
+  mounted filesystem (iopsystems/rezolus#1202). Measured sweep cost and the scope
   decision that made the cost bounded are in *Results* and *Decisions*.
 - **Driver:** #133 asked for free-space metrics in 2023 and was closed in 2024
   as health telemetry other agents cover, "willing to revisit if there's
@@ -91,12 +91,25 @@ that `timing.rs` documented as single-init when this sampler was written; it
 now requires only a single writer. A membership change is an honest schema
 change (a mount appeared or went away), so the V3 schema-hash churn it causes
 is the truth, not noise. The store is not atomic with a snapshot: the builder
-reads the bound separately for each of the five gauge families, so a sweep
+reads the bound separately for each gauge family, so a sweep
 landing mid-snapshot can give them different bounds. Flagged in the PR for the
 maintainer's ruling.
 
+**Read-only state is a gauge, read from the superblock.** Round 5 asked for more
+filesystem context. A full disk does not make a filesystem read-only — its
+writes fail with `ENOSPC` — but an error can: ext4 `errors=remount-ro` and a
+btrfs transaction abort set the superblock's read-only flag while the mount's
+own flag stays `rw`. Each series is one superblock, since the deduplication key
+`major:minor` is the superblock's device number, so the superblock flag is the
+fact that describes a series; a per-mount flag describes only the path that won
+deduplication. The flag comes from mountinfo's super options rather than
+`statvfs`'s `f_flag`, whose `ST_RDONLY` also reflects the mount flag. It is a
+0/1 gauge rather than an `ro`/`rw` label because a label change on a retained
+slot is what #1205 misattributes inside a `.rez` segment. Source, root and the
+option strings are not recorded in this PR.
+
 **Dashboard.** A Filesystem section with `sum by (mount)` over each gauge, so
-the viewer's multi-series chart names one line per mount and mounts that
+the viewer's multi-series chart draws one line per filesystem and filesystems that
 appear or disappear show up on the next render — the same shape as the
 cgroups section's `sum by (name)`. Inode cards render only when the
 recording carries inode metrics; a recording without the sampler renders an
@@ -165,14 +178,14 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 21 on the parser and classifier (fixture lines for nfs, cifs,
+Tests: 22 on the parser and classifier (the superblock read-only flag, fixture lines for nfs, cifs,
 fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and ten visibility
 cases: a share stacked on a local mount, one mounted on a directory above it, a
 local mount stacked on top, `/data` against `/database`, a covered bind alias, a
 hidden tree under a replacement tree, a chroot table with no `/` row, a covered
 mount in a chroot table, two omitted parents, and an ambiguous attachment), 12 on slot assignment and relabeling, `statvfs`,
 its mount-id refusal and a regular-file read, vacate/label and the end-to-end
-sweep against a readable local mount, 3 on the dashboard section.
+sweep against a readable local mount, 4 on the dashboard section.
 
 ## Deferred / reopen
 

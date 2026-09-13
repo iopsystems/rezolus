@@ -232,8 +232,9 @@ Metrics related to filesystem occupancy.
 
 ### filesystem
 
-Reports total, free and available bytes and total and free inodes for every
-**locally mounted** filesystem, from one `statvfs` per mount.
+Reports total, free and available bytes, total and free inodes, and read-only
+state for every **locally mounted** filesystem: one series per filesystem
+(superblock), read with one `statvfs` each.
 
 The mount table (`/proc/self/mountinfo`) is re-read on every sweep, so a
 filesystem mounted after the agent started is picked up, and one that is
@@ -260,10 +261,16 @@ in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
 local filesystems): a 330–570 µs sweep once per interval, most of it the
 kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 
-`filesystem_available` is the number `df` reports as available and the one a
-one to alert on; `filesystem_free` also counts the blocks reserved
-for the superuser. Inode exhaustion is the other way a disk fills, and comes
-from the same call.
+`filesystem_available` is the number `df` reports as available and the one to
+alert on; `filesystem_free` also counts the blocks reserved for the superuser.
+Inode exhaustion is the other way a disk fills, and comes from the same call.
+
+`filesystem_readonly` is 1 while the filesystem itself is read-only, from its
+superblock flag: a read-only mount sets it, and so does an error such as ext4
+`errors=remount-ro`. Filling up does not set it — writes to a full filesystem
+fail with `ENOSPC` while it stays writable — and a read-only bind of a writable
+filesystem reads 0, because the filesystem is still writable through its other
+mounts.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -272,6 +279,7 @@ from the same call.
 | `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
 | `filesystem_inodes_total` | Inodes the filesystem reports it can hold; 0 on btrfs and vfat | `mount`, `fstype`, `device` |
 | `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
+| `filesystem_readonly` | 1 when the filesystem is read-only, from its superblock flag | `mount`, `fstype`, `device` |
 
 ## GPU
 

@@ -1,5 +1,6 @@
-//! Occupancy of local filesystems, sampled from `/proc/self/mountinfo` and
-//! `fstatvfs`: total, free and available bytes, plus total and free inodes.
+//! Occupancy and read-only state of local filesystems, one series per
+//! superblock, sampled from `/proc/self/mountinfo` and `fstatvfs`: total, free
+//! and available bytes, total and free inodes, and the superblock read-only flag.
 //!
 //! ```text
 //! mountinfo -> resolve visible mounts / classify -> assign slots
@@ -29,8 +30,8 @@
 //! inline; consumer-driven `refresh()` dispatches subsequent sweeps to the
 //! blocking pool, at most once per configured interval (60s by default).
 //!
-//! Sweeps never overlap. Each sweep brackets discovery and all five gauge
-//! groups with one acquisition window, stamped after successful publication;
+//! Sweeps never overlap. Each sweep brackets discovery and every gauge group
+//! with one acquisition window, stamped after successful publication;
 //! an empty or failed sweep leaves the previous window unchanged. This is
 //! principle 18's device-sweep shape. [`Slots`] owns membership and labels;
 //! the member bound limits snapshot traversal to slots below the highest
@@ -71,6 +72,7 @@ static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_AVAILABLE,
     &FILESYSTEM_INODES_TOTAL,
     &FILESYSTEM_INODES_FREE,
+    &FILESYSTEM_READONLY,
 ];
 
 fn init(config: Arc<Config>) -> SamplerResult {
@@ -348,6 +350,9 @@ fn sweep(state: &mut SweepState) -> usize {
                 let _ = FILESYSTEM_AVAILABLE.set(slot, gauge(usage.available_bytes));
                 let _ = FILESYSTEM_INODES_TOTAL.set(slot, gauge(usage.total_inodes));
                 let _ = FILESYSTEM_INODES_FREE.set(slot, gauge(usage.free_inodes));
+                // From the superblock options, not statvfs `f_flag`: its
+                // ST_RDONLY is also set by this path's own mount flag.
+                let _ = FILESYSTEM_READONLY.set(slot, i64::from(mount.readonly));
                 published += 1;
             }
             Err(e) => {
@@ -479,6 +484,7 @@ mod tests {
             fstype: "xfs".to_string(),
             source: "/dev/sdz1".to_string(),
             device: "8:401".to_string(),
+            readonly: false,
         };
         label(slot, &mount);
         for group in GROUPS {
@@ -524,6 +530,9 @@ mod tests {
         assert!(total > 0 && free <= total && available <= free);
         assert!(FILESYSTEM_INODES_TOTAL.value(slot).is_some());
         assert!(FILESYSTEM_INODES_FREE.value(slot).is_some());
+        assert!(FILESYSTEM_READONLY
+            .value(slot)
+            .is_some_and(|v| v == 0 || v == 1));
         let labels = FILESYSTEM_TOTAL.load_metadata(slot).expect("labels set");
         assert_eq!(
             labels.get("mount").map(String::as_str),
@@ -617,6 +626,7 @@ mod tests {
             fstype: "ext4".to_string(),
             source: "/dev/sda1".to_string(),
             device: "8:1".to_string(),
+            readonly: false,
         }
     }
 

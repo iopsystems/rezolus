@@ -20,6 +20,9 @@ pub struct MountEntry {
     pub source: String,
     /// major:minor device id used to deduplicate bind aliases.
     pub device: String,
+    /// The superblock's read-only flag, from the super options. Per-mount
+    /// options describe one path into the filesystem, not the filesystem.
+    pub readonly: bool,
 }
 
 /// Network or clustered filesystems whose statvfs can wait on remote state.
@@ -101,7 +104,7 @@ pub fn parse_mountinfo(text: &str) -> Vec<MountEntry> {
 fn parse_line(line: &str) -> Option<MountEntry> {
     let fields: Vec<&str> = line.split(' ').collect();
     let sep = fields.iter().position(|f| *f == "-")?;
-    if sep < 6 || fields.len() < sep + 3 {
+    if sep < 6 || fields.len() < sep + 4 {
         return None;
     }
     Some(MountEntry {
@@ -111,6 +114,7 @@ fn parse_line(line: &str) -> Option<MountEntry> {
         mount_point: unescape(fields[4]),
         fstype: fields[sep + 1].to_string(),
         source: unescape(fields[sep + 2]),
+        readonly: fields[sep + 3].split(',').next() == Some("ro"),
     })
 }
 
@@ -262,6 +266,18 @@ mod tests {
         assert_eq!(m.fstype, "ext4");
         assert_eq!(m.source, "/dev/nvme0n1p2");
         assert_eq!(m.device, "259:2");
+        assert!(!m.readonly);
+    }
+
+    /// An error flips the superblock read-only while the mount stays `rw`; a
+    /// read-only bind is the reverse, and its filesystem stays writable.
+    #[test]
+    fn read_only_comes_from_the_superblock_not_the_mount() {
+        let text = "\
+40 22 8:1 / /errored rw,relatime - ext4 /dev/sda1 ro,errors=remount-ro
+41 22 8:2 / /view ro,relatime - ext4 /dev/sdb1 rw";
+        let flags: Vec<bool> = parse_mountinfo(text).iter().map(|m| m.readonly).collect();
+        assert_eq!(flags, vec![true, false]);
     }
 
     #[test]
@@ -294,6 +310,7 @@ mod tests {
             fstype: fstype.to_string(),
             source: source.to_string(),
             device: "0:1".to_string(),
+            readonly: false,
         }
     }
 
