@@ -709,6 +709,14 @@ change. Each item is a yes/no question, or "justify in a comment."
   collected by default and never plotted. Label-keyed metrics (per device,
   mount, interface) chart through `sum by (<label>)`, so the viewer draws
   one line per entity with no per-entity configuration.
+- **Series context.** What does one series represent, and does the slot or
+  deduplication key match it? A filesystem is one superblock, not one mount
+  path; a mismatch double-counts or merges. Do the labels carry what an
+  operator needs to interpret a value away from the host — its source and the
+  configuration that changes its behavior — and does the change say what it
+  leaves out? State that can change during a series' life (read-only, link
+  state, throttling, mode) is a gauge, not a label: a label change on a
+  retained slot is misattributed within a `.rez` segment (#1205).
 - **Userspace cost.** Will the new userspace refresh path be O(active
   keys), bounded constant, or O(N) in some workload-driven metric? Prefer
   the first two. (Principle 13.)
