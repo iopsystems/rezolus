@@ -2,7 +2,7 @@
 //! `fstatvfs`: total, free and available bytes, plus total and free inodes.
 //!
 //! ```text
-//! mountinfo -> classify / filter covered mounts -> assign slots
+//! mountinfo -> resolve visible mounts / classify -> assign slots
 //!           -> open / verify mount id / fstatvfs -> gauges -> window
 //! ```
 //!
@@ -101,18 +101,20 @@ pub struct Usage {
     pub free_inodes: u64,
 }
 
-/// Read a directory mount selected by [`mounts::local_mounts`].
+/// Read a mount selected by [`mounts::local_mounts`], directory or file.
 ///
-/// Callers must classify and filter covered mounts before this path lookup.
+/// Callers must resolve visibility and classify before this path lookup.
 /// Rejects a mount-id mismatch when `STATX_MNT_ID` is available; kernels
 /// before 5.8 lack that check. Lookup itself has no deadline.
 pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     let c_path = CString::new(path)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in path"))?;
     let raw = unsafe {
+        // Must not require a directory: container file bind mounts such as
+        // /etc/hosts are local mounts.
         libc::open(
             c_path.as_ptr(),
-            libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
     };
     if raw < 0 {
@@ -446,13 +448,14 @@ mod tests {
         assert_eq!(slots.slot_of("c"), None);
     }
 
-    // Requires a root filesystem accepted by the local-mount classifier.
+    // The visible root of any type: overlay, tmpfs and network roots are
+    // excluded from sampling but still resolve.
     fn root_mount() -> MountEntry {
         let table = std::fs::read_to_string(MOUNTINFO).unwrap();
-        local_mounts(&table)
+        mounts::visible_mounts(&table)
             .into_iter()
             .find(|m| m.mount_point == "/")
-            .expect("/ is a local mount")
+            .expect("the root mount resolves")
     }
 
     #[test]
@@ -493,20 +496,26 @@ mod tests {
         }
     }
 
-    /// Requires a local root mount; verifies its gauges, labels and acquisition window.
+    /// Verifies gauges, labels and the acquisition window for a readable local
+    /// mount; returns early on hosts with none, such as an overlay-root container.
     #[test]
-    fn a_sweep_publishes_the_root_filesystem_and_stamps_the_group() {
+    fn a_sweep_publishes_a_local_filesystem_and_stamps_the_group() {
+        let table = std::fs::read_to_string(MOUNTINFO).unwrap();
+        let Some(mount) = local_mounts(&table)
+            .into_iter()
+            .find(|m| read_usage(&m.mount_point, m.id).is_ok())
+        else {
+            eprintln!("skipped: no readable local filesystem on this host");
+            return;
+        };
+
         let mut state = SweepState::new();
         let published = sweep(&mut state);
         assert!(published >= 1, "no local filesystem published");
         let slots = &state.slots;
-
-        let table = std::fs::read_to_string(MOUNTINFO).unwrap();
-        let root = local_mounts(&table)
-            .into_iter()
-            .find(|m| m.mount_point == "/")
-            .expect("/ is a local mount");
-        let slot = slots.slot_of(&root.device).expect("/ holds a slot");
+        let slot = slots
+            .slot_of(&mount.device)
+            .expect("the mount holds a slot");
         assert!(slot < slots.bound());
 
         let total = FILESYSTEM_TOTAL.value(slot).expect("total set");
@@ -516,7 +525,10 @@ mod tests {
         assert!(FILESYSTEM_INODES_TOTAL.value(slot).is_some());
         assert!(FILESYSTEM_INODES_FREE.value(slot).is_some());
         let labels = FILESYSTEM_TOTAL.load_metadata(slot).expect("labels set");
-        assert_eq!(labels.get("mount").map(String::as_str), Some("/"));
+        assert_eq!(
+            labels.get("mount").map(String::as_str),
+            Some(mount.mount_point.as_str())
+        );
 
         let w = FILESYSTEM_SWEEP_ACQ
             .window()
@@ -568,7 +580,27 @@ mod tests {
         assert!(read_usage("/definitely/not/a/mount/point", 0).is_err());
     }
 
-    /// Requires STATX_MNT_ID support (Linux 5.8+) and a local root mount.
+    /// Container file bind mounts such as `/etc/hosts` are files, so a read
+    /// must not require a directory.
+    #[test]
+    fn a_regular_file_reads_through_its_mount() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let file = dir.join(format!("rezolus-filesystem-test-{}", std::process::id()));
+        std::fs::write(&file, b"x").unwrap();
+        let path = file.to_str().unwrap().to_string();
+
+        let table = std::fs::read_to_string(MOUNTINFO).unwrap();
+        let holder = mounts::visible_mounts(&table)
+            .into_iter()
+            .filter(|m| m.mount_point == "/" || path.starts_with(&format!("{}/", m.mount_point)))
+            .max_by_key(|m| m.mount_point.len())
+            .expect("a visible mount holds the temp dir");
+        let result = read_usage(&path, holder.id);
+        let _ = std::fs::remove_file(&file);
+        result.expect("a regular file resolves to its mount");
+    }
+
+    /// Requires STATX_MNT_ID support (Linux 5.8+).
     #[test]
     fn a_path_resolving_to_a_different_mount_is_refused() {
         let root = root_mount();

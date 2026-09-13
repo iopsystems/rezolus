@@ -630,6 +630,10 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
   stacked over a local path between the table read and the `open` can still
   park the sweep thread on the lookup. Reopen if a sweep is ever observed
   parked in `open`.
+- **Label changes inside a `.rez` segment** — Open, #1205. A relabeled or reused
+  slot keeps writing into the column created with its first labels, because the
+  group table builder keys columns by descriptor name alone. Shared with
+  `cpu_usage`'s per-PID task slots; the fix belongs in `crates/rez`.
 
 ## Agent — NVIDIA GPU sampler
 

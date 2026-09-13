@@ -5,7 +5,7 @@
 //! an excluded mount can cover a local one. Device deduplication runs after
 //! filtering, so a covered alias does not displace an uncovered one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountEntry {
@@ -144,29 +144,17 @@ fn octal(digits: &[u8]) -> Option<u8> {
     u8::try_from(v).ok()
 }
 
-/// One entry per device, choosing its shortest path after the cover filter;
+/// One entry per device, choosing its shortest path among visible mounts;
 /// sorted by mount point for deterministic initial slot assignment.
 pub fn local_mounts(text: &str) -> Vec<MountEntry> {
-    let table = parse_mountinfo(text);
-    let parent_of: HashMap<u64, u64> = table.iter().map(|m| (m.id, m.parent)).collect();
-    // Must retain excluded mount types here: they can cover a local mount.
-    let mut at_path: HashMap<&str, Vec<u64>> = HashMap::new();
-    for m in &table {
-        at_path
-            .entry(m.mount_point.as_str())
-            .or_default()
-            .push(m.id);
-    }
-
     let mut by_device: HashMap<String, MountEntry> = HashMap::new();
-    for entry in table
-        .iter()
-        .filter(|m| m.is_local() && !covered(m, &parent_of, &at_path))
-    {
+    // Classify before resolving: a container host carries thousands of overlay
+    // mounts, and only local candidates need a path walk.
+    for entry in visible(&parse_mountinfo(text), MountEntry::is_local) {
         match by_device.get(&entry.device) {
             Some(kept) if kept.mount_point.len() <= entry.mount_point.len() => {}
             _ => {
-                by_device.insert(entry.device.clone(), entry.clone());
+                by_device.insert(entry.device.clone(), entry);
             }
         }
     }
@@ -175,35 +163,73 @@ pub fn local_mounts(text: &str) -> Vec<MountEntry> {
     mounts
 }
 
-/// Conservatively rejects non-ancestor mounts at or above the candidate path.
-/// A missing parent shortens the ancestry chain; competing mounts' own
-/// visibility is not resolved, so hidden competitors can also exclude a mount.
-fn covered(
-    mount: &MountEntry,
-    parent_of: &HashMap<u64, u64>,
-    at_path: &HashMap<&str, Vec<u64>>,
-) -> bool {
-    let mut beneath = Vec::new();
-    let mut id = mount.parent;
-    for _ in 0..=parent_of.len() {
-        if id == mount.id || beneath.contains(&id) {
-            break;
-        }
-        beneath.push(id);
-        match parent_of.get(&id) {
-            Some(&parent) => id = parent,
-            None => break,
+/// Mounts that path lookup reaches, of every filesystem type.
+#[cfg(test)]
+pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
+    visible(&parse_mountinfo(text), |_| true)
+}
+
+/// The mounts in `table` that `keep` accepts and path lookup reaches.
+///
+/// Resolution starts at the root mount, the one at `/` whose parent is not in
+/// the table. At each mount point along a path it enters the mount attached
+/// there and climbs any stack on that point, since a mount made over another
+/// takes it as parent. A mount is visible when resolving its own path ends on
+/// it. With no single root, or two mounts attached to one parent at one point,
+/// resolution stops, and nothing at or below the ambiguity is returned.
+fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<MountEntry> {
+    let ids: HashSet<u64> = table.iter().map(|m| m.id).collect();
+    // Must index every mount, whatever `keep` accepts: an excluded type can
+    // cover a local mount.
+    let mut attached: HashMap<(u64, &str), Vec<u64>> = HashMap::new();
+    for m in table.iter().filter(|m| m.parent != m.id) {
+        attached
+            .entry((m.parent, m.mount_point.as_str()))
+            .or_default()
+            .push(m.id);
+    }
+    let roots: Vec<u64> = table
+        .iter()
+        .filter(|m| m.mount_point == "/" && (m.parent == m.id || !ids.contains(&m.parent)))
+        .map(|m| m.id)
+        .collect();
+    let &[root] = roots.as_slice() else {
+        return Vec::new();
+    };
+    table
+        .iter()
+        .filter(|m| keep(m) && resolve(&m.mount_point, root, &attached) == Some(m.id))
+        .cloned()
+        .collect()
+}
+
+/// The mount a lookup of `path` ends on, or `None` past an ambiguous step.
+fn resolve(path: &str, root: u64, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<u64> {
+    let mut current = climb(root, "/", attached)?;
+    let points = path
+        .match_indices('/')
+        .skip(1)
+        .map(|(i, _)| &path[..i])
+        .chain(std::iter::once(path))
+        .filter(|point| *point != "/");
+    for point in points {
+        current = climb(current, point, attached)?;
+    }
+    Some(current)
+}
+
+/// The top of the stack of mounts attached to `base` at `point`.
+fn climb(base: u64, point: &str, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<u64> {
+    let mut top = base;
+    // Bounded by the table size, so a cyclic stack cannot loop.
+    for _ in 0..=attached.len() {
+        match attached.get(&(top, point)).map(Vec::as_slice) {
+            None => return Some(top),
+            Some(&[next]) => top = next,
+            Some(_) => return None,
         }
     }
-
-    let path = mount.mount_point.as_str();
-    let at_or_above = std::iter::once("/")
-        .chain(path.match_indices('/').skip(1).map(|(i, _)| &path[..i]))
-        .chain(std::iter::once(path));
-    at_or_above
-        .filter_map(|p| at_path.get(p))
-        .flatten()
-        .any(|&other| other != mount.id && !beneath.contains(&other))
+    None
 }
 
 #[cfg(test)]
@@ -345,13 +371,58 @@ mod tests {
             .collect()
     }
 
-    /// A missing ancestor must not prevent a stacked share from counting as cover.
     #[test]
     fn a_local_mount_with_a_network_mount_stacked_on_it_is_not_sampled() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 8:1 / /data rw - ext4 /dev/sda1 rw
+41 40 0:40 / /data rw - nfs4 nas:/export rw";
+        assert_eq!(points(text), vec!["/"]);
+    }
+
+    /// An old `/data` tree covered by a replacement tree: the hidden old
+    /// `/data/sub` must not suppress the visible new one at the same path.
+    #[test]
+    fn a_hidden_mount_does_not_hide_the_visible_mount_at_its_path() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/root rw
+40 22 8:1 / /data rw - ext4 /dev/old rw
+41 40 8:2 / /data/sub rw - ext4 /dev/oldchild rw
+42 40 8:3 / /data rw - ext4 /dev/new rw
+43 42 8:4 / /data/sub rw - ext4 /dev/newchild rw";
+        let found: Vec<(u64, String)> = local_mounts(text)
+            .into_iter()
+            .map(|m| (m.id, m.mount_point))
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (22, "/".to_string()),
+                (42, "/data".to_string()),
+                (43, "/data/sub".to_string())
+            ]
+        );
+    }
+
+    /// With no root mount at `/` to resolve from, nothing is sampled.
+    #[test]
+    fn a_table_without_a_root_mount_samples_nothing() {
         let text = "\
 40 22 8:1 / /data rw - ext4 /dev/sda1 rw
 41 40 0:40 / /data rw - nfs4 nas:/export rw";
         assert!(points(text).is_empty());
+    }
+
+    /// Two mounts attached to one parent at one point leave the top unknown.
+    #[test]
+    fn an_ambiguous_attachment_samples_nothing_at_or_below_it() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 8:1 / /data rw - ext4 /dev/sda1 rw
+41 22 8:2 / /data rw - ext4 /dev/sdb1 rw
+42 41 8:3 / /data/sub rw - ext4 /dev/sdc1 rw
+50 22 8:5 / /srv rw - ext4 /dev/sde1 rw";
+        assert_eq!(points(text), vec!["/", "/srv"]);
     }
 
     #[test]

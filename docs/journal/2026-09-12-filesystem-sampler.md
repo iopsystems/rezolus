@@ -51,12 +51,18 @@ round 1 of the branch's local review thread): classifying by type alone let an
 ext4 mount at `/data` through with an NFS share stacked on it, and
 `statvfs("/data")` resolves to the share — no race needed, and a dead server
 would have hung the inline startup sweep. `mountinfo` keeps both entries, so
-the fix is structural: each mount's id and parent id are kept, and a local
-mount is dropped when any mount at its path or at a directory above it is not
-in its own parent chain (`mounts::covered`), since a mount's parent is the
-mount holding its mount point. The read then goes through an `O_PATH`
-descriptor whose `statx` mount id must equal the table's, so numbers from a
-mount that replaced the sampled one are never published. It matches on mount
+the fix is structural: each mount's id and parent id are kept, and only mounts
+that path lookup reaches are sampled (`mounts::visible_mounts`). Resolution
+starts at the root mount and, at each mount point along a path, enters the
+mount attached there and climbs any stack on it, as the kernel does. A first
+version instead dropped a local mount when any mount at or above its path was
+outside its own parent chain; round 3 showed that a *hidden* mount then
+suppressed the visible one at the same path — an old `/data/sub` under a
+replaced `/data` tree — which resolving from the root fixes. The read then goes
+through an `O_PATH` descriptor, deliberately without `O_DIRECTORY` because
+container file bind mounts such as `/etc/hosts` are local mounts too, and its
+`statx` mount id must equal the table's, so numbers from a mount that replaced
+the sampled one are never published. It matches on mount
 id rather than `st_dev` because btrfs reports `st_dev` per subvolume. The check
 follows the path lookup instead of preventing it; that residual is in
 *Deferred*.
@@ -115,6 +121,10 @@ After the cover fix (see *Decisions*), the same test in a release build: read
 `open` + `statx` + `fstatvfs` reads — about 2 µs a mount. There is no release
 run of the pre-fix code to subtract, so this records the fixed cost rather
 than a delta; every phase is within the cold sweep range in the table below.
+After round 3 replaced the cover check with resolution from the root mount,
+restricted to local candidates, the same release test read 72 µs, parsed 74 µs
+and made the three reads in 7 µs. The unchanged read phase moved 10 µs between
+the two runs, so the 9 µs parse difference is within run-to-run noise.
 
 One thing tried and measured as no gain: pre-sizing and reusing the read
 buffer. A fresh `String` makes `read_to_string` probe a zero-size procfs
@@ -153,13 +163,14 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 16 on the parser and classifier (fixture lines for nfs, cifs,
-fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and five cover
-cases: a share stacked on a local mount, one mounted on a directory above it,
-a local mount stacked on top, `/data` against `/database`, and a covered bind
-alias), 11 on slot assignment and relabeling, `statvfs` and its mount-id
-refusal, vacate/label and the end-to-end sweep against the real mount table,
-3 on the dashboard section.
+Tests: 19 on the parser and classifier (fixture lines for nfs, cifs,
+fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and eight
+visibility cases: a share stacked on a local mount, one mounted on a directory
+above it, a local mount stacked on top, `/data` against `/database`, a covered
+bind alias, a hidden tree under a replacement tree, a table with no root mount,
+and an ambiguous attachment), 12 on slot assignment and relabeling, `statvfs`,
+its mount-id refusal and a regular-file read, vacate/label and the end-to-end
+sweep against a readable local mount, 3 on the dashboard section.
 
 ## Deferred / reopen
 
@@ -179,3 +190,8 @@ refusal, vacate/label and the end-to-end sweep against the real mount table,
   still park the sweep thread on the lookup, and later sweeps skip while it
   stays parked. No unprivileged interface reaches a mount by id without a
   path. Reopen if a sweep is ever observed parked in `open`.
+- **Label changes inside a `.rez` segment** — Open, #1205. A relabeled or reused
+  slot keeps writing into the column created with its first labels, because the
+  group table builder keys columns by descriptor name alone. `cpu_usage`'s
+  per-PID task slots share the exposure, so the fix belongs in `crates/rez`
+  rather than in this sampler.
