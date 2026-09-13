@@ -12,14 +12,17 @@
 //! [`mounts::local_mounts`] selects `/dev`-backed filesystems and ZFS,
 //! excluding known network types, FUSE, autofs and pseudo-filesystems. It also
 //! skips a local filesystem whose path passes through one of those blocking
-//! types, since looking the path up walks that mount.
+//! types, since looking the path up walks that mount, and fails closed on a
+//! path that starts in a mount the table omits: a chroot's root, whose type is
+//! unknown. Candidates skipped for such a reason, or for an ambiguous table, are
+//! logged as warnings when the reasons change.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
 //! Mount-id validation detects replacement after discovery when the kernel
 //! supplies `STATX_MNT_ID`, but cannot prevent a lookup from blocking if a
 //! network mount is stacked over the path between discovery and `open`.
-//! Such a lookup blocks startup during the initial sweep, or leaves later
-//! sweeps skipped while the blocking task remains in flight.
+//! Such a lookup leaves later sweeps skipped while it stays blocked; a sweep
+//! still running after three intervals is logged as a warning.
 //!
 //! Network support is deferred in `docs/backlog.md`; any opt-in must bound
 //! both blocking workers and per-mount wait time.
@@ -28,9 +31,14 @@
 //!
 //! Superblock counters have no BPF or perf hook, so the sweep reads procfs
 //! and `fstatvfs`: a principle 15 exception (`docs/principles.md`).
-//! Rescanning the table each sweep discovers mounts added after startup. The initial sweep runs
-//! inline; consumer-driven `refresh()` dispatches subsequent sweeps to the
-//! blocking pool, at most once per configured interval (60s by default).
+//! Rescanning the table each sweep discovers mounts added after startup.
+//! Consumer-driven `refresh()` dispatches every sweep, the first included, to
+//! the blocking pool, at most once per configured interval (60s by default);
+//! until the first lands the group is bounded to zero members.
+//!
+//! Each series is labeled `mount`, `fstype`, `devnum` (`major:minor`) and, for a
+//! block-backed filesystem, `block_device`: the kernel's name for the partition
+//! or mapped device, from `/sys/dev/block`, which is not the drive's name.
 //!
 //! Sweeps never overlap. Each sweep brackets discovery and every gauge group
 //! with one acquisition window, stamped after successful publication;
@@ -52,6 +60,11 @@ const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 const MOUNTINFO: &str = "/proc/self/mountinfo";
 
+const SYS_DEV_BLOCK: &str = "/sys/dev/block";
+
+/// A sweep still running after this many intervals is reported as stuck.
+const STUCK_INTERVALS: u32 = 3;
+
 use crate::agent::*;
 use metriken::GaugeGroup;
 
@@ -59,6 +72,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -66,7 +80,7 @@ use std::time::{Duration, Instant};
 mod mounts;
 mod stats;
 
-use mounts::{local_mounts, MountEntry};
+use mounts::MountEntry;
 use stats::*;
 
 // Every published gauge family must participate in slot clearing and relabeling.
@@ -251,40 +265,67 @@ impl Slots {
 struct SweepState {
     slots: Slots,
     table: String,
+    /// Resolution problems last logged, so a steady condition logs once.
+    reported: Reported,
+    /// Filesystems over the cap at the last sweep, so its warning fires on change.
+    dropped: usize,
 }
+
+/// How many mounts could hold the process root when not one, and the skipped
+/// candidates.
+type Reported = (Option<usize>, Vec<mounts::Skipped>);
 
 impl SweepState {
     fn new() -> Self {
         Self {
             slots: Slots::new(MAX_MOUNTS),
             table: String::with_capacity(16 * 1024),
+            reported: (None, Vec::new()),
+            dropped: 0,
         }
     }
 }
 
 struct Filesystem {
     interval: Duration,
+    /// When the running or last sweep was dispatched.
     last_read: Mutex<Option<Instant>>,
     reading: Arc<AtomicBool>,
+    stuck_warned: AtomicBool,
     state: Arc<Mutex<SweepState>>,
 }
 
 impl Filesystem {
     fn new(interval: Duration) -> Self {
-        let state = Arc::new(Mutex::new(SweepState::new()));
-
-        // Initialize membership and readings before the first snapshot walk.
-        let published = sweep(&mut state.lock().unwrap());
-        debug!(
-            "{NAME}: {published} local filesystem(s) at startup; sweeping every {:?}",
-            interval
-        );
+        // No member until the first sweep lands. Every sweep runs on the
+        // blocking pool, so a lookup cannot hang startup.
+        FILESYSTEM_SWEEP_ACQ.set_member_bound(0);
+        debug!("{NAME}: sweeping every {interval:?}");
 
         Self {
             interval,
-            last_read: Mutex::new(Some(Instant::now())),
+            last_read: Mutex::new(None),
             reading: Arc::new(AtomicBool::new(false)),
-            state,
+            stuck_warned: AtomicBool::new(false),
+            state: Arc::new(Mutex::new(SweepState::new())),
+        }
+    }
+
+    /// Warn once per stuck sweep: one still running after `STUCK_INTERVALS`
+    /// intervals is most likely parked in a path lookup, and the gauges hold
+    /// their last values until it returns.
+    fn warn_if_stuck(&self) {
+        let Some(dispatched) = *self.last_read.lock().unwrap() else {
+            return;
+        };
+        let running = dispatched.elapsed();
+        if running > self.interval * STUCK_INTERVALS
+            && !self.stuck_warned.swap(true, Ordering::AcqRel)
+        {
+            warn!(
+                "{NAME}: a sweep has been running for {running:?}, over {STUCK_INTERVALS} \
+                 intervals; filesystem gauges hold their last values until it returns"
+            );
         }
     }
 }
@@ -297,11 +338,59 @@ fn vacate(slot: usize) {
     }
 }
 
-fn label(slot: usize, mount: &MountEntry) {
+fn label(slot: usize, mount: &MountEntry, block_device: Option<&str>) {
     for group in GROUPS {
         group.insert_metadata(slot, "mount".to_string(), mount.mount_point.clone());
         group.insert_metadata(slot, "fstype".to_string(), mount.fstype.clone());
-        group.insert_metadata(slot, "device".to_string(), mount.device.clone());
+        group.insert_metadata(slot, "devnum".to_string(), mount.device.clone());
+        if let Some(name) = block_device {
+            group.insert_metadata(slot, "block_device".to_string(), name.to_string());
+        }
+    }
+}
+
+/// The kernel's name for block device `devnum` (`nvme0n1p5`, `dm-0`), from its
+/// `/sys/dev/block` link. `None` for a filesystem with no block device, such as
+/// a ZFS dataset or btrfs, whose `major:minor` is anonymous.
+fn block_device_name(sys_dev_block: &Path, devnum: &str) -> Option<String> {
+    let target = std::fs::read_link(sys_dev_block.join(devnum)).ok()?;
+    target.file_name()?.to_str().map(str::to_string)
+}
+
+/// Label `slot` for `mount` when its identity changed. A new identity starts
+/// with no reading, so a failed read cannot leave the previous identity's
+/// values under the new labels.
+fn apply_identity(slots: &mut Slots, slot: usize, mount: &MountEntry) {
+    if slots.relabel(slot, mount) {
+        vacate(slot);
+        let name = block_device_name(Path::new(SYS_DEV_BLOCK), &mount.device);
+        label(slot, mount, name.as_deref());
+    }
+}
+
+/// Store `now` in `last`, reporting whether it differed.
+fn changed<T: PartialEq>(last: &mut T, now: T) -> bool {
+    if *last == now {
+        return false;
+    }
+    *last = now;
+    true
+}
+
+/// Log why local filesystem candidates are not sampled. Called when the reasons
+/// change, so a steady condition logs once.
+fn report_selection((starts, skipped): &Reported) {
+    if let Some(starts) = starts {
+        warn!(
+            "{NAME}: the mount table names {starts} mounts that could hold the process root, \
+             not one; no filesystem is sampled"
+        );
+    }
+    for skip in skipped {
+        warn!("{NAME}: not sampling {skip}");
+    }
+    if starts.is_none() && skipped.is_empty() {
+        info!("{NAME}: every local filesystem candidate resolves again");
     }
 }
 
@@ -330,7 +419,12 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     let started = Instant::now();
     let guard = FILESYSTEM_SWEEP_ACQ.acquire();
 
-    let SweepState { slots, table } = state;
+    let SweepState {
+        slots,
+        table,
+        reported,
+        dropped,
+    } = state;
     table.clear();
     if let Err(e) = std::fs::File::open(path).and_then(|mut f| f.read_to_string(table)) {
         warn!("{NAME}: could not read {path}: {e}");
@@ -342,8 +436,15 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     }
     let read_done = Instant::now();
 
-    let mounts = local_mounts(table);
+    let selection = mounts::select_local(table);
     let parse_done = Instant::now();
+    if changed(
+        reported,
+        (selection.unresolvable_starts, selection.skipped.clone()),
+    ) {
+        report_selection(reported);
+    }
+    let mounts = selection.mounts;
     let devices: Vec<String> = mounts.iter().map(|m| m.device.clone()).collect();
     let assignment = slots.assign(&devices);
 
@@ -351,11 +452,15 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     for slot in &assignment.freed {
         vacate(*slot);
     }
-    if assignment.dropped > 0 {
-        warn!(
-            "{NAME}: {} local filesystem(s) beyond the {MAX_MOUNTS}-mount cap are not sampled",
-            assignment.dropped
-        );
+    if changed(dropped, assignment.dropped) {
+        if *dropped > 0 {
+            warn!(
+                "{NAME}: {} local filesystem(s) beyond the {MAX_MOUNTS}-mount cap are not sampled",
+                dropped
+            );
+        } else {
+            info!("{NAME}: every local filesystem fits within the {MAX_MOUNTS}-mount cap again");
+        }
     }
 
     let mut reads = Vec::with_capacity(mounts.len());
@@ -363,9 +468,7 @@ fn sweep_table(state: &mut SweepState, path: &str) -> usize {
         let Some(slot) = slots.slot_of(&mount.device) else {
             continue;
         };
-        if slots.relabel(slot, mount) {
-            label(slot, mount);
-        }
+        apply_identity(slots, slot, mount);
         let read = read_usage(&mount.mount_point, mount.id);
         if let Err(e) = &read {
             debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
@@ -437,12 +540,16 @@ impl Drop for InFlight {
 }
 
 /// Lock the sweep state, starting it afresh if a panicking sweep poisoned it: a
-/// slot map abandoned mid-update cannot be trusted, and a fresh one relabels
-/// every slot it places.
+/// slot map abandoned mid-update cannot be trusted.
 fn lock_state(state: &Mutex<SweepState>) -> std::sync::MutexGuard<'_, SweepState> {
     state.lock().unwrap_or_else(|poisoned| {
         warn!("{NAME}: a previous sweep panicked; restarting slot assignment");
         state.clear_poison();
+        // The abandoned map may not know which slots hold readings, so clear
+        // every one before a fresh map reuses them.
+        for slot in 0..MAX_MOUNTS {
+            vacate(slot);
+        }
         let mut guard = poisoned.into_inner();
         *guard = SweepState::new();
         guard
@@ -456,6 +563,12 @@ impl Sampler for Filesystem {
     }
 
     async fn refresh(&self) {
+        // Checked before the throttle: a held latch must not advance `last_read`,
+        // which times how long the running sweep has been going.
+        if self.reading.load(Ordering::Acquire) {
+            self.warn_if_stuck();
+            return;
+        }
         {
             let mut last = self.last_read.lock().unwrap();
             match *last {
@@ -467,6 +580,7 @@ impl Sampler for Filesystem {
         if self.reading.swap(true, Ordering::AcqRel) {
             return;
         }
+        self.stuck_warned.store(false, Ordering::Release);
 
         // Only the blocking task may stamp the group; refresh must not stamp it.
         let state = self.state.clone();
@@ -482,6 +596,7 @@ impl Sampler for Filesystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mounts::local_mounts;
 
     #[test]
     fn slots_are_stable_for_a_mount_that_stays_and_reused_for_one_that_goes() {
@@ -539,6 +654,7 @@ mod tests {
 
     #[test]
     fn a_vacated_slot_reads_as_absent_with_no_labels() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
         // Avoids real-sweep slots only on hosts with fewer than MAX_MOUNTS filesystems.
         let slot = MAX_MOUNTS - 1;
         let mount = MountEntry {
@@ -550,13 +666,18 @@ mod tests {
             device: "8:401".to_string(),
             readonly: false,
         };
-        label(slot, &mount);
+        label(slot, &mount, Some("sdz1"));
         for group in GROUPS {
             assert!(group.set(slot, 7));
             let m = group.load_metadata(slot).expect("labels set");
             assert_eq!(m.get("mount").map(String::as_str), Some("/scratch"));
             assert_eq!(m.get("fstype").map(String::as_str), Some("xfs"));
-            assert_eq!(m.get("device").map(String::as_str), Some("8:401"));
+            assert_eq!(m.get("devnum").map(String::as_str), Some("8:401"));
+            assert_eq!(m.get("block_device").map(String::as_str), Some("sdz1"));
+            assert!(
+                !m.contains_key("device"),
+                "no label claims a drivehealth join"
+            );
         }
 
         vacate(slot);
@@ -605,6 +726,14 @@ mod tests {
         assert_eq!(
             labels.get("mount").map(String::as_str),
             Some(mount.mount_point.as_str())
+        );
+        assert_eq!(
+            labels.get("devnum").map(String::as_str),
+            Some(mount.device.as_str())
+        );
+        assert!(
+            !labels.contains_key("device"),
+            "no label claims a drivehealth join"
         );
 
         let w = FILESYSTEM_SWEEP_ACQ
@@ -699,6 +828,9 @@ mod tests {
 
     #[test]
     fn a_poisoned_sweep_state_is_restarted_rather_than_left_locked() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let stale = MAX_MOUNTS - 5;
+        let _ = FILESYSTEM_TOTAL.set(stale, 777);
         let state = Arc::new(Mutex::new(SweepState::new()));
         state.lock().unwrap().slots.assign(&["8:1".to_string()]);
         let poisoner = state.clone();
@@ -713,6 +845,11 @@ mod tests {
         assert_eq!(guard.slots.bound(), 0, "the abandoned slot map is replaced");
         drop(guard);
         assert!(!state.is_poisoned());
+        assert_eq!(
+            FILESYSTEM_TOTAL.value(stale),
+            None,
+            "a restart clears readings the fresh map cannot account for"
+        );
     }
 
     #[test]
@@ -721,7 +858,8 @@ mod tests {
         assert_eq!(inode_gauge(1000, 250), 250);
     }
 
-    /// Serializes tests that store the process-wide acquisition group's bound.
+    /// Serializes tests that write the process-wide gauge groups or acquisition
+    /// group.
     static SWEEP_GLOBALS: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -743,6 +881,7 @@ mod tests {
 
     #[test]
     fn a_sweep_with_no_successful_read_keeps_the_previous_values() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
         // The top slots, clear of real sweeps on hosts with few filesystems.
         let (kept, unset) = (MAX_MOUNTS - 2, MAX_MOUNTS - 3);
         let usage = Usage {
@@ -773,6 +912,77 @@ mod tests {
             FILESYSTEM_TOTAL.value(unset),
             None,
             "something succeeded: the failed slot is unset"
+        );
+    }
+
+    /// A slot whose identity changes must not show the previous reading under
+    /// the new labels, even if every read in the sweep then fails.
+    #[test]
+    fn a_new_identity_on_a_retained_slot_starts_without_the_old_reading() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let slot = MAX_MOUNTS - 4;
+        let mut slots = Slots::new(MAX_MOUNTS);
+        apply_identity(&mut slots, slot, &ext4_at("/old"));
+        let _ = FILESYSTEM_TOTAL.set(slot, 777);
+
+        apply_identity(&mut slots, slot, &ext4_at("/old"));
+        assert_eq!(
+            FILESYSTEM_TOTAL.value(slot),
+            Some(777),
+            "an unchanged identity keeps its reading"
+        );
+
+        apply_identity(&mut slots, slot, &ext4_at("/new"));
+        assert_eq!(
+            FILESYSTEM_TOTAL.value(slot),
+            None,
+            "a new identity starts absent"
+        );
+        let labels = FILESYSTEM_TOTAL.load_metadata(slot).expect("labels set");
+        assert_eq!(labels.get("mount").map(String::as_str), Some("/new"));
+    }
+
+    #[test]
+    fn a_block_device_is_named_by_its_sysfs_link_and_an_anonymous_one_is_not() {
+        let sys = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(
+            "../../devices/pci0000:00/0000:00:01.0/nvme/nvme0/nvme0n1/nvme0n1p5",
+            sys.path().join("259:3"),
+        )
+        .unwrap();
+        assert_eq!(
+            block_device_name(sys.path(), "259:3").as_deref(),
+            Some("nvme0n1p5")
+        );
+        assert_eq!(block_device_name(sys.path(), "0:42"), None);
+    }
+
+    #[test]
+    fn a_warning_fires_when_its_condition_changes_not_every_sweep() {
+        let mut last = 0;
+        assert!(!changed(&mut last, 0));
+        assert!(changed(&mut last, 3));
+        assert!(!changed(&mut last, 3));
+        assert!(changed(&mut last, 0));
+    }
+
+    #[tokio::test]
+    async fn a_held_latch_neither_dispatches_nor_advances_the_throttle() {
+        let fs = {
+            let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+            Filesystem::new(Duration::from_millis(10))
+        };
+        let dispatched = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("the host has been up for a second");
+        *fs.last_read.lock().unwrap() = Some(dispatched);
+        fs.reading.store(true, Ordering::Release);
+
+        fs.refresh().await;
+        assert_eq!(*fs.last_read.lock().unwrap(), Some(dispatched));
+        assert!(
+            fs.stuck_warned.load(Ordering::Acquire),
+            "a sweep 100 intervals old is reported as stuck"
         );
     }
 

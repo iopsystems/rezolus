@@ -3,8 +3,10 @@ use metriken::*;
 use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
-/// Hard series cap; excess local filesystems are skipped with a warning.
-pub const MAX_MOUNTS: usize = 64;
+/// Hard series cap; excess local filesystems are skipped, with a warning when
+/// their count changes. Costs memory only: the member bound limits each snapshot
+/// to occupied slots.
+pub const MAX_MOUNTS: usize = 256;
 
 // Must remain in stats.rs so non-Linux builds register the group too.
 /// Shared window for discovery and every gauge family; see linux/mod.rs.
@@ -19,7 +21,7 @@ static FILESYSTEM_SWEEP_ACQ_REG: &'static AcquisitionGroup = &FILESYSTEM_SWEEP_A
 
 #[metric(
     name = "filesystem_total",
-    description = "The size of a locally mounted filesystem in bytes (f_blocks * f_frsize). Labeled with the `mount` point, the `fstype`, and the `device` (major:minor).",
+    description = "The size of a locally mounted filesystem in bytes (f_blocks * f_frsize). Labeled with the `mount` point, the `fstype`, the `devnum` (major:minor) and, for a block-backed filesystem, the kernel `block_device` name of its partition or mapped device.",
     metadata = { unit = "bytes", acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_TOTAL: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);

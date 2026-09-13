@@ -248,11 +248,15 @@ pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
 are never touched. Neither is a local filesystem that another mount covers — an
 NFS share mounted over `/data`, or over a directory above it — since its path
 now leads to the mount on top — nor one whose path passes through a network,
-FUSE or autofs mount, since looking the path up walks that mount. A `statvfs` on a `hard` network mount blocks until the
-server answers, with no timeout the agent can set, and one on an autofs trigger
-starts a mount attempt; local filesystems answer from in-memory superblock
-counters and issue no I/O, which is what bounds the sweep. Network mounts stay
-out of scope until there is demand for them (#1202).
+FUSE or autofs mount, since looking the path up walks that mount. An agent in a
+chroot whose mount table omits the mount holding its root samples nothing, since
+that mount's type is unknown. Each skipped filesystem is logged as a warning,
+with the reason, when the reasons change. A `statvfs` on a `hard` network mount
+blocks until the server answers, with no timeout the agent can set, and one on
+an autofs trigger starts a mount attempt; local filesystems answer from kernel
+state without a network round trip (ext4 and XFS from superblock counters,
+btrfs after its own space accounting), which is what bounds the sweep. Network
+mounts stay out of scope until there is demand for them (#1202).
 
 Occupancy moves slowly, so sweeps are throttled and run off the scrape/TTL
 sample cycle: at most once per `interval` the sampler dispatches the sweep to a
@@ -279,12 +283,19 @@ signal, so 0 does not prove the filesystem is writable.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `device` (major:minor) |
-| `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `device` |
-| `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
-| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; absent on btrfs and vfat, which report no inode limit | `mount`, `fstype`, `device` |
-| `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
-| `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `device` |
+`block_device` is the kernel's name for the filesystem's partition or mapped
+device, such as `nvme0n1p5` or `dm-0`, not the drive. It does not match
+`drivehealth`'s `device` label for the same disk. ZFS datasets and btrfs have no
+block device and carry no `block_device`; `devnum` is always present.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `devnum` (major:minor), `block_device` (when block-backed) |
+| `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; absent on btrfs and vfat, which report no inode limit | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `devnum`, `block_device` |
 
 ## GPU
 

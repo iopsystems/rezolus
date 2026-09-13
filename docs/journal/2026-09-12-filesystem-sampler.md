@@ -39,8 +39,9 @@ The reason is the failure mode. `statvfs` on a network mount is an RPC; on a
 `timeo`/`retrans`/`soft` knobs are mount options owned by whoever mounted the
 share, not by the process making the call. On a `soft` mount the worst case is
 still `timeo × (retrans + 1)`, minutes. A `statvfs` on an autofs trigger
-starts a mount attempt. Local filesystems answer from in-memory superblock
-counters and issue no I/O. So classification is the only thing that bounds
+starts a mount attempt. Local filesystems answer from kernel state without a
+network round trip (ext4 and XFS from superblock counters, btrfs after its own
+space accounting). So classification is the only thing that bounds
 the sweep, and it is done from a local kernel read that blocks on nothing.
 `df -l` draws the same line. Network mounts stay out of scope until someone
 asks; the reopen condition lives in `docs/backlog.md`, pointed at from the
@@ -86,7 +87,7 @@ has its values unset (`i64::MIN`, which the snapshot walk reads as absent) and
 its labels cleared, and the slot is reused. The group's member bound is set
 by the sweep task — the group's single writer — to one past the highest
 occupied slot before the window is stamped, so a three-mount host is walked
-as three members, not `MAX_MOUNTS` (64). This is a per-sweep write to a bound
+as three members, not `MAX_MOUNTS` (now 256). This is a per-sweep write to a bound
 that `timing.rs` documented as single-init when this sampler was written; every
 other sampler sets its bound only during init. A membership change is an honest
 schema change (a mount appeared or went away), so the V3 schema-hash churn it
@@ -141,6 +142,43 @@ not, all fixed:
 - A sweep with no successful read unset every slot's values while keeping the
   previous window, pairing it with values it did not describe. Failed slots now
   keep their values unless another read in the same sweep succeeded.
+
+**Round 11 and the first maintainer review.** Codex found that the new
+failure-path fixes could publish old measurements under a changed identity, and
+brayniac reviewed the draft on GitHub. Decisions and fixes:
+
+- **Identity before values.** A slot's labels were applied before its read, and
+  a sweep with no successful read keeps previous values, so a slot whose path or
+  type changed kept its old reading under the new labels. A new identity now
+  vacates the slot before labeling. A panic-restarted slot map likewise clears
+  every slot, since it cannot tell which ones hold readings.
+- **Unknown chroot root: fail closed.** A chroot of a plain directory omits the
+  mount holding the process root, and that mount can be NFS. The resolver had
+  treated it as safe to traverse. Nothing below it is sampled now.
+- **Resolution failures say why.** The resolver returns the skipped candidates
+  and a reason for each (ambiguous attachment, unknown root, blocking mount on
+  the path), or the number of possible roots when there is not one. The sweep
+  warns when the reasons change. A runtime degraded status in `rezolus status`
+  needs a status API the agent does not have (#1208).
+- **Stuck sweeps are visible, and cannot hang startup.** A held in-flight latch
+  now returns before `last_read` advances, so `last_read` times the running
+  sweep, and a sweep running past three intervals warns once. The first sweep
+  runs on the blocking pool like the rest, with the group bounded to zero
+  members until it lands.
+- **Labels: `devnum` and `block_device`, no `device`.** `device` was
+  `major:minor` here and the drive name in `drivehealth`, so a join on it
+  silently returned nothing. Publishing the kernel name as `device` would still
+  not join: a filesystem sits on a partition (`nvme0n1p5`) and `drivehealth`
+  names the drive (`nvme0`). The series now carry `devnum` and, when
+  `/sys/dev/block` has a link, `block_device`, so no label promises a join that
+  does not hold. A partition-to-drive link belongs with #1206.
+- **Cap.** `MAX_MOUNTS` rose from 64 to 256, which costs memory only because the
+  member bound limits each snapshot to occupied slots; a ZFS host with many
+  datasets hit 64. The over-cap warning fires when the count changes rather
+  than every sweep.
+- **Follow-ups filed:** reading the member bound once per snapshot (#1207), a
+  runtime degraded sampler status (#1208), and ownership of the docs site's
+  version label (#1209).
 
 **Dashboard.** A Filesystem section with `sum by (mount)` over each gauge, so
 the viewer's multi-series chart draws one line per filesystem and filesystems that
@@ -212,17 +250,20 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 23 on the parser and classifier (the superblock read-only flag, fixture
+Tests: 24 on the parser and classifier (the superblock read-only flag, fixture
 lines for nfs, cifs, fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair,
 and eleven visibility cases: a share stacked on a local mount, one mounted on a
 directory above it, a local mount stacked on top, `/data` against `/database`, a
 covered bind alias, a hidden tree under a replacement tree, a chroot table with
 no `/` row, a covered mount in a chroot table, two omitted parents, an ambiguous
-attachment, and local mounts below NFS, FUSE and autofs mounts), 17 on slot
+attachment, local mounts below NFS, FUSE and autofs mounts, the skip reasons for
+each, and an alias not reported when another alias is sampled), 21 on slot
 assignment and relabeling, `statvfs`, its mount-id refusal and a regular-file
 read, vacate/label, the absent inode gauges, the panic latch and poisoned-state
-restart, the failed-read bound, publication when no read succeeds, and the
-end-to-end sweep against a readable local mount, 4 on the dashboard section.
+restart, the failed-read bound, publication when no read succeeds, a new
+identity starting without the old reading, `block_device` naming, warn-on-change,
+the held-latch refresh, and the end-to-end sweep against a readable local mount,
+4 on the dashboard section.
 
 ## Deferred / reopen
 
@@ -234,8 +275,9 @@ end-to-end sweep against a readable local mount, 4 on the dashboard section.
   descriptor to rescan only on mount-table change. Reopen if a
   many-thousand-mount host shows the parse cost mattering at the chosen
   interval.
-- **`MAX_MOUNTS` = 64** — By design. Mounts beyond the cap are dropped and
-  counted in a warning per sweep. Reopen if a real host exceeds it.
+- **`MAX_MOUNTS` = 256** — By design, raised from 64. Mounts beyond the cap are
+  dropped, with a warning when their count changes. Reopen if a real host
+  exceeds it.
 - **A network mount stacked mid-sweep** — Accepted. Covered mounts are dropped
   from the table and a changed mount id refuses publication, but a network
   mount stacked over a local path between the table read and the `open` can

@@ -623,8 +623,11 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
 - **Event-driven mount-table rescan** — Idea. `poll()` on the mountinfo
   descriptor reports `POLLPRI` on change; a sweep could rescan only then.
   Reopen if a many-thousand-mount host shows the per-sweep parse mattering.
-- **`MAX_MOUNTS` = 64** — By design. Mounts past the cap are dropped and
-  counted in a warning. Reopen if a real host exceeds it.
+- **`MAX_MOUNTS` = 256** — By design, raised from 64. Mounts past the cap are
+  dropped, with a warning when their count changes. Reopen if a real host
+  exceeds it.
+- **Runtime degraded status** — Open, #1208. Resolution failures and stuck
+  sweeps are logged as warnings; `rezolus status` cannot show them.
 - **A network mount stacked mid-sweep** — Accepted. Covered local mounts are
   dropped and a changed mount id refuses publication, but a network mount
   stacked over a local path between the table read and the `open` can still

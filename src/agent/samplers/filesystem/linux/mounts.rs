@@ -163,15 +163,82 @@ fn octal(digits: &[u8]) -> Option<u8> {
     u8::try_from(v).ok()
 }
 
+/// Why a local filesystem candidate is not sampled, when the reason is not
+/// that another mount covers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Two mounts are attached to one parent at one point on its path.
+    Ambiguous,
+    /// Its path starts in the mount holding the process root, which the table
+    /// omits (a chroot of a plain directory). That mount's type is unknown and
+    /// its lookup might block.
+    UnknownRoot,
+    /// Its path passes through a mount whose lookup can block.
+    Blocking { through: String, fstype: String },
+}
+
+/// A local filesystem candidate that resolution skipped, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    pub mount_point: String,
+    pub device: String,
+    pub reason: SkipReason,
+}
+
+impl Skipped {
+    fn new(mount: &MountEntry, reason: SkipReason) -> Self {
+        Self {
+            mount_point: mount.mount_point.clone(),
+            device: mount.device.clone(),
+            reason,
+        }
+    }
+}
+
+impl std::fmt::Display for Skipped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}): ", self.mount_point, self.device)?;
+        match &self.reason {
+            SkipReason::Ambiguous => {
+                write!(f, "two mounts are attached at one point on its path")
+            }
+            SkipReason::UnknownRoot => write!(
+                f,
+                "its path starts in the mount holding the process root, which the mount \
+                 table omits, so its lookup might block"
+            ),
+            SkipReason::Blocking { through, fstype } => write!(
+                f,
+                "its path passes through {fstype} at {through}, whose lookup can block"
+            ),
+        }
+    }
+}
+
+/// Local filesystems selected from a mount table, and the candidates skipped
+/// for a reason an operator needs to hear about.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// One entry per device, sorted by mount point.
+    pub mounts: Vec<MountEntry>,
+    /// Sorted by mount point. Covered candidates are not listed, nor aliases of
+    /// a device that another alias samples.
+    pub skipped: Vec<Skipped>,
+    /// How many mounts could hold the process root, when that is not exactly
+    /// one and there were local candidates, all of which are then skipped.
+    pub unresolvable_starts: Option<usize>,
+}
+
 /// One entry per device, choosing its shortest path among visible mounts;
 /// sorted by mount point for deterministic initial slot assignment.
-pub fn local_mounts(text: &str) -> Vec<MountEntry> {
-    let mut by_device: HashMap<String, MountEntry> = HashMap::new();
+pub fn select_local(text: &str) -> Selection {
     // Classify before resolving: a container host carries thousands of overlay
     // mounts, and only local candidates need a path walk.
-    for entry in visible(&parse_mountinfo(text), MountEntry::is_local, |m| {
+    let resolved = visible(&parse_mountinfo(text), MountEntry::is_local, |m| {
         !m.lookup_can_block()
-    }) {
+    });
+    let mut by_device: HashMap<String, MountEntry> = HashMap::new();
+    for entry in resolved.mounts {
         match by_device.get(&entry.device) {
             Some(kept) if kept.mount_point.len() <= entry.mount_point.len() => {}
             _ => {
@@ -181,16 +248,31 @@ pub fn local_mounts(text: &str) -> Vec<MountEntry> {
     }
     let mut mounts: Vec<MountEntry> = by_device.into_values().collect();
     mounts.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
-    mounts
+    let mut skipped = resolved.skipped;
+    // A filesystem sampled through another alias has lost nothing.
+    skipped.retain(|s| !mounts.iter().any(|m| m.device == s.device));
+    skipped.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
+    Selection {
+        mounts,
+        skipped,
+        unresolvable_starts: resolved.unresolvable_starts,
+    }
+}
+
+/// The selected mounts alone.
+#[cfg(test)]
+pub fn local_mounts(text: &str) -> Vec<MountEntry> {
+    select_local(text).mounts
 }
 
 /// Mounts that path lookup reaches, of every filesystem type.
 #[cfg(test)]
 pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
-    visible(&parse_mountinfo(text), |_| true, |_| true)
+    visible(&parse_mountinfo(text), |_| true, |_| true).mounts
 }
 
-/// The mounts in `table` that `keep` accepts and path lookup reaches.
+/// The mounts in `table` that `keep` accepts and path lookup reaches, and the
+/// accepted ones skipped for a reason other than being covered.
 ///
 /// Resolution starts at the one parent id the table references but does not
 /// list: the mount holding the process root, which `mountinfo` omits because
@@ -199,18 +281,18 @@ pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
 /// its own parent starts resolution the same way. At each mount point along a
 /// path, resolution enters the mount attached there and climbs any stack on
 /// that point, since a mount made over another takes it as parent. A mount is
-/// visible when resolving its own path ends on it. With no single start, or two
-/// mounts attached to one parent at one point, resolution stops, and nothing at
-/// or below the ambiguity is returned.
+/// visible when resolving its own path ends on it.
 ///
 /// Every mount the lookup passes through on the way must satisfy `traverse`: a
 /// local mount at `/home/scratch` under an NFS `/home` is reached by looking
-/// `scratch` up inside the share, which waits on its server.
+/// `scratch` up inside the share, which waits on its server. With no single
+/// start, two mounts attached to one parent at one point, or a path starting in
+/// the omitted root, the candidate is skipped and the reason recorded.
 fn visible(
     table: &[MountEntry],
     keep: impl Fn(&MountEntry) -> bool,
     traverse: impl Fn(&MountEntry) -> bool,
-) -> Vec<MountEntry> {
+) -> Selection {
     let by_id: HashMap<u64, &MountEntry> = table.iter().map(|m| (m.id, m)).collect();
     // Must index every mount, whatever `keep` accepts: an excluded type can
     // cover a local mount.
@@ -236,26 +318,42 @@ fn visible(
         .into_iter()
         .collect();
     let &[start] = starts.as_slice() else {
-        return Vec::new();
+        return Selection {
+            unresolvable_starts: table.iter().any(&keep).then_some(starts.len()),
+            ..Selection::default()
+        };
     };
-    table
-        .iter()
-        .filter(|m| {
-            keep(m)
-                && resolve(&m.mount_point, start, &attached).is_some_and(|walk| {
-                    let Some((last, through)) = walk.split_last() else {
-                        return false;
-                    };
-                    // The start can be absent from the table: it holds the
-                    // process root, and its type is unknown.
-                    *last == m.id
-                        && through
-                            .iter()
-                            .all(|id| by_id.get(id).is_none_or(|p| traverse(p)))
-                })
-        })
-        .cloned()
-        .collect()
+
+    let mut selection = Selection::default();
+    for m in table.iter().filter(|m| keep(m)) {
+        let Some(walk) = resolve(&m.mount_point, start, &attached) else {
+            selection
+                .skipped
+                .push(Skipped::new(m, SkipReason::Ambiguous));
+            continue;
+        };
+        let Some((last, through)) = walk.split_last() else {
+            continue;
+        };
+        if *last != m.id {
+            // Covered: the path reaches another mount, which is not a loss.
+            continue;
+        }
+        let blocked = through.iter().find_map(|id| match by_id.get(id) {
+            // Must fail closed: the omitted root of a chroot may be NFS.
+            None => Some(SkipReason::UnknownRoot),
+            Some(p) if !traverse(p) => Some(SkipReason::Blocking {
+                through: p.mount_point.clone(),
+                fstype: p.fstype.clone(),
+            }),
+            Some(_) => None,
+        });
+        match blocked {
+            Some(reason) => selection.skipped.push(Skipped::new(m, reason)),
+            None => selection.mounts.push(m.clone()),
+        }
+    }
+    selection
 }
 
 /// The mounts a lookup of `path` passes through, ending on the one it lands on,
@@ -480,14 +578,24 @@ mod tests {
         );
     }
 
-    /// A chroot of a plain directory omits the containing mount and every `/`
-    /// row; the mounts below still resolve from that omitted parent.
+    /// A chroot of a plain directory omits the mount holding the process root.
+    /// Its type is unknown and it may be NFS, so nothing below it is sampled,
+    /// and each candidate says why.
     #[test]
-    fn a_chroot_table_without_a_root_row_still_samples_local_mounts() {
+    fn a_chroot_table_without_a_root_row_samples_nothing_and_says_why() {
         let text = "\
 40 22 8:1 / /data rw - ext4 /dev/sda1 rw
 41 22 0:3 / /proc rw - proc proc rw";
-        assert_eq!(points(text), vec!["/data"]);
+        let selection = select_local(text);
+        assert!(selection.mounts.is_empty());
+        assert_eq!(
+            selection.skipped,
+            vec![Skipped {
+                mount_point: "/data".to_string(),
+                device: "8:1".to_string(),
+                reason: SkipReason::UnknownRoot,
+            }]
+        );
     }
 
     #[test]
@@ -505,6 +613,7 @@ mod tests {
 40 22 8:1 / /data rw - ext4 /dev/sda1 rw
 50 23 8:2 / /srv rw - ext4 /dev/sdb1 rw";
         assert!(points(text).is_empty());
+        assert_eq!(select_local(text).unresolvable_starts, Some(2));
     }
 
     /// Two mounts attached to one parent at one point leave the top unknown.
@@ -517,6 +626,9 @@ mod tests {
 42 41 8:3 / /data/sub rw - ext4 /dev/sdc1 rw
 50 22 8:5 / /srv rw - ext4 /dev/sde1 rw";
         assert_eq!(points(text), vec!["/", "/srv"]);
+        let skipped = select_local(text).skipped;
+        assert_eq!(skipped.len(), 3, "{skipped:?}");
+        assert!(skipped.iter().all(|s| s.reason == SkipReason::Ambiguous));
     }
 
     #[test]
@@ -554,6 +666,41 @@ mod tests {
 70 22 0:24 / /run rw - tmpfs tmpfs rw
 71 70 8:4 / /run/media rw - ext4 /dev/sdd1 rw";
         assert_eq!(points(text), vec!["/", "/run/media"]);
+        let through: Vec<(String, String)> = select_local(text)
+            .skipped
+            .into_iter()
+            .map(|s| match s.reason {
+                SkipReason::Blocking { through, fstype } => (through, fstype),
+                other => panic!("unexpected reason {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            through,
+            vec![
+                ("/auto".to_string(), "autofs".to_string()),
+                ("/home".to_string(), "nfs4".to_string()),
+                ("/mnt/fuse".to_string(), "fuse.sshfs".to_string()),
+            ]
+        );
+    }
+
+    /// A filesystem sampled through another alias has lost nothing, so its alias
+    /// below a blocking mount is not reported.
+    #[test]
+    fn an_alias_below_a_blocking_mount_is_not_reported_when_another_is_sampled() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 0:40 / /home rw - nfs4 nas:/home rw
+41 40 8:1 / /home/scratch rw - xfs /dev/sda1 rw
+42 22 8:1 / /scratch rw - xfs /dev/sda1 rw";
+        let selection = select_local(text);
+        let points: Vec<&str> = selection
+            .mounts
+            .iter()
+            .map(|m| m.mount_point.as_str())
+            .collect();
+        assert_eq!(points, vec!["/", "/scratch"]);
+        assert!(selection.skipped.is_empty(), "{:?}", selection.skipped);
     }
 
     /// `/data` is a string prefix of `/database`, not a directory above it.

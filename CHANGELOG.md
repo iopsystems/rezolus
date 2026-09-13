@@ -4,8 +4,8 @@
 
 - Agent: a `filesystem` sampler reports total, free and available bytes and
   total and free inodes, plus whether it is read-only, for every locally mounted
-  filesystem: one series per filesystem, labeled by `mount`, `fstype` and
-  `device`. The mount table is re-read on each sweep, so
+  filesystem: one series per filesystem, labeled by `mount`, `fstype`, `devnum`
+  and, for block-backed filesystems, `block_device`. The mount table is re-read on each sweep, so
   a filesystem mounted after startup appears on its own. Local filesystems
   only: network filesystems, FUSE and autofs are never sampled, and neither is a
   local filesystem another mount covers or that sits below a network, FUSE or
