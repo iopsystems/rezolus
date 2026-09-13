@@ -216,32 +216,11 @@ impl AcquisitionGroup {
         }
     }
 
-    /// Set the group's member-population bound: the real number of
-    /// populated members (e.g. `possible_cpus()` for a per-CPU group), as
-    /// opposed to the backing array's `entries()` capacity — a fixed
-    /// implementation ceiling (`MAX_CPUS`), not a population count (see
-    /// `docs/principles.md` principle 6: "over-allocates on small
-    /// machines"). The V3 snapshot builder walks only `0..bound` for a
-    /// group that has one set, instead of the full `entries()`, so an
-    /// ~18-CPU host does not emit 1024 mostly-empty slots per tick.
+    /// Limits the V3 member walk to `0..n`; zero declares an empty population.
     ///
-    /// Callers must store the bound before the window is stamped, so a
-    /// snapshot never walks a bound its values do not match. One writer per
-    /// group: a concurrent second call silently overwrites the first
-    /// (last-write-wins), which is safe for a group's own sampler revising
-    /// its population and is not a runtime toggle.
-    ///
-    /// Most callers set it once at init from a boot-fixed population
-    /// (`possible_cpus()`, drive discovery at startup). Some revise it as
-    /// the population changes — the GPU samplers on device discovery, the
-    /// `filesystem` sweep on each rescan — and the V3 schema hash then
-    /// changes with membership, which is the honest report of a device or
-    /// mount appearing.
-    // `bound_groups_without_a_live_sampler` calls this on every platform, so
-    // the `allow(dead_code)` below is now vestigial; see the note on
-    // `GroupWindowSlot::store` for why it was added. `member_bound()` itself
-    // (the read side) is NOT guarded the same way — the V3 snapshot builder
-    // reads it unconditionally, whether or not anything ever set it.
+    /// The group's single writer must store the bound before stamping its window.
+    /// This atomic store does not synchronize a snapshot's value or metadata reads;
+    /// stamp-last ordering alone does not make a changing population coherent.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);
@@ -299,8 +278,7 @@ impl AcquisitionGroup {
     /// concurrently with itself.
     ///
     /// Expected to be called exactly once per group, at sampler init
-    /// (`PackedCounters::new`) — the same single-init contract as
-    /// `set_member_bound`. Calling it more than once (e.g. two
+    /// (`PackedCounters::new`). Calling it more than once (e.g. two
     /// `.packed_counters()` calls sharing one like-entities group, or a
     /// group already declared with [`new_reader_stamped`](Self::new_reader_stamped))
     /// is idempotent and harmless. Prefer declaring the group with

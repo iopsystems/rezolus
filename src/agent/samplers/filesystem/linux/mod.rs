@@ -1,81 +1,47 @@
-//! Occupancy of locally mounted filesystems: total, free and available
-//! bytes, and total and free inodes, one `statvfs` per mount.
+//! Occupancy of local filesystems, sampled from `/proc/self/mountinfo` and
+//! `fstatvfs`: total, free and available bytes, plus total and free inodes.
 //!
-//! # Local mounts only
+//! ```text
+//! mountinfo -> classify / filter covered mounts -> assign slots
+//!           -> open / verify mount id / fstatvfs -> gauges -> window
+//! ```
 //!
-//! The mount table is read from `/proc/self/mountinfo` on each sweep and
-//! every mount is classified **before** any `statvfs` is issued
-//! ([`mounts::MountEntry::is_local`]). Only local filesystems are sampled:
-//! block-backed types with a `/dev` source, plus `zfs`. Network filesystems
-//! (`nfs`, `cifs`, `ceph`, ...), every FUSE filesystem, autofs triggers and
-//! the kernel's pseudo-filesystems are never touched.
+//! # Scope and blocking
 //!
-//! Neither is a local mount that another mount covers — one stacked on the
-//! same path, or mounted on a directory above it — because a path resolves to
-//! the mount on top, and `statvfs` on the path of an ext4 mount with an NFS
-//! share stacked over it reaches the share ([`mounts::local_mounts`]). The
-//! call goes through a descriptor whose mount id must match the table's, so
-//! a mount that replaced the sampled one since the table was read is never
-//! published. That check follows the path lookup rather than preventing it: a
-//! network mount stacked over a local path between the table read and the
-//! open can still park the sweep thread, and every later sweep is skipped
-//! while it stays parked.
+//! [`mounts::local_mounts`] selects `/dev`-backed filesystems and ZFS,
+//! excluding known network types, FUSE, autofs and pseudo-filesystems.
+//! Network `statvfs` calls can block on an unavailable server; autofs path
+//! lookup can trigger a mount. Classification must precede path lookup.
+//! Mount-id validation detects replacement after discovery when the kernel
+//! supplies `STATX_MNT_ID`, but cannot prevent a lookup from blocking if a
+//! network mount is stacked over the path between discovery and `open`.
+//! Such a lookup blocks startup during the initial sweep, or leaves later
+//! sweeps skipped while the blocking task remains in flight.
 //!
-//! The reason is the failure mode, not the value. `statvfs` on a network
-//! mount is an RPC, and on a `hard` mount (the default) it blocks until the
-//! server answers, with no timeout the calling process can set — the
-//! `timeo`/`retrans`/`soft` knobs are mount options owned by whoever mounted
-//! the share. A `statvfs` on an autofs trigger starts a mount attempt. Local
-//! filesystems answer from in-memory superblock counters and issue no I/O, so
-//! the sweep is bounded by construction, which is what lets it run at all
-//! without a per-call deadline. `df -l` draws the same line.
+//! Network support is deferred in `docs/backlog.md`; any opt-in must bound
+//! both blocking workers and per-mount wait time.
 //!
-//! Network mounts stay out of scope until there is demand for them. An
-//! opt-in must bring its own blocking budget — a bounded thread and a
-//! deadline per mount — because the classification above is the only thing
-//! keeping this sweep off a dead NFS server. See `docs/backlog.md`.
+//! # Cadence and publication
 //!
-//! # Why procfs, and why its own cadence
+//! Filesystem capacity comes from filesystem statistics rather than a BPF
+//! event stream (principle 15 in `docs/principles.md`). Rescanning the table
+//! each sweep discovers mounts added after startup. The initial sweep runs
+//! inline; consumer-driven `refresh()` dispatches subsequent sweeps to the
+//! blocking pool, at most once per configured interval (60s by default).
 //!
-//! Filesystem occupancy has no BPF or perf hook; the superblock counters are
-//! reachable only through `statvfs` (or the `df` family that wraps it), and
-//! the set of mounts only through the mount table. This is the deliberate
-//! principle-15 exception (`docs/principles.md`), documented here so a later
-//! reviewer does not have to rediscover it.
+//! Sweeps never overlap. Each sweep brackets discovery and all five gauge
+//! groups with one acquisition window, stamped after successful publication;
+//! an empty or failed sweep leaves the previous window unchanged. This is
+//! principle 18's device-sweep shape. [`Slots`] owns membership and labels;
+//! the member bound limits snapshot traversal to the occupied prefix.
+//! Window publication does not make values, labels and membership atomic.
 //!
-//! The mount table is re-read on every sweep, not once at startup as
-//! `drivehealth` enumerates drives, because a filesystem mounted after the
-//! agent started and then filling up is exactly the case this metric exists
-//! for. A sweep costs a few hundred µs, most of it the kernel generating the
-//! mount table on each open; the cost grows with the size of that table, not
-//! with the number of `statvfs` calls, since the mounts a container host has
-//! thousands of are filtered out before any call. Measured by phase in
+//! Phase measurements and scale limits live in
 //! `docs/journal/2026-09-12-filesystem-sampler.md`.
-//!
-//! Even so the sweep does not run on the scrape/TTL sample cycle (principle
-//! 17): `refresh()` does a cheap time check and, at most once per `interval`
-//! (`[samplers.filesystem]`, default 60s), dispatches the sweep to Tokio's
-//! blocking pool and returns immediately. Occupancy moves slowly — even a
-//! writer at 1 GB/s consumes 60 GB per interval — and a `statvfs` is a
-//! syscall, which does not belong on the async worker however cheap it is.
-//!
-//! # Membership
-//!
-//! Each local filesystem, identified by its `major:minor` device id, holds a
-//! stable slot in the five gauge groups for as long as it stays mounted; its
-//! `mount`, `fstype` and `device` labels are set when the slot is assigned.
-//! When it is unmounted the slot's values are unset (`i64::MIN`, which the
-//! snapshot walk reads as absent) and its labels cleared, and the slot is
-//! reused by the next new mount. The acquisition group's member bound follows
-//! the highest occupied slot, updated by the sweep task — the group's single
-//! writer — before the window is stamped, so a snapshot never walks
-//! `MAX_MOUNTS` slots for a host with three mounts.
 
 const NAME: &str = "filesystem";
 
-/// Built-in read cadence when `[samplers.filesystem] interval` is unset.
-/// Matches `drivehealth`: occupancy is a slow-moving gauge, and 60s keeps the
-/// amortized cost of the sweep to about 10 µs per second of wall time.
+// 60s matches drivehealth; measured sweep cost is recorded in the journal.
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(60);
 
 const MOUNTINFO: &str = "/proc/self/mountinfo";
@@ -97,8 +63,7 @@ mod stats;
 use mounts::{local_mounts, MountEntry};
 use stats::*;
 
-/// The five gauge groups a sweep writes, in a fixed order, so labels and
-/// unsets are applied uniformly.
+// Every published gauge family must participate in slot clearing and relabeling.
 static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_TOTAL,
     &FILESYSTEM_FREE,
@@ -126,7 +91,6 @@ static SAMPLER_ENTRY: crate::agent::samplers::SamplerEntry = crate::agent::sampl
     init,
 };
 
-/// What one `statvfs` says about a filesystem, in the units the metrics use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Usage {
     pub total_bytes: u64,
@@ -136,15 +100,14 @@ pub struct Usage {
     pub free_inodes: u64,
 }
 
-/// `fstatvfs` on the filesystem mounted at `path`, refused unless `path`
-/// still resolves to mount `mount_id`. Callers must pass only a mount that
-/// [`mounts::local_mounts`] returned: for anything else the path lookup can
-/// block for as long as the mount's options allow, with no deadline
-/// available to the caller (see the module doc).
+/// Read a directory mount selected by [`mounts::local_mounts`].
+///
+/// Callers must classify and filter covered mounts before this path lookup.
+/// Rejects a mount-id mismatch when `STATX_MNT_ID` is available; kernels
+/// before 5.8 lack that check. Lookup itself has no deadline.
 pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     let c_path = CString::new(path)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "NUL in path"))?;
-    // SAFETY: `c_path` is a valid NUL-terminated string.
     let raw = unsafe {
         libc::open(
             c_path.as_ptr(),
@@ -154,12 +117,10 @@ pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     if raw < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // SAFETY: `open` just returned this descriptor, and nothing else owns it.
     let fd = unsafe { OwnedFd::from_raw_fd(raw) };
 
     let mut stx: libc::statx = unsafe { std::mem::zeroed() };
-    // SAFETY: `fd` is open, an empty path with `AT_EMPTY_PATH` names it, and
-    // `stx` is a properly sized, writable `statx`.
+    // AT_EMPTY_PATH applies statx to the open descriptor, not a second lookup.
     let rc = unsafe {
         libc::statx(
             fd.as_raw_fd(),
@@ -172,10 +133,7 @@ pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // Matched on mount id, not `st_dev`: btrfs reports `st_dev` per
-    // subvolume, which need not equal the device mountinfo names. Kernels
-    // before 5.8 report no mount id, leaving the table's cover check as the
-    // only guard.
+    // btrfs subvolumes have distinct st_dev values; mount id identifies the mount.
     if stx.stx_mask & libc::STATX_MNT_ID != 0 && stx.stx_mnt_id != mount_id {
         return Err(std::io::Error::other(format!(
             "{path} now resolves to mount {}, not mount {mount_id}",
@@ -184,13 +142,12 @@ pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     }
 
     let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: `fd` is open and `st` is a properly sized, writable `statvfs`.
+    // Must read the validated descriptor; reopening the path reintroduces replacement races.
     let rc = unsafe { libc::fstatvfs(fd.as_raw_fd(), &mut st) };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // `f_frsize` is the fragment size the block counts are in units of;
-    // `f_bsize` is the preferred I/O size and is the wrong multiplier.
+    // Block counts use f_frsize; f_bsize is the preferred I/O size.
     let frsize = st.f_frsize as u64;
     Ok(Usage {
         total_bytes: (st.f_blocks as u64).saturating_mul(frsize),
@@ -201,17 +158,15 @@ pub fn read_usage(path: &str, mount_id: u64) -> std::io::Result<Usage> {
     })
 }
 
-/// Stable slot assignment: one slot per filesystem (by device id) for as long
-/// as it stays mounted, freed slots reused lowest-first.
+/// One slot per `major:minor` device id while mounted; freed slots are reused.
+/// The selected path can change without changing the device, so label state
+/// tracks `(mount, fstype)` separately from slot ownership.
 pub struct Slots {
     by_device: HashMap<String, usize>,
     occupied: Vec<Option<String>>,
-    /// The `(mount, fstype)` labels last applied to each slot.
     labeled: Vec<Option<(String, String)>>,
 }
 
-/// What changed in one [`Slots::assign`]: which slots were vacated, and how
-/// many mounts did not fit.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Assignment {
     pub freed: Vec<usize>,
@@ -227,13 +182,9 @@ impl Slots {
         }
     }
 
-    /// Reconcile the slots with the devices currently mounted, in the order
-    /// given (sorted by mount point upstream, so a fresh start is
-    /// deterministic).
     pub fn assign(&mut self, devices: &[String]) -> Assignment {
         let mut outcome = Assignment::default();
 
-        // Vacate slots whose device is gone.
         for (slot, held) in self.occupied.iter_mut().enumerate() {
             if let Some(device) = held {
                 if !devices.contains(device) {
@@ -245,7 +196,6 @@ impl Slots {
             }
         }
 
-        // Place new devices in the lowest free slots.
         for device in devices {
             if self.by_device.contains_key(device) {
                 continue;
@@ -266,10 +216,7 @@ impl Slots {
         self.by_device.get(device).copied()
     }
 
-    /// Whether `slot` needs labeling for `mount`, recording that it now has
-    /// it. True on a slot's first mount, and again whenever a retained slot's
-    /// selected mount point or type changes: a filesystem remounted elsewhere,
-    /// or its shortest bind alias gone while a longer one remains.
+    /// Records the selected labels; a true result requires the caller to apply them.
     pub fn relabel(&mut self, slot: usize, mount: &MountEntry) -> bool {
         let current = (mount.mount_point.as_str(), mount.fstype.as_str());
         let applied = self.labeled[slot]
@@ -282,8 +229,6 @@ impl Slots {
         true
     }
 
-    /// One past the highest occupied slot: the member bound the snapshot walk
-    /// uses.
     pub fn bound(&self) -> usize {
         self.occupied
             .iter()
@@ -292,13 +237,8 @@ impl Slots {
     }
 }
 
-/// State one sweep hands the next: the slot map, and the buffer the mount
-/// table is read into.
-///
-/// The buffer is reused for the allocation it saves, not for speed: measured,
-/// it did not move the sweep's wall time. `/proc/self/mountinfo` reports a
-/// zero size, so reading into a fresh `String` doubles from 32 bytes and
-/// issues a dozen `read()`s where a warm buffer takes one.
+/// Reuses the procfs buffer to avoid repeated allocation; measured wall time
+/// was unchanged (see the filesystem sampler journal).
 struct SweepState {
     slots: Slots,
     table: String,
@@ -314,13 +254,9 @@ impl SweepState {
 }
 
 struct Filesystem {
-    /// Minimum spacing between sweeps.
     interval: Duration,
-    /// Timestamp of the last dispatched sweep; `None` until the first.
     last_read: Mutex<Option<Instant>>,
-    /// True while a sweep is in flight, so sweeps never overlap.
     reading: Arc<AtomicBool>,
-    /// Carried between sweeps. Only the sweep task touches it.
     state: Arc<Mutex<SweepState>>,
 }
 
@@ -328,12 +264,7 @@ impl Filesystem {
     fn new(interval: Duration) -> Self {
         let state = Arc::new(Mutex::new(SweepState::new()));
 
-        // The first sweep runs inline at init so the member bound is set
-        // before any snapshot walk reads it (the same "before the first
-        // walk" contract `drivehealth` meets by enumerating in `new()`), and
-        // so the metric is present from the first scrape rather than one
-        // interval later. It is the same bounded, local-only sweep the
-        // blocking pool runs afterwards.
+        // Initialize membership and readings before the first snapshot walk.
         let published = sweep(&mut state.lock().unwrap());
         debug!(
             "{NAME}: {published} local filesystem(s) at startup; sweeping every {:?}",
@@ -349,15 +280,14 @@ impl Filesystem {
     }
 }
 
-/// Unset every gauge in `slot` and drop its labels: the filesystem is gone.
 fn vacate(slot: usize) {
     for group in GROUPS {
+        // Must use the absent sentinel, not zero, when a filesystem leaves.
         let _ = group.set(slot, i64::MIN);
         group.clear_metadata(slot);
     }
 }
 
-/// Label `slot` with the identity of `mount` on every gauge group.
 fn label(slot: usize, mount: &MountEntry) {
     for group in GROUPS {
         group.insert_metadata(slot, "mount".to_string(), mount.mount_point.clone());
@@ -366,21 +296,11 @@ fn label(slot: usize, mount: &MountEntry) {
     }
 }
 
-/// Clamp a `u64` count into the `i64` a gauge holds.
 fn gauge(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
-/// One sweep: read the mount table, reconcile slots, `statvfs` every local
-/// mount, publish. Returns how many mounts published a value.
-///
-/// Acquisition-group bracket (principle 18): `acquire()` before the
-/// mount-table read, `finish()` after the last `set()`, and `discard()` when
-/// nothing could be published — a failed mount-table read, or every
-/// `statvfs` failing — so the previous window stands rather than pairing a
-/// failed sweep with a fresh one. A host with no local filesystem (a
-/// container on an overlay root) publishes nothing and stamps nothing; it is
-/// not an error, and the next sweep will see any local mount that appears.
+/// Returns the number of mounts whose readings were published.
 fn sweep(state: &mut SweepState) -> usize {
     let started = Instant::now();
     let guard = FILESYSTEM_SWEEP_ACQ.acquire();
@@ -399,6 +319,7 @@ fn sweep(state: &mut SweepState) -> usize {
     let devices: Vec<String> = mounts.iter().map(|m| m.device.clone()).collect();
     let assignment = slots.assign(&devices);
 
+    // Reused slots must be cleared before any new labels or readings are published.
     for slot in &assignment.freed {
         vacate(*slot);
     }
@@ -427,9 +348,7 @@ fn sweep(state: &mut SweepState) -> usize {
                 published += 1;
             }
             Err(e) => {
-                // Unmounted or replaced between the table read and the call,
-                // or not ours to read. Absent beats stale: unset rather than
-                // keep the previous sweep's numbers under a fresh window.
+                // Failed reads must not retain old values under this sweep's window.
                 debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
                 for group in GROUPS {
                     let _ = group.set(slot, i64::MIN);
@@ -438,20 +357,15 @@ fn sweep(state: &mut SweepState) -> usize {
         }
     }
 
-    // The bound follows the population, up and down, so a snapshot walks
-    // only the slots that can hold a member. This sweep task is its only
-    // writer, and the store must stay above the `finish()` below: a window
-    // stamped first is a window a snapshot can read against a stale bound.
+    // The sweep is the sole writer; the bound must be stored before finish().
     FILESYSTEM_SWEEP_ACQ.set_member_bound(slots.bound());
 
+    // A sweep with no published readings must not advance the acquisition window.
     if published > 0 {
         guard.finish();
     } else {
         guard.discard();
     }
-    // The off-cycle cost principle 16 asks for, as a number, by phase: the
-    // mount-table read, its parse and classification, and the statvfs calls
-    // plus publication.
     debug!(
         "{NAME}: sweep published {published}/{} local filesystem(s) in {} us (read {} us, parse {} us, statvfs+publish {} us)",
         mounts.len(),
@@ -470,7 +384,6 @@ impl Sampler for Filesystem {
     }
 
     async fn refresh(&self) {
-        // Scoped so the lock is dropped before the dispatch below.
         {
             let mut last = self.last_read.lock().unwrap();
             match *last {
@@ -479,18 +392,16 @@ impl Sampler for Filesystem {
             }
         }
 
-        // Never overlap sweeps.
         if self.reading.swap(true, Ordering::AcqRel) {
             return;
         }
 
-        // Off the async worker and back immediately: the sweep is syscalls,
-        // however cheap. The sweep task is the acquisition group's single
-        // writer; `refresh()` never acquires or finishes it.
+        // Only the blocking task may stamp the group; refresh must not stamp it.
         let state = self.state.clone();
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
             sweep(&mut state.lock().unwrap());
+            // The in-flight latch must remain set until the blocking sweep returns.
             reading.store(false, Ordering::Release);
         });
     }
@@ -509,7 +420,6 @@ mod tests {
         assert!(first.freed.is_empty());
         assert_eq!(slots.bound(), 2);
 
-        // `/` (259:2) stays, the xfs disk (8:1) is unmounted, a USB stick (8:17) appears.
         let second = slots.assign(&["259:2".to_string(), "8:17".to_string()]);
         assert_eq!(second.freed, vec![1]);
         assert_eq!(slots.slot_of("259:2"), Some(0));
@@ -535,7 +445,7 @@ mod tests {
         assert_eq!(slots.slot_of("c"), None);
     }
 
-    /// `/` as the real mount table describes it.
+    // Requires a root filesystem accepted by the local-mount classifier.
     fn root_mount() -> MountEntry {
         let table = std::fs::read_to_string(MOUNTINFO).unwrap();
         local_mounts(&table)
@@ -556,8 +466,7 @@ mod tests {
 
     #[test]
     fn a_vacated_slot_reads_as_absent_with_no_labels() {
-        // The top slot: no sweep on a real host has enough mounts to reach
-        // it, so this test cannot race the ones that sweep for real.
+        // Avoids real-sweep slots only on hosts with fewer than MAX_MOUNTS filesystems.
         let slot = MAX_MOUNTS - 1;
         let mount = MountEntry {
             id: 900,
@@ -583,9 +492,7 @@ mod tests {
         }
     }
 
-    /// The whole sweep against the real mount table: `/` is a local mount on
-    /// any Linux host, so after one sweep it holds a slot, its five gauges are
-    /// populated, and the group carries a stamped window.
+    /// Requires a local root mount; verifies its gauges, labels and acquisition window.
     #[test]
     fn a_sweep_publishes_the_root_filesystem_and_stamps_the_group() {
         let mut state = SweepState::new();
@@ -616,8 +523,7 @@ mod tests {
         assert!(w.width_ns() > 0);
     }
 
-    /// Where a sweep spends its time, phase by phase. Ignored: it prints, it
-    /// does not assert. Run with
+    /// Manual phase measurement:
     ///   cargo test --release --bin rezolus -- filesystem::linux::tests::sweep_phase_timing --ignored --nocapture
     #[test]
     #[ignore]
@@ -661,8 +567,7 @@ mod tests {
         assert!(read_usage("/definitely/not/a/mount/point", 0).is_err());
     }
 
-    /// Needs a kernel that reports `STATX_MNT_ID` (5.8+); older ones skip the
-    /// check by design, and this test would fail there.
+    /// Requires STATX_MNT_ID support (Linux 5.8+) and a local root mount.
     #[test]
     fn a_path_resolving_to_a_different_mount_is_refused() {
         let root = root_mount();

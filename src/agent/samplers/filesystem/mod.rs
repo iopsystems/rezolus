@@ -1,9 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux;
 
-// On non-Linux the sampler does not run, but the metric definition is still
-// compiled so exposition/dashboards stay consistent across platforms (matches
-// the other Linux-only samplers, e.g. drivehealth, blockio).
+// Non-Linux builds still need metric and acquisition-group registration.
 #[cfg(not(target_os = "linux"))]
 mod stats {
     include!("./linux/stats.rs");

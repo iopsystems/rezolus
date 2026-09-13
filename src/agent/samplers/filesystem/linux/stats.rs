@@ -3,25 +3,13 @@ use metriken::*;
 use crate::agent::timing::AcquisitionGroup;
 use linkme::distributed_slice;
 
-/// Maximum number of local filesystems tracked. Mounts discovered beyond this
-/// cap are dropped by the sweep (logged once per sweep with the count).
+/// Hard series cap; excess local filesystems are skipped with a warning.
 pub const MAX_MOUNTS: usize = 64;
 
-// This group must stay in `stats.rs`, not `linux/mod.rs`: this file is the
-// one `include!`d on non-Linux platforms (see `filesystem/mod.rs`), and a
-// group registered under a name the platform never produces is a group
-// `create_v3`'s routing can never find. Same cross-platform-name mechanism
-// as `drivehealth` and the BPF samplers — see
-// `crate::agent::samplers::bpf_sampler_name`'s doc comment.
-//
-/// One group for the whole sweep: the mount-table read plus every
-/// `statvfs` and the per-mount `set()` calls that follow, bracketed inside
-/// the sweep in `linux/mod.rs`, which is this group's single writer. The
-/// five metrics below are five fields of one `statvfs` answer per mount —
-/// one source per entity, decoded once — so this is principle 18's "device
-/// sweep" read-section shape (one group over like entities), as
-/// `drivehealth` is, not five groups for five families.
+// Must remain in stats.rs so non-Linux builds register the group too.
+/// Shared window for discovery and the five gauge families; see linux/mod.rs.
 pub static FILESYSTEM_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    // Must match metric attribution on non-Linux as well as Linux.
     crate::agent::samplers::bpf_sampler_name("filesystem"),
     "filesystem_sweep",
 );

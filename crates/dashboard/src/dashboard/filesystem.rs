@@ -1,12 +1,8 @@
+//! Group filesystem gauges by mount for the viewer's per-mount series.
+
 use crate::MetricsSource;
 use crate::plot::*;
 
-/// One line per mount: the `filesystem_*` gauges carry a `mount` label, and
-/// `sum by (mount)` over a single-series-per-mount gauge is the identity that
-/// keeps exactly that label, so the viewer's multi-series chart names each
-/// line by mount point (the same shape the cgroups section uses with
-/// `sum by (name)`). Mounts that appear or disappear between sweeps show up
-/// or drop out on the next render with no per-mount configuration.
 fn by_mount(metric: &str) -> String {
     format!("sum by (mount) ({metric})")
 }
@@ -14,8 +10,6 @@ fn by_mount(metric: &str) -> String {
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
 
-    // A recording made without the sampler renders an empty section rather
-    // than a page of empty charts.
     if !has_metric(data, "filesystem_total") {
         return view;
     }
@@ -123,7 +117,6 @@ mod tests {
         let j = json(&view);
         assert!(j.contains("sum by (mount) (filesystem_available)"));
         assert!(j.contains("sum by (mount) (filesystem_total)"));
-        // Used fraction is derived from the two gauges, not a sixth metric.
         assert!(j.contains(
             "1 - sum by (mount) (filesystem_available) / sum by (mount) (filesystem_total)"
         ));

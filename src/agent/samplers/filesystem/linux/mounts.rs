@@ -1,36 +1,28 @@
-//! The mount table, read from `/proc/self/mountinfo`, reduced to the local
-//! filesystems this sampler is allowed to `statvfs`.
+//! Parse and classify `/proc/self/mountinfo` without resolving mount paths.
 //!
-//! Classification happens here, before any `statvfs` call, because the call
-//! itself is where a network filesystem can block (see the module doc in
-//! `mod.rs`). Everything in this file is a pure function of the mount table's
-//! text, so it is testable without a real mount.
+//! See the parent module for the sampler's local-only policy. Visibility
+//! filtering retains the full table, including excluded filesystem types:
+//! an excluded mount can cover a local one. Device deduplication runs after
+//! filtering, so a covered alias does not displace an uncovered one.
 
 use std::collections::HashMap;
 
-/// One line of `/proc/self/mountinfo`, reduced to what the sweep needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MountEntry {
-    /// The mount's id: unique within the table, and what `statx` reports as
-    /// `stx_mnt_id` for a path on this mount.
+    /// Mount-table id, comparable to statx.stx_mnt_id.
     pub id: u64,
-    /// The id of the mount this one is mounted on.
+    /// Parent mount id; the parent can lie outside the process root and table.
     pub parent: u64,
-    /// Where the filesystem is mounted, with `\NNN` octal escapes decoded.
+    /// Mount path relative to the process root, with octal escapes decoded.
     pub mount_point: String,
-    /// The filesystem type as the kernel names it (`ext4`, `nfs4`, `fuse.sshfs`).
     pub fstype: String,
-    /// The mount source: a `/dev` path for block-backed filesystems, a
-    /// `host:/export` or `//server/share` for network ones, a bare word for
-    /// pseudo-filesystems.
+    /// Filesystem-specific source, such as a device path, export or ZFS dataset.
     pub source: String,
-    /// The `major:minor` device id. Two mounts sharing it are the same
-    /// filesystem seen twice (a bind mount, a subvolume mount).
+    /// major:minor device id used to deduplicate bind aliases.
     pub device: String,
 }
 
-/// Filesystem types whose reads go over a network, so `statvfs` can block for
-/// as long as the mount options let it. Never sampled.
+/// Network or clustered filesystems whose statvfs can wait on remote state.
 const NETWORK_FSTYPES: &[&str] = &[
     "nfs",
     "nfs4",
@@ -48,10 +40,8 @@ const NETWORK_FSTYPES: &[&str] = &[
     "coda",
 ];
 
-/// Filesystem types with no occupancy worth reporting: kernel pseudo
-/// filesystems, RAM-backed scratch space, container overlays, read-only
-/// images (a squashfs is always 100% full by construction), and autofs
-/// triggers, which a `statvfs` would turn into a mount attempt.
+/// Excluded by scope: pseudo-filesystems, RAM storage, overlays and read-only images.
+/// Autofs lookup can trigger a mount; squashfs reports full capacity by construction.
 const PSEUDO_FSTYPES: &[&str] = &[
     "autofs",
     "tmpfs",
@@ -82,24 +72,17 @@ const PSEUDO_FSTYPES: &[&str] = &[
     "selinuxfs",
 ];
 
-/// Local filesystems whose source is not a `/dev` path: a pool or dataset
-/// name stands in for the device.
+/// ZFS identifies its source by pool or dataset name, not a /dev path.
 const LOCAL_FSTYPES_WITHOUT_DEV_SOURCE: &[&str] = &["zfs"];
 
 impl MountEntry {
-    /// True when a `statvfs` on this mount is answered from the kernel's own
-    /// superblock counters and never crosses a network or a userspace daemon.
-    ///
-    /// The rule is fail-closed: a filesystem qualifies by a positive signal
-    /// (a `/dev` source, or a type known to be local without one), never by
-    /// merely failing to match the deny lists. FUSE is excluded as a family
-    /// because the process behind it can block for any reason, `fuseblk`
-    /// included even though its source is a `/dev` path.
+    /// Local-only policy gate; does not establish path visibility or a read deadline.
     pub fn is_local(&self) -> bool {
         let fstype = self.fstype.as_str();
         if NETWORK_FSTYPES.contains(&fstype) || PSEUDO_FSTYPES.contains(&fstype) {
             return false;
         }
+        // FUSE must remain excluded even with a /dev source: its daemon can block.
         if fstype == "fuse" || fstype == "fuseblk" || fstype.starts_with("fuse.") {
             return false;
         }
@@ -107,13 +90,10 @@ impl MountEntry {
     }
 }
 
-/// Parse the text of `/proc/self/mountinfo`. Lines that do not have the
-/// documented shape are skipped rather than failing the whole table.
+/// Unparseable lines are skipped.
 ///
-/// The format (`proc(5)`): `id parent major:minor root mount_point options
-/// [optional fields...] - fstype source super_options`. The optional fields
-/// are variable in number, so the separator `-` is located first and the
-/// fields after it are read from there.
+/// proc_pid_mountinfo(5): `id parent major:minor root mount_point options
+/// [optional fields...] - fstype source super_options`.
 pub fn parse_mountinfo(text: &str) -> Vec<MountEntry> {
     text.lines().filter_map(parse_line).collect()
 }
@@ -134,8 +114,7 @@ fn parse_line(line: &str) -> Option<MountEntry> {
     })
 }
 
-/// Decode the `\NNN` octal escapes the kernel uses for space, tab, newline
-/// and backslash in mount paths and sources.
+/// Kernel mount paths escape space, tab, newline and backslash as \NNN octal.
 fn unescape(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -165,20 +144,12 @@ fn octal(digits: &[u8]) -> Option<u8> {
     u8::try_from(v).ok()
 }
 
-/// The local filesystems in a mount table, one entry per filesystem.
-///
-/// A local mount that another mount covers is dropped first ([`covered`]): a
-/// path resolves to the mount on top, so `statvfs` on the path of an ext4
-/// mount with an NFS share stacked over it reaches the NFS share.
-///
-/// A filesystem mounted more than once (bind mounts, btrfs subvolumes on one
-/// device) shares a `major:minor` id and reports the same occupancy at every
-/// mount, so it is kept once, under its shortest uncovered mount point. The
-/// result is sorted by mount point so slot assignment upstream is
-/// deterministic.
+/// One entry per device, choosing its shortest path after the cover filter;
+/// sorted by mount point for deterministic initial slot assignment.
 pub fn local_mounts(text: &str) -> Vec<MountEntry> {
     let table = parse_mountinfo(text);
     let parent_of: HashMap<u64, u64> = table.iter().map(|m| (m.id, m.parent)).collect();
+    // Must retain excluded mount types here: they can cover a local mount.
     let mut at_path: HashMap<&str, Vec<u64>> = HashMap::new();
     for m in &table {
         at_path
@@ -204,14 +175,9 @@ pub fn local_mounts(text: &str) -> Vec<MountEntry> {
     mounts
 }
 
-/// True when a mount other than `mount` sits at its path or at a directory
-/// above it, and is not one of the mounts `mount` was mounted on.
-///
-/// A mount at or above the path is either beneath `mount` — reachable by
-/// following parent ids, since a mount's parent is the mount holding its
-/// mount point — or was mounted there afterwards, and path resolution meets
-/// it first. Fail-closed: a parent missing from the table shortens the chain,
-/// which can only exclude more mounts, never sample a covered one.
+/// Conservatively rejects non-ancestor mounts at or above the candidate path.
+/// A missing parent shortens the ancestry chain; competing mounts' own
+/// visibility is not resolved, so hidden competitors can also exclude a mount.
 fn covered(
     mount: &MountEntry,
     parent_of: &HashMap<u64, u64>,
@@ -219,7 +185,6 @@ fn covered(
 ) -> bool {
     let mut beneath = Vec::new();
     let mut id = mount.parent;
-    // Bounded by the table size, so a cyclic parent chain cannot loop.
     for _ in 0..=parent_of.len() {
         if id == mount.id || beneath.contains(&id) {
             break;
@@ -380,8 +345,7 @@ mod tests {
             .collect()
     }
 
-    /// Codex's review fixture, verbatim: both mounts' parents are absent from
-    /// the table, which must not stop the NFS share from counting as cover.
+    /// A missing ancestor must not prevent a stacked share from counting as cover.
     #[test]
     fn a_local_mount_with_a_network_mount_stacked_on_it_is_not_sampled() {
         let text = "\
