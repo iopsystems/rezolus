@@ -20,8 +20,9 @@ pub struct MountEntry {
     pub source: String,
     /// major:minor device id used to deduplicate bind aliases.
     pub device: String,
-    /// The superblock's read-only flag, from the super options. Per-mount
-    /// options describe one path into the filesystem, not the filesystem.
+    /// Read-only as a whole: a leading `ro` superblock option, or ext4's
+    /// `emergency_ro`, which current kernels set after an error instead of the
+    /// superblock flag. Per-mount options describe one path, not the filesystem.
     pub readonly: bool,
 }
 
@@ -114,7 +115,10 @@ fn parse_line(line: &str) -> Option<MountEntry> {
         mount_point: unescape(fields[4]),
         fstype: fields[sep + 1].to_string(),
         source: unescape(fields[sep + 2]),
-        readonly: fields[sep + 3].split(',').next() == Some("ro"),
+        readonly: {
+            let mut options = fields[sep + 3].split(',');
+            options.next() == Some("ro") || options.any(|option| option == "emergency_ro")
+        },
     })
 }
 
@@ -269,15 +273,17 @@ mod tests {
         assert!(!m.readonly);
     }
 
-    /// An error flips the superblock read-only while the mount stays `rw`; a
-    /// read-only bind is the reverse, and its filesystem stays writable.
+    /// A superblock `ro` (an older ext4 or a btrfs error) and ext4's
+    /// `emergency_ro` (a current ext4 error) both read as read-only while the
+    /// mount stays `rw`; a read-only bind is the reverse, and stays writable.
     #[test]
     fn read_only_comes_from_the_superblock_not_the_mount() {
         let text = "\
 40 22 8:1 / /errored rw,relatime - ext4 /dev/sda1 ro,errors=remount-ro
-41 22 8:2 / /view ro,relatime - ext4 /dev/sdb1 rw";
+41 22 8:2 / /view ro,relatime - ext4 /dev/sdb1 rw
+42 22 8:3 / /emergency rw,relatime - ext4 /dev/sdc1 rw,errors=remount-ro,emergency_ro";
         let flags: Vec<bool> = parse_mountinfo(text).iter().map(|m| m.readonly).collect();
-        assert_eq!(flags, vec![true, false]);
+        assert_eq!(flags, vec![true, false, true]);
     }
 
     #[test]

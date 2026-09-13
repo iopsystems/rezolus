@@ -97,9 +97,15 @@ maintainer's ruling.
 
 **Read-only state is a gauge, read from the superblock.** Round 5 asked for more
 filesystem context. A full disk does not make a filesystem read-only — its
-writes fail with `ENOSPC` — but an error can: ext4 `errors=remount-ro` and a
-btrfs transaction abort set the superblock's read-only flag while the mount's
-own flag stays `rw`. Each series is one superblock, since the deduplication key
+writes fail with `ENOSPC` — but an error can. A btrfs transaction abort sets
+the superblock's read-only flag while the mount's own flag stays `rw`. ext4
+`errors=remount-ro` did the same until Jan Kara's `d3476f3` (August 2024);
+since then it leaves the flag clear, sets `EXT4_FLAGS_EMERGENCY_RO`, and adds
+`emergency_ro` to the superblock options. Round 7 caught the gauge reading only
+the leading option, which reports 0 for exactly that error, so it now reads 1
+on either signal. It still misses an XFS shutdown, which sets neither, and it
+does not say why a filesystem is read-only: the operator knows which mounts
+they made read-only, and can tell an error from that. Each series is one superblock, since the deduplication key
 `major:minor` is the superblock's device number, so the superblock flag is the
 fact that describes a series; a per-mount flag describes only the path that won
 deduplication. The flag comes from mountinfo's super options rather than

@@ -54,7 +54,7 @@ pub static FILESYSTEM_INODES_FREE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
 
 #[metric(
     name = "filesystem_readonly",
-    description = "1 when a locally mounted filesystem is read-only, 0 when it is writable. Reports the superblock's flag, set by a read-only mount or by an error such as ext4 errors=remount-ro. A read-only bind of a writable filesystem reads 0, and a full filesystem stays writable.",
+    description = "1 when a locally mounted filesystem is read-only as a whole, 0 otherwise: its superblock is read-only (a read-only mount, or btrfs forced read-only after an error), or ext4 has gone emergency read-only after an error (emergency_ro). A read-only bind of a writable filesystem reads 0 and a full filesystem stays writable; an XFS shutdown sets neither signal, so 0 does not prove the filesystem is writable.",
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_READONLY: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);

@@ -75,8 +75,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
 
         let readonly = state.subgroup("Read-only");
         readonly.describe(
-            "1 while a filesystem is read-only: mounted that way, or flipped by an error such as \
-             ext4 errors=remount-ro. A full filesystem stays writable; its writes fail instead.",
+            "1 while a filesystem is read-only as a whole: mounted that way, or after an error \
+             (ext4 emergency_ro, btrfs forced read-only). 0 does not prove it is writable: an XFS \
+             shutdown does not show here, and a full filesystem stays writable while its writes \
+             fail.",
         );
         readonly.plot_promql(
             PlotOpts::gauge("Read-only", "readonly", Unit::Count),

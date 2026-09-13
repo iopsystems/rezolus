@@ -265,12 +265,16 @@ kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
 alert on; `filesystem_free` also counts the blocks reserved for the superuser.
 Inode exhaustion is the other way a disk fills, and comes from the same call.
 
-`filesystem_readonly` is 1 while the filesystem itself is read-only, from its
-superblock flag: a read-only mount sets it, and so does an error such as ext4
-`errors=remount-ro`. Filling up does not set it — writes to a full filesystem
-fail with `ENOSPC` while it stays writable — and a read-only bind of a writable
-filesystem reads 0, because the filesystem is still writable through its other
-mounts.
+`filesystem_readonly` is 1 while the filesystem as a whole is read-only: its
+superblock is read-only, which a read-only mount or a btrfs forced read-only
+sets, or ext4 has gone emergency read-only after an error. Current ext4 marks
+that with `emergency_ro` in the superblock options instead of setting the
+superblock flag, so both are checked. It does not say why; whether a 1 is a
+read-only mount or an error is for the operator to judge. Filling up does not
+set it — writes to a full filesystem fail with `ENOSPC` while it stays writable
+— and a read-only bind of a writable filesystem reads 0, because the filesystem
+is still writable through its other mounts. An XFS shutdown sets neither
+signal, so 0 does not prove the filesystem is writable.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
@@ -279,7 +283,7 @@ mounts.
 | `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
 | `filesystem_inodes_total` | Inodes the filesystem reports it can hold; 0 on btrfs and vfat | `mount`, `fstype`, `device` |
 | `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
-| `filesystem_readonly` | 1 when the filesystem is read-only, from its superblock flag | `mount`, `fstype`, `device` |
+| `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `device` |
 
 ## GPU
 
