@@ -87,13 +87,16 @@ its labels cleared, and the slot is reused. The group's member bound is set
 by the sweep task — the group's single writer — to one past the highest
 occupied slot before the window is stamped, so a three-mount host is walked
 as three members, not `MAX_MOUNTS` (64). This is a per-sweep write to a bound
-that `timing.rs` documented as single-init when this sampler was written; it
-now requires only a single writer. A membership change is an honest schema
-change (a mount appeared or went away), so the V3 schema-hash churn it causes
-is the truth, not noise. The store is not atomic with a snapshot: the builder
-reads the bound separately for each gauge family, so a sweep
-landing mid-snapshot can give them different bounds. Flagged in the PR for the
-maintainer's ruling.
+that `timing.rs` documented as single-init when this sampler was written; every
+other sampler sets its bound only during init. A membership change is an honest
+schema change (a mount appeared or went away), so the V3 schema-hash churn it
+causes is the truth, not noise. The store is not atomic with a snapshot: the
+builder reads the bound separately for each gauge family, so a sweep landing
+mid-snapshot can give them different bounds for that one snapshot. **Ruled
+acceptable** and recorded in principle 18, over three alternatives: a fixed
+bound of 64, which puts empty rows in every snapshot; membership by labels,
+which needs a snapshot-builder change for the same result; and a bound frozen
+at the startup count, which hides filesystems mounted later.
 
 **Read-only state is a gauge, read from the superblock.** Round 5 asked for more
 filesystem context. A full disk does not make a filesystem read-only — its
@@ -113,6 +116,31 @@ deduplication. The flag comes from mountinfo's super options rather than
 0/1 gauge rather than an `ro`/`rw` label because a label change on a retained
 slot is what #1205 misattributes inside a `.rez` segment. Source, root and the
 option strings are not recorded in this PR.
+
+**Five defects found by testing the review skill.** A series-context rule was
+added to `reviewing-samplers` after the metadata gap had to be raised by hand,
+and testing it ran six fresh reviews of this sampler as it stood before any
+metadata work. They found five defects that eight rounds of local review had
+not, all fixed:
+
+- A local mount below an NFS, FUSE or autofs mount was sampled, and looking its
+  path up walks the blocking mount, so a dead server hung every sweep and
+  startup. Resolution now rejects a local mount whose path passes through a
+  mount whose lookup can block (`MountEntry::lookup_can_block`).
+- A panicking sweep left the in-flight latch set and the state lock poisoned,
+  stopping the sampler for good. The latch now clears on unwind, and a poisoned
+  lock restarts slot assignment.
+- *Inodes Free %* divided 0 by 0 on btrfs and vfat. Those filesystems report no
+  inode limit, and their inode gauges are now absent rather than 0; the query
+  engine has no comparison operators to filter them in the query. *Used %*
+  now matches `df` (used over used plus available) instead of
+  `1 - available / total`, which counted the superuser reserve as used.
+- A failed first mount-table read left the group unbounded, so snapshots
+  carried 64 empty rows until a sweep succeeded. That path now stores the last
+  known population.
+- A sweep with no successful read unset every slot's values while keeping the
+  previous window, pairing it with values it did not describe. Failed slots now
+  keep their values unless another read in the same sweep succeeded.
 
 **Dashboard.** A Filesystem section with `sum by (mount)` over each gauge, so
 the viewer's multi-series chart draws one line per filesystem and filesystems that
@@ -184,14 +212,17 @@ and classifier, `linux/stats.rs` metrics) and
 analysis-side lists (`src/analysis/extract/{context,golden}.rs`); prose in
 `config/agent.toml`, `docs/metrics.md`, `CHANGELOG.md`, `docs/principles.md`,
 `docs/backlog.md` and the `reviewing-samplers` skill.
-Tests: 22 on the parser and classifier (the superblock read-only flag, fixture lines for nfs, cifs,
-fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair, and ten visibility
-cases: a share stacked on a local mount, one mounted on a directory above it, a
-local mount stacked on top, `/data` against `/database`, a covered bind alias, a
-hidden tree under a replacement tree, a chroot table with no `/` row, a covered
-mount in a chroot table, two omitted parents, and an ambiguous attachment), 12 on slot assignment and relabeling, `statvfs`,
-its mount-id refusal and a regular-file read, vacate/label and the end-to-end
-sweep against a readable local mount, 4 on the dashboard section.
+Tests: 23 on the parser and classifier (the superblock read-only flag, fixture
+lines for nfs, cifs, fuse.sshfs, autofs, overlay, tmpfs, zfs, a bind-mount pair,
+and eleven visibility cases: a share stacked on a local mount, one mounted on a
+directory above it, a local mount stacked on top, `/data` against `/database`, a
+covered bind alias, a hidden tree under a replacement tree, a chroot table with
+no `/` row, a covered mount in a chroot table, two omitted parents, an ambiguous
+attachment, and local mounts below NFS, FUSE and autofs mounts), 17 on slot
+assignment and relabeling, `statvfs`, its mount-id refusal and a regular-file
+read, vacate/label, the absent inode gauges, the panic latch and poisoned-state
+restart, the failed-read bound, publication when no read succeeds, and the
+end-to-end sweep against a readable local mount, 4 on the dashboard section.
 
 ## Deferred / reopen
 
@@ -216,3 +247,9 @@ sweep against a readable local mount, 4 on the dashboard section.
   group table builder keys columns by descriptor name alone. `cpu_usage`'s
   per-PID task slots share the exposure, so the fix belongs in `crates/rez`
   rather than in this sampler.
+- **Filesystem context** — Open, #1206. Source, mount root, and per-mount and
+  superblock option strings are not recorded; read-only state is.
+- **Fleet-scale sweep cost** — Open. Measured only on this host (an 87-line
+  mount table, 3 local filesystems). A container host carries thousands of mount
+  lines, and the kernel generating the table dominates the sweep. Reopen:
+  measure on such a host before enabling the sampler fleet-wide.

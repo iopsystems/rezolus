@@ -247,7 +247,8 @@ sampled. Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `ceph`,
 pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
 are never touched. Neither is a local filesystem that another mount covers — an
 NFS share mounted over `/data`, or over a directory above it — since its path
-now leads to the mount on top. A `statvfs` on a `hard` network mount blocks until the
+now leads to the mount on top — nor one whose path passes through a network,
+FUSE or autofs mount, since looking the path up walks that mount. A `statvfs` on a `hard` network mount blocks until the
 server answers, with no timeout the agent can set, and one on an autofs trigger
 starts a mount attempt; local filesystems answer from in-memory superblock
 counters and issue no I/O, which is what bounds the sweep. Network mounts stay
@@ -281,7 +282,7 @@ signal, so 0 does not prove the filesystem is writable.
 | `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `device` (major:minor) |
 | `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `device` |
 | `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `device` |
-| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; 0 on btrfs and vfat | `mount`, `fstype`, `device` |
+| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; absent on btrfs and vfat, which report no inode limit | `mount`, `fstype`, `device` |
 | `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `device` |
 | `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `device` |
 

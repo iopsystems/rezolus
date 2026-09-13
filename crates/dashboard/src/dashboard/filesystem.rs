@@ -19,7 +19,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let capacity = space.subgroup("Capacity");
     capacity.describe(
         "Bytes per locally mounted filesystem. Available is what an unprivileged writer can \
-         still use and is the number to alert on; Free also counts the superuser reserve.",
+         still use and is the number to alert on; Free also counts the superuser reserve. \
+         Used % is computed as df computes it, so the reserve does not count as used.",
     );
     capacity.plot_promql(
         PlotOpts::gauge("Available", "available", Unit::Bytes),
@@ -35,10 +36,13 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     );
     capacity.plot_promql(
         PlotOpts::gauge("Used %", "used-pct", Unit::Percentage).percentage_range(),
+        // As df computes it: used over used plus available, so the superuser
+        // reserve counts as neither.
         format!(
-            "1 - {} / {}",
-            by_mount("filesystem_available"),
-            by_mount("filesystem_total")
+            "({total} - {free}) / ({total} - {free} + {available})",
+            total = by_mount("filesystem_total"),
+            free = by_mount("filesystem_free"),
+            available = by_mount("filesystem_available"),
         ),
     );
 
@@ -51,7 +55,8 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         usage.describe(
             "Inodes per filesystem. A filesystem full of small files runs out of these before \
              it runs out of bytes. ext4 fixes the count at mkfs time; XFS and ZFS report an \
-             estimate that moves with free space; btrfs and vfat report zero.",
+             estimate that moves with free space; btrfs and vfat report no limit and are not \
+             shown.",
         );
         usage.plot_promql(
             PlotOpts::gauge("Free Inodes", "inodes-free", Unit::Count),
@@ -129,14 +134,22 @@ mod tests {
     #[test]
     fn one_line_per_filesystem_through_sum_by_mount() {
         let view = generate(
-            &store_with(&["filesystem_total", "filesystem_available"]),
+            &store_with(&[
+                "filesystem_total",
+                "filesystem_free",
+                "filesystem_available",
+            ]),
             vec![],
         );
         let j = json(&view);
         assert!(j.contains("sum by (mount) (filesystem_available)"));
+        assert!(j.contains("sum by (mount) (filesystem_free)"));
         assert!(j.contains("sum by (mount) (filesystem_total)"));
+        // Used % as df computes it, not 1 - available / total.
         assert!(j.contains(
-            "1 - sum by (mount) (filesystem_available) / sum by (mount) (filesystem_total)"
+            "(sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free)) / \
+             (sum by (mount) (filesystem_total) - sum by (mount) (filesystem_free) + \
+             sum by (mount) (filesystem_available))"
         ));
     }
 

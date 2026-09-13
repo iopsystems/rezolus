@@ -566,6 +566,17 @@ enforces, and that reviewers must protect:
   possible CPUs, never the array capacity); a quiet member reports zero,
   it does not vanish. Value-sentinel membership is a V2 transitional
   behavior confined to the un-migrated default groups.
+- **A changing population may revise its bound on every read.** Most groups
+  set `set_member_bound` once at init from a boot-fixed population. A
+  sampler whose population changes while it runs — the `filesystem` sweep,
+  as mounts come and go — may store a new bound each read, from the group's
+  single writer, before stamping the window. Accepted cost: the snapshot
+  builder reads the bound, values and labels per metric family without
+  locking out that writer, so a read landing mid-snapshot can publish a new
+  member in some families and not others for that one snapshot, and each
+  membership change is a schema change in recordings. Never a fixed bound at
+  array capacity (empty rows in every snapshot), and never a bound frozen at
+  the startup count (later members invisible).
 - **Reader-stamped groups: the acquisition is the exposition read.** A
   mmap-direct `PackedCounters` group has no sampler `refresh()` read to
   bracket — the snapshot builder's own walk IS the acquisition, so

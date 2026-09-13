@@ -634,6 +634,11 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
   slot keeps writing into the column created with its first labels, because the
   group table builder keys columns by descriptor name alone. Shared with
   `cpu_usage`'s per-PID task slots; the fix belongs in `crates/rez`.
+- **Filesystem context** — Open, #1206. Source, mount root and the per-mount and
+  superblock option strings are not recorded.
+- **Fleet-scale sweep cost** — Open. Measured only on a 3-filesystem host with an
+  87-line mount table; container hosts carry thousands of mount lines. Reopen:
+  measure on such a host before enabling the sampler fleet-wide.
 
 ## Agent — NVIDIA GPU sampler
 

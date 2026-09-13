@@ -8,7 +8,8 @@
   `device`. The mount table is re-read on each sweep, so
   a filesystem mounted after startup appears on its own. Local filesystems
   only: network filesystems, FUSE and autofs are never sampled, and neither is a
-  local filesystem another mount covers, because a `statvfs` that reaches a
+  local filesystem another mount covers or that sits below a network, FUSE or
+  autofs mount, because a lookup or `statvfs` that reaches a
   hard network mount blocks until the server answers. Sweeps
   run at most once per `[samplers.filesystem] interval` (default 60s), off the
   scrape cycle. The viewer gains a Filesystem section with one line per filesystem.

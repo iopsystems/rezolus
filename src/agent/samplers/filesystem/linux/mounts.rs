@@ -92,6 +92,17 @@ impl MountEntry {
         }
         self.source.starts_with("/dev/") || LOCAL_FSTYPES_WITHOUT_DEV_SOURCE.contains(&fstype)
     }
+
+    /// A path lookup through this mount can wait on a server, a userspace
+    /// daemon or an automount: network types, FUSE and autofs.
+    pub fn lookup_can_block(&self) -> bool {
+        let fstype = self.fstype.as_str();
+        NETWORK_FSTYPES.contains(&fstype)
+            || fstype == "autofs"
+            || fstype == "fuse"
+            || fstype == "fuseblk"
+            || fstype.starts_with("fuse.")
+    }
 }
 
 /// Unparseable lines are skipped.
@@ -158,7 +169,9 @@ pub fn local_mounts(text: &str) -> Vec<MountEntry> {
     let mut by_device: HashMap<String, MountEntry> = HashMap::new();
     // Classify before resolving: a container host carries thousands of overlay
     // mounts, and only local candidates need a path walk.
-    for entry in visible(&parse_mountinfo(text), MountEntry::is_local) {
+    for entry in visible(&parse_mountinfo(text), MountEntry::is_local, |m| {
+        !m.lookup_can_block()
+    }) {
         match by_device.get(&entry.device) {
             Some(kept) if kept.mount_point.len() <= entry.mount_point.len() => {}
             _ => {
@@ -174,7 +187,7 @@ pub fn local_mounts(text: &str) -> Vec<MountEntry> {
 /// Mounts that path lookup reaches, of every filesystem type.
 #[cfg(test)]
 pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
-    visible(&parse_mountinfo(text), |_| true)
+    visible(&parse_mountinfo(text), |_| true, |_| true)
 }
 
 /// The mounts in `table` that `keep` accepts and path lookup reaches.
@@ -189,8 +202,16 @@ pub fn visible_mounts(text: &str) -> Vec<MountEntry> {
 /// visible when resolving its own path ends on it. With no single start, or two
 /// mounts attached to one parent at one point, resolution stops, and nothing at
 /// or below the ambiguity is returned.
-fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<MountEntry> {
-    let ids: HashSet<u64> = table.iter().map(|m| m.id).collect();
+///
+/// Every mount the lookup passes through on the way must satisfy `traverse`: a
+/// local mount at `/home/scratch` under an NFS `/home` is reached by looking
+/// `scratch` up inside the share, which waits on its server.
+fn visible(
+    table: &[MountEntry],
+    keep: impl Fn(&MountEntry) -> bool,
+    traverse: impl Fn(&MountEntry) -> bool,
+) -> Vec<MountEntry> {
+    let by_id: HashMap<u64, &MountEntry> = table.iter().map(|m| (m.id, m)).collect();
     // Must index every mount, whatever `keep` accepts: an excluded type can
     // cover a local mount.
     let mut attached: HashMap<(u64, &str), Vec<u64>> = HashMap::new();
@@ -205,7 +226,7 @@ fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<Moun
         .filter_map(|m| {
             if m.parent == m.id {
                 Some(m.id)
-            } else if !ids.contains(&m.parent) {
+            } else if !by_id.contains_key(&m.parent) {
                 Some(m.parent)
             } else {
                 None
@@ -219,14 +240,29 @@ fn visible(table: &[MountEntry], keep: impl Fn(&MountEntry) -> bool) -> Vec<Moun
     };
     table
         .iter()
-        .filter(|m| keep(m) && resolve(&m.mount_point, start, &attached) == Some(m.id))
+        .filter(|m| {
+            keep(m)
+                && resolve(&m.mount_point, start, &attached).is_some_and(|walk| {
+                    let Some((last, through)) = walk.split_last() else {
+                        return false;
+                    };
+                    // The start can be absent from the table: it holds the
+                    // process root, and its type is unknown.
+                    *last == m.id
+                        && through
+                            .iter()
+                            .all(|id| by_id.get(id).is_none_or(|p| traverse(p)))
+                })
+        })
         .cloned()
         .collect()
 }
 
-/// The mount a lookup of `path` ends on, or `None` past an ambiguous step.
-fn resolve(path: &str, start: u64, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<u64> {
+/// The mounts a lookup of `path` passes through, ending on the one it lands on,
+/// or `None` past an ambiguous step.
+fn resolve(path: &str, start: u64, attached: &HashMap<(u64, &str), Vec<u64>>) -> Option<Vec<u64>> {
     let mut current = climb(start, "/", attached)?;
+    let mut walk = vec![current];
     let points = path
         .match_indices('/')
         .skip(1)
@@ -234,9 +270,13 @@ fn resolve(path: &str, start: u64, attached: &HashMap<(u64, &str), Vec<u64>>) ->
         .chain(std::iter::once(path))
         .filter(|point| *point != "/");
     for point in points {
-        current = climb(current, point, attached)?;
+        let next = climb(current, point, attached)?;
+        if next != current {
+            walk.push(next);
+            current = next;
+        }
     }
-    Some(current)
+    Some(walk)
 }
 
 /// The top of the stack of mounts attached to `base` at `point`.
@@ -496,6 +536,24 @@ mod tests {
 41 40 8:1 / /data rw - ext4 /dev/sda1 rw
 42 41 8:2 / /data/sub rw - xfs /dev/sdb1 rw";
         assert_eq!(points(text), vec!["/", "/data", "/data/sub"]);
+    }
+
+    /// Opening `/home/scratch` looks `scratch` up inside the NFS share, so a
+    /// dead server blocks the walk even though the target is local. tmpfs is
+    /// in-kernel and does not block.
+    #[test]
+    fn a_local_mount_below_a_blocking_mount_is_not_sampled() {
+        let text = "\
+22 1 259:2 / / rw - ext4 /dev/nvme0n1p2 rw
+40 22 0:40 / /home rw - nfs4 nas:/home rw
+41 40 8:1 / /home/scratch rw - xfs /dev/sda1 rw
+50 22 0:50 / /mnt/fuse rw - fuse.sshfs host:/ rw
+51 50 8:2 / /mnt/fuse/disk rw - ext4 /dev/sdb1 rw
+60 22 0:60 / /auto rw - autofs systemd-1 rw
+61 60 8:3 / /auto/disk rw - ext4 /dev/sdc1 rw
+70 22 0:24 / /run rw - tmpfs tmpfs rw
+71 70 8:4 / /run/media rw - ext4 /dev/sdd1 rw";
+        assert_eq!(points(text), vec!["/", "/run/media"]);
     }
 
     /// `/data` is a string prefix of `/database`, not a directory above it.

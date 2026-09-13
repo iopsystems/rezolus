@@ -221,6 +221,8 @@ impl AcquisitionGroup {
     /// The group's single writer must store the bound before stamping its window.
     /// This atomic store does not synchronize a snapshot's value or metadata reads;
     /// stamp-last ordering alone does not make a changing population coherent.
+    /// Principle 18 allows revising the bound each read for a changing
+    /// population and accepts that one-snapshot incoherence.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);

@@ -10,7 +10,9 @@
 //! # Scope and blocking
 //!
 //! [`mounts::local_mounts`] selects `/dev`-backed filesystems and ZFS,
-//! excluding known network types, FUSE, autofs and pseudo-filesystems.
+//! excluding known network types, FUSE, autofs and pseudo-filesystems. It also
+//! skips a local filesystem whose path passes through one of those blocking
+//! types, since looking the path up walks that mount.
 //! Network `statvfs` calls can block on an unavailable server; autofs path
 //! lookup can trigger a mount. Classification must precede path lookup.
 //! Mount-id validation detects replacement after discovery when the kernel
@@ -32,10 +34,12 @@
 //!
 //! Sweeps never overlap. Each sweep brackets discovery and every gauge group
 //! with one acquisition window, stamped after successful publication;
-//! an empty or failed sweep leaves the previous window unchanged. This is
+//! an empty or failed sweep leaves the previous window unchanged, and a sweep
+//! with no successful read also keeps the values that window describes. This is
 //! principle 18's device-sweep shape. [`Slots`] owns membership and labels;
 //! the member bound limits snapshot traversal to slots below the highest
-//! occupied one, where vacant slots read as absent.
+//! occupied one, where vacant slots read as absent. It is revised every sweep,
+//! which principle 18 allows for a changing population.
 //! Window publication does not make values, labels and membership atomic.
 //!
 //! Phase measurements and scale limits live in
@@ -305,15 +309,34 @@ fn gauge(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+/// An inode gauge for a filesystem reporting `total` inodes. Zero means no inode
+/// limit (btrfs, vfat), so the value is absent rather than 0 and no consumer
+/// divides by it.
+fn inode_gauge(total: u64, value: u64) -> i64 {
+    if total == 0 {
+        i64::MIN
+    } else {
+        gauge(value)
+    }
+}
+
 /// Returns the number of mounts whose readings were published.
 fn sweep(state: &mut SweepState) -> usize {
+    sweep_table(state, MOUNTINFO)
+}
+
+/// One sweep over the mount table at `path`.
+fn sweep_table(state: &mut SweepState, path: &str) -> usize {
     let started = Instant::now();
     let guard = FILESYSTEM_SWEEP_ACQ.acquire();
 
     let SweepState { slots, table } = state;
     table.clear();
-    if let Err(e) = std::fs::File::open(MOUNTINFO).and_then(|mut f| f.read_to_string(table)) {
-        warn!("{NAME}: could not read {MOUNTINFO}: {e}");
+    if let Err(e) = std::fs::File::open(path).and_then(|mut f| f.read_to_string(table)) {
+        warn!("{NAME}: could not read {path}: {e}");
+        // The last known population, 0 before any sweep succeeds: a failed first
+        // read must not leave the group walking its full capacity.
+        FILESYSTEM_SWEEP_ACQ.set_member_bound(slots.bound());
         guard.discard();
         return 0;
     }
@@ -335,7 +358,7 @@ fn sweep(state: &mut SweepState) -> usize {
         );
     }
 
-    let mut published = 0;
+    let mut reads = Vec::with_capacity(mounts.len());
     for mount in &mounts {
         let Some(slot) = slots.slot_of(&mount.device) else {
             continue;
@@ -343,27 +366,13 @@ fn sweep(state: &mut SweepState) -> usize {
         if slots.relabel(slot, mount) {
             label(slot, mount);
         }
-        match read_usage(&mount.mount_point, mount.id) {
-            Ok(usage) => {
-                let _ = FILESYSTEM_TOTAL.set(slot, gauge(usage.total_bytes));
-                let _ = FILESYSTEM_FREE.set(slot, gauge(usage.free_bytes));
-                let _ = FILESYSTEM_AVAILABLE.set(slot, gauge(usage.available_bytes));
-                let _ = FILESYSTEM_INODES_TOTAL.set(slot, gauge(usage.total_inodes));
-                let _ = FILESYSTEM_INODES_FREE.set(slot, gauge(usage.free_inodes));
-                // From the superblock options, not statvfs `f_flag`: its
-                // ST_RDONLY is also set by this path's own mount flag.
-                let _ = FILESYSTEM_READONLY.set(slot, i64::from(mount.readonly));
-                published += 1;
-            }
-            Err(e) => {
-                // Failed reads must not retain old values under this sweep's window.
-                debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
-                for group in GROUPS {
-                    let _ = group.set(slot, i64::MIN);
-                }
-            }
+        let read = read_usage(&mount.mount_point, mount.id);
+        if let Err(e) = &read {
+            debug!("{NAME}: statvfs {} failed: {e}", mount.mount_point);
         }
+        reads.push((slot, mount.readonly, read));
     }
+    let published = publish(&reads);
 
     // The sweep is the sole writer; the bound must be stored before finish().
     FILESYSTEM_SWEEP_ACQ.set_member_bound(slots.bound());
@@ -383,6 +392,61 @@ fn sweep(state: &mut SweepState) -> usize {
         parse_done.elapsed().as_micros()
     );
     published
+}
+
+/// Publish one sweep's reads and return how many succeeded.
+///
+/// When anything succeeded, failed slots are unset so the fresh window never
+/// pairs with stale values. When nothing did, the caller keeps the previous
+/// window, and failed slots must keep the values that window describes.
+fn publish(reads: &[(usize, bool, std::io::Result<Usage>)]) -> usize {
+    let published = reads.iter().filter(|(_, _, read)| read.is_ok()).count();
+    for (slot, readonly, read) in reads {
+        let slot = *slot;
+        match read {
+            Ok(usage) => {
+                let _ = FILESYSTEM_TOTAL.set(slot, gauge(usage.total_bytes));
+                let _ = FILESYSTEM_FREE.set(slot, gauge(usage.free_bytes));
+                let _ = FILESYSTEM_AVAILABLE.set(slot, gauge(usage.available_bytes));
+                let total = usage.total_inodes;
+                let _ = FILESYSTEM_INODES_TOTAL.set(slot, inode_gauge(total, total));
+                let _ = FILESYSTEM_INODES_FREE.set(slot, inode_gauge(total, usage.free_inodes));
+                // From the superblock options, not statvfs `f_flag`: its
+                // ST_RDONLY is also set by this path's own mount flag.
+                let _ = FILESYSTEM_READONLY.set(slot, i64::from(*readonly));
+            }
+            Err(_) if published > 0 => {
+                for group in GROUPS {
+                    let _ = group.set(slot, i64::MIN);
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    published
+}
+
+/// Clears the in-flight latch on drop, so a sweep that panics does not leave
+/// every later refresh skipping its sweep.
+struct InFlight(Arc<AtomicBool>);
+
+impl Drop for InFlight {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Lock the sweep state, starting it afresh if a panicking sweep poisoned it: a
+/// slot map abandoned mid-update cannot be trusted, and a fresh one relabels
+/// every slot it places.
+fn lock_state(state: &Mutex<SweepState>) -> std::sync::MutexGuard<'_, SweepState> {
+    state.lock().unwrap_or_else(|poisoned| {
+        warn!("{NAME}: a previous sweep panicked; restarting slot assignment");
+        state.clear_poison();
+        let mut guard = poisoned.into_inner();
+        *guard = SweepState::new();
+        guard
+    })
 }
 
 #[async_trait]
@@ -408,9 +472,9 @@ impl Sampler for Filesystem {
         let state = self.state.clone();
         let reading = self.reading.clone();
         tokio::task::spawn_blocking(move || {
-            sweep(&mut state.lock().unwrap());
-            // The in-flight latch must remain set until the blocking sweep returns.
-            reading.store(false, Ordering::Release);
+            // Must stay held until the sweep returns or unwinds.
+            let _in_flight = InFlight(reading);
+            sweep(&mut lock_state(&state));
         });
     }
 }
@@ -506,6 +570,7 @@ mod tests {
     /// mount; returns early on hosts with none, such as an overlay-root container.
     #[test]
     fn a_sweep_publishes_a_local_filesystem_and_stamps_the_group() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
         let table = std::fs::read_to_string(MOUNTINFO).unwrap();
         let Some(mount) = local_mounts(&table)
             .into_iter()
@@ -528,8 +593,11 @@ mod tests {
         let free = FILESYSTEM_FREE.value(slot).expect("free set");
         let available = FILESYSTEM_AVAILABLE.value(slot).expect("available set");
         assert!(total > 0 && free <= total && available <= free);
-        assert!(FILESYSTEM_INODES_TOTAL.value(slot).is_some());
-        assert!(FILESYSTEM_INODES_FREE.value(slot).is_some());
+        assert_eq!(
+            FILESYSTEM_INODES_TOTAL.value(slot).is_some(),
+            FILESYSTEM_INODES_FREE.value(slot).is_some(),
+            "inode gauges are present together, or absent together where there is no limit"
+        );
         assert!(FILESYSTEM_READONLY
             .value(slot)
             .is_some_and(|v| v == 0 || v == 1));
@@ -616,6 +684,96 @@ mod tests {
         let err = read_usage("/", root.id.wrapping_add(1 << 40))
             .expect_err("a mount id mismatch must refuse");
         assert!(err.to_string().contains("now resolves to mount"), "{err}");
+    }
+
+    #[test]
+    fn a_panicking_sweep_clears_the_in_flight_latch() {
+        let reading = Arc::new(AtomicBool::new(true));
+        let latch = reading.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _in_flight = InFlight(latch);
+            panic!("sweep failed");
+        });
+        assert!(!reading.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_poisoned_sweep_state_is_restarted_rather_than_left_locked() {
+        let state = Arc::new(Mutex::new(SweepState::new()));
+        state.lock().unwrap().slots.assign(&["8:1".to_string()]);
+        let poisoner = state.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("sweep failed");
+        })
+        .join();
+        assert!(state.is_poisoned());
+
+        let guard = lock_state(&state);
+        assert_eq!(guard.slots.bound(), 0, "the abandoned slot map is replaced");
+        drop(guard);
+        assert!(!state.is_poisoned());
+    }
+
+    #[test]
+    fn a_filesystem_without_an_inode_limit_publishes_absent_not_zero() {
+        assert_eq!(inode_gauge(0, 0), i64::MIN);
+        assert_eq!(inode_gauge(1000, 250), 250);
+    }
+
+    /// Serializes tests that store the process-wide acquisition group's bound.
+    static SWEEP_GLOBALS: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn a_failed_table_read_bounds_the_group_to_the_last_population() {
+        let _globals = SWEEP_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+        let missing = "/definitely/not/mountinfo";
+        let mut state = SweepState::new();
+        assert_eq!(sweep_table(&mut state, missing), 0);
+        assert_eq!(
+            FILESYSTEM_SWEEP_ACQ.member_bound(),
+            Some(0),
+            "a failed first read is bounded, never left walking capacity"
+        );
+
+        state.slots.assign(&["8:1".to_string(), "8:2".to_string()]);
+        sweep_table(&mut state, missing);
+        assert_eq!(FILESYSTEM_SWEEP_ACQ.member_bound(), Some(2));
+    }
+
+    #[test]
+    fn a_sweep_with_no_successful_read_keeps_the_previous_values() {
+        // The top slots, clear of real sweeps on hosts with few filesystems.
+        let (kept, unset) = (MAX_MOUNTS - 2, MAX_MOUNTS - 3);
+        let usage = Usage {
+            total_bytes: 7,
+            free_bytes: 7,
+            available_bytes: 7,
+            total_inodes: 7,
+            free_inodes: 7,
+        };
+        let missing = || -> std::io::Result<Usage> { Err(std::io::ErrorKind::NotFound.into()) };
+        assert_eq!(
+            publish(&[(kept, false, Ok(usage)), (unset, false, Ok(usage))]),
+            2
+        );
+
+        assert_eq!(publish(&[(kept, false, missing())]), 0);
+        assert_eq!(
+            FILESYSTEM_TOTAL.value(kept),
+            Some(7),
+            "nothing succeeded: keep"
+        );
+
+        assert_eq!(
+            publish(&[(kept, false, Ok(usage)), (unset, false, missing())]),
+            1
+        );
+        assert_eq!(
+            FILESYSTEM_TOTAL.value(unset),
+            None,
+            "something succeeded: the failed slot is unset"
+        );
     }
 
     fn ext4_at(point: &str) -> MountEntry {

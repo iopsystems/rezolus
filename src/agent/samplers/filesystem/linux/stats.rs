@@ -40,14 +40,14 @@ pub static FILESYSTEM_AVAILABLE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
 
 #[metric(
     name = "filesystem_inodes_total",
-    description = "The number of inodes a locally mounted filesystem reports it can hold (f_files). Fixed at mkfs time on ext4; an estimate that moves with free space on XFS and ZFS, which allocate inodes on demand; zero on btrfs and vfat, which report no inode limit.",
+    description = "The number of inodes a locally mounted filesystem reports it can hold (f_files). Fixed at mkfs time on ext4; an estimate that moves with free space on XFS and ZFS, which allocate inodes on demand; absent on filesystems that report no inode limit, such as btrfs and vfat.",
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_INODES_TOTAL: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
 
 #[metric(
     name = "filesystem_inodes_free",
-    description = "The number of free inodes on a locally mounted filesystem (f_ffree). A filesystem full of small files runs out of these before it runs out of bytes.",
+    description = "The number of free inodes on a locally mounted filesystem (f_ffree). A filesystem full of small files runs out of these before it runs out of bytes. Absent where the filesystem reports no inode limit.",
     metadata = { acq_group = "filesystem_sweep" }
 )]
 pub static FILESYSTEM_INODES_FREE: GaugeGroup = GaugeGroup::new(MAX_MOUNTS);
