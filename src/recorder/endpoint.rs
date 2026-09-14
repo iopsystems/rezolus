@@ -43,15 +43,30 @@ pub enum EndpointStatus {
     Pending,
 }
 
+/// What a Rezolus agent tells the recorder about itself, once, at probe time.
+///
+/// A struct rather than a tuple because the fetch grew a fourth element: four
+/// same-typed `Option<String>`s in a row is a bug waiting for someone to swap
+/// two of them at the call site.
+#[derive(Default)]
+pub struct AgentMetadata {
+    pub systeminfo: Option<String>,
+    pub descriptions: Option<String>,
+    pub sampler_status: Option<String>,
+    /// The agent's own crate version, recorded so a capture can be attributed
+    /// to a build after the fact. See `recorder::fetch_agent_version`.
+    pub version: Option<String>,
+}
+
 /// Runtime state for a single endpoint during recording.
 pub struct EndpointState {
     pub config: EndpointConfig,
     pub status: EndpointStatus,
     pub detected_protocol: Option<Protocol>,
     pub scrape_url: Option<Url>,
-    pub systeminfo: Option<String>,
-    pub descriptions: Option<String>,
-    pub sampler_status: Option<String>,
+    /// What the agent said about itself at probe time. All-`None` until the
+    /// endpoint probes as msgpack; a Prometheus endpoint never fills it.
+    pub agent: AgentMetadata,
     pub first_success_ns: Option<u64>,
     pub last_success_ns: Option<u64>,
 }
@@ -64,9 +79,7 @@ impl EndpointState {
             status: EndpointStatus::Pending,
             detected_protocol,
             scrape_url: None,
-            systeminfo: None,
-            descriptions: None,
-            sampler_status: None,
+            agent: AgentMetadata::default(),
             first_success_ns: None,
             last_success_ns: None,
         }

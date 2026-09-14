@@ -31,7 +31,7 @@ fn wants_rez(format: crate::Format) -> bool {
 
 use crate::parquet_metadata;
 pub use config::RecordingConfig;
-use endpoint::{infer_source_name, EndpointState, EndpointStatus, Protocol};
+use endpoint::{infer_source_name, AgentMetadata, EndpointState, EndpointStatus, Protocol};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -339,11 +339,9 @@ async fn probe_endpoint(
     None
 }
 
-/// Fetch systeminfo, descriptions, and sampler status from a Rezolus agent.
-async fn fetch_agent_metadata(
-    client: &Client,
-    base_url: &Url,
-) -> (Option<String>, Option<String>, Option<String>) {
+/// Fetch systeminfo, descriptions, sampler status and version from a Rezolus
+/// agent.
+async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata {
     let mut info_url = base_url.clone();
     info_url.set_path("/systeminfo");
     let systeminfo = match client.get(info_url).send().await {
@@ -365,7 +363,67 @@ async fn fetch_agent_metadata(
         _ => None,
     };
 
-    (systeminfo, descriptions, sampler_status)
+    let version = fetch_agent_version(client, base_url).await;
+
+    AgentMetadata {
+        systeminfo,
+        descriptions,
+        sampler_status,
+        version,
+    }
+}
+
+/// The version of the agent being recorded — **not** this binary's.
+///
+/// The recorder and the agent are separate processes and routinely different
+/// builds (one host upgrades, the fleet does not), so `CARGO_PKG_VERSION` here
+/// would name the wrong thing precisely when the question is being asked.
+///
+/// `/status` is the structured answer and is tried first. It is also recent
+/// (5.16.0), and the whole point of recording a version is to make old
+/// captures attributable, so an agent that predates it falls back to the root
+/// page — `"Rezolus <version> Agent"`, served by every agent this project has
+/// ever shipped. A source that answers neither (a Prometheus exporter, an
+/// agent behind a proxy that rewrites `/`) simply records no version, which is
+/// how every recording before this change reads.
+async fn fetch_agent_version(client: &Client, base_url: &Url) -> Option<String> {
+    let mut status_url = base_url.clone();
+    status_url.set_path("/status");
+    if let Ok(response) = client.get(status_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(status) =
+                    serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body)
+                {
+                    if !status.version.is_empty() {
+                        return Some(status.version);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut root_url = base_url.clone();
+    root_url.set_path("/");
+    let body = match client.get(root_url).send().await {
+        Ok(response) if response.status().is_success() => response.text().await.ok()?,
+        _ => return None,
+    };
+    parse_root_version(&body)
+}
+
+/// Pull the version out of the agent's root page, whose first line is
+/// `Rezolus <version> Agent`. Returns `None` for anything else, so a proxy's
+/// error page or another service on the port does not get recorded as a
+/// version.
+pub(crate) fn parse_root_version(body: &str) -> Option<String> {
+    let first = body.lines().next()?;
+    let rest = first.strip_prefix("Rezolus ")?;
+    let version = rest.strip_suffix(" Agent")?;
+    if version.is_empty() || version.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(version.to_string())
 }
 
 /// `sleep_until(deadline)` when there is one, otherwise a future that never
@@ -552,11 +610,18 @@ fn build_parquet_converter(
 
     converter = converter.metadata("source".to_string(), ep.config.source_label().to_string());
 
+    // Before the user's `--metadata`, the same as `source` above: what the
+    // agent reported is the default, and an explicit `--metadata version=...`
+    // overrides it.
+    if let Some(ref version) = ep.agent.version {
+        converter = converter.metadata(parquet_metadata::KEY_VERSION.to_string(), version.clone());
+    }
+
     for (key, value) in &config.metadata {
         converter = converter.metadata(key.clone(), value.clone());
     }
 
-    if let Some(ref json) = ep.systeminfo {
+    if let Some(ref json) = ep.agent.systeminfo {
         converter = converter.metadata("systeminfo".to_string(), json.clone());
     }
 
@@ -565,7 +630,7 @@ fn build_parquet_converter(
         .as_ref()
         .filter(|c| !c.descriptions().is_empty())
         .and_then(|c| serde_json::to_string(c.descriptions()).ok());
-    let desc = ep.descriptions.clone().or(prom_desc);
+    let desc = ep.agent.descriptions.clone().or(prom_desc);
     if let Some(ref json) = desc {
         converter = converter.metadata("descriptions".to_string(), json.clone());
     }
@@ -586,7 +651,7 @@ fn build_parquet_converter(
         ep.first_success_ns,
         ep.last_success_ns,
         ep.config.role.as_deref(),
-        ep.sampler_status.as_deref(),
+        ep.agent.sampler_status.as_deref(),
     ) {
         converter = converter.metadata("per_source_metadata".to_string(), json);
     }
@@ -596,7 +661,7 @@ fn build_parquet_converter(
 
 /// File-level metadata for a `.rez` archive manifest, mirroring the keys
 /// `build_parquet_converter` writes (`sampling_interval_ms`, `source`,
-/// user `--metadata`, `systeminfo`, `descriptions`).
+/// `version`, user `--metadata`, `systeminfo`, `descriptions`).
 fn build_rez_metadata(
     config: &RecordingConfig,
     ep: &EndpointState,
@@ -607,13 +672,20 @@ fn build_rez_metadata(
         config.interval.as_millis().to_string(),
     );
     m.insert("source".to_string(), ep.config.source_label().to_string());
+    // Written whether or not the agent answered anything else: a recording
+    // with no systeminfo and no descriptions is still worth attributing to a
+    // build. Before the user's `--metadata` for the same reason `source` is —
+    // an explicit `--metadata version=...` overrides what the agent reported.
+    if let Some(ref version) = ep.agent.version {
+        m.insert(parquet_metadata::KEY_VERSION.to_string(), version.clone());
+    }
     for (k, v) in &config.metadata {
         m.insert(k.clone(), v.clone());
     }
-    if let Some(ref json) = ep.systeminfo {
+    if let Some(ref json) = ep.agent.systeminfo {
         m.insert("systeminfo".to_string(), json.clone());
     }
-    if let Some(ref json) = ep.descriptions {
+    if let Some(ref json) = ep.agent.descriptions {
         m.insert("descriptions".to_string(), json.clone());
     }
     m
@@ -628,7 +700,7 @@ fn build_rez_labels(
 ) -> std::collections::BTreeMap<String, String> {
     rez::build_labels(
         ep.config.source_label(),
-        ep.systeminfo.as_deref(),
+        ep.agent.systeminfo.as_deref(),
         &config.labels,
     )
 }
@@ -1179,10 +1251,7 @@ pub fn run(mut config: RecordingConfig) {
                         protocol
                     );
                     if protocol == Protocol::Msgpack {
-                        let (si, desc, ss) = fetch_agent_metadata(&client, &ep.config.url).await;
-                        ep.systeminfo = si;
-                        ep.descriptions = desc;
-                        ep.sampler_status = ss;
+                        ep.agent = fetch_agent_metadata(&client, &ep.config.url).await;
                     }
                     ep.scrape_url = Some(url);
                     ep.detected_protocol = Some(protocol);
@@ -1695,11 +1764,8 @@ pub fn run(mut config: RecordingConfig) {
                         endpoints[idx].config.url
                     );
                     if protocol == Protocol::Msgpack {
-                        let (si, desc, ss) =
+                        endpoints[idx].agent =
                             fetch_agent_metadata(&client, &endpoints[idx].config.url).await;
-                        endpoints[idx].systeminfo = si;
-                        endpoints[idx].descriptions = desc;
-                        endpoints[idx].sampler_status = ss;
                     }
                     endpoints[idx].scrape_url = Some(url);
                     endpoints[idx].detected_protocol = Some(protocol.clone());
@@ -2240,6 +2306,79 @@ mod tests {
     // nothing behind. What they do NOT cover is the loop around it — the tick
     // scheduling, the scrape timeouts and the exit paths are exercised by
     // `tests/record_lifecycle.rs` against the real binary.
+
+    // ── agent version capture (issue #1195) ─────────────────────────────────
+
+    #[test]
+    fn root_version_parses_the_agent_banner() {
+        assert_eq!(
+            parse_root_version("Rezolus 5.20.0 Agent\nFor information, see: https://rezolus.com\n")
+                .as_deref(),
+            Some("5.20.0")
+        );
+        // A prerelease is the interesting case: most of the sampler history
+        // worth bisecting lives in `-alpha.N` builds.
+        assert_eq!(
+            parse_root_version("Rezolus 5.20.1-alpha.0 Agent\n").as_deref(),
+            Some("5.20.1-alpha.0")
+        );
+    }
+
+    #[test]
+    fn root_version_refuses_anything_that_is_not_the_banner() {
+        // A proxy error page, another service on the port, and a banner with
+        // no version in it. None of these may be recorded as a version.
+        assert_eq!(parse_root_version("<html>404</html>"), None);
+        assert_eq!(parse_root_version("Prometheus 2.5\n"), None);
+        assert_eq!(parse_root_version("Rezolus  Agent\n"), None);
+        assert_eq!(parse_root_version("Rezolus 5.20.0 Exporter\n"), None);
+        assert_eq!(parse_root_version(""), None);
+    }
+
+    #[test]
+    fn rez_metadata_carries_the_agent_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let mut ep = rez_endpoint();
+        ep.agent.version = Some("5.19.2".to_string());
+
+        let m = build_rez_metadata(&config, &ep);
+        assert_eq!(
+            m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
+            Some("5.19.2")
+        );
+    }
+
+    /// Same precedence as `source`: what the agent reported is the default,
+    /// and an explicit `--metadata version=...` overrides it (relabeling a
+    /// capture taken through a proxy, say).
+    #[test]
+    fn an_explicit_metadata_version_overrides_the_agent_reported_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = rez_config(&dir.path().join("out.rez"));
+        config.metadata = vec![("version".to_string(), "custom".to_string())];
+        let mut ep = rez_endpoint();
+        ep.agent.version = Some("5.19.2".to_string());
+
+        let m = build_rez_metadata(&config, &ep);
+        assert_eq!(
+            m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
+            Some("custom")
+        );
+    }
+
+    #[test]
+    fn rez_metadata_omits_the_version_when_the_agent_did_not_report_one() {
+        // A Prometheus endpoint, or an agent that answers neither `/status`
+        // nor `/`. Absent, not empty: an empty string would render as the
+        // blank `Rezolus Version:` line this change exists to remove.
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let ep = rez_endpoint();
+
+        let m = build_rez_metadata(&config, &ep);
+        assert!(!m.contains_key(parquet_metadata::KEY_VERSION));
+    }
 
     const TEST_ANCHOR: u64 = 1_700_000_000_000_000_000;
     const TEST_SECOND: u64 = 1_000_000_000;

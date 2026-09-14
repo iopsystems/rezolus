@@ -53,7 +53,9 @@ Each manifest recording carries two maps:
   column renaming and no pinned node; label sets distinguish recordings.
 - **`metadata`** — mirrors the keys the parquet writer would put in a
   footer: `sampling_interval_ms`, `source`, `systeminfo`, `descriptions`,
-  plus any `record --metadata k=v`.
+  `version` (see [`version`](#version)), plus any `record --metadata k=v`.
+  Per *recording*, not per file, so a multi-recording archive assembled from
+  several hosts or several agent builds stays unambiguous.
 
 Structural differences from a single parquet file:
 
@@ -160,7 +162,16 @@ Agent/tool version string of the source that produced this file. Single-source
 only — when files are combined this moves to
 `per_source_metadata.<source>.<id>.version`.
 
-**Set at record time** by the recorder/agent. Not user-editable.
+**Set at record time** by the recorder, from the *agent it scraped* — not from
+the recorder's own build. The two are separate processes and routinely
+different versions, and the question this answers ("which build produced these
+numbers?") is about the agent. The recorder reads it from the agent's `/status`
+endpoint, falling back to the `Rezolus <version> Agent` banner on `/` for
+agents older than `/status` (5.16.0). Not user-editable.
+
+**Absent, rather than empty, when there is nothing to record**: a Prometheus
+source has no agent, and recorders that predate the capture wrote no version
+at all. `mcp describe-recording` renders those as `unknown`.
 
 ### `sampling_interval_ms`
 

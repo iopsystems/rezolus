@@ -182,6 +182,7 @@ Parquet files produced by the recorder/hindsight use a columnar layout from `met
 
 File-level metadata keys are defined in `src/parquet_metadata.rs`:
 - `source` - Recording source: `"rezolus"` (single) or `["rezolus","llm-perf"]` (combined).
+- `version` - Version of the **agent that was scraped**, not the recorder's own build; read from the agent's `/status` (or its `/` banner for agents older than 5.16.0). Absent for a Prometheus source and for recordings written by recorders that predate the capture. In a `.rez` it is per-recording, so a multi-host or multi-build archive stays unambiguous.
 - `sampling_interval_ms` - Collection interval in milliseconds.
 - `systeminfo` - JSON hardware summary from agent.
 - `descriptions` - JSON map of metric name to help text. Present in single-source files; combined files nest this under `per_source_metadata.<source>.descriptions` instead.
