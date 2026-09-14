@@ -393,9 +393,11 @@ pub(crate) fn build_coverage(present: &BTreeSet<String>, uncertainty: &Uncertain
     }
 }
 
-/// Assemble the record context. Empty version -> None (`.rez` recordings
-/// carry no version metadata). `systeminfo` is a JSON passthrough; invalid
-/// JSON -> None rather than an error (the recording is still analyzable).
+/// Assemble the record context. Empty version -> None: recordings written
+/// before agent-version capture (and any Prometheus source, which has no
+/// agent) carry no `version` metadata, and `None` says "unknown build" rather
+/// than inventing one. `systeminfo` is a JSON passthrough; invalid JSON ->
+/// None rather than an error (the recording is still analyzable).
 pub(crate) fn build_context(
     source: String,
     version: String,
@@ -592,7 +594,7 @@ mod tests {
         };
         let ctx = build_context(
             "rezolus".to_string(),
-            String::new(), // .rez recordings have no version metadata
+            String::new(), // a recording from before agent-version capture
             120.0,
             1.0,
             Some(r#"{"os":"linux"}"#.to_string()),
