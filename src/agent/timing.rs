@@ -216,25 +216,13 @@ impl AcquisitionGroup {
         }
     }
 
-    /// Set the group's member-population bound: the real number of
-    /// populated members (e.g. `possible_cpus()` for a per-CPU group), as
-    /// opposed to the backing array's `entries()` capacity — a fixed
-    /// implementation ceiling (`MAX_CPUS`), not a population count (see
-    /// `docs/principles.md` principle 6: "over-allocates on small
-    /// machines"). The V3 snapshot builder walks only `0..bound` for a
-    /// group that has one set, instead of the full `entries()`, so an
-    /// ~18-CPU host does not emit 1024 mostly-empty slots per tick.
+    /// Limits the V3 member walk to `0..n`; zero declares an empty population.
     ///
-    /// Expected to be called exactly once, at sampler init, before any
-    /// snapshot walk reads it — the population is boot-fixed (CPUs coming
-    /// online later are still within the possible-CPU bound computed at
-    /// init). This is not a documented multi-writer API: a second call
-    /// silently overwrites the first (last-write-wins), which is fine for
-    /// the single-init contract but would not be safe as a runtime toggle.
-    // Only called from `CpuCounters::new`, Linux-only; see the note on
-    // `GroupWindowSlot::store`. `member_bound()` itself (the read side) is
-    // NOT guarded the same way — the V3 snapshot builder reads it
-    // unconditionally on every platform, whether or not anything ever set it.
+    /// The group's single writer must store the bound before stamping its window.
+    /// This atomic store does not synchronize a snapshot's value or metadata reads;
+    /// stamp-last ordering alone does not make a changing population coherent.
+    /// Principle 18 allows revising the bound each read for a changing
+    /// population and accepts that one-snapshot incoherence.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) fn set_member_bound(&self, n: usize) {
         self.member_bound.store(n, Ordering::Relaxed);
@@ -245,9 +233,9 @@ impl AcquisitionGroup {
     ///
     /// Takes precedence over [`set_member_bound`](Self::set_member_bound) — a
     /// bound describes a prefix, and a caller that knows the exact set knows
-    /// strictly more. Same single-init contract as the bound: called once at
-    /// sampler init, before any snapshot walk reads it. A second call is
-    /// ignored rather than racing, since the population is fixed at init.
+    /// strictly more. Call it once, at sampler init, before any snapshot walk
+    /// reads it: the set is stored once, and a second call is ignored rather
+    /// than racing.
     ///
     /// Indices are sorted and de-duplicated, so the walk stays in index order
     /// regardless of the order the caller discovered them in.
@@ -292,8 +280,7 @@ impl AcquisitionGroup {
     /// concurrently with itself.
     ///
     /// Expected to be called exactly once per group, at sampler init
-    /// (`PackedCounters::new`) — the same single-init contract as
-    /// `set_member_bound`. Calling it more than once (e.g. two
+    /// (`PackedCounters::new`). Calling it more than once (e.g. two
     /// `.packed_counters()` calls sharing one like-entities group, or a
     /// group already declared with [`new_reader_stamped`](Self::new_reader_stamped))
     /// is idempotent and harmless. Prefer declaring the group with
@@ -583,8 +570,8 @@ mod tests {
         assert_eq!(group.member_bound(), None, "unset bound is unbounded");
         group.set_member_bound(3);
         assert_eq!(group.member_bound(), Some(3));
-        // Last-write-wins, per the single-init contract documented on
-        // `set_member_bound`.
+        // A later store replaces the bound; samplers revise it as membership
+        // changes.
         group.set_member_bound(5);
         assert_eq!(group.member_bound(), Some(5));
     }

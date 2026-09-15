@@ -200,6 +200,12 @@ enabled = true
 [samplers.drivehealth]
 # interval = "60s"
 
+# Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
+# Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
+# Excludes network filesystems, FUSE, autofs and pseudo-filesystems.
+[samplers.filesystem]
+# interval = "60s"
+
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
 # requires Turing+ GPU and is only available when built with --features cupti.

@@ -611,6 +611,41 @@ Page 0x02 (`nvme.rs`) — no kernel module.
 - **Hotplug discovery** — Open. Phase 1 discovers drives once at startup; drives
   added later are missed. *Reopen:* if hotplug matters.
 
+## Agent — filesystem sampler
+
+Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-filesystem-sampler.md).
+
+- **Network mounts** — By design. Never sampled: `statvfs` on a `hard` NFS/CIFS
+  mount blocks until the server answers and the timeout is a mount option the
+  agent cannot set. Reopen on demand for them; an opt-in needs its own blocking
+  budget (bounded thread, per-mount deadline). The sampler's module doc
+  (`src/agent/samplers/filesystem/linux/mod.rs`) points here.
+- **Event-driven mount-table rescan** — Idea. `poll()` on the mountinfo
+  descriptor reports `POLLPRI` on change; a sweep could rescan only then.
+  Reopen if a many-thousand-mount host shows the per-sweep parse mattering.
+- **`MAX_MOUNTS` = 256** — By design, raised from 64. Mounts past the cap are
+  dropped, with a warning when their count changes. Reopen if a real host
+  exceeds it.
+- **Runtime degraded status** — Open, #1208. Resolution failures and stuck
+  sweeps are logged as warnings; `rezolus status` cannot show them.
+- **Partition-to-drive join** — Open, #1217. `block_device` names the partition
+  or mapped device and `drivehealth` names the drive, so no query joins them.
+  Reopen when someone needs that join.
+- **A network mount stacked mid-sweep** — Accepted. Covered local mounts are
+  dropped and a changed mount id refuses publication, but a network mount
+  stacked over a local path between the table read and the `open` can still
+  park the sweep thread on the lookup. Reopen if a sweep is ever observed
+  parked in `open`.
+- **Label changes inside a `.rez` segment** — Open, #1205. A relabeled or reused
+  slot keeps writing into the column created with its first labels, because the
+  group table builder keys columns by descriptor name alone. Shared with
+  `cpu_usage`'s per-PID task slots; the fix belongs in `crates/rez`.
+- **Filesystem context** — Open, #1206. Source, mount root and the per-mount and
+  superblock option strings are not recorded.
+- **Fleet-scale sweep cost** — Open. Measured only on a 3-filesystem host with an
+  87-line mount table; container hosts carry thousands of mount lines. Reopen:
+  measure on such a host before enabling the sampler fleet-wide.
+
 ## Agent — NVIDIA GPU sampler
 
 Source: PR #1108 (Tegra placeholder gating), grounded in a measured Tegra

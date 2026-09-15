@@ -21,6 +21,8 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_usage](#cpu_usage)
 - [Drive](#drive)
   - [drivehealth](#drivehealth)
+- [Filesystem](#filesystem)
+  - [filesystem](#filesystem-1)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
 - [Memory](#memory)
@@ -223,6 +225,75 @@ counters are always maintained by the controller.
 | `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+
+## Filesystem
+
+Metrics related to filesystem occupancy.
+
+### filesystem
+
+Reports total, free and available bytes, total and free inodes, and read-only
+state for every **locally mounted** filesystem: one series per filesystem
+(superblock), read with one `statvfs` each.
+
+The mount table (`/proc/self/mountinfo`) is re-read on every sweep, so a
+filesystem mounted after the agent started is picked up, and one that is
+unmounted drops out. A filesystem mounted more than once (bind mounts, btrfs
+subvolumes) is reported once, under its shortest mount point.
+
+**Local only.** Block-backed filesystems with a `/dev` source, plus `zfs`, are
+sampled. Network filesystems (`nfs`, `nfs4`, `cifs`, `smb3`, `ceph`,
+`glusterfs`, ...), every FUSE filesystem, autofs triggers and the kernel's
+pseudo-filesystems (`tmpfs`, `overlay`, `proc`, `sysfs`, squashfs images, ...)
+are never touched. Neither is a local filesystem that another mount covers — an
+NFS share mounted over `/data`, or over a directory above it — since its path
+now leads to the mount on top — nor one whose path passes through a network,
+FUSE or autofs mount, since looking the path up walks that mount. An agent in a
+chroot whose mount table omits the mount holding its root samples nothing, since
+that mount's type is unknown. Each skipped filesystem is logged as a warning,
+with the reason, when the reasons change. A `statvfs` on a `hard` network mount
+blocks until the server answers, with no timeout the agent can set, and one on
+an autofs trigger starts a mount attempt; local filesystems answer from kernel
+state without a network round trip (ext4 and XFS from superblock counters,
+btrfs after its own space accounting), which is what bounds the sweep. Network
+mounts stay out of scope until there is demand for them (#1202).
+
+Occupancy moves slowly, so sweeps are throttled and run off the scrape/TTL
+sample cycle: at most once per `interval` the sampler dispatches the sweep to a
+blocking thread pool and returns immediately; the gauges keep their last value
+between sweeps. The cadence defaults to 60s and is configurable via `interval`
+in `[samplers.filesystem]`. Measured cost (release, 87-line mount table, 3
+local filesystems): a 330–570 µs sweep once per interval, most of it the
+kernel generating the mount table; `refresh()` on the scrape path is 0–8 µs.
+
+`filesystem_available` is the number `df` reports as available and the one to
+alert on; `filesystem_free` also counts the blocks reserved for the superuser.
+Inode exhaustion is the other way a disk fills, and comes from the same call.
+
+`filesystem_readonly` is 1 while the filesystem as a whole is read-only: its
+superblock is read-only, which a read-only mount or a btrfs forced read-only
+sets, or ext4 has gone emergency read-only after an error. Current ext4 marks
+that with `emergency_ro` in the superblock options instead of setting the
+superblock flag, so both are checked. It does not say why; whether a 1 is a
+read-only mount or an error is for the operator to judge. Filling up does not
+set it — writes to a full filesystem fail with `ENOSPC` while it stays writable
+— and a read-only bind of a writable filesystem reads 0, because the filesystem
+is still writable through its other mounts. An XFS shutdown sets neither
+signal, so 0 does not prove the filesystem is writable.
+
+`block_device` is the kernel's name for the filesystem's partition or mapped
+device, such as `nvme0n1p5` or `dm-0`, not the drive. It does not match
+`drivehealth`'s `device` label for the same disk (#1217). ZFS datasets and btrfs have no
+block device and carry no `block_device`; `devnum` is always present.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `filesystem_total` | Size of the filesystem in bytes | `mount`, `fstype`, `devnum` (major:minor), `block_device` (when block-backed) |
+| `filesystem_free` | Unallocated bytes, including the superuser reserve | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_available` | Bytes an unprivileged process can still write | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_inodes_total` | Inodes the filesystem reports it can hold; absent on btrfs and vfat, which report no inode limit | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_inodes_free` | Free inodes | `mount`, `fstype`, `devnum`, `block_device` |
+| `filesystem_readonly` | 1 when the filesystem is read-only as a whole: superblock `ro`, or ext4 `emergency_ro` | `mount`, `fstype`, `devnum`, `block_device` |
 
 ## GPU
 

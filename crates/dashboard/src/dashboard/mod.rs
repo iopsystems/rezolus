@@ -7,6 +7,7 @@ mod category;
 mod cgroups;
 mod cpu;
 mod exceptions;
+mod filesystem;
 mod gpu;
 mod memory;
 mod network;
@@ -33,6 +34,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Syscall", "/syscall", syscall::generate),
     ("Softirq", "/softirq", softirq::generate),
     ("BlockIO", "/blockio", blockio::generate),
+    ("Filesystem", "/filesystem", filesystem::generate),
     ("cgroups", "/cgroups", cgroups::generate),
     ("Rezolus", "/rezolus", rezolus::generate),
 ];

@@ -464,6 +464,7 @@ mod tests {
         "cpu_tlb_flush",
         "cpu_usage",
         "drivehealth",
+        "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",
         "gpu_apple",

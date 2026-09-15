@@ -65,6 +65,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "cpu_tlb_flush",
     "cpu_usage",
     "drivehealth",
+    "filesystem",
     "gpu_amd_pmu",
     "gpu_amd_smi",
     "gpu_apple",
