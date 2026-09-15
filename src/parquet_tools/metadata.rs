@@ -468,6 +468,9 @@ fn describe_v3_string(recordings: &[V3Recording]) -> String {
                  at most the final tick is missing"
             );
         }
+        if let Some(line) = agent_line(&rec.metadata) {
+            let _ = writeln!(out, "    {line}");
+        }
         if let Some(line) = clock_line_of(Some(rec.clock_anchor_wall_ns), &rec.clock_offsets) {
             let _ = writeln!(out, "    {line}");
         }
@@ -516,6 +519,21 @@ fn v3_json(recordings: &[V3Recording]) -> serde_json::Value {
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
+}
+
+/// The recording's agent line: which rezolus build produced it.
+///
+/// Printed because "which agent wrote this?" is the first question when two
+/// recordings of the same host disagree, and a manifest that describes the
+/// machine in detail while omitting the thing that read it leaves that
+/// unanswerable (issue #1195). Absent for recordings written before the
+/// recorder captured it, and for a Prometheus source, which has no agent.
+fn agent_line(metadata: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    let version = metadata.get(crate::parquet_metadata::KEY_VERSION)?;
+    if version.is_empty() {
+        return None;
+    }
+    Some(format!("agent rezolus {version}"))
 }
 
 /// The recording's clock line: the wall-clock anchor its row timestamps are
@@ -578,6 +596,9 @@ fn describe_rez_string(manifest: &crate::recorder::rez::RezManifest) -> String {
                 "    ! not cleanly finalized — recovered up to its last checkpoint; \
                  data after that may be missing"
             );
+        }
+        if let Some(line) = agent_line(&rec.metadata) {
+            let _ = writeln!(out, "    {line}");
         }
         if let Some(line) = clock_line(rec) {
             let _ = writeln!(out, "    {line}");
@@ -643,6 +664,43 @@ mod rez_tests {
         assert!(
             !s.contains("not cleanly finalized"),
             "a v1 archive has no completeness flag to report: {s}"
+        );
+    }
+
+    /// Which agent build wrote a recording is the first question when two
+    /// recordings of the same host disagree (issue #1195), so the manifest
+    /// summary names it — and says nothing at all when the recording predates
+    /// the capture, rather than printing an empty label.
+    #[test]
+    fn describe_rez_string_names_the_agent_that_wrote_the_recording() {
+        let mut m = RezManifest {
+            version: 2,
+            recordings: vec![RezRecording {
+                dir: "rezolus".to_string(),
+                labels: Default::default(),
+                metadata: [(
+                    crate::parquet_metadata::KEY_VERSION.to_string(),
+                    "5.20.0".to_string(),
+                )]
+                .into_iter()
+                .collect(),
+                complete: true,
+                clock_anchor_wall_ns: None,
+                clock_offsets: Vec::new(),
+                tables: Vec::new(),
+            }],
+        };
+        assert!(
+            describe_rez_string(&m).contains("agent rezolus 5.20.0"),
+            "{}",
+            describe_rez_string(&m)
+        );
+
+        m.recordings[0].metadata = Default::default();
+        assert!(
+            !describe_rez_string(&m).contains("agent"),
+            "an archive without a captured version must not print the label: {}",
+            describe_rez_string(&m)
         );
     }
 

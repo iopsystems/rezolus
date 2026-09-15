@@ -445,6 +445,27 @@ pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> Strin
         .map(|dt: DateTime<Utc>| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| format!("{end_time:.0} (invalid timestamp)"));
 
+    // Recordings written before agent versions were captured (and any
+    // Prometheus source, which has no agent) carry no `version` metadata. Say
+    // so rather than rendering the label with nothing after it, which reads as
+    // a rendering bug rather than as an absent fact.
+    let version = data.version();
+    let version = if version.is_empty() {
+        "unknown (recording predates agent-version capture)"
+    } else {
+        &version
+    };
+
+    // Only when the recording has one: a line reading "Accelerator Driver:"
+    // with nothing after it is the exact defect this block exists to fix, one
+    // field over.
+    let accelerator = data
+        .metadata_get(crate::parquet_metadata::KEY_SYSTEMINFO)
+        .as_deref()
+        .and_then(accelerator_driver_line)
+        .map(|line| format!("\nAccelerator Driver: {line}"))
+        .unwrap_or_default();
+
     format!(
         "Recording Information\n\
          =====================\n\
@@ -453,16 +474,68 @@ pub fn format_recording_info(file_path: &str, data: &dyn MetricsSource) -> Strin
          Source: {}\n\
          Recording Duration: {} ({:.1} seconds)\n\
          Start Time: {} (epoch: {:.0})\n\
-         End Time: {} (epoch: {:.0})",
+         End Time: {} (epoch: {:.0}){}",
         file_path,
-        data.version(),
+        version,
         data.source(),
         duration_str,
         duration_seconds,
         start_datetime,
         start_time,
         end_datetime,
-        end_time
+        end_time,
+        accelerator
+    )
+}
+
+/// The accelerator driver(s) a recording was taken against, read out of its
+/// `systeminfo`.
+///
+/// Surfaced beside the agent version because the two answer the same question
+/// — which software produced these numbers — and a driver upgrade moves GPU
+/// metrics exactly as a sampler change does (issue #1195). The fact already
+/// rides along in `systeminfo.gpus[].driver`; this only puts it where a reader
+/// looks. `None` when the recording has no GPU reporting one, or when
+/// `systeminfo` is absent or unparseable.
+fn accelerator_driver_line(systeminfo_json: &str) -> Option<String> {
+    let info: systeminfo::SystemSummary = serde_json::from_str(systeminfo_json).ok()?;
+
+    // Deduplicated by (vendor, driver) and counted: a host with eight
+    // identical GPUs should read as one driver, not eight copies of it — and a
+    // host whose GPUs disagree about their driver is exactly the interesting
+    // case, so the pairs are kept distinct rather than folded to the first.
+    let mut seen: Vec<((&str, &str), usize)> = Vec::new();
+    for gpu in &info.gpus {
+        let driver = match gpu.driver.as_deref() {
+            Some(d) if !d.is_empty() => d,
+            _ => continue,
+        };
+        let vendor = if gpu.vendor.is_empty() {
+            "gpu"
+        } else {
+            gpu.vendor.as_str()
+        };
+        match seen.iter_mut().find(|(key, _)| *key == (vendor, driver)) {
+            Some((_, count)) => *count += 1,
+            None => seen.push(((vendor, driver), 1)),
+        }
+    }
+
+    if seen.is_empty() {
+        return None;
+    }
+
+    Some(
+        seen.iter()
+            .map(|((vendor, driver), count)| {
+                if *count > 1 {
+                    format!("{vendor} {driver} ({count} devices)")
+                } else {
+                    format!("{vendor} {driver}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
     )
 }
 
@@ -2431,5 +2504,79 @@ mod tests {
         assert!(command()
             .try_get_matches_from(["mcp", "--recording", "source=redis"])
             .is_err());
+    }
+
+    // ── recording attribution (issue #1195) ─────────────────────────────────
+
+    /// Deliberately not a bare pass-through assertion: a recording that
+    /// predates agent-version capture must SAY the version is unknown. The
+    /// bug this replaces rendered `Rezolus Version:` with nothing after it,
+    /// which reads as a broken formatter rather than as a missing fact.
+    #[test]
+    fn an_absent_version_is_named_rather_than_left_blank() {
+        let store = metriken_query::MemoryStore::builder()
+            .source("rezolus")
+            .sampling_interval_ms(1000)
+            .build();
+        let out = format_recording_info("old.parquet", &store);
+        assert!(
+            !out.contains("Rezolus Version: \n"),
+            "an empty version must not render as a bare label: {out}"
+        );
+        assert!(out.contains("Rezolus Version: unknown"), "{out}");
+    }
+
+    #[test]
+    fn a_captured_version_is_rendered() {
+        let store = metriken_query::MemoryStore::builder()
+            .source("rezolus")
+            .version("5.20.1-alpha.0")
+            .sampling_interval_ms(1000)
+            .build();
+        let out = format_recording_info("new.rez", &store);
+        assert!(out.contains("Rezolus Version: 5.20.1-alpha.0"), "{out}");
+    }
+
+    #[test]
+    fn accelerator_driver_folds_identical_devices_and_counts_them() {
+        let json = r#"{"os":"linux","kernel":"6.8.0","arch":"x86_64","gpus":[
+            {"index":0,"vendor":"nvidia","driver":"570.86.15"},
+            {"index":1,"vendor":"nvidia","driver":"570.86.15"}
+        ]}"#;
+        assert_eq!(
+            accelerator_driver_line(json).as_deref(),
+            Some("nvidia 570.86.15 (2 devices)")
+        );
+    }
+
+    /// A host whose GPUs disagree about their driver is exactly the case the
+    /// line exists for, so the pairs stay distinct instead of folding to the
+    /// first one seen.
+    #[test]
+    fn accelerator_driver_keeps_disagreeing_devices_apart() {
+        let json = r#"{"gpus":[
+            {"index":0,"vendor":"nvidia","driver":"570.86.15"},
+            {"index":1,"vendor":"amd","driver":"6.8.5"}
+        ]}"#;
+        assert_eq!(
+            accelerator_driver_line(json).as_deref(),
+            Some("nvidia 570.86.15; amd 6.8.5")
+        );
+    }
+
+    #[test]
+    fn accelerator_driver_is_absent_without_one_to_report() {
+        // No GPUs at all, a GPU that reports no driver, an empty driver
+        // string, and systeminfo that is not JSON.
+        assert_eq!(accelerator_driver_line(r#"{"os":"linux","gpus":[]}"#), None);
+        assert_eq!(
+            accelerator_driver_line(r#"{"gpus":[{"index":0,"vendor":"apple"}]}"#),
+            None
+        );
+        assert_eq!(
+            accelerator_driver_line(r#"{"gpus":[{"index":0,"vendor":"apple","driver":""}]}"#),
+            None
+        );
+        assert_eq!(accelerator_driver_line("not json"), None);
     }
 }

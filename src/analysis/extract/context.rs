@@ -202,6 +202,10 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
         "network_ethtool",
     ),
     ("network_ena_pps_allowance_exceeded", "network_ethtool"),
+    // Not prefix-recoverable: the sampler is `network_traffic`, and neither
+    // host-boundary name starts with it.
+    ("network_host_bytes", "network_traffic"),
+    ("network_host_packets", "network_traffic"),
     ("network_packets", "network_traffic"),
     ("network_transmit_busy", "network_interfaces"),
     ("network_transmit_complete", "network_interfaces"),
@@ -394,9 +398,11 @@ pub(crate) fn build_coverage(present: &BTreeSet<String>, uncertainty: &Uncertain
     }
 }
 
-/// Assemble the record context. Empty version -> None (`.rez` recordings
-/// carry no version metadata). `systeminfo` is a JSON passthrough; invalid
-/// JSON -> None rather than an error (the recording is still analyzable).
+/// Assemble the record context. Empty version -> None: recordings written
+/// before agent-version capture (and any Prometheus source, which has no
+/// agent) carry no `version` metadata, and `None` says "unknown build" rather
+/// than inventing one. `systeminfo` is a JSON passthrough; invalid JSON ->
+/// None rather than an error (the recording is still analyzable).
 pub(crate) fn build_context(
     source: String,
     version: String,
@@ -593,7 +599,7 @@ mod tests {
         };
         let ctx = build_context(
             "rezolus".to_string(),
-            String::new(), // .rez recordings have no version metadata
+            String::new(), // a recording from before agent-version capture
             120.0,
             1.0,
             Some(r#"{"os":"linux"}"#.to_string()),

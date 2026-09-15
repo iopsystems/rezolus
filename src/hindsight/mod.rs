@@ -127,6 +127,22 @@ pub fn run(config: Config) {
 
     let agent_systeminfo = fetch("/systeminfo");
     let agent_descriptions = fetch("/metrics/descriptions");
+    // The buffered agent's version, not this binary's: hindsight and the agent
+    // are separate processes and can be different builds. `/status` is the
+    // structured answer; the root page is the fallback for agents older than
+    // it. Same two-step as `recorder::fetch_agent_version`, done with the
+    // blocking client hindsight already has here.
+    let agent_version = fetch("/status")
+        .and_then(|body| {
+            serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body).ok()
+        })
+        .map(|status| status.version)
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            fetch("/")
+                .as_deref()
+                .and_then(crate::recorder::parse_root_version)
+        });
 
     if agent_systeminfo.is_some() {
         debug!("fetched systeminfo from agent");
@@ -220,7 +236,12 @@ pub fn run(config: Config) {
 
     let seed = crate::recorder::rez_v3_writer::ManifestSeed {
         labels: crate::recorder::rez::build_labels("rezolus", agent_systeminfo.as_deref(), &[]),
-        metadata: buffer_metadata(interval_dur, &agent_systeminfo, &agent_descriptions),
+        metadata: buffer_metadata(
+            interval_dur,
+            &agent_systeminfo,
+            &agent_descriptions,
+            &agent_version,
+        ),
         clock_anchor_wall_ns,
     };
 
@@ -495,6 +516,7 @@ fn buffer_metadata(
     interval: Duration,
     systeminfo: &Option<String>,
     descriptions: &Option<String>,
+    version: &Option<String>,
 ) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     m.insert(
@@ -508,5 +530,37 @@ fn buffer_metadata(
     if let Some(json) = descriptions {
         m.insert("descriptions".to_string(), json.clone());
     }
+    if let Some(v) = version {
+        m.insert(crate::parquet_metadata::KEY_VERSION.to_string(), v.clone());
+    }
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The buffer must be indistinguishable from a `rezolus record` capture to
+    /// every consumer, and that now includes carrying the agent's version
+    /// (issue #1195). Hindsight and the agent are separate processes, so the
+    /// version written is the one fetched from the agent, never this binary's.
+    #[test]
+    fn buffer_metadata_carries_the_agent_version_when_the_agent_reported_one() {
+        let m = buffer_metadata(
+            Duration::from_secs(1),
+            &None,
+            &None,
+            &Some("5.19.2".to_string()),
+        );
+        assert_eq!(
+            m.get(crate::parquet_metadata::KEY_VERSION)
+                .map(String::as_str),
+            Some("5.19.2")
+        );
+
+        // Absent, not empty: an empty value renders as the bare
+        // `Rezolus Version:` line this change exists to remove.
+        let m = buffer_metadata(Duration::from_secs(1), &None, &None, &None);
+        assert!(!m.contains_key(crate::parquet_metadata::KEY_VERSION));
+    }
 }
