@@ -43,28 +43,28 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_bytes",
-    description = "The number of bytes transferred over the network",
+    description = "The number of bytes transferred over the network. Counted once per network interface the packet is handed to, so a packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer — a bonded host reads roughly 2x its real egress on transmit, 3x for VLAN-over-bond. Includes loopback and intra-host virtual traffic that never reaches a NIC. Use network_host_bytes for traffic crossing the host boundary",
     metadata = { direction = "receive", unit = "bytes", acq_group = "network_traffic_counters" }
 )]
 pub static NETWORK_RX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_packets",
-    description = "The number of packets transferred over the network",
+    description = "The number of packets transferred over the network. Counted once per network interface the packet is handed to, so a packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer — a bonded host reads roughly 2x its real egress on transmit, 3x for VLAN-over-bond. Includes loopback and intra-host virtual traffic that never reaches a NIC. Use network_host_packets for traffic crossing the host boundary",
     metadata = { direction = "receive", unit = "packets", acq_group = "network_traffic_counters" }
 )]
 pub static NETWORK_RX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_bytes",
-    description = "The number of bytes transferred over the network",
+    description = "The number of bytes transferred over the network. Counted once per network interface the packet is handed to, so a packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer — a bonded host reads roughly 2x its real egress on transmit, 3x for VLAN-over-bond. Includes loopback and intra-host virtual traffic that never reaches a NIC. Use network_host_bytes for traffic crossing the host boundary",
     metadata = { direction = "transmit", unit = "bytes", acq_group = "network_traffic_counters" }
 )]
 pub static NETWORK_TX_BYTES: LazyCounter = LazyCounter::new(Counter::default);
 
 #[metric(
     name = "network_packets",
-    description = "The number of packets transferred over the network",
+    description = "The number of packets transferred over the network. Counted once per network interface the packet is handed to, so a packet crossing a stacked interface (bond, VLAN, bridge, tunnel) is counted once per layer — a bonded host reads roughly 2x its real egress on transmit, 3x for VLAN-over-bond. Includes loopback and intra-host virtual traffic that never reaches a NIC. Use network_host_packets for traffic crossing the host boundary",
     metadata = { direction = "transmit", unit = "packets", acq_group = "network_traffic_counters" }
 )]
 pub static NETWORK_TX_PACKETS: LazyCounter = LazyCounter::new(Counter::default);
