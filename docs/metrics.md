@@ -292,6 +292,31 @@ systems.
 Metrics related to network performance. These metrics provide insights into
 network traffic, error rates, packet processing, and overall network health.
 
+### network_ethtool
+
+NIC driver statistics read via ethtool ioctls, the same mechanism as
+`ethtool -S`. On AWS EC2 instances with ENA interfaces these expose the
+allowance-exceeded counters that indicate instance-level rate limiting. On
+hosts with no ENA interface the sampler reports as unsupported and produces
+nothing.
+
+Every metric is **per interface**: each carries an `id` (the interface's slot)
+and an `interface` label (its name, e.g. `eth0`). A host with several ENIs
+reports each separately — which ENI is being throttled is the question these
+counters exist to answer.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `network_ena_bandwidth_allowance_exceeded` | Packets queued or dropped due to the bandwidth allowance being exceeded | `direction={receive,transmit}`, `id`, `interface` |
+| `network_ena_pps_allowance_exceeded` | Packets queued or dropped due to the PPS allowance being exceeded | `id`, `interface` |
+| `network_ena_conntrack_allowance_exceeded` | Packets dropped due to the connection tracking allowance being exceeded | `id`, `interface` |
+| `network_ena_linklocal_allowance_exceeded` | Packets dropped due to the link-local PPS allowance being exceeded | `id`, `interface` |
+
+`id` is assigned from a name-sorted enumeration of interfaces, so it is stable
+across agent restarts for an unchanged set of interfaces. Adding or removing a
+NIC renumbers the ones after it — use `interface` to follow a series across
+that.
+
 ### network_interfaces
 
 Produces network interface statistics from /sys/class/net for TX/RX errors.

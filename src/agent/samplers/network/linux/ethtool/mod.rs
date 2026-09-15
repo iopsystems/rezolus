@@ -16,7 +16,7 @@ use stats::*;
 
 use crate::agent::*;
 
-use metriken::LazyCounter;
+use metriken::CounterGroup;
 use tokio::sync::Mutex;
 
 use std::os::fd::RawFd;
@@ -32,7 +32,12 @@ const SIOCETHTOOL: u64 = 0x8946;
 const ETH_GSTRING_LEN: usize = 32;
 
 /// The ENA stats we want to track, mapping ethtool stat name to our metric.
-const ENA_STATS: &[(&str, &LazyCounter)] = &[
+///
+/// Each metric is a per-interface [`CounterGroup`], not a scalar. A host can
+/// have several ENA interfaces — a separate management and data ENI, or several
+/// data ENIs for bandwidth — and "which ENI is being throttled" is the question
+/// these counters exist to answer. See `TrackedInterface::slot`.
+const ENA_STATS: &[(&str, &CounterGroup)] = &[
     ("bw_in_allowance_exceeded", &ENA_BW_IN_ALLOWANCE_EXCEEDED),
     ("bw_out_allowance_exceeded", &ENA_BW_OUT_ALLOWANCE_EXCEEDED),
     ("pps_allowance_exceeded", &ENA_PPS_ALLOWANCE_EXCEEDED),
@@ -124,12 +129,25 @@ impl Ifreq {
 /// A tracked stat: its index in the ethtool stats array and the metric to update.
 struct TrackedStat {
     index: usize,
-    metric: &'static LazyCounter,
+    metric: &'static CounterGroup,
 }
 
-/// A tracked interface: its name and the stats we care about.
+/// A tracked interface: its name, its slot in every [`CounterGroup`], and the
+/// stats we care about.
 struct TrackedInterface {
     name: String,
+    /// This interface's index within each metric group, and the value of the
+    /// `id` label the agent stamps on the exposed series.
+    ///
+    /// Assigned from a NAME-SORTED enumeration, not `read_dir` order. The slot
+    /// is part of the series identity, so an arbitrary order would reshuffle
+    /// which `id` refers to which NIC every time the agent restarts, silently
+    /// splicing two interfaces' histories together in any recording that spans
+    /// the restart. Sorting makes the assignment reproducible for an unchanged
+    /// set of interfaces. (Adding or removing a NIC still renumbers the ones
+    /// after it — the `interface` metadata below is what actually identifies a
+    /// series across that.)
+    slot: usize,
     n_stats: u32,
     stats: Vec<TrackedStat>,
 }
@@ -218,15 +236,34 @@ impl EthtoolInner {
             }
         };
 
-        for entry in entries.flatten() {
-            let ifname = entry.file_name().to_string_lossy().to_string();
-
+        // Sorted, so slot assignment is reproducible across restarts — see
+        // `TrackedInterface::slot`. `read_dir` yields filesystem order, which is
+        // neither alphabetical nor stable.
+        let mut ifnames: Vec<String> = entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
             // Skip loopback
-            if ifname == "lo" {
-                continue;
-            }
+            .filter(|ifname| ifname != "lo")
+            .collect();
+        ifnames.sort();
 
-            if let Some(tracked) = Self::probe_interface(fd, &ifname)? {
+        for ifname in ifnames {
+            if let Some(mut tracked) = Self::probe_interface(fd, &ifname)? {
+                if interfaces.len() >= MAX_INTERFACES {
+                    warn!(
+                        "{NAME}: more than {MAX_INTERFACES} interfaces expose tracked stats; \
+                         {ifname} and any beyond it are not reported"
+                    );
+                    break;
+                }
+                tracked.slot = interfaces.len();
+                for stat in &tracked.stats {
+                    stat.metric.insert_metadata(
+                        tracked.slot,
+                        "interface".to_string(),
+                        tracked.name.clone(),
+                    );
+                }
                 interfaces.push(tracked);
             }
         }
@@ -328,6 +365,9 @@ impl EthtoolInner {
 
         Ok(Some(TrackedInterface {
             name: ifname.to_string(),
+            // Overwritten by the caller, which owns slot assignment because it
+            // is the only place that knows how many interfaces already qualified.
+            slot: 0,
             n_stats,
             stats: tracked_stats,
         }))
@@ -382,7 +422,7 @@ impl EthtoolInner {
 
         for stat in &iface.stats {
             let value = unsafe { *values_ptr.add(stat.index) };
-            stat.metric.set(value);
+            stat.metric.set(iface.slot, value);
         }
 
         unsafe {
