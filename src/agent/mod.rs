@@ -50,6 +50,9 @@ pub use bpf::{kernel_has_btf, process_cgroup_info, CgroupInfo};
 // This is the maximum number of CPUs we track with BPF counters.
 pub const MAX_CPUS: usize = 1024;
 
+// This is the maximum number of CPU packages (sockets) we track.
+pub const MAX_PACKAGES: usize = 8;
+
 // This is the maximum number of cgroups we track with BPF counters.
 pub const MAX_CGROUPS: usize = 4096;
 

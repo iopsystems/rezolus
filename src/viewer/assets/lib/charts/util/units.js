@@ -137,6 +137,42 @@ const UNIT_SYSTEMS = {
         }]
     },
 
+    // Power (watts). Dashboard power plots derive watts from the microjoule
+    // energy counters: irate() yields uJ/s (= uW), so the query divides by 1e6.
+    power: {
+        base: 'W',
+        scales: [{
+            // Sub-watt steps matter here: an idle integrated GPU draws
+            // microwatts, and that domain is precisely why the dashboard
+            // derives power from the energy counters instead of the
+            // milliwatt gauges. Starting at `W` would render it `0 W` and
+            // reintroduce the problem the derivation exists to avoid.
+            //
+            // `threshold: 0` must stay on the lowest scale: the selector walks
+            // scales downward and falls back to `scales[0]`, so a value below
+            // every threshold formats with whatever sits first.
+            threshold: 0,
+            suffix: 'uW',
+            divisor: 0.000001
+        }, {
+            threshold: 0.001,
+            suffix: 'mW',
+            divisor: 0.001
+        }, {
+            threshold: 1,
+            suffix: 'W',
+            divisor: 1
+        }, {
+            threshold: 1000,
+            suffix: 'KW',
+            divisor: 1000
+        }, {
+            threshold: 1000000,
+            suffix: 'MW',
+            divisor: 1000000
+        }]
+    },
+
     // Count (no units, just numbers with K, M, B suffixes)
     count: {
         base: '',

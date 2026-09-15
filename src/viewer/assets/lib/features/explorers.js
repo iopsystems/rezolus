@@ -13,6 +13,7 @@ const UNIT_OPTIONS = [
     { value: 'bitrate', label: 'Bit Rate (bps)' },
     { value: 'percentage', label: 'Percentage (0–1 → %)' },
     { value: 'frequency', label: 'Frequency (Hz)' },
+    { value: 'power', label: 'Power (W)' },
 ];
 
 /** Render a unit-type selector dropdown with label (inline). */
