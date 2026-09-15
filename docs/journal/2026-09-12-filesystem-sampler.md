@@ -171,7 +171,7 @@ brayniac reviewed the draft on GitHub. Decisions and fixes:
   not join: a filesystem sits on a partition (`nvme0n1p5`) and `drivehealth`
   names the drive (`nvme0`). The series now carry `devnum` and, when
   `/sys/dev/block` has a link, `block_device`, so no label promises a join that
-  does not hold. A partition-to-drive link belongs with #1206.
+  does not hold. Relating a partition to its drive is tracked in #1217.
 - **Cap.** `MAX_MOUNTS` rose from 64 to 256, which costs memory only because the
   member bound limits each snapshot to occupied slots; a ZFS host with many
   datasets hit 64. The over-cap warning fires when the count changes rather
@@ -291,6 +291,9 @@ the held-latch refresh, and the end-to-end sweep against a readable local mount,
   rather than in this sampler.
 - **Filesystem context** — Open, #1206. Source, mount root, and per-mount and
   superblock option strings are not recorded; read-only state is.
+- **Partition-to-drive join** — Open, #1217. `block_device` names the partition
+  or mapped device and `drivehealth` names the drive, so no query joins them.
+  Reopen when someone needs that join.
 - **Fleet-scale sweep cost** — Open. Measured only on this host (an 87-line
   mount table, 3 local filesystems). A container host carries thousands of mount
   lines, and the kernel generating the table dominates the sweep. Reopen:

@@ -281,11 +281,9 @@ set it — writes to a full filesystem fail with `ENOSPC` while it stays writabl
 is still writable through its other mounts. An XFS shutdown sets neither
 signal, so 0 does not prove the filesystem is writable.
 
-| Metric | Description | Metadata |
-|--------|-------------|----------|
 `block_device` is the kernel's name for the filesystem's partition or mapped
 device, such as `nvme0n1p5` or `dm-0`, not the drive. It does not match
-`drivehealth`'s `device` label for the same disk. ZFS datasets and btrfs have no
+`drivehealth`'s `device` label for the same disk (#1217). ZFS datasets and btrfs have no
 block device and carry no `block_device`; `devnum` is always present.
 
 | Metric | Description | Metadata |

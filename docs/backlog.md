@@ -628,6 +628,9 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
   exceeds it.
 - **Runtime degraded status** — Open, #1208. Resolution failures and stuck
   sweeps are logged as warnings; `rezolus status` cannot show them.
+- **Partition-to-drive join** — Open, #1217. `block_device` names the partition
+  or mapped device and `drivehealth` names the drive, so no query joins them.
+  Reopen when someone needs that join.
 - **A network mount stacked mid-sweep** — Accepted. Covered local mounts are
   dropped and a changed mount id refuses publication, but a network mount
   stacked over a local path between the table read and the `open` can still
