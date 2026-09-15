@@ -25,8 +25,39 @@ pub fn generate(
 
     let mut network = Group::new("Network", "network");
 
-    let bandwidth = network.subgroup("Bandwidth");
-    bandwidth.describe("Transmit and receive bit rates on the wire.");
+    // Host boundary above the per-interface pair — see `network.rs` for why.
+    if has_host_traffic_counters(data) {
+        let host = network.subgroup("Host Bandwidth");
+        host.describe(
+            "Transmit and receive bit rates crossing the host boundary, counted once at the \
+             interface bound to a device driver. Matches the NIC's own counters.",
+        );
+        host.plot_promql(
+            PlotOpts::counter(
+                "Host Transmit Bandwidth",
+                "network-host-transmit-bandwidth",
+                Unit::Bitrate,
+            )
+            .with_unit_system("bitrate"),
+            "sum(irate(network_host_bytes{direction=\"transmit\"}[5m])) * 8".to_string(),
+        );
+        host.plot_promql(
+            PlotOpts::counter(
+                "Host Receive Bandwidth",
+                "network-host-receive-bandwidth",
+                Unit::Bitrate,
+            )
+            .with_unit_system("bitrate"),
+            "sum(irate(network_host_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
+        );
+    }
+
+    let bandwidth = network.subgroup("Interface Bandwidth");
+    bandwidth.describe(
+        "Transmit and receive bit rates summed over every interface traversed. Counts a packet \
+         once per stacked layer (bond, VLAN, bridge), and includes intra-host virtual traffic, \
+         so this reads higher than the host bandwidth above.",
+    );
     bandwidth.plot_promql(
         PlotOpts::counter(
             "Transmit Bandwidth",
@@ -46,8 +77,11 @@ pub fn generate(
         "sum(irate(network_bytes{direction=\"receive\"}[5m])) * 8".to_string(),
     );
 
-    let packets = network.subgroup("Packets");
-    packets.describe("Transmit and receive packet rates.");
+    let packets = network.subgroup("Interface Packets");
+    packets.describe(
+        "Transmit and receive packet rates summed over every interface traversed — see the \
+         interface bandwidth note above.",
+    );
     packets.plot_promql(
         PlotOpts::counter("Transmit Packets", "network-transmit-packets", Unit::Rate),
         "sum(irate(network_packets{direction=\"transmit\"}[5m]))".to_string(),
@@ -173,13 +207,22 @@ pub fn generate(
             PlotOpts::counter("CPU Time / Throughput", "normalized-cpu-busy", Unit::Time),
             format!("sum(irate(cpu_usage[5m])) / ({tq})"),
         );
+        // Bits per unit of work is a wire-efficiency question, so it uses the
+        // host-boundary counter when the recording has it. Falling back to
+        // `network_bytes` keeps the panel populated for older recordings,
+        // where it carries that metric's per-layer inflation.
+        let net = if has_host_traffic_counters(data) {
+            "network_host_bytes"
+        } else {
+            "network_bytes"
+        };
         efficiency.plot_promql(
             PlotOpts::counter(
                 "Network TX / Throughput",
                 "normalized-network-tx",
                 Unit::Count,
             ),
-            format!("(sum(irate(network_bytes{{direction=\"transmit\"}}[5m])) * 8) / ({tq})"),
+            format!("(sum(irate({net}{{direction=\"transmit\"}}[5m])) * 8) / ({tq})"),
         );
         efficiency.plot_promql(
             PlotOpts::counter(
@@ -187,7 +230,7 @@ pub fn generate(
                 "normalized-network-rx",
                 Unit::Count,
             ),
-            format!("(sum(irate(network_bytes{{direction=\"receive\"}}[5m])) * 8) / ({tq})"),
+            format!("(sum(irate({net}{{direction=\"receive\"}}[5m])) * 8) / ({tq})"),
         );
 
         view.group(normalized);

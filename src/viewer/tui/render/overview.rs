@@ -5,7 +5,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::widgets::{Block, Borders};
 use ratatui::Frame;
 
-use ::dashboard::blockio_device_latency_metric;
+use ::dashboard::{blockio_device_latency_metric, has_host_traffic_counters};
 use metriken_query::MetricsSource;
 
 use super::chart::draw_chart;
@@ -70,8 +70,19 @@ pub fn tiles(data: &dyn MetricsSource) -> Vec<Tile> {
             def: line("sum(irate(syscall[5m]))", Some("rate")),
         },
         Tile {
+            // Host-boundary when the recording has it: one tile, so it shows
+            // the number that matches the NIC rather than the per-interface
+            // sum, which on a bonded or VM host reads several times higher.
+            // Falls back so older recordings still populate the tile.
             title: "Network Throughput",
-            def: line("sum(irate(network_bytes[5m])) * 8", Some("bitrate")),
+            def: line(
+                if has_host_traffic_counters(data) {
+                    "sum(irate(network_host_bytes[5m])) * 8"
+                } else {
+                    "sum(irate(network_bytes[5m])) * 8"
+                },
+                Some("bitrate"),
+            ),
         },
         Tile {
             title: "Block IO Latency",

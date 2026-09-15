@@ -407,8 +407,8 @@ Basic network traffic statistics.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `network_bytes` | The number of bytes transferred over the network | `direction={receive,transmit}` |
-| `network_packets` | The number of packets transferred over the network | `direction={receive,transmit}` |
+| `network_bytes` | Bytes transferred, counted once per interface traversed — **reads high on stacked interfaces**, see below | `direction={receive,transmit}` |
+| `network_packets` | Packets transferred, counted once per interface traversed — **reads high on stacked interfaces**, see below | `direction={receive,transmit}` |
 | `network_host_bytes` | Bytes crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
 | `network_host_packets` | Packets crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
 

@@ -60,6 +60,25 @@ pub fn blockio_device_latency_metric(data: &dyn MetricsSource) -> &'static str {
     }
 }
 
+/// Whether the recording carries the host-boundary traffic counters
+/// (`network_host_bytes` / `network_host_packets`) added in 5.20.1.
+///
+/// Consumers plot the host-boundary series ABOVE the older per-interface
+/// `network_*` panels, but only when the recording actually has them: a query
+/// for an absent metric renders an empty plot, and a recording made before
+/// those counters existed would otherwise get blank panels at the top of its
+/// network view.
+///
+/// Checked on `network_host_bytes` alone — all four counters come from one
+/// sampler reading one BPF map, so a recording has all of them or none.
+///
+/// Single source of truth, for the same reason as
+/// [`blockio_device_latency_metric`]: the overview dashboard, the network
+/// dashboard and the TUI all need this decision and must not disagree.
+pub fn has_host_traffic_counters(data: &dyn MetricsSource) -> bool {
+    has_metric(data, "network_host_bytes")
+}
+
 #[derive(Default, Serialize)]
 pub struct View {
     // interval between consecutive datapoints as fractional seconds
