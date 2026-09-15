@@ -307,12 +307,71 @@ These metrics can help monitor network interface health.
 
 ### network_traffic
 
-Basic network traffic statistics. 
+Basic network traffic statistics.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
 | `network_bytes` | The number of bytes transferred over the network | `direction={receive,transmit}` |
 | `network_packets` | The number of packets transferred over the network | `direction={receive,transmit}` |
+| `network_host_bytes` | Bytes crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
+| `network_host_packets` | Packets crossing this host's network boundary, counted once at the interface bound to a device driver | `direction={receive,transmit}` |
+
+#### Which pair to use
+
+The two pairs count at different layers, and neither is a drop-in replacement
+for the other.
+
+`network_bytes` / `network_packets` count **every netdev the packet is handed
+to**. The kernel fires `net_dev_start_xmit` once per `net_device`, not once per
+packet leaving the host, so on a stacked netdev each layer is counted:
+
+```
+bond0  -> xmit_one() -> trace_net_dev_start_xmit(skb, bond0)   # counted
+  eth0 -> xmit_one() -> trace_net_dev_start_xmit(skb, eth0)    # counted again
+```
+
+A bonded host therefore reports roughly **2x** its real egress on these, and
+VLAN-over-bond reports 3x. The receive side is not symmetric —
+`trace_netif_receive_skb()` sits above the `another_round:` label in
+`__netif_receive_skb_core()`, and bonding, bridging and VLAN untagging all
+re-enter below it — so RX is counted once while TX is inflated. Use these when
+you want stack activity, not a traffic total.
+
+`network_host_bytes` / `network_host_packets` count the same traffic **once**,
+at the interface bound to a device driver. This is the number to put on a
+"network throughput" dashboard and the one to compare against a NIC's own
+counters.
+
+#### What "host boundary" means, and does not
+
+The predicate is the presence of a bus parent (`SET_NETDEV_DEV()` — the same
+thing `/sys/class/net/<if>/device` reflects). Verified against Linux v6.12:
+bond, VLAN, bridge, veth, tun/tap, macvlan, ipvlan, vxlan, dummy and loopback
+have none; `virtio_net` has one.
+
+**This is not a claim that the frame reached a wire.** On bare metal the two
+coincide. In a VM guest the boundary is the hypervisor: the guest counts its
+own egress at `virtio_net`, but the hypervisor may hairpin that frame to
+another guest on the same box without it ever touching a link. The guest cannot
+distinguish the two cases, so the metric claims only what it can support.
+
+Known scope limits:
+
+- **Container east-west traffic is not counted.** A pod-to-pod flow that stays
+  on the node (veth -> bridge -> veth) touches no bus-parented device. It
+  appears in `network_bytes` (several times over) and not at all in
+  `network_host_bytes`. If that traffic matters to you, `network_bytes` is the
+  only thing that currently sees it.
+- **VM east-west is not a gap in the same way.** Each guest counts its own side
+  at `virtio_net`, so a fleet running the agent inside guests still sees it;
+  the hypervisor correctly reports zero, because nothing left the box.
+- **SR-IOV VF traffic is invisible to the hypervisor.** With a VF passed
+  through to a guest, the host has no netdev for it at all, so no tracepoint
+  fires — the host is blind to it both before and after this metric existed.
+  Guests count their own VF (it has a PCI parent), but VF-to-VF traffic
+  hairpinned by the NIC's embedded switch is counted by the guests without
+  consuming link bandwidth. Seeing real link utilization under SR-IOV requires
+  PF-side hardware counters, which Rezolus does not yet collect.
 
 ## Scheduler
 

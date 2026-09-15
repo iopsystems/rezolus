@@ -201,6 +201,10 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
         "network_ethtool",
     ),
     ("network_ena_pps_allowance_exceeded", "network_ethtool"),
+    // Not prefix-recoverable: the sampler is `network_traffic`, and neither
+    // host-boundary name starts with it.
+    ("network_host_bytes", "network_traffic"),
+    ("network_host_packets", "network_traffic"),
     ("network_packets", "network_traffic"),
     ("network_transmit_busy", "network_interfaces"),
     ("network_transmit_complete", "network_interfaces"),
