@@ -23,6 +23,7 @@ This guide walks you through all the available metrics, organized by category.
   - [drivehealth](#drivehealth)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
+  - [gpu_intel_pmu](#gpu_intel_pmu)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
   - [memory_vmstat](#memory_vmstat)
@@ -249,6 +250,99 @@ consumption, and thermal conditions.
 | `gpu_clock` | The current clock speed for different GPU domains | `clock={compute,graphics,memory,video}` |
 | `gpu_utilization` | The running average percentage of time the GPU was executing one or more kernels (0-100) | |
 | `gpu_memory_utilization` | The running average percentage of time that GPU memory was being read from or written to (0-100) | |
+
+### gpu_intel_pmu
+
+Produces Intel GPU metrics from the i915 PMU via `perf_event_open`, the same
+data source `intel_gpu_top` reads. Covers both integrated GPUs and discrete Arc
+cards: each GPU registers its own PMU, which the sampler discovers from sysfs
+along with the engine set that GPU actually exposes (a discrete card has a
+compute engine; an integrated GPU typically does not). All events for a GPU are
+opened as one perf group, so a single read returns every counter with no skew
+between engines.
+
+Requires `CAP_PERFMON` (or `kernel.perf_event_paranoid` <= 2).
+
+The PMU values are **cumulative counters**, so the interesting quantities are
+rates:
+
+- `rate(gpu_engine_busy_time) * 100` — engine utilization, in percent.
+- `rate(gpu_frequency_sample)` — average frequency in MHz over the interval.
+  The driver accumulates one MHz sample per tick while the GT is awake, so this
+  is a running sum rather than an instantaneous gauge; a single reading carries
+  no meaning without its predecessor.
+
+VRAM is the exception: it is a gauge in bytes, from the DRM query ioctl rather
+than the PMU.
+
+| Metric | Type | Description | Metadata |
+|--------|------|-------------|----------|
+| `gpu_engine_busy_time` | counter | Nanoseconds an engine spent executing work | `id`, `device`, `type`, `engine`, `engine_class={render,copy,video,video-enhance,compute}` |
+| `gpu_frequency_sample` | counter | Cumulative sum of frequency samples in MHz; `rate()` yields average MHz | `id`, `device`, `type`, `frequency={actual,requested}` |
+| `gpu_memory` | gauge | The amount of GPU device memory (VRAM), in bytes | `id`, `device`, `type`, `state={used,free}` |
+
+The `device` label is the GPU's PCI address (e.g. `0000:04:00.0`) for a discrete
+card, or `integrated` for an integrated GPU; prefer it over `id` when joining
+across restarts. `type` is `discrete` or `integrated`, which is the quickest way
+to separate an Arc card from the iGPU on a host that has both.
+
+`gpu_memory` uses the same name and units as the AMD and NVIDIA samplers, so
+cross-vendor dashboards work unchanged. It is **discrete-only**: an integrated
+GPU has no device-local memory region, so it publishes no VRAM series rather
+than passing host RAM off as VRAM. VRAM comes from the DRM
+`QUERY_MEMORY_REGIONS` ioctl and needs `CAP_PERFMON` — without it the kernel
+reports all memory as unallocated, so the sampler suppresses the series rather
+than publishing a misleading "0 used".
+
+Pair busy time with frequency when interpreting load. The PMU reports engine
+**occupancy, not efficiency**: an engine reading 100% busy had work queued,
+which does not mean the EUs were saturated. Frequency separates "busy but
+downclocked" from genuinely saturated. EU-level detail needs the separate i915
+perf/OA interface, which this sampler does not use.
+
+Deliberately not collected, though the PMU exposes them: `<engine>-wait` and
+`<engine>-sema` (why an engine stalled — a debugging question rather than a load
+one), and `rc6-residency`, `software-gt-awake-time` and `interrupts` (power-state
+and IRQ accounting). GPU temperature and energy are available from the i915
+hwmon node but are not collected here either. `gpu_memory_utilization` and
+`gpu_pcie_throughput` are not available on Intel at all — there is no
+memory-controller or PCIe counter in this PMU.
+
+### Cadence
+
+This sampler reads on its own interval (`[samplers.gpu_intel_pmu] interval`,
+default 1s) rather than on the scrape cycle, serving cached values in between.
+A grouped `read(2)` on an i915 perf fd is not an mmap load — it takes a driver
+lock and samples each event, plus ~5.4 us for the VRAM ioctl — so driving it at
+the snapshot-TTL rate would burn CPU for values that move on the order of
+seconds. Measured end to end on a host with two Intel GPUs (an Arc A770 and an
+integrated GPU, 11 engines and 4 frequency counters between them): 40-66 us per
+sweep in a release build. Reads are dispatched via `spawn_blocking`; the
+on-cycle cost is a time comparison.
+
+The read cadence admits a scrape arriving up to 50ms early. Without that
+tolerance, a consumer scraping at the same period as `interval` — the common
+case, since both default to 1s — has roughly every other scrape rejected by
+timer jitter, and the exported cumulative counters then alternate between an
+unchanged value and one that jumped two intervals' worth. That differentiates
+to double the true rate with no gap to indicate a dropped sample: an A770 held
+at a steady 2400 MHz recorded as 4800. Measured before the fix, two thirds of
+samples in a 155-second capture were stale repeats.
+
+The sweep is bracketed by two acquisition groups rather than one
+(`gpu_intel_pmu_engines` and `gpu_intel_pmu_devices`). It is a single read
+section, but its metrics live in two index spaces — per-engine entries are
+indexed by a GPU-major engine index, per-device entries by plain GPU id — and a
+group's member set applies to every metric tagged with it. Sharing one group
+made engine indices look like GPU ids and published phantom all-zero
+`gpu_frequency_sample{id="2"}` series on a two-GPU host. Both groups are stamped
+from the same bracket, so the two windows are identical.
+
+Note that this PMU reports engine **occupancy, not efficiency** — a busy engine
+had work queued, which does not mean its execution units were saturated. Pair
+busy time with frequency to distinguish "busy but downclocked" from genuinely
+saturated. EU-level detail requires the separate i915 perf/OA interface, and
+there is no VRAM bandwidth counter in this PMU.
 
 ## Memory
 

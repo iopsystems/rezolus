@@ -17,8 +17,12 @@ walkdir.workspace = true
 # Used to dlopen the vendor GPU libraries (libnvidia-ml, librocm_smi64) at
 # runtime for hardware inventory. Linux-only: these libraries don't exist
 # elsewhere, and the GPU collector is gated to Linux.
+#
+# `libc` is for the DRM query ioctl the Intel GPU collector uses to read VRAM
+# size — Intel needs no vendor library, but it does need that one syscall.
 [target.'cfg(target_os = "linux")'.dependencies]
 libloading.workspace = true
+libc.workspace = true
 
 
 [[bin]]

@@ -49,7 +49,10 @@ Rezolus effortlessly tracks the details you need to understand production so you
   frequency, per core and per cgroup.
 - **GPU telemetry** — NVIDIA via NVML and GPM, including per-tensor-pipe
   utilization, plus SM utilization/occupancy, DRAM bandwidth, PCIe throughput, power,
-  energy, clocks, and temperature. Apple GPU metrics on macOS.
+  energy, clocks, and temperature. AMD via ROCm SMI and rocprofiler hardware
+  counters. Intel integrated and Arc GPUs via the i915 PMU, with per-engine
+  (render/copy/video/compute) busy time and frequency, plus VRAM usage. Apple GPU
+  metrics on macOS.
 - **Container-aware** — per-cgroup CPU cycles/instructions, migrations, syscalls,
   and CFS bandwidth/throttling, so you can attribute behavior per container.
 - **Service & inference telemetry** — runtime-loaded templates that turn

@@ -54,7 +54,14 @@ export function resolveStyle(type_, subtype, result) {
         return 'scatter';
     }
 
-    // gauge or delta_counter: infer from result shape
+    // gauge or delta_counter: infer from result shape.
+    //
+    // A single series stays a LINE. A one-row heatmap encodes its value as
+    // colour and drops the y-axis, so it is strictly less readable than the
+    // line it would replace — and this function governs every gauge plot, not
+    // just GPU ones, so a 1-vCPU VM or a single-NIC host would lose its line
+    // charts too. A plot that wants a heatmap regardless declares it via
+    // `PlotOpts::style`, which `data.js` honours ahead of this inference.
     if (result?.data?.result?.length > 1) {
         const first = result.data.result[0];
         if (first.metric && first.metric.id != null) {
