@@ -7,6 +7,11 @@
 //! * `network/receive/frames`
 //! * `network/transmit/bytes`
 //! * `network/transmit/frames`
+//!
+//! Plus a host-boundary (north/south) pair of each, counted once at the
+//! interface bound to a device driver instead of once per netdev traversed:
+//! * `network_host_bytes`
+//! * `network_host_packets`
 
 const NAME: &str = "network_traffic";
 
@@ -29,11 +34,18 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
+    // Order is the BPF map layout, not taste: `Counters` reads slot `i` of each
+    // CPU's bank into `counters[i]`, so this vec must match the `RX_BYTES` ..
+    // `TX_HOST_PACKETS` indices in `mod.bpf.c` exactly.
     let counters = vec![
         &NETWORK_RX_BYTES,
         &NETWORK_TX_BYTES,
         &NETWORK_RX_PACKETS,
         &NETWORK_TX_PACKETS,
+        &NETWORK_RX_HOST_BYTES,
+        &NETWORK_TX_HOST_BYTES,
+        &NETWORK_RX_HOST_PACKETS,
+        &NETWORK_TX_HOST_PACKETS,
     ];
 
     let bpf = BpfBuilder::new(
