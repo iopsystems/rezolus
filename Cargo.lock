@@ -1017,6 +1017,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dendro"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd2f71a97283b459584f37f6fd25a4d69697bd8d54862a9698f6e8ac584e2baf"
+dependencies = [
+ "arrow",
+ "bytes",
+ "parquet",
+ "rusqlite",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2984,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "dendro",
  "histogram",
  "metriken",
  "metriken-exposition",
