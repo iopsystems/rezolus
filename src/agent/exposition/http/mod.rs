@@ -233,12 +233,21 @@ fn rows_frames(
         // Schemas already sent ON THIS CONNECTION — the per-connection state
         // that makes `?schemas=all` unnecessary here.
         let mut sent: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
-        let mut seq: u64 = 0;
 
         loop {
-            // Wait for a tick. `changed()` resolves immediately if a tick
-            // landed while the previous frame was being written, so a slow
-            // consumer is detected rather than silently served stale frames.
+            // Wait for a tick. `changed()` resolves IMMEDIATELY when the clock
+            // moved on while the previous frame was being written — and it
+            // yields the latest value, not the next unseen one, so a consumer
+            // that fell behind is served the newest snapshot and the ticks in
+            // between are skipped.
+            //
+            // That is the right behaviour (stale data helps nobody) but it is
+            // why the frame's `seq` is the CLOCK GENERATION rather than a
+            // count of frames sent. A per-frame counter would increment by one
+            // across a skip, so the consumer would see a contiguous sequence
+            // with data missing from the middle of it — a hole in a recording
+            // that nothing could detect. As the generation, a skip is a
+            // visible jump.
             if generation.changed().await.is_err() {
                 break;
             }
@@ -257,7 +266,7 @@ fn rows_frames(
             // not. `encode_frame_filtered` applies that decision while
             // borrowing, so a second subscriber costs a serialization rather
             // than a copy of every payload.
-            let frame = crate::recorder::wire::encode_frame_filtered(&rows, seq, |row| {
+            let frame = crate::recorder::wire::encode_frame_filtered(&rows, observed, |row| {
                 match sent.get(&row.stream) {
                     Some(hash) if *hash == row.schema_hash => false,
                     _ => {
@@ -267,7 +276,6 @@ fn rows_frames(
                 }
             })
             .map_err(std::io::Error::other)?;
-            seq += 1;
 
             yield bytes::Bytes::from(frame);
 

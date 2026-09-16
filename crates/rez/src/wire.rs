@@ -213,10 +213,17 @@ pub const STREAM_CONTENT_TYPE: &str = "application/vnd.rezolus.rows.v1+msgpack-s
 
 /// One frame of a subscription stream.
 ///
-/// `seq` is what makes a gap detectable. The agent ends a stream rather than
-/// letting a slow subscriber fall behind, but a truncated TCP connection looks
-/// the same as a clean end — so a consumer checks that `seq` increments by one
-/// and treats anything else as a gap to be refilled, not as data.
+/// `seq` is the producer's **sampling-clock generation**, not a count of
+/// frames sent. That distinction is the whole point: a consumer that falls
+/// behind is served the newest tick and the ones in between are skipped, so a
+/// per-frame counter would increment by one across the skip and present a
+/// contiguous sequence with data missing from the middle. As a generation, a
+/// skip is a visible jump.
+///
+/// So a consumer checks that `seq` increases by exactly one and treats
+/// anything else — a jump, or a stream that simply ends, which is
+/// indistinguishable from a truncated connection — as a gap to be refilled
+/// rather than as data.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StreamFrame {
     pub seq: u64,
