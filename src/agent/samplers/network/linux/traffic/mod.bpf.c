@@ -79,66 +79,92 @@ static __always_inline bool crosses_host_boundary(struct net_device* dev) {
     return dev && BPF_CORE_READ(dev, dev.parent) != NULL;
 }
 
-SEC("raw_tp/netif_receive_skb")
-int BPF_PROG(netif_receive_skb, struct sk_buff* skb) {
-    u64 len;
-    u32 idx;
-
-    len = BPF_CORE_READ(skb, len);
-
+/*
+ * Counting, shared by both attach flavors.
+ *
+ * Split out so the two variants below differ ONLY in how they read the kernel
+ * structs — which is the entire point of having two — rather than in what they
+ * count.
+ */
+static __always_inline void account(u32 rx_or_tx_bytes, u32 rx_or_tx_packets,
+                                    u32 host_bytes_idx, u32 host_packets_idx, u64 len,
+                                    bool crosses_boundary) {
     u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
-    idx = offset + RX_PACKETS;
-    array_incr(&counters, idx);
+    array_incr(&counters, offset + rx_or_tx_packets);
+    array_add(&counters, offset + rx_or_tx_bytes, len);
 
-    idx = offset + RX_BYTES;
-    array_add(&counters, idx, len);
+    if (crosses_boundary) {
+        array_incr(&counters, offset + host_packets_idx);
+        array_add(&counters, offset + host_bytes_idx, len);
+    }
+}
 
-    // `skb->dev` is still the receiving device here: this tracepoint sits
+/*
+ * ---- BTF-typed attach (preferred) -------------------------------------
+ *
+ * `tp_btf` hands the verifier the tracepoint's argument TYPES, so a field
+ * access compiles to a direct load. The `raw_tp` twin below must reach the
+ * same fields through `bpf_probe_read_kernel`, which is a helper CALL.
+ *
+ * That difference is the whole reason both exist. Measured on this sampler,
+ * the probe-read path cost 73.6 ns/run against 44.8 before the host-boundary
+ * counters were added (#1218) — a baseline where one or two helper calls
+ * dominate. The reads here are relocatable all the same: `vmlinux.h` applies
+ * `preserve_access_index` to every record, so clang emits CO-RE relocations
+ * for direct accesses just as it does inside `BPF_CORE_READ`.
+ *
+ * Which pair attaches is decided in `mod.rs` by `kernel_has_btf()`; the other
+ * is disabled, never loaded. Same two-program shape `cpu_migrations` uses.
+ */
+
+SEC("tp_btf/netif_receive_skb")
+int BPF_PROG(netif_receive_skb_btf, struct sk_buff* skb) {
+    // `skb->dev` is still the RECEIVING device here: this tracepoint sits
     // ABOVE the `another_round:` label in `__netif_receive_skb_core()`, and
     // bonding, bridging and VLAN untagging all re-enter below it. So RX is
     // already counted once, at the physical slave — the asymmetry with TX.
     // The predicate is applied anyway so both directions are counted at the
     // same layer: without it, a veth receive (container east-west) would land
     // in the host-scoped RX total while its TX counterpart did not.
-    if (crosses_host_boundary(BPF_CORE_READ(skb, dev))) {
-        idx = offset + RX_HOST_PACKETS;
-        array_incr(&counters, idx);
+    struct net_device* dev = skb->dev;
 
-        idx = offset + RX_HOST_BYTES;
-        array_add(&counters, idx, len);
-    }
+    account(RX_BYTES, RX_PACKETS, RX_HOST_BYTES, RX_HOST_PACKETS, skb->len,
+            dev && dev->dev.parent);
+    return 0;
+}
 
+SEC("tp_btf/net_dev_start_xmit")
+int BPF_PROG(net_dev_start_xmit_btf, struct sk_buff* skb, struct net_device* dev) {
+    // `dev` is this layer's netdev, so on a bond this fires for bond0 AND for
+    // the slave. Only the slave has a bus parent, so the host-scoped counters
+    // see the packet exactly once.
+    account(TX_BYTES, TX_PACKETS, TX_HOST_BYTES, TX_HOST_PACKETS, skb->len,
+            dev && dev->dev.parent);
+    return 0;
+}
+
+/*
+ * ---- Probe-read attach (fallback) -------------------------------------
+ *
+ * For a kernel without BTF. Identical accounting, every field reached through
+ * `bpf_probe_read_kernel`.
+ */
+
+SEC("raw_tp/netif_receive_skb")
+int BPF_PROG(netif_receive_skb_raw, struct sk_buff* skb) {
+    struct net_device* dev = BPF_CORE_READ(skb, dev);
+
+    account(RX_BYTES, RX_PACKETS, RX_HOST_BYTES, RX_HOST_PACKETS, BPF_CORE_READ(skb, len),
+            crosses_host_boundary(dev));
     return 0;
 }
 
 SEC("raw_tp/net_dev_start_xmit")
-int BPF_PROG(net_dev_start_xmit, struct sk_buff* skb, struct net_device* dev, void* txq,
+int BPF_PROG(net_dev_start_xmit_raw, struct sk_buff* skb, struct net_device* dev, void* txq,
              bool more) {
-    u64 len;
-    u32 idx;
-
-    len = BPF_CORE_READ(skb, len);
-
-    u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
-
-    idx = offset + TX_PACKETS;
-    array_incr(&counters, idx);
-
-    idx = offset + TX_BYTES;
-    array_add(&counters, idx, len);
-
-    // `dev` is this layer's netdev, so on a bond this fires for bond0 AND for
-    // the slave. Only the slave has a bus parent, so the host-scoped counters
-    // see the packet exactly once.
-    if (crosses_host_boundary(dev)) {
-        idx = offset + TX_HOST_PACKETS;
-        array_incr(&counters, idx);
-
-        idx = offset + TX_HOST_BYTES;
-        array_add(&counters, idx, len);
-    }
-
+    account(TX_BYTES, TX_PACKETS, TX_HOST_BYTES, TX_HOST_PACKETS, BPF_CORE_READ(skb, len),
+            crosses_host_boundary(dev));
     return 0;
 }
 

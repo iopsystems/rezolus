@@ -58,6 +58,18 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ModSkelBuilder::default,
     )
     .counters("counters", counters, &COUNTERS_ACQ)
+    // BTF-typed attach where the kernel has BTF, probe-read attach where it
+    // does not. The pair is identical in what it counts and differs only in
+    // how it reaches the kernel structs: `tp_btf` compiles a field access to a
+    // direct load, `raw_tp` to a `bpf_probe_read_kernel` CALL. On a probe
+    // whose whole body is ~45 ns, that is most of the cost (#1218).
+    //
+    // Same shape `cpu_migrations` uses for `sched_switch`.
+    .disabled_programs(if kernel_has_btf() {
+        &["netif_receive_skb_raw", "net_dev_start_xmit_raw"]
+    } else {
+        &["netif_receive_skb_btf", "net_dev_start_xmit_btf"]
+    })
     .build()?;
 
     Ok(Some(Box::new(bpf)))
@@ -81,13 +93,23 @@ impl SkelExt for ModSkel<'_> {
 
 impl OpenSkelExt for ModSkel<'_> {
     fn log_prog_instructions(&self) {
+        // Both flavors are reported: only one is attached, and which one is
+        // the first thing to check when this sampler's cost looks wrong.
         debug!(
-            "{NAME} netif_receive_skb() BPF instruction count: {}",
-            self.progs.netif_receive_skb.insn_cnt()
+            "{NAME} netif_receive_skb_btf() BPF instruction count: {}",
+            self.progs.netif_receive_skb_btf.insn_cnt()
         );
         debug!(
-            "{NAME} net_dev_start_xmit() BPF instruction count: {}",
-            self.progs.net_dev_start_xmit.insn_cnt()
+            "{NAME} net_dev_start_xmit_btf() BPF instruction count: {}",
+            self.progs.net_dev_start_xmit_btf.insn_cnt()
+        );
+        debug!(
+            "{NAME} netif_receive_skb_raw() BPF instruction count: {}",
+            self.progs.netif_receive_skb_raw.insn_cnt()
+        );
+        debug!(
+            "{NAME} net_dev_start_xmit_raw() BPF instruction count: {}",
+            self.progs.net_dev_start_xmit_raw.insn_cnt()
         );
     }
 }
