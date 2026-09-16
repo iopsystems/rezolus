@@ -37,3 +37,4 @@ pub mod schema;
 pub mod seal_policy;
 pub mod wal;
 pub mod window;
+pub mod wire;

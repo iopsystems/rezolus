@@ -23,15 +23,27 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use metriken_exposition::{GroupSchema, GroupSnapshot, Snapshot};
+use metriken_exposition::{GroupSnapshot, Snapshot};
 use tracing::warn;
 
 use super::rez::{dedup_key, entries_approx_bytes, group_approx_bytes, group_by_sampler};
 use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
 use super::seal_policy::{SealPolicy, SegmentAccount};
 use super::wal::{
-    encode_wal_group_row, encode_wal_row, materialize_wal_tail, WalCell, WalGroupRow, WalValue,
+    decode_wal_group_row, encode_wal_group_row, encode_wal_row, materialize_wal_tail,
+    wal_group_row, WalCell, WalValue,
 };
+use super::wire::AgentRows;
+
+/// A schema's `(counters, gauges, histograms)` slot counts — what
+/// [`AgentRow`](crate::wire::AgentRow)'s `arity` is compared against.
+fn schema_arity(s: &crate::schema::GroupSchema) -> (u32, u32, u32) {
+    (
+        s.counters.len() as u32,
+        s.gauges.len() as u32,
+        s.histograms.len() as u32,
+    )
+}
 
 /// Everything known when the recording starts. v3 has no manifest and no
 /// per-recording tar directory — a recording IS a row in `recordings` — so the
@@ -1026,7 +1038,7 @@ const SCHEMA_RING_LEN: usize = 3;
 
 /// One group name's cached schema generations, oldest first — see
 /// `StreamRecorderV3::schemas` and [`SCHEMA_RING_LEN`].
-type SchemaRing = std::collections::VecDeque<((u64, u64), Arc<GroupSchema>)>;
+type SchemaRing = std::collections::VecDeque<((u64, u64), Arc<crate::schema::GroupSchema>)>;
 
 impl StreamRecorderV3 {
     pub fn new(handle: RecordingWriter) -> Self {
@@ -1328,61 +1340,11 @@ impl StreamRecorderV3 {
             // truncated payload, not steady state (today's producer always
             // sends the schema, so this path is exercised only by malformed
             // input in practice).
-            let schema: Arc<GroupSchema> = match &g.schema {
-                Some(s) => {
-                    // `get_mut` first — a `&str` lookup, no allocation — and
-                    // only fall to `entry`'s owned key (one `String` clone)
-                    // on the genuine first sighting of this group name,
-                    // rather than on every hit-or-miss tick. A schema-bearing
-                    // tick is common (every re-anchor sends one — see
-                    // `StreamRecorderV3::segment_schema` — and today's
-                    // producer always includes it besides), so this was a
-                    // per-tick allocation this arc's own `described`/dedup
-                    // cleanup was supposed to have retired.
-                    if let Some(ring) = self.schemas.get_mut(g.name.as_str()) {
-                        if ring.iter().any(|(hash, _)| *hash == g.schema_hash) {
-                            self.schema_stats.hits += 1;
-                        } else {
-                            ring.push_back((g.schema_hash, Arc::clone(s)));
-                            // Evict the oldest generation once the ring runs
-                            // over its cap — see `SCHEMA_RING_LEN`'s doc for
-                            // why 3 is enough (the agent itself only ever
-                            // needs the newest).
-                            if ring.len() > SCHEMA_RING_LEN {
-                                ring.pop_front();
-                            }
-                            self.schema_stats.misses += 1;
-                        }
-                    } else {
-                        let mut ring = SchemaRing::new();
-                        ring.push_back((g.schema_hash, Arc::clone(s)));
-                        self.schemas.insert(g.name.clone(), ring);
-                        self.schema_stats.misses += 1;
-                    }
-                    Arc::clone(s)
-                }
-                None => match self
-                    .schemas
-                    .get(g.name.as_str())
-                    .and_then(|ring| ring.iter().find(|(hash, _)| *hash == g.schema_hash))
-                {
-                    Some((_, s)) => {
-                        self.schema_stats.hits += 1;
-                        Arc::clone(s)
-                    }
-                    None => {
-                        if self.warned.insert(format!("{}#unknown-schema", g.name)) {
-                            warn!(
-                                "group {} sent schema: None for an unresolved schema hash \
-                                 {:?}; skipping (producer bug, a truncated payload, or a \
-                                 generation older than this recorder's schema ring, warned \
-                                 once)",
-                                g.name, g.schema_hash
-                            );
-                        }
-                        continue;
-                    }
-                },
+            let schema = match self.resolve_schema(&g.name, g.schema_hash, {
+                g.schema.as_ref().map(|s| move || s.as_ref().into())
+            }) {
+                Some(s) => s,
+                None => continue,
             };
 
             // `validate()` only checks arity against a TRANSMITTED schema
@@ -1417,28 +1379,11 @@ impl StreamRecorderV3 {
                 self.segment_schema.insert(g.name.clone(), g.schema_hash);
             }
 
-            let row = WalGroupRow {
-                schema_hash: g.schema_hash,
-                // The ingest boundary: the producer's schema becomes the
-                // archive's on the way into the WAL.
-                schema: need_anchor.then(|| schema.as_ref().into()),
-                window: g.window.map(|w| (w.begin_ns, w.end_ns)),
-                counters: g.counters.clone(),
-                gauges: g.gauges.clone(),
-                histograms: g
-                    .histograms
-                    .iter()
-                    .map(|h| {
-                        h.as_ref().map(|h| {
-                            (
-                                h.config().grouping_power(),
-                                h.config().max_value_power(),
-                                h.as_slice().to_vec(),
-                            )
-                        })
-                    })
-                    .collect(),
-            };
+            // The ingest boundary: the producer's schema becomes the
+            // archive's on the way into the WAL. `wal_group_row` is shared
+            // with the row-format wire so the two cannot drift on what a
+            // row's values are — see its doc.
+            let row = wal_group_row(g, need_anchor.then(|| schema.as_ref().clone()));
             wal_rows.push(WalRow {
                 sampler: g.name.clone(),
                 ts: anchored_ts,
@@ -1460,6 +1405,248 @@ impl StreamRecorderV3 {
                 .add_row(bytes);
         }
         Ok(wal_rows)
+    }
+
+    /// Ingest one scrape's worth of pre-encoded rows, committing the tick —
+    /// the row-format wire's [`ingest`](Self::ingest).
+    pub fn ingest_rows(
+        &mut self,
+        rows: &AgentRows,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<(), String> {
+        let rows = self.stage_rows(rows, anchored_ts, wall_offset_ns)?;
+        self.handle.wal(rows)
+    }
+
+    /// Build this tick's WAL rows from a producer that already encoded them.
+    ///
+    /// **Decision for decision, this is [`ingest_v3`](Self::ingest_v3)**: the
+    /// same duplicate-in-tick rule, the same window-advance dedup in the same
+    /// position, the same validation, the same schema ring (literally the
+    /// same — see [`resolve_schema`](Self::resolve_schema)), the same
+    /// per-segment re-anchor, and the same two-pass split between what can
+    /// fail and what advances state. It has to be: pointing a recorder at the
+    /// row endpoint rather than the snapshot endpoint changes a TRANSPORT,
+    /// and a transport that changed what landed in the archive would be a
+    /// trap. `a_row_recording_and_a_snapshot_recording_agree` pins the two
+    /// against each other over a run that exercises dedup, a schema change
+    /// and a segment rotation.
+    ///
+    /// What differs is only where each decision reads from: `ingest_v3` holds
+    /// a decoded [`GroupSnapshot`] and builds a payload out of it, while here
+    /// the payload arrived already built and every decision is made against
+    /// [`AgentRow`]'s cleartext fields instead. [`crate::wire`] documents why
+    /// each of those fields is in the clear; the short version is that a pipe
+    /// which had to decode each row to route it would not be a pipe.
+    ///
+    /// **The one thing this path does that the producer could not.** A row
+    /// arrives carrying no schema, because the producer has no idea when THIS
+    /// archive last rotated a segment — segments are the consumer's business,
+    /// and two recorders scraping one agent rotate independently. So on the
+    /// rare tick where a group must re-anchor, the payload is decoded and
+    /// re-encoded with its schema attached. That is the entire cost of the
+    /// indirection, and it is metered by the seal policy rather than by the
+    /// scrape interval: once per group per segment, against a 300 s default
+    /// `max_age`. Every other tick moves a `Vec<u8>` into a [`WalRow`].
+    pub fn stage_rows(
+        &mut self,
+        rows: &AgentRows,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+    ) -> Result<Vec<WalRow>, String> {
+        let mut wal_rows = Vec::new();
+        let mut accepted: Vec<(&str, u64, usize)> = Vec::new();
+        // `ingest_v3`'s guard, for `ingest_v3`'s reason: two rows sharing a
+        // stream name in one tick would both clear the dedup below (which
+        // compares against the PREVIOUS tick, not this one) and then collide
+        // on the `wal` primary key, failing the whole tick and killing the
+        // writer. First occurrence wins.
+        let mut seen_this_tick: HashSet<&str> = HashSet::new();
+        for r in &rows.rows {
+            debug_assert!(
+                r.stream.contains('/'),
+                "stream {:?} contains no '/', which materialize_wal_tail's \
+                 is_group_table_key requires to route a V3 acquisition-group table to the \
+                 group decode path — this row would be misrouted to the V1/V2 cell path",
+                r.stream
+            );
+            if !seen_this_tick.insert(r.stream.as_str()) {
+                if self
+                    .warned
+                    .insert(format!("{}#duplicate-in-tick", r.stream))
+                {
+                    warn!(
+                        "stream {} appears more than once in one tick; keeping the first \
+                         occurrence and skipping the rest (warned once)",
+                        r.stream
+                    );
+                }
+                continue;
+            }
+            // Dedup FIRST — before validation, before any schema work — so a
+            // window that has not advanced costs one comparison and nothing
+            // else, not even a look at the payload.
+            let key = r.window.map(|(_, end)| end).unwrap_or(anchored_ts);
+            if let Some(&last) = self.last_keys.get(r.stream.as_str()) {
+                if key <= last {
+                    continue;
+                }
+            }
+
+            // `GroupSnapshot::validate`, read off the cleartext. It checks a
+            // TRANSMITTED schema only — returning `Ok` outright when there is
+            // none — so this does too, and the resolved-schema case is caught
+            // by the arity check below, exactly as on the snapshot path.
+            if let Some(s) = &r.schema {
+                if schema_arity(s) != r.arity || s.hash() != r.schema_hash {
+                    if self.warned.insert(format!("{}#invalid", r.stream)) {
+                        warn!(
+                            "stream {} sent a schema that does not describe its own row (arity \
+                             or hash mismatch); skipping until it recovers (warned once)",
+                            r.stream
+                        );
+                    }
+                    continue;
+                }
+            }
+
+            let Some(schema) = self.resolve_schema(&r.stream, r.schema_hash, {
+                r.schema.as_ref().map(|s| move || s.clone())
+            }) else {
+                continue;
+            };
+
+            // The check `validate()` structurally cannot make: a schema
+            // resolved from the ring was never compared against THIS row.
+            if schema_arity(&schema) != r.arity {
+                if self.warned.insert(format!("{}#arity", r.stream)) {
+                    warn!(
+                        "stream {} values do not match its resolved schema's arity; skipping \
+                         (warned once)",
+                        r.stream
+                    );
+                }
+                continue;
+            }
+
+            let need_anchor = self.segment_schema.get(r.stream.as_str()) != Some(&r.schema_hash);
+            if need_anchor {
+                self.segment_schema.insert(r.stream.clone(), r.schema_hash);
+            }
+
+            // The only place this path touches a payload at all.
+            let row = if need_anchor {
+                let mut decoded = decode_wal_group_row(&r.row)?;
+                decoded.schema = Some(schema.as_ref().clone());
+                encode_wal_group_row(&decoded)?
+            } else {
+                r.row.clone()
+            };
+
+            wal_rows.push(WalRow {
+                sampler: r.stream.clone(),
+                ts: anchored_ts,
+                wall_offset: wall_offset_ns,
+                row,
+            });
+            accepted.push((r.stream.as_str(), key, r.approx_bytes as usize));
+        }
+
+        // Pass 2: infallible, same shape as `ingest_v3`'s.
+        let stagger_key = self.handle.stagger_key().to_string();
+        for (name, key, bytes) in accepted {
+            self.last_keys.insert(name.to_string(), key);
+            let policy = &self.policy;
+            let stagger_key = stagger_key.as_str();
+            self.accounts
+                .entry(name.to_string())
+                .or_insert_with(|| SegmentAccount::open_first(name, stagger_key, policy))
+                .add_row(bytes);
+        }
+        Ok(wal_rows)
+    }
+
+    /// Resolve one group's schema through the ring: `transmitted` either
+    /// teaches the ring a generation or confirms one it holds, and a row that
+    /// transmitted nothing must find its hash already there.
+    ///
+    /// `None` means "skip this group this tick" — the producer referenced a
+    /// schema this recorder has never been taught, which the doc on
+    /// [`schemas`](Self::schemas) calls a producer bug, a truncated payload,
+    /// or a generation older than the ring, not steady state.
+    ///
+    /// **Shared by both transports on purpose.** `ingest_v3` reaches it with
+    /// a schema decoded out of a snapshot and `stage_rows` with one off the
+    /// row wire, and they must populate ONE ring: a recorder that resolved
+    /// row-wire hashes against a separate cache would re-learn every schema
+    /// it already knew, and the two would disagree about which generations
+    /// are live. The ring is keyed by group name and hash, neither of which
+    /// depends on how the schema arrived.
+    ///
+    /// **`transmitted` is a closure, not a schema.** Materializing the
+    /// producer's schema into the archive's own type costs a full deep clone
+    /// — every member's name and its metadata `BTreeMap` — and the ring
+    /// already holds that generation on all but the rare tick where it
+    /// changes. Taking the value eagerly would pay that clone on EVERY tick
+    /// for EVERY group, which with today's always-resend producer is most of
+    /// the recorder's per-tick work. The closure runs only on a genuine miss.
+    fn resolve_schema<F>(
+        &mut self,
+        name: &str,
+        schema_hash: (u64, u64),
+        transmitted: Option<F>,
+    ) -> Option<Arc<crate::schema::GroupSchema>>
+    where
+        F: FnOnce() -> crate::schema::GroupSchema,
+    {
+        if let Some(build) = transmitted {
+            // `get_mut` first — a `&str` lookup, no allocation — and only
+            // fall to an owned key (one `String` clone) on the genuine first
+            // sighting of this group name, rather than on every hit-or-miss
+            // tick.
+            if let Some(ring) = self.schemas.get_mut(name) {
+                if let Some((_, cached)) = ring.iter().find(|(hash, _)| *hash == schema_hash) {
+                    self.schema_stats.hits += 1;
+                    return Some(Arc::clone(cached));
+                }
+                ring.push_back((schema_hash, Arc::new(build())));
+                // Evict the oldest generation once the ring runs over its cap
+                // — see `SCHEMA_RING_LEN`'s doc for why 3 is enough (the agent
+                // itself only ever needs the newest).
+                if ring.len() > SCHEMA_RING_LEN {
+                    ring.pop_front();
+                }
+                self.schema_stats.misses += 1;
+                return ring.back().map(|(_, s)| Arc::clone(s));
+            }
+            let arc = Arc::new(build());
+            let mut ring = SchemaRing::new();
+            ring.push_back((schema_hash, Arc::clone(&arc)));
+            self.schemas.insert(name.to_string(), ring);
+            self.schema_stats.misses += 1;
+            return Some(arc);
+        }
+        match self
+            .schemas
+            .get(name)
+            .and_then(|ring| ring.iter().find(|(hash, _)| *hash == schema_hash))
+        {
+            Some((_, s)) => {
+                self.schema_stats.hits += 1;
+                Some(Arc::clone(s))
+            }
+            None => {
+                if self.warned.insert(format!("{name}#unknown-schema")) {
+                    warn!(
+                        "group {name} sent no schema for an unresolved schema hash {schema_hash:?}; \
+                         skipping (producer bug, a truncated payload, or a generation older than \
+                         this recorder's schema ring, warned once)"
+                    );
+                }
+                None
+            }
+        }
     }
 
     /// Seal every open segment past any threshold, as ONE batch → one
@@ -3143,6 +3330,7 @@ mod tests {
 
     mod v3_groups {
         use super::*;
+        use crate::wal::WalGroupRow;
         use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
 
         fn desc(name: &str) -> MetricDesc {
@@ -3894,6 +4082,260 @@ mod tests {
                 rows_before,
                 "a schema evicted from the ring must not produce a row"
             );
+        }
+
+        /// The row-format wire (`crate::wire`) is a TRANSPORT, and the claim
+        /// it makes is that choosing it changes nothing about the archive.
+        ///
+        /// These tests are the enforcement. They drive two recorders in
+        /// lockstep over the same producer ticks — one fed snapshots, one fed
+        /// the same ticks encoded as rows — and require the staged WAL rows to
+        /// be equal as BYTES, along with the seal accounting that decides
+        /// where segments break. Comparing the decoded values would miss
+        /// exactly the failures worth catching: a schema anchored on a
+        /// different tick, a window dropped in transcription, a field
+        /// reordered.
+        mod row_wire {
+            use super::*;
+            use crate::wire;
+
+            /// Stage one tick through both transports and require the result
+            /// to be identical.
+            fn both(
+                snap_rec: &mut StreamRecorderV3,
+                row_rec: &mut StreamRecorderV3,
+                groups: Vec<GroupSnapshot>,
+                ts: u64,
+            ) -> Vec<WalRow> {
+                let snapshot = v3_snap(ts, groups);
+                let rows = wire::encode_snapshot(&snapshot).unwrap();
+                // Through the wire, not merely through the conversion: an
+                // `AgentRows` that failed to round-trip would still compare
+                // equal if we never encoded it.
+                let wire_bytes = wire::encode(&rows).unwrap();
+                let rows = wire::decode(&wire_bytes).unwrap();
+
+                let from_snapshot = snap_rec.stage(&snapshot, ts, 0).unwrap();
+                let from_rows = row_rec.stage_rows(&rows, ts, 0).unwrap();
+                assert_eq!(
+                    from_snapshot, from_rows,
+                    "the two transports staged different WAL rows at ts={ts}"
+                );
+                from_snapshot
+            }
+
+            /// The whole claim, over a run that exercises every decision the
+            /// two paths make independently: a first anchor, steady ticks that
+            /// must NOT re-anchor, a window that does not advance (dedup), a
+            /// schema change mid-run, and a segment rotation that forces a
+            /// re-anchor of a schema the producer did not resend.
+            #[test]
+            fn a_row_recording_and_a_snapshot_recording_agree() {
+                let dir = tempfile::tempdir().unwrap();
+                // `max_rows = 4`: small enough that the run below rotates,
+                // large enough that the rotation lands mid-run rather than on
+                // every tick, so the "steady tick does not re-anchor" case is
+                // actually exercised.
+                let (_a1, mut snap_rec, _) = recorder(&dir.path().join("snap.rez"), policy(4));
+                let (_a2, mut row_rec, _) = recorder(&dir.path().join("rows.rez"), policy(4));
+
+                let v1 = group_schema(&["cpu/0", "cpu/1"]);
+                let v2 = group_schema(&["cpu/0", "cpu/1", "cpu/2"]);
+                let gauges = gauge_group_schema(&["mem/free"]);
+
+                let mut anchored = 0u64;
+                let mut window_end = 1_000u64;
+                let mut staged = 0usize;
+
+                for tick in 0..12u64 {
+                    anchored += 1_000;
+                    // Tick 5 repeats the previous window: the producer read
+                    // nothing new, and BOTH paths must drop it.
+                    if tick != 5 {
+                        window_end += 1_000;
+                    }
+                    let w = Some(Window::new(window_end - 500, window_end));
+                    // The schema changes at tick 7, and from tick 8 the
+                    // producer stops resending it (its own cache is warm) —
+                    // which is precisely when the consumer's per-segment
+                    // re-anchor has to supply one the wire did not carry.
+                    let (schema, counters) = if tick < 7 {
+                        (&v1, vec![Some(tick), Some(tick * 2)])
+                    } else {
+                        (&v2, vec![Some(tick), Some(tick * 2), Some(tick * 3)])
+                    };
+                    let rows = both(
+                        &mut snap_rec,
+                        &mut row_rec,
+                        vec![
+                            group_snapshot(
+                                "cpu/usage",
+                                schema,
+                                counters,
+                                w,
+                                tick != 8 && tick != 9,
+                            ),
+                            gauge_group_snapshot("mem/stats", &gauges, vec![Some(tick as i64)], w),
+                        ],
+                        anchored,
+                    );
+                    staged += rows.len();
+
+                    // Seal together, so the two recorders' segment_schema maps
+                    // rotate on the same tick and the next row has to
+                    // re-anchor on both.
+                    snap_rec.maybe_seal().unwrap();
+                    row_rec.maybe_seal().unwrap();
+                }
+
+                // Guard the scenario itself: a test that silently stopped
+                // staging rows would pass vacuously.
+                assert_eq!(
+                    staged, 22,
+                    "expected 2 groups x 12 ticks less the 2 deduped at tick 5"
+                );
+            }
+
+            /// A steady tick is a passthrough: the bytes the producer encoded
+            /// are the bytes that reach the WAL, with no decode and re-encode
+            /// in between. This is the performance claim, so it is asserted
+            /// rather than assumed.
+            #[test]
+            fn only_an_anchoring_tick_rewrites_the_payload() {
+                let dir = tempfile::tempdir().unwrap();
+                let (_a, mut rec, _) = recorder(&dir.path().join("rows.rez"), policy(1_000));
+                let schema = group_schema(&["cpu/0"]);
+
+                let mut payloads = Vec::new();
+                for tick in 0..3u64 {
+                    let w = Some(Window::new(tick * 1_000, tick * 1_000 + 500));
+                    let snapshot = v3_snap(
+                        (tick + 1) * 1_000,
+                        vec![group_snapshot(
+                            "cpu/usage",
+                            &schema,
+                            vec![Some(tick)],
+                            w,
+                            true,
+                        )],
+                    );
+                    let rows = wire::encode_snapshot(&snapshot).unwrap();
+                    let staged = rec.stage_rows(&rows, (tick + 1) * 1_000, 0).unwrap();
+                    payloads.push((rows.rows[0].row.clone(), staged[0].row.clone()));
+                }
+
+                assert_ne!(
+                    payloads[0].0, payloads[0].1,
+                    "the first row of a segment must be rewritten to carry the schema \
+                     the producer left out"
+                );
+                for (tick, (sent, staged)) in payloads.iter().enumerate().skip(1) {
+                    assert_eq!(
+                        sent, staged,
+                        "tick {tick} is already anchored, so its payload must reach the \
+                         WAL untouched"
+                    );
+                }
+            }
+
+            /// The producer's payload never carries a schema, whatever its own
+            /// cache chose to transmit. Anchoring belongs to the consumer,
+            /// which is the invariant that lets two recorders with different
+            /// segment boundaries share one agent — so it is pinned here
+            /// rather than left to the prose.
+            #[test]
+            fn the_producer_never_anchors() {
+                let schema = group_schema(&["cpu/0"]);
+                for include_schema in [true, false] {
+                    let snapshot = v3_snap(
+                        1_000,
+                        vec![group_snapshot(
+                            "cpu/usage",
+                            &schema,
+                            vec![Some(1)],
+                            Some(Window::new(0, 500)),
+                            include_schema,
+                        )],
+                    );
+                    let rows = wire::encode_snapshot(&snapshot).unwrap();
+                    assert_eq!(
+                        rows.rows[0].schema.is_some(),
+                        include_schema,
+                        "the wire passes the producer's own cache decision through"
+                    );
+                    assert!(
+                        decode_wal_group_row(&rows.rows[0].row)
+                            .unwrap()
+                            .schema
+                            .is_none(),
+                        "the PAYLOAD must never carry a schema, transmitted or not"
+                    );
+                }
+            }
+
+            /// A row whose declared arity disagrees with its schema is
+            /// dropped, not written — the same disposition `validate()` gives
+            /// it on the snapshot path. Without the cleartext `arity` field
+            /// this check would require decoding every row, and skipping it
+            /// would make a recording's contents depend on its transport.
+            #[test]
+            fn a_row_that_disagrees_with_its_schema_is_dropped() {
+                let dir = tempfile::tempdir().unwrap();
+                let (_a, mut rec, _) = recorder(&dir.path().join("rows.rez"), policy(1_000));
+                let schema = group_schema(&["cpu/0", "cpu/1"]);
+                let snapshot = v3_snap(
+                    1_000,
+                    vec![group_snapshot(
+                        "cpu/usage",
+                        &schema,
+                        vec![Some(1), Some(2)],
+                        Some(Window::new(0, 500)),
+                        true,
+                    )],
+                );
+                let mut rows = wire::encode_snapshot(&snapshot).unwrap();
+                rows.rows[0].arity = (3, 0, 0);
+
+                assert!(
+                    rec.stage_rows(&rows, 1_000, 0).unwrap().is_empty(),
+                    "a row that does not match its own schema must be skipped"
+                );
+            }
+
+            /// A row referencing a schema generation nobody ever transmitted
+            /// cannot be decoded by anything downstream, so it is skipped
+            /// rather than written — `ingest_v3`'s disposition for the same
+            /// input, reached through the shared `resolve_schema`.
+            #[test]
+            fn a_row_for_an_unknown_schema_is_dropped() {
+                let dir = tempfile::tempdir().unwrap();
+                let (_a, mut rec, _) = recorder(&dir.path().join("rows.rez"), policy(1_000));
+                let schema = group_schema(&["cpu/0"]);
+                let snapshot = v3_snap(
+                    1_000,
+                    vec![group_snapshot(
+                        "cpu/usage",
+                        &schema,
+                        vec![Some(1)],
+                        Some(Window::new(0, 500)),
+                        false,
+                    )],
+                );
+                let rows = wire::encode_snapshot(&snapshot).unwrap();
+                assert!(rows.rows[0].schema.is_none());
+                assert!(
+                    rec.stage_rows(&rows, 1_000, 0).unwrap().is_empty(),
+                    "nothing taught this recorder the schema, so the row is undecodable"
+                );
+            }
+
+            /// A V2 snapshot has no acquisition groups, so it has no rows to
+            /// serve. Returning an empty body would be indistinguishable to a
+            /// consumer from an agent with every sampler disabled.
+            #[test]
+            fn a_non_v3_snapshot_is_refused_rather_than_served_empty() {
+                assert!(wire::encode_snapshot(&snap(1_000, vec![])).is_err());
+            }
         }
     }
 }

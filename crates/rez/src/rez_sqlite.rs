@@ -124,6 +124,7 @@ pub struct SegmentRow {
 /// unchanged every tick, so carrying them per row costs several times the
 /// payload for nothing. They are re-anchored once per segment instead — see
 /// `WalCell`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WalRow {
     pub sampler: String,
     pub ts: u64,

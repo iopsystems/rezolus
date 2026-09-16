@@ -425,3 +425,40 @@ pub fn encode_wal_row(cells: &[WalCell]) -> Result<Vec<u8>, String> {
 pub fn decode_wal_row(bytes: &[u8]) -> Result<Vec<WalCell>, String> {
     rmp_serde::from_slice(bytes).map_err(|e| format!("failed to decode a WAL row: {e}"))
 }
+
+/// Build one acquisition group's WAL payload from the producer's snapshot of
+/// it, anchoring `schema` when the caller says the row needs to carry one.
+///
+/// **The single place a `WalGroupRow`'s values are transcribed.** Two callers
+/// need exactly this: `StreamRecorderV3::ingest_v3`, which anchors per
+/// segment, and the row-format wire (`crate::wire`), where the AGENT encodes
+/// the payload once and every consumer re-anchors against its own segments.
+/// Those two differ only in what they pass for `schema` — so the values, and
+/// therefore the bytes, are the same function of the same input by
+/// construction rather than by a test that has to notice drift.
+#[cfg(feature = "write")]
+pub fn wal_group_row(
+    g: &metriken_exposition::GroupSnapshot,
+    schema: Option<crate::schema::GroupSchema>,
+) -> WalGroupRow {
+    WalGroupRow {
+        schema_hash: g.schema_hash,
+        schema,
+        window: g.window.map(|w| (w.begin_ns, w.end_ns)),
+        counters: g.counters.clone(),
+        gauges: g.gauges.clone(),
+        histograms: g
+            .histograms
+            .iter()
+            .map(|h| {
+                h.as_ref().map(|h| {
+                    (
+                        h.config().grouping_power(),
+                        h.config().max_value_power(),
+                        h.as_slice().to_vec(),
+                    )
+                })
+            })
+            .collect(),
+    }
+}
