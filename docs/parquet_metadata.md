@@ -173,6 +173,40 @@ agents older than `/status` (5.16.0). Not user-editable.
 source has no agent, and recorders that predate the capture wrote no version
 at all. `mcp describe-recording` renders those as `unknown`.
 
+### `producer_epoch`
+
+An opaque id — a v4 UUID — minted once per agent **process**. It changes when,
+and only when, every cumulative counter in the recording restarted from zero
+together, which for a process-scoped producer is once per process.
+
+**Why it is needed.** From the values alone, a counter that was *reset* and one
+that *wrapped* are identical — both went down — while their arithmetic is not
+(`cur` versus `cur + (2^w - prev)`). Every consumer here assumes reset, which is
+right for a restart and silently wrong for an overflow. This settles the restart
+half for every counter at once. There is also a case no value-based heuristic
+can catch: a counter reset to zero that counts past its previous value before
+the next observation shows **no drop at all**, and the interval silently
+undercounts. An epoch change is visible either way.
+
+**What it does not cover.** A single counter that wrapped, or that a sampler
+zeroes on read, did not restart the process — so this key says nothing about it.
+That needs a generation per counter, which is row data rather than file
+metadata.
+
+**Set at record time** from the agent's `/status`, and re-checked against every
+snapshot's metadata, which is the channel that can catch a restart *between* two
+scrapes. Absent for a Prometheus source, and for an agent old enough to predate
+it (the `/` banner fallback deliberately yields no epoch rather than inventing a
+restart boundary nobody observed).
+
+Name and semantics follow dendro's `keys::PRODUCER_EPOCH`, so an archive written
+here reads the same to any consumer of that format.
+
+**Known limitation:** if the agent restarts mid-recording, the recording's
+metadata still carries the epoch observed when it opened — there is no plumbing
+yet to amend it in place. The recorder logs a warning naming both epochs.
+Persisting the full history as dendro's `producer_epochs` is the fix.
+
 ### `sampling_interval_ms`
 
 Collection interval in milliseconds, written as a decimal string (e.g.

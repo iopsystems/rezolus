@@ -363,13 +363,14 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata 
         _ => None,
     };
 
-    let version = fetch_agent_version(client, base_url).await;
+    let (version, producer_epoch) = fetch_agent_identity(client, base_url).await;
 
     AgentMetadata {
         systeminfo,
         descriptions,
         sampler_status,
         version,
+        producer_epoch,
     }
 }
 
@@ -386,7 +387,7 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata 
 /// ever shipped. A source that answers neither (a Prometheus exporter, an
 /// agent behind a proxy that rewrites `/`) simply records no version, which is
 /// how every recording before this change reads.
-async fn fetch_agent_version(client: &Client, base_url: &Url) -> Option<String> {
+async fn fetch_agent_identity(client: &Client, base_url: &Url) -> (Option<String>, Option<String>) {
     let mut status_url = base_url.clone();
     status_url.set_path("/status");
     if let Ok(response) = client.get(status_url).send().await {
@@ -395,8 +396,13 @@ async fn fetch_agent_version(client: &Client, base_url: &Url) -> Option<String> 
                 if let Ok(status) =
                     serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body)
                 {
+                    let epoch =
+                        (!status.producer_epoch.is_empty()).then_some(status.producer_epoch);
                     if !status.version.is_empty() {
-                        return Some(status.version);
+                        return (Some(status.version), epoch);
+                    }
+                    if epoch.is_some() {
+                        return (None, epoch);
                     }
                 }
             }
@@ -406,10 +412,16 @@ async fn fetch_agent_version(client: &Client, base_url: &Url) -> Option<String> 
     let mut root_url = base_url.clone();
     root_url.set_path("/");
     let body = match client.get(root_url).send().await {
-        Ok(response) if response.status().is_success() => response.text().await.ok()?,
-        _ => return None,
+        Ok(response) if response.status().is_success() => match response.text().await {
+            Ok(body) => body,
+            Err(_) => return (None, None),
+        },
+        _ => return (None, None),
     };
-    parse_root_version(&body)
+    // No epoch from this path by construction: an agent old enough to lack
+    // `/status` predates the epoch entirely, and inventing one here would
+    // claim a restart boundary nobody observed.
+    (parse_root_version(&body), None)
 }
 
 /// Pull the version out of the agent's root page, whose first line is
@@ -424,6 +436,56 @@ pub(crate) fn parse_root_version(body: &str) -> Option<String> {
         return None;
     }
     Some(version.to_string())
+}
+
+/// The producer epoch carried by a snapshot's metadata, if it has one.
+///
+/// Read from the snapshot rather than only from `/status` because this is the
+/// channel that can catch a restart BETWEEN two scrapes: at that moment every
+/// counter in the payload restarted from zero together, and no comparison of
+/// the values can say so — a counter that reset and one that wrapped both just
+/// went down.
+fn snapshot_producer_epoch(snapshot: &metriken_exposition::Snapshot) -> Option<&str> {
+    use metriken_exposition::Snapshot;
+    let metadata = match snapshot {
+        Snapshot::V1(s) => &s.metadata,
+        Snapshot::V2(s) => &s.metadata,
+        Snapshot::V3(s) => &s.metadata,
+    };
+    metadata
+        .get(parquet_metadata::KEY_PRODUCER_EPOCH)
+        .map(String::as_str)
+        .filter(|e| !e.is_empty())
+}
+
+/// Warn once when the agent's epoch changes mid-recording.
+///
+/// The recording's metadata records the epoch observed when it opened, and
+/// there is no plumbing yet to amend it in place — the streaming writer owns
+/// the connection on its own thread. So the rows after a restart are stamped
+/// with the epoch of the run before it, which is wrong in a way nothing
+/// downstream can detect.
+///
+/// Saying so in the log is not a fix and is not pretending to be one. It is
+/// the difference between an operator having a chance to notice and having
+/// none. Persisting the history as dendro's `producer_epochs` is the fix.
+fn note_epoch_change(ep: &mut EndpointState, snapshot: &metriken_exposition::Snapshot) {
+    let Some(seen) = snapshot_producer_epoch(snapshot) else {
+        return;
+    };
+    match ep.agent.producer_epoch.as_deref() {
+        // First epoch observed on an endpoint whose `/status` did not carry
+        // one: adopt it rather than warn. Nothing restarted.
+        None => ep.agent.producer_epoch = Some(seen.to_string()),
+        Some(known) if known == seen => {}
+        Some(known) => {
+            warn!(
+                "{}: the agent restarted mid-recording (producer epoch {known} -> {seen});                  every cumulative counter reset at this point, and rows from here on are                  stamped with the earlier epoch",
+                ep.config.source_label()
+            );
+            ep.agent.producer_epoch = Some(seen.to_string());
+        }
+    }
 }
 
 /// `sleep_until(deadline)` when there is one, otherwise a future that never
@@ -617,6 +679,13 @@ fn build_parquet_converter(
         converter = converter.metadata(parquet_metadata::KEY_VERSION.to_string(), version.clone());
     }
 
+    if let Some(ref epoch) = ep.agent.producer_epoch {
+        converter = converter.metadata(
+            parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
+            epoch.clone(),
+        );
+    }
+
     for (key, value) in &config.metadata {
         converter = converter.metadata(key.clone(), value.clone());
     }
@@ -678,6 +747,12 @@ fn build_rez_metadata(
     // an explicit `--metadata version=...` overrides what the agent reported.
     if let Some(ref version) = ep.agent.version {
         m.insert(parquet_metadata::KEY_VERSION.to_string(), version.clone());
+    }
+    if let Some(ref epoch) = ep.agent.producer_epoch {
+        m.insert(
+            parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
+            epoch.clone(),
+        );
     }
     for (k, v) in &config.metadata {
         m.insert(k.clone(), v.clone());
@@ -1612,11 +1687,14 @@ pub fn run(mut config: RecordingConfig) {
                                     Some(conv.convert(&text, request_ns, response_ns))
                                 }
                                 None => match metriken_exposition::Snapshot::from_msgpack(&body) {
-                                    Ok(snapshot) => Some(inject_provenance(
-                                        snapshot,
-                                        endpoints[idx].config.source_label(),
-                                        endpoints[idx].config.url.as_str(),
-                                    )),
+                                    Ok(snapshot) => {
+                                        note_epoch_change(&mut endpoints[idx], &snapshot);
+                                        Some(inject_provenance(
+                                            snapshot,
+                                            endpoints[idx].config.source_label(),
+                                            endpoints[idx].config.url.as_str(),
+                                        ))
+                                    }
                                     Err(e) => {
                                         warn!(
                                             "msgpack decode error for {}: {e}",
@@ -1668,6 +1746,7 @@ pub fn run(mut config: RecordingConfig) {
                                 // sibling branch above never reaches it).
                                 match metriken_exposition::Snapshot::from_msgpack(&body) {
                                     Ok(snapshot) => {
+                                        note_epoch_change(&mut endpoints[idx], &snapshot);
                                         let snapshot = inject_provenance(
                                             snapshot,
                                             endpoints[idx].config.source_label(),
@@ -2347,6 +2426,94 @@ mod tests {
             m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
             Some("5.19.2")
         );
+    }
+
+    // ── producer epoch (#1224) ──────────────────────────────────────────────
+
+    fn snap_with_epoch(epoch: Option<&str>) -> metriken_exposition::Snapshot {
+        use std::collections::HashMap;
+        let mut metadata = HashMap::new();
+        metadata.insert("source".to_string(), "rezolus".to_string());
+        if let Some(e) = epoch {
+            metadata.insert("producer_epoch".to_string(), e.to_string());
+        }
+        metriken_exposition::Snapshot::V2(metriken_exposition::SnapshotV2 {
+            systemtime: std::time::SystemTime::UNIX_EPOCH,
+            duration: Duration::ZERO,
+            metadata,
+            counters: vec![],
+            gauges: vec![],
+            histograms: vec![],
+        })
+    }
+
+    #[test]
+    fn rez_metadata_carries_the_producer_epoch() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let mut ep = rez_endpoint();
+        ep.agent.producer_epoch = Some("11111111-2222-4333-8444-555555555555".to_string());
+
+        let m = build_rez_metadata(&config, &ep);
+        assert_eq!(
+            m.get(parquet_metadata::KEY_PRODUCER_EPOCH)
+                .map(String::as_str),
+            Some("11111111-2222-4333-8444-555555555555")
+        );
+    }
+
+    /// Absent, not empty. An empty epoch would read as "this recording knows
+    /// its counters did not restart", which is the opposite of not knowing.
+    #[test]
+    fn rez_metadata_omits_the_epoch_when_the_agent_reported_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let ep = rez_endpoint();
+        let m = build_rez_metadata(&config, &ep);
+        assert!(!m.contains_key(parquet_metadata::KEY_PRODUCER_EPOCH));
+    }
+
+    /// An endpoint whose `/status` carried no epoch adopts the first one a
+    /// snapshot shows. Nothing restarted; there was simply nothing to compare.
+    #[test]
+    fn a_first_epoch_is_adopted_rather_than_reported_as_a_restart() {
+        let mut ep = rez_endpoint();
+        assert!(ep.agent.producer_epoch.is_none());
+        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-a")));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
+    }
+
+    /// The same epoch twice is the ordinary case and must not move anything.
+    #[test]
+    fn an_unchanged_epoch_leaves_the_recorded_one_alone() {
+        let mut ep = rez_endpoint();
+        ep.agent.producer_epoch = Some("epoch-a".to_string());
+        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-a")));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
+    }
+
+    /// A change is a restart: every cumulative counter reset between these two
+    /// scrapes. The recorder tracks the new one so it warns once rather than
+    /// once per tick for the rest of the recording.
+    #[test]
+    fn a_changed_epoch_is_tracked_so_the_warning_fires_once() {
+        let mut ep = rez_endpoint();
+        ep.agent.producer_epoch = Some("epoch-a".to_string());
+        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-b")));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-b"));
+        // A second look at the same epoch is not another restart.
+        note_epoch_change(&mut ep, &snap_with_epoch(Some("epoch-b")));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-b"));
+    }
+
+    /// A snapshot from an agent that predates the epoch must not clear one we
+    /// already have — absence is not a restart.
+    #[test]
+    fn a_snapshot_without_an_epoch_does_not_clear_the_known_one() {
+        let mut ep = rez_endpoint();
+        ep.agent.producer_epoch = Some("epoch-a".to_string());
+        note_epoch_change(&mut ep, &snap_with_epoch(None));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-a"));
     }
 
     /// Same precedence as `source`: what the agent reported is the default,

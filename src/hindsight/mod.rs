@@ -132,17 +132,25 @@ pub fn run(config: Config) {
     // structured answer; the root page is the fallback for agents older than
     // it. Same two-step as `recorder::fetch_agent_version`, done with the
     // blocking client hindsight already has here.
-    let agent_version = fetch("/status")
-        .and_then(|body| {
-            serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body).ok()
-        })
-        .map(|status| status.version)
+    let agent_status = fetch("/status").and_then(|body| {
+        serde_json::from_str::<crate::agent::sampler_status::AgentStatus>(&body).ok()
+    });
+    let agent_version = agent_status
+        .as_ref()
+        .map(|s| s.version.clone())
         .filter(|v| !v.is_empty())
         .or_else(|| {
             fetch("/")
                 .as_deref()
                 .and_then(crate::recorder::parse_root_version)
         });
+    // No epoch from the root-page fallback: an agent old enough to lack
+    // `/status` predates the epoch, and inventing one would claim a restart
+    // boundary nobody observed.
+    let agent_epoch = agent_status
+        .as_ref()
+        .map(|s| s.producer_epoch.clone())
+        .filter(|e| !e.is_empty());
 
     if agent_systeminfo.is_some() {
         debug!("fetched systeminfo from agent");
@@ -241,6 +249,7 @@ pub fn run(config: Config) {
             &agent_systeminfo,
             &agent_descriptions,
             &agent_version,
+            &agent_epoch,
         ),
         clock_anchor_wall_ns,
     };
@@ -553,6 +562,7 @@ fn buffer_metadata(
     systeminfo: &Option<String>,
     descriptions: &Option<String>,
     version: &Option<String>,
+    producer_epoch: &Option<String>,
 ) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     m.insert(
@@ -568,6 +578,12 @@ fn buffer_metadata(
     }
     if let Some(v) = version {
         m.insert(crate::parquet_metadata::KEY_VERSION.to_string(), v.clone());
+    }
+    if let Some(e) = producer_epoch {
+        m.insert(
+            crate::parquet_metadata::KEY_PRODUCER_EPOCH.to_string(),
+            e.clone(),
+        );
     }
     m
 }
@@ -622,6 +638,7 @@ mod tests {
             &None,
             &None,
             &Some("5.19.2".to_string()),
+            &None,
         );
         assert_eq!(
             m.get(crate::parquet_metadata::KEY_VERSION)
@@ -631,7 +648,7 @@ mod tests {
 
         // Absent, not empty: an empty value renders as the bare
         // `Rezolus Version:` line this change exists to remove.
-        let m = buffer_metadata(Duration::from_secs(1), &None, &None, &None);
+        let m = buffer_metadata(Duration::from_secs(1), &None, &None, &None, &None);
         assert!(!m.contains_key(crate::parquet_metadata::KEY_VERSION));
     }
 }

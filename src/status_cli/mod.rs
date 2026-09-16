@@ -360,6 +360,7 @@ mod tests {
     fn header_formats_version_uptime_ttl() {
         let s = AgentStatus {
             version: "5.15.1".into(),
+            producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
             uptime_seconds: 11532,
             ttl_seconds: 60,
             samplers: vec![],

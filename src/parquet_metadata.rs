@@ -29,6 +29,23 @@ pub const KEY_SOURCE: &str = "source";
 /// the per-source version lives under `per_source_metadata.<source>.version`).
 pub const KEY_VERSION: &str = "version";
 
+/// The producing agent's **counter epoch**: an opaque id that changes when,
+/// and only when, every cumulative counter in the recording restarted from
+/// zero together — which for a process-scoped producer is once per process.
+///
+/// Two recordings with equal epochs over overlapping time are two
+/// observations of one monotonic series. A change means every counter reset
+/// at that point, which a consumer cannot otherwise distinguish from a
+/// counter that merely wrapped.
+///
+/// Name and semantics follow dendro's `keys::PRODUCER_EPOCH`, so an archive
+/// written here reads the same to any consumer of that format.
+///
+/// **Source-wide, and it does not cover a single counter.** A counter that
+/// wrapped, or that a sampler zeroes on read, did not restart the process, so
+/// this says nothing about it; that needs a per-counter generation.
+pub const KEY_PRODUCER_EPOCH: &str = "producer_epoch";
+
 /// Sampling interval in milliseconds, e.g. `"1000"`. Must be identical
 /// across files before they can be combined.
 pub const KEY_SAMPLING_INTERVAL_MS: &str = "sampling_interval_ms";

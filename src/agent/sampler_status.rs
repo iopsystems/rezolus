@@ -22,6 +22,11 @@ pub struct SamplerStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentStatus {
     pub version: String,
+    /// This run's producer epoch. Changes on restart and only on restart, so
+    /// two readings that differ mean every cumulative counter in between
+    /// restarted from zero. See `crate::agent::epoch`.
+    #[serde(default)]
+    pub producer_epoch: String,
     pub uptime_seconds: u64,
     pub ttl_seconds: u64,
     pub samplers: Vec<SamplerStatus>,
@@ -607,6 +612,7 @@ mod tests {
     fn agent_status_round_trips() {
         let s = AgentStatus {
             version: "5.15.1-alpha.2".into(),
+            producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
             uptime_seconds: 11532,
             ttl_seconds: 60,
             samplers: vec![SamplerStatus {

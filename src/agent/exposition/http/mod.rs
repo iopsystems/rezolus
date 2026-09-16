@@ -96,6 +96,7 @@ async fn samplers() -> axum::response::Json<Vec<crate::agent::sampler_status::Sa
 async fn status() -> axum::response::Json<crate::agent::sampler_status::AgentStatus> {
     axum::response::Json(crate::agent::sampler_status::AgentStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
+        producer_epoch: crate::agent::epoch::producer_epoch().to_string(),
         uptime_seconds: crate::agent::agent_uptime_seconds(),
         ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
         samplers: crate::agent::sampler_status::snapshot(),
