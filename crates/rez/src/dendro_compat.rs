@@ -1,40 +1,44 @@
-//! Does `dendro` read an archive `rez` wrote?
+//! Where `rez` ends and [`dendro`] begins.
 //!
-//! The read path is moving onto [`dendro`], the crate this format was
-//! extracted into. Every `.rez` in existence — hindsight buffers, archived
-//! incident captures, this repo's own fixtures — was written by `rez_sqlite`,
-//! which stamps nothing: no `application_id`, no `user_version`, and a
-//! `schema_version` TABLE plus a `recordings` table where dendro has a
-//! `user_version` pragma and `sources`.
+//! dendro is the crate this format was extracted into, and rezolus now depends
+//! on it. Nothing here is on a shipping code path yet; what these tests pin is
+//! the **boundary**, because it is not where it was during extraction and the
+//! difference is easy to assume away.
 //!
-//! dendro at the pinned rev reads those through compatibility views, and that
-//! is the entire basis for swapping the read path without migrating anybody's
-//! files. It is also a property of a *specific revision*: dendro's later
-//! `efe127e` ("the stamp is the identity, and nothing else is read") deletes
-//! the fallback, after which an unstamped file is refused as `NotAnArchive`.
+//! **dendro 0.1.0 does not read an archive `rez` wrote.** An archive is
+//! exactly a file carrying dendro's header stamp — `application_id` plus a
+//! `user_version` — and `rez_sqlite` stamps neither. It also writes a
+//! `schema_version` TABLE and a `recordings` table where dendro has
+//! `sources`. Earlier revisions accepted that shape through compatibility
+//! views; `Sniff::Unstamped` and `ReadOnly::LegacySchema` are gone, and
+//! `Sniff::NotAnArchive`'s own documentation names `.rez` as an example of
+//! what it refuses.
 //!
-//! So this is a pin test, not a smoke test. If the dependency is ever moved
-//! forward past that commit, these fail — which is the point, because the
-//! alternative is discovering it when somebody cannot open a capture.
+//! That is dendro's decision to make, and it has two consequences for this
+//! crate that are worth stating where they cannot be missed:
+//!
+//! 1. **`crates/rez` stays the reader for legacy archives.** Every `.rez` in
+//!    existence — hindsight buffers, archived incident captures, this repo's
+//!    fixtures — is unstamped. dendro will not open one, so the code that does
+//!    cannot be deleted when the read path moves. See #1224.
+//! 2. **Writing dendro-shaped archives is a format break**, not a refactor.
+//!    A 6.x archive cannot be opened by a 5.x rezolus, which is what makes it
+//!    major-version work rather than something to slip in.
 
 #[cfg(all(test, feature = "test-support"))]
 mod tests {
     use crate::rez::recorder_tests_support::{counter, snap};
-    use crate::rez_sqlite::RezDb;
     use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
     use std::path::Path;
 
     const ANCHOR: u64 = 1_700_000_000_000_000_000;
 
-    /// Write a two-sampler archive with `rez`'s own writer, cleanly finalized.
+    /// A two-sampler archive written by `rez`'s own writer, cleanly finalized.
     fn write_rez_archive(path: &Path) {
         let seed = ManifestSeed {
-            labels: [
-                ("source".to_string(), "rezolus".to_string()),
-                ("host".to_string(), "test-host".to_string()),
-            ]
-            .into_iter()
-            .collect(),
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
             metadata: [("sampling_interval_ms".to_string(), "1000".to_string())]
                 .into_iter()
                 .collect(),
@@ -61,78 +65,77 @@ mod tests {
         archive.finalize_single_rec(rec, (ts, 0)).unwrap();
     }
 
-    /// The load-bearing claim: dendro opens it at all.
+    /// The boundary, asserted rather than assumed: dendro refuses what `rez`
+    /// writes, and refuses it as "not an archive" rather than by failing
+    /// somewhere further in.
+    ///
+    /// If this ever starts failing, one of two things happened and both change
+    /// the plan: dendro regained legacy reading, or `rez` started stamping its
+    /// archives. Either is good news; neither should arrive unnoticed.
     #[test]
-    fn dendro_opens_an_archive_rez_wrote() {
+    fn dendro_does_not_read_an_archive_rez_wrote() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("compat.rez");
+        let path = dir.path().join("legacy.rez");
         write_rez_archive(&path);
 
-        // Unstamped, which is what makes this the legacy path rather than the
-        // ordinary one.
         assert!(
             matches!(
-                dendro::db::sniff(&path).unwrap(),
-                dendro::db::Sniff::Unstamped
+                dendro::archive::sniff(&path).unwrap(),
+                dendro::archive::Sniff::NotAnArchive
             ),
-            "a rez-written archive carries no dendro stamp; if this ever \
-             reports Stamped, rez started writing dendro's header and this \
-             test is no longer testing the legacy path"
+            "a rez-written archive carries no dendro stamp, so it must sniff as \
+             NotAnArchive — if it sniffs as Stamped, rez started writing dendro's \
+             header and the migration in #1224 has partly happened"
         );
 
-        dendro::db::Db::open(&path).expect(
-            "dendro must read a legacy .rez — if this fails, the pinned rev \
-             moved past the commit that removed compatibility views",
+        assert!(
+            dendro::Archive::open(&path).is_err(),
+            "dendro must refuse an unstamped archive; `crates/rez` is what reads \
+             these, and that cannot change until the migration in #1224 lands"
         );
     }
 
-    /// Opening is not enough: the two must agree about what is inside.
-    /// `recordings` -> `sources` and `all_samplers` -> `all_streams` are the
-    /// renames the compatibility views bridge, so they are what to check.
+    /// And the dependency is functional, not merely declared: an archive
+    /// dendro writes, dendro reads.
+    ///
+    /// Worth having because the test above passes for a dependency that is
+    /// broken in every way — "refuses to open a file" is what a non-working
+    /// crate does too.
     #[test]
-    fn dendro_and_rez_agree_on_the_catalog() {
+    fn dendro_round_trips_an_archive_of_its_own() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("compat.rez");
-        write_rez_archive(&path);
+        let path = dir.path().join("native.dendro");
 
-        let rez = RezDb::open(&path).unwrap();
-        let den = dendro::db::Db::open(&path).unwrap();
+        {
+            let mut archive = dendro::ArchiveMut::create(&path).unwrap();
+            archive
+                .transaction(|tx| {
+                    tx.insert_source(&dendro::archive::SourceMeta {
+                        labels: [("source".to_string(), "rezolus".to_string())]
+                            .into_iter()
+                            .collect(),
+                        metadata: Default::default(),
+                        clock_anchor_wall_ns: ANCHOR as i64,
+                    })?;
+                    Ok(())
+                })
+                .unwrap();
+        }
 
-        let rez_recs = rez.read_recordings().unwrap();
-        let den_srcs = den.read_sources().unwrap();
-        assert_eq!(
-            rez_recs.len(),
-            den_srcs.len(),
-            "recordings/sources count must match"
+        assert!(
+            matches!(
+                dendro::archive::sniff(&path).unwrap(),
+                dendro::archive::Sniff::Stamped { .. }
+            ),
+            "dendro stamps what it creates"
         );
 
-        for rec in &rez_recs {
-            let mut rez_streams = rez.all_samplers(rec.id).unwrap();
-            let mut den_streams = den.all_streams(rec.id).unwrap();
-            rez_streams.sort();
-            den_streams.sort();
-            assert_eq!(
-                rez_streams, den_streams,
-                "the two readers must see the same streams for recording {}",
-                rec.id
-            );
-            assert!(
-                !rez_streams.is_empty(),
-                "fixture should have produced streams"
-            );
-
-            for stream in &rez_streams {
-                assert_eq!(
-                    rez.read_segments(rec.id, stream).unwrap().len(),
-                    den.read_segments(rec.id, stream).unwrap().len(),
-                    "segment count must match for {stream}"
-                );
-                assert_eq!(
-                    rez.total_rows(rec.id, stream).unwrap(),
-                    den.total_rows(rec.id, stream).unwrap(),
-                    "row count must match for {stream}"
-                );
-            }
-        }
+        let archive = dendro::Archive::open(&path).unwrap();
+        let sources = archive.read_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].meta.labels.get("source").map(String::as_str),
+            Some("rezolus")
+        );
     }
 }

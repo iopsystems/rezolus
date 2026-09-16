@@ -39,6 +39,8 @@ dashboard = { path = "crates/dashboard" }
 # fallback, after which those archives are refused as `NotAnArchive`.
 # Adopting it needs a migration story for existing captures; that is 6.0
 # work, tracked in #1224.
+# The archive format, extracted from `crates/rez` into its own crate.
+#
 # `default-features = false` must be set HERE, not only at the consumer:
 # cargo ignores a member's `default-features` when the workspace entry does
 # not declare it, and warns rather than failing. dendro's default `write`
@@ -46,7 +48,7 @@ dashboard = { path = "crates/dashboard" }
 # `std::thread::spawn` compiles for wasm32 and panics at runtime — so the
 # reader configuration must not pull it in. `crates/rez` re-enables it
 # through its own `write` feature.
-dendro = { git = "https://github.com/iopsystems/dendro.git", rev = "1486b20", default-features = false }
+dendro = { version = "0.1.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
