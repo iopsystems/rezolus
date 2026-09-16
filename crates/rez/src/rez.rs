@@ -1473,6 +1473,11 @@ pub struct GroupTableBuilder {
     windows: Vec<Option<Window>>,
     order: Vec<String>,
     columns: HashMap<String, RezColumn>,
+    /// Descriptor name -> the key in `columns` its CURRENT generation writes
+    /// to. A relabeled slot keeps its descriptor name and gets a new key here,
+    /// so later rows for that slot find the new column rather than the old
+    /// one. See `get_or_create`.
+    live: HashMap<String, String>,
     /// Members whose histogram failed to rebuild and have already been
     /// reported. A malformed cell usually repeats every tick, so without this
     /// one bad member would log per row for the life of the segment.
@@ -1483,6 +1488,7 @@ impl GroupTableBuilder {
     pub fn new(name: String) -> Self {
         Self {
             name,
+            live: HashMap::new(),
             reported_bad_histograms: HashSet::new(),
             timestamps: Vec::new(),
             wall_offsets: Vec::new(),
@@ -1521,30 +1527,87 @@ impl GroupTableBuilder {
         }
     }
 
+    /// The column a descriptor writes into, creating it on first sight — and
+    /// creating a NEW one when the descriptor's labels have changed.
+    ///
+    /// A group slot's descriptor name is `{metric_id}x{slot}` whatever its
+    /// labels are, so a slot that is relabeled or reused keeps the same name.
+    /// Keying on the name alone meant the second identity wrote into the first
+    /// one's column, and the column kept the first one's metadata: a
+    /// filesystem remounted elsewhere, or a reused PID, had its values filed
+    /// under the previous occupant's labels, with nothing at the seam and no
+    /// way for any later read to recover the split (issue #1205).
+    ///
+    /// So identity here is `(name, labels)`, not `name`. A changed label set
+    /// opens a fresh column whose physical name carries a generation suffix,
+    /// because parquet field names must be unique within a schema.
+    ///
+    /// **The suffix is invisible to queries.** `metriken_query`'s
+    /// `parse_schema` takes a column's series name from its `metric` metadata
+    /// and only falls back to the field name when that is absent, and
+    /// `SeriesIdentity` keys on `(name, labels)` — so the two generations
+    /// present as two series distinguished by their labels, which is what they
+    /// are. Nothing downstream needs to learn about generations.
+    ///
+    /// `#` as the separator, deliberately: every sidecar suffix this format
+    /// uses is `:`-prefixed (`:window_begin`, `:window_width`, `:buckets`), and
+    /// `rez::read_table_parquet` strips those by suffix match. A `:`-prefixed
+    /// generation marker would be mistaken for a sidecar.
     fn get_or_create(
         &mut self,
         desc: &crate::schema::MetricDesc,
         metric_type: &'static str,
         empty: RezValues,
     ) -> &mut RezColumn {
-        let order = &mut self.order;
-        self.columns.entry(desc.name.clone()).or_insert_with(|| {
-            order.push(desc.name.clone());
-            let mut metadata: HashMap<String, String> = desc
-                .metadata
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            metadata
-                .entry("metric_type".to_string())
-                .or_insert_with(|| metric_type.to_string());
-            RezColumn {
-                name: desc.name.clone(),
-                metadata,
-                values: empty,
-                windows: Vec::new(),
+        let mut metadata: HashMap<String, String> = desc
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        metadata
+            .entry("metric_type".to_string())
+            .or_insert_with(|| metric_type.to_string());
+
+        // The live column for this descriptor name, if its labels still match.
+        // Compared on the FULL metadata map, `metric_type` included: the map is
+        // what becomes the column's parquet field metadata, so anything that
+        // differs in it is a different column.
+        let key = match self.live.get(desc.name.as_str()) {
+            Some(key)
+                if self
+                    .columns
+                    .get(key)
+                    .is_some_and(|c| c.metadata == metadata) =>
+            {
+                key.clone()
             }
-        })
+            _ => {
+                // First sight, or a relabel. Either way this descriptor needs a
+                // column of its own; find a field name nothing else has taken.
+                let mut key = desc.name.clone();
+                let mut generation = 1usize;
+                while self.columns.contains_key(&key) {
+                    generation += 1;
+                    key = format!("{}#{generation}", desc.name);
+                }
+                self.live.insert(desc.name.clone(), key.clone());
+                self.order.push(key.clone());
+                self.columns.insert(
+                    key.clone(),
+                    RezColumn {
+                        name: key.clone(),
+                        metadata,
+                        values: empty,
+                        windows: Vec::new(),
+                    },
+                );
+                key
+            }
+        };
+
+        self.columns
+            .get_mut(&key)
+            .expect("the key was just resolved against `columns`")
     }
 
     /// Append one row: `ts`/`wall_offset_ns` as in `TableBuilder::push_row`,
@@ -3809,5 +3872,138 @@ mod malformed_histogram_tests {
                 );
             }
         }
+    }
+}
+
+/// A group slot that is relabeled or reused must not write into the column its
+/// previous occupant created — see #1205.
+#[cfg(test)]
+mod slot_relabel_tests {
+    use super::{read_table_parquet, write_table_parquet, GroupTableBuilder, RezValues};
+    use crate::schema::{GroupSchema, MetricDesc};
+
+    /// One gauge in slot 0, named as a group slot is: `{metric_id}x{slot}`,
+    /// unchanged by a relabel.
+    fn schema(mount: &str, device: &str) -> GroupSchema {
+        GroupSchema {
+            gauges: vec![MetricDesc {
+                name: "123x0".into(),
+                metadata: [
+                    ("metric".to_string(), "filesystem_total".to_string()),
+                    ("mount".to_string(), mount.to_string()),
+                    ("device".to_string(), device.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn gauges(col: &super::RezColumn) -> Vec<Option<i64>> {
+        match &col.values {
+            RezValues::Gauge(v) => v.clone(),
+            other => panic!("expected gauges, got {other:?}"),
+        }
+    }
+
+    /// The bug, as reported: two identities, one column, the first one's
+    /// labels, and a value that belongs to the second filed under the first.
+    #[test]
+    fn a_relabeled_slot_does_not_inherit_the_previous_labels() {
+        let (old, new) = (schema("/old", "8:1"), schema("/new", "8:17"));
+        assert_ne!(old.hash(), new.hash(), "a relabel changes the schema hash");
+
+        let mut builder = GroupTableBuilder::new("filesystem/filesystem_sweep".into());
+        builder.push_row(1, 0, None, &old, &[], &[Some(100)], &[]);
+        builder.push_row(2, 0, None, &new, &[], &[Some(200)], &[]);
+        let table = builder.finish();
+
+        assert_eq!(
+            table.columns.len(),
+            2,
+            "each identity needs its own column; got {:?}",
+            table.columns.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+
+        let first = &table.columns[0];
+        assert_eq!(first.metadata["mount"], "/old");
+        assert_eq!(
+            gauges(first),
+            vec![Some(100), None],
+            "the old identity has no reading once the slot was relabeled"
+        );
+
+        let second = &table.columns[1];
+        assert_eq!(second.metadata["mount"], "/new");
+        assert_eq!(second.metadata["device"], "8:17");
+        assert_eq!(
+            gauges(second),
+            vec![None, Some(200)],
+            "the new identity is absent for rows before it existed, not zero"
+        );
+        assert_ne!(
+            first.name, second.name,
+            "parquet field names must be unique within a schema"
+        );
+    }
+
+    /// The ordinary case must not regress: an unchanged descriptor keeps
+    /// writing to one column, or every group table would explode into a column
+    /// per row.
+    #[test]
+    fn an_unchanged_slot_keeps_one_column() {
+        let s = schema("/data", "8:1");
+        let mut builder = GroupTableBuilder::new("filesystem/filesystem_sweep".into());
+        for (i, v) in [100i64, 200, 300].into_iter().enumerate() {
+            builder.push_row(i as u64 + 1, 0, None, &s, &[], &[Some(v)], &[]);
+        }
+        let table = builder.finish();
+        assert_eq!(table.columns.len(), 1);
+        assert_eq!(
+            gauges(&table.columns[0]),
+            vec![Some(100), Some(200), Some(300)]
+        );
+    }
+
+    /// A slot that returns to a previous identity gets a THIRD column rather
+    /// than resuming the first. Resuming would fuse two disjoint occupancies
+    /// into one series across a gap where the slot meant something else —
+    /// which is the same misattribution in a subtler form.
+    #[test]
+    fn a_slot_returning_to_an_earlier_identity_gets_a_new_column() {
+        let (a, b) = (schema("/a", "8:1"), schema("/b", "8:2"));
+        let mut builder = GroupTableBuilder::new("filesystem/filesystem_sweep".into());
+        builder.push_row(1, 0, None, &a, &[], &[Some(1)], &[]);
+        builder.push_row(2, 0, None, &b, &[], &[Some(2)], &[]);
+        builder.push_row(3, 0, None, &a, &[], &[Some(3)], &[]);
+        let table = builder.finish();
+        assert_eq!(table.columns.len(), 3);
+        assert_eq!(gauges(&table.columns[0]), vec![Some(1), None, None]);
+        assert_eq!(gauges(&table.columns[2]), vec![None, None, Some(3)]);
+    }
+
+    /// The generation suffix must survive a parquet round trip, and the two
+    /// generations must come back as two columns with their own labels.
+    #[test]
+    fn both_generations_survive_a_parquet_round_trip() {
+        let (old, new) = (schema("/old", "8:1"), schema("/new", "8:17"));
+        let mut builder = GroupTableBuilder::new("filesystem/filesystem_sweep".into());
+        builder.push_row(1, 0, None, &old, &[], &[Some(100)], &[]);
+        builder.push_row(2, 0, None, &new, &[], &[Some(200)], &[]);
+
+        let bytes = write_table_parquet(&builder.finish()).unwrap();
+        let table = read_table_parquet("filesystem/filesystem_sweep".to_string(), bytes).unwrap();
+
+        assert_eq!(table.columns.len(), 2);
+        let mounts: Vec<&str> = table
+            .columns
+            .iter()
+            .map(|c| c.metadata["mount"].as_str())
+            .collect();
+        assert!(
+            mounts.contains(&"/old") && mounts.contains(&"/new"),
+            "both identities must survive the round trip: {mounts:?}"
+        );
     }
 }
