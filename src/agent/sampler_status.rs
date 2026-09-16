@@ -29,6 +29,20 @@ pub struct AgentStatus {
     pub producer_epoch: String,
     pub uptime_seconds: u64,
     pub ttl_seconds: u64,
+    /// The sampling clock's current period in milliseconds, or `None` when the
+    /// agent is **tickless** — nothing is subscribed, so nothing is sampled
+    /// except when a scrape asks.
+    ///
+    /// Reported because a new subsystem nobody can see is a new subsystem
+    /// nobody can debug: "is this agent sampling, and how often" is the first
+    /// question when a subscriber is not getting what it expected, and the
+    /// answer depends on who ELSE is subscribed (the clock runs at the fastest
+    /// demand). Defaulted for an older agent that has no clock to report.
+    #[serde(default)]
+    pub sample_interval_ms: Option<u64>,
+    /// How many subscriptions are currently driving the clock.
+    #[serde(default)]
+    pub subscribers: usize,
     pub samplers: Vec<SamplerStatus>,
 }
 
@@ -615,6 +629,8 @@ mod tests {
             producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
             uptime_seconds: 11532,
             ttl_seconds: 60,
+            sample_interval_ms: None,
+            subscribers: 0,
             samplers: vec![SamplerStatus {
                 name: "cpu_usage".into(),
                 state: SamplerState::Active,

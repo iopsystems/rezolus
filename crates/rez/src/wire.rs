@@ -203,3 +203,209 @@ pub fn encode_snapshot(snapshot: &metriken_exposition::Snapshot) -> Result<Agent
             .collect::<Result<Vec<_>, _>>()?,
     })
 }
+
+/// The `Content-Type` of the streaming subscription endpoint.
+///
+/// Distinct from [`CONTENT_TYPE`]: a stream body is a sequence of
+/// length-prefixed frames, not one `AgentRows`, and a consumer that decoded
+/// one as the other would read the first frame's length as msgpack.
+pub const STREAM_CONTENT_TYPE: &str = "application/vnd.rezolus.rows.v1+msgpack-stream";
+
+/// One frame of a subscription stream.
+///
+/// `seq` is what makes a gap detectable. The agent ends a stream rather than
+/// letting a slow subscriber fall behind, but a truncated TCP connection looks
+/// the same as a clean end — so a consumer checks that `seq` increments by one
+/// and treats anything else as a gap to be refilled, not as data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamFrame {
+    pub seq: u64,
+    pub rows: AgentRows,
+}
+
+/// Encode one frame: a `u32` big-endian length, then that many bytes of
+/// msgpack.
+///
+/// Length-prefixed rather than self-delimiting because a consumer must be able
+/// to find a frame boundary without decoding — the same reason
+/// [`AgentRow`]'s routing fields are in the clear.
+pub fn encode_frame(rows: &AgentRows, seq: u64) -> Result<Vec<u8>, String> {
+    // A tuple, not a `StreamFrame`, purely so this can borrow `rows` instead
+    // of cloning a whole tick to build one. rmp-serde encodes a struct as a
+    // positional array, so the two are the same bytes —
+    // `a_frame_round_trips_through_its_struct` pins that.
+    let payload =
+        rmp_serde::to_vec(&(seq, rows)).map_err(|e| format!("failed to encode a frame: {e}"))?;
+    let len = u32::try_from(payload.len()).map_err(|_| {
+        format!(
+            "frame of {} bytes exceeds the u32 length prefix",
+            payload.len()
+        )
+    })?;
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+/// Decode one frame's payload — the bytes AFTER the length prefix.
+pub fn decode_frame(payload: &[u8]) -> Result<StreamFrame, String> {
+    rmp_serde::from_slice(payload).map_err(|e| format!("failed to decode a frame: {e}"))
+}
+
+/// A borrowed view of an [`AgentRow`], for encoding without copying.
+///
+/// rmp-serde writes a struct as a positional array, so this produces the same
+/// bytes as the owned [`AgentRow`] — pinned by
+/// `a_borrowed_row_encodes_exactly_like_an_owned_one`.
+///
+/// It exists for the streaming path. One sampling tick is shared by every
+/// subscriber, but *which* schemas each still needs is per-connection, so
+/// without this each subscriber would deep-clone the whole tick — payload
+/// bytes included — every time, purely to null out a few schema fields.
+#[derive(Serialize)]
+struct AgentRowRef<'a> {
+    stream: &'a str,
+    window: Option<(u64, u64)>,
+    schema_hash: (u64, u64),
+    schema: Option<&'a GroupSchema>,
+    arity: (u32, u32, u32),
+    approx_bytes: u32,
+    row: &'a [u8],
+}
+
+#[derive(Serialize)]
+struct AgentRowsRef<'a> {
+    wall_ns: u64,
+    duration_ns: u64,
+    rows: Vec<AgentRowRef<'a>>,
+}
+
+/// Encode one frame, keeping each row's schema only where `keep_schema` says
+/// this consumer still needs it.
+///
+/// The filter is how per-connection schema state is applied to a shared tick:
+/// the caller's map of what it has already sent decides, and nothing is
+/// copied to express the decision.
+pub fn encode_frame_filtered(
+    rows: &AgentRows,
+    seq: u64,
+    mut keep_schema: impl FnMut(&AgentRow) -> bool,
+) -> Result<Vec<u8>, String> {
+    let view = AgentRowsRef {
+        wall_ns: rows.wall_ns,
+        duration_ns: rows.duration_ns,
+        rows: rows
+            .rows
+            .iter()
+            .map(|r| AgentRowRef {
+                stream: &r.stream,
+                window: r.window,
+                schema_hash: r.schema_hash,
+                schema: if keep_schema(r) {
+                    r.schema.as_ref()
+                } else {
+                    None
+                },
+                arity: r.arity,
+                approx_bytes: r.approx_bytes,
+                row: &r.row,
+            })
+            .collect(),
+    };
+    let payload =
+        rmp_serde::to_vec(&(seq, &view)).map_err(|e| format!("failed to encode a frame: {e}"))?;
+    let len = u32::try_from(payload.len()).map_err(|_| {
+        format!(
+            "frame of {} bytes exceeds the u32 length prefix",
+            payload.len()
+        )
+    })?;
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows() -> AgentRows {
+        AgentRows {
+            wall_ns: 7,
+            duration_ns: 3,
+            rows: vec![AgentRow {
+                stream: "cpu/usage".to_string(),
+                window: Some((1, 2)),
+                schema_hash: (9, 9),
+                schema: None,
+                arity: (1, 0, 0),
+                approx_bytes: 16,
+                row: vec![0xc0],
+            }],
+        }
+    }
+
+    /// `encode_frame` borrows a tuple where `decode_frame` produces a struct.
+    /// That only works because rmp-serde writes a struct as a positional
+    /// array; if it ever did not, frames would encode and decode differently
+    /// and the mismatch would show up as corrupt data rather than an error.
+    #[test]
+    fn a_frame_round_trips_through_its_struct() {
+        let rows = rows();
+        let framed = encode_frame(&rows, 41).unwrap();
+        let len = u32::from_be_bytes(framed[..4].try_into().unwrap()) as usize;
+        assert_eq!(
+            len,
+            framed.len() - 4,
+            "the prefix must describe the payload"
+        );
+
+        let frame = decode_frame(&framed[4..]).unwrap();
+        assert_eq!(frame.seq, 41);
+        assert_eq!(frame.rows, rows);
+    }
+
+    /// The borrowed encode view must be byte-identical to the owned type, or
+    /// the streaming path and the poll path would disagree about the format
+    /// while both claiming the same content type.
+    #[test]
+    fn a_borrowed_row_encodes_exactly_like_an_owned_one() {
+        let mut rows = rows();
+        rows.rows[0].schema = Some(GroupSchema::default());
+
+        let borrowed = encode_frame_filtered(&rows, 5, |_| true).unwrap();
+        let owned = encode_frame(&rows, 5).unwrap();
+        assert_eq!(borrowed, owned);
+
+        // ...and dropping a schema through the filter must equal having built
+        // the row without one.
+        let dropped = encode_frame_filtered(&rows, 5, |_| false).unwrap();
+        let mut without = rows.clone();
+        without.rows[0].schema = None;
+        assert_eq!(dropped, encode_frame(&without, 5).unwrap());
+        assert_ne!(dropped, borrowed, "the filter has to actually do something");
+    }
+
+    /// A stream body is several frames back to back, and a consumer has to be
+    /// able to walk them using only the prefixes.
+    #[test]
+    fn frames_concatenate_and_are_walkable_by_length_alone() {
+        let rows = rows();
+        let mut body = Vec::new();
+        for seq in 0..4 {
+            body.extend_from_slice(&encode_frame(&rows, seq).unwrap());
+        }
+
+        let mut at = 0usize;
+        let mut seen = Vec::new();
+        while at < body.len() {
+            let len = u32::from_be_bytes(body[at..at + 4].try_into().unwrap()) as usize;
+            at += 4;
+            seen.push(decode_frame(&body[at..at + len]).unwrap().seq);
+            at += len;
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+    }
+}

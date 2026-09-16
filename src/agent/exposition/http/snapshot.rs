@@ -38,6 +38,8 @@ pub struct SnapshotBuilder {
     /// Bounded by the number of acquisition groups (45 on a 25-sampler host),
     /// not by generations: one entry per group name, overwritten on change.
     emitted_schemas: HashMap<String, (u64, u64)>,
+    /// Completed sampling passes — see [`samples`](Self::samples).
+    samples: u64,
 }
 
 struct CachedSnapshot {
@@ -61,6 +63,11 @@ struct CachedSnapshot {
     /// hit should be a refcount bump, not a re-encode.
     rows: OnceLock<Bytes>,
     rows_all: OnceLock<Bytes>,
+    /// The decoded, fully-schema'd rows for this snapshot, shared by every
+    /// stream subscriber so one tick costs one conversion rather than one per
+    /// connection. Each subscriber then clears the schemas IT has already
+    /// sent, which is per-connection state and cannot be shared.
+    rows_full: OnceLock<Option<Arc<crate::recorder::wire::AgentRows>>>,
 }
 
 impl SnapshotBuilder {
@@ -77,10 +84,12 @@ impl SnapshotBuilder {
             format: config.general().snapshot_format(),
             skeleton_cache: SkeletonCache::new(),
             emitted_schemas: HashMap::new(),
+            samples: 0,
         }
     }
 
     async fn refresh(&mut self) {
+        self.samples += 1;
         let last = Instant::now();
 
         let timestamp = SystemTime::now();
@@ -120,7 +129,51 @@ impl SnapshotBuilder {
             json: OnceLock::new(),
             rows: OnceLock::new(),
             rows_all: OnceLock::new(),
+            rows_full: OnceLock::new(),
         });
+    }
+
+    /// Run one sampling pass unconditionally, ignoring the TTL.
+    ///
+    /// This is what the [sampling clock](crate::agent::clock) calls on a tick.
+    /// It bypasses the TTL rather than consulting it because the tick IS the
+    /// cadence decision — a clock running faster than the TTL would otherwise
+    /// serve a subscriber the same snapshot twice and call it two readings.
+    pub async fn sample(&mut self) {
+        self.refresh().await;
+    }
+
+    /// How many sampling passes this builder has run, from either cause: a
+    /// clock tick or a TTL-expired request.
+    ///
+    /// Exposed because "the agent did not sample" is the property that keeps
+    /// #1226's observer effect away, and a property worth having is a property
+    /// worth asserting — see `an_unsubscribed_agent_never_samples`. Only the
+    /// tests need the raw count; an operator reads the clock's state off
+    /// `/status` instead.
+    #[cfg(test)]
+    pub fn samples(&self) -> u64 {
+        self.samples
+    }
+
+    /// The most recent completed sampling pass as rows, with every schema
+    /// present — or `None` before the first pass, or for a V2 agent, which has
+    /// no acquisition groups to stream.
+    ///
+    /// Does NOT sample. A stream subscriber reads what the clock produced; it
+    /// must never be able to drive a sampling pass of its own, or N
+    /// subscribers would mean N passes and the whole point of one shared clock
+    /// would be lost.
+    pub fn latest_rows(&self) -> Option<Arc<crate::recorder::wire::AgentRows>> {
+        let cached = self.cached.as_ref()?;
+        cached
+            .rows_full
+            .get_or_init(|| {
+                crate::recorder::wire::encode_snapshot(&cached.snapshot)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .clone()
     }
 
     pub async fn build(&mut self, now: Instant) -> &Snapshot {

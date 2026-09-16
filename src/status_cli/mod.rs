@@ -363,6 +363,8 @@ mod tests {
             producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
             uptime_seconds: 11532,
             ttl_seconds: 60,
+            sample_interval_ms: None,
+            subscribers: 0,
             samplers: vec![],
         };
         let h = render_header(&s);
