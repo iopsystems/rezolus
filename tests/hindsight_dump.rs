@@ -237,12 +237,18 @@ impl Hindsight {
                  duration = \"15m\"\n\
                  source = \"127.0.0.1:{agent}\"\n\
                  output = \"{}\"\n\
+                 buffer_dir = \"{}\"\n\
                  listen = \"127.0.0.1:{port}\"\n\
                  segment_rows = {segment_rows}\n\
                  [log]\n\
                  level = \"info\"\n",
                 INTERVAL.as_millis(),
                 output.display(),
+                // Pinned to this test's temp dir. `buffer_dir` defaults to
+                // $STATE_DIRECTORY or /var/lib/rezolus, neither of which a
+                // test may write to — and setting it here is also what keeps
+                // each test's buffer isolated from every other's.
+                dir.path().display(),
             ),
         )
         .expect("failed to write the hindsight config");

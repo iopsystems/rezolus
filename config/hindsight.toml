@@ -12,9 +12,20 @@ source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are `.rez` archives
 # (readable by `rezolus view`, `rezolus mcp` and `rezolus recording metadata`).
-# The directory holding this file is also where the rolling buffer is kept, so
-# it needs room for the buffer as well as the snapshot.
-output = "/tmp/rezolus.rez"
+output = "/var/lib/rezolus/rezolus.rez"
+
+# Specify the directory the rolling buffer is kept in. It needs room for the
+# whole lookback period above, which can be gigabytes.
+#
+# Defaults to $STATE_DIRECTORY when systemd sets it (the packaged unit declares
+# `StateDirectory=rezolus`), otherwise /var/lib/rezolus.
+#
+# This is deliberately NOT derived from `output`. The snapshot is an artifact
+# you keep and choose the location of; the buffer is working state rewritten
+# continuously. Do not put it on tmpfs — /tmp and /run are tmpfs on most
+# distributions, and a buffer in RAM defeats the point of keeping more history
+# than memory holds.
+# buffer_dir = "/var/lib/rezolus"
 
 # Optional: rows per sealed segment. Defaults to 4096, which at the 1s interval
 # above is one segment per ~68 minutes. Retention and ranged snapshots both work

@@ -188,15 +188,26 @@ pub fn run(config: Config) {
         );
     }
 
-    let buffer_dir = {
-        let mut path = output.clone();
-        path.pop();
-        path
-    };
+    let buffer_dir = config.general().buffer_dir();
 
-    // The buffer lives in a private directory beside the output, so its
-    // `-wal`/`-shm` sidecars cannot collide with anything and the whole lot is
-    // removed together when the daemon exits cleanly.
+    // Created if absent, so a hand-run daemon works without the operator
+    // preparing anything. Under systemd `StateDirectory=rezolus` has already
+    // made it, with the right ownership for `User=rezolus` — which is the case
+    // that would otherwise fail, since a non-root service cannot create a
+    // directory under `/var/lib` itself.
+    if let Err(e) = std::fs::create_dir_all(&buffer_dir) {
+        eprintln!(
+            "could not create the buffer directory {}: {e}\n\
+             Set `buffer_dir` in the config, or run under a unit with \
+             `StateDirectory=rezolus`.",
+            buffer_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    // The buffer lives in a private directory inside it, so its `-wal`/`-shm`
+    // sidecars cannot collide with anything and the whole lot is removed
+    // together when the daemon exits cleanly.
     let staging = match tempfile::TempDir::new_in(&buffer_dir) {
         Ok(t) => t,
         Err(error) => {

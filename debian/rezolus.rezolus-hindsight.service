@@ -5,6 +5,12 @@ After=rezolus.service
 
 [Service]
 User=rezolus
+# Creates /var/lib/rezolus owned by `User=` above and exports it as
+# $STATE_DIRECTORY, which is where the rolling buffer and the default snapshot
+# path live. Without it a non-root service cannot create a directory under
+# /var/lib at all, and the buffer previously defaulted into /tmp — tmpfs on
+# most distributions, so a multi-gigabyte rolling buffer sat in RAM.
+StateDirectory=rezolus
 ExecStart=/usr/bin/rezolus hindsight /etc/rezolus/hindsight.toml
 KillMode=control-group
 Restart=on-failure
