@@ -4413,6 +4413,169 @@ mod tests {
                 );
             }
 
+            /// Not a test — the measurement behind this wire's existence, kept
+            /// runnable so the numbers in
+            /// `docs/journal/2026-09-16-row-endpoint-schema-resend.md` can be
+            /// reproduced rather than taken on faith:
+            ///
+            /// ```text
+            /// cargo test -p rez --release row_transport_cost -- --ignored --nocapture
+            /// ```
+            ///
+            /// It reports two things, and the second is the point. Holding the
+            /// schema policy fixed, the row transport is worth little — it
+            /// trades one large encode for many small ones. Holding the
+            /// TRANSPORT fixed and changing only whether the producer resends
+            /// schemas is worth an order of magnitude. `#[ignore]` because it
+            /// prints timings rather than asserting, and a timing assertion on
+            /// CI hardware is a flake generator.
+            #[test]
+            #[ignore]
+            fn row_transport_cost() {
+                use std::time::Instant;
+
+                // A population shaped like a real host: a few wide groups
+                // (cgroups, per-CPU) carrying most of the members, plus a long
+                // tail of narrow ones. `delta` measures 45 groups / 3,560
+                // members; this is deliberately smaller so the test stays
+                // quick, which makes it CONSERVATIVE — the schema share grows
+                // with member count.
+                let mut pop: Vec<(String, GroupSchema, usize)> = Vec::new();
+                for (name, members) in [
+                    ("cgroup_cpu_usage/usage", 400usize),
+                    ("cpu_usage/usage", 128),
+                    ("cpu_perf/cycles", 128),
+                    ("scheduler_runqueue/latency", 64),
+                    ("network_traffic/traffic", 32),
+                    ("blockio_requests/requests", 32),
+                ] {
+                    let counters = (0..members)
+                        .map(|i| MetricDesc {
+                            name: format!("{i}"),
+                            metadata: [
+                                ("metric".to_string(), name.replace('/', "_")),
+                                (
+                                    "name".to_string(),
+                                    format!("/sys/fs/cgroup/system.slice/unit-{i}.service"),
+                                ),
+                                ("sampler".to_string(), "cgroup_cpu_usage".to_string()),
+                            ]
+                            .into_iter()
+                            .collect(),
+                        })
+                        .collect();
+                    pop.push((
+                        name.to_string(),
+                        GroupSchema {
+                            counters,
+                            gauges: Vec::new(),
+                            histograms: Vec::new(),
+                        },
+                        members,
+                    ));
+                }
+                for i in 0..20 {
+                    pop.push((
+                        format!("sampler_{i}/group"),
+                        group_schema(&["a", "b", "c", "d", "e", "f", "g", "h"]),
+                        8,
+                    ));
+                }
+                let total: usize = pop.iter().map(|(_, _, m)| m).sum();
+
+                const TICKS: u64 = 200;
+                let build = |tick: u64, resend: bool| -> Snapshot {
+                    let end = 1_000 + tick * 1_000;
+                    v3_snap(
+                        end,
+                        pop.iter()
+                            .map(|(name, schema, members)| GroupSnapshot {
+                                name: name.clone(),
+                                schema_hash: schema.hash(),
+                                schema: (resend || tick == 0).then(|| Arc::new(schema.clone())),
+                                window: Some(Window::new(end - 500, end).into()),
+                                counters: (0..*members)
+                                    .map(|i| Some(tick * 7 + i as u64))
+                                    .collect(),
+                                gauges: Vec::new(),
+                                histograms: Vec::new(),
+                            })
+                            .collect(),
+                    )
+                };
+
+                println!(
+                    "\n{total} metrics across {} groups, {TICKS} ticks",
+                    pop.len()
+                );
+                for resend in [true, false] {
+                    let dir = tempfile::tempdir().unwrap();
+                    println!(
+                        "\n-- producer resends every schema every tick: {resend} {}",
+                        if resend {
+                            "(what the agent does today)"
+                        } else {
+                            ""
+                        }
+                    );
+
+                    let (_a, mut rec, _) = recorder(&dir.path().join("s.rez"), policy(1_000));
+                    let (mut sa, mut sr, mut sb) = (0u128, 0u128, 0usize);
+                    for tick in 0..TICKS {
+                        let snap = build(tick, resend);
+                        let t = Instant::now();
+                        let body = rmp_serde::to_vec(&snap).unwrap();
+                        sa += t.elapsed().as_nanos();
+                        sb += body.len();
+                        let t = Instant::now();
+                        let decoded: Snapshot = rmp_serde::from_slice(&body).unwrap();
+                        let staged = rec.stage(&decoded, 1_000 + tick * 1_000, 0).unwrap();
+                        sr += t.elapsed().as_nanos();
+                        std::hint::black_box(staged);
+                    }
+
+                    let (_a2, mut rec2, _) = recorder(&dir.path().join("r.rez"), policy(1_000));
+                    let (mut ra, mut rr, mut rb) = (0u128, 0u128, 0usize);
+                    for tick in 0..TICKS {
+                        let snap = build(tick, resend);
+                        let t = Instant::now();
+                        let rows = crate::wire::encode_snapshot(&snap).unwrap();
+                        let body = crate::wire::encode(&rows).unwrap();
+                        ra += t.elapsed().as_nanos();
+                        rb += body.len();
+                        let t = Instant::now();
+                        let decoded = crate::wire::decode(&body).unwrap();
+                        let staged = rec2.stage_rows(&decoded, 1_000 + tick * 1_000, 0).unwrap();
+                        rr += t.elapsed().as_nanos();
+                        std::hint::black_box(staged);
+                    }
+
+                    let per = |n: u128| n as f64 / TICKS as f64 / 1000.0;
+                    let kib = |n: usize| n as f64 / TICKS as f64 / 1024.0;
+                    println!(
+                        "   snapshot: agent {:>6.0} us  recorder {:>6.0} us  body {:>6.0} KiB",
+                        per(sa),
+                        per(sr),
+                        kib(sb)
+                    );
+                    println!(
+                        "   rows    : agent {:>6.0} us  recorder {:>6.0} us  body {:>6.0} KiB",
+                        per(ra),
+                        per(rr),
+                        kib(rb)
+                    );
+                    println!(
+                        "   transport alone: recorder {:.2}x, TOTAL CPU {:.2}x",
+                        sr as f64 / rr as f64,
+                        (sa + sr) as f64 / (ra + rr) as f64
+                    );
+                }
+                println!(
+                    "\nThe gap between the two blocks above — not the gap between the two \
+                     rows within a block — is what this wire is for.\n"
+                );
+            }
+
             /// A V2 snapshot has no acquisition groups, so it has no rows to
             /// serve. Returning an empty body would be indistinguishable to a
             /// consumer from an agent with every sampler disabled.

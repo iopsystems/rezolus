@@ -14,9 +14,12 @@
 //! exporter, the parquet recorder and the live viewer all decode one snapshot
 //! in isolation and hold no cache to resolve a schema reference against. A
 //! schema that repeats unchanged for hours is re-encoded, re-transmitted and
-//! re-decoded every tick, and it dwarfs the values it describes — the numbers
-//! are in `docs/journal/`, but the shape of them is that the schema is most
-//! of the body and most of the recorder's per-tick cost.
+//! re-decoded every tick, and it dwarfs the values it describes: on a
+//! 25-sampler host it is 87.8% of the body. Serving rows instead measured
+//! **2.6x smaller bodies** end to end on that host — see
+//! `docs/journal/2026-09-16-row-endpoint-schema-resend.md`, which also has
+//! the two reasons it is 2.6x rather than the 8x that removing schemas
+//! outright would give.
 //!
 //! [`WalGroupRow`](crate::wal::WalGroupRow) was built for a producer that
 //! does not do that: `schema` is optional, `schema_hash` identifies the

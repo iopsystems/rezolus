@@ -158,10 +158,18 @@ impl SnapshotBuilder {
     ///
     /// The point of this endpoint is that it does NOT resend a schema that
     /// has not changed. On a 25-sampler host (45 groups, 3,560 declared
-    /// members) schemas are **87.8%** of a scrape's body, and they repeat
-    /// unchanged for hours — so omitting them is worth roughly 8x on the
-    /// wire, and more than that on the consumer, which no longer decodes
-    /// 3,560 names and metadata maps per tick.
+    /// members) schemas are 87.8% of a scrape's body — and measured end to
+    /// end over 60 consecutive scrapes there, this endpoint's bodies are
+    /// **2.6x smaller** than `/metrics/binary`'s (212,308 B against
+    /// 559,458 B median).
+    ///
+    /// Not 8x, which is what removing schemas outright would give, because
+    /// a default group's membership is value-derived — a counter's first
+    /// non-zero tick changes its group's schema hash and forces a resend —
+    /// and because each row is framed separately, costing about 1.6x a
+    /// snapshot's framing at equal schema policy. Declared member sets are
+    /// the lever on the first; see
+    /// `docs/journal/2026-09-16-row-endpoint-schema-resend.md`.
     ///
     /// `/metrics/binary` cannot do this and must keep resending. Its body is
     /// contractually self-contained: `record --format raw` writes those bodies
