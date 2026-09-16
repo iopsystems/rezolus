@@ -208,6 +208,14 @@ fn collect_gpus() -> Vec<GpuSummary> {
                 memory_bytes,
                 driver: None,
                 numa_node: None,
+                // An Apple Silicon GPU is on-die: no PCI bus, no PCIe link, and
+                // the system profiler reports no core count or architecture
+                // string. All genuinely absent rather than merely uncollected.
+                pci_bus_id: None,
+                architecture: None,
+                pcie_gen: None,
+                pcie_width: None,
+                cores: None,
             });
         }
     }

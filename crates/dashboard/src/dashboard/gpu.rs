@@ -2,6 +2,11 @@ use crate::MetricsSource;
 use crate::plot::*;
 
 /// The metrics we probe for GPU presence / id enumeration.
+///
+/// `gpu_engine_busy_time` and `gpu_frequency_sample` are Intel's — an Intel host
+/// publishes neither `gpu_utilization` nor (on an integrated GPU) `gpu_memory`,
+/// so without them such a host would enumerate no GPUs at all and the per-device
+/// charts and selector would never appear.
 const GPU_PROBE_METRICS: &[&str] = &[
     "gpu_utilization",
     "gpu_memory",
@@ -10,40 +15,89 @@ const GPU_PROBE_METRICS: &[&str] = &[
     "gpu_clock",
     "gpu_memory_utilization",
     "gpmu_clock",
+    "gpu_engine_busy_time",
+    "gpu_frequency_sample",
 ];
 
 /// True iff the recording has more than one GPU. Per-device charts are
 /// suppressed when this is false because they degenerate to the aggregate.
+///
+/// Counts distinct `(vendor, id)` pairs, not distinct ids: a host with an
+/// NVIDIA card and an Intel iGPU has two GPUs that are both `id="0"`, and
+/// counting ids alone would call that a single-GPU host and hide the
+/// per-device charts that separate them.
 fn has_multiple_gpus(data: &dyn MetricsSource) -> bool {
-    GPU_PROBE_METRICS
-        .iter()
-        .any(|m| metric_unique_label_count(data, m, "id") > 1)
+    gpu_entries(data).len() > 1
 }
 
-/// The distinct GPU `id` values present in the recording, sorted numerically.
-fn gpu_ids(data: &dyn MetricsSource) -> Vec<i64> {
-    let mut ids: Vec<i64> = GPU_PROBE_METRICS
-        .iter()
-        .flat_map(|m| data.label_values(m, "id"))
-        .filter_map(|v| v.parse::<i64>().ok())
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+/// One GPU present in the recording, as the selector needs to address it.
+///
+/// `id` alone does not identify a GPU. Every vendor's sampler numbers its own
+/// devices from 0 (NVML's device index, ROCm's, and for Intel the PMU discovery
+/// order), so on a host with an NVIDIA card and an Intel iGPU there are two
+/// distinct GPUs both labelled `id="0"`. Selecting on `id` alone matches both.
+struct GpuEntry {
+    id: i64,
+    /// The `vendor` label, absent on samplers that do not set one (the Apple
+    /// GPU sampler declares no vendor). `None` means "match on id alone",
+    /// which is the pre-existing behaviour and correct when nothing else
+    /// disambiguates.
+    vendor: Option<String>,
+}
+
+/// The distinct GPUs present in the recording, sorted by vendor then id so the
+/// selector's order is stable across runs.
+fn gpu_entries(data: &dyn MetricsSource) -> Vec<GpuEntry> {
+    let mut seen: std::collections::BTreeSet<(Option<String>, i64)> =
+        std::collections::BTreeSet::new();
+
+    for metric in GPU_PROBE_METRICS {
+        // Read whole label sets rather than one key at a time: pairing a
+        // vendor with an id requires seeing them on the same series.
+        for labels in data
+            .counter_labels(metric)
+            .into_iter()
+            .chain(data.gauge_labels(metric))
+        {
+            let Some(id) = labels.get("id").and_then(|v| v.parse::<i64>().ok()) else {
+                continue;
+            };
+            seen.insert((labels.get("vendor").cloned(), id));
+        }
+    }
+
+    seen.into_iter()
+        .map(|(vendor, id)| GpuEntry { id, vendor })
+        .collect()
 }
 
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
     let multi_gpu = has_multiple_gpus(data);
 
-    // Tell the frontend which GPU ids exist so it can render the GPU selector
-    // (a dropdown to view the non-per-GPU charts for a single GPU or the
+    // Tell the frontend which GPUs exist so it can render the GPU selector
+    // (a picker that filters the non-per-GPU charts to a subset, or the
     // aggregate). Only meaningful with more than one GPU.
-    let ids = gpu_ids(data);
-    if ids.len() > 1 {
+    //
+    // `gpus` carries the (vendor, id) pairs the selector must filter on; `ids`
+    // is kept alongside it for older frontends, which read only that field.
+    let entries = gpu_entries(data);
+    if entries.len() > 1 {
+        let mut ids: Vec<i64> = entries.iter().map(|g| g.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+
+        let gpus: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|g| match &g.vendor {
+                Some(v) => serde_json::json!({ "id": g.id, "vendor": v }),
+                None => serde_json::json!({ "id": g.id }),
+            })
+            .collect();
+
         view.metadata.insert(
             "gpu_selector".to_string(),
-            serde_json::json!({ "enabled": true, "ids": ids }),
+            serde_json::json!({ "enabled": true, "ids": ids, "gpus": gpus }),
         );
     }
 
@@ -59,8 +113,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         gpu.plot_promql(
             PlotOpts::gauge("GPU % (Per-GPU)", "gpu-pct-per-gpu", Unit::Percentage)
                 .percentage_range()
-                .with_row_label("GPU"),
-            "sum by (id) (gpu_utilization) / 100".to_string(),
+                .with_row_label("GPU")
+                .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_utilization) / 100".to_string(),
         );
     } else {
         gpu.plot_promql_full(
@@ -84,8 +139,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range()
-            .with_row_label("GPU"),
-            "sum by (id) (gpu_memory_utilization) / 100".to_string(),
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_memory_utilization) / 100".to_string(),
         );
     } else {
         mem_ctrl.plot_promql_full(
@@ -105,7 +161,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         tensor.plot_promql(
             PlotOpts::gauge("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_tensor_utilization) / 100".to_string(),
+            "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         tensor.plot_promql(
             PlotOpts::gauge(
@@ -114,14 +170,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range()
-            .with_row_label("GPU"),
-            "sum by (id) (gpu_tensor_utilization) / 100".to_string(),
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     } else {
         tensor.plot_promql_full(
             PlotOpts::gauge("GPU Tensor Activity %", "gpu-tensor-act", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_tensor_utilization) / 100".to_string(),
+            "avg(gpu_tensor_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -130,7 +187,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if multi_gpu {
         sm.plot_promql(
             PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
-            "avg(gpu_sm_utilization) / 100".to_string(),
+            "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge(
@@ -139,13 +196,14 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range()
-            .with_row_label("GPU"),
-            "sum by (id) (gpu_sm_utilization) / 100".to_string(),
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_sm_occupancy) / 100".to_string(),
+            "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql(
             PlotOpts::gauge(
@@ -154,18 +212,19 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range()
-            .with_row_label("GPU"),
-            "sum by (id) (gpu_sm_occupancy) / 100".to_string(),
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
     } else {
         sm.plot_promql_full(
             PlotOpts::gauge("GPU SM Activity %", "gpu-sm-act", Unit::Percentage).percentage_range(),
-            "avg(gpu_sm_utilization) / 100".to_string(),
+            "avg(gpu_sm_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         sm.plot_promql_full(
             PlotOpts::gauge("GPU SM Occupancy %", "gpu-sm-ocp", Unit::Percentage)
                 .percentage_range(),
-            "avg(gpu_sm_occupancy) / 100".to_string(),
+            "avg(gpu_sm_occupancy{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -194,13 +253,15 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         per_device.describe("Memory used and free broken out by GPU id.");
         per_device.plot_promql(
             PlotOpts::gauge("Used (Per-GPU)", "mem-used-per-gpu", Unit::Bytes)
-                .with_row_label("GPU"),
-            "sum by (id) (gpu_memory{state=\"used\"})".to_string(),
+                .with_row_label("GPU")
+                .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_memory{state=\"used\"})".to_string(),
         );
         per_device.plot_promql(
             PlotOpts::gauge("Free (Per-GPU)", "mem-free-per-gpu", Unit::Bytes)
-                .with_row_label("GPU"),
-            "sum by (id) (gpu_memory{state=\"free\"})".to_string(),
+                .with_row_label("GPU")
+                .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_memory{state=\"free\"})".to_string(),
         );
     }
 
@@ -214,7 +275,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range(),
-            "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
+            "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
         dram_bw.plot_promql(
             PlotOpts::gauge(
@@ -223,8 +284,10 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range()
-            .with_row_label("GPU"),
-            "sum by (id) (gpu_dram_bandwidth_utilization) / 100".to_string(),
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100"
+                .to_string(),
         );
     } else {
         dram_bw.plot_promql_full(
@@ -234,7 +297,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
                 Unit::Percentage,
             )
             .percentage_range(),
-            "avg(gpu_dram_bandwidth_utilization) / 100".to_string(),
+            "avg(gpu_dram_bandwidth_utilization{vendor=\"nvidia\"}) / 100".to_string(),
         );
     }
 
@@ -255,7 +318,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth"
+        "gpu_pcie_throughput{direction=\"receive\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
             .to_string(),
     );
 
@@ -272,7 +335,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             Unit::Percentage,
         )
         .percentage_range(),
-        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth"
+        "gpu_pcie_throughput{direction=\"transmit\"} / ignoring(direction) gpu_pcie_bandwidth{vendor=\"nvidia\"}"
             .to_string(),
     );
 
@@ -280,7 +343,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     capacity.describe("Aggregate theoretical PCIe bandwidth available to all GPUs.");
     capacity.plot_promql_full(
         PlotOpts::gauge("Bandwidth", "pcie-bandwidth", Unit::Datarate),
-        "sum(gpu_pcie_bandwidth)".to_string(),
+        "sum(gpu_pcie_bandwidth{vendor=\"nvidia\"})".to_string(),
     );
 
     view.group(pcie);
@@ -297,8 +360,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         draw.plot_promql(
             PlotOpts::gauge("Power (Per-GPU)", "power-watts-per-gpu", Unit::Count)
                 .with_axis_label("Watts")
-                .with_row_label("GPU"),
-            "sum by (id) (gpu_power_usage) / 1000".to_string(),
+                .with_row_label("GPU")
+                .with_style("heatmap"),
+            "sum by (id, vendor) (gpu_power_usage) / 1000".to_string(),
         );
     } else {
         draw.plot_promql_full(
@@ -328,8 +392,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         temps.plot_promql(
             PlotOpts::gauge("Temperature (Per-GPU)", "temp-per-gpu", Unit::Count)
                 .with_axis_label("°C")
-                .with_row_label("GPU"),
-            "max by (id) (gpu_temperature)".to_string(),
+                .with_row_label("GPU")
+                .with_style("heatmap"),
+            "max by (id, vendor) (gpu_temperature)".to_string(),
         );
         temps.plot_promql(
             PlotOpts::gauge("Max (°C)", "temp-max", Unit::Count).with_axis_label("°C"),
@@ -350,24 +415,25 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     freqs.describe("Per-device clock speeds for graphics, memory, compute, and video engines.");
     freqs.plot_promql(
         PlotOpts::gauge("Graphics", "clock-graphics", Unit::Frequency),
-        "sum by (id) (gpu_clock{clock=\"graphics\"})".to_string(),
+        "sum by (id, vendor) (gpu_clock{clock=\"graphics\"})".to_string(),
     );
     freqs.plot_promql(
         PlotOpts::gauge("Memory", "clock-memory", Unit::Frequency),
-        "sum by (id) (gpu_clock{clock=\"memory\"})".to_string(),
+        "sum by (id, vendor) (gpu_clock{clock=\"memory\"})".to_string(),
     );
     freqs.plot_promql(
         PlotOpts::gauge("Compute", "clock-compute", Unit::Frequency),
-        "sum by (id) (gpu_clock{clock=\"compute\"})".to_string(),
+        "sum by (id, vendor) (gpu_clock{clock=\"compute\"})".to_string(),
     );
     freqs.plot_promql(
         PlotOpts::gauge("Video", "clock-video", Unit::Frequency),
-        "sum by (id) (gpu_clock{clock=\"video\"})".to_string(),
+        "sum by (id, vendor) (gpu_clock{clock=\"video\"})".to_string(),
     );
 
     view.group(clocks);
 
     amd_pmu(&mut view);
+    intel_pmu(&mut view, data);
 
     view
 }
@@ -533,6 +599,139 @@ fn amd_pmu(view: &mut View) {
         PlotOpts::counter("VRAM Write Requests", "amd-vram-write-req", Unit::Count)
             .with_axis_label("requests/s"),
         "sum(rate(gpmu_vram_write_requests[5m]))".to_string(),
+    );
+
+    view.group(pmu);
+}
+
+/// Intel GPU metrics from the i915/xe PMU (the `gpu_intel_pmu` sampler).
+///
+/// Only populated on Intel hosts; the charts are empty otherwise. See
+/// `docs/metrics.md#gpu_intel_pmu`.
+///
+/// Both PMU families are **cumulative counters**, so everything here is a
+/// `rate()`. Two consequences shape the queries below:
+///
+/// - Engine busy is cumulative nanoseconds, so `rate()` yields nanoseconds of
+///   busy time per second — dividing by 1e9 gives the busy fraction, which is
+///   what the percentage charts plot.
+/// - The frequency events are a running sum of one MHz sample per driver tick,
+///   accumulated only while the GT is awake. `rate()` recovers average MHz over
+///   the interval; a raw reading carries no meaning without its predecessor.
+///   The GT parking while idle is why these drop to zero rather than to an idle
+///   clock.
+///
+/// `gpu_memory` is deliberately absent here: the Intel sampler publishes it
+/// under the same vendor-neutral name and labels the AMD and NVIDIA samplers
+/// use, so it already appears in the shared Memory group above. VRAM is
+/// discrete-only — an integrated GPU has no device-local memory region and
+/// publishes no such series.
+/// The engine classes the Intel sampler labels, in the order they are shown.
+///
+/// These are the `engine_class` values `gpu/linux/intel/mod.rs` maps sysfs
+/// engine names onto; `other` is its fallback for an unrecognised prefix.
+const ENGINE_CLASSES: [(&str, &str); 6] = [
+    ("compute", "Compute"),
+    ("render", "Render"),
+    ("copy", "Copy"),
+    ("video", "Video"),
+    ("video-enhance", "Video Enhance"),
+    ("other", "Other"),
+];
+
+fn intel_pmu(view: &mut View, data: &dyn MetricsSource) {
+    // Nothing to show without the sampler's own metrics. The per-class
+    // subgroups are each gated on the classes present, but the Frequency
+    // subgroup and the group itself were not — so an NVIDIA- or AMD-only
+    // recording rendered an empty "Intel GPU Performance Counters" section.
+    let has_intel = !data
+        .label_values("gpu_engine_busy_time", "engine_class")
+        .is_empty()
+        || !data
+            .label_values("gpu_frequency_sample", "frequency")
+            .is_empty();
+
+    if !has_intel {
+        return;
+    }
+
+    let mut pmu = Group::new("Intel GPU Performance Counters", "intel-pmu");
+
+    // ----- Engine occupancy, one subgroup per engine class -----
+    //
+    // The i915/xe PMU counts busy time per engine, and the engine classes do
+    // very different jobs — a compute kernel, a blit, a video decode. Stacking
+    // every class into one chart made them hard to read against each other and
+    // buried the one that mattered for a given workload. Each class now gets
+    // its own subgroup with two plots: the aggregate across the host, and the
+    // same broken out per GPU.
+    //
+    // Only classes the recording actually contains are emitted, so an
+    // integrated GPU (no compute engine) shows no empty compute section.
+    for (class_name, title) in ENGINE_CLASSES {
+        let query_all = format!(
+            "sum(rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+             vendor=\"intel\"}}[5m])) / 1000000000"
+        );
+
+        if !data
+            .label_values("gpu_engine_busy_time", "engine_class")
+            .contains(class_name)
+        {
+            continue;
+        }
+
+        let engines = pmu.subgroup(title);
+        engines.describe(format!(
+            "Fraction of wall time the {class_name} engine(s) spent executing work, from the \
+             i915/xe PMU. This is occupancy, not efficiency: an engine at 100% had work queued, \
+             which does not mean the execution units were saturated — read it alongside the \
+             frequency charts. Summing several engines of one class can exceed 100%, since they \
+             run concurrently."
+        ));
+
+        engines.plot_promql(
+            PlotOpts::gauge(
+                format!("{title} Busy %"),
+                format!("intel-{class_name}-pct"),
+                Unit::Percentage,
+            ),
+            query_all,
+        );
+
+        engines.plot_promql(
+            PlotOpts::gauge(
+                format!("{title} Busy % (Per-GPU)"),
+                format!("intel-{class_name}-pct-per-gpu"),
+                Unit::Percentage,
+            )
+            .with_row_label("GPU")
+            .with_style("heatmap"),
+            format!(
+                "sum by (id, vendor) (rate(gpu_engine_busy_time{{engine_class=\"{class_name}\", \
+                 vendor=\"intel\"}}[5m])) / 1000000000"
+            ),
+        );
+    }
+
+    // ----- Frequency -----
+    let freq = pmu.subgroup("Frequency");
+    freq.describe(
+        "Average GPU frequency over each interval, recovered from the PMU's cumulative sum of \
+         per-tick MHz samples. Requested is what the driver asked for; actual is what the \
+         hardware delivered — a persistent gap between them means the GPU is being held back \
+         (thermal, power or voltage limits). Both fall to zero when the GT parks, because the \
+         driver stops sampling rather than because the clock reached zero.",
+    );
+    freq.plot_promql(
+        PlotOpts::gauge("Actual", "intel-freq-actual", Unit::Frequency),
+        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"actual\", vendor=\"intel\"}[5m])) * 1000000"
+            .to_string(),
+    );
+    freq.plot_promql(
+        PlotOpts::gauge("Requested", "intel-freq-requested", Unit::Frequency),
+        "sum by (id, vendor) (rate(gpu_frequency_sample{frequency=\"requested\", vendor=\"intel\"}[5m])) * 1000000"
+            .to_string(),
     );
 
     view.group(pmu);
