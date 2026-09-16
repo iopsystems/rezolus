@@ -16,6 +16,11 @@ pub struct General {
     #[serde(default = "output")]
     output: String,
 
+    // Where the rolling buffer lives. Its own key, not `dirname(output)` —
+    // see `config::buffer_dir`.
+    #[serde(default = "buffer_dir")]
+    buffer_dir: String,
+
     // optional HTTP listen address for dump endpoint
     listen: Option<String>,
 
@@ -32,6 +37,7 @@ impl Default for General {
             duration: duration(),
             source: source(),
             output: output(),
+            buffer_dir: buffer_dir(),
             listen: None,
             segment_rows: None,
         }
@@ -48,6 +54,12 @@ impl General {
 
     pub fn output(&self) -> PathBuf {
         self.output.clone().into()
+    }
+
+    /// The directory the rolling buffer is created in. See
+    /// `config::buffer_dir` for why this is not derived from `output`.
+    pub fn buffer_dir(&self) -> PathBuf {
+        self.buffer_dir.clone().into()
     }
 
     pub fn interval(&self) -> humantime::Duration {
