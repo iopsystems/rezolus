@@ -33,6 +33,9 @@ pub(crate) fn agent_uptime_seconds() -> u64 {
         .unwrap_or(0)
 }
 
+/// The producer epoch: minted once per process, on every platform.
+pub mod epoch;
+
 #[cfg(target_os = "linux")]
 use metrics::GroupMetadata;
 

@@ -30,7 +30,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.20.1-alpha.6"
+version = "5.20.1-alpha.7"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
@@ -57,6 +57,10 @@ clocksource = "1.0.0"
 core_affinity = "0.8.3"
 ctrlc = { version = "3.5.2", features = ["termination"] }
 futures = "0.3.32"
+# 16 random bytes for the producer epoch, nothing else. Already in the graph
+# transitively (ahash -> arrow); named here because the agent depends on it
+# directly rather than by accident.
+getrandom = "0.3.4"
 histogram.workspace = true
 http = "1.4.0"
 humantime = "2.3.0"

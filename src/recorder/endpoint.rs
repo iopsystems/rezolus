@@ -56,6 +56,10 @@ pub struct AgentMetadata {
     /// The agent's own crate version, recorded so a capture can be attributed
     /// to a build after the fact. See `recorder::fetch_agent_version`.
     pub version: Option<String>,
+    /// The agent's producer epoch as of the probe: an opaque id that changes
+    /// when, and only when, every cumulative counter restarted from zero —
+    /// which for a process-scoped producer is once per process.
+    pub producer_epoch: Option<String>,
 }
 
 /// Runtime state for a single endpoint during recording.

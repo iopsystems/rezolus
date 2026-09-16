@@ -237,6 +237,14 @@ fn create(
         metadata: [
             ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
             ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            // Rides on every snapshot, not just on `/status`, because it is
+            // what lets a consumer notice the agent restarted BETWEEN two
+            // scrapes: at that moment every counter in the payload restarted
+            // from zero together, and the values alone cannot say so.
+            (
+                "producer_epoch".to_string(),
+                crate::agent::epoch::producer_epoch().to_string(),
+            ),
         ]
         .into(),
         counters: Vec::new(),
@@ -2500,6 +2508,14 @@ fn create_v3(
         metadata: [
             ("source".to_string(), env!("CARGO_BIN_NAME").to_string()),
             ("version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
+            // Rides on every snapshot, not just on `/status`, because it is
+            // what lets a consumer notice the agent restarted BETWEEN two
+            // scrapes: at that moment every counter in the payload restarted
+            // from zero together, and the values alone cannot say so.
+            (
+                "producer_epoch".to_string(),
+                crate::agent::epoch::producer_epoch().to_string(),
+            ),
         ]
         .into(),
         groups: group_snapshots,

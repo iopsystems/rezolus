@@ -2986,7 +2986,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.20.1-alpha.6"
+version = "5.20.1-alpha.7"
 dependencies = [
  "allan",
  "anyhow",
@@ -3003,6 +3003,7 @@ dependencies = [
  "ctrlc",
  "dashboard",
  "futures",
+ "getrandom 0.3.4",
  "histogram",
  "http",
  "humantime",

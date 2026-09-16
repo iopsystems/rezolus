@@ -183,6 +183,7 @@ Parquet files produced by the recorder/hindsight use a columnar layout from `met
 File-level metadata keys are defined in `src/parquet_metadata.rs`:
 - `source` - Recording source: `"rezolus"` (single) or `["rezolus","llm-perf"]` (combined).
 - `version` - Version of the **agent that was scraped**, not the recorder's own build; read from the agent's `/status` (or its `/` banner for agents older than 5.16.0). Absent for a Prometheus source and for recordings written by recorders that predate the capture. In a `.rez` it is per-recording, so a multi-host or multi-build archive stays unambiguous.
+- `producer_epoch` - An opaque id (v4 UUID) minted once per agent **process**, so it changes when and only when every cumulative counter restarted from zero together. Carried on every snapshot as well as `/status`, which is what lets the recorder notice a restart *between* two scrapes — values alone cannot distinguish a counter that reset from one that wrapped. Source-wide: it says nothing about a single counter that wrapped or that a sampler zeroes on read. Name and semantics follow dendro's `keys::PRODUCER_EPOCH`.
 - `sampling_interval_ms` - Collection interval in milliseconds.
 - `systeminfo` - JSON hardware summary from agent.
 - `descriptions` - JSON map of metric name to help text. Present in single-source files; combined files nest this under `per_source_metadata.<source>.descriptions` instead.
