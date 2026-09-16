@@ -3368,14 +3368,57 @@ mod tests {
         guard.finish();
     }
 
-    /// Run two ticks against `cache` and return `(snapshot, hit_allocs)` for
-    /// the second — the first just warms the cache (necessarily a miss for
-    /// anything that changed since the LAST call using this `cache`, e.g.
-    /// this fixture right after `grow_alloc_probe` moved its member bound)
-    /// and is not measured.
+    /// How many hit ticks to measure before taking the minimum. See
+    /// [`warm_then_measure_hit`] for why the minimum is the right estimator.
+    const HIT_SAMPLES: usize = 5;
+
+    /// Warm `cache`, then measure a hit tick [`HIT_SAMPLES`] times and return
+    /// the **smallest** count, with one of the snapshots.
+    ///
+    /// The warm tick is necessarily a miss for anything that changed since the
+    /// last call using this `cache` — this fixture right after
+    /// `grow_alloc_probe` moved its member bound, for instance — so it is not
+    /// measured.
+    ///
+    /// # Why the minimum, and not one sample
+    ///
+    /// `create_v3` walks the WHOLE metriken registry, not just this fixture.
+    /// `BUILDER_TEST_LOCK` stops two builder walks overlapping, but it does not
+    /// stop other tests MUTATING metric state between walks — registering a
+    /// metric, moving a member set, inserting group metadata. Any such mutation
+    /// invalidates that group's skeleton-cache entry, so the next measured walk
+    /// pays a real miss for a group this test never touched, and a miss
+    /// allocates.
+    ///
+    /// That interference is **one-sided**: it can only ADD allocations. Nothing
+    /// another test does can make this walk cheaper than a clean all-hit walk,
+    /// because the hit path is already the cheapest path through the builder.
+    /// So the minimum over a few samples converges on the clean cost, while a
+    /// single sample is whatever the rest of the suite happened to be doing at
+    /// that instant.
+    ///
+    /// This replaces a wide tolerance. The margin was set against locally
+    /// observed noise of ~40 and CI produced 382 on a PR that could not reach
+    /// this code (#1232) — widening it further would have meant a test that
+    /// cannot fail for the reason it exists. Sampling removes the noise instead
+    /// of accommodating it, which is what lets the margin below be tight enough
+    /// to mean something.
     fn warm_then_measure_hit(cache: &mut SkeletonCache) -> (Snapshot, usize) {
         let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
-        count_allocations(|| create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache))
+
+        let mut best = usize::MAX;
+        let mut snapshot = None;
+        for _ in 0..HIT_SAMPLES {
+            let (snap, allocs) = count_allocations(|| {
+                create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache)
+            });
+            best = best.min(allocs);
+            snapshot = Some(snap);
+        }
+        (
+            snapshot.expect("HIT_SAMPLES is non-zero, so a snapshot was taken"),
+            best,
+        )
     }
 
     fn alloc_probe_group(snap: &Snapshot) -> &GroupSnapshot {
@@ -3391,6 +3434,33 @@ mod tests {
     #[test]
     fn v3_hit_tick_allocations_are_a_small_constant_not_o_n() {
         let mut cache = SkeletonCache::new();
+
+        // Settle the PROCESS before phase 1 measures anything.
+        //
+        // `create_v3` walks the whole metriken registry, and a good deal of
+        // what it touches is lazily initialized on first use — metric storage,
+        // group registries, the per-sampler attribution map. Whichever
+        // measurement runs first pays for all of it.
+        //
+        // That is why this test failed on GitHub's runners while passing on a
+        // 32-core Linux box and on macOS: the two phases are compared against
+        // each other, so anything one-time landing in phase 1 reads as phase 2
+        // being *cheaper*, and the margin is two-sided. Measured on CI, phase 1
+        // came in ~382 allocations above phase 2 — consistently, not randomly.
+        //
+        // A throwaway cache, so this does not warm the one under test: phase 1
+        // must still see its own first tick as a miss.
+        {
+            let mut settle = SkeletonCache::new();
+            for _ in 0..3 {
+                let _ = create_v3(
+                    SystemTime::now(),
+                    Duration::from_secs(1),
+                    vec![],
+                    &mut settle,
+                );
+            }
+        }
 
         // Phase 1: SMALL_N members, hit tick measured.
         grow_alloc_probe(0, ALLOC_TEST_SMALL_N);
@@ -3463,24 +3533,28 @@ mod tests {
         // measurements are NOT taken back-to-back in isolation — other
         // tests mutate their OWN groups on other threads in between, and
         // `create_v3` walks the full process-wide registry every time, so
-        // some of that concurrent churn legitimately lands as real misses
-        // (and their real allocations) inside one measurement or the other
-        // — observed delta up to ~40 across repeated full-suite runs, the
-        // same class of cross-test interference documented on
-        // `skeleton_cache_is_stable_across_ticks` and elsewhere in this
-        // file. The margin below (300) comfortably covers that noise while
-        // staying nowhere near what a real per-member regression would add:
-        // before this change, growing 504 more members would have cost a
-        // `MetricDesc` (`String` name + `BTreeMap`) AND an `entry_metadata`
-        // `HashMap` PER MEMBER, on the order of 1,500+ extra allocations —
-        // two orders of magnitude past this margin.
+        // Both counts are the MINIMUM over `HIT_SAMPLES` hit ticks, so the
+        // one-sided interference described on `warm_then_measure_hit` has
+        // been sampled out rather than tolerated. What remains is the real
+        // difference between a hit tick over 8 members and one over 512, and
+        // the claim under test is that there is none: the hit path reuses the
+        // cached `Arc<GroupSchema>` and touches no per-member allocation.
+        //
+        // The margin is therefore small on purpose. Before the change this
+        // test pins, growing 504 more members cost a `MetricDesc` (`String`
+        // name + `BTreeMap`) AND an `entry_metadata` `HashMap` per member —
+        // on the order of 1,500+ extra allocations. A margin of 100 sits an
+        // order of magnitude below that and no longer has to absorb whatever
+        // the rest of the suite was doing at that instant.
         let delta = large_allocs.abs_diff(small_allocs);
         assert!(
-            delta <= 300,
+            delta <= 100,
             "growing this fixture from {ALLOC_TEST_SMALL_N} to {ALLOC_TEST_LARGE_N} members \
-             changed hit-tick allocations by {delta} ({small_allocs} -> {large_allocs}) — \
-             expected ~0 (some slack for concurrent-test noise); a per-member allocation \
-             regression would move this by well over a thousand"
+             changed hit-tick allocations by {delta} ({small_allocs} -> {large_allocs}), \
+             each the minimum over {HIT_SAMPLES} hit ticks — expected ~0. A per-member \
+             allocation regression would move this by well over a thousand; a delta in \
+             the low hundreds instead means the hit path started doing per-member work \
+             that is cheap but not free"
         );
     }
 
