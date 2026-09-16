@@ -45,6 +45,7 @@ fn app(state: Arc<Mutex<SnapshotBuilder>>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/metrics/binary", get(msgpack))
+        .route("/metrics/rows", get(rows))
         .route("/metrics/json", get(json))
         .route("/metrics/descriptions", get(descriptions))
         .route("/systeminfo", get(system_info))
@@ -63,6 +64,52 @@ async fn msgpack(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> bytes::Byt
 
     let mut snapshot_builder = state.lock().await;
     snapshot_builder.build_msgpack(now).await
+}
+
+/// Query parameters for [`rows`].
+#[derive(serde::Deserialize, Default)]
+struct RowsQuery {
+    /// `schemas=all` forces every group's schema into the body. Any other
+    /// value, or none, gives the delta body — schemas only where they changed.
+    ///
+    /// A recorder asks for `all` on its first scrape and whenever it meets a
+    /// schema hash it cannot resolve; see `SnapshotBuilder::build_rows`.
+    schemas: Option<String>,
+}
+
+/// Acquisition groups as pre-encoded WAL rows, for a consumer that keeps
+/// state across scrapes — see `rez::wire`.
+///
+/// This is deliberately NOT a second spelling of `/metrics/binary`. Its body
+/// omits schemas that have not changed, which a snapshot body can never do:
+/// snapshots are contractually self-contained, because `record --format raw`
+/// writes them verbatim for `recording convert` to decode offline.
+async fn rows(
+    State(state): State<Arc<Mutex<SnapshotBuilder>>>,
+    axum::extract::Query(query): axum::extract::Query<RowsQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let now = Instant::now();
+    let all = query.schemas.as_deref() == Some("all");
+
+    let mut snapshot_builder = state.lock().await;
+    match snapshot_builder.build_rows(now, all).await {
+        Ok(body) => (
+            [(
+                axum::http::header::CONTENT_TYPE,
+                crate::recorder::wire::CONTENT_TYPE,
+            )],
+            body,
+        )
+            .into_response(),
+        // The only way this fails is an agent configured to produce V2
+        // snapshots, which have no acquisition groups to serve. 409 rather
+        // than 500: nothing went wrong, this agent just cannot answer this
+        // question in its current configuration, and the recorder should fall
+        // back to `/metrics/binary` rather than retry.
+        Err(e) => (axum::http::StatusCode::CONFLICT, e).into_response(),
+    }
 }
 
 async fn json(State(state): State<Arc<Mutex<SnapshotBuilder>>>) -> String {
