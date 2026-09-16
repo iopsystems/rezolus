@@ -64,11 +64,6 @@ pub struct General {
     #[serde(default)]
     reserved_pmu_cpus: Option<String>,
 
-    // fastest sampling interval any subscriber can obtain (see
-    // `min_sample_interval`)
-    #[serde(default = "min_sample_interval")]
-    min_sample_interval: String,
-
     // enable host-wide BPF run-time statistics (see `bpf_stats`)
     // Only consulted on Linux, where BPF runs; the field exists on every
     // platform so the config shape is identical.
@@ -97,7 +92,6 @@ impl Default for General {
             reserved_pmu_counters: 0,
             pmu_priority: Vec::new(),
             reserved_pmu_cpus: None,
-            min_sample_interval: min_sample_interval(),
             bpf_stats: false,
         }
     }
@@ -105,10 +99,6 @@ impl Default for General {
 
 impl General {
     pub fn check(&self) {
-        if let Err(e) = self.min_sample_interval.parse::<humantime::Duration>() {
-            eprintln!("min_sample_interval couldn't be parsed: {e}");
-            std::process::exit(1);
-        }
         if let Err(e) = self.ttl.parse::<humantime::Duration>() {
             eprintln!("ttl couldn't be parsed: {e}");
             std::process::exit(1);
@@ -206,20 +196,6 @@ impl General {
 
     pub fn ttl(&self) -> std::time::Duration {
         *self.ttl.parse::<humantime::Duration>().unwrap()
-    }
-
-    /// The fastest sampling interval a subscriber can obtain.
-    ///
-    /// A subscriber is remote and has no stake in this agent's CPU budget, so
-    /// without a floor one could ask for a microsecond and spin the sampling
-    /// loop. The default (10ms) sits an order of magnitude below the 50ms this
-    /// repo uses for high-resolution recording, so it bounds abuse without
-    /// getting in the way of a legitimate fast capture.
-    pub fn min_sample_interval(&self) -> std::time::Duration {
-        *self
-            .min_sample_interval
-            .parse::<humantime::Duration>()
-            .unwrap()
     }
 
     #[allow(dead_code)]

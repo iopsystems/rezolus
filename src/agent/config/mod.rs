@@ -33,11 +33,6 @@ fn listen() -> String {
     "0.0.0.0:4241".into()
 }
 
-/// The clock's floor — see `General::min_sample_interval`.
-fn min_sample_interval() -> String {
-    "10ms".to_string()
-}
-
 fn ttl() -> String {
     "10ms".into()
 }

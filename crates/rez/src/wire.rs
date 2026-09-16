@@ -213,14 +213,23 @@ pub const STREAM_CONTENT_TYPE: &str = "application/vnd.rezolus.rows.v1+msgpack-s
 
 /// One frame of a subscription stream.
 ///
-/// `seq` is the producer's **sampling-clock generation**, not a count of
-/// frames sent. That distinction is the whole point: a consumer that falls
-/// behind is served the newest tick and the ones in between are skipped, so a
-/// per-frame counter would increment by one across the skip and present a
-/// contiguous sequence with data missing from the middle. As a generation, a
-/// skip is a visible jump.
+/// `seq` is the index of the **subscriber's own interval** that this frame
+/// covers: the producer's wall clock at the sampling pass, divided by the
+/// interval this subscription asked for.
 ///
-/// So a consumer checks that `seq` increases by exactly one and treats
+/// A count of frames sent would not do: it increments by one across a skipped
+/// interval, presenting a contiguous sequence with data missing from the
+/// middle — an undetectable hole. An interval index says the thing worth
+/// knowing, in the subscriber's own terms: *an interval I asked for produced
+/// no frame*.
+///
+/// It advances by one per interval in the healthy case. A gap means one of two
+/// things, and both are worth seeing: the agent produced no new reading for
+/// that interval (which is what an interval shorter than the snapshot TTL
+/// looks like — the subscriber is asking faster than the operator allows), or
+/// a reading was genuinely missed.
+///
+/// So a consumer checks that `seq` increases by exactly one, and treats
 /// anything else — a jump, or a stream that simply ends, which is
 /// indistinguishable from a truncated connection — as a gap to be refilled
 /// rather than as data.

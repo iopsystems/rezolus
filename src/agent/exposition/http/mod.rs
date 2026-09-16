@@ -1,4 +1,4 @@
-use crate::agent::clock::SampleClock;
+use crate::agent::clock::{self, Subscribers};
 use crate::agent::*;
 
 use axum::extract::State;
@@ -31,15 +31,12 @@ pub async fn serve(
 
     let _ = STATUS_TTL_SECONDS.set(config.general().ttl().as_secs());
 
-    // The clock is created unconditionally but does NOT sample unconditionally
-    // — with no subscriber it parks and arms no timer. See `agent::clock` for
-    // why an agent nobody is watching must not sample.
-    let clock = SampleClock::new(config.general().min_sample_interval());
-    tokio::spawn(clock.clone().run(state.clone()));
-
+    // No clock is started here. Each subscription drives its own timer, so an
+    // agent nobody is subscribed to samples only when scraped — see
+    // `agent::clock` for why that matters beyond CPU.
     let app: Router = app(AppState {
         builder: state,
-        clock,
+        subscribers: Subscribers::new(),
     });
 
     let listener = TcpListener::bind(config.general().listen())
@@ -56,7 +53,7 @@ pub async fn serve(
 #[derive(Clone)]
 pub(crate) struct AppState {
     builder: Arc<Mutex<SnapshotBuilder>>,
-    clock: SampleClock,
+    subscribers: Subscribers,
 }
 
 fn app(state: AppState) -> Router {
@@ -134,10 +131,15 @@ async fn rows(
 /// Query parameters for [`stream`].
 #[derive(serde::Deserialize, Default)]
 struct StreamQuery {
-    /// Requested sampling interval, e.g. `500ms`. Clamped to the agent's
-    /// `min_sample_interval` floor, and reported back in frame 0 — a
-    /// subscriber is told what it will actually get rather than assuming it
-    /// got what it asked for.
+    /// Sampling interval, e.g. `500ms`, defaulting to 1s. Honoured exactly:
+    /// this subscription gets its own timer on its own boundaries, so the
+    /// interval need not relate to any other subscriber's.
+    ///
+    /// What it does NOT control is how often the agent samples. A tick inside
+    /// the snapshot TTL is answered from cache, so an interval shorter than
+    /// the TTL yields repeated readings rather than a faster agent — the TTL
+    /// is the floor, and it belongs to the operator rather than the
+    /// subscriber.
     interval: Option<String>,
 }
 
@@ -178,6 +180,13 @@ async fn stream(
 
     let requested = match query.interval.as_deref() {
         Some(s) => match s.parse::<humantime::Duration>() {
+            Ok(d) if d.is_zero() => {
+                return (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    "interval must be greater than zero",
+                )
+                    .into_response()
+            }
             Ok(d) => *d,
             Err(e) => {
                 return (
@@ -202,15 +211,7 @@ async fn stream(
             .into_response();
     }
 
-    // Registering demand is what starts the clock; dropping the subscription
-    // inside the stream's async block is what stops it.
-    let subscription = state.clock.subscribe(requested);
-    // What the subscriber will ACTUALLY get, which is not necessarily what it
-    // asked for: the floor clamps it, and another subscriber may already be
-    // driving the clock faster. Reported rather than left to be inferred — a
-    // recorder that assumed its request was honoured would stamp its recording
-    // with an interval the agent never used.
-    let granted = subscription.interval();
+    let subscription = state.subscribers.register(requested);
     let builder = state.builder.clone();
 
     let body = axum::body::Body::from_stream(rows_frames(builder, subscription));
@@ -224,7 +225,7 @@ async fn stream(
                 axum::http::HeaderName::from_static("x-rezolus-sample-interval"),
                 axum::http::HeaderValue::from_str(&format!(
                     "{}",
-                    humantime::format_duration(granted)
+                    humantime::format_duration(requested)
                 ))
                 .unwrap_or(axum::http::HeaderValue::from_static("unknown")),
             ),
@@ -236,49 +237,74 @@ async fn stream(
 
 /// The frame stream behind [`stream`]. Holds the [`Subscription`] for its
 /// whole life, so the agent returns to tickless when the client goes away.
+///
+/// [`Subscription`]: crate::agent::clock::Subscription
 fn rows_frames(
     builder: Arc<Mutex<SnapshotBuilder>>,
     subscription: crate::agent::clock::Subscription,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
-        let mut generation = subscription.generation();
+        let interval = subscription.interval();
         // Schemas already sent ON THIS CONNECTION — the per-connection state
-        // that makes `?schemas=all` unnecessary here.
-        let mut sent: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+        // that makes `/metrics/rows`'s `?schemas=all` recovery unnecessary
+        // here.
+        let mut sent: std::collections::HashMap<String, (u64, u64)> =
+            std::collections::HashMap::new();
+        let mut last_sent_wall: Option<u64> = None;
+        let mut last_index: Option<u64> = None;
 
         loop {
-            // Wait for a tick. `changed()` resolves IMMEDIATELY when the clock
-            // moved on while the previous frame was being written — and it
-            // yields the latest value, not the next unseen one, so a consumer
-            // that fell behind is served the newest snapshot and the ticks in
-            // between are skipped.
-            //
-            // That is the right behaviour (stale data helps nobody) but it is
-            // why the frame's `seq` is the CLOCK GENERATION rather than a
-            // count of frames sent. A per-frame counter would increment by one
-            // across a skip, so the consumer would see a contiguous sequence
-            // with data missing from the middle of it — a hole in a recording
-            // that nothing could detect. As the generation, a skip is a
-            // visible jump.
-            if generation.changed().await.is_err() {
-                break;
-            }
-            let observed = *generation.borrow_and_update();
+            // This subscription's own timer, on ITS boundaries. Nothing is
+            // shared with other subscriptions: they neither speed this one up
+            // nor slow it down, and an interval that divides nothing else is
+            // served exactly rather than quantized.
+            tokio::time::sleep(clock::until_next_aligned(interval)).await;
 
+            // Which of this subscription's intervals just elapsed. Taken from
+            // the boundary we woke for, not from the snapshot's own timestamp:
+            // a snapshot served from cache can predate the boundary slightly,
+            // and this index has to advance once per interval regardless.
+            let index = clock::interval_index(wall_now_ns(), interval);
+
+            // Ask for a snapshot. Whether this costs a sampling pass is the
+            // TTL's decision, made in `rows_at` — which is what keeps a
+            // subscription from sampling faster than the operator allowed, and
+            // what lets two subscriptions whose ticks nearly coincide share one
+            // pass.
             let rows = {
-                let builder = builder.lock().await;
-                match builder.latest_rows() {
+                let mut builder = builder.lock().await;
+                match builder.rows_at(Instant::now()).await {
                     Some(rows) => rows,
-                    // No snapshot yet — the clock has not completed a pass.
                     None => continue,
                 }
             };
 
-            // The tick is shared; which schemas THIS connection still needs is
-            // not. `encode_frame_filtered` applies that decision while
-            // borrowing, so a second subscriber costs a serialization rather
-            // than a copy of every payload.
-            let frame = crate::recorder::wire::encode_frame_filtered(&rows, observed, |row| {
+            // A reading already sent. Reached when the interval asked for is
+            // shorter than the TTL, which is exactly the case the TTL is
+            // meant to bound: the subscription is told nothing new rather than
+            // being allowed to drive the samplers. The `seq` gap it leaves
+            // says so.
+            if last_sent_wall == Some(rows.wall_ns) {
+                continue;
+            }
+            last_sent_wall = Some(rows.wall_ns);
+
+            if let Some(previous) = last_index {
+                if index > previous + 1 {
+                    warn!(
+                        "stream subscriber at {interval:?} produced no frame for {} interval(s)",
+                        index - previous - 1
+                    );
+                }
+            }
+            last_index = Some(index);
+
+            // The snapshot may be shared with other subscriptions; which
+            // schemas THIS connection still needs is not.
+            // `encode_frame_filtered` applies that decision while borrowing,
+            // so a second subscriber costs a serialization rather than a copy
+            // of every payload.
+            let frame = crate::recorder::wire::encode_frame_filtered(&rows, index, |row| {
                 match sent.get(&row.stream) {
                     Some(hash) if *hash == row.schema_hash => false,
                     _ => {
@@ -290,18 +316,16 @@ fn rows_frames(
             .map_err(std::io::Error::other)?;
 
             yield bytes::Bytes::from(frame);
-
-            // Lag check AFTER the write: if the clock moved on while we were
-            // writing, this consumer cannot keep up. End the stream so it
-            // reconnects (and, once backfill exists, asks for the gap) rather
-            // than falling further behind or applying backpressure.
-            if *generation.borrow() > observed + 1 {
-                Err(std::io::Error::other(
-                    "subscriber fell behind the sampling clock",
-                ))?;
-            }
         }
     }
+}
+
+/// Wall clock in nanoseconds since the Unix epoch.
+fn wall_now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
 }
 
 async fn json(State(state): State<AppState>) -> String {
@@ -340,8 +364,8 @@ async fn status(
         producer_epoch: crate::agent::epoch::producer_epoch().to_string(),
         uptime_seconds: crate::agent::agent_uptime_seconds(),
         ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
-        sample_interval_ms: state.clock.current().map(|d| d.as_millis() as u64),
-        subscribers: state.clock.subscribers(),
+        sample_interval_ms: state.subscribers.fastest().map(|d| d.as_millis() as u64),
+        subscribers: state.subscribers.count(),
         samplers: crate::agent::sampler_status::snapshot(),
     })
 }

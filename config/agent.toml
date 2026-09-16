@@ -17,23 +17,6 @@ ttl = "10ms"
 # Example:
 # btf_path = "/path/to/vmlinux-5.15.0-generic.btf"
 
-# The fastest sampling interval a subscriber of /metrics/stream can obtain.
-#
-# The agent is TICKLESS by default: with nothing subscribed and no local
-# buffer, it samples only when a scrape asks it to. That is deliberate — a
-# cross-CPU perf read charges the target core's C-state exit latency, measured
-# at 1002us p50 idle against 52us under load, so an agent that sampled on a
-# timer regardless of demand would wake every idle core to observe that it was
-# idle.
-#
-# A subscriber starts the clock and the last one leaving stops it. This floor
-# bounds what a subscriber can ask for, since it has no stake in this agent's
-# CPU budget. The default sits an order of magnitude below the 50ms used for
-# high-resolution recording, so it bounds abuse without limiting a legitimate
-# fast capture.
-#
-# min_sample_interval = "10ms"
-
 # Snapshot wire format served on /metrics/binary and /metrics/json.
 #
 # "v3" (the default) groups metrics by the read that produced them, and each
