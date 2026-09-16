@@ -300,7 +300,22 @@ fn collect_nics() -> Vec<NicSummary> {
             Ok(s) => s,
             Err(_) => continue,
         };
-        if operstate != "up" {
+        // `unknown` counts as present, and dropping it was a real gap: a tap
+        // device reports `unknown` for its whole life, because there is no
+        // carrier for the kernel to report on. So every VM tap (`vnetN`) and
+        // every tun interface was missing from the inventory embedded in every
+        // recording taken on a hypervisor or VPN host — precisely the hosts
+        // whose network topology is worth recording.
+        //
+        // Per `Documentation/ABI/testing/sysfs-class-net`, `unknown` means the
+        // driver does not report a link state. It is not a claim that the link
+        // is down.
+        //
+        // `down` is still excluded: it means the kernel knows the link is not
+        // carrying, and that interface has no telemetry to correlate with.
+        // Whether a present-but-down NIC belongs in a hardware inventory is a
+        // separate question — see the issue.
+        if operstate != "up" && operstate != "unknown" {
             continue;
         }
 
@@ -315,6 +330,7 @@ fn collect_nics() -> Vec<NicSummary> {
             speed,
             numa_node,
             driver,
+            operstate: Some(operstate),
         });
     }
 

@@ -84,6 +84,10 @@ fn collect_nics() -> Vec<NicSummary> {
             speed: None,     // macOS doesn't expose link speed easily
             numa_node: None, // No NUMA on macOS
             driver: None,
+            // `ifconfig` reports "status: active", which is what the filter
+            // above already matched on. Reported as `up` so the field means
+            // the same thing on both platforms rather than being Linux-only.
+            operstate: Some("up".to_string()),
         });
     }
 
