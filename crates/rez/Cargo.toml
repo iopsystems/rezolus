@@ -10,6 +10,9 @@ publish = false
 [dependencies]
 arrow = "58.2.0"
 bytes = "1"
+# Reader-only by default (see the workspace entry); `write` below turns
+# dendro's append side on alongside rez's own.
+dendro.workspace = true
 histogram.workspace = true
 metriken = { workspace = true, optional = true }
 metriken-exposition = { workspace = true, optional = true }
@@ -41,6 +44,9 @@ write = [
     "dep:metriken",
     "dep:metriken-exposition",
     "metriken-query/ingest",
+    # dendro's append side, for the same reason as the rest of this list: it
+    # is what does not compile for wasm32.
+    "dendro/write",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate

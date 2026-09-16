@@ -1017,6 +1017,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dendro"
+version = "0.1.0"
+source = "git+https://github.com/iopsystems/dendro.git?rev=1486b20#1486b20a77bf9beeb7602e40a302676ba23ecdc0"
+dependencies = [
+ "arrow",
+ "bytes",
+ "parquet",
+ "rusqlite",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2970,6 +2983,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
+ "dendro",
  "histogram",
  "metriken",
  "metriken-exposition",

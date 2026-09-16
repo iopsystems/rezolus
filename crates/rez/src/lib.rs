@@ -11,6 +11,9 @@
 
 /// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
 /// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
+/// Compatibility pin: dendro must keep reading archives `rez` wrote.
+/// Tests only; no production code depends on it yet. See #1224.
+mod dendro_compat;
 pub mod parquet_ingest;
 pub mod reader;
 pub mod rez;

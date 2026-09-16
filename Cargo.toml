@@ -22,6 +22,31 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
 dashboard = { path = "crates/dashboard" }
+# The archive format, extracted from `crates/rez` into its own crate
+# (github.com/iopsystems/dendro). Not a dependency of any shipping code path
+# yet — `crates/rez` is still what reads and writes a `.rez`. What this pin
+# buys today is the compatibility tripwire in `rez::dendro_compat`.
+#
+# Pinned to a REV, not a branch or a version range. This is the on-disk
+# format: an unpinned dependency would let it move under a recording nobody
+# re-read, and the thing being asserted here is a property of one specific
+# revision.
+#
+# 1486b20 deliberately. It is the last revision that reads a legacy
+# (unstamped, `recordings`-schema) `.rez` through compatibility views, which
+# every archive rezolus has written so far is. dendro's later `efe127e` --
+# "the stamp is the identity, and nothing else is read" -- deletes that
+# fallback, after which those archives are refused as `NotAnArchive`.
+# Adopting it needs a migration story for existing captures; that is 6.0
+# work, tracked in #1224.
+# `default-features = false` must be set HERE, not only at the consumer:
+# cargo ignores a member's `default-features` when the workspace entry does
+# not declare it, and warns rather than failing. dendro's default `write`
+# feature is its append side, including a checkpoint thread, and
+# `std::thread::spawn` compiles for wasm32 and panics at runtime — so the
+# reader configuration must not pull it in. `crates/rez` re-enables it
+# through its own `write` feature.
+dendro = { git = "https://github.com/iopsystems/dendro.git", rev = "1486b20", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -30,7 +55,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.20.1-alpha.5"
+version = "5.20.1-alpha.6"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
