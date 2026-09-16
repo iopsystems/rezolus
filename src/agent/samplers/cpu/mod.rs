@@ -30,6 +30,10 @@ pub mod stats {
         include!("./linux/perf/stats.rs");
     }
 
+    mod power {
+        include!("./linux/power/stats.rs");
+    }
+
     mod tlb_flush {
         include!("./linux/tlb_flush/stats.rs");
     }

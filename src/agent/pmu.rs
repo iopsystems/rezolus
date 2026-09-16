@@ -38,6 +38,13 @@ pub enum PmuKind {
     /// Free-running MSRs (aperf/mperf/tsc). Not general-purpose counters and
     /// not allocated, so they cannot be starved.
     Msr,
+    /// The RAPL energy PMU (`power`, and AMD's `power_core`). Free-running
+    /// energy accumulators on their own PMU — type 14/31 here against the core
+    /// PMU's 4 — so they never draw on the contended pool. Distinct from
+    /// [`PmuKind::Msr`]: the `msr` PMU is a different device (type 13) whose
+    /// fixed eight-entry allowlist holds no energy register, so RAPL is not
+    /// reachable through it.
+    Rapl,
 }
 
 /// The PMU samplers, in the order they claim counters, with the PMU each uses
@@ -68,6 +75,14 @@ pub const DEFAULT_PRIORITY: &[(&str, PmuKind, usize)] = &[
     ("cpu_l3", PmuKind::Uncore, 2),
     // MSR: aperf/mperf/tsc are free-running, not allocated counters.
     ("cpu_frequency", PmuKind::Msr, 3),
+    // RAPL: its own PMU, free-running energy accumulators, package- and
+    // core-scope rather than per-CPU. The count is the most domains the
+    // `power` PMU can expose (pkg, cores, gpu, ram, psys) rather than a
+    // per-CPU figure, which would not mean anything for a package-scope PMU;
+    // what a host actually opens depends on which domains it implements, and
+    // ranges from one to three across the parts measured. Not budgeted, so
+    // the number is documentary only.
+    ("cpu_power", PmuKind::Rapl, 5),
 ];
 
 /// What the agent decided to do about one PMU sampler.
