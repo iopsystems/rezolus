@@ -156,6 +156,17 @@ impl SnapshotBuilder {
         self.samples
     }
 
+    /// Whether this agent can serve acquisition-group rows at all.
+    ///
+    /// False for a V2 agent, which has no groups. Checked BEFORE a stream is
+    /// accepted: without it a V2 agent would take the subscription, find
+    /// nothing to send on every tick, and hold an open connection emitting
+    /// nothing — indistinguishable to the subscriber from an agent whose
+    /// samplers are all quiet.
+    pub fn serves_rows(&self) -> bool {
+        matches!(self.format, SnapshotFormat::V3)
+    }
+
     /// The most recent completed sampling pass as rows, with every schema
     /// present — or `None` before the first pass, or for a V2 agent, which has
     /// no acquisition groups to stream.
@@ -5086,6 +5097,30 @@ mod tests {
             full_again.as_ptr(),
             "a cache hit must hand back the same buffer rather than re-encoding"
         );
+    }
+
+    /// A V2 agent must be refused a stream rather than handed an open
+    /// connection that never produces a frame — which is what the loop would
+    /// do, since every tick would find nothing to send.
+    #[tokio::test]
+    async fn a_v2_agent_cannot_serve_rows_at_all() {
+        let v2: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v2\"\n").expect("valid config");
+        let builder = SnapshotBuilder::new(
+            Arc::new(v2),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        assert!(!builder.serves_rows());
+
+        let v3: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v3\"\n").expect("valid config");
+        let builder = SnapshotBuilder::new(
+            Arc::new(v3),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        assert!(builder.serves_rows());
     }
 
     /// A V2 agent has no acquisition groups, so it cannot answer this

@@ -190,6 +190,18 @@ async fn stream(
         None => Duration::from_secs(1),
     };
 
+    // Refuse up front rather than accepting a subscription this agent can
+    // never satisfy — see `SnapshotBuilder::serves_rows`. 409 matches
+    // `/metrics/rows`: nothing is wrong, this agent just cannot answer this
+    // question in its current configuration.
+    if !state.builder.lock().await.serves_rows() {
+        return (
+            axum::http::StatusCode::CONFLICT,
+            "the row format carries acquisition groups, which only a V3 snapshot has",
+        )
+            .into_response();
+    }
+
     // Registering demand is what starts the clock; dropping the subscription
     // inside the stream's async block is what stops it.
     let subscription = state.clock.subscribe(requested);
