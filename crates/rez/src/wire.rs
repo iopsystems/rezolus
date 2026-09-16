@@ -3,10 +3,14 @@
 //!
 //! # Why this exists
 //!
-//! Not to save an encode. That was the original argument and measurement
-//! does not support it: moving the same payload over this wire instead of a
-//! snapshot is worth about 1.2x on the recorder and slightly NEGATIVE on
-//! total CPU, because it trades one large encode for many small ones.
+//! Mostly not to save an encode. That was the original argument, and
+//! measurement puts it second: moving the same payload over this wire instead
+//! of a snapshot is worth 1.71x on the recorder and 1.33x on total CPU —
+//! real, but a fraction of what the schema policy below is worth, and part of
+//! even that is the row decode not being hardened the way
+//! `Snapshot::from_msgpack` is. Under a no-resend policy the transport alone
+//! goes NEGATIVE on total CPU (0.90x), because once schemas are gone the
+//! per-row framing is what is left.
 //!
 //! What it is actually for is the schema. An agent serving `/metrics/binary`
 //! ships every acquisition group's full `GroupSchema` — every member's name

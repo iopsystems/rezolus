@@ -4528,7 +4528,13 @@ mod tests {
                         sa += t.elapsed().as_nanos();
                         sb += body.len();
                         let t = Instant::now();
-                        let decoded: Snapshot = rmp_serde::from_slice(&body).unwrap();
+                        // `from_msgpack`, not a bare `from_slice`: it is what
+                        // the recorder actually calls (depth-cap and
+                        // trailing-byte hardening), and it is materially more
+                        // expensive than `from_slice` because `Snapshot` is an
+                        // untagged enum — so measuring the cheap one would
+                        // flatter the snapshot path against production.
+                        let decoded = Snapshot::from_msgpack(&body).unwrap();
                         let staged = rec.stage(&decoded, 1_000 + tick * 1_000, 0).unwrap();
                         sr += t.elapsed().as_nanos();
                         std::hint::black_box(staged);
@@ -4564,6 +4570,11 @@ mod tests {
                         per(rr),
                         kib(rb)
                     );
+                    // NOTE: the row path's decode is `rmp_serde::from_slice`,
+                    // which is NOT hardened the way `Snapshot::from_msgpack`
+                    // is. Part of the recorder-side gap below is that
+                    // difference rather than the format, and hardening the row
+                    // decode would give some of it back.
                     println!(
                         "   transport alone: recorder {:.2}x, TOTAL CPU {:.2}x",
                         sr as f64 / rr as f64,

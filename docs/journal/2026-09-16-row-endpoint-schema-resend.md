@@ -26,13 +26,22 @@ They are not. Measured with both transports driven over identical ticks — 944 
 
 | transport | agent | recorder | body |
 |---|---|---|---|
-| snapshot | 43 µs/tick | 347 µs/tick | 89 KiB |
-| rows | 113 µs/tick | 279 µs/tick | 92 KiB |
+| snapshot | 49 µs/tick | 509 µs/tick | 89 KiB |
+| rows | 121 µs/tick | 297 µs/tick | 92 KiB |
 
-**1.24x on the recorder and 0.99x on total CPU — net negative.** The row wire trades one
-large encode for many small ones and frames each payload separately, so the body
-gets marginally *bigger*. On this evidence alone the endpoint is not worth
-building.
+**1.71x on the recorder, 1.33x on total CPU.** Real, then — but see what the
+schema policy is worth below, and note two caveats that cut it further: part of
+the recorder-side gap is that the row decode is a plain `from_slice` while the
+snapshot path uses the hardened `Snapshot::from_msgpack`, and under a *no-resend*
+policy the transport alone goes negative on total CPU (0.90x), because once
+schemas are gone the per-row framing is all that is left. The transport is a
+second-order effect either way.
+
+**An earlier draft of this entry recorded 0.99x — net negative — for the first
+row.** That was measured with `rmp_serde::from_slice` on the snapshot path,
+which is not what the recorder calls; `from_msgpack` adds depth-cap and
+trailing-byte hardening over an untagged enum and costs materially more. The
+bench now uses the same function the recorder does.
 
 ## What the same experiment did surface
 
@@ -41,11 +50,11 @@ schemas:
 
 | schema policy | agent | recorder | body |
 |---|---|---|---|
-| every tick (what the agent does) | 43 µs/tick | 347 µs/tick | 89 KiB |
-| only on change | 5 µs/tick | 26 µs/tick | 4 KiB |
+| every tick (what the agent does) | 49 µs/tick | 509 µs/tick | 89 KiB |
+| only on change | 5 µs/tick | 29 µs/tick | 4 KiB |
 
-**13x on the recorder, 22x on the wire** — from a producer-side policy, with the
-transport held fixed.
+**17.6x on the recorder, 22x on the wire** — from a producer-side policy, with
+the transport held fixed. An order of magnitude against the transport's 1.3x.
 
 Confirmed on real hardware — `delta`, 25 healthy samplers, **45 acquisition
 groups, 3,560 declared members**:
