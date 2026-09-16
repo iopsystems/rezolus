@@ -772,11 +772,43 @@ fn a_second_signal_waits_for_the_capture_then_stops_the_daemon() {
          signal pair"
     );
     h.wait_for_log("capture complete", Duration::from_secs(5));
-    let bytes = std::fs::metadata(&h.output).map(|m| m.len()).unwrap_or(0);
+
+    // A signal-triggered capture lands on a TIMESTAMPED sibling of `output`,
+    // never on `output` itself — that path holds an operator's deliberate
+    // `POST /dump/file` captures, and a restart must not overwrite one. So
+    // the assertion is "a capture appeared beside it", not "output grew".
+    let dir = h.output.parent().expect("output has a directory");
+    let stem = h.output.file_stem().unwrap().to_string_lossy().into_owned();
+    let captures: Vec<_> = std::fs::read_dir(dir)
+        .expect("output directory is readable")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| {
+                    let n = n.to_string_lossy();
+                    n.starts_with(&format!("{stem}-")) && n != stem
+                })
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        captures.len(),
+        1,
+        "expected exactly one shutdown capture beside {}, found {captures:?}",
+        h.output.display()
+    );
+    let bytes = std::fs::metadata(&captures[0])
+        .map(|m| m.len())
+        .unwrap_or(0);
     assert!(
         bytes > 0,
         "the capture the second signal waited for wrote nothing to {}",
-        h.output.display()
+        captures[0].display()
+    );
+    assert!(
+        std::fs::metadata(&h.output).map(|m| m.len()).unwrap_or(0) == 0,
+        "the shutdown capture must not have written to the output path itself"
     );
 }
 

@@ -8,7 +8,17 @@ User=rezolus
 ExecStart=/usr/bin/rezolus hindsight /etc/rezolus/hindsight.toml
 KillMode=control-group
 Restart=on-failure
-KillSignal=SIGKILL
+# NOT KillSignal=SIGKILL. The daemon catches the stop signal and writes the
+# buffer out before exiting, which is the whole point of a flight recorder:
+# a restart for a config change or an upgrade should not throw away the
+# lookback window. SIGKILL cannot be caught, so setting it made that handler
+# unreachable in the packaged service and orphaned the buffer's staging
+# directory on every stop.
+#
+# The timeout is the backstop instead of the opening move: a large buffer
+# takes time to write, and `KillMode=control-group` escalates to SIGKILL on
+# expiry, so a wedged daemon still cannot block shutdown indefinitely.
+TimeoutStopSec=120
 
 [Install]
 WantedBy=multi-user.target
