@@ -1536,8 +1536,35 @@ impl StreamRecorderV3 {
             }
 
             // The only place this path touches a payload at all.
+            //
+            // The decode is also the one chance to check that the payload's
+            // own `schema_hash` agrees with the cleartext one every decision
+            // above was made against. It cannot be checked on a passthrough
+            // tick without decoding — which is the whole point of the wire —
+            // but a group re-anchors at least once per segment, so a producer
+            // whose two hashes disagree is caught within a segment rather than
+            // never. Left undetected it would be quietly corrosive: the row
+            // would carry a schema resolved for one hash and a `schema_hash`
+            // naming another, and `materialize_group_wal_tail` would then read
+            // every following row as unanchored and drop it.
             let row = if need_anchor {
                 let mut decoded = decode_wal_group_row(&r.row)?;
+                if decoded.schema_hash != r.schema_hash {
+                    if self
+                        .warned
+                        .insert(format!("{}#hash-disagreement", r.stream))
+                    {
+                        warn!(
+                            "stream {} declares schema hash {:?} but its payload carries {:?}; \
+                             skipping (warned once)",
+                            r.stream, r.schema_hash, decoded.schema_hash
+                        );
+                    }
+                    // Undo the anchor claim: nothing was written, so the next
+                    // well-formed row for this group must still anchor.
+                    self.segment_schema.remove(r.stream.as_str());
+                    continue;
+                }
                 decoded.schema = Some(schema.as_ref().clone());
                 encode_wal_group_row(&decoded)?
             } else {
@@ -4326,6 +4353,63 @@ mod tests {
                 assert!(
                     rec.stage_rows(&rows, 1_000, 0).unwrap().is_empty(),
                     "nothing taught this recorder the schema, so the row is undecodable"
+                );
+            }
+
+            /// A payload whose own `schema_hash` disagrees with the cleartext
+            /// one every routing decision was made against is dropped, and the
+            /// group is left un-anchored so a well-formed row can still claim
+            /// the segment. Caught on the anchoring tick — which every group
+            /// reaches at least once per segment — because checking it on a
+            /// passthrough would mean decoding the payload this wire exists
+            /// not to decode.
+            #[test]
+            fn a_payload_that_contradicts_its_own_header_is_dropped() {
+                let dir = tempfile::tempdir().unwrap();
+                let (_a, mut rec, _) = recorder(&dir.path().join("rows.rez"), policy(1_000));
+                let schema = group_schema(&["cpu/0"]);
+                let snapshot = v3_snap(
+                    1_000,
+                    vec![group_snapshot(
+                        "cpu/usage",
+                        &schema,
+                        vec![Some(1)],
+                        Some(Window::new(0, 500)),
+                        true,
+                    )],
+                );
+                let mut rows = wire::encode_snapshot(&snapshot).unwrap();
+                // Rewrite the PAYLOAD's hash, leaving the cleartext intact.
+                let mut payload = decode_wal_group_row(&rows.rows[0].row).unwrap();
+                payload.schema_hash = (1, 2);
+                rows.rows[0].row = encode_wal_group_row(&payload).unwrap();
+
+                assert!(
+                    rec.stage_rows(&rows, 1_000, 0).unwrap().is_empty(),
+                    "a payload contradicting its header must be skipped"
+                );
+
+                // ...and the group must not be left holding an anchor it never
+                // wrote: a good row at the next tick still anchors.
+                let good = wire::encode_snapshot(&v3_snap(
+                    2_000,
+                    vec![group_snapshot(
+                        "cpu/usage",
+                        &schema,
+                        vec![Some(2)],
+                        Some(Window::new(1_000, 1_500)),
+                        true,
+                    )],
+                ))
+                .unwrap();
+                let staged = rec.stage_rows(&good, 2_000, 0).unwrap();
+                assert_eq!(staged.len(), 1);
+                assert!(
+                    decode_wal_group_row(&staged[0].row)
+                        .unwrap()
+                        .schema
+                        .is_some(),
+                    "the recovering row must carry the schema the dropped one never anchored"
                 );
             }
 
