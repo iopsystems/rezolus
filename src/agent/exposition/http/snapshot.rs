@@ -24,6 +24,20 @@ pub struct SnapshotBuilder {
     external_store: Option<Arc<ExternalMetricsStore>>,
     format: SnapshotFormat,
     skeleton_cache: SkeletonCache,
+    /// Per group name, the schema hash most recently *emitted in a delta row
+    /// body* (`/metrics/rows` without `schemas=all`).
+    ///
+    /// This is what lets that endpoint omit a schema that has not changed —
+    /// see [`build_rows`](Self::build_rows). It tracks what the AGENT has
+    /// sent, not what any particular consumer has received, which is why the
+    /// endpoint also has to offer `schemas=all`: a recorder that connects
+    /// mid-life, or one whose response was dropped in flight, holds no schema
+    /// for a hash this map already considers emitted, and asks for a full body
+    /// to recover.
+    ///
+    /// Bounded by the number of acquisition groups (45 on a 25-sampler host),
+    /// not by generations: one entry per group name, overwritten on change.
+    emitted_schemas: HashMap<String, (u64, u64)>,
 }
 
 struct CachedSnapshot {
@@ -41,6 +55,12 @@ struct CachedSnapshot {
     /// snapshot turns every subsequent request into a refcount bump.
     msgpack: OnceLock<Bytes>,
     json: OnceLock<Arc<str>>,
+    /// The row-format bodies, in their two flavours: `rows` omits a schema
+    /// whose hash the agent has already emitted, `rows_all` carries every
+    /// schema. Both are per snapshot for the same reason `msgpack` is — a TTL
+    /// hit should be a refcount bump, not a re-encode.
+    rows: OnceLock<Bytes>,
+    rows_all: OnceLock<Bytes>,
 }
 
 impl SnapshotBuilder {
@@ -56,6 +76,7 @@ impl SnapshotBuilder {
             external_store,
             format: config.general().snapshot_format(),
             skeleton_cache: SkeletonCache::new(),
+            emitted_schemas: HashMap::new(),
         }
     }
 
@@ -97,6 +118,8 @@ impl SnapshotBuilder {
             timestamp: last,
             msgpack: OnceLock::new(),
             json: OnceLock::new(),
+            rows: OnceLock::new(),
+            rows_all: OnceLock::new(),
         });
     }
 
@@ -126,6 +149,83 @@ impl SnapshotBuilder {
                 )
             })
             .clone()
+    }
+
+    /// The row-format body for the current snapshot — acquisition groups as
+    /// pre-encoded WAL rows rather than as a snapshot.
+    ///
+    /// # Why the `all` flavour exists
+    ///
+    /// The point of this endpoint is that it does NOT resend a schema that
+    /// has not changed. On a 25-sampler host (45 groups, 3,560 declared
+    /// members) schemas are 87.8% of a scrape's body — and measured end to
+    /// end over 60 consecutive scrapes there, this endpoint's bodies are
+    /// **2.6x smaller** than `/metrics/binary`'s (212,308 B against
+    /// 559,458 B median).
+    ///
+    /// Not 8x, which is what removing schemas outright would give, because
+    /// a default group's membership is value-derived — a counter's first
+    /// non-zero tick changes its group's schema hash and forces a resend —
+    /// and because each row is framed separately, costing about 1.6x a
+    /// snapshot's framing at equal schema policy. Declared member sets are
+    /// the lever on the first; see
+    /// `docs/journal/2026-09-16-row-endpoint-schema-resend.md`.
+    ///
+    /// `/metrics/binary` cannot do this and must keep resending. Its body is
+    /// contractually self-contained: `record --format raw` writes those bodies
+    /// verbatim to a file that `recording convert` decodes offline, much
+    /// later, with no access to whatever earlier scrape carried the schema.
+    /// Only a consumer that keeps state across scrapes can be told "the same
+    /// schema as last time", and a recorder is the one consumer that does.
+    ///
+    /// Which is also why omission cannot be unconditional. [`emitted_schemas`]
+    /// tracks what this AGENT has sent, not what any given consumer holds, so
+    /// a recorder that connects mid-life — or one whose response was dropped
+    /// in flight — would be handed a reference to a schema it has never seen.
+    /// `all = true` is its way back: it asks for a full body, learns every
+    /// schema, and resumes taking delta bodies. That makes the failure
+    /// recoverable in one tick without the agent having to track sessions.
+    ///
+    /// [`emitted_schemas`]: Self::emitted_schemas
+    pub async fn build_rows(&mut self, now: Instant, all: bool) -> Result<Bytes, String> {
+        self.build(now).await;
+
+        // Cache hit: this snapshot's body for this flavour is already encoded.
+        {
+            let cached = self.cached.as_ref().expect("build populates the cache");
+            let slot = if all { &cached.rows_all } else { &cached.rows };
+            if let Some(bytes) = slot.get() {
+                return Ok(bytes.clone());
+            }
+        }
+
+        let mut rows = {
+            let cached = self.cached.as_ref().expect("build populates the cache");
+            crate::recorder::wire::encode_snapshot(&cached.snapshot)?
+        };
+
+        if !all {
+            // Drop a schema the agent has already put on the wire for this
+            // group at this hash, and record the ones it has not. Note this
+            // advances on BODY CONSTRUCTION rather than on delivery — see the
+            // recovery path above for why that is safe rather than merely
+            // convenient.
+            for row in &mut rows.rows {
+                match self.emitted_schemas.get(&row.stream) {
+                    Some(hash) if *hash == row.schema_hash => row.schema = None,
+                    _ => {
+                        self.emitted_schemas
+                            .insert(row.stream.clone(), row.schema_hash);
+                    }
+                }
+            }
+        }
+
+        let bytes = Bytes::from(crate::recorder::wire::encode(&rows)?);
+        let cached = self.cached.as_ref().expect("build populates the cache");
+        let slot = if all { &cached.rows_all } else { &cached.rows };
+        let _ = slot.set(bytes.clone());
+        Ok(bytes)
     }
 
     /// The JSON body for the current snapshot, encoded at most once per
@@ -4817,6 +4917,137 @@ mod tests {
         // Single-init, like the bound: a second call does not race the walk.
         G.set_member_set(&[0]);
         assert_eq!(G.member_set(), Some(&[16usize, 17, 31][..]));
+    }
+
+    /// The row endpoint exists to stop resending schemas that have not
+    /// changed. On a 25-sampler host that is 87.8% of the body (45 groups,
+    /// 3,560 declared members), so this is the behaviour the whole endpoint is
+    /// for — not an optimization on top of it.
+    #[tokio::test]
+    async fn the_row_body_stops_resending_a_schema_that_has_not_changed() {
+        let config: Config = toml::from_str("[general]\nttl = \"0s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        let first =
+            crate::recorder::wire::decode(&builder.build_rows(now, false).await.expect("v3 agent"))
+                .expect("a decodable body");
+        assert!(
+            !first.rows.is_empty(),
+            "the test binary registers metrics, so there are groups to serve"
+        );
+        assert!(
+            first.rows.iter().all(|r| r.schema.is_some()),
+            "the first body must teach the consumer every schema"
+        );
+
+        // A later scrape of the same agent, past the TTL so it really
+        // re-samples rather than returning the cached body.
+        let later = now + Duration::from_secs(1);
+        let second = crate::recorder::wire::decode(
+            &builder.build_rows(later, false).await.expect("v3 agent"),
+        )
+        .expect("a decodable body");
+
+        for row in &second.rows {
+            let before = first.rows.iter().find(|r| r.stream == row.stream);
+            if let Some(before) = before {
+                if before.schema_hash == row.schema_hash {
+                    assert!(
+                        row.schema.is_none(),
+                        "group {} repeated an unchanged schema",
+                        row.stream
+                    );
+                }
+            }
+        }
+        // ...and the values are still there: omitting the schema must not
+        // have omitted the reading it describes.
+        assert!(
+            second.rows.iter().all(|r| !r.row.is_empty()),
+            "every row must still carry its payload"
+        );
+    }
+
+    /// `schemas=all` is the recovery path: a recorder that connects mid-life
+    /// holds no schema for a hash the agent already considers emitted, and
+    /// this is how it catches up. So it must carry every schema regardless of
+    /// what the delta body has already sent.
+    #[tokio::test]
+    async fn schemas_all_carries_every_schema_even_after_a_delta_body() {
+        let config: Config = toml::from_str("[general]\nttl = \"0s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        // Teach the agent that it has emitted every schema...
+        let _ = builder.build_rows(now, false).await.expect("v3 agent");
+        // ...then make sure a full body is still full.
+        let later = now + Duration::from_secs(1);
+        let full = crate::recorder::wire::decode(
+            &builder.build_rows(later, true).await.expect("v3 agent"),
+        )
+        .expect("a decodable body");
+
+        assert!(!full.rows.is_empty());
+        assert!(
+            full.rows.iter().all(|r| r.schema.is_some()),
+            "schemas=all must be unconditional, or a late recorder cannot recover"
+        );
+    }
+
+    /// The two flavours are cached separately per snapshot. Sharing one slot
+    /// would hand a delta body to a recorder that asked for a full one — which
+    /// is exactly the request it makes when it is already stuck.
+    #[tokio::test]
+    async fn the_two_row_flavours_do_not_share_a_cache_slot() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        let delta = builder.build_rows(now, false).await.expect("v3 agent");
+        let full = builder.build_rows(now, true).await.expect("v3 agent");
+        let full_again = builder.build_rows(now, true).await.expect("v3 agent");
+
+        assert_ne!(
+            delta.as_ptr(),
+            full.as_ptr(),
+            "the two flavours are different bodies"
+        );
+        assert_eq!(
+            full.as_ptr(),
+            full_again.as_ptr(),
+            "a cache hit must hand back the same buffer rather than re-encoding"
+        );
+    }
+
+    /// A V2 agent has no acquisition groups, so it cannot answer this
+    /// question at all. It must say so rather than serve an empty body, which
+    /// a recorder could not tell from an agent with every sampler disabled.
+    #[tokio::test]
+    async fn a_v2_agent_refuses_the_row_endpoint() {
+        let config: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v2\"\n").expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        assert!(builder.build_rows(Instant::now(), false).await.is_err());
     }
 
     #[tokio::test]
