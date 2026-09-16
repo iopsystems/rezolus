@@ -100,8 +100,22 @@ pub struct NicSummary {
     pub speed: Option<usize>,
     /// NUMA node this NIC is attached to
     pub numa_node: Option<usize>,
-    /// NIC driver name
+    /// NIC driver name.
+    ///
+    /// `None` for an interface with no bus parent — a bond, bridge, veth, tap
+    /// or tun. That absence is also the discriminator between a physical NIC
+    /// and a virtual one: the driver is read through
+    /// `/sys/class/net/<if>/device/`, which only exists when
+    /// `SET_NETDEV_DEV()` gave the device a bus parent.
     pub driver: Option<String>,
+    /// The kernel's link state: `up`, or `unknown` for a device with no
+    /// carrier to report on (a tap or tun for its whole life).
+    ///
+    /// Recorded rather than only filtered on, so a reader can tell a NIC that
+    /// is carrying from one that simply never says. `None` for a summary
+    /// written before this field existed.
+    #[serde(default)]
+    pub operstate: Option<String>,
 }
 
 /// Summary of a GPU device.
@@ -212,5 +226,53 @@ mod tests {
         let s: SystemSummary = serde_json::from_str(json).unwrap();
         assert_eq!(s.os, "linux");
         assert_eq!(s.cpus, 128);
+    }
+}
+
+#[cfg(test)]
+mod nic_summary_tests {
+    use super::*;
+
+    /// `operstate` arrived after the first summaries were written, and a
+    /// `systeminfo` blob is embedded verbatim in every recording. An older
+    /// recording must still deserialize rather than failing the whole summary.
+    #[test]
+    fn a_summary_without_operstate_still_deserializes() {
+        let nic: NicSummary =
+            serde_json::from_str(r#"{"name":"eth0","speed":10000,"driver":"bnxt_en"}"#)
+                .expect("a pre-operstate NicSummary must still parse");
+        assert_eq!(nic.name, "eth0");
+        assert_eq!(nic.operstate, None, "absent means unknown, not 'down'");
+    }
+
+    /// The whole summary, not just the NIC: `SystemSummary` is what actually
+    /// round-trips through a recording's metadata.
+    #[test]
+    fn an_older_system_summary_round_trips() {
+        let summary: SystemSummary = serde_json::from_str(
+            r#"{"os":"linux","kernel":"6.8.0","arch":"x86_64",
+                "nics":[{"name":"eth0","driver":"igb"}]}"#,
+        )
+        .expect("an older SystemSummary must still parse");
+        assert_eq!(summary.nics.len(), 1);
+        assert_eq!(summary.nics[0].operstate, None);
+    }
+
+    /// `driver: None` is the physical/virtual discriminator, and the same one
+    /// the BPF predicate uses (a bus parent). Pinned here because a reader
+    /// deciding "is this a NIC or a bridge" depends on it.
+    #[test]
+    fn an_absent_driver_is_how_a_virtual_interface_reads() {
+        let virtual_nic = NicSummary {
+            name: "bond0".to_string(),
+            speed: Some(20000),
+            numa_node: None,
+            driver: None,
+            operstate: Some("up".to_string()),
+        };
+        assert!(
+            virtual_nic.driver.is_none(),
+            "a bond has no bus parent, so no driver is readable through it"
+        );
     }
 }
