@@ -425,7 +425,16 @@ pub fn run(config: Config) {
                 if state == CAPTURING {
                     capturing = true;
                     info!("capture in progress; the recording continues");
-                    let (buffer_path, output) = (buffer_path.clone(), output.clone());
+                    // NOT `output`. An HTTP dump writes there because its
+                    // caller asked for exactly that path; a signal-triggered
+                    // capture has no caller and no such instruction, and
+                    // `output` is where an operator's deliberate captures
+                    // live. Writing there on every stop would mean restarting
+                    // the service overwrites the incident somebody saved —
+                    // destroying data they chose to keep, which is worse than
+                    // the window this capture exists to preserve.
+                    let output = shutdown_capture_path(&output, wall_ns());
+                    let buffer_path = buffer_path.clone();
                     let (gate, done) = (dump_gate.clone(), capture_tx.clone());
                     tokio::spawn(async move {
                         let _serialized = gate.lock().await;
@@ -466,6 +475,33 @@ fn dump_to_file(buffer_path: &Path, output: &Path, range: &TimeRange) -> DumpToF
         Ok(summary) => DumpToFileResponse::success(output.to_path_buf(), summary),
         Err(e) => DumpToFileResponse::error(e),
     }
+}
+
+/// Where a signal-triggered capture goes: `output`'s directory and stem, a
+/// UTC timestamp, and `output`'s extension.
+///
+/// `/var/lib/rezolus/rezolus.rez` becomes
+/// `/var/lib/rezolus/rezolus-20260915T204500Z.rez`.
+///
+/// Timestamped rather than a fixed second name so that successive restarts do
+/// not overwrite each other either — two stops a minute apart are two
+/// different windows, and the second is not more interesting than the first.
+/// It does mean these accumulate; retention for them is deliberately not
+/// handled here, because a file an operator may be about to read is not
+/// something a daemon should delete on its own schedule.
+fn shutdown_capture_path(output: &Path, now_ns: u64) -> PathBuf {
+    let stamp = chrono::DateTime::from_timestamp_nanos(now_ns as i64)
+        .format("%Y%m%dT%H%M%SZ")
+        .to_string();
+    let stem = output
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "rezolus".to_string());
+    let name = match output.extension() {
+        Some(ext) => format!("{stem}-{stamp}.{}", ext.to_string_lossy()),
+        None => format!("{stem}-{stamp}"),
+    };
+    output.with_file_name(name)
 }
 
 /// Report a SIGHUP / ctrl-c capture. It is the only trace such a capture
@@ -539,6 +575,41 @@ fn buffer_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A signal-triggered capture must never land on `output`: that is where
+    /// an operator's deliberate `POST /dump/file` captures go, and a service
+    /// restart would otherwise overwrite an incident somebody saved.
+    #[test]
+    fn a_shutdown_capture_does_not_land_on_the_output_path() {
+        let out = Path::new("/var/lib/rezolus/rezolus.rez");
+        let got = shutdown_capture_path(out, 1_789_425_944_000_000_000);
+        assert_ne!(got, out.to_path_buf(), "must not clobber the output path");
+        assert_eq!(
+            got,
+            Path::new("/var/lib/rezolus/rezolus-20260914T224544Z.rez"),
+            "same directory and extension, stem stamped with the capture time"
+        );
+    }
+
+    /// Two stops close together are two different windows; neither is more
+    /// interesting than the other, so neither may overwrite the other.
+    #[test]
+    fn two_shutdown_captures_do_not_collide() {
+        let out = Path::new("/var/lib/rezolus/rezolus.rez");
+        let a = shutdown_capture_path(out, 1_789_425_944_000_000_000);
+        let b = shutdown_capture_path(out, 1_789_425_999_000_000_000);
+        assert_ne!(a, b);
+    }
+
+    /// An output path with no extension still produces a distinct name rather
+    /// than panicking or returning the input.
+    #[test]
+    fn a_shutdown_capture_handles_an_extensionless_output() {
+        let out = Path::new("/var/lib/rezolus/buffer");
+        let got = shutdown_capture_path(out, 1_789_425_944_000_000_000);
+        assert_ne!(got, out.to_path_buf());
+        assert_eq!(got, Path::new("/var/lib/rezolus/buffer-20260914T224544Z"));
+    }
 
     /// The buffer must be indistinguishable from a `rezolus record` capture to
     /// every consumer, and that now includes carrying the agent's version
