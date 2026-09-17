@@ -212,6 +212,46 @@ mod tests {
         assert_eq!(subs.fastest(), None);
     }
 
+    /// A wall-clock step backwards must not be able to produce a `seq` lower
+    /// than one already sent — a consumer checking for +1 has no rule for
+    /// that, and would read it as corruption rather than as a clock
+    /// correction. Models the clamp the stream loop applies.
+    #[test]
+    fn a_backwards_clock_step_cannot_lower_the_interval_index() {
+        let interval = Duration::from_secs(1);
+        let base = 1_700_000_000_000_000_000u64;
+
+        let mut last: Option<u64> = None;
+        let mut emitted = Vec::new();
+        // Four normal seconds, then the clock jumps back thirty, then it
+        // carries on.
+        for now in [
+            base,
+            base + 1_000_000_000,
+            base + 2_000_000_000,
+            base + 3_000_000_000,
+            base - 30_000_000_000,
+            base - 29_000_000_000,
+            base + 4_000_000_000,
+        ] {
+            let measured = interval_index(now, interval);
+            let index = match last {
+                Some(previous) if measured <= previous => previous + 1,
+                _ => measured,
+            };
+            last = Some(index);
+            emitted.push(index);
+        }
+
+        for pair in emitted.windows(2) {
+            assert_eq!(
+                pair[1],
+                pair[0] + 1,
+                "indices must stay contiguous and increasing across a step: {emitted:?}"
+            );
+        }
+    }
+
     #[test]
     fn alignment_lands_on_wall_clock_multiples() {
         let offsets = [0u128, 1, 999, 1_000_000, 123_456_789, 999_999_999];

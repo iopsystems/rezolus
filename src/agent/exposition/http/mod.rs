@@ -37,6 +37,7 @@ pub async fn serve(
     let app: Router = app(AppState {
         builder: state,
         subscribers: Subscribers::new(),
+        ttl: config.general().ttl(),
     });
 
     let listener = TcpListener::bind(config.general().listen())
@@ -54,6 +55,9 @@ pub async fn serve(
 pub(crate) struct AppState {
     builder: Arc<Mutex<SnapshotBuilder>>,
     subscribers: Subscribers,
+    /// The snapshot TTL, reported to a stream subscriber as the floor on how
+    /// often its frames can carry anything new.
+    ttl: Duration,
 }
 
 fn app(state: AppState) -> Router {
@@ -131,9 +135,13 @@ async fn rows(
 /// Query parameters for [`stream`].
 #[derive(serde::Deserialize, Default)]
 struct StreamQuery {
-    /// Sampling interval, e.g. `500ms`, defaulting to 1s. Honoured exactly:
-    /// this subscription gets its own timer on its own boundaries, so the
-    /// interval need not relate to any other subscriber's.
+    /// Frame interval, e.g. `500ms`, defaulting to 1s. Honoured exactly: this
+    /// subscription gets its own timer on its own boundaries, so the interval
+    /// need not relate to any other subscriber's.
+    ///
+    /// The response reports it back as `x-rezolus-frame-interval`, alongside
+    /// `x-rezolus-update-floor` — the snapshot TTL, which is how often a frame
+    /// can carry anything new.
     ///
     /// What it does NOT control is how often the agent samples. A tick inside
     /// the snapshot TTL is answered from cache, and readings already sent are
@@ -214,21 +222,34 @@ async fn stream(
 
     let subscription = state.subscribers.register(requested);
     let builder = state.builder.clone();
+    let ttl = state.ttl;
 
     let body = axum::body::Body::from_stream(rows_frames(builder, subscription));
+    let duration_header = |d: Duration| {
+        axum::http::HeaderValue::from_str(&format!("{}", humantime::format_duration(d)))
+            .unwrap_or(axum::http::HeaderValue::from_static("unknown"))
+    };
+
     (
         [
             (
                 axum::http::header::CONTENT_TYPE,
                 axum::http::HeaderValue::from_static(crate::recorder::wire::STREAM_CONTENT_TYPE),
             ),
+            // How often a frame arrives: exactly what was asked for, since
+            // this subscription gets its own timer.
             (
-                axum::http::HeaderName::from_static("x-rezolus-sample-interval"),
-                axum::http::HeaderValue::from_str(&format!(
-                    "{}",
-                    humantime::format_duration(requested)
-                ))
-                .unwrap_or(axum::http::HeaderValue::from_static("unknown")),
+                axum::http::HeaderName::from_static("x-rezolus-frame-interval"),
+                duration_header(requested),
+            ),
+            // How often a frame can carry anything NEW, which is the thing a
+            // subscriber cannot otherwise discover. Asking for less than this
+            // is legal and gets the frames it asked for — most of them empty.
+            // Reported so that a consumer stamping a recording with "1s data"
+            // can tell when it is really getting 10s data.
+            (
+                axum::http::HeaderName::from_static("x-rezolus-update-floor"),
+                duration_header(ttl),
             ),
         ],
         body,
@@ -273,7 +294,31 @@ fn rows_frames(
             // the boundary we woke for, not from the snapshot's own timestamp:
             // a snapshot served from cache can predate the boundary slightly,
             // and this index has to advance once per interval regardless.
-            let index = clock::interval_index(wall_now_ns(), interval);
+            //
+            // Clamped forward, because it is derived from the WALL clock and
+            // the wall clock can step. An NTP correction backwards would
+            // otherwise emit a `seq` lower than one already sent, which a
+            // consumer checking for +1 has no rule for — it would read as
+            // corruption. The contract `seq` actually makes is about its
+            // DIFFERENCES ("one per interval, a jump means a lost reading"),
+            // and each frame carries the snapshot's own `wall_ns` for anyone
+            // who needs the absolute time, so holding the line here costs
+            // nothing that is depended on.
+            let index = match last_index {
+                Some(previous) => {
+                    let measured = clock::interval_index(wall_now_ns(), interval);
+                    if measured <= previous {
+                        warn!(
+                            "wall clock moved backwards under a stream subscriber at \
+                             {interval:?}; holding the interval index monotonic"
+                        );
+                        previous + 1
+                    } else {
+                        measured
+                    }
+                }
+                None => clock::interval_index(wall_now_ns(), interval),
+            };
 
             // Ask for a snapshot. Whether this costs a sampling pass is the
             // TTL's decision, made in `rows_at` — which is what keeps a
