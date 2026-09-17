@@ -136,10 +136,11 @@ struct StreamQuery {
     /// interval need not relate to any other subscriber's.
     ///
     /// What it does NOT control is how often the agent samples. A tick inside
-    /// the snapshot TTL is answered from cache, so an interval shorter than
-    /// the TTL yields repeated readings rather than a faster agent — the TTL
-    /// is the floor, and it belongs to the operator rather than the
-    /// subscriber.
+    /// the snapshot TTL is answered from cache — and a reading already sent is
+    /// **not sent again**, it is skipped. So asking for less than the TTL
+    /// makes frames arrive at the TTL's rate, with the `seq` gaps saying which
+    /// intervals produced nothing new. The TTL is the floor, and it belongs to
+    /// the operator rather than to the subscriber.
     interval: Option<String>,
 }
 
@@ -279,11 +280,23 @@ fn rows_frames(
                 }
             };
 
-            // A reading already sent. Reached when the interval asked for is
-            // shorter than the TTL, which is exactly the case the TTL is
-            // meant to bound: the subscription is told nothing new rather than
-            // being allowed to drive the samplers. The `seq` gap it leaves
-            // says so.
+            // Already sent this reading: skip rather than repeat it. Reached
+            // when the interval asked for is shorter than the TTL, which is
+            // the case the TTL exists to bound.
+            //
+            // Skipping rather than re-sending because a duplicate frame is
+            // waste at both ends — bytes on the wire, and a decode on a
+            // recorder that would discard it anyway (`stage_rows` drops a
+            // group whose acquisition window has not advanced). The `seq` gap
+            // left behind carries the information the duplicate would have:
+            // this interval produced nothing new.
+            //
+            // The consequence, worth knowing: a subscription asking for much
+            // less than the TTL sees SILENCE between frames rather than
+            // duplicates, and this stream has no keepalive. Harmless at the
+            // defaults (a 10ms TTL against intervals of a second or more, so
+            // every tick brings a new reading) but it would bite an operator
+            // who raised the TTL far above a subscriber's interval.
             if last_sent_wall == Some(rows.wall_ns) {
                 continue;
             }

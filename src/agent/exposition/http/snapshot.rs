@@ -162,10 +162,14 @@ impl SnapshotBuilder {
     ///
     /// **This is where a subscription's tick becomes (or does not become) a
     /// sampling pass.** Two subscriptions whose timers fall within one TTL of
-    /// each other share a pass; one asking for less than the TTL is handed the
-    /// same reading again rather than being allowed to sample faster than the
-    /// operator configured. That makes the TTL the floor on sampling rate
+    /// each other share a pass; one asking for less than the TTL gets the
+    /// reading it already has rather than being allowed to sample faster than
+    /// the operator configured. That makes the TTL the floor on sampling rate
     /// without a second knob to keep in agreement with it.
+    ///
+    /// Callers are expected to notice a repeated reading (by `wall_ns`) and
+    /// act on it — the stream handler skips the frame rather than sending a
+    /// duplicate.
     pub async fn rows_at(&mut self, now: Instant) -> Option<Arc<crate::recorder::wire::AgentRows>> {
         self.build(now).await;
         self.latest_rows()
@@ -5188,6 +5192,63 @@ mod tests {
 
         assert_eq!(a.wall_ns, b.wall_ns, "both saw the same reading");
         assert_eq!(builder.samples(), 1, "and it was sampled once");
+    }
+
+    /// A subscription asking faster than the TTL gets frames at the TTL's
+    /// rate, not at its own — and not duplicates of the rate it asked for.
+    ///
+    /// Models what the stream handler does: tick, ask, and send only when the
+    /// reading is one it has not already sent. Counting DISTINCT readings is
+    /// counting frames, since a repeat is skipped.
+    #[tokio::test]
+    async fn asking_faster_than_the_ttl_yields_frames_at_the_ttl_rate() {
+        let config: Config =
+            toml::from_str("[general]\nttl = \"100ms\"\nsnapshot_format = \"v3\"\n")
+                .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        // A second of ticks at 10ms — a subscriber asking ten times faster
+        // than this agent will sample.
+        let start = Instant::now();
+        let mut sent = 0usize;
+        let mut last: Option<u64> = None;
+        for i in 0..100 {
+            let rows = builder
+                .rows_at(start + Duration::from_millis(i * 10))
+                .await
+                .expect("v3 agent");
+            if last != Some(rows.wall_ns) {
+                last = Some(rows.wall_ns);
+                sent += 1;
+            }
+        }
+
+        // The exact count is deliberately not asserted. `refresh` stamps the
+        // cache with the real `Instant::now()`, so how far this loop's
+        // synthetic clock gets ahead of it depends on how long a sampling pass
+        // takes in a debug build — noise, not behaviour.
+        //
+        // What IS behaviour: one frame per sampling pass, in both directions.
+        // No pass goes unsent (data would be lost) and no frame is sent
+        // without one (that is the duplicate this skip exists to suppress).
+        assert_eq!(
+            builder.samples() as usize,
+            sent,
+            "expected one frame per sampling pass; {sent} frames, {} passes",
+            builder.samples()
+        );
+        assert!(
+            sent >= 2,
+            "the TTL must expire at least twice over this span"
+        );
+        assert!(
+            sent < 20,
+            "100 ticks at a tenth of the TTL must coalesce heavily; sent {sent}"
+        );
     }
 
     /// A V2 agent must be refused a stream rather than handed an open
