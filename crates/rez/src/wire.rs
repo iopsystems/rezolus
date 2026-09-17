@@ -297,28 +297,54 @@ struct AgentRowsRef<'a> {
     rows: Vec<AgentRowRef<'a>>,
 }
 
-/// Encode one frame, keeping each row's schema only where `keep_schema` says
-/// this consumer still needs it.
+/// What a consumer should be told about one row this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowDisposition {
+    /// Leave the row out. Its acquisition window has not advanced, so there is
+    /// no new observation to report — see [`encode_frame_filtered`].
+    Omit,
+    /// Include the row, carrying its schema (this consumer has not been taught
+    /// this generation).
+    SendWithSchema,
+    /// Include the row without its schema (already taught).
+    Send,
+}
+
+/// Encode one frame, asking `decide` what to do with each row.
 ///
-/// The filter is how per-connection schema state is applied to a shared tick:
-/// the caller's map of what it has already sent decides, and nothing is
-/// copied to express the decision.
+/// Returns `None` when every row was omitted: an empty frame would assert a
+/// tick on which nothing at all was observed, which is not the same statement
+/// and is not one worth a frame.
+///
+/// # Why a row can be left out
+///
+/// A snapshot carries every group the producer knows about, including ones
+/// whose sampler did not read this tick — a 60 s `drivehealth` sweep sits
+/// unchanged across hundreds of ticks, keeping the acquisition window of its
+/// last real read (that is the point of the window; see the agent's
+/// `timing.rs`). Repeating such a row would assert an observation that did not
+/// happen. A recorder would drop it on the same window-advance rule it already
+/// applies, but a consumer that plots what it receives — a live viewer — would
+/// draw a point where there was no reading.
+///
+/// So the stream sends **updates**, and a consumer's view of a group persists
+/// until the group is mentioned again. The window in each row says when the
+/// reading it carries was actually taken, which is what makes that safe.
 pub fn encode_frame_filtered(
     rows: &AgentRows,
     seq: u64,
-    mut keep_schema: impl FnMut(&AgentRow) -> bool,
-) -> Result<Vec<u8>, String> {
-    let view = AgentRowsRef {
-        wall_ns: rows.wall_ns,
-        duration_ns: rows.duration_ns,
-        rows: rows
-            .rows
-            .iter()
-            .map(|r| AgentRowRef {
+    mut decide: impl FnMut(&AgentRow) -> RowDisposition,
+) -> Result<Option<Vec<u8>>, String> {
+    let kept: Vec<AgentRowRef<'_>> = rows
+        .rows
+        .iter()
+        .filter_map(|r| match decide(r) {
+            RowDisposition::Omit => None,
+            disposition => Some(AgentRowRef {
                 stream: &r.stream,
                 window: r.window,
                 schema_hash: r.schema_hash,
-                schema: if keep_schema(r) {
+                schema: if disposition == RowDisposition::SendWithSchema {
                     r.schema.as_ref()
                 } else {
                     None
@@ -326,8 +352,17 @@ pub fn encode_frame_filtered(
                 arity: r.arity,
                 approx_bytes: r.approx_bytes,
                 row: &r.row,
-            })
-            .collect(),
+            }),
+        })
+        .collect();
+    if kept.is_empty() {
+        return Ok(None);
+    }
+
+    let view = AgentRowsRef {
+        wall_ns: rows.wall_ns,
+        duration_ns: rows.duration_ns,
+        rows: kept,
     };
     let payload =
         rmp_serde::to_vec(&(seq, &view)).map_err(|e| format!("failed to encode a frame: {e}"))?;
@@ -340,7 +375,7 @@ pub fn encode_frame_filtered(
     let mut out = Vec::with_capacity(4 + payload.len());
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(&payload);
-    Ok(out)
+    Ok(Some(out))
 }
 
 #[cfg(test)]
@@ -391,17 +426,61 @@ mod tests {
         let mut rows = rows();
         rows.rows[0].schema = Some(GroupSchema::default());
 
-        let borrowed = encode_frame_filtered(&rows, 5, |_| true).unwrap();
+        let borrowed = encode_frame_filtered(&rows, 5, |_| RowDisposition::SendWithSchema)
+            .unwrap()
+            .unwrap();
         let owned = encode_frame(&rows, 5).unwrap();
         assert_eq!(borrowed, owned);
 
         // ...and dropping a schema through the filter must equal having built
         // the row without one.
-        let dropped = encode_frame_filtered(&rows, 5, |_| false).unwrap();
+        let dropped = encode_frame_filtered(&rows, 5, |_| RowDisposition::Send)
+            .unwrap()
+            .unwrap();
         let mut without = rows.clone();
         without.rows[0].schema = None;
         assert_eq!(dropped, encode_frame(&without, 5).unwrap());
         assert_ne!(dropped, borrowed, "the filter has to actually do something");
+    }
+
+    /// Omitting a row must equal never having had it, so a consumer cannot
+    /// tell a filtered frame from one the producer built that way.
+    #[test]
+    fn an_omitted_row_encodes_as_though_it_were_never_there() {
+        let mut rows = rows();
+        rows.rows.push(AgentRow {
+            stream: "drivehealth/temp".to_string(),
+            window: Some((5, 6)),
+            schema_hash: (1, 1),
+            schema: None,
+            arity: (1, 0, 0),
+            approx_bytes: 8,
+            row: vec![0xc0],
+        });
+
+        let filtered = encode_frame_filtered(&rows, 9, |r| {
+            if r.stream == "drivehealth/temp" {
+                RowDisposition::Omit
+            } else {
+                RowDisposition::Send
+            }
+        })
+        .unwrap()
+        .unwrap();
+
+        let mut only_first = rows.clone();
+        only_first.rows.truncate(1);
+        assert_eq!(filtered, encode_frame(&only_first, 9).unwrap());
+    }
+
+    /// A tick on which nothing advanced is not a tick on which nothing was
+    /// observed, so it gets no frame rather than an empty one.
+    #[test]
+    fn a_frame_with_every_row_omitted_is_not_sent() {
+        let rows = rows();
+        assert!(encode_frame_filtered(&rows, 3, |_| RowDisposition::Omit)
+            .unwrap()
+            .is_none());
     }
 
     /// A stream body is several frames back to back, and a consumer has to be

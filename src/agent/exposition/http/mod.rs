@@ -251,6 +251,14 @@ fn rows_frames(
         // here.
         let mut sent: std::collections::HashMap<String, (u64, u64)> =
             std::collections::HashMap::new();
+        // Per group, the end of the acquisition window this connection has
+        // already been told about. A snapshot carries every group the agent
+        // knows, including ones whose sampler did not read this tick — a 60s
+        // `drivehealth` sweep sits unchanged across hundreds of ticks, keeping
+        // the window of its last real read. Sending it again would assert an
+        // observation that did not happen.
+        let mut last_window: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
         let mut last_sent_wall: Option<u64> = None;
         let mut last_index: Option<u64> = None;
 
@@ -318,15 +326,39 @@ fn rows_frames(
             // so a second subscriber costs a serialization rather than a copy
             // of every payload.
             let frame = crate::recorder::wire::encode_frame_filtered(&rows, index, |row| {
+                use crate::recorder::wire::RowDisposition;
+
+                // Has this group actually been read again since this
+                // connection last heard about it? A windowless group carries
+                // no answer, so it is always sent — the same disposition
+                // `stage_rows` gives it.
+                if let Some(end) = row.window.map(|(_, end)| end) {
+                    if last_window.get(&row.stream) == Some(&end) {
+                        return RowDisposition::Omit;
+                    }
+                    last_window.insert(row.stream.clone(), end);
+                }
+
+                // Only now decide about the schema. Doing it the other way
+                // round would record a schema as taught on a row that was
+                // then omitted, and the group would go on to reference a
+                // generation this consumer never received.
                 match sent.get(&row.stream) {
-                    Some(hash) if *hash == row.schema_hash => false,
+                    Some(hash) if *hash == row.schema_hash => RowDisposition::Send,
                     _ => {
                         sent.insert(row.stream.clone(), row.schema_hash);
-                        true
+                        RowDisposition::SendWithSchema
                     }
                 }
             })
             .map_err(std::io::Error::other)?;
+
+            // Every group was already current for this consumer. That is not
+            // the same as a tick on which nothing was observed, so it gets no
+            // frame — the `seq` gap says an interval passed with no update.
+            let Some(frame) = frame else {
+                continue;
+            };
 
             yield bytes::Bytes::from(frame);
         }
