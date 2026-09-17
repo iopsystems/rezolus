@@ -168,8 +168,9 @@ impl SnapshotBuilder {
     /// without a second knob to keep in agreement with it.
     ///
     /// Callers are expected to notice a repeated reading (by `wall_ns`) and
-    /// act on it — the stream handler skips the frame rather than sending a
-    /// duplicate.
+    /// act on it — the stream handler sends an EMPTY frame rather than
+    /// repeating the readings, which says "your interval elapsed, nothing is
+    /// new" without asserting observations that did not happen.
     pub async fn rows_at(&mut self, now: Instant) -> Option<Arc<crate::recorder::wire::AgentRows>> {
         self.build(now).await;
         self.latest_rows()
@@ -5194,14 +5195,15 @@ mod tests {
         assert_eq!(builder.samples(), 1, "and it was sampled once");
     }
 
-    /// A subscription asking faster than the TTL gets frames at the TTL's
-    /// rate, not at its own — and not duplicates of the rate it asked for.
+    /// A subscription asking faster than the TTL gets UPDATES at the TTL's
+    /// rate, not at its own. It still gets a frame per interval — an empty one
+    /// where there is nothing new — so what the TTL bounds is the readings,
+    /// not the cadence.
     ///
-    /// Models what the stream handler does: tick, ask, and send only when the
-    /// reading is one it has not already sent. Counting DISTINCT readings is
-    /// counting frames, since a repeat is skipped.
+    /// Models what the stream handler does: tick, ask, and carry rows only
+    /// when the reading is one it has not already sent.
     #[tokio::test]
-    async fn asking_faster_than_the_ttl_yields_frames_at_the_ttl_rate() {
+    async fn asking_faster_than_the_ttl_yields_updates_at_the_ttl_rate() {
         let config: Config =
             toml::from_str("[general]\nttl = \"100ms\"\nsnapshot_format = \"v3\"\n")
                 .expect("valid config");
@@ -5214,7 +5216,7 @@ mod tests {
         // A second of ticks at 10ms — a subscriber asking ten times faster
         // than this agent will sample.
         let start = Instant::now();
-        let mut sent = 0usize;
+        let mut updates = 0usize;
         let mut last: Option<u64> = None;
         for i in 0..100 {
             let rows = builder
@@ -5223,7 +5225,7 @@ mod tests {
                 .expect("v3 agent");
             if last != Some(rows.wall_ns) {
                 last = Some(rows.wall_ns);
-                sent += 1;
+                updates += 1;
             }
         }
 
@@ -5232,22 +5234,23 @@ mod tests {
         // synthetic clock gets ahead of it depends on how long a sampling pass
         // takes in a debug build — noise, not behaviour.
         //
-        // What IS behaviour: one frame per sampling pass, in both directions.
-        // No pass goes unsent (data would be lost) and no frame is sent
-        // without one (that is the duplicate this skip exists to suppress).
+        // What IS behaviour: one update per sampling pass, in both directions.
+        // No pass goes unreported (data would be lost) and no update is
+        // reported without one (that is the duplicate the empty frame
+        // replaces).
         assert_eq!(
             builder.samples() as usize,
-            sent,
-            "expected one frame per sampling pass; {sent} frames, {} passes",
+            updates,
+            "expected one update per sampling pass; {updates} updates, {} passes",
             builder.samples()
         );
         assert!(
-            sent >= 2,
+            updates >= 2,
             "the TTL must expire at least twice over this span"
         );
         assert!(
-            sent < 20,
-            "100 ticks at a tenth of the TTL must coalesce heavily; sent {sent}"
+            updates < 20,
+            "100 ticks at a tenth of the TTL must coalesce heavily; {updates} updates"
         );
     }
 

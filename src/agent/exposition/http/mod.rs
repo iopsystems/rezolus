@@ -136,11 +136,11 @@ struct StreamQuery {
     /// interval need not relate to any other subscriber's.
     ///
     /// What it does NOT control is how often the agent samples. A tick inside
-    /// the snapshot TTL is answered from cache — and a reading already sent is
-    /// **not sent again**, it is skipped. So asking for less than the TTL
-    /// makes frames arrive at the TTL's rate, with the `seq` gaps saying which
-    /// intervals produced nothing new. The TTL is the floor, and it belongs to
-    /// the operator rather than to the subscriber.
+    /// the snapshot TTL is answered from cache, and readings already sent are
+    /// not repeated — that interval gets an EMPTY frame instead. So asking for
+    /// less than the TTL yields frames at the requested rate carrying updates
+    /// at the TTL's rate. The TTL is the floor, and it belongs to the operator
+    /// rather than to the subscriber.
     interval: Option<String>,
 }
 
@@ -288,32 +288,24 @@ fn rows_frames(
                 }
             };
 
-            // Already sent this reading: skip rather than repeat it. Reached
-            // when the interval asked for is shorter than the TTL, which is
-            // the case the TTL exists to bound.
-            //
-            // Skipping rather than re-sending because a duplicate frame is
-            // waste at both ends — bytes on the wire, and a decode on a
-            // recorder that would discard it anyway (`stage_rows` drops a
-            // group whose acquisition window has not advanced). The `seq` gap
-            // left behind carries the information the duplicate would have:
-            // this interval produced nothing new.
-            //
-            // The consequence, worth knowing: a subscription asking for much
-            // less than the TTL sees SILENCE between frames rather than
-            // duplicates, and this stream has no keepalive. Harmless at the
-            // defaults (a 10ms TTL against intervals of a second or more, so
-            // every tick brings a new reading) but it would bite an operator
-            // who raised the TTL far above a subscriber's interval.
-            if last_sent_wall == Some(rows.wall_ns) {
-                continue;
-            }
+            // The same reading as last time — reached when the interval asked
+            // for is shorter than the TTL, which is the case the TTL exists to
+            // bound. Nothing in this snapshot can have advanced, so every row
+            // is omitted below and the frame goes out empty, saying "your
+            // interval elapsed and there is nothing new". That is also what
+            // keeps a subscription asking faster than the TTL from seeing
+            // silence.
+            let advanced = last_sent_wall != Some(rows.wall_ns);
             last_sent_wall = Some(rows.wall_ns);
 
             if let Some(previous) = last_index {
                 if index > previous + 1 {
+                    // Every interval gets a frame, so this is a lost reading
+                    // rather than a quiet one — the distinction empty frames
+                    // exist to preserve.
                     warn!(
-                        "stream subscriber at {interval:?} produced no frame for {} interval(s)",
+                        "stream subscriber at {interval:?} missed {} interval(s); \
+                         the subscription was starved past its boundary",
                         index - previous - 1
                     );
                 }
@@ -327,6 +319,15 @@ fn rows_frames(
             // of every payload.
             let frame = crate::recorder::wire::encode_frame_filtered(&rows, index, |row| {
                 use crate::recorder::wire::RowDisposition;
+
+                // The whole snapshot is one this connection already has, so
+                // nothing in it is new — including a windowless group, which
+                // carries no evidence either way and would otherwise be sent
+                // again on the strength of not being able to prove itself
+                // stale.
+                if !advanced {
+                    return RowDisposition::Omit;
+                }
 
                 // Has this group actually been read again since this
                 // connection last heard about it? A windowless group carries
@@ -352,13 +353,6 @@ fn rows_frames(
                 }
             })
             .map_err(std::io::Error::other)?;
-
-            // Every group was already current for this consumer. That is not
-            // the same as a tick on which nothing was observed, so it gets no
-            // frame — the `seq` gap says an interval passed with no update.
-            let Some(frame) = frame else {
-                continue;
-            };
 
             yield bytes::Bytes::from(frame);
         }

@@ -312,9 +312,19 @@ pub enum RowDisposition {
 
 /// Encode one frame, asking `decide` what to do with each row.
 ///
-/// Returns `None` when every row was omitted: an empty frame would assert a
-/// tick on which nothing at all was observed, which is not the same statement
-/// and is not one worth a frame.
+/// # An empty frame is a statement, not a wasted one
+///
+/// A frame with no rows says *this interval elapsed and nothing new was
+/// observed*, and it is sent. That is worth about twenty bytes and it buys two
+/// things that skipping it would cost:
+///
+/// - **`seq` stays contiguous**, so a gap means exactly one thing: a reading
+///   was lost. Skipping empty frames made a gap ambiguous between "nothing had
+///   changed" and "your subscription was starved", which are the two cases a
+///   consumer most needs to tell apart — and it is the reason `seq` exists.
+///
+/// - **It is a keepalive.** Without it, a subscriber whose groups are all slow
+///   cannot distinguish a quiet agent from a dead connection.
 ///
 /// # Why a row can be left out
 ///
@@ -334,7 +344,7 @@ pub fn encode_frame_filtered(
     rows: &AgentRows,
     seq: u64,
     mut decide: impl FnMut(&AgentRow) -> RowDisposition,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Vec<u8>, String> {
     let kept: Vec<AgentRowRef<'_>> = rows
         .rows
         .iter()
@@ -355,9 +365,6 @@ pub fn encode_frame_filtered(
             }),
         })
         .collect();
-    if kept.is_empty() {
-        return Ok(None);
-    }
 
     let view = AgentRowsRef {
         wall_ns: rows.wall_ns,
@@ -375,7 +382,7 @@ pub fn encode_frame_filtered(
     let mut out = Vec::with_capacity(4 + payload.len());
     out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(&payload);
-    Ok(Some(out))
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -426,17 +433,13 @@ mod tests {
         let mut rows = rows();
         rows.rows[0].schema = Some(GroupSchema::default());
 
-        let borrowed = encode_frame_filtered(&rows, 5, |_| RowDisposition::SendWithSchema)
-            .unwrap()
-            .unwrap();
+        let borrowed = encode_frame_filtered(&rows, 5, |_| RowDisposition::SendWithSchema).unwrap();
         let owned = encode_frame(&rows, 5).unwrap();
         assert_eq!(borrowed, owned);
 
         // ...and dropping a schema through the filter must equal having built
         // the row without one.
-        let dropped = encode_frame_filtered(&rows, 5, |_| RowDisposition::Send)
-            .unwrap()
-            .unwrap();
+        let dropped = encode_frame_filtered(&rows, 5, |_| RowDisposition::Send).unwrap();
         let mut without = rows.clone();
         without.rows[0].schema = None;
         assert_eq!(dropped, encode_frame(&without, 5).unwrap());
@@ -465,7 +468,6 @@ mod tests {
                 RowDisposition::Send
             }
         })
-        .unwrap()
         .unwrap();
 
         let mut only_first = rows.clone();
@@ -473,14 +475,21 @@ mod tests {
         assert_eq!(filtered, encode_frame(&only_first, 9).unwrap());
     }
 
-    /// A tick on which nothing advanced is not a tick on which nothing was
-    /// observed, so it gets no frame rather than an empty one.
+    /// An interval on which nothing advanced still gets a frame — an empty
+    /// one. It keeps `seq` contiguous, so a gap means a lost reading and
+    /// nothing else, and it doubles as a keepalive.
     #[test]
-    fn a_frame_with_every_row_omitted_is_not_sent() {
+    fn an_interval_with_no_updates_still_sends_a_frame() {
         let rows = rows();
-        assert!(encode_frame_filtered(&rows, 3, |_| RowDisposition::Omit)
-            .unwrap()
-            .is_none());
+        let framed = encode_frame_filtered(&rows, 3, |_| RowDisposition::Omit).unwrap();
+
+        let frame = decode_frame(&framed[4..]).unwrap();
+        assert_eq!(frame.seq, 3, "the interval it covers is still named");
+        assert!(frame.rows.rows.is_empty(), "and it carries no observations");
+
+        // Small enough that sending one per idle interval is not a cost worth
+        // trading the contiguity for.
+        assert!(framed.len() < 64, "empty frame was {} bytes", framed.len());
     }
 
     /// A stream body is several frames back to back, and a consumer has to be
