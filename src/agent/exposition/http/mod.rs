@@ -224,7 +224,7 @@ async fn stream(
     let builder = state.builder.clone();
     let ttl = state.ttl;
 
-    let body = axum::body::Body::from_stream(rows_frames(builder, subscription));
+    let body = axum::body::Body::from_stream(rows_frames(builder, subscription, wall_now_ns));
     let duration_header = |d: Duration| {
         axum::http::HeaderValue::from_str(&format!("{}", humantime::format_duration(d)))
             .unwrap_or(axum::http::HeaderValue::from_static("unknown"))
@@ -261,9 +261,16 @@ async fn stream(
 /// whole life, so the agent returns to tickless when the client goes away.
 ///
 /// [`Subscription`]: crate::agent::clock::Subscription
+///
+/// `wall_now` is injected rather than read directly so a test can drive the
+/// clock backwards and exercise the monotonicity clamp below on the REAL code
+/// path. `tokio::time::pause` cannot do that job: it controls `Instant` and
+/// `sleep`, while the interval index is derived from `SystemTime`, which tokio
+/// does not touch.
 fn rows_frames(
     builder: Arc<Mutex<SnapshotBuilder>>,
     subscription: crate::agent::clock::Subscription,
+    wall_now: impl Fn() -> u64,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
         let interval = subscription.interval();
@@ -304,21 +311,14 @@ fn rows_frames(
             // and each frame carries the snapshot's own `wall_ns` for anyone
             // who needs the absolute time, so holding the line here costs
             // nothing that is depended on.
-            let index = match last_index {
-                Some(previous) => {
-                    let measured = clock::interval_index(wall_now_ns(), interval);
-                    if measured <= previous {
-                        warn!(
-                            "wall clock moved backwards under a stream subscriber at \
-                             {interval:?}; holding the interval index monotonic"
-                        );
-                        previous + 1
-                    } else {
-                        measured
-                    }
-                }
-                None => clock::interval_index(wall_now_ns(), interval),
-            };
+            let measured = clock::interval_index(wall_now(), interval);
+            let index = clock::monotonic_interval_index(wall_now(), interval, last_index);
+            if index != measured {
+                warn!(
+                    "wall clock moved backwards under a stream subscriber at {interval:?}; \
+                     holding the interval index monotonic ({measured} -> {index})"
+                );
+            }
 
             // Ask for a snapshot. Whether this costs a sampling pass is the
             // TTL's decision, made in `rows_at` — which is what keeps a
@@ -460,5 +460,77 @@ async fn system_info() -> axum::response::Response {
     match systeminfo::summary() {
         Some(info) => axum::response::Json(info).into_response(),
         None => axum::http::StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    use crate::agent::clock::Subscribers;
+    use crate::agent::config::Config;
+    use futures::StreamExt;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Drive the real frame stream with a wall clock the test owns, and step
+    /// it BACKWARDS mid-stream.
+    ///
+    /// This exercises the shipped code path rather than modelling it. An
+    /// earlier version of this test re-implemented the clamp in its own body,
+    /// so deleting the clamp from the handler left it passing — it proved the
+    /// arithmetic and nothing about the stream.
+    ///
+    /// `tokio::time::pause` cannot do this job: it controls `Instant` and
+    /// `sleep`, while the interval index is derived from `SystemTime`. Hence
+    /// the injected clock.
+    #[tokio::test(start_paused = true)]
+    async fn a_backwards_clock_step_cannot_lower_seq_on_the_real_stream() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let builder = Arc::new(Mutex::new(SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        )));
+        let subscription = Subscribers::new().register(Duration::from_secs(1));
+
+        // A wall clock this test drives.
+        let now = Arc::new(AtomicU64::new(1_700_000_000_000_000_000));
+        let clock_for_stream = Arc::clone(&now);
+
+        let stream = rows_frames(builder, subscription, move || {
+            clock_for_stream.load(Ordering::Relaxed)
+        });
+        futures::pin_mut!(stream);
+
+        let mut seqs = Vec::new();
+        for step in 0..6 {
+            // Three seconds forward, then a thirty-second jump BACKWARDS —
+            // an NTP correction of the kind that would otherwise emit a `seq`
+            // below one already sent.
+            if step == 3 {
+                now.fetch_sub(30_000_000_000, Ordering::Relaxed);
+            } else {
+                now.fetch_add(1_000_000_000, Ordering::Relaxed);
+            }
+            let frame = stream
+                .next()
+                .await
+                .expect("the stream yields")
+                .expect("a frame");
+            let decoded = crate::recorder::wire::decode_frame(&frame[4..]).expect("decodable");
+            seqs.push(decoded.seq);
+        }
+
+        for pair in seqs.windows(2) {
+            assert!(
+                pair[1] > pair[0],
+                "seq went backwards or stalled across a clock step: {seqs:?}"
+            );
+        }
+        // ...and specifically: the step back did not produce a lower index.
+        assert!(
+            seqs[3] == seqs[2] + 1,
+            "the clamped frame must continue the sequence, got {seqs:?}"
+        );
     }
 }

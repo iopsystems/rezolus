@@ -184,6 +184,25 @@ pub fn interval_index(wall_ns: u64, interval: Duration) -> u64 {
     wall_ns / period
 }
 
+/// [`interval_index`], never allowed to go backwards.
+///
+/// The index comes off the WALL clock, which can step: an NTP correction
+/// backwards would otherwise emit a `seq` below one already sent, and a
+/// consumer checking for +1 has no rule for that — it reads as corruption
+/// rather than as a clock correction.
+///
+/// The contract `seq` makes is about its DIFFERENCES ("one per interval; a
+/// jump means a lost reading"), and every frame carries the snapshot's own
+/// `wall_ns` for anyone needing absolute time, so holding the line here costs
+/// nothing that is depended on.
+pub fn monotonic_interval_index(wall_ns: u64, interval: Duration, last: Option<u64>) -> u64 {
+    let measured = interval_index(wall_ns, interval);
+    match last {
+        Some(previous) if measured <= previous => previous + 1,
+        _ => measured,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
