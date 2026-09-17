@@ -203,3 +203,313 @@ pub fn encode_snapshot(snapshot: &metriken_exposition::Snapshot) -> Result<Agent
             .collect::<Result<Vec<_>, _>>()?,
     })
 }
+
+/// The `Content-Type` of the streaming subscription endpoint.
+///
+/// Distinct from [`CONTENT_TYPE`]: a stream body is a sequence of
+/// length-prefixed frames, not one `AgentRows`, and a consumer that decoded
+/// one as the other would read the first frame's length as msgpack.
+pub const STREAM_CONTENT_TYPE: &str = "application/vnd.rezolus.rows.v1+msgpack-stream";
+
+/// One frame of a subscription stream.
+///
+/// `seq` is the index of the **subscriber's own interval** that this frame
+/// covers: the producer's wall clock at the sampling pass, divided by the
+/// interval this subscription asked for.
+///
+/// A count of frames sent would not do: it increments by one across a skipped
+/// interval, presenting a contiguous sequence with data missing from the
+/// middle — an undetectable hole. An interval index says the thing worth
+/// knowing, in the subscriber's own terms: *an interval I asked for produced
+/// no frame*.
+///
+/// It advances by one per interval in the healthy case. A gap means one of two
+/// things, and both are worth seeing: the agent produced no new reading for
+/// that interval (which is what an interval shorter than the snapshot TTL
+/// looks like — the subscriber is asking faster than the operator allows), or
+/// a reading was genuinely missed.
+///
+/// So a consumer checks that `seq` increases by exactly one, and treats
+/// anything else — a jump, or a stream that simply ends, which is
+/// indistinguishable from a truncated connection — as a gap to be refilled
+/// rather than as data.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StreamFrame {
+    pub seq: u64,
+    pub rows: AgentRows,
+}
+
+/// Encode one frame: a `u32` big-endian length, then that many bytes of
+/// msgpack.
+///
+/// Length-prefixed rather than self-delimiting because a consumer must be able
+/// to find a frame boundary without decoding — the same reason
+/// [`AgentRow`]'s routing fields are in the clear.
+pub fn encode_frame(rows: &AgentRows, seq: u64) -> Result<Vec<u8>, String> {
+    // A tuple, not a `StreamFrame`, purely so this can borrow `rows` instead
+    // of cloning a whole tick to build one. rmp-serde encodes a struct as a
+    // positional array, so the two are the same bytes —
+    // `a_frame_round_trips_through_its_struct` pins that.
+    let payload =
+        rmp_serde::to_vec(&(seq, rows)).map_err(|e| format!("failed to encode a frame: {e}"))?;
+    let len = u32::try_from(payload.len()).map_err(|_| {
+        format!(
+            "frame of {} bytes exceeds the u32 length prefix",
+            payload.len()
+        )
+    })?;
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+/// Decode one frame's payload — the bytes AFTER the length prefix.
+pub fn decode_frame(payload: &[u8]) -> Result<StreamFrame, String> {
+    rmp_serde::from_slice(payload).map_err(|e| format!("failed to decode a frame: {e}"))
+}
+
+/// A borrowed view of an [`AgentRow`], for encoding without copying.
+///
+/// rmp-serde writes a struct as a positional array, so this produces the same
+/// bytes as the owned [`AgentRow`] — pinned by
+/// `a_borrowed_row_encodes_exactly_like_an_owned_one`.
+///
+/// It exists for the streaming path. One sampling tick is shared by every
+/// subscriber, but *which* schemas each still needs is per-connection, so
+/// without this each subscriber would deep-clone the whole tick — payload
+/// bytes included — every time, purely to null out a few schema fields.
+#[derive(Serialize)]
+struct AgentRowRef<'a> {
+    stream: &'a str,
+    window: Option<(u64, u64)>,
+    schema_hash: (u64, u64),
+    schema: Option<&'a GroupSchema>,
+    arity: (u32, u32, u32),
+    approx_bytes: u32,
+    row: &'a [u8],
+}
+
+#[derive(Serialize)]
+struct AgentRowsRef<'a> {
+    wall_ns: u64,
+    duration_ns: u64,
+    rows: Vec<AgentRowRef<'a>>,
+}
+
+/// What a consumer should be told about one row this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowDisposition {
+    /// Leave the row out. Its acquisition window has not advanced, so there is
+    /// no new observation to report — see [`encode_frame_filtered`].
+    Omit,
+    /// Include the row, carrying its schema (this consumer has not been taught
+    /// this generation).
+    SendWithSchema,
+    /// Include the row without its schema (already taught).
+    Send,
+}
+
+/// Encode one frame, asking `decide` what to do with each row.
+///
+/// # An empty frame is a statement, not a wasted one
+///
+/// A frame with no rows says *this interval elapsed and nothing new was
+/// observed*, and it is sent. That is worth about twenty bytes and it buys two
+/// things that skipping it would cost:
+///
+/// - **`seq` stays contiguous**, so a gap means exactly one thing: a reading
+///   was lost. Skipping empty frames made a gap ambiguous between "nothing had
+///   changed" and "your subscription was starved", which are the two cases a
+///   consumer most needs to tell apart — and it is the reason `seq` exists.
+///
+/// - **It is a keepalive.** Without it, a subscriber whose groups are all slow
+///   cannot distinguish a quiet agent from a dead connection.
+///
+/// # Why a row can be left out
+///
+/// A snapshot carries every group the producer knows about, including ones
+/// whose sampler did not read this tick — a 60 s `drivehealth` sweep sits
+/// unchanged across hundreds of ticks, keeping the acquisition window of its
+/// last real read (that is the point of the window; see the agent's
+/// `timing.rs`). Repeating such a row would assert an observation that did not
+/// happen. A recorder would drop it on the same window-advance rule it already
+/// applies, but a consumer that plots what it receives — a live viewer — would
+/// draw a point where there was no reading.
+///
+/// So the stream sends **updates**, and a consumer's view of a group persists
+/// until the group is mentioned again. The window in each row says when the
+/// reading it carries was actually taken, which is what makes that safe.
+pub fn encode_frame_filtered(
+    rows: &AgentRows,
+    seq: u64,
+    mut decide: impl FnMut(&AgentRow) -> RowDisposition,
+) -> Result<Vec<u8>, String> {
+    let kept: Vec<AgentRowRef<'_>> = rows
+        .rows
+        .iter()
+        .filter_map(|r| match decide(r) {
+            RowDisposition::Omit => None,
+            disposition => Some(AgentRowRef {
+                stream: &r.stream,
+                window: r.window,
+                schema_hash: r.schema_hash,
+                schema: if disposition == RowDisposition::SendWithSchema {
+                    r.schema.as_ref()
+                } else {
+                    None
+                },
+                arity: r.arity,
+                approx_bytes: r.approx_bytes,
+                row: &r.row,
+            }),
+        })
+        .collect();
+
+    let view = AgentRowsRef {
+        wall_ns: rows.wall_ns,
+        duration_ns: rows.duration_ns,
+        rows: kept,
+    };
+    let payload =
+        rmp_serde::to_vec(&(seq, &view)).map_err(|e| format!("failed to encode a frame: {e}"))?;
+    let len = u32::try_from(payload.len()).map_err(|_| {
+        format!(
+            "frame of {} bytes exceeds the u32 length prefix",
+            payload.len()
+        )
+    })?;
+    let mut out = Vec::with_capacity(4 + payload.len());
+    out.extend_from_slice(&len.to_be_bytes());
+    out.extend_from_slice(&payload);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rows() -> AgentRows {
+        AgentRows {
+            wall_ns: 7,
+            duration_ns: 3,
+            rows: vec![AgentRow {
+                stream: "cpu/usage".to_string(),
+                window: Some((1, 2)),
+                schema_hash: (9, 9),
+                schema: None,
+                arity: (1, 0, 0),
+                approx_bytes: 16,
+                row: vec![0xc0],
+            }],
+        }
+    }
+
+    /// `encode_frame` borrows a tuple where `decode_frame` produces a struct.
+    /// That only works because rmp-serde writes a struct as a positional
+    /// array; if it ever did not, frames would encode and decode differently
+    /// and the mismatch would show up as corrupt data rather than an error.
+    #[test]
+    fn a_frame_round_trips_through_its_struct() {
+        let rows = rows();
+        let framed = encode_frame(&rows, 41).unwrap();
+        let len = u32::from_be_bytes(framed[..4].try_into().unwrap()) as usize;
+        assert_eq!(
+            len,
+            framed.len() - 4,
+            "the prefix must describe the payload"
+        );
+
+        let frame = decode_frame(&framed[4..]).unwrap();
+        assert_eq!(frame.seq, 41);
+        assert_eq!(frame.rows, rows);
+    }
+
+    /// The borrowed encode view must be byte-identical to the owned type, or
+    /// the streaming path and the poll path would disagree about the format
+    /// while both claiming the same content type.
+    #[test]
+    fn a_borrowed_row_encodes_exactly_like_an_owned_one() {
+        let mut rows = rows();
+        rows.rows[0].schema = Some(GroupSchema::default());
+
+        let borrowed = encode_frame_filtered(&rows, 5, |_| RowDisposition::SendWithSchema).unwrap();
+        let owned = encode_frame(&rows, 5).unwrap();
+        assert_eq!(borrowed, owned);
+
+        // ...and dropping a schema through the filter must equal having built
+        // the row without one.
+        let dropped = encode_frame_filtered(&rows, 5, |_| RowDisposition::Send).unwrap();
+        let mut without = rows.clone();
+        without.rows[0].schema = None;
+        assert_eq!(dropped, encode_frame(&without, 5).unwrap());
+        assert_ne!(dropped, borrowed, "the filter has to actually do something");
+    }
+
+    /// Omitting a row must equal never having had it, so a consumer cannot
+    /// tell a filtered frame from one the producer built that way.
+    #[test]
+    fn an_omitted_row_encodes_as_though_it_were_never_there() {
+        let mut rows = rows();
+        rows.rows.push(AgentRow {
+            stream: "drivehealth/temp".to_string(),
+            window: Some((5, 6)),
+            schema_hash: (1, 1),
+            schema: None,
+            arity: (1, 0, 0),
+            approx_bytes: 8,
+            row: vec![0xc0],
+        });
+
+        let filtered = encode_frame_filtered(&rows, 9, |r| {
+            if r.stream == "drivehealth/temp" {
+                RowDisposition::Omit
+            } else {
+                RowDisposition::Send
+            }
+        })
+        .unwrap();
+
+        let mut only_first = rows.clone();
+        only_first.rows.truncate(1);
+        assert_eq!(filtered, encode_frame(&only_first, 9).unwrap());
+    }
+
+    /// An interval on which nothing advanced still gets a frame — an empty
+    /// one. It keeps `seq` contiguous, so a gap means a lost reading and
+    /// nothing else, and it doubles as a keepalive.
+    #[test]
+    fn an_interval_with_no_updates_still_sends_a_frame() {
+        let rows = rows();
+        let framed = encode_frame_filtered(&rows, 3, |_| RowDisposition::Omit).unwrap();
+
+        let frame = decode_frame(&framed[4..]).unwrap();
+        assert_eq!(frame.seq, 3, "the interval it covers is still named");
+        assert!(frame.rows.rows.is_empty(), "and it carries no observations");
+
+        // Small enough that sending one per idle interval is not a cost worth
+        // trading the contiguity for.
+        assert!(framed.len() < 64, "empty frame was {} bytes", framed.len());
+    }
+
+    /// A stream body is several frames back to back, and a consumer has to be
+    /// able to walk them using only the prefixes.
+    #[test]
+    fn frames_concatenate_and_are_walkable_by_length_alone() {
+        let rows = rows();
+        let mut body = Vec::new();
+        for seq in 0..4 {
+            body.extend_from_slice(&encode_frame(&rows, seq).unwrap());
+        }
+
+        let mut at = 0usize;
+        let mut seen = Vec::new();
+        while at < body.len() {
+            let len = u32::from_be_bytes(body[at..at + 4].try_into().unwrap()) as usize;
+            at += 4;
+            seen.push(decode_frame(&body[at..at + len]).unwrap().seq);
+            at += len;
+        }
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+    }
+}

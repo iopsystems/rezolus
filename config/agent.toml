@@ -3,6 +3,25 @@ listen = "0.0.0.0:4241"
 
 # Metric snapshots are cached with the following TTL to prevent excessive
 # resource usage.
+#
+# This knob does two jobs, and it is worth knowing both before changing it.
+#
+# 1. It coalesces consumers. Two scrapes or subscriptions landing within one
+#    TTL of each other share a single sampling pass rather than causing two.
+#    Subscriptions align to wall-clock boundaries, so consumers at the same
+#    interval genuinely do land together and this works.
+#
+# 2. It is the FLOOR on how often the agent samples, and therefore on how often
+#    a /metrics/stream frame can carry anything new. A subscriber asking for
+#    less than the TTL is legal — it gets the frames it asked for, most of them
+#    empty — but it cannot make the agent work harder than this. Subscribers
+#    are told the floor in the `x-rezolus-update-floor` response header.
+#
+# The consequence of one knob doing both: raising the TTL to protect the agent
+# from a demanding subscriber also coarsens every scrape-based consumer. The
+# default is deliberately small enough to be invisible to either — an order of
+# magnitude below the 50ms used for high-resolution recording, so it never
+# silently caps a capture at something coarser than was asked for.
 ttl = "10ms"
 
 # External BTF (BPF Type Format) file path (optional)

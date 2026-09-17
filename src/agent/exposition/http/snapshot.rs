@@ -38,6 +38,8 @@ pub struct SnapshotBuilder {
     /// Bounded by the number of acquisition groups (45 on a 25-sampler host),
     /// not by generations: one entry per group name, overwritten on change.
     emitted_schemas: HashMap<String, (u64, u64)>,
+    /// Completed sampling passes — see [`samples`](Self::samples).
+    samples: u64,
 }
 
 struct CachedSnapshot {
@@ -61,6 +63,11 @@ struct CachedSnapshot {
     /// hit should be a refcount bump, not a re-encode.
     rows: OnceLock<Bytes>,
     rows_all: OnceLock<Bytes>,
+    /// The decoded, fully-schema'd rows for this snapshot, shared by every
+    /// stream subscriber so one tick costs one conversion rather than one per
+    /// connection. Each subscriber then clears the schemas IT has already
+    /// sent, which is per-connection state and cannot be shared.
+    rows_full: OnceLock<Option<Arc<crate::recorder::wire::AgentRows>>>,
 }
 
 impl SnapshotBuilder {
@@ -77,10 +84,12 @@ impl SnapshotBuilder {
             format: config.general().snapshot_format(),
             skeleton_cache: SkeletonCache::new(),
             emitted_schemas: HashMap::new(),
+            samples: 0,
         }
     }
 
     async fn refresh(&mut self) {
+        self.samples += 1;
         let last = Instant::now();
 
         let timestamp = SystemTime::now();
@@ -120,7 +129,71 @@ impl SnapshotBuilder {
             json: OnceLock::new(),
             rows: OnceLock::new(),
             rows_all: OnceLock::new(),
+            rows_full: OnceLock::new(),
         });
+    }
+
+    /// How many sampling passes this builder has run, from either cause: a
+    /// clock tick or a TTL-expired request.
+    ///
+    /// Exposed because "the agent did not sample" is the property that keeps
+    /// #1226's observer effect away, and a property worth having is a property
+    /// worth asserting — see `an_unsubscribed_agent_never_samples`. Only the
+    /// tests need the raw count; an operator reads the clock's state off
+    /// `/status` instead.
+    #[cfg(test)]
+    pub fn samples(&self) -> u64 {
+        self.samples
+    }
+
+    /// Whether this agent can serve acquisition-group rows at all.
+    ///
+    /// False for a V2 agent, which has no groups. Checked BEFORE a stream is
+    /// accepted: without it a V2 agent would take the subscription, find
+    /// nothing to send on every tick, and hold an open connection emitting
+    /// nothing — indistinguishable to the subscriber from an agent whose
+    /// samplers are all quiet.
+    pub fn serves_rows(&self) -> bool {
+        matches!(self.format, SnapshotFormat::V3)
+    }
+
+    /// A snapshot for `now` as rows — sampling only if the cached one has
+    /// aged past the TTL, exactly as a scrape would.
+    ///
+    /// **This is where a subscription's tick becomes (or does not become) a
+    /// sampling pass.** Two subscriptions whose timers fall within one TTL of
+    /// each other share a pass; one asking for less than the TTL gets the
+    /// reading it already has rather than being allowed to sample faster than
+    /// the operator configured. That makes the TTL the floor on sampling rate
+    /// without a second knob to keep in agreement with it.
+    ///
+    /// Callers are expected to notice a repeated reading (by `wall_ns`) and
+    /// act on it — the stream handler sends an EMPTY frame rather than
+    /// repeating the readings, which says "your interval elapsed, nothing is
+    /// new" without asserting observations that did not happen.
+    pub async fn rows_at(&mut self, now: Instant) -> Option<Arc<crate::recorder::wire::AgentRows>> {
+        self.build(now).await;
+        self.latest_rows()
+    }
+
+    /// The most recent completed sampling pass as rows, with every schema
+    /// present — or `None` before the first pass, or for a V2 agent, which has
+    /// no acquisition groups to stream.
+    ///
+    /// Does NOT sample. A stream subscriber reads what the clock produced; it
+    /// must never be able to drive a sampling pass of its own, or N
+    /// subscribers would mean N passes and the whole point of one shared clock
+    /// would be lost.
+    pub fn latest_rows(&self) -> Option<Arc<crate::recorder::wire::AgentRows>> {
+        let cached = self.cached.as_ref()?;
+        cached
+            .rows_full
+            .get_or_init(|| {
+                crate::recorder::wire::encode_snapshot(&cached.snapshot)
+                    .ok()
+                    .map(Arc::new)
+            })
+            .clone()
     }
 
     pub async fn build(&mut self, now: Instant) -> &Snapshot {
@@ -5033,6 +5106,176 @@ mod tests {
             full_again.as_ptr(),
             "a cache hit must hand back the same buffer rather than re-encoding"
         );
+    }
+
+    /// **The TTL is the floor on sampling rate.** A subscription ticking
+    /// faster than the TTL is handed the reading it already has rather than
+    /// being allowed to drive the samplers — which is what makes a separate
+    /// "minimum interval" knob unnecessary, and what stops a remote subscriber
+    /// having any say over how hard this agent works.
+    #[tokio::test]
+    async fn a_tick_inside_the_ttl_does_not_sample_again() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        let first = builder.rows_at(now).await.expect("v3 agent");
+        assert_eq!(builder.samples(), 1);
+
+        // Nine more ticks well inside the TTL — a subscription asking for far
+        // less than the agent will give it.
+        for i in 1..10 {
+            let rows = builder
+                .rows_at(now + Duration::from_millis(i))
+                .await
+                .expect("v3 agent");
+            assert_eq!(
+                rows.wall_ns, first.wall_ns,
+                "the same reading, not a new one"
+            );
+        }
+        assert_eq!(
+            builder.samples(),
+            1,
+            "ticking faster than the TTL must not cost sampling passes"
+        );
+    }
+
+    /// ...and past the TTL it does sample, so the floor is a floor rather than
+    /// a cache that never expires.
+    #[tokio::test]
+    async fn a_tick_past_the_ttl_samples_again() {
+        let config: Config =
+            toml::from_str("[general]\nttl = \"10ms\"\nsnapshot_format = \"v3\"\n")
+                .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        builder.rows_at(now).await.expect("v3 agent");
+        builder
+            .rows_at(now + Duration::from_millis(500))
+            .await
+            .expect("v3 agent");
+        assert_eq!(builder.samples(), 2);
+    }
+
+    /// Two subscriptions whose ticks fall within one TTL of each other share a
+    /// single sampling pass. This is the property that lets hindsight, a
+    /// recorder and a live viewer watch one agent without multiplying its
+    /// cost — and with per-subscription timers it comes from the TTL rather
+    /// than from a shared clock.
+    #[tokio::test]
+    async fn two_subscriptions_ticking_together_share_one_pass() {
+        let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        // A 5s subscription and a 97s one whose boundaries happen to coincide.
+        let a = builder.rows_at(now).await.expect("v3 agent");
+        let b = builder
+            .rows_at(now + Duration::from_micros(200))
+            .await
+            .expect("v3 agent");
+
+        assert_eq!(a.wall_ns, b.wall_ns, "both saw the same reading");
+        assert_eq!(builder.samples(), 1, "and it was sampled once");
+    }
+
+    /// A subscription asking faster than the TTL gets UPDATES at the TTL's
+    /// rate, not at its own. It still gets a frame per interval — an empty one
+    /// where there is nothing new — so what the TTL bounds is the readings,
+    /// not the cadence.
+    ///
+    /// Models what the stream handler does: tick, ask, and carry rows only
+    /// when the reading is one it has not already sent.
+    #[tokio::test]
+    async fn asking_faster_than_the_ttl_yields_updates_at_the_ttl_rate() {
+        let config: Config =
+            toml::from_str("[general]\nttl = \"100ms\"\nsnapshot_format = \"v3\"\n")
+                .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        // A second of ticks at 10ms — a subscriber asking ten times faster
+        // than this agent will sample.
+        let start = Instant::now();
+        let mut updates = 0usize;
+        let mut last: Option<u64> = None;
+        for i in 0..100 {
+            let rows = builder
+                .rows_at(start + Duration::from_millis(i * 10))
+                .await
+                .expect("v3 agent");
+            if last != Some(rows.wall_ns) {
+                last = Some(rows.wall_ns);
+                updates += 1;
+            }
+        }
+
+        // The exact count is deliberately not asserted. `refresh` stamps the
+        // cache with the real `Instant::now()`, so how far this loop's
+        // synthetic clock gets ahead of it depends on how long a sampling pass
+        // takes in a debug build — noise, not behaviour.
+        //
+        // What IS behaviour: one update per sampling pass, in both directions.
+        // No pass goes unreported (data would be lost) and no update is
+        // reported without one (that is the duplicate the empty frame
+        // replaces).
+        assert_eq!(
+            builder.samples() as usize,
+            updates,
+            "expected one update per sampling pass; {updates} updates, {} passes",
+            builder.samples()
+        );
+        assert!(
+            updates >= 2,
+            "the TTL must expire at least twice over this span"
+        );
+        assert!(
+            updates < 20,
+            "100 ticks at a tenth of the TTL must coalesce heavily; {updates} updates"
+        );
+    }
+
+    /// A V2 agent must be refused a stream rather than handed an open
+    /// connection that never produces a frame — which is what the loop would
+    /// do, since every tick would find nothing to send.
+    #[tokio::test]
+    async fn a_v2_agent_cannot_serve_rows_at_all() {
+        let v2: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v2\"\n").expect("valid config");
+        let builder = SnapshotBuilder::new(
+            Arc::new(v2),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        assert!(!builder.serves_rows());
+
+        let v3: Config =
+            toml::from_str("[general]\nsnapshot_format = \"v3\"\n").expect("valid config");
+        let builder = SnapshotBuilder::new(
+            Arc::new(v3),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+        assert!(builder.serves_rows());
     }
 
     /// A V2 agent has no acquisition groups, so it cannot answer this

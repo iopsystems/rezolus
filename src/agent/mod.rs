@@ -1,5 +1,6 @@
 use super::*;
 
+mod clock;
 mod config;
 mod exposition;
 mod external_metrics;
