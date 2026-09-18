@@ -261,9 +261,9 @@ mod tests {
     use crate::recorder::wire::{AgentRow, AgentRows};
     use std::time::Duration;
 
-    const STREAM: &str = "cpu_usage/cpu_usage_task";
+    pub(super) const STREAM: &str = "cpu_usage/cpu_usage_task";
 
-    fn schema(n: usize) -> crate::recorder::schema::GroupSchema {
+    pub(super) fn schema(n: usize) -> crate::recorder::schema::GroupSchema {
         crate::recorder::schema::GroupSchema {
             counters: (0..n)
                 .map(|i| crate::recorder::schema::MetricDesc {
@@ -278,7 +278,7 @@ mod tests {
         }
     }
 
-    fn payload(n: usize) -> Vec<u8> {
+    pub(super) fn payload(n: usize) -> Vec<u8> {
         crate::recorder::wal::encode_wal_group_row(&crate::recorder::wal::WalGroupRow {
             schema_hash: schema(n).hash(),
             schema: None,
@@ -290,7 +290,7 @@ mod tests {
         .unwrap()
     }
 
-    fn rows(n: usize, wall_ns: u64) -> AgentRows {
+    pub(super) fn rows(n: usize, wall_ns: u64) -> AgentRows {
         AgentRows {
             wall_ns,
             duration_ns: 1_000,
@@ -306,7 +306,7 @@ mod tests {
         }
     }
 
-    fn producer() -> FrameProducer {
+    pub(super) fn producer() -> FrameProducer {
         FrameProducer::anchored_at(
             "11111111-2222-4333-8444-555555555555".to_string(),
             [("source".to_string(), "rezolus".to_string())]
@@ -770,5 +770,239 @@ mod tests {
             uuid.as_deref(),
             Some("11111111-2222-4333-8444-555555555555")
         );
+    }
+}
+
+/// Pricing the archive as a replication source — #1224, deciding whether the
+/// agent should stream from an in-memory dendro archive or produce frames
+/// directly.
+///
+/// Two paths, same input, same frames out:
+///
+/// - **direct**: snapshot -> `FrameProducer` -> frames. What the agent does
+///   today.
+/// - **archive**: snapshot -> dendro `Writer` (tmpfs) -> `ArchivePublisher` ->
+///   frames. What it would do if replication came out of an archive, which is
+///   what buys backfill by segment frame, hindsight as an ordinary subscriber,
+///   and one replication path instead of two.
+///
+/// The archive path pays a write and a read per tick that the direct path does
+/// not. This says what that costs.
+#[cfg(test)]
+mod archive_as_a_source {
+    use super::tests::*;
+    use super::*;
+    use crate::recorder::wire::{AgentRow, AgentRows};
+    use dendro::archive::{Archive, CallerRow, SourceMeta};
+    use dendro::replicate::ArchivePublisher;
+    use dendro::segment::SegmentEncoder;
+    use dendro::writer::Writer;
+    use std::time::Duration;
+
+    struct NoSegments;
+    impl SegmentEncoder for NoSegments {
+        fn encode(&self, _: &str, _: &[dendro::archive::WalRow]) -> dendro::segment::EncodeResult {
+            Ok(None)
+        }
+        fn version(&self) -> Option<&str> {
+            Some("rez-archive-pricing")
+        }
+    }
+
+    fn percentile(sorted: &[Duration], p: f64) -> Duration {
+        sorted[((sorted.len() as f64 * p) as usize).min(sorted.len() - 1)]
+    }
+
+    /// What the archive hop costs per tick, against producing frames directly.
+    ///
+    /// `cargo test --release --bin rezolus archive_as_a_source -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn price_the_archive_as_a_replication_source() {
+        const TICKS: usize = 600;
+        const GROUPS: usize = 49;
+        const WIDE: usize = 638;
+
+        let tick = || {
+            let mut rows = vec![AgentRow {
+                stream: STREAM.to_string(),
+                window: Some((1_000, 2_000)),
+                schema_hash: schema(WIDE).hash(),
+                schema: Some(schema(WIDE)),
+                arity: (WIDE as u32, 0, 0),
+                approx_bytes: 8_192,
+                row: payload(WIDE),
+            }];
+            for g in 1..GROUPS {
+                rows.push(AgentRow {
+                    stream: format!("sampler_{g}/group"),
+                    window: Some((1_000, 2_000)),
+                    schema_hash: schema(8).hash(),
+                    schema: Some(schema(8)),
+                    arity: (8, 0, 0),
+                    approx_bytes: 256,
+                    row: payload(8),
+                });
+            }
+            AgentRows {
+                wall_ns: 2_000,
+                duration_ns: 1_000,
+                rows,
+            }
+        };
+
+        let encoded = |frames: &[Frame]| -> usize {
+            let mut out = Vec::new();
+            for f in frames {
+                dendro::replicate::wire::encode_frame(f, &mut out).unwrap();
+            }
+            out.len()
+        };
+
+        // --- direct ---------------------------------------------------------
+        let mut p = producer();
+        let mut direct = Vec::with_capacity(TICKS);
+        let mut direct_bytes = 0usize;
+        for seq in 0..TICKS {
+            let t = tick();
+            let start = Instant::now();
+            let frames = p.interval(Instant::now(), &t, Vec::new(), (0, 0), seq as u64, |_| true);
+            direct.push(start.elapsed());
+            direct_bytes += encoded(&frames);
+        }
+
+        // --- archive --------------------------------------------------------
+        // /tmp is tmpfs on the hosts this is measured on, so the archive is
+        // genuinely in memory rather than merely uncommitted.
+        let dir = tempfile::Builder::new()
+            .prefix("rez-price-")
+            .tempdir()
+            .unwrap();
+        let path = dir.path().join("live.dendro");
+        let mut archive = Writer::create(&path, Box::new(NoSegments)).unwrap();
+        let mut source = archive
+            .add_source(SourceMeta {
+                labels: [("source".to_string(), "rezolus".to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+            })
+            .unwrap();
+        let db = Archive::open(&path).unwrap();
+        let (mut publisher, _opening) = ArchivePublisher::tailing(&db).unwrap();
+
+        let mut write = Vec::with_capacity(TICKS);
+        let mut visible = Vec::with_capacity(TICKS);
+        let mut poll = Vec::with_capacity(TICKS);
+        let mut archive_bytes = 0usize;
+        for seq in 0..TICKS {
+            let t = tick();
+            let ts = 10_000 + seq as i64 * 1_000_000_000;
+
+            // 1. The write itself. Asynchronous — this hands rows to the
+            //    writer thread and returns.
+            let start = Instant::now();
+            let wal: Vec<dendro::archive::WalRow> = t
+                .rows
+                .iter()
+                .map(|r| dendro::archive::WalRow {
+                    stream: r.stream.clone(),
+                    ts,
+                    wall_offset: 0,
+                    row: r.row.clone(),
+                })
+                .collect();
+            source.wal(wal).unwrap();
+            let _ = source.caller_rows(
+                STREAM,
+                vec![CallerRow {
+                    ts,
+                    blob: vec![0u8; 80],
+                }],
+            );
+            write.push(start.elapsed());
+
+            // 2. How long until the writer thread has committed it and a
+            //    reader can see it, and 3. what the publishing call itself
+            //    costs once it can. Kept apart because they answer different
+            //    questions: the first is latency a 1s stream would not notice,
+            //    the second is CPU on the agent.
+            //
+            //    Polled with a sleep rather than a spin, and against ONE open
+            //    archive rather than reopening per attempt — a spin charges
+            //    the wait to CPU, and reopening charges every attempt a fresh
+            //    SQLite open, neither of which a real agent would do.
+            let waited = Instant::now();
+            loop {
+                let call = Instant::now();
+                let frames = publisher.next(&db).expect("tailing keeps up");
+                let elapsed = call.elapsed();
+                let rows: usize = frames
+                    .iter()
+                    .map(|f| match f {
+                        Frame::Rows { rows, .. } => rows.len(),
+                        _ => 0,
+                    })
+                    .sum();
+                if rows > 0 {
+                    visible.push(waited.elapsed());
+                    poll.push(elapsed);
+                    archive_bytes += encoded(&frames);
+                    break;
+                }
+                if waited.elapsed() > Duration::from_secs(5) {
+                    panic!("the tick never became visible to the publisher");
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        }
+
+        // Does the publish cost grow as the live WAL tail grows? This
+        // benchmark never seals, so if it does, the headline p50 is an
+        // artifact of an unbounded tail rather than a steady-state cost.
+        let quarter = TICKS / 4;
+        let mut first: Vec<Duration> = poll[..quarter].to_vec();
+        let mut last: Vec<Duration> = poll[TICKS - quarter..].to_vec();
+        first.sort();
+        last.sort();
+        println!(
+            "  publish cost, first {quarter} ticks p50 {:.1?} -> last {quarter} p50 {:.1?}",
+            percentile(&first, 0.50),
+            percentile(&last, 0.50),
+        );
+
+        for v in [&mut direct, &mut write, &mut visible, &mut poll] {
+            v.sort();
+        }
+        let line = |name: &str, v: &[Duration]| {
+            println!(
+                "  {name:<22} p50 {:>9.1?}  p99 {:>9.1?}  max {:>9.1?}",
+                percentile(v, 0.50),
+                percentile(v, 0.99),
+                percentile(v, 1.0),
+            );
+        };
+
+        println!("\n{TICKS} ticks, {GROUPS} groups ({WIDE} slots on the wide one)\n");
+        line("direct: produce", &direct);
+        line("archive: write (async)", &write);
+        line("archive: publish (cpu)", &poll);
+        line("archive: time to visible", &visible);
+        let direct_cpu = percentile(&direct, 0.50);
+        let archive_cpu = percentile(&write, 0.50) + percentile(&poll, 0.50);
+        println!(
+            "\n  CPU per tick at p50: direct {:.1?}, archive {:.1?} ({:.1}x)",
+            direct_cpu,
+            archive_cpu,
+            archive_cpu.as_secs_f64() / direct_cpu.as_secs_f64(),
+        );
+        println!(
+            "  the archive also adds {:.1?} p50 / {:.1?} p99 of commit latency before a \n  \
+             tick can be published at all",
+            percentile(&visible, 0.50),
+            percentile(&visible, 0.99),
+        );
+        println!("  bytes out: direct {direct_bytes}, archive {archive_bytes}\n");
     }
 }
