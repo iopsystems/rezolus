@@ -35,9 +35,11 @@ dashboard = { path = "crates/dashboard" }
 #
 # 0.2.0 rather than 0.1.x because the crate root stopped re-exporting the
 # archive and writer types — one canonical path per type, with `Error` and
-# `Result` the deliberate exceptions. Replication is unconditional as of this
-# release; there is no longer a feature to ask for.
-dendro = { version = "0.2.0", default-features = false }
+# `Result` the deliberate exceptions. Replication is unconditional as of that
+# release; there is no longer a feature to ask for. 0.2.1 is documentation
+# only: `Frame::Rows.seq` no longer has to start at zero, which is what lets
+# rezolus send the subscription's interval index.
+dendro = { version = "0.2.1", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
