@@ -14,6 +14,13 @@ use tower_http::{compression::CompressionLayer, decompression::RequestDecompress
 /// the `/status` handler.
 static STATUS_TTL_SECONDS: OnceLock<u64> = OnceLock::new();
 
+/// A sampling pass as dendro replication frames — #1224 Phase 2.
+///
+/// Nothing serves these yet: the `/metrics/stream` wiring is the next step.
+/// Building the producer first keeps that change to the handler, against
+/// frames whose round trip into an archive is already tested.
+#[cfg_attr(not(test), allow(dead_code))]
+mod frames;
 mod snapshot;
 
 pub use snapshot::SnapshotBuilder;

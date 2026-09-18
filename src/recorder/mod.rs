@@ -17,7 +17,8 @@ mod prometheus;
 #[cfg(test)]
 pub(crate) use ::rez::rez_stream;
 pub(crate) use ::rez::{
-    index, parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, seal_policy, wire,
+    index, parquet_ingest, rez, rez_sqlite, rez_v3_rewrite, rez_v3_writer, schema, seal_policy,
+    wal, wire,
 };
 
 /// True when the recording should be written as a `.rez` archive: either the
