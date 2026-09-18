@@ -364,6 +364,7 @@ mod tests {
             uptime_seconds: 11532,
             ttl_seconds: 60,
             sample_interval_ms: None,
+            index_resyncs: 0,
             subscribers: 0,
             samplers: vec![],
         };

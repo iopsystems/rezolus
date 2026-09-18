@@ -150,6 +150,7 @@ impl FrameProducer {
         entries: Vec<(String, IndexEntry)>,
         index_state: IndexState,
         seq: u64,
+        mut keep: impl FnMut(&crate::recorder::wire::AgentRow) -> bool,
     ) -> Vec<Frame> {
         let ts = self.ts_at(now);
         let wall_offset = rows.wall_ns as i64 - ts;
@@ -169,6 +170,11 @@ impl FrameProducer {
         let wal_rows = rows
             .rows
             .iter()
+            // Filtered BEFORE the schema decision below, not after. The other
+            // way round would record a schema as taught on a row that was then
+            // dropped, and the group would go on referencing a generation this
+            // subscriber never received.
+            .filter(|row| keep(row))
             .map(|row| {
                 // The schema rides in the payload, so the payload has to be
                 // rebuilt when it is included — the bytes `encode_group`
@@ -224,6 +230,14 @@ impl FrameProducer {
         self.handshake_sent
     }
 }
+
+/// The `Content-Type` of a replication stream.
+///
+/// Distinct from `wire::STREAM_CONTENT_TYPE`, which names a sequence of
+/// msgpack `StreamFrame`s. This body is dendro's own framing — a preamble and
+/// then length-prefixed frames — and a consumer that decoded one as the other
+/// would read dendro's magic as msgpack.
+pub(crate) const CONTENT_TYPE: &str = "application/vnd.rezolus.replication.v1+dendro";
 
 /// Put `schema` into an encoded `WalGroupRow`, leaving everything else alone.
 ///
@@ -311,7 +325,14 @@ mod tests {
     #[test]
     fn the_first_row_of_a_stream_carries_its_schema_inside_the_payload() {
         let mut p = producer();
-        let frames = p.interval(Instant::now(), &rows(3, 2_000), Vec::new(), (0, 0), 7);
+        let frames = p.interval(
+            Instant::now(),
+            &rows(3, 2_000),
+            Vec::new(),
+            (0, 0),
+            7,
+            |_| true,
+        );
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame closes the interval")
@@ -335,8 +356,22 @@ mod tests {
     #[test]
     fn a_schema_already_sent_is_not_sent_again() {
         let mut p = producer();
-        p.interval(Instant::now(), &rows(3, 2_000), Vec::new(), (0, 0), 7);
-        let frames = p.interval(Instant::now(), &rows(3, 3_000), Vec::new(), (0, 0), 8);
+        p.interval(
+            Instant::now(),
+            &rows(3, 2_000),
+            Vec::new(),
+            (0, 0),
+            7,
+            |_| true,
+        );
+        let frames = p.interval(
+            Instant::now(),
+            &rows(3, 3_000),
+            Vec::new(),
+            (0, 0),
+            8,
+            |_| true,
+        );
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame")
@@ -355,8 +390,22 @@ mod tests {
     #[test]
     fn a_changed_schema_is_sent_again() {
         let mut p = producer();
-        p.interval(Instant::now(), &rows(3, 2_000), Vec::new(), (0, 0), 7);
-        let frames = p.interval(Instant::now(), &rows(4, 3_000), Vec::new(), (0, 0), 8);
+        p.interval(
+            Instant::now(),
+            &rows(3, 2_000),
+            Vec::new(),
+            (0, 0),
+            7,
+            |_| true,
+        );
+        let frames = p.interval(
+            Instant::now(),
+            &rows(4, 3_000),
+            Vec::new(),
+            (0, 0),
+            8,
+            |_| true,
+        );
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame")
@@ -390,6 +439,7 @@ mod tests {
             vec![(STREAM.to_string(), entry)],
             index.state(),
             7,
+            |_| true,
         );
 
         assert!(matches!(frames[0], Frame::Index { .. }), "index first");
@@ -421,6 +471,7 @@ mod tests {
             Vec::new(),
             (0, 0),
             7,
+            |_| true,
         );
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
@@ -484,6 +535,7 @@ mod tests {
             vec![(STREAM.to_string(), entry)],
             index.state(),
             7,
+            |_| true,
         ));
 
         let mut stream = Vec::new();
@@ -536,6 +588,7 @@ mod tests {
             Vec::new(),
             (0xdead, 0xbeef),
             7,
+            |_| true,
         );
         let Some(Frame::Rows { index_state, .. }) = frames.last() else {
             panic!("a rows frame")
@@ -664,6 +717,7 @@ mod tests {
             vec![(STREAM.to_string(), opening_entry)],
             index.state(),
             7,
+            |_| true,
         );
         let opening_bytes = encoded(&opening);
 
@@ -678,6 +732,7 @@ mod tests {
             vec![(STREAM.to_string(), churn_entry)],
             index.state(),
             8,
+            |_| true,
         );
         let steady_bytes = encoded(&steady);
 

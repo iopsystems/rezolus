@@ -146,6 +146,30 @@ impl SnapshotBuilder {
         self.samples
     }
 
+    /// The source's current index state. See
+    /// [`SkeletonCache::index_state`].
+    pub fn index_state(&self) -> crate::recorder::index::IndexState {
+        self.skeleton_cache.index_state()
+    }
+
+    /// See [`SkeletonCache::index_since`].
+    pub fn index_since(
+        &mut self,
+        from: crate::recorder::index::IndexState,
+    ) -> Option<Vec<(String, crate::recorder::index::IndexEntry)>> {
+        self.skeleton_cache.index_since(from)
+    }
+
+    /// See [`SkeletonCache::index_full`].
+    pub fn index_full(&self) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        self.skeleton_cache.index_full()
+    }
+
+    /// See [`SkeletonCache::index_resyncs`].
+    pub fn index_resyncs(&self) -> u64 {
+        self.skeleton_cache.index_resyncs()
+    }
+
     /// Whether this agent can serve acquisition-group rows at all.
     ///
     /// False for a V2 agent, which has no groups. Checked BEFORE a stream is
@@ -1077,7 +1101,92 @@ pub(crate) struct SkeletonCache {
     /// compared equal, and member metadata is part of a schema, so a hit means
     /// identity did not move.
     slots: crate::recorder::index::SourceIndex,
+    /// Entries this pass produced, before they are folded into `history`.
     index_entries: Vec<(String, crate::recorder::index::IndexEntry)>,
+    history: IndexHistory,
+}
+
+/// One pass's index entries, and the source state they build FROM.
+type IndexPass = (
+    crate::recorder::index::IndexState,
+    Arc<Vec<(String, crate::recorder::index::IndexEntry)>>,
+);
+
+/// The last few passes' index entries, so a subscriber that missed a pass can
+/// be caught up without a full resend.
+///
+/// A subscription cannot simply be handed the newest pass's deltas. `rows_at`
+/// returns the LATEST snapshot, so a slow subscriber skips passes entirely,
+/// and it needs every pass's entries since the state it last held to reach the
+/// state the rows it is about to receive were built against. With only the
+/// newest pass's deltas its accumulated set would not match, and dendro's
+/// subscriber would skip every row — correctly, since misattribution is worse
+/// than a gap.
+///
+/// Bounded, so a subscriber that stops reading cannot make the agent hold
+/// history without limit. Past the bound a subscriber is sent the whole state
+/// instead: that is rule 8's `Full`, which the format already has for
+/// connect-time completeness and eviction safety, and which dendro's
+/// subscriber applies as a whole-set replace.
+#[derive(Default)]
+struct IndexHistory {
+    passes: std::collections::VecDeque<IndexPass>,
+    /// How many times a subscriber has been too far behind to catch up
+    /// incrementally. Not per-subscriber state — failing to find a state in
+    /// the ring IS the signal — but an operator wants the count.
+    resyncs: u64,
+}
+
+/// How many passes of index entries to keep.
+///
+/// Passes, not intervals: the TTL is the sampling floor, so this is 64 sampling
+/// passes however fast subscriptions tick. At a 1s TTL that covers a subscriber
+/// stalled for about a minute, against the 20s stall measured in #1240's
+/// backpressure test. Cheap to hold — a steady pass's entries were measured at
+/// 80 B for the churning group — so the bound is about refusing unbounded
+/// growth, not about the memory these actually take.
+const INDEX_HISTORY_PASSES: usize = 64;
+
+impl IndexHistory {
+    fn record(
+        &mut self,
+        before: crate::recorder::index::IndexState,
+        entries: Vec<(String, crate::recorder::index::IndexEntry)>,
+    ) {
+        if entries.is_empty() {
+            // A pass that moved nothing leaves the state where it was, so
+            // there is nothing to replay and no reason to consume a slot.
+            return;
+        }
+        if self.passes.len() == INDEX_HISTORY_PASSES {
+            self.passes.pop_front();
+        }
+        self.passes.push_back((before, Arc::new(entries)));
+    }
+
+    /// Every entry needed to get from `from` to the current state, or `None`
+    /// when `from` is no longer in the ring and only a `Full` will do.
+    ///
+    /// An empty `Vec` and `None` are different answers: the first says "you
+    /// are already current", the second "you are too far behind to be told
+    /// what changed".
+    fn since(
+        &self,
+        from: crate::recorder::index::IndexState,
+        current: crate::recorder::index::IndexState,
+    ) -> Option<Vec<(String, crate::recorder::index::IndexEntry)>> {
+        if from == current {
+            return Some(Vec::new());
+        }
+        let start = self.passes.iter().position(|(before, _)| *before == from)?;
+        Some(
+            self.passes
+                .iter()
+                .skip(start)
+                .flat_map(|(_, entries)| entries.iter().cloned())
+                .collect(),
+        )
+    }
 }
 
 struct GroupSkeleton {
@@ -1097,6 +1206,7 @@ impl SkeletonCache {
             rebuilds: 0,
             slots: crate::recorder::index::SourceIndex::new(),
             index_entries: Vec::new(),
+            history: IndexHistory::default(),
         }
     }
 
@@ -1116,19 +1226,51 @@ impl SkeletonCache {
         }
     }
 
-    /// The index entries the last `create_v3` produced, and clear them.
-    ///
-    /// Empty on a steady tick: a group whose slots did not move emits nothing,
-    /// which is what makes the format cheaper than re-sending a schema.
-    // Nothing in the agent transmits these yet — the producer that turns them
-    // into `Frame::Index` is the next step of #1224 Phase 2. Capturing them
-    // first keeps that change to frame-building, with the walk it reads from
-    // already tested.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn take_index_entries(
+    /// Note the state a pass starts from, so what it produces can be replayed
+    /// from there.
+    fn begin_pass(&mut self) -> crate::recorder::index::IndexState {
+        self.index_entries.clear();
+        self.slots.state()
+    }
+
+    /// Fold the pass's entries into the history.
+    fn end_pass(&mut self, before: crate::recorder::index::IndexState) {
+        let entries = std::mem::take(&mut self.index_entries);
+        self.history.record(before, entries);
+    }
+
+    /// The source's current index state — what a subscriber must hold for its
+    /// rows to be attributable.
+    pub(crate) fn index_state(&self) -> crate::recorder::index::IndexState {
+        self.slots.state()
+    }
+
+    /// What a subscriber holding `from` needs in order to become current, or
+    /// `None` when it is too far behind and must be sent the whole state.
+    pub(crate) fn index_since(
         &mut self,
-    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
-        std::mem::take(&mut self.index_entries)
+        from: crate::recorder::index::IndexState,
+    ) -> Option<Vec<(String, crate::recorder::index::IndexEntry)>> {
+        let current = self.slots.state();
+        match self.history.since(from, current) {
+            Some(entries) => Some(entries),
+            None => {
+                self.history.resyncs += 1;
+                None
+            }
+        }
+    }
+
+    /// Every stream's whole slot set. What a subscriber gets on connect, and
+    /// what recovers one that fell out of the history.
+    pub(crate) fn index_full(&self) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        self.slots.full_entries()
+    }
+
+    /// How many subscribers have had to be resynced from a `Full` because they
+    /// fell out of the history.
+    pub(crate) fn index_resyncs(&self) -> u64 {
+        self.history.resyncs
     }
 
     /// Every group's live slot set, for a caller that needs the full state
@@ -1842,6 +1984,8 @@ fn create_v3(
     let _serialize = BUILDER_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let index_state_before = cache.begin_pass();
 
     let sampler_mods = crate::agent::samplers::sampler_modules();
     let group_registry = group_registry();
@@ -2781,6 +2925,11 @@ fn create_v3(
 
     group_snapshots.sort_by(|a, b| a.name.cmp(&b.name));
 
+    // Close the pass: whatever the walk observed becomes one replayable step
+    // from the state this pass started at. A pass that moved nothing records
+    // nothing — see `IndexHistory::record`.
+    cache.end_pass(index_state_before);
+
     Snapshot::V3(SnapshotV3 {
         systemtime: timestamp,
         duration,
@@ -3496,6 +3645,133 @@ mod tests {
         }
     }
 
+    /// `Some(empty)` and `None` are different answers, and conflating them
+    /// would be the whole bug: the first says "you are already current", the
+    /// second "you are too far behind to be told what changed". A caller that
+    /// read `None` as "nothing to send" would leave a subscriber holding a
+    /// stale set while sending it rows built against a newer one.
+    #[test]
+    fn being_current_and_being_too_far_behind_are_different_answers() {
+        let h = IndexHistory::default();
+        let a = (1u64, 1u64);
+        let b = (2u64, 2u64);
+
+        assert_eq!(h.since(a, a).as_deref(), Some(&[][..]), "already current");
+        assert!(
+            h.since(a, b).is_none(),
+            "a state the ring never saw cannot be caught up"
+        );
+    }
+
+    /// The case the ring exists for: a subscriber that skipped a pass needs
+    /// BOTH passes' entries, not just the newest, or its accumulated set will
+    /// not hash to what the rows it is about to receive were built against.
+    #[test]
+    fn catching_up_replays_every_pass_since_the_state_held() {
+        let entry = |n: u64| {
+            (
+                format!("s/{n}"),
+                crate::recorder::index::IndexEntry {
+                    kind: crate::recorder::index::EntryKind::Delta,
+                    slots: Vec::new(),
+                    removed: vec![n as u32],
+                    state: (n, n),
+                },
+            )
+        };
+
+        let mut h = IndexHistory::default();
+        h.record((0, 0), vec![entry(1)]);
+        h.record((1, 1), vec![entry(2)]);
+        h.record((2, 2), vec![entry(3)]);
+
+        let caught_up = h.since((0, 0), (3, 3)).expect("still in the ring");
+        assert_eq!(
+            caught_up
+                .iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s/1", "s/2", "s/3"],
+            "every pass since the held state, in order"
+        );
+
+        let from_middle = h.since((1, 1), (3, 3)).expect("still in the ring");
+        assert_eq!(
+            from_middle
+                .iter()
+                .map(|(s, _)| s.as_str())
+                .collect::<Vec<_>>(),
+            vec!["s/2", "s/3"],
+            "and only the passes it actually missed"
+        );
+    }
+
+    /// Past the bound, a subscriber cannot be caught up and must be sent the
+    /// whole state. The ring is what stops a subscriber that stopped reading
+    /// from making the agent hold history without limit.
+    #[test]
+    fn a_subscriber_past_the_bound_cannot_be_caught_up() {
+        let mut h = IndexHistory::default();
+        for n in 0..(INDEX_HISTORY_PASSES as u64 + 5) {
+            h.record(
+                (n, n),
+                vec![(
+                    "s".to_string(),
+                    crate::recorder::index::IndexEntry {
+                        kind: crate::recorder::index::EntryKind::Delta,
+                        slots: Vec::new(),
+                        removed: vec![n as u32],
+                        state: (n + 1, n + 1),
+                    },
+                )],
+            );
+        }
+        assert_eq!(h.passes.len(), INDEX_HISTORY_PASSES, "bounded");
+        assert!(
+            h.since((0, 0), (99, 99)).is_none(),
+            "the oldest state fell out and only a Full will do"
+        );
+        assert!(
+            h.since(
+                (
+                    INDEX_HISTORY_PASSES as u64 + 4,
+                    INDEX_HISTORY_PASSES as u64 + 4
+                ),
+                (99, 99)
+            )
+            .is_some(),
+            "a recent one is still catchable"
+        );
+    }
+
+    /// A pass that moved nothing must not consume a slot. Most passes move
+    /// nothing — 42 of 51 groups on `delta` never churn — so recording them
+    /// would evict real history within a minute and force resyncs that nothing
+    /// asked for.
+    #[test]
+    fn a_pass_that_moved_nothing_does_not_consume_history() {
+        let mut h = IndexHistory::default();
+        h.record((0, 0), Vec::new());
+        h.record((0, 0), Vec::new());
+        assert!(h.passes.is_empty());
+        assert_eq!(
+            h.since((0, 0), (0, 0)).as_deref(),
+            Some(&[][..]),
+            "and the subscriber is still current, because nothing changed"
+        );
+    }
+
+    /// Falling out of the ring is counted, because an operator reading
+    /// `/status` wants to know subscribers are resyncing rather than keeping
+    /// up.
+    #[test]
+    fn a_resync_is_counted() {
+        let mut cache = SkeletonCache::new();
+        assert_eq!(cache.index_resyncs(), 0);
+        assert!(cache.index_since((0xdead, 0xbeef)).is_none());
+        assert_eq!(cache.index_resyncs(), 1);
+    }
+
     static V3_CAPTURE_GROUP: AcquisitionGroup =
         AcquisitionGroup::new_reader_stamped("unattributed", "capture_probe");
 
@@ -3529,10 +3805,15 @@ mod tests {
         group: &AcquisitionGroup,
         cache: &mut SkeletonCache,
     ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        // Read back the way a subscriber does — what changed since the state
+        // before this pass — rather than through an accessor only tests use.
+        let before = cache.index_state();
         let guard = group.acquire();
         guard.finish();
         let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
-        cache.take_index_entries()
+        cache
+            .index_since(before)
+            .expect("one pass is always inside the history")
     }
 
     fn tick_entries(
