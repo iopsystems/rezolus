@@ -17,6 +17,10 @@ mod dendro_compat;
 /// is what tells us a dendro release still fits before #1224 Phase 2 leans on
 /// it.
 mod dendro_replicate_contract;
+/// What a group's slots mean, and when that changed — the blob dendro's
+/// `caller_rows` holds. Not behind `write`: a reader has to decode identity to
+/// make sense of an archive's values, so this is read-path code.
+pub mod index;
 /// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
 /// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
 pub mod parquet_ingest;

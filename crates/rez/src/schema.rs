@@ -42,16 +42,26 @@ impl GroupSchema {
     /// with the one written would make every row look like drift.
     /// Deterministic because `MetricDesc::metadata` is a `BTreeMap`.
     pub fn hash(&self) -> (u64, u64) {
-        const OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
-        const PRIME: u128 = 0x0000000001000000000000000000013b;
         let bytes = rmp_serde::to_vec(self).expect("GroupSchema serialization is infallible");
-        let mut h = OFFSET;
-        for &b in &bytes {
-            h ^= b as u128;
-            h = h.wrapping_mul(PRIME);
-        }
-        ((h >> 64) as u64, h as u64)
+        fnv1a_128(&bytes)
     }
+}
+
+/// FNV-1a-128, returned as `(hi, lo)` because msgpack has no 128-bit integer.
+///
+/// Shared with [`SlotIndex::state`](crate::index::SlotIndex::state) so the two
+/// content-addressed identifiers rezolus puts on the wire are computed by one
+/// function rather than two copies of the same constants. The domains are
+/// separate; the arithmetic is not.
+pub(crate) fn fnv1a_128(bytes: &[u8]) -> (u64, u64) {
+    const OFFSET: u128 = 0x6c62272e07bb014262b821756295c58d;
+    const PRIME: u128 = 0x0000000001000000000000000000013b;
+    let mut h = OFFSET;
+    for &b in bytes {
+        h ^= b as u128;
+        h = h.wrapping_mul(PRIME);
+    }
+    ((h >> 64) as u64, h as u64)
 }
 
 #[cfg(feature = "write")]
