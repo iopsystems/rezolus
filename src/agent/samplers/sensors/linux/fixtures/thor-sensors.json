@@ -1,0 +1,163 @@
+{
+  "kernel": "6.8.12-tegra-bpf",
+  "architecture": "aarch64",
+  "model": "NVIDIA Jetson AGX Thor Developer Kit",
+  "compatible": "nvidia,p4071-0000+p3834-0008\nnvidia,p3834-0008\nnvidia,tegra264",
+  "l4t_release": "# R39 (release), REVISION: 2.1, GCID: 46758480, BOARD: generic, EABI: aarch64, DATE: Fri Aug  7 05:54:22 AM UTC 2026\n# KERNEL_VARIANT: oot\nTARGET_USERSPACE_LIB_DIR=nvidia\nTARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia",
+  "thermal_zones": [
+    {
+      "path": "/sys/class/thermal/thermal_zone0",
+      "resolved_path": "/sys/devices/virtual/thermal/thermal_zone0",
+      "device_path": null,
+      "attributes": {
+        "type": "tj-thermal",
+        "temp": "50781",
+        "mode": "enabled",
+        "policy": "user_space",
+        "trip_point_0_hyst": "0",
+        "trip_point_0_temp": "114500",
+        "trip_point_0_type": "critical",
+        "trip_point_1_hyst": "0",
+        "trip_point_1_temp": "80000",
+        "trip_point_1_type": "active",
+        "trip_point_2_hyst": "0",
+        "trip_point_2_temp": "86000",
+        "trip_point_2_type": "active",
+        "trip_point_3_hyst": "0",
+        "trip_point_3_temp": "91000",
+        "trip_point_3_type": "active",
+        "trip_point_4_hyst": "0",
+        "trip_point_4_temp": "100000",
+        "trip_point_4_type": "active"
+      }
+    },
+    {
+      "path": "/sys/class/thermal/thermal_zone1",
+      "resolved_path": "/sys/devices/virtual/thermal/thermal_zone1",
+      "device_path": null,
+      "attributes": {
+        "type": "gpu-thermal",
+        "temp": "50656",
+        "mode": "enabled",
+        "policy": "step_wise",
+        "trip_point_0_hyst": "0",
+        "trip_point_0_temp": "109000",
+        "trip_point_0_type": "passive",
+        "trip_point_1_hyst": "0",
+        "trip_point_1_temp": "114500",
+        "trip_point_1_type": "critical"
+      }
+    },
+    {
+      "path": "/sys/class/thermal/thermal_zone2",
+      "resolved_path": "/sys/devices/virtual/thermal/thermal_zone2",
+      "device_path": null,
+      "attributes": {
+        "type": "cpu-thermal",
+        "temp": "48875",
+        "mode": "enabled",
+        "policy": "step_wise",
+        "trip_point_0_hyst": "0",
+        "trip_point_0_temp": "109000",
+        "trip_point_0_type": "passive",
+        "trip_point_1_hyst": "0",
+        "trip_point_1_temp": "114500",
+        "trip_point_1_type": "critical"
+      }
+    },
+    {
+      "path": "/sys/class/thermal/thermal_zone3",
+      "resolved_path": "/sys/devices/virtual/thermal/thermal_zone3",
+      "device_path": null,
+      "attributes": {
+        "type": "soc012-thermal",
+        "temp": "48781",
+        "mode": "enabled",
+        "policy": "step_wise",
+        "trip_point_0_hyst": "0",
+        "trip_point_0_temp": "109000",
+        "trip_point_0_type": "passive",
+        "trip_point_1_hyst": "0",
+        "trip_point_1_temp": "114500",
+        "trip_point_1_type": "critical"
+      }
+    },
+    {
+      "path": "/sys/class/thermal/thermal_zone4",
+      "resolved_path": "/sys/devices/virtual/thermal/thermal_zone4",
+      "device_path": null,
+      "attributes": {
+        "type": "soc345-thermal",
+        "temp": "48125",
+        "mode": "enabled",
+        "policy": "step_wise",
+        "trip_point_0_hyst": "0",
+        "trip_point_0_temp": "109000",
+        "trip_point_0_type": "passive",
+        "trip_point_1_hyst": "0",
+        "trip_point_1_temp": "114500",
+        "trip_point_1_type": "critical"
+      }
+    }
+  ],
+  "cooling_devices": [
+    {"path":"/sys/class/thermal/cooling_device0","resolved_path":"/sys/devices/virtual/thermal/cooling_device0","device_path":null,"attributes":{"type":"cpufreq-cpu0","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device1","resolved_path":"/sys/devices/virtual/thermal/cooling_device1","device_path":null,"attributes":{"type":"cpufreq-cpu2","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device10","resolved_path":"/sys/devices/virtual/thermal/cooling_device10","device_path":null,"attributes":{"type":"soc345-throttle-alert","cur_state":"0","max_state":"2"}},
+    {"path":"/sys/class/thermal/cooling_device11","resolved_path":"/sys/devices/virtual/thermal/cooling_device11","device_path":null,"attributes":{"type":"pwm-fan","cur_state":"0","max_state":"4"}},
+    {"path":"/sys/class/thermal/cooling_device12","resolved_path":"/sys/devices/virtual/thermal/cooling_device12","device_path":null,"attributes":{"type":"devfreq-gpu-gpc-0","cur_state":"0","max_state":"169"}},
+    {"path":"/sys/class/thermal/cooling_device13","resolved_path":"/sys/devices/virtual/thermal/cooling_device13","device_path":null,"attributes":{"type":"devfreq-gpu-nvd-0","cur_state":"0","max_state":"182"}},
+    {"path":"/sys/class/thermal/cooling_device2","resolved_path":"/sys/devices/virtual/thermal/cooling_device2","device_path":null,"attributes":{"type":"cpufreq-cpu4","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device3","resolved_path":"/sys/devices/virtual/thermal/cooling_device3","device_path":null,"attributes":{"type":"cpufreq-cpu6","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device4","resolved_path":"/sys/devices/virtual/thermal/cooling_device4","device_path":null,"attributes":{"type":"cpufreq-cpu8","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device5","resolved_path":"/sys/devices/virtual/thermal/cooling_device5","device_path":null,"attributes":{"type":"cpufreq-cpu10","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device6","resolved_path":"/sys/devices/virtual/thermal/cooling_device6","device_path":null,"attributes":{"type":"cpufreq-cpu12","cur_state":"0","max_state":"48"}},
+    {"path":"/sys/class/thermal/cooling_device7","resolved_path":"/sys/devices/virtual/thermal/cooling_device7","device_path":null,"attributes":{"type":"cpu-throttle-alert","cur_state":"0","max_state":"2"}},
+    {"path":"/sys/class/thermal/cooling_device8","resolved_path":"/sys/devices/virtual/thermal/cooling_device8","device_path":null,"attributes":{"type":"gpu-throttle-alert","cur_state":"0","max_state":"2"}},
+    {"path":"/sys/class/thermal/cooling_device9","resolved_path":"/sys/devices/virtual/thermal/cooling_device9","device_path":null,"attributes":{"type":"soc012-throttle-alert","cur_state":"0","max_state":"2"}}
+  ],
+  "hwmon": [
+    {
+      "path": "/sys/class/hwmon/hwmon0",
+      "resolved_path": "/sys/devices/platform/bus@0/a808480000.pcie/pci0005:00/0005:00:00.0/0005:01:00.0/nvme/nvme0/hwmon0",
+      "device_path": "/sys/devices/platform/bus@0/a808480000.pcie/pci0005:00/0005:00:00.0/0005:01:00.0/nvme/nvme0",
+      "attributes": {"name":"nvme","temp1_alarm":"0","temp1_crit":"84850","temp1_input":"51850","temp1_label":"Composite","temp1_max":"81850","temp1_min":"-273150","temp2_input":"51850","temp2_label":"Sensor 1","temp2_max":"65261850","temp2_min":"-273150","temp3_input":"54850","temp3_label":"Sensor 2","temp3_max":"65261850","temp3_min":"-273150"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon1",
+      "resolved_path": "/sys/devices/platform/bus@0/810c5c0000.tachometer/hwmon/hwmon1",
+      "device_path": "/sys/devices/platform/bus@0/810c5c0000.tachometer",
+      "attributes": {"name":"pwm_tach"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon2",
+      "resolved_path": "/sys/devices/platform/bpmp/bpmp:i2c/i2c-5/5-004c/hwmon/hwmon2",
+      "device_path": "/sys/devices/platform/bpmp/bpmp:i2c/i2c-5/5-004c",
+      "attributes": {"name":"tmp451","temp1_crit":"117000","temp1_crit_alarm":"0","temp1_crit_hyst":"107000","temp1_input":"45875","temp1_max":"116000","temp1_max_alarm":"0","temp1_min":"-64000","temp1_min_alarm":"0","temp2_crit":"117000","temp2_crit_alarm":"0","temp2_crit_hyst":"107000","temp2_fault":"0","temp2_input":"45687","temp2_max":"116000","temp2_max_alarm":"0","temp2_min":"-64000","temp2_min_alarm":"0","temp2_offset":"-2500","temp_samples":"1"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon3",
+      "resolved_path": "/sys/devices/platform/nvtherm-oc-event/hwmon/hwmon3",
+      "device_path": "/sys/devices/platform/nvtherm-oc-event",
+      "attributes": {"name":"soctherm_oc"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon4",
+      "resolved_path": "/sys/devices/platform/pwm-fan/hwmon/hwmon4",
+      "device_path": "/sys/devices/platform/pwm-fan",
+      "attributes": {"name":"pwmfan","pwm1":"70","pwm1_enable":"1"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon5",
+      "resolved_path": "/sys/devices/platform/bus@0/c600000.i2c/i2c-2/2-0040/hwmon/hwmon5",
+      "device_path": "/sys/devices/platform/bus@0/c600000.i2c/i2c-2/2-0040",
+      "attributes": {"name":"ina3221","in1_enable":"1","in1_input":"19744","in1_label":"VDD_GPU","in2_enable":"1","in2_input":"19744","in2_label":"VDD_CPU_SOC_MSS","in3_enable":"1","in3_input":"5128","in3_label":"VIN_SYS_5V0","in4_input":"480","in5_input":"800","in6_input":"2360","in7_input":"1520","in7_label":"sum of shunt voltages","curr1_crit":"6080","curr1_crit_alarm":"0","curr1_input":"240","curr1_max":"5060","curr1_max_alarm":"0","curr2_crit":"81900","curr2_crit_alarm":"0","curr2_input":"400","curr2_max":"81900","curr2_max_alarm":"0","curr3_crit":"81900","curr3_crit_alarm":"0","curr3_input":"1180","curr3_max":"81900","curr3_max_alarm":"0","curr4_crit":"7300","curr4_crit_alarm":"0","curr4_input":"620"}
+    },
+    {
+      "path": "/sys/class/hwmon/hwmon6",
+      "resolved_path": "/sys/devices/platform/bus@0/c600000.i2c/i2c-2/2-0044/hwmon/hwmon6",
+      "device_path": "/sys/devices/platform/bus@0/c600000.i2c/i2c-2/2-0044",
+      "attributes": {"name":"ina238","temp1_input":"49000","temp1_max":"255875","temp1_max_alarm":"0","power1_input":"27422000","power1_max":"167936000","power1_max_alarm":"0","in0_input":"1","in0_max":"163","in0_max_alarm":"0","in0_min":"-163","in0_min_alarm":"0","in1_input":"27946","in1_max":"102396","in1_max_alarm":"0","in1_min":"0","in1_min_alarm":"0","curr1_input":"980"}
+    }
+  ]
+}

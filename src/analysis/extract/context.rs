@@ -79,6 +79,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "network_traffic",
     "rezolus_rusage",
     "scheduler_runqueue",
+    "sensors",
     "syscall_counts",
     "syscall_latency",
     "tcp_connect_latency",
@@ -247,6 +248,13 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("scheduler_discarded_samples", "scheduler_runqueue"),
     ("scheduler_offcpu", "scheduler_runqueue"),
     ("scheduler_running", "scheduler_runqueue"),
+    ("sensor_cooling_state", "sensors"),
+    ("sensor_current", "sensors"),
+    ("sensor_fan_pwm", "sensors"),
+    ("sensor_fan_speed", "sensors"),
+    ("sensor_power", "sensors"),
+    ("sensor_temperature", "sensors"),
+    ("sensor_voltage", "sensors"),
     ("softirq", "cpu_usage"),
     ("softirq_time", "cpu_usage"),
     ("syscall", "syscall_counts"),
@@ -374,6 +382,7 @@ const DOMAIN_ALIASES: &[(&str, &str)] = &[
     ("drive", "drivehealth"), // drivehealth sampler emits drive_* metrics
     ("gpmu", "gpu"),          // gpu_amd_pmu sampler emits gpmu_* metrics
     ("package", "cpu"),       // cpu_power sampler emits package_c*_residency metrics
+    ("sensor", "sensors"),    // sensors sampler emits sensor_* metrics
 ];
 
 /// Domain of a sampler or metric name: its first `_`-separated token, except

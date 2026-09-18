@@ -14,6 +14,7 @@ mod memory;
 mod network;
 mod rezolus;
 mod scheduler;
+mod sensors;
 mod syscall;
 mod tcp;
 
