@@ -678,13 +678,18 @@ interval = "5s"
 Reads run in a nonoverlapping blocking task, dispatched by consumer activity
 at most once per interval (5 seconds by default). Discovery runs every 60
 seconds during sampling; descriptive metadata is cached between passes.
-Failed, disabled, faulted, removed or unreadable measurements are absent rather
-than zero. A sysfs read can invoke hardware access, so this sampler's cost must
+Failed, disabled, faulted, removed or unreadable measurements are absent from
+the live endpoint rather than zero. If every channel in a family fails, its
+last successful acquisition window remains unchanged; a recorder that
+deduplicates windows can retain the previous observation without an outage
+marker. A sysfs read can invoke hardware access, so this sampler's cost must
 be measured on the target before fleet-wide enablement.
 
 Each family identifies a native channel with `sensor`, `source`, `chip`,
-`channel`, and a native `label` when supplied by the kernel. Platform identity
-and verified board-specific scope provide additional context when available.
+`channel`, and a native `label` when supplied by the kernel. `board_model` and
+`soc_compatible` preserve platform identity when available; `scope` records
+verified board-specific interpretation. Derived power carries
+`derived=voltage_x_current`.
 Unknown boards retain native readings without inferred CPU/GPU associations.
 Sensor slots are never reused for a different identity during the process;
 each family supports at most 256 lifetime identities, reporting overflow.
@@ -692,7 +697,7 @@ each family supports at most 256 lifetime identities, reporting overflow.
 | Metric | Type | Stored unit / interpretation |
 | --- | --- | --- |
 | `sensor_temperature` | Gauge | Millidegrees Celsius per temperature channel; signed |
-| `sensor_power` | Gauge | Microwatts per rail; direct hwmon reading or checked INA3221 voltage × current |
+| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading or checked INA3221 voltage × current |
 | `sensor_voltage` | Gauge | Millivolts per bus-voltage channel; excludes INA3221 shunt-voltage channels |
 | `sensor_current` | Gauge | Milliamps per current channel |
 | `sensor_fan_speed` | Gauge | Measured revolutions per minute, including NVIDIA `pwm_tach/rpm` |
