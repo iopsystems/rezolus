@@ -15,6 +15,7 @@ mod overview;
 mod query_explorer;
 mod rezolus;
 mod scheduler;
+mod sensors;
 mod service;
 mod softirq;
 mod syscall;
@@ -28,6 +29,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
     ("GPU", "/gpu", gpu::generate),
+    ("Sensors", "/sensors", sensors::generate),
     ("Memory", "/memory", memory::generate),
     ("Network", "/network", network::generate),
     ("Scheduler", "/scheduler", scheduler::generate),
