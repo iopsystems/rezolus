@@ -9,11 +9,16 @@
 //! Nothing here knows about samplers, endpoints, or the CLI — it speaks in
 //! recordings, tables, segments, and bytes.
 
-/// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
-/// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
 /// Where `rez` ends and `dendro` begins, asserted rather than assumed.
 /// Tests only; no production code depends on dendro yet. See #1224.
 mod dendro_compat;
+/// The half of that boundary dendro 0.2.0 added: a rezolus-shaped tick through
+/// `Frame`, the wire codec, and a `Subscriber`. Tests only, same as above — it
+/// is what tells us a dendro release still fits before #1224 Phase 2 leans on
+/// it.
+mod dendro_replicate_contract;
+/// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
+/// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
 pub mod parquet_ingest;
 pub mod reader;
 pub mod rez;
