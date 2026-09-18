@@ -106,9 +106,21 @@ pub struct IndexEntry {
     /// `Delta` only, and always empty on a `Full` — a `Full` states the whole
     /// set, so anything absent from `slots` is gone by construction.
     pub removed: Vec<u32>,
-    /// The hash of the COMPLETE slot set after applying this entry, not of the
-    /// change. A consumer applies the entry and compares its own accumulated
-    /// set against this, which makes a missed delta loud rather than silent.
+    /// The hash of the SOURCE's complete index state after applying this
+    /// entry — every stream's slot set, not just this entry's stream.
+    ///
+    /// The level is dendro's, not a choice: a `Subscriber` keeps one
+    /// `index_state` per source, every `Frame::Index` overwrites it whatever
+    /// stream it names, and `Frame::Rows` carries a single `index_state` for
+    /// rows that span streams. A per-stream hash here would mean that in a
+    /// tick touching several streams, only the last entry's state could ever
+    /// match the rows that follow.
+    ///
+    /// It is stamped per entry rather than once per tick, which is what keeps
+    /// rule 10 working: a consumer that loses one stream's entry holds the
+    /// state from before it, and the next rows frame does not match. Stamping
+    /// every entry of a tick with the state after ALL of them would let that
+    /// loss through silently.
     pub state: IndexState,
 }
 
@@ -199,14 +211,18 @@ impl SlotIndex {
         crate::schema::fnv1a_128(&bytes)
     }
 
-    /// Producer side: fold this tick's complete live set in, and return what to
-    /// transmit — or `None` when nothing moved, which is the common case.
+    /// Producer side: fold this tick's complete live set in, and return what
+    /// changed — or `None` when nothing moved, which is the common case.
     ///
     /// `observed` is the whole live set, not a change: the caller walks the
     /// group's populated slots and this works out what is new. Returning `None`
     /// for an unchanged set is what keeps a steady group silent between
-    /// [`full_entry`](Self::full_entry) resends.
-    pub fn observe<I>(&mut self, observed: I) -> Option<IndexEntry>
+    /// [`full_change`](Self::full_change) resends.
+    ///
+    /// A [`SlotChange`] and not an [`IndexEntry`] because the entry's `state`
+    /// is the whole source's, which one stream cannot compute.
+    /// [`SourceIndex`] is what turns this into something transmittable.
+    pub fn observe<I>(&mut self, observed: I) -> Option<SlotChange>
     where
         I: IntoIterator<Item = (u32, BTreeMap<String, String>)>,
     {
@@ -244,21 +260,20 @@ impl SlotIndex {
         // case, where a `Delta` carrying nothing would be indistinguishable
         // from no entry at all.
         if first {
-            return Some(self.full_entry());
+            return Some(self.full_change());
         }
 
-        Some(IndexEntry {
+        Some(SlotChange {
             kind: EntryKind::Delta,
             slots,
             removed,
-            state: self.state(),
         })
     }
 
     /// The complete state, for connect-time completeness and the seal-cadence
     /// resend that keeps eviction from orphaning identity.
-    pub fn full_entry(&self) -> IndexEntry {
-        IndexEntry {
+    pub fn full_change(&self) -> SlotChange {
+        SlotChange {
             kind: EntryKind::Full,
             slots: self
                 .live
@@ -269,36 +284,151 @@ impl SlotIndex {
                 })
                 .collect(),
             removed: Vec::new(),
-            state: self.state(),
         }
     }
 
-    /// Consumer side: apply a received entry, refusing it if the result does
-    /// not hash to what the entry claims.
+    /// Consumer side: apply a received change to this one stream.
     ///
-    /// On refusal the index is left as it was, so a caller that skips the
-    /// offending rows and waits for the next `Full` recovers rather than
-    /// carrying a half-applied set forward.
-    pub fn apply(&mut self, entry: &IndexEntry) -> Result<(), ApplyError> {
-        if entry.kind == EntryKind::Delta && !self.seen_full {
+    /// The state comparison is not here — it is over every stream, so
+    /// [`SourceIndex::apply`] is what performs it, and what leaves the index
+    /// untouched when it fails.
+    pub fn apply(&mut self, change: &SlotChange) -> Result<(), ApplyError> {
+        if change.kind == EntryKind::Delta && !self.seen_full {
             return Err(ApplyError::DeltaBeforeFull);
         }
 
-        let mut next = match entry.kind {
+        let mut next = match change.kind {
             EntryKind::Full => BTreeMap::new(),
             EntryKind::Delta => self.live.clone(),
         };
-        for slot in &entry.removed {
+        for slot in &change.removed {
             next.remove(slot);
         }
-        for e in &entry.slots {
+        for e in &change.slots {
             next.insert(e.slot, e.labels.clone());
         }
 
-        let candidate = Self {
-            live: next,
-            seen_full: true,
+        self.live = next;
+        self.seen_full = true;
+        Ok(())
+    }
+}
+
+/// What changed on one stream, before it is stamped with a state and becomes
+/// an [`IndexEntry`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotChange {
+    pub kind: EntryKind,
+    pub slots: Vec<SlotEntry>,
+    pub removed: Vec<u32>,
+}
+
+/// Every stream of one source, and the rolling state their slot sets hash to.
+///
+/// This is the level dendro's `Subscriber` works at: one `index_state` per
+/// source, overwritten by each `Frame::Index` whatever stream it names, and
+/// compared against the single `index_state` a `Frame::Rows` carries for rows
+/// that span streams.
+#[derive(Clone, Debug, Default)]
+pub struct SourceIndex {
+    streams: BTreeMap<String, SlotIndex>,
+}
+
+impl SourceIndex {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// FNV-1a-128 over every stream's own state, keyed by stream name.
+    ///
+    /// Deterministic because the map is a `BTreeMap` and each stream's state
+    /// is itself deterministic. A stream that exists but is empty still
+    /// contributes, so a group appearing changes the source state even before
+    /// it has a slot.
+    pub fn state(&self) -> IndexState {
+        let per_stream: BTreeMap<&str, IndexState> = self
+            .streams
+            .iter()
+            .map(|(name, index)| (name.as_str(), index.state()))
+            .collect();
+        let bytes =
+            rmp_serde::to_vec(&per_stream).expect("index state serialization is infallible");
+        crate::schema::fnv1a_128(&bytes)
+    }
+
+    pub fn stream(&self, stream: &str) -> Option<&SlotIndex> {
+        self.streams.get(stream)
+    }
+
+    pub fn streams(&self) -> impl Iterator<Item = (&str, &SlotIndex)> {
+        self.streams.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Producer side: fold one stream's live set in and return the entry to
+    /// transmit, stamped with the source's state after the fold.
+    pub fn observe<I>(&mut self, stream: &str, observed: I) -> Option<IndexEntry>
+    where
+        I: IntoIterator<Item = (u32, BTreeMap<String, String>)>,
+    {
+        let change = self
+            .streams
+            .entry(stream.to_string())
+            .or_default()
+            .observe(observed)?;
+        Some(IndexEntry {
+            kind: change.kind,
+            slots: change.slots,
+            removed: change.removed,
+            state: self.state(),
+        })
+    }
+
+    /// Producer side: every stream's complete state, for connect-time
+    /// completeness and the seal-cadence resend.
+    ///
+    /// Each entry carries the source state as of that point in the sequence,
+    /// which for a resend is the same value throughout — nothing is changing,
+    /// only being restated — so a consumer that applies all of them, or that
+    /// already held the set, ends where the producer is either way.
+    pub fn full_entries(&self) -> Vec<(String, IndexEntry)> {
+        let state = self.state();
+        self.streams
+            .iter()
+            .map(|(name, index)| {
+                let change = index.full_change();
+                (
+                    name.clone(),
+                    IndexEntry {
+                        kind: change.kind,
+                        slots: change.slots,
+                        removed: change.removed,
+                        state,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Consumer side: apply a received entry to one stream, refusing it if the
+    /// source's state does not then hash to what the entry claims.
+    ///
+    /// On refusal nothing is changed, so a caller that skips the offending
+    /// rows and waits for the next `Full` recovers rather than carrying a
+    /// half-applied set forward.
+    pub fn apply(&mut self, stream: &str, entry: &IndexEntry) -> Result<(), ApplyError> {
+        let change = SlotChange {
+            kind: entry.kind,
+            slots: entry.slots.clone(),
+            removed: entry.removed.clone(),
         };
+
+        let mut candidate = self.clone();
+        candidate
+            .streams
+            .entry(stream.to_string())
+            .or_default()
+            .apply(&change)?;
+
         let actual = candidate.state();
         if actual != entry.state {
             return Err(ApplyError::StateMismatch {
@@ -315,6 +445,8 @@ impl SlotIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const S: &str = "cpu_usage/cpu_usage_task";
 
     fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
@@ -349,8 +481,8 @@ mod tests {
     /// only the changes.
     #[test]
     fn a_consumer_following_deltas_ends_up_where_the_producer_is() {
-        let mut producer = SlotIndex::new();
-        let mut consumer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
+        let mut consumer = SourceIndex::new();
 
         let ticks = vec![
             vec![task(0, "redis"), task(1, "nginx")],
@@ -362,20 +494,21 @@ mod tests {
 
         let mut sent = 0usize;
         for tick in ticks {
-            if let Some(entry) = producer.observe(tick) {
-                consumer.apply(&entry).expect("applies");
+            if let Some(entry) = producer.observe(S, tick) {
+                consumer.apply(S, &entry).expect("applies");
                 sent += 1;
             }
         }
 
         assert_eq!(sent, 3, "the fourth tick changed nothing and sent nothing");
         assert_eq!(consumer.state(), producer.state());
-        assert_eq!(consumer.len(), 2);
+        let stream = consumer.stream(S).expect("tracked");
+        assert_eq!(stream.len(), 2);
         assert_eq!(
-            consumer.labels(0).unwrap().get("comm").map(String::as_str),
+            stream.labels(0).unwrap().get("comm").map(String::as_str),
             Some("valkey"),
         );
-        assert!(consumer.labels(1).is_none(), "slot 1 was removed");
+        assert!(stream.labels(1).is_none(), "slot 1 was removed");
     }
 
     /// Rule 10: a consumer whose accumulated state does not hash to what the
@@ -383,22 +516,82 @@ mod tests {
     /// another's name — is worse than a gap.
     #[test]
     fn a_skipped_entry_is_refused_rather_than_misattributed() {
-        let mut producer = SlotIndex::new();
-        let mut consumer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
+        let mut consumer = SourceIndex::new();
 
-        let first = producer.observe(vec![task(0, "redis")]).unwrap();
-        consumer.apply(&first).expect("base applies");
+        let first = producer.observe(S, vec![task(0, "redis")]).unwrap();
+        consumer.apply(S, &first).expect("base applies");
 
         // The consumer never sees this one, and nothing later undoes it.
-        let _lost = producer.observe(vec![task(0, "redis"), task(1, "nginx")]);
+        let _lost = producer.observe(S, vec![task(0, "redis"), task(1, "nginx")]);
         let next = producer
-            .observe(vec![task(0, "valkey"), task(1, "nginx")])
+            .observe(S, vec![task(0, "valkey"), task(1, "nginx")])
             .unwrap();
 
         let before = consumer.state();
-        let err = consumer.apply(&next).expect_err("must refuse");
+        let err = consumer.apply(S, &next).expect_err("must refuse");
         assert!(matches!(err, ApplyError::StateMismatch { .. }), "{err:?}");
         assert_eq!(consumer.state(), before, "a refused entry changes nothing");
+    }
+
+    /// **Why the state is the source's and not one stream's.** dendro keeps a
+    /// single `index_state` per source, overwritten by every `Frame::Index`
+    /// whatever stream it names, and a `Frame::Rows` carries one for rows that
+    /// span streams. So a tick touching two streams must leave a state that
+    /// reflects both; if each entry carried only its own stream's hash, the
+    /// second would overwrite the first and rows built against both would
+    /// match a state that describes one.
+    ///
+    /// Here the consumer loses stream B's entry entirely. Its accumulated
+    /// state must then not match what the producer reports, even though its
+    /// copy of stream A is perfectly current.
+    #[test]
+    fn losing_one_streams_entry_desyncs_the_source_not_just_that_stream() {
+        const A: &str = "cpu_usage/cpu_usage_task";
+        const B: &str = "syscall_counts/syscall_counts_cgroup";
+
+        let mut producer = SourceIndex::new();
+        let mut consumer = SourceIndex::new();
+
+        let a = producer.observe(A, vec![task(0, "redis")]).unwrap();
+        consumer.apply(A, &a).expect("stream A applies");
+
+        // Stream B's opening entry is lost in flight.
+        let _lost = producer.observe(B, vec![task(3, "cgroup")]);
+
+        assert_ne!(
+            consumer.state(),
+            producer.state(),
+            "a stream the consumer never heard of still moved the source's state"
+        );
+
+        // And the next thing that arrives on stream A is refused, which is the
+        // point: rows built against both streams must not be attributed.
+        let a2 = producer.observe(A, vec![task(0, "valkey")]).unwrap();
+        assert!(matches!(
+            consumer.apply(A, &a2).expect_err("must refuse"),
+            ApplyError::StateMismatch { .. }
+        ));
+    }
+
+    /// Entries within one tick are stamped as the state reaches them, not with
+    /// the state after all of them. Otherwise a consumer that lost the second
+    /// of two would hold a state that already claimed the second's effect, and
+    /// rule 10 would pass on rows it should have skipped.
+    #[test]
+    fn each_entry_in_a_tick_carries_the_state_as_of_itself() {
+        const A: &str = "a/one";
+        const B: &str = "b/two";
+
+        let mut producer = SourceIndex::new();
+        let first = producer.observe(A, vec![task(0, "x")]).unwrap();
+        let second = producer.observe(B, vec![task(0, "y")]).unwrap();
+
+        assert_ne!(
+            first.state, second.state,
+            "the first entry must not already claim the second's effect"
+        );
+        assert_eq!(second.state, producer.state(), "the last one is current");
     }
 
     /// The other side of hashing the result rather than the change: a lost
@@ -407,42 +600,42 @@ mod tests {
     /// made this a permanent desync over a difference that no longer exists.
     #[test]
     fn a_loss_a_later_entry_undoes_is_not_an_error() {
-        let mut producer = SlotIndex::new();
-        let mut consumer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
+        let mut consumer = SourceIndex::new();
         consumer
-            .apply(&producer.observe(vec![task(0, "redis")]).unwrap())
+            .apply(S, &producer.observe(S, vec![task(0, "redis")]).unwrap())
             .unwrap();
 
         // Slot 1 appears and goes away again; the consumer misses both halves
         // of that, so what it holds is still correct.
-        let _lost = producer.observe(vec![task(0, "redis"), task(1, "nginx")]);
+        let _lost = producer.observe(S, vec![task(0, "redis"), task(1, "nginx")]);
         let next = producer
-            .observe(vec![task(0, "redis"), task(2, "cron")])
+            .observe(S, vec![task(0, "redis"), task(2, "cron")])
             .unwrap();
 
         consumer
-            .apply(&next)
+            .apply(S, &next)
             .expect("the set is right, so it applies");
         assert_eq!(consumer.state(), producer.state());
     }
 
-    /// A `Full` is what recovers from that: it states the whole set, so it
+    /// A `Full` is what recovers from a desync: it states the whole set, so it
     /// applies to a consumer no matter how far behind it had fallen.
     #[test]
-    fn a_full_recovers_a_consumer_that_fell_behind() {
-        let mut producer = SlotIndex::new();
-        let mut consumer = SlotIndex::new();
+    fn a_full_resend_recovers_a_consumer_that_fell_behind() {
+        let mut producer = SourceIndex::new();
+        let mut consumer = SourceIndex::new();
         consumer
-            .apply(&producer.observe(vec![task(0, "redis")]).unwrap())
+            .apply(S, &producer.observe(S, vec![task(0, "redis")]).unwrap())
             .unwrap();
 
-        let _lost = producer.observe(vec![task(5, "nginx"), task(9, "cron")]);
+        let _lost = producer.observe(S, vec![task(5, "nginx"), task(9, "cron")]);
 
-        consumer
-            .apply(&producer.full_entry())
-            .expect("full applies");
+        for (stream, entry) in producer.full_entries() {
+            consumer.apply(&stream, &entry).expect("a full applies");
+        }
         assert_eq!(consumer.state(), producer.state());
-        assert!(consumer.labels(0).is_none());
+        assert!(consumer.stream(S).unwrap().labels(0).is_none());
     }
 
     /// The `cpu_usage_task` case: a slot whose task exited and was reused is
@@ -450,10 +643,10 @@ mod tests {
     /// would make a consumer drop identity it is about to be given back.
     #[test]
     fn a_recycled_slot_is_an_update_not_a_removal() {
-        let mut producer = SlotIndex::new();
-        producer.observe(vec![task(3, "old_task")]).unwrap();
+        let mut producer = SourceIndex::new();
+        producer.observe(S, vec![task(3, "old_task")]).unwrap();
 
-        let entry = producer.observe(vec![task(3, "new_task")]).unwrap();
+        let entry = producer.observe(S, vec![task(3, "new_task")]).unwrap();
         assert_eq!(entry.kind, EntryKind::Delta);
         assert_eq!(entry.slots.len(), 1);
         assert_eq!(entry.slots[0].slot, 3);
@@ -469,18 +662,15 @@ mod tests {
     /// check is what turns that into a refusal instead of silence.
     #[test]
     fn a_removal_travels_in_the_entry() {
-        let mut producer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
         producer
-            .observe(vec![task(0, "redis"), task(1, "nginx")])
+            .observe(S, vec![task(0, "redis"), task(1, "nginx")])
             .unwrap();
-        let entry = producer.observe(vec![task(0, "redis")]).unwrap();
+        let entry = producer.observe(S, vec![task(0, "redis")]).unwrap();
 
         assert_eq!(entry.removed, vec![1]);
         assert!(entry.slots.is_empty(), "nothing was added or changed");
-
-        let mut consumer = SlotIndex::new();
-        consumer.apply(&producer.full_entry()).unwrap();
-        assert_eq!(consumer.len(), 1);
+        assert_eq!(producer.stream(S).unwrap().len(), 1);
     }
 
     /// The first entry of a stream is a `Full` whatever it holds, including
@@ -488,62 +678,65 @@ mod tests {
     /// a consumer would have no base to apply the next one to.
     #[test]
     fn the_first_entry_is_full_even_when_empty() {
-        let mut producer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
         let first = producer
-            .observe(Vec::new())
+            .observe(S, Vec::new())
             .expect("an opening entry is sent");
         assert_eq!(first.kind, EntryKind::Full);
         assert!(first.slots.is_empty());
 
-        let mut consumer = SlotIndex::new();
-        consumer.apply(&first).expect("applies");
-        let second = producer.observe(vec![task(0, "redis")]).unwrap();
+        let mut consumer = SourceIndex::new();
+        consumer.apply(S, &first).expect("applies");
+        let second = producer.observe(S, vec![task(0, "redis")]).unwrap();
         assert_eq!(second.kind, EntryKind::Delta);
         consumer
-            .apply(&second)
+            .apply(S, &second)
             .expect("and so does the delta after it");
     }
 
     #[test]
     fn a_delta_before_a_full_is_refused() {
-        let mut producer = SlotIndex::new();
-        producer.observe(Vec::new()).unwrap();
-        let delta = producer.observe(vec![task(0, "redis")]).unwrap();
+        let mut producer = SourceIndex::new();
+        producer.observe(S, Vec::new()).unwrap();
+        let delta = producer.observe(S, vec![task(0, "redis")]).unwrap();
 
-        let mut fresh = SlotIndex::new();
+        let mut fresh = SourceIndex::new();
         assert_eq!(
-            fresh.apply(&delta).expect_err("no base"),
+            fresh.apply(S, &delta).expect_err("no base"),
             ApplyError::DeltaBeforeFull,
         );
     }
 
     /// The seal-cadence resend must not look like a change to anything
-    /// downstream: same set, same state, so rows built against it stay valid.
+    /// downstream: same sets, same state, so rows built against it stay valid.
     #[test]
     fn a_full_resend_does_not_move_the_state() {
-        let mut producer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
         producer
-            .observe(vec![task(0, "redis"), task(7, "nginx")])
+            .observe(S, vec![task(0, "redis"), task(7, "nginx")])
             .unwrap();
         let before = producer.state();
 
-        let full = producer.full_entry();
-        assert_eq!(full.state, before);
+        let fulls = producer.full_entries();
+        assert_eq!(fulls.len(), 1);
+        assert_eq!(fulls[0].1.state, before);
 
-        let mut consumer = SlotIndex::new();
-        consumer.apply(&full).unwrap();
-        consumer
-            .apply(&full)
-            .expect("applying it twice is idempotent");
+        let mut consumer = SourceIndex::new();
+        for (stream, entry) in &fulls {
+            consumer.apply(stream, entry).unwrap();
+            consumer
+                .apply(stream, entry)
+                .expect("applying it twice is idempotent");
+        }
         assert_eq!(consumer.state(), before);
     }
 
     #[test]
     fn an_entry_round_trips_through_its_blob_encoding() {
-        let mut producer = SlotIndex::new();
-        producer.observe(vec![task(0, "redis")]).unwrap();
+        let mut producer = SourceIndex::new();
+        producer.observe(S, vec![task(0, "redis")]).unwrap();
         let entry = producer
-            .observe(vec![task(0, "redis"), task(4, "nginx")])
+            .observe(S, vec![task(0, "redis"), task(4, "nginx")])
             .unwrap();
 
         let decoded = IndexEntry::decode(&entry.encode()).expect("decodes");
@@ -554,11 +747,14 @@ mod tests {
     /// sorted by slot rather than by arrival.
     #[test]
     fn slots_come_back_in_rank_order() {
-        let mut producer = SlotIndex::new();
+        let mut producer = SourceIndex::new();
         producer
-            .observe(vec![task(9, "c"), task(2, "a"), task(5, "b")])
+            .observe(S, vec![task(9, "c"), task(2, "a"), task(5, "b")])
             .unwrap();
-        assert_eq!(producer.slots().collect::<Vec<_>>(), vec![2, 5, 9]);
+        assert_eq!(
+            producer.stream(S).unwrap().slots().collect::<Vec<_>>(),
+            vec![2, 5, 9]
+        );
     }
 
     /// What Phase 2 of #1224 is for, in bytes.
@@ -622,9 +818,9 @@ mod tests {
         let schema_bytes = rmp_serde::to_vec(&schema).unwrap().len();
         assert_eq!(schema.counters.len(), 638, "the measured descriptor count");
 
-        let mut producer = SlotIndex::new();
-        let full_bytes = producer.observe(live(0)).unwrap().encode().len();
-        let delta_bytes = producer.observe(live(1)).unwrap().encode().len();
+        let mut producer = SourceIndex::new();
+        let full_bytes = producer.observe(S, live(0)).unwrap().encode().len();
+        let delta_bytes = producer.observe(S, live(1)).unwrap().encode().len();
 
         println!(
             "\n  {TASKS} tasks, 638 descriptors, one slot recycled\n\

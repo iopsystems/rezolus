@@ -1076,7 +1076,7 @@ pub(crate) struct SkeletonCache {
     /// `entries` has, updated on the same condition — a hit means the schema
     /// compared equal, and member metadata is part of a schema, so a hit means
     /// identity did not move.
-    slots: HashMap<String, crate::recorder::index::SlotIndex>,
+    slots: crate::recorder::index::SourceIndex,
     index_entries: Vec<(String, crate::recorder::index::IndexEntry)>,
 }
 
@@ -1095,7 +1095,7 @@ impl SkeletonCache {
         Self {
             entries: HashMap::new(),
             rebuilds: 0,
-            slots: HashMap::new(),
+            slots: crate::recorder::index::SourceIndex::new(),
             index_entries: Vec::new(),
         }
     }
@@ -1111,8 +1111,7 @@ impl SkeletonCache {
         group_name: &str,
         observed: BTreeMap<u32, BTreeMap<String, String>>,
     ) {
-        let index = self.slots.entry(group_name.to_string()).or_default();
-        if let Some(entry) = index.observe(observed) {
+        if let Some(entry) = self.slots.observe(group_name, observed) {
             self.index_entries.push((group_name.to_string(), entry));
         }
     }
@@ -1132,15 +1131,12 @@ impl SkeletonCache {
         std::mem::take(&mut self.index_entries)
     }
 
-    /// A group's live slot set, for a caller that needs the full state rather
-    /// than the change — connect-time completeness and the seal-cadence
+    /// Every group's live slot set, for a caller that needs the full state
+    /// rather than the change — connect-time completeness and the seal-cadence
     /// resend.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn slot_index(
-        &self,
-        group_name: &str,
-    ) -> Option<&crate::recorder::index::SlotIndex> {
-        self.slots.get(group_name)
+    pub(crate) fn slot_index(&self) -> &crate::recorder::index::SourceIndex {
+        &self.slots
     }
 
     /// Number of times a group's schema has been rebuilt (hash recomputed)
@@ -3529,17 +3525,23 @@ mod tests {
     )]
     static V3_STEADY_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
 
-    fn tick_entries(
+    fn tick_all_entries(
         group: &AcquisitionGroup,
-        name: &str,
         cache: &mut SkeletonCache,
     ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
         let guard = group.acquire();
         guard.finish();
         let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
+        cache.take_index_entries()
+    }
+
+    fn tick_entries(
+        group: &AcquisitionGroup,
+        name: &str,
+        cache: &mut SkeletonCache,
+    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
         let want = format!("unattributed/{name}");
-        cache
-            .take_index_entries()
+        tick_all_entries(group, cache)
             .into_iter()
             .filter(|(group_name, _)| *group_name == want)
             .collect()
@@ -3633,14 +3635,23 @@ mod tests {
 
         V3_CAPTURE_COUNTERS.set(11, 1);
         V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "before".to_string())].into());
-        capture_tick(&mut cache);
+        let mut consumer = crate::recorder::index::SourceIndex::new();
+        for (stream, entry) in tick_all_entries(&V3_CAPTURE_GROUP, &mut cache) {
+            consumer
+                .apply(&stream, &entry)
+                .expect("opening entries apply");
+        }
 
         V3_CAPTURE_COUNTERS.set(11, 1);
         V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "after".to_string())].into());
 
-        let entries = capture_tick(&mut cache);
-        assert_eq!(entries.len(), 1);
-        let (_, entry) = &entries[0];
+        let all = tick_all_entries(&V3_CAPTURE_GROUP, &mut cache);
+        let mine: Vec<_> = all
+            .iter()
+            .filter(|(name, _)| name == "unattributed/capture_probe")
+            .collect();
+        assert_eq!(mine.len(), 1, "one entry for the probe group");
+        let entry = &mine[0].1;
         assert_eq!(entry.kind, crate::recorder::index::EntryKind::Delta);
         let changed: Vec<_> = entry.slots.iter().filter(|e| e.slot == 11).collect();
         assert_eq!(changed.len(), 1, "one slot changed");
@@ -3653,12 +3664,17 @@ mod tests {
             "the slot never stopped being live"
         );
 
-        // And the accumulated state is what a consumer would be checked
-        // against.
-        let index = cache
-            .slot_index("unattributed/capture_probe")
-            .expect("tracked");
-        assert_eq!(entry.state, index.state());
+        // A consumer applying this tick's entries in order arrives at the
+        // producer's state. Asserting `entry.state == cache.slot_index()
+        // .state()` directly would be wrong: an entry carries the state as of
+        // ITSELF, and any group that missed later in the same tick moves the
+        // source past it.
+        for (stream, entry) in &all {
+            consumer
+                .apply(stream, entry)
+                .expect("this tick's entries apply");
+        }
+        assert_eq!(consumer.state(), cache.slot_index().state());
     }
 
     // What `rez::index` rests on, made checkable. A reader-stamped group with
