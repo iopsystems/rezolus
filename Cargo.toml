@@ -71,6 +71,12 @@ chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
 clocksource = "1.0.0"
 core_affinity = "0.8.3"
+# The agent produces replication frames directly now (#1224 Phase 2), so the
+# binary names dendro's types rather than reaching them through `rez`. Reader
+# configuration here too: `crates/rez`'s `write` feature is what turns the
+# append side on, and turning it on twice would say the binary needs a writer
+# of its own, which it does not.
+dendro.workspace = true
 ctrlc = { version = "3.5.2", features = ["termination"] }
 futures = "0.3.32"
 # 16 random bytes for the producer epoch, nothing else. Already in the graph
