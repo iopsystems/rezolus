@@ -77,15 +77,11 @@ impl BranchInner {
         // Declare the members we can actually populate — see the note in
         // `BpfBuilder::build`. `allowed_cpus` is unrestricted unless a
         // `reserved_pmu_cpus` mask kept this sampler off part of the machine.
-        let allowed = crate::agent::pmu::allowed_cpus(
-            NAME,
-            (0..crate::agent::bpf::possible_cpus()).collect(),
-        );
-        if allowed.len() == crate::agent::bpf::possible_cpus() {
-            CPU_BRANCH_ACQ.set_member_bound(crate::agent::bpf::possible_cpus());
-        } else {
-            CPU_BRANCH_ACQ.set_member_set(&allowed);
-        }
+        // Present CPUs, not `0..possible_cpus()`: the possible mask is
+        // hot-add capacity, so a dense prefix over it declares members this
+        // host will never populate. See `bpf::present_cpus`.
+        let allowed = crate::agent::pmu::allowed_cpus(NAME, crate::agent::bpf::present_cpus());
+        CPU_BRANCH_ACQ.set_member_set(&allowed);
 
         Ok(Self {
             perf_threads,

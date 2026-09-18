@@ -73,7 +73,7 @@ impl CpuL3Inner {
         // (principle 18): the real number of per-CPU slots this sweep will
         // ever populate, not each member `CounterGroup`'s `MAX_CPUS`-sized
         // backing array.
-        CPU_L3_ACQ.set_member_bound(crate::agent::bpf::possible_cpus());
+        CPU_L3_ACQ.set_member_set(&crate::agent::bpf::present_cpus());
 
         Ok(Self {
             perf_threads,
