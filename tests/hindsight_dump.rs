@@ -1315,11 +1315,15 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
     let target = plateau + plateau / 2;
     let deadline = Instant::now() + SUSTAINED_MAX;
     let started = Instant::now();
-    let (mut dumps, mut busy) = (0u32, Duration::ZERO);
+    let (mut dumps, mut busy, mut longest_gap) = (0u32, Duration::ZERO, Duration::ZERO);
+    let mut last_end = Instant::now();
     while (started.elapsed() < SUSTAINED || size() < target) && Instant::now() < deadline {
+        longest_gap = longest_gap.max(last_end.elapsed());
         busy += h.dump_to(&dest);
+        last_end = Instant::now();
         dumps += 1;
     }
+    longest_gap = longest_gap.max(last_end.elapsed());
     let held = started.elapsed();
     let during = size();
 
@@ -1368,7 +1372,7 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
          steady-state plateau           {plateau} B\n  \
          after one {one_took:?} dump  {after_one} B ({:+} B)\n  \
          after {held:?} of dumps  {during} B ({:+} B, {:.2} MB/s; {dumps} dumps, \
-         {busy:?} inside one)\n  \
+         {busy:?} inside one, longest gap {longest_gap:?})\n  \
          1 s after the last dump        {after} B ({:+} B)\n  \
          peak over {} samples           {} B",
         after_one as i64 - plateau as i64,
@@ -1379,10 +1383,24 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
         peak,
     );
 
+    // Fixture check: was the read mark effectively continuous? Measured
+    // against the length of a dump rather than as a fraction of the window,
+    // because the window holds very few dumps — a run that produced this
+    // assertion's last failure managed two, of ~1.3 s each. Per-iteration
+    // overhead amortized over two iterations is a large share of the window
+    // and none of it means the mark lapsed, so a fixed coverage ratio measures
+    // the host's scheduling, which is what the rest of this test is written to
+    // avoid asserting. What would actually break the fixture is a gap long
+    // enough to be a lapse in its own right, and a dump is the natural scale
+    // for that.
+    assert!(dumps > 0, "fixture: no dump ran inside the {held:?} window");
+    let average_dump = busy / dumps;
     assert!(
-        busy >= held * 3 / 4,
-        "fixture: dumps covered only {busy:?} of the {held:?} window, so the \
-         read mark was not held for most of it"
+        longest_gap < average_dump,
+        "fixture: the longest gap between dumps was {longest_gap:?}, against an \
+         average dump of {average_dump:?} ({dumps} dumps, {busy:?} inside one, \
+         {held:?} window) — the read mark lapsed rather than being held across \
+         the window"
     );
     // Past the UNPINNED high-water, by half again. The threshold is what makes
     // this test mean anything: with the read mark removed the sidecar still

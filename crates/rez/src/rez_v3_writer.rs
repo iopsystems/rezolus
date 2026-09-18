@@ -1796,8 +1796,22 @@ mod tests {
     /// segment writes the rows a tick would have written and then names the
     /// sampler. Metadata rides the first row only, as `ingest` anchors it.
     fn commit_wal(writer: &mut RecordingWriter, sampler: &str, ts: &[u64], wall_offset: i64) {
-        let rows: Vec<WalRow> = ts
-            .iter()
+        writer.wal(wal_rows(sampler, ts, wall_offset)).unwrap();
+    }
+
+    /// `commit`, handing the writer's error back instead of panicking.
+    ///
+    /// A hand-off is a hand-off. Once the writer thread has failed, whichever
+    /// of `wal` or `seal` next finds the receiver gone is the one that reports
+    /// it, and which of the two that is comes down to timing. A test looking
+    /// for that error on `seal` has to tolerate it arriving here instead, or it
+    /// fails on whichever machine loses the race.
+    fn try_commit(writer: &mut RecordingWriter, sampler: &str, ts: &[u64]) -> Result<(), String> {
+        writer.wal(wal_rows(sampler, ts, 7))
+    }
+
+    fn wal_rows(sampler: &str, ts: &[u64], wall_offset: i64) -> Vec<WalRow> {
+        ts.iter()
             .enumerate()
             .map(|(i, &t)| WalRow {
                 sampler: sampler.to_string(),
@@ -1815,8 +1829,7 @@ mod tests {
                 }])
                 .unwrap(),
             })
-            .collect();
-        writer.wal(rows).unwrap();
+            .collect()
     }
 
     /// `commit_wal` at the offset most tests do not care about.
@@ -2506,7 +2519,14 @@ mod tests {
         // writer fails asynchronously.
         let mut surfaced = None;
         for _ in 0..500 {
-            commit(&mut writer, "scheduler", &[1_000]);
+            // Either hand-off may be the one that finds the receiver gone —
+            // see `try_commit`. Taking the error from whichever reports it is
+            // the difference between testing the mechanism and testing which
+            // side of a race this machine landed on.
+            if let Err(e) = try_commit(&mut writer, "scheduler", &[1_000]) {
+                surfaced = Some(e);
+                break;
+            }
             match writer.seal(vec!["scheduler".to_string()]) {
                 Ok(()) => std::thread::sleep(std::time::Duration::from_millis(1)),
                 Err(e) => {
