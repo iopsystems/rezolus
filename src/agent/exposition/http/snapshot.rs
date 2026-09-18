@@ -1067,6 +1067,17 @@ fn create(
 pub(crate) struct SkeletonCache {
     entries: HashMap<String, GroupSkeleton>,
     rebuilds: u64,
+    /// Each group's live slot set, and the entries this tick's walk produced.
+    ///
+    /// Here rather than returned from `create_v3` because it is cross-tick
+    /// state: a cache HIT does not re-read member metadata, so the labels a
+    /// hit tick observes are empty, and the set they belong to has to have
+    /// survived from the miss that last built it. That is the same lifetime
+    /// `entries` has, updated on the same condition — a hit means the schema
+    /// compared equal, and member metadata is part of a schema, so a hit means
+    /// identity did not move.
+    slots: HashMap<String, crate::recorder::index::SlotIndex>,
+    index_entries: Vec<(String, crate::recorder::index::IndexEntry)>,
 }
 
 struct GroupSkeleton {
@@ -1084,7 +1095,52 @@ impl SkeletonCache {
         Self {
             entries: HashMap::new(),
             rebuilds: 0,
+            slots: HashMap::new(),
+            index_entries: Vec::new(),
         }
+    }
+
+    /// Fold one group's freshly observed slot labels in, recording an entry
+    /// when identity actually moved.
+    ///
+    /// Call only for a group whose schema was rebuilt this tick. On a hit the
+    /// labels were never read, and observing an empty set would be read as
+    /// every slot having been removed.
+    fn observe_slots(
+        &mut self,
+        group_name: &str,
+        observed: BTreeMap<u32, BTreeMap<String, String>>,
+    ) {
+        let index = self.slots.entry(group_name.to_string()).or_default();
+        if let Some(entry) = index.observe(observed) {
+            self.index_entries.push((group_name.to_string(), entry));
+        }
+    }
+
+    /// The index entries the last `create_v3` produced, and clear them.
+    ///
+    /// Empty on a steady tick: a group whose slots did not move emits nothing,
+    /// which is what makes the format cheaper than re-sending a schema.
+    // Nothing in the agent transmits these yet — the producer that turns them
+    // into `Frame::Index` is the next step of #1224 Phase 2. Capturing them
+    // first keeps that change to frame-building, with the walk it reads from
+    // already tested.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn take_index_entries(
+        &mut self,
+    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        std::mem::take(&mut self.index_entries)
+    }
+
+    /// A group's live slot set, for a caller that needs the full state rather
+    /// than the change — connect-time completeness and the seal-cadence
+    /// resend.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn slot_index(
+        &self,
+        group_name: &str,
+    ) -> Option<&crate::recorder::index::SlotIndex> {
+        self.slots.get(group_name)
     }
 
     /// Number of times a group's schema has been rebuilt (hash recomputed)
@@ -1559,6 +1615,11 @@ struct GroupBuilder {
     reader_guard: Option<AcquisitionGuard<'static>>,
     needs_schema: bool,
     walk_identity: GroupIdentityAccum,
+    /// What the sampler attached to each populated slot, captured during the
+    /// same walk that reads the values — see `SkeletonCache::observe_slots`.
+    /// Empty on a cache hit, which is exactly when there is nothing to
+    /// observe.
+    slot_labels: BTreeMap<u32, BTreeMap<String, String>>,
     counter_descs: Vec<MetricDesc>,
     counter_values: Vec<Option<u64>>,
     gauge_descs: Vec<MetricDesc>,
@@ -1574,6 +1635,7 @@ impl Default for GroupBuilder {
             reader_guard: None,
             needs_schema: true,
             walk_identity: GroupIdentityAccum::default(),
+            slot_labels: BTreeMap::new(),
             counter_descs: Vec::new(),
             counter_values: Vec::new(),
             gauge_descs: Vec::new(),
@@ -2070,6 +2132,16 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
+                                    // The same map, kept unmerged. Once it is
+                                    // folded into `entry_metadata` above the
+                                    // per-slot half cannot be told from the
+                                    // metric-level half again — a member key
+                                    // may shadow a metric one — and an index
+                                    // entry needs the per-slot half alone.
+                                    group.slot_labels.insert(
+                                        idx as u32,
+                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                                    );
                                 }
                                 group.counter_descs.push(MetricDesc {
                                     name: format!("{metric_id}x{idx}"),
@@ -2168,6 +2240,16 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
+                                    // The same map, kept unmerged. Once it is
+                                    // folded into `entry_metadata` above the
+                                    // per-slot half cannot be told from the
+                                    // metric-level half again — a member key
+                                    // may shadow a metric one — and an index
+                                    // entry needs the per-slot half alone.
+                                    group.slot_labels.insert(
+                                        idx as u32,
+                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                                    );
                                 }
                             });
 
@@ -2211,6 +2293,16 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
+                                    // The same map, kept unmerged. Once it is
+                                    // folded into `entry_metadata` above the
+                                    // per-slot half cannot be told from the
+                                    // metric-level half again — a member key
+                                    // may shadow a metric one — and an index
+                                    // entry needs the per-slot half alone.
+                                    group.slot_labels.insert(
+                                        idx as u32,
+                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                                    );
                                 }
                                 group.gauge_descs.push(MetricDesc {
                                     name: format!("{metric_id}x{idx}"),
@@ -2265,6 +2357,16 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
+                                    // The same map, kept unmerged. Once it is
+                                    // folded into `entry_metadata` above the
+                                    // per-slot half cannot be told from the
+                                    // metric-level half again — a member key
+                                    // may shadow a metric one — and an index
+                                    // entry needs the per-slot half alone.
+                                    group.slot_labels.insert(
+                                        idx as u32,
+                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                                    );
                                 }
                             });
 
@@ -2490,7 +2592,7 @@ fn create_v3(
 
     let mut group_snapshots: Vec<GroupSnapshot> = Vec::with_capacity(groups.len());
 
-    for (group_key, group) in groups {
+    for (group_key, mut group) in groups {
         // A metric routes to (and so creates) a `GroupBuilder` before its
         // `Value` is matched above, so a metric whose value kind isn't one
         // `create_v3` knows how to expose (falls into the `_ => {}` arm —
@@ -2560,6 +2662,14 @@ fn create_v3(
             let latest_window = group_registry.get(&group_key).and_then(|ag| ag.window());
             resolve_walk_window(group.window, latest_window)
         };
+
+        // Only on a miss: see `observe_slots`. `group.slot_labels` is empty on
+        // a hit because the hit walk reads values without touching metadata,
+        // and an empty observation means "every slot is gone", not "nothing
+        // changed".
+        if group.needs_schema {
+            cache.observe_slots(&group_name, std::mem::take(&mut group.slot_labels));
+        }
 
         let (schema, hash) = if group.needs_schema {
             let schema = GroupSchema {
@@ -3388,6 +3498,167 @@ mod tests {
                 );
             }
         }
+    }
+
+    static V3_CAPTURE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "capture_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_CAPTURE_GROUP_ENTRY: &'static AcquisitionGroup = &V3_CAPTURE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_capture_probe",
+        metadata = { acq_group = "capture_probe" }
+    )]
+    static V3_CAPTURE_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
+
+    // A second group, for the one test whose assertion is about ABSENCE. The
+    // others filter to their own slot and so tolerate a sibling test writing
+    // metadata concurrently; "the next tick emits nothing" cannot, because any
+    // write to a shared group produces an entry. Found the hard way: that test
+    // passed alone and failed in the suite, intermittently.
+    static V3_STEADY_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "steady_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_STEADY_GROUP_ENTRY: &'static AcquisitionGroup = &V3_STEADY_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_steady_probe",
+        metadata = { acq_group = "steady_probe" }
+    )]
+    static V3_STEADY_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
+
+    fn tick_entries(
+        group: &AcquisitionGroup,
+        name: &str,
+        cache: &mut SkeletonCache,
+    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        let guard = group.acquire();
+        guard.finish();
+        let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
+        let want = format!("unattributed/{name}");
+        cache
+            .take_index_entries()
+            .into_iter()
+            .filter(|(group_name, _)| *group_name == want)
+            .collect()
+    }
+
+    fn capture_tick(
+        cache: &mut SkeletonCache,
+    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
+        tick_entries(&V3_CAPTURE_GROUP, "capture_probe", cache)
+    }
+
+    /// The capture takes what the SAMPLER attached to a slot, not the merged
+    /// metadata a `MetricDesc` carries.
+    ///
+    /// `create_v3` builds a descriptor's metadata as metric-level ∪ `{id}` ∪
+    /// `load_metadata(idx)`, merged with `insert` — so a member key can shadow
+    /// a metric-level one and nothing afterwards records which was which.
+    /// Splitting identity back out downstream would be a guess, and a wrong
+    /// guess misattributes a slot rather than failing.
+    #[test]
+    fn the_capture_takes_the_samplers_labels_and_not_the_merged_ones() {
+        let mut cache = SkeletonCache::new();
+
+        V3_CAPTURE_COUNTERS.set(4, 1);
+        V3_CAPTURE_COUNTERS.set_metadata(
+            4,
+            [
+                ("comm".to_string(), "redis".to_string()),
+                ("cgroup".to_string(), "/system.slice".to_string()),
+            ]
+            .into(),
+        );
+
+        let entries = capture_tick(&mut cache);
+        assert_eq!(
+            entries.len(),
+            1,
+            "a new group's first tick states its slots"
+        );
+        let (_, entry) = &entries[0];
+        assert_eq!(entry.kind, crate::recorder::index::EntryKind::Full);
+        let slot = entry
+            .slots
+            .iter()
+            .find(|e| e.slot == 4)
+            .expect("the populated slot");
+        assert_eq!(slot.labels.get("comm").map(String::as_str), Some("redis"));
+        assert_eq!(
+            slot.labels.get("cgroup").map(String::as_str),
+            Some("/system.slice")
+        );
+        // The keys `create_v3` adds itself describe the metric or the walk, not
+        // the slot, and must not reach an index entry.
+        for key in ["metric", "sampler", "id"] {
+            assert!(
+                !slot.labels.contains_key(key),
+                "`{key}` is not something the sampler attached to slot 4: {:?}",
+                slot.labels
+            );
+        }
+    }
+
+    /// A steady tick is silent. This is the whole saving: a group whose slots
+    /// did not move sends nothing, where today an unrelated schema change
+    /// re-sends every descriptor.
+    #[test]
+    fn a_tick_that_moves_nothing_produces_no_entry() {
+        let mut cache = SkeletonCache::new();
+
+        V3_STEADY_COUNTERS.set(6, 1);
+        V3_STEADY_COUNTERS.set_metadata(6, [("comm".to_string(), "steady".to_string())].into());
+        assert_eq!(
+            tick_entries(&V3_STEADY_GROUP, "steady_probe", &mut cache).len(),
+            1,
+            "the opening entry"
+        );
+
+        // Same slots, same labels, a fresh value.
+        V3_STEADY_COUNTERS.set(6, 2);
+        assert!(
+            tick_entries(&V3_STEADY_GROUP, "steady_probe", &mut cache).is_empty(),
+            "nothing about identity changed, so nothing is transmitted"
+        );
+    }
+
+    /// The `cpu_usage_task` case end to end: a slot whose occupant changed
+    /// produces one delta naming that slot, not a rebuilt group.
+    #[test]
+    fn a_recycled_slot_produces_one_delta_through_the_builder() {
+        let mut cache = SkeletonCache::new();
+
+        V3_CAPTURE_COUNTERS.set(11, 1);
+        V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "before".to_string())].into());
+        capture_tick(&mut cache);
+
+        V3_CAPTURE_COUNTERS.set(11, 1);
+        V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "after".to_string())].into());
+
+        let entries = capture_tick(&mut cache);
+        assert_eq!(entries.len(), 1);
+        let (_, entry) = &entries[0];
+        assert_eq!(entry.kind, crate::recorder::index::EntryKind::Delta);
+        let changed: Vec<_> = entry.slots.iter().filter(|e| e.slot == 11).collect();
+        assert_eq!(changed.len(), 1, "one slot changed");
+        assert_eq!(
+            changed[0].labels.get("comm").map(String::as_str),
+            Some("after")
+        );
+        assert!(
+            !entry.removed.contains(&11),
+            "the slot never stopped being live"
+        );
+
+        // And the accumulated state is what a consumer would be checked
+        // against.
+        let index = cache
+            .slot_index("unattributed/capture_probe")
+            .expect("tracked");
+        assert_eq!(entry.state, index.state());
     }
 
     // What `rez::index` rests on, made checkable. A reader-stamped group with
