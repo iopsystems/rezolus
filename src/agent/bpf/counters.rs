@@ -194,15 +194,19 @@ impl<'a> CpuCounters<'a> {
     ) -> Self {
         let counter_map = CounterMap::new(map, counters.len()).expect("failed to initialize");
 
-        // Boot-fixed population bound: the real number of per-CPU slots
-        // this group will ever populate, distinct from each member
-        // `CounterGroup`'s `MAX_CPUS`-sized backing array (an
+        // Boot-fixed membership: the CPU ids this host actually has, distinct
+        // from each member `CounterGroup`'s `MAX_CPUS`-sized backing array (an
         // implementation ceiling — see docs/principles.md principle 6).
-        // `possible_cpus()` is already clamped to `MAX_CPUS` (see
-        // `bpf/mod.rs`), so this can never exceed a member's `entries()`.
-        // The V3 snapshot builder walks only `0..bound` for a declared
-        // group with a bound set, instead of the full backing capacity.
-        group.set_member_bound(possible_cpus());
+        //
+        // An explicit SET, not a `0..possible_cpus()` bound. The possible mask
+        // is what could be hot-added rather than what exists, and it is
+        // `max_id + 1`, so a dense bound over it declares members this host
+        // will never populate — 256 of them on a VM with `possible: 0-255,
+        // present: 0-31`. Those slots are read from the zero-filled BPF mmap
+        // and published as a real `0`, because a DECLARED group is exactly
+        // where the snapshot builder skips the value-sentinel that would
+        // otherwise have hidden them.
+        group.set_member_set(&present_cpus());
 
         Self {
             counter_map,

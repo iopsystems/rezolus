@@ -133,6 +133,61 @@ use counters::{Counters, CpuCounters, PackedCounters};
 use histogram::{Histogram, HistogramBatch};
 pub use sync_primitive::SyncPrimitive;
 
+/// The CPU ids this host actually has, for declaring a per-CPU group's
+/// membership.
+///
+/// **Not `0..possible_cpus()`.** That is a dense prefix over
+/// `/sys/devices/system/cpu/possible`, which the kernel populates with ids
+/// that *could* be hot-added rather than ids that exist — so on a VM
+/// advertising hotplug capacity (`possible: 0-255`, `present: 0-31`) it
+/// declares 256 members for a 32-CPU machine. It is also `max_id + 1`, so a
+/// gapped mask (`0-3,8-11`) declares the four ids in between as well.
+///
+/// Either way the extra slots are members of a DECLARED group, which is
+/// exactly where `create_v3` skips the value-sentinel that would otherwise
+/// have hidden them — so they are read out of the zero-filled BPF mmap and
+/// published as a real `0`. That is the failure the declared-membership doc
+/// warns about: "an over-declared prefix still publishes `0` for indices
+/// nothing measured — a wrong value where the honest answer is no value at
+/// all."
+///
+/// `present` rather than `online`: a CPU that is present but offline keeps its
+/// slot and its identity, so its membership does not move when it is taken
+/// down and brought back. `set_member_set` is a `OnceLock` — declared once at
+/// init — so a membership that tracked `online` could not be updated on
+/// hotplug anyway, and would silently be wrong after the first change.
+///
+/// Falls back to the dense prefix if the file is unreadable, which is the
+/// behaviour this replaces rather than a new failure mode.
+pub(crate) fn present_cpus() -> Vec<usize> {
+    static CACHE: OnceLock<Vec<usize>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| match crate::common::cpus() {
+            Ok(cpus) if !cpus.is_empty() => cpus
+                .into_iter()
+                .filter(|c| *c < crate::agent::MAX_CPUS)
+                .collect(),
+            Ok(_) => {
+                warn!(
+                    "/sys/devices/system/cpu/present listed no CPUs; falling back to a \
+                     dense 0..{} member set",
+                    possible_cpus()
+                );
+                (0..possible_cpus()).collect()
+            }
+            Err(e) => {
+                warn!(
+                    "failed to read /sys/devices/system/cpu/present ({e}); falling back to \
+                     a dense 0..{} member set, which over-declares on a host whose possible \
+                     mask exceeds its present one",
+                    possible_cpus()
+                );
+                (0..possible_cpus()).collect()
+            }
+        })
+        .clone()
+}
+
 /// Parse the CPU count implied by `/sys/devices/system/cpu/possible`
 /// syntax: a comma-separated list of individual ids and/or `lo-hi` ranges
 /// (e.g. `"0-31"`, `"0"`, `"0-3,8-11"`). The file lists which ids the kernel
@@ -347,6 +402,59 @@ impl Sampler for AsyncBpf {
         if let Some(guard) = guard {
             guard.finish();
         }
+    }
+}
+
+/// The gap between "how many slots could exist" and "which ids do exist" —
+/// the distinction `present_cpus` was added for.
+///
+/// These are parse-level rather than filesystem-level: `present_cpus` reads
+/// sysfs and caches in a `OnceLock`, so it cannot be driven from a test.
+/// `crate::common::cpus` does the parsing it depends on, and these pin the
+/// property that made the old dense bound wrong — that `possible_cpus`'
+/// answer is not a member count.
+#[cfg(test)]
+mod present_vs_possible_tests {
+    use super::parse_possible_cpus;
+
+    /// A VM advertising hot-add capacity. The old code declared one member
+    /// per possible SLOT, so a 32-CPU guest published 256 per-CPU series,
+    /// 224 of them zeros read out of a zero-filled mmap.
+    #[test]
+    fn a_hotplug_capable_mask_implies_far_more_slots_than_cpus() {
+        assert_eq!(parse_possible_cpus("0-255"), Some(256));
+        // What the host actually has is a different file, and a different
+        // answer: `present: 0-31` is 32 ids.
+        let present: Vec<usize> = (0..=31).collect();
+        assert_eq!(present.len(), 32);
+        assert!(
+            parse_possible_cpus("0-255").unwrap() > present.len(),
+            "this is the over-declaration: 256 declared members, 32 real CPUs"
+        );
+    }
+
+    /// A gapped mask. `possible_cpus` is documented to return `max_id + 1`
+    /// precisely so a sweep bound covers the highest id — which means the
+    /// gap is inside the range, and a dense bound declares it.
+    #[test]
+    fn a_gapped_mask_implies_slots_that_are_not_cpus() {
+        assert_eq!(parse_possible_cpus("0-3,8-11"), Some(12));
+        let present = [0usize, 1, 2, 3, 8, 9, 10, 11];
+        assert_eq!(present.len(), 8);
+        // Slots 4-7 are inside the bound and belong to no CPU.
+        for phantom in 4..8 {
+            assert!(!present.contains(&phantom));
+            assert!(phantom < parse_possible_cpus("0-3,8-11").unwrap());
+        }
+    }
+
+    /// The case where the two agree, which is every machine CI and `delta`
+    /// run on — and why this went unnoticed.
+    #[test]
+    fn a_contiguous_fully_present_machine_hides_the_bug() {
+        assert_eq!(parse_possible_cpus("0-31"), Some(32));
+        let present: Vec<usize> = (0..=31).collect();
+        assert_eq!(parse_possible_cpus("0-31").unwrap(), present.len());
     }
 }
 
