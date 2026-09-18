@@ -3390,6 +3390,155 @@ mod tests {
         }
     }
 
+    // What `rez::index` rests on, made checkable. A reader-stamped group with
+    // two metrics, populated at non-contiguous slots — the shape
+    // `cpu_usage/cpu_usage_task` has.
+    static V3_SLOT_ORDER_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "slot_order_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_SLOT_ORDER_GROUP_ENTRY: &'static AcquisitionGroup = &V3_SLOT_ORDER_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_slot_order_a",
+        metadata = { acq_group = "slot_order_probe" }
+    )]
+    static V3_SLOT_ORDER_A: metriken::CounterGroup = metriken::CounterGroup::new(16);
+
+    #[metric(
+        name = "snapshot_v3_slot_order_b",
+        metadata = { acq_group = "slot_order_probe" }
+    )]
+    static V3_SLOT_ORDER_B: metriken::CounterGroup = metriken::CounterGroup::new(16);
+
+    /// Two properties the `rez::index` producer will depend on, neither of
+    /// which is enforced by a type today.
+    ///
+    /// **Within a metric, members come out in ascending slot order.** A row's
+    /// values vector is positional, and `SlotIndex::slots()` hands back sorted
+    /// slots — so a consumer reading value `i` as belonging to the `i`-th
+    /// sorted live slot is right only if the producer emitted them that way.
+    ///
+    /// **Every metric of a group agrees on what a slot means.** The index is
+    /// per stream, so one slot has one label set for the whole group. Samplers
+    /// do this by looping over their metric list
+    /// (`cpu/linux/usage/mod.rs`'s `handle_task_info` inserts the same
+    /// metadata for every metric in `TASK_METRICS`, and `handle_task_exit`
+    /// clears them together), but nothing makes them. A sampler that labelled
+    /// one metric and not another would give a slot two meanings, and the
+    /// index has one place to put it.
+    #[test]
+    fn a_groups_metrics_agree_on_slot_order_and_on_what_each_slot_means() {
+        // Non-contiguous on purpose: membership here is metadata-presence, so
+        // the emitted order is whatever the walk produces, not 0..n.
+        for (slot, comm) in [(9usize, "nine"), (2, "two"), (13, "thirteen")] {
+            for metric in [&V3_SLOT_ORDER_A, &V3_SLOT_ORDER_B] {
+                metric.set(slot, 1);
+                metric.set_metadata(
+                    slot,
+                    [
+                        ("comm".to_string(), comm.to_string()),
+                        ("cgroup".to_string(), "/system.slice".to_string()),
+                    ]
+                    .into(),
+                );
+            }
+        }
+
+        let guard = V3_SLOT_ORDER_GROUP.acquire();
+        guard.finish();
+
+        let mut cache = SkeletonCache::new();
+        let Snapshot::V3(snap) = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            &mut cache,
+        ) else {
+            panic!("expected V3")
+        };
+        let group = snap
+            .groups
+            .iter()
+            .find(|g| g.name == "unattributed/slot_order_probe")
+            .expect("probe group present");
+        let schema = group.schema.as_ref().expect("schema present");
+
+        // `MetricDesc.name` is `"{metric_id}x{slot}"` for a group member.
+        let mut by_metric: std::collections::BTreeMap<&str, Vec<u32>> = Default::default();
+        // What one metric says a slot means: the metric's name, and the
+        // identity the sampler attached to that slot.
+        type SlotClaim<'a> = (&'a str, BTreeMap<&'a str, &'a str>);
+        let mut labels_by_slot: std::collections::BTreeMap<u32, Vec<SlotClaim<'_>>> =
+            Default::default();
+        for desc in &schema.counters {
+            let Some(metric) = desc.metadata.get("metric") else {
+                continue;
+            };
+            if !metric.starts_with("snapshot_v3_slot_order_") {
+                continue;
+            }
+            let slot: u32 = desc
+                .name
+                .split_once('x')
+                .expect("a group member's name is `{metric_id}x{slot}`")
+                .1
+                .parse()
+                .expect("the slot half parses");
+            by_metric.entry(metric).or_default().push(slot);
+
+            // Everything the sampler attached, which is what identity is. The
+            // keys create_v3 adds itself (`metric`, `sampler`, `id`) are not
+            // per-slot and do not belong in an index entry.
+            let identity: BTreeMap<&str, &str> = desc
+                .metadata
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "metric" | "sampler" | "id"))
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            labels_by_slot
+                .entry(slot)
+                .or_default()
+                .push((metric, identity));
+        }
+
+        assert_eq!(by_metric.len(), 2, "both metrics emitted members");
+        for (metric, slots) in &by_metric {
+            let mut sorted = slots.clone();
+            sorted.sort_unstable();
+            assert_eq!(
+                slots, &sorted,
+                "`{metric}` emitted members out of slot order: {slots:?}"
+            );
+            assert_eq!(slots, &vec![2, 9, 13], "the populated slots, ascending");
+        }
+
+        for (slot, seen) in &labels_by_slot {
+            let (first_metric, first) = &seen[0];
+            // Without this the comparison below could hold vacuously: if the
+            // filter above ever stripped every key, two empty maps are equal.
+            let expected = match slot {
+                2 => "two",
+                9 => "nine",
+                13 => "thirteen",
+                other => panic!("unexpected slot {other}"),
+            };
+            assert_eq!(
+                first.get("comm").copied(),
+                Some(expected),
+                "slot {slot} carries the identity the sampler attached"
+            );
+            for (metric, identity) in &seen[1..] {
+                assert_eq!(
+                    identity, first,
+                    "slot {slot} means one thing to `{first_metric}` and another \
+                     to `{metric}`; an index entry has one place to put it"
+                );
+            }
+        }
+        assert_eq!(labels_by_slot.len(), 3, "every populated slot was seen");
+    }
+
     // C1 regression fixture: a declared CounterGroup whose metadata gets
     // mutated at a stable index between ticks, simulating what happens when
     // the kernel recycles a pid/cgroup id — the value slot stays written
