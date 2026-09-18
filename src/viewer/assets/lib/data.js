@@ -271,12 +271,21 @@ const windowIndices = (t, ns, ne) => {
     return [lo, hi];
 };
 
+// Every per-point column, not just the six a series always carries: `uncLo`,
+// `uncHi` and `interpCol` are optional but are indexed by the SAME point index
+// as `t`, so clipping `t` and spreading those through at full length leaves
+// them misaligned by `lo`. `zipMs` in boxplot.js pairs `t[i]` with `col[i]`
+// and checks no lengths, so that renders the uncertainty ribbon at the wrong
+// timestamps rather than failing; `buildBoxplotSeries`'s interpolation guard
+// compares lengths and silently drops the unobserved-stretch overlay instead.
+const CLIPPED_COLUMNS = ['t', 'min', 'lo', 'median', 'hi', 'max', 'uncLo', 'uncHi', 'interpCol'];
+
 const clipDecoded = (decoded, ns, ne) => {
     const series = decoded.series.map((s) => {
         const [lo, hi] = windowIndices(s.t, ns, ne);
         const out = { ...s, n: hi - lo };
-        for (const c of ['t', 'min', 'lo', 'median', 'hi', 'max']) {
-            out[c] = s[c].subarray(lo, hi);
+        for (const c of CLIPPED_COLUMNS) {
+            if (s[c]) out[c] = s[c].subarray(lo, hi);
         }
         return out;
     });
