@@ -302,7 +302,15 @@ const tileLookup = (query, ns, ne, budget) => {
         const s0 = tile.decoded.series[0];
         if (!s0 || !s0.t || s0.t.length === 0) continue;
         const [lo, hi] = windowIndices(s0.t, ns, ne);
-        if (hi - lo < budget * 0.9) continue;
+        // Only a DECIMATED tile can be too coarse. One that was never
+        // decimated already holds every sample the recording has across its
+        // range, so a window it covers is at native resolution and no refetch
+        // can return more. Measuring it against a budget derived from the
+        // window's LENGTH rejects it whenever the samples are sparser than the
+        // step -- and, in a response composed from several recordings, whenever
+        // series[0] spans less than the tile's full range, since that range is
+        // the union across all series while this check reads only the first.
+        if (s0.decimated && hi - lo < budget * 0.9) continue;
         if (!best || (tile.end - tile.start) < (best.end - best.start)) best = tile;
     }
     if (!best) return null;
