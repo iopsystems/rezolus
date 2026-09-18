@@ -89,7 +89,7 @@ mod tests {
         );
 
         assert!(
-            dendro::Archive::open(&path).is_err(),
+            dendro::archive::Archive::open(&path).is_err(),
             "dendro must refuse an unstamped archive; `crates/rez` is what reads \
              these, and that cannot change until the migration in #1224 lands"
         );
@@ -107,7 +107,7 @@ mod tests {
         let path = dir.path().join("native.dendro");
 
         {
-            let mut archive = dendro::ArchiveMut::create(&path).unwrap();
+            let mut archive = dendro::archive::ArchiveMut::create(&path).unwrap();
             archive
                 .transaction(|tx| {
                     tx.insert_source(&dendro::archive::SourceMeta {
@@ -130,7 +130,7 @@ mod tests {
             "dendro stamps what it creates"
         );
 
-        let archive = dendro::Archive::open(&path).unwrap();
+        let archive = dendro::archive::Archive::open(&path).unwrap();
         let sources = archive.read_sources().unwrap();
         assert_eq!(sources.len(), 1);
         assert_eq!(
