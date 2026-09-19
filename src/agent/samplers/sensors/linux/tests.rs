@@ -5,8 +5,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 struct Inventory {
@@ -372,11 +373,11 @@ fn lifetime_slots_are_stable_never_reused_and_bounded() {
 }
 
 /// Serializes tests that write process-global sensor gauge groups/windows.
-static SENSOR_GLOBALS: Mutex<()> = Mutex::new(());
+static SENSOR_GLOBALS: Mutex<()> = Mutex::const_new(());
 
 #[test]
 fn families_publish_values_metadata_bounds_and_independent_windows() {
-    let _globals = SENSOR_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+    let _globals = SENSOR_GLOBALS.blocking_lock();
     let root = tempfile::tempdir().unwrap();
     make_hwmon(
         root.path(),
@@ -425,7 +426,7 @@ fn families_publish_values_metadata_bounds_and_independent_windows() {
 
 #[test]
 fn failed_and_removed_readings_clear_without_reusing_the_slot() {
-    let _globals = SENSOR_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+    let _globals = SENSOR_GLOBALS.blocking_lock();
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(root.path(), "generic", &[("temp1_input", "42000")]);
     let descriptor = family_descriptors(root.path(), Family::Temperature)
@@ -486,7 +487,7 @@ fn a_panicking_worker_clears_the_in_flight_latch() {
 
 #[tokio::test]
 async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
-    let _globals = SENSOR_GLOBALS.lock().unwrap_or_else(|p| p.into_inner());
+    let _globals = SENSOR_GLOBALS.lock().await;
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(root.path(), "generic", &[("temp1_input", "42000")]);
     let _ = super::metric(Family::Temperature).set(0, i64::MIN);

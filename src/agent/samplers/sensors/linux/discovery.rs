@@ -610,16 +610,16 @@ fn device_identity(sysfs: &Path, node: &Path, hwmon: bool) -> String {
     let canonical = std::fs::canonicalize(node).unwrap_or_else(|_| node.to_path_buf());
     let in_class = canonical.starts_with(sysfs.join("class"));
     let mut device = canonical.as_path();
-    if hwmon && !in_class {
-        if device
+    if hwmon
+        && !in_class
+        && device
             .file_name()
             .and_then(|v| v.to_str())
             .is_some_and(|name| name.starts_with("hwmon"))
-        {
+    {
+        device = device.parent().unwrap_or(device);
+        if device.file_name().and_then(|v| v.to_str()) == Some("hwmon") {
             device = device.parent().unwrap_or(device);
-            if device.file_name().and_then(|v| v.to_str()) == Some("hwmon") {
-                device = device.parent().unwrap_or(device);
-            }
         }
     }
     let relative = device.strip_prefix(sysfs).unwrap_or(device);
