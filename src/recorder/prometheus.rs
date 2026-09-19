@@ -16,8 +16,6 @@ pub struct PrometheusConverter {
     metric_ids: HashMap<MetricKey, usize>,
     next_id: usize,
     descriptions: HashMap<String, String>,
-    source: Option<String>,
-    endpoint: Option<String>,
 }
 
 #[derive(Clone, Hash, Eq, PartialEq)]
@@ -27,13 +25,18 @@ struct MetricKey {
 }
 
 impl PrometheusConverter {
-    pub fn with_provenance(source: String, endpoint: String) -> Self {
+    /// A converter for one endpoint's scrapes.
+    ///
+    /// It used to take that endpoint's `source` and URL and write both into
+    /// every metric's metadata. Neither is a property of a metric — one
+    /// converter is one endpoint — so they now travel where the rest of a
+    /// recording's provenance does: a parquet's file-level keys, a `.rez`
+    /// manifest's labels. See #1224.
+    pub fn new() -> Self {
         Self {
             metric_ids: HashMap::new(),
             next_id: 0,
             descriptions: HashMap::new(),
-            source: Some(source),
-            endpoint: Some(endpoint),
         }
     }
 
@@ -62,12 +65,15 @@ impl PrometheusConverter {
         for (k, v) in labels {
             metadata.insert(k.clone(), v.clone());
         }
-        if let Some(ref source) = self.source {
-            metadata.insert("source".to_string(), source.clone());
-        }
-        if let Some(ref endpoint) = self.endpoint {
-            metadata.insert("endpoint".to_string(), endpoint.clone());
-        }
+        // No `source`/`endpoint` here. Both describe the RECORDING — one
+        // converter is one endpoint — and a parquet carries them at file level
+        // while a `.rez` carries them in its manifest's labels. Writing them
+        // into every metric was N copies of one fact, and `endpoint` had no
+        // reader anywhere in the tree. See #1224.
+        //
+        // It also stopped clobbering the exporter's own labels: these were
+        // inserted AFTER the scrape's labels above, so a Prometheus metric
+        // legitimately exposing `source` had it overwritten with ours.
         metadata
     }
 
@@ -157,13 +163,8 @@ impl PrometheusConverter {
                     }
                 }
                 prometheus_parse::Value::Histogram(ref buckets) => {
-                    if let Some((h, metadata)) = convert_histogram(
-                        buckets,
-                        &sample.metric,
-                        &labels,
-                        self.source.as_deref(),
-                        self.endpoint.as_deref(),
-                    ) {
+                    if let Some((h, metadata)) = convert_histogram(buckets, &sample.metric, &labels)
+                    {
                         let id = self.get_or_assign_id(&sample.metric, &labels);
                         histograms
                             .push(SnapshotHistogram::new(id, h, metadata).with_window(window));
@@ -307,8 +308,6 @@ fn convert_histogram(
     buckets: &[prometheus_parse::HistogramCount],
     metric_name: &str,
     labels: &[(String, String)],
-    source: Option<&str>,
-    endpoint: Option<&str>,
 ) -> Option<(histogram::Histogram, HashMap<String, String>)> {
     // Filter to finite boundaries only (+Inf cannot be represented)
     let finite_buckets: Vec<_> = buckets
@@ -361,12 +360,7 @@ fn convert_histogram(
     for (k, v) in labels {
         metadata.insert(k.clone(), v.clone());
     }
-    if let Some(s) = source {
-        metadata.insert("source".to_string(), s.to_string());
-    }
-    if let Some(e) = endpoint {
-        metadata.insert("endpoint".to_string(), e.to_string());
-    }
+    // See `build_metadata` for why neither is written here.
     metadata.insert("grouping_power".to_string(), grouping_power.to_string());
     metadata.insert("max_value_power".to_string(), max_value_power.to_string());
 
@@ -514,7 +508,7 @@ mod tests {
     /// and a scrape without silently mixed two.
     #[test]
     fn an_embedded_timestamp_is_not_the_window() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         let (request_ns, response_ns) = (5_000_000_000u64, 5_002_000_000u64);
         let text = "m_total 3 1000\n";
         // Read through the version-agnostic accessor: these assert a property
@@ -534,7 +528,7 @@ mod tests {
     /// `rate()` prices its uncertainty from.
     #[test]
     fn an_embedded_timestamp_cannot_predate_the_row_it_describes() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         // A realistic recording clock: 2026-ish, not 1970.
         let fetch_ns = 1_780_000_000_000_000_000u64;
         let mut snap = conv.convert("m_total 3 1000\n", fetch_ns, fetch_ns + 2_000_000);
@@ -549,7 +543,7 @@ mod tests {
 
     #[test]
     fn absent_timestamp_falls_back_to_fetch_time() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         let (request_ns, response_ns) = (5_000_000_000u64, 5_002_000_000u64);
         let text = "m_total 3\n";
         let mut snap = conv.convert(text, request_ns, response_ns);
@@ -567,7 +561,7 @@ mod tests {
     /// observe.
     #[test]
     fn every_value_in_a_scrape_carries_the_round_trip_as_its_window() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         let (request_ns, response_ns) = (10_000_000_000u64, 10_045_000_000u64);
         let text = "\
 # TYPE a_total counter
@@ -601,7 +595,7 @@ b 2
     /// for.
     #[test]
     fn the_flat_view_of_a_scrape_is_unchanged_by_the_group_shape() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         let text = "\
 # TYPE a_total counter
 a_total 7
@@ -617,10 +611,16 @@ b{k=\"v\"} -3
             counters[0].metadata.get("metric").map(String::as_str),
             Some("a_total")
         );
-        assert_eq!(
-            counters[0].metadata.get("source").map(String::as_str),
-            Some("svc")
-        );
+        // Neither describes a metric, and neither is written here any more —
+        // one converter is one endpoint, so both are properties of the
+        // recording. `endpoint` in particular had no reader anywhere.
+        for key in ["source", "endpoint"] {
+            assert!(
+                !counters[0].metadata.contains_key(key),
+                "`{key}` belongs to the recording, not the metric: {:?}",
+                counters[0].metadata
+            );
+        }
         let w = counters[0].window.expect("window survives the group");
         assert_eq!((w.begin_ns, w.end_ns), (1_000, 2_000));
 
@@ -637,7 +637,7 @@ b{k=\"v\"} -3
     /// which is exactly the cost acquisition groups removed.
     #[test]
     fn a_scrape_is_one_acquisition_group() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         let text = "\
 # TYPE a_total counter
 a_total 1
@@ -683,7 +683,7 @@ b 3
     /// WAL row with a fresh copy of the membership.
     #[test]
     fn the_schema_hash_is_stable_across_scrapes_of_the_same_metrics() {
-        let mut conv = PrometheusConverter::with_provenance("svc".into(), "http://x".into());
+        let mut conv = PrometheusConverter::new();
         // Enough metrics that ids run past 9, where a lexical sort would put
         // "10" before "2" and reshuffle the schema.
         let many = |vals: &[u64]| {

@@ -1401,12 +1401,7 @@ pub fn run(mut config: RecordingConfig) {
         .iter()
         .map(|ep| {
             (ep.status == EndpointStatus::Active && ep.protocol() == Some(&Protocol::Prometheus))
-                .then(|| {
-                    prometheus::PrometheusConverter::with_provenance(
-                        ep.config.source_label().to_string(),
-                        ep.config.url.to_string(),
-                    )
-                })
+                .then(prometheus::PrometheusConverter::new)
         })
         .collect();
 
@@ -1864,11 +1859,7 @@ pub fn run(mut config: RecordingConfig) {
                         // a scrape becomes an acquisition group and lands in
                         // the archive like any other recording.
                         if protocol == Protocol::Prometheus && prom_converters[idx].is_none() {
-                            prom_converters[idx] =
-                                Some(prometheus::PrometheusConverter::with_provenance(
-                                    endpoints[idx].config.source_label().to_string(),
-                                    endpoints[idx].config.url.to_string(),
-                                ));
+                            prom_converters[idx] = Some(prometheus::PrometheusConverter::new());
                         }
                         if let Some(rec) = rez_recorder.as_mut() {
                             if let Err(e) = rec.add_endpoint(
@@ -1887,11 +1878,7 @@ pub fn run(mut config: RecordingConfig) {
                         }
                     } else {
                         if protocol == Protocol::Prometheus && prom_converters[idx].is_none() {
-                            prom_converters[idx] =
-                                Some(prometheus::PrometheusConverter::with_provenance(
-                                    endpoints[idx].config.source_label().to_string(),
-                                    endpoints[idx].config.url.to_string(),
-                                ));
+                            prom_converters[idx] = Some(prometheus::PrometheusConverter::new());
                         }
                         writers[idx] = Some(EndpointWriter {
                             writer: tempfile_in(out_dir.clone())
