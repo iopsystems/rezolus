@@ -477,6 +477,7 @@ mod tests {
         "network_interfaces",
         "network_traffic",
         "rezolus_rusage",
+        "sensors",
         "syscall_counts",
         "syscall_latency",
         "tcp_connect_latency",

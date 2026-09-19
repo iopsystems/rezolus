@@ -2,6 +2,13 @@
 
 ### Added
 
+- Agent: an opt-in Linux `sensors` sampler reads native thermal zones, hwmon
+  temperature and electrical channels, fan RPM/PWM, and cooling states. Includes
+  INA3221 power derivation and Thor board interpretation, with a Sensors viewer
+  section. Reads run in the blocking pool at a configurable interval (default
+  5s). Thor inventory fixtures and synthetic Orin layouts are tested; hardware
+  timing and Orin validation are still required before fleet-wide enablement.
+  (#1203)
 - Agent: a `filesystem` sampler reports total, free and available bytes and
   total and free inodes, plus whether it is read-only, for every locally mounted
   filesystem: one series per filesystem, labeled by `mount`, `fstype`, `devnum`
