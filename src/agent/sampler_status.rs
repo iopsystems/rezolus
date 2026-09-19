@@ -43,6 +43,17 @@ pub struct AgentStatus {
     /// How many subscriptions are currently driving the clock.
     #[serde(default)]
     pub subscribers: usize,
+    /// How many times a replication subscriber has fallen far enough behind
+    /// that it had to be sent the whole slot set instead of what changed.
+    ///
+    /// Zero is the expected value. A rising count means subscribers are being
+    /// starved past the index history's bound — they still receive correct
+    /// data, since a `Full` restates the whole set, but they are paying a
+    /// resend for it, and the cause is on the consumer's side or the network's
+    /// rather than the agent's. Defaulted for an older agent that has no
+    /// replication to report.
+    #[serde(default)]
+    pub index_resyncs: u64,
     pub samplers: Vec<SamplerStatus>,
 }
 
@@ -630,6 +641,7 @@ mod tests {
             uptime_seconds: 11532,
             ttl_seconds: 60,
             sample_interval_ms: None,
+            index_resyncs: 0,
             subscribers: 0,
             samplers: vec![SamplerStatus {
                 name: "cpu_usage".into(),

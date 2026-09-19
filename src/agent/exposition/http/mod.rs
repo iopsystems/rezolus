@@ -241,7 +241,7 @@ async fn stream(
         [
             (
                 axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_static(crate::recorder::wire::STREAM_CONTENT_TYPE),
+                axum::http::HeaderValue::from_static(frames::CONTENT_TYPE),
             ),
             // How often a frame arrives: exactly what was asked for, since
             // this subscription gets its own timer.
@@ -281,11 +281,6 @@ fn rows_frames(
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
         let interval = subscription.interval();
-        // Schemas already sent ON THIS CONNECTION — the per-connection state
-        // that makes `/metrics/rows`'s `?schemas=all` recovery unnecessary
-        // here.
-        let mut sent: std::collections::HashMap<String, (u64, u64)> =
-            std::collections::HashMap::new();
         // Per group, the end of the acquisition window this connection has
         // already been told about. A snapshot carries every group the agent
         // knows, including ones whose sampler did not read this tick — a 60s
@@ -296,6 +291,33 @@ fn rows_frames(
             std::collections::HashMap::new();
         let mut last_sent_wall: Option<u64> = None;
         let mut last_index: Option<u64> = None;
+        // The index state this connection has been brought to. `None` until
+        // the opening `Full`, which is what rule 3 requires: a subscriber
+        // starts complete or not at all.
+        let mut last_state: Option<crate::recorder::index::IndexState> = None;
+
+        let mut producer = frames::FrameProducer::new(
+            crate::agent::epoch::producer_epoch().to_string(),
+            [("source".to_string(), env!("CARGO_BIN_NAME").to_string())]
+                .into_iter()
+                .collect(),
+            [(
+                dendro::keys::PRODUCER_EPOCH.to_string(),
+                crate::agent::epoch::producer_epoch().to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+
+        // dendro's own framing: a preamble, then length-prefixed frames. Sent
+        // before anything else so a consumer can reject a stream it cannot
+        // read rather than decoding its first frame as garbage.
+        let mut opening = Vec::new();
+        dendro::replicate::wire::write_preamble(&mut opening)
+            .map_err(std::io::Error::other)?;
+        dendro::replicate::wire::encode_frame(&producer.handshake(), &mut opening)
+            .map_err(std::io::Error::other)?;
+        yield bytes::Bytes::from(opening);
 
         loop {
             // This subscription's own timer, on ITS boundaries. Nothing is
@@ -313,11 +335,7 @@ fn rows_frames(
             // the wall clock can step. An NTP correction backwards would
             // otherwise emit a `seq` lower than one already sent, which a
             // consumer checking for +1 has no rule for — it would read as
-            // corruption. The contract `seq` actually makes is about its
-            // DIFFERENCES ("one per interval, a jump means a lost reading"),
-            // and each frame carries the snapshot's own `wall_ns` for anyone
-            // who needs the absolute time, so holding the line here costs
-            // nothing that is depended on.
+            // corruption.
             let measured = clock::interval_index(wall_now(), interval);
             let index = clock::monotonic_interval_index(wall_now(), interval, last_index);
             if index != measured {
@@ -327,26 +345,37 @@ fn rows_frames(
                 );
             }
 
-            // Ask for a snapshot. Whether this costs a sampling pass is the
-            // TTL's decision, made in `rows_at` — which is what keeps a
-            // subscription from sampling faster than the operator allowed, and
-            // what lets two subscriptions whose ticks nearly coincide share one
-            // pass.
-            let rows = {
+            // Ask for a snapshot, then take the index in the SAME lock. Two
+            // locks would let a sampling pass land between them, and the rows
+            // would name a state built from a walk they were not part of.
+            let (rows, entries, state) = {
                 let mut builder = builder.lock().await;
-                match builder.rows_at(Instant::now()).await {
-                    Some(rows) => rows,
-                    None => continue,
-                }
+                let Some(rows) = builder.rows_at(Instant::now()).await else {
+                    continue;
+                };
+                let state = builder.index_state();
+                // What this connection needs to reach `state`. `None` means it
+                // fell out of the history — see `IndexHistory` — and only the
+                // whole set will do.
+                let entries = match last_state {
+                    Some(held) => builder.index_since(held).unwrap_or_else(|| {
+                        warn!(
+                            "stream subscriber at {interval:?} fell out of the index history; \
+                             resending the whole slot set"
+                        );
+                        builder.index_full()
+                    }),
+                    None => builder.index_full(),
+                };
+                (rows, entries, state)
             };
+            last_state = Some(state);
 
             // The same reading as last time — reached when the interval asked
             // for is shorter than the TTL, which is the case the TTL exists to
             // bound. Nothing in this snapshot can have advanced, so every row
-            // is omitted below and the frame goes out empty, saying "your
-            // interval elapsed and there is nothing new". That is also what
-            // keeps a subscription asking faster than the TTL from seeing
-            // silence.
+            // is dropped below and the frame goes out empty, saying "your
+            // interval elapsed and there is nothing new".
             let advanced = last_sent_wall != Some(rows.wall_ns);
             last_sent_wall = Some(rows.wall_ns);
 
@@ -364,49 +393,41 @@ fn rows_frames(
             }
             last_index = Some(index);
 
-            // The snapshot may be shared with other subscriptions; which
-            // schemas THIS connection still needs is not.
-            // `encode_frame_filtered` applies that decision while borrowing,
-            // so a second subscriber costs a serialization rather than a copy
-            // of every payload.
-            let frame = crate::recorder::wire::encode_frame_filtered(&rows, index, |row| {
-                use crate::recorder::wire::RowDisposition;
-
-                // The whole snapshot is one this connection already has, so
-                // nothing in it is new — including a windowless group, which
-                // carries no evidence either way and would otherwise be sent
-                // again on the strength of not being able to prove itself
-                // stale.
-                if !advanced {
-                    return RowDisposition::Omit;
-                }
-
-                // Has this group actually been read again since this
-                // connection last heard about it? A windowless group carries
-                // no answer, so it is always sent — the same disposition
-                // `stage_rows` gives it.
-                if let Some(end) = row.window.map(|(_, end)| end) {
-                    if last_window.get(&row.stream) == Some(&end) {
-                        return RowDisposition::Omit;
+            let produced = producer.interval(
+                Instant::now(),
+                &rows,
+                entries,
+                state,
+                index,
+                |row| {
+                    // The whole snapshot is one this connection already has, so
+                    // nothing in it is new — including a windowless group,
+                    // which carries no evidence either way and would otherwise
+                    // be sent again on the strength of not being able to prove
+                    // itself stale.
+                    if !advanced {
+                        return false;
                     }
-                    last_window.insert(row.stream.clone(), end);
-                }
-
-                // Only now decide about the schema. Doing it the other way
-                // round would record a schema as taught on a row that was
-                // then omitted, and the group would go on to reference a
-                // generation this consumer never received.
-                match sent.get(&row.stream) {
-                    Some(hash) if *hash == row.schema_hash => RowDisposition::Send,
-                    _ => {
-                        sent.insert(row.stream.clone(), row.schema_hash);
-                        RowDisposition::SendWithSchema
+                    // Has this group actually been read again since this
+                    // connection last heard about it? A windowless group
+                    // carries no answer, so it is always sent — the same
+                    // disposition `stage_rows` gives it.
+                    if let Some(end) = row.window.map(|(_, end)| end) {
+                        if last_window.get(&row.stream) == Some(&end) {
+                            return false;
+                        }
+                        last_window.insert(row.stream.clone(), end);
                     }
-                }
-            })
-            .map_err(std::io::Error::other)?;
+                    true
+                },
+            );
 
-            yield bytes::Bytes::from(frame);
+            let mut body = Vec::new();
+            for frame in &produced {
+                dendro::replicate::wire::encode_frame(frame, &mut body)
+                    .map_err(std::io::Error::other)?;
+            }
+            yield bytes::Bytes::from(body);
         }
     }
 }
@@ -457,6 +478,7 @@ async fn status(
         ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
         sample_interval_ms: state.subscribers.fastest().map(|d| d.as_millis() as u64),
         subscribers: state.subscribers.count(),
+        index_resyncs: state.builder.lock().await.index_resyncs(),
         samplers: crate::agent::sampler_status::snapshot(),
     })
 }
@@ -509,7 +531,19 @@ mod stream_tests {
         });
         futures::pin_mut!(stream);
 
-        let mut seqs = Vec::new();
+        // Every chunk concatenated, preamble included, then read back through
+        // dendro's own reader — the bytes a subscriber would actually receive.
+        let mut body = Vec::new();
+        // The opening chunk is the preamble and the handshake, before any
+        // interval has elapsed.
+        body.extend_from_slice(
+            &stream
+                .next()
+                .await
+                .expect("the stream opens")
+                .expect("an opening chunk"),
+        );
+
         for step in 0..6 {
             // Three seconds forward, then a thirty-second jump BACKWARDS —
             // an NTP correction of the kind that would otherwise emit a `seq`
@@ -519,14 +553,28 @@ mod stream_tests {
             } else {
                 now.fetch_add(1_000_000_000, Ordering::Relaxed);
             }
-            let frame = stream
-                .next()
-                .await
-                .expect("the stream yields")
-                .expect("a frame");
-            let decoded = crate::recorder::wire::decode_frame(&frame[4..]).expect("decodable");
-            seqs.push(decoded.seq);
+            body.extend_from_slice(
+                &stream
+                    .next()
+                    .await
+                    .expect("the stream yields")
+                    .expect("a frame"),
+            );
         }
+
+        let mut reader = dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(body))
+            .expect("the preamble reads");
+        let mut seqs = Vec::new();
+        let mut handshakes = 0usize;
+        while let Some(frame) = reader.next_frame().expect("decodable") {
+            match frame {
+                dendro::replicate::Frame::Handshake { .. } => handshakes += 1,
+                dendro::replicate::Frame::Rows { seq, .. } => seqs.push(seq),
+                _ => {}
+            }
+        }
+        assert_eq!(handshakes, 1, "one handshake, at the start and only there");
+        assert_eq!(seqs.len(), 6, "one rows frame per interval");
 
         for pair in seqs.windows(2) {
             assert!(
