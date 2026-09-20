@@ -409,8 +409,40 @@ impl SourceIndex {
             .collect()
     }
 
+    /// Consumer side: apply a received entry to one stream, WITHOUT comparing
+    /// the result against what the entry claims.
+    ///
+    /// The comparison belongs at the end of an interval, not after each entry,
+    /// and the difference is not cosmetic. A complete restatement — what a
+    /// subscriber gets on connect, and again if it falls out of the history —
+    /// is several entries carrying one state between them: the state after all
+    /// of them. A receiver applying the first of five and checking there holds
+    /// one stream out of five, hashes to something no producer ever claimed,
+    /// and refuses an entry that was perfectly good.
+    ///
+    /// Checking once, against the `index_state` the interval's rows carry,
+    /// loses nothing. A lost entry still leaves the accumulated set hashing to
+    /// something other than what those rows name, so the rows are still
+    /// skipped — which is the outcome rule 10 exists to produce.
+    pub fn apply_unchecked(&mut self, stream: &str, entry: &IndexEntry) -> Result<(), ApplyError> {
+        let change = SlotChange {
+            kind: entry.kind,
+            slots: entry.slots.clone(),
+            removed: entry.removed.clone(),
+        };
+        self.streams
+            .entry(stream.to_string())
+            .or_default()
+            .apply(&change)
+    }
+
     /// Consumer side: apply a received entry to one stream, refusing it if the
     /// source's state does not then hash to what the entry claims.
+    ///
+    /// Only correct for an entry that stands alone — a delta from a state the
+    /// receiver already holds. For a restatement spread over several entries
+    /// use [`apply_unchecked`](Self::apply_unchecked) and compare once at the
+    /// end.
     ///
     /// On refusal nothing is changed, so a caller that skips the offending
     /// rows and waits for the next `Full` recovers rather than carrying a

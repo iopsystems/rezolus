@@ -500,6 +500,74 @@ mod stream_tests {
     use futures::StreamExt;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    /// The whole path, over a real socket: the agent serves, the recorder's
+    /// own `Subscription` connects, and one interval comes back applied.
+    ///
+    /// Every other test on either side hands frames straight to the other's
+    /// types. This one goes through axum, HTTP, the chunked body and the
+    /// decoder — so a content type, a route, a header or a framing mistake
+    /// fails here rather than the first time a recorder is pointed at an
+    /// agent.
+    ///
+    /// It also covers the empty-index case specifically: with no samplers the
+    /// agent has no slots, so it sends no index frames at all and its rows name
+    /// the empty state. A subscriber that required an index entry before
+    /// attributing anything would skip every row of this stream.
+    #[tokio::test]
+    async fn a_recorder_can_subscribe_to_a_real_agent_over_http() {
+        use crate::recorder::stream::Subscription;
+
+        let config: Config = toml::from_str("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let state = AppState {
+            builder: Arc::new(Mutex::new(SnapshotBuilder::new(
+                Arc::new(config),
+                Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+                None,
+            ))),
+            subscribers: Subscribers::new(),
+            ttl: Duration::from_secs(1),
+        };
+
+        // Port 0: the OS picks a free one, so this cannot collide with another
+        // test or with something already running on the machine.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app(state)).await;
+        });
+
+        // `main` installs this; a test binary never runs `main`. A second
+        // install returns `Err` rather than panicking, so ignoring the result
+        // is what makes this safe to call from any test that needs a client.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let client = reqwest::Client::builder().http1_only().build().unwrap();
+        let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
+        let mut sub = Subscription::connect(&client, &base, Duration::from_secs(1))
+            .await
+            .expect("subscribes");
+
+        let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
+            .await
+            .expect("an interval arrives inside the timeout")
+            .expect("the stream is well formed")
+            .expect("the stream did not end");
+
+        assert_eq!(
+            applied.rows_skipped, 0,
+            "an agent with no slots names the empty state, which is the state a fresh \
+             subscriber holds"
+        );
+        assert_eq!(
+            sub.source()
+                .and_then(|s| s.labels.get("source"))
+                .map(String::as_str),
+            Some("rezolus"),
+            "the handshake arrived and identified the source"
+        );
+        assert_eq!(sub.skipped_total(), 0);
+    }
+
     /// Drive the real frame stream with a wall clock the test owns, and step
     /// it BACKWARDS mid-stream.
     ///

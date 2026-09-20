@@ -3,6 +3,14 @@ use super::*;
 mod clock;
 mod config;
 mod exposition;
+
+/// The `Content-Type` an agent's replication stream is served with, and the one
+/// a subscriber requires.
+///
+/// Here rather than beside the producer because both halves must name the same
+/// string, and a consumer that reached into the agent's private exposition
+/// module for it would be the wrong dependency.
+pub(crate) const REPLICATION_CONTENT_TYPE: &str = "application/vnd.rezolus.replication.v1+dendro";
 mod external_metrics;
 mod metrics;
 pub mod sampler_status;

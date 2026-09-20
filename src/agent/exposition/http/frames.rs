@@ -237,7 +237,7 @@ impl FrameProducer {
 /// msgpack `StreamFrame`s. This body is dendro's own framing — a preamble and
 /// then length-prefixed frames — and a consumer that decoded one as the other
 /// would read dendro's magic as msgpack.
-pub(crate) const CONTENT_TYPE: &str = "application/vnd.rezolus.replication.v1+dendro";
+pub(crate) const CONTENT_TYPE: &str = crate::agent::REPLICATION_CONTENT_TYPE;
 
 /// Put `schema` into an encoded `WalGroupRow`, leaving everything else alone.
 ///

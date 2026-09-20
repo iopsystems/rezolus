@@ -134,8 +134,12 @@ impl StreamSubscriber {
                     // sees what was sent.
                     let entry = IndexEntry::decode(&blob)
                         .map_err(|e| format!("undecodable index entry on `{stream}`: {e}"))?;
+                    // Applied without comparing, because a complete
+                    // restatement is several entries carrying one state
+                    // between them — see `SourceIndex::apply_unchecked`. The
+                    // comparison happens once, against the rows below.
                     self.index
-                        .apply(&stream, &entry)
+                        .apply_unchecked(&stream, &entry)
                         .map_err(|e| format!("index entry on `{stream}` at {ts}: {e}"))?;
                     out.entries.push((stream, blob));
                 }
@@ -316,6 +320,132 @@ impl FrameDecoder {
     /// ended with some is a truncated stream, which a caller may want to say.
     pub(crate) fn pending(&self) -> usize {
         self.buf.len()
+    }
+}
+
+/// One live subscription to an agent.
+///
+/// Owns the connection, the decoder and the subscriber, and hands back one
+/// interval at a time.
+pub(crate) struct Subscription {
+    response: reqwest::Response,
+    decoder: FrameDecoder,
+    subscriber: StreamSubscriber,
+    /// Frames decoded but not yet part of a complete interval.
+    pending: Vec<Frame>,
+}
+
+impl Subscription {
+    /// Open a subscription asking for `interval`.
+    ///
+    /// The interval is a request, not a guarantee: the agent's TTL is the
+    /// floor on how often anything can be new, and it reports that floor in
+    /// `x-rezolus-update-floor`. Asking for less is legal and gets the frames
+    /// asked for, most of them empty.
+    pub(crate) async fn connect(
+        client: &reqwest::Client,
+        base: &reqwest::Url,
+        interval: std::time::Duration,
+    ) -> Result<Self, String> {
+        let mut url = base.clone();
+        url.set_path("/metrics/stream");
+        url.set_query(Some(&format!(
+            "interval={}",
+            humantime::format_duration(interval)
+        )));
+
+        let response = client
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("failed to subscribe to {url}: {e}"))?;
+
+        if !response.status().is_success() {
+            // 409 is the agent saying it has no acquisition groups to stream —
+            // a V2 agent. Worth distinguishing from a transport failure,
+            // because retrying will never fix it.
+            return Err(match response.status().as_u16() {
+                409 => format!(
+                    "{url} cannot serve a replication stream: the agent reports no \
+                     acquisition groups, which a V2 agent never has"
+                ),
+                code => format!("{url} returned HTTP {code}"),
+            });
+        }
+
+        // Checked before any bytes, so an agent serving the older msgpack
+        // stream is named as that rather than as a stream of malformed frames.
+        // The decoder's magic check would catch it too; this says it sooner
+        // and more precisely.
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
+            return Err(format!(
+                "{url} serves `{content_type}`, not `{}` — this build speaks only the \
+                 replication stream",
+                crate::agent::REPLICATION_CONTENT_TYPE
+            ));
+        }
+
+        Ok(Self {
+            response,
+            decoder: FrameDecoder::new(),
+            subscriber: StreamSubscriber::new(),
+            pending: Vec::new(),
+        })
+    }
+
+    /// The next complete interval, or `None` when the agent closed the stream.
+    ///
+    /// An interval is every frame up to and including a `Rows`, which is what
+    /// the producer emits last — index entries first, then the rows that
+    /// reference them. Waiting for the `Rows` is what makes the batch handed
+    /// to [`StreamSubscriber::apply`] a whole interval rather than a fragment,
+    /// which that method requires.
+    pub(crate) async fn next_interval(&mut self) -> Result<Option<Applied>, String> {
+        loop {
+            if let Some(at) = self
+                .pending
+                .iter()
+                .position(|f| matches!(f, Frame::Rows { .. }))
+            {
+                let batch: Vec<Frame> = self.pending.drain(..=at).collect();
+                return self.subscriber.apply(batch).map(Some);
+            }
+
+            let chunk = self
+                .response
+                .chunk()
+                .await
+                .map_err(|e| format!("replication stream failed: {e}"))?;
+            let Some(chunk) = chunk else {
+                // The agent closed. Bytes still held back mean it closed
+                // mid-frame, which is worth saying — a clean end leaves none.
+                if self.decoder.pending() > 0 {
+                    return Err(format!(
+                        "the agent closed the stream mid-frame, with {} byte(s) unread",
+                        self.decoder.pending()
+                    ));
+                }
+                return Ok(None);
+            };
+            self.pending.extend(self.decoder.push(&chunk)?);
+        }
+    }
+
+    /// Rows dropped over this subscription's life.
+    pub(crate) fn skipped_total(&self) -> usize {
+        self.subscriber.skipped_total()
+    }
+
+    /// The source this subscription is carrying, once its handshake has been
+    /// applied.
+    pub(crate) fn source(&self) -> Option<&Source> {
+        self.subscriber.source()
     }
 }
 
@@ -508,6 +638,80 @@ mod tests {
         assert!(applied.rows.is_empty());
         assert_eq!(applied.rows_skipped, 4);
         assert_eq!(sub.skipped_total(), 4);
+    }
+
+    /// A complete restatement is several entries carrying ONE state between
+    /// them — the state after all of them. Checking after each would refuse
+    /// the first, which is what a connecting subscriber always receives.
+    #[test]
+    fn a_restatement_spread_over_several_entries_applies_whole() {
+        let mut producer = SourceIndex::new();
+        producer
+            .observe("a/one", vec![(0u32, labels("x"))])
+            .unwrap();
+        producer
+            .observe("b/two", vec![(0u32, labels("y"))])
+            .unwrap();
+        producer
+            .observe("c/three", vec![(0u32, labels("z"))])
+            .unwrap();
+
+        let full = producer.full_entries();
+        assert_eq!(full.len(), 3);
+        assert!(
+            full.iter().all(|(_, e)| e.state == full[0].1.state),
+            "fixture: a restatement carries one state across its entries"
+        );
+
+        let mut frames = vec![handshake()];
+        frames.extend(full.iter().map(|(s, e)| index_frame(s, e)));
+        frames.push(rows_frame(1, producer.state(), 2));
+
+        let mut sub = StreamSubscriber::new();
+        let applied = sub.apply(frames).unwrap();
+        assert_eq!(
+            applied.rows_skipped, 0,
+            "every entry applied, so the rows attribute"
+        );
+        assert_eq!(applied.rows.len(), 2);
+        assert_eq!(sub.index().state(), producer.state());
+    }
+
+    /// And losing one of those entries still skips the rows, which is the
+    /// property moving the check was not allowed to cost. The accumulated set
+    /// hashes to something other than what the rows name, so they are not
+    /// attributed.
+    #[test]
+    fn losing_one_entry_of_a_restatement_still_skips_the_rows() {
+        let mut producer = SourceIndex::new();
+        producer
+            .observe("a/one", vec![(0u32, labels("x"))])
+            .unwrap();
+        producer
+            .observe("b/two", vec![(0u32, labels("y"))])
+            .unwrap();
+        producer
+            .observe("c/three", vec![(0u32, labels("z"))])
+            .unwrap();
+
+        let full = producer.full_entries();
+        let mut frames = vec![handshake()];
+        // The middle one never arrives.
+        frames.extend(
+            full.iter()
+                .enumerate()
+                .filter(|(i, _)| *i != 1)
+                .map(|(_, (s, e))| index_frame(s, e)),
+        );
+        frames.push(rows_frame(1, producer.state(), 2));
+
+        let mut sub = StreamSubscriber::new();
+        let applied = sub.apply(frames).unwrap();
+        assert_eq!(
+            applied.rows_skipped, 2,
+            "a stream missing from the accumulated set means the rows cannot be attributed"
+        );
+        assert!(applied.rows.is_empty());
     }
 
     /// A subscriber that joined mid-stream holds an empty index, and a
