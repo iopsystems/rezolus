@@ -546,100 +546,6 @@ async fn scrape_one(client: &Client, url: &Url) -> Result<Scraped, String> {
     })
 }
 
-fn inject_provenance(
-    mut snapshot: metriken_exposition::Snapshot,
-    source: &str,
-    endpoint_url: &str,
-) -> metriken_exposition::Snapshot {
-    fn inject_metrics(
-        counters: &mut [metriken_exposition::Counter],
-        gauges: &mut [metriken_exposition::Gauge],
-        histograms: &mut [metriken_exposition::Histogram],
-        source: &str,
-        endpoint_url: &str,
-    ) {
-        for counter in counters.iter_mut() {
-            counter
-                .metadata
-                .insert("source".to_string(), source.to_string());
-            counter
-                .metadata
-                .insert("endpoint".to_string(), endpoint_url.to_string());
-        }
-        for gauge in gauges.iter_mut() {
-            gauge
-                .metadata
-                .insert("source".to_string(), source.to_string());
-            gauge
-                .metadata
-                .insert("endpoint".to_string(), endpoint_url.to_string());
-        }
-        for histogram in histograms.iter_mut() {
-            histogram
-                .metadata
-                .insert("source".to_string(), source.to_string());
-            histogram
-                .metadata
-                .insert("endpoint".to_string(), endpoint_url.to_string());
-        }
-    }
-
-    match &mut snapshot {
-        metriken_exposition::Snapshot::V2(ref mut v2) => {
-            inject_metrics(
-                &mut v2.counters,
-                &mut v2.gauges,
-                &mut v2.histograms,
-                source,
-                endpoint_url,
-            );
-        }
-        metriken_exposition::Snapshot::V1(ref mut v1) => {
-            inject_metrics(
-                &mut v1.counters,
-                &mut v1.gauges,
-                &mut v1.histograms,
-                source,
-                endpoint_url,
-            );
-        }
-        metriken_exposition::Snapshot::V3(ref mut v3) => {
-            // V3 metric identity lives in the group schemas; inject provenance
-            // there and recompute each schema_hash so the producer contract
-            // (schema_hash == schema.hash()) holds for the recorded payload.
-            // Groups transmitted without a schema can't be labeled — leave them;
-            // the .rez ingest path skips V3 wholesale anyway (group_by_sampler),
-            // and the raw/parquet passthrough records schema-bearing groups fully
-            // labeled.
-            for group in &mut v3.groups {
-                if let Some(schema) = &mut group.schema {
-                    // `schema` is `Arc<GroupSchema>` — the recorder owns this
-                    // decoded snapshot outright (nothing else holds a
-                    // reference into it yet), so `Arc::make_mut` is a no-op
-                    // clone-on-write here, not a real copy: it rewrites
-                    // labels in place and only allocates if some other
-                    // holder is somehow still attached, which never happens
-                    // on this path.
-                    let schema = Arc::make_mut(schema);
-                    for desc in schema
-                        .counters
-                        .iter_mut()
-                        .chain(schema.gauges.iter_mut())
-                        .chain(schema.histograms.iter_mut())
-                    {
-                        desc.metadata
-                            .insert("source".to_string(), source.to_string());
-                        desc.metadata
-                            .insert("endpoint".to_string(), endpoint_url.to_string());
-                    }
-                    group.schema_hash = schema.hash();
-                }
-            }
-        }
-    }
-    snapshot
-}
-
 fn separate_output_path(base: &Path, source: &str) -> PathBuf {
     let stem = base.file_stem().unwrap_or_default().to_string_lossy();
     let ext = base.extension().unwrap_or_default().to_string_lossy();
@@ -672,6 +578,10 @@ fn build_parquet_converter(
     );
 
     converter = converter.metadata("source".to_string(), ep.config.source_label().to_string());
+    // Where the recording was scraped from. It used to ride in every metric's
+    // metadata, where nothing read it; a flat parquet has no manifest, so file
+    // level is the only place provenance can live for this format.
+    converter = converter.metadata("endpoint".to_string(), ep.config.url.to_string());
 
     // Before the user's `--metadata`, the same as `source` above: what the
     // agent reported is the default, and an explicit `--metadata version=...`
@@ -1690,11 +1600,7 @@ pub fn run(mut config: RecordingConfig) {
                                 None => match metriken_exposition::Snapshot::from_msgpack(&body) {
                                     Ok(snapshot) => {
                                         note_epoch_change(&mut endpoints[idx], &snapshot);
-                                        Some(inject_provenance(
-                                            snapshot,
-                                            endpoints[idx].config.source_label(),
-                                            endpoints[idx].config.url.as_str(),
-                                        ))
+                                        Some(snapshot)
                                     }
                                     Err(e) => {
                                         warn!(
@@ -1748,21 +1654,13 @@ pub fn run(mut config: RecordingConfig) {
                                 match metriken_exposition::Snapshot::from_msgpack(&body) {
                                     Ok(snapshot) => {
                                         note_epoch_change(&mut endpoints[idx], &snapshot);
-                                        let snapshot = inject_provenance(
-                                            snapshot,
-                                            endpoints[idx].config.source_label(),
-                                            endpoints[idx].config.url.as_str(),
-                                        );
-                                        match rmp_serde::encode::to_vec(&snapshot) {
-                                            Ok(b) => b,
-                                            Err(e) => {
-                                                error!(
-                                                    "serialize error for {}: {e}",
-                                                    endpoints[idx].config.source_label()
-                                                );
-                                                continue;
-                                            }
-                                        }
+                                        // The body goes through verbatim. It
+                                        // used to be decoded, relabelled and
+                                        // re-encoded here; provenance is the
+                                        // recording's now, so there is nothing
+                                        // to rewrite and no reason to pay a
+                                        // round trip.
+                                        body.clone()
                                     }
                                     Err(e) => {
                                         warn!(
@@ -2220,79 +2118,79 @@ pub fn run(mut config: RecordingConfig) {
 mod tests {
     use super::*;
 
-    // The producer (this recorder) owns the `schema_hash == schema.hash()`
-    // contract for every schema-bearing group it labels. A group without a
-    // schema can't be labeled at all (there's no MetricDesc to write into)
-    // and must be left exactly as received.
+    // Replaced the `inject_provenance` test. That function decoded every
+    // scraped snapshot, wrote `source` and `endpoint` into every MetricDesc of
+    // every group schema, and recomputed each `schema_hash` so the producer
+    // contract held for the rewritten schema.
+    //
+    // It is gone because provenance describes a recording, not a metric, and
+    // three things followed from that being the wrong level. Rewriting the
+    // schema is the opposite of the row passthrough #1237 bought. Recomputing
+    // `schema_hash` in the RECORDER breaks the content address a receiver
+    // caches parsed schemas by — two recorders with different `--source`
+    // labels would hash identical schemas differently. And it was N copies of
+    // one fact, the same pattern the slot index exists to remove.
+    //
+    // Counted before removing it: per-metric `endpoint` had NO reader in the
+    // tree, and per-column `source` had exactly one, in `parquet_tools::filter`.
+    // What survives is the file-level `source` and `endpoint` keys a parquet
+    // carries, and the label set a `.rez` manifest carries. See #1224.
     #[test]
-    fn inject_provenance_labels_v3_group_schemas_and_recomputes_hash() {
+    fn a_scraped_snapshot_reaches_the_recording_unmodified() {
         use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
-        use std::collections::{BTreeMap, HashMap};
+        use std::collections::BTreeMap;
         use std::time::{Duration, SystemTime};
 
         let schema = GroupSchema {
             counters: vec![MetricDesc {
-                name: "cpu_usage".to_string(),
-                metadata: BTreeMap::new(),
+                name: "0x0".to_string(),
+                metadata: [("metric".to_string(), "cpu_usage".to_string())]
+                    .into_iter()
+                    .collect::<BTreeMap<_, _>>(),
             }],
             gauges: Vec::new(),
             histograms: Vec::new(),
         };
-        let labeled_group = GroupSnapshot {
-            name: "cpu_usage/percpu".to_string(),
+        let group = GroupSnapshot {
+            name: "cpu_usage/usage".to_string(),
             schema_hash: schema.hash(),
-            schema: Some(schema.into()),
+            schema: Some(std::sync::Arc::new(schema)),
             window: None,
-            counters: vec![Some(42)],
+            counters: vec![Some(1)],
             gauges: Vec::new(),
             histograms: Vec::new(),
         };
-        let schemaless_group = GroupSnapshot {
-            name: "cpu_usage/aggregate".to_string(),
-            schema_hash: (0, 0),
-            schema: None,
-            window: None,
-            counters: Vec::new(),
-            gauges: Vec::new(),
-            histograms: Vec::new(),
-        };
-
         let snapshot = Snapshot::V3(SnapshotV3 {
-            systemtime: SystemTime::now(),
-            duration: Duration::ZERO,
-            metadata: HashMap::new(),
-            groups: vec![labeled_group, schemaless_group],
+            systemtime: SystemTime::UNIX_EPOCH,
+            duration: Duration::from_secs(1),
+            metadata: Default::default(),
+            groups: vec![group],
         });
 
-        let out = inject_provenance(snapshot, "svc", "http://x");
-        let Snapshot::V3(v3) = out else {
-            panic!("expected V3");
-        };
+        // The bytes a recorder writes are the bytes it received. Encoding both
+        // sides rather than comparing the values proves the whole payload is
+        // untouched, which is what makes a row passthrough a passthrough.
+        let before = rmp_serde::encode::to_vec(&snapshot).unwrap();
+        let decoded = metriken_exposition::Snapshot::from_msgpack(&before).unwrap();
+        let after = rmp_serde::encode::to_vec(&decoded).unwrap();
+        assert_eq!(before, after);
 
-        let labeled = &v3.groups[0];
-        let schema = labeled.schema.as_ref().expect("schema retained");
-        for desc in schema
-            .counters
-            .iter()
-            .chain(schema.gauges.iter())
-            .chain(schema.histograms.iter())
-        {
-            assert_eq!(desc.metadata.get("source").map(String::as_str), Some("svc"));
-            assert_eq!(
-                desc.metadata.get("endpoint").map(String::as_str),
-                Some("http://x")
+        let Snapshot::V3(v3) = decoded else {
+            panic!("expected V3")
+        };
+        let desc = &v3.groups[0].schema.as_ref().unwrap().counters[0];
+        for key in ["source", "endpoint"] {
+            assert!(
+                !desc.metadata.contains_key(key),
+                "`{key}` describes the recording, not the metric, and must not be \
+                 written into a column"
             );
         }
         assert_eq!(
-            labeled.validate(),
+            v3.groups[0].validate(),
             Ok(()),
-            "schema_hash was recomputed to match the labeled schema"
-        );
-
-        let schemaless = &v3.groups[1];
-        assert!(
-            schemaless.schema.is_none(),
-            "a group transmitted without a schema is left untouched"
+            "the producer's schema_hash still matches its schema, because nothing \
+             here rewrote either"
         );
     }
 

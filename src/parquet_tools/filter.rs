@@ -95,6 +95,20 @@ pub(super) fn filter_parquet_file(
     let schema = builder.schema().clone();
     let total_columns = schema.fields().len();
 
+    // What this FILE came from, for the rezolus-column rule below.
+    //
+    // A single-source recording says it once, at file level, and the recorder
+    // no longer repeats it into every column's metadata — provenance describes
+    // a recording, not a metric. A COMBINED file is the one case where columns
+    // genuinely differ, and `combine` writes each column's `source` itself, so
+    // the per-column answer is still asked for first and still right there.
+    let file_source: Option<String> = builder
+        .metadata()
+        .file_metadata()
+        .key_value_metadata()
+        .and_then(|kv| kv.iter().find(|kv| kv.key == KEY_SOURCE))
+        .and_then(|kv| kv.value.clone());
+
     let indices: Vec<usize> = schema
         .fields()
         .iter()
@@ -120,8 +134,15 @@ pub(super) fn filter_parquet_file(
                 }
             }
             // Keep all rezolus (agent) columns — they provide system-level
-            // context and are not referenced by service KPI queries.
-            if f.metadata().get("source").is_some_and(|s| s == "rezolus") {
+            // context and are not referenced by service KPI queries. The
+            // column's own `source` when it has one (a combined file), the
+            // file's otherwise (a single-source recording).
+            let source = f
+                .metadata()
+                .get("source")
+                .map(String::as_str)
+                .or(file_source.as_deref());
+            if source == Some("rezolus") {
                 return true;
             }
             false
@@ -444,6 +465,117 @@ fn resolve_service_extension(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A one-row parquet with the given columns, each carrying the metadata
+    /// given, plus whatever file-level keys are asked for.
+    fn write_parquet(path: &Path, columns: &[(&str, &[(&str, &str)])], file_meta: &[(&str, &str)]) {
+        use arrow::array::{ArrayRef, UInt64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        use std::sync::Arc;
+
+        let fields: Vec<Field> = columns
+            .iter()
+            .map(|(name, meta)| {
+                Field::new(*name, DataType::UInt64, false).with_metadata(
+                    meta.iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                )
+            })
+            .collect();
+        let schema = Arc::new(Schema::new(fields));
+        let arrays: Vec<ArrayRef> = columns
+            .iter()
+            .map(|_| Arc::new(UInt64Array::from(vec![1u64])) as ArrayRef)
+            .collect();
+        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+
+        let kv: Vec<parquet::file::metadata::KeyValue> = file_meta
+            .iter()
+            .map(|(k, v)| {
+                parquet::file::metadata::KeyValue::new(k.to_string(), Some(v.to_string()))
+            })
+            .collect();
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(if kv.is_empty() { None } else { Some(kv) })
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    fn column_names(path: &Path) -> Vec<String> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(path).unwrap()).unwrap();
+        builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    }
+
+    /// The recorder no longer writes `source` into every column, so the rule
+    /// that keeps agent columns has to read the file's own `source` key.
+    ///
+    /// Without the fallback this drops every rezolus column from a
+    /// single-source recording — the columns an operator keeps a recording for.
+    #[test]
+    fn agent_columns_are_kept_from_the_files_source_when_a_column_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent.parquet");
+        let out = dir.path().join("slim.parquet");
+        write_parquet(
+            &path,
+            &[
+                ("timestamp", &[]),
+                ("cpu_usage", &[("metric", "cpu_usage")]),
+            ],
+            &[("source", "rezolus")],
+        );
+
+        // A KPI set that names neither column: only the rezolus rule can keep
+        // them.
+        filter_parquet_file(&path, &make_test_ext(&["something_else"]), Some(&out)).unwrap();
+        let kept = column_names(&out);
+        assert!(
+            kept.iter().any(|n| n == "cpu_usage"),
+            "an agent column must survive on the file's source alone, got {kept:?}"
+        );
+    }
+
+    /// And the rule still discriminates: a file from something else keeps only
+    /// what its KPIs name. A fallback that kept everything would make the
+    /// filter a no-op for service recordings.
+    #[test]
+    fn a_non_agent_file_keeps_only_what_its_queries_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("svc.parquet");
+        let out = dir.path().join("slim.parquet");
+        write_parquet(
+            &path,
+            &[
+                ("timestamp", &[]),
+                ("wanted", &[("metric", "wanted")]),
+                ("unwanted", &[("metric", "unwanted")]),
+            ],
+            &[("source", "llm-perf")],
+        );
+
+        filter_parquet_file(&path, &make_test_ext(&["wanted"]), Some(&out)).unwrap();
+        let kept = column_names(&out);
+        assert!(kept.iter().any(|n| n == "wanted"), "got {kept:?}");
+        assert!(
+            !kept.iter().any(|n| n == "unwanted"),
+            "a column no query names, in a file that is not the agent's, must be \
+             dropped: {kept:?}"
+        );
+    }
 
     fn make_test_ext(queries: &[&str]) -> ServiceExtension {
         ServiceExtension {
