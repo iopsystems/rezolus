@@ -439,10 +439,15 @@ impl SourceIndex {
     /// Consumer side: apply a received entry to one stream, refusing it if the
     /// source's state does not then hash to what the entry claims.
     ///
-    /// Only correct for an entry that stands alone — a delta from a state the
-    /// receiver already holds. For a restatement spread over several entries
-    /// use [`apply_unchecked`](Self::apply_unchecked) and compare once at the
-    /// end.
+    /// Correct only where each entry carries the state as of ITSELF, which is
+    /// what [`observe`](Self::observe) produces: a delta, or a sequence of
+    /// deltas applied in order from a state the receiver already holds.
+    ///
+    /// Wrong for a restatement from [`full_entries`](Self::full_entries),
+    /// whose entries share one state between them — the state after all of
+    /// them. Use [`apply_unchecked`](Self::apply_unchecked) there and compare
+    /// once at the end. Reaching for this one instead is a real bug that unit
+    /// tests on both sides missed; see the note on `apply_unchecked`.
     ///
     /// On refusal nothing is changed, so a caller that skips the offending
     /// rows and waits for the next `Full` recovers rather than carrying a
