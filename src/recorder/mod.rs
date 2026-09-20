@@ -4,6 +4,9 @@ mod child;
 mod config;
 mod endpoint;
 mod prometheus;
+/// Consuming an agent replication stream — #1224 Phase 3.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) mod stream;
 // The `.rez` format lives in its own crate so the WASM viewer can read the
 // archives this binary writes (`rezolus` is binary-only, so nothing could
 // depend on it). Re-exported under the paths call sites already use.

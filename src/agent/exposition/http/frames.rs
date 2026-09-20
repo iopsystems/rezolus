@@ -635,6 +635,98 @@ mod tests {
         );
     }
 
+    /// Producer and consumer agree, end to end, through the real codec.
+    ///
+    /// Every other test here hands the subscriber frames it built itself, which
+    /// checks the rules but not the agreement. This drives the AGENT's
+    /// `FrameProducer`, encodes what it emits with dendro's wire, reads it back
+    /// with dendro's reader, and applies it — so a producer and a consumer that
+    /// disagreed about the index state, the frame order, or the encoding would
+    /// fail here rather than in the field.
+    #[test]
+    fn what_the_agent_produces_is_what_this_consumes() {
+        use crate::recorder::index::SourceIndex;
+        use crate::recorder::stream::StreamSubscriber;
+
+        // This module's own fixtures: one counter group with a schema and
+        // an encoded payload, the same shape every other test here uses.
+        let rows = rows(1, 2_000);
+
+        // The agent side: an index entry and the rows built against it.
+        let mut producer_index = SourceIndex::new();
+        let entry = producer_index
+            .observe(
+                STREAM,
+                vec![(
+                    0u32,
+                    [("comm".to_string(), "redis".to_string())]
+                        .into_iter()
+                        .collect::<BTreeMap<String, String>>(),
+                )],
+            )
+            .unwrap();
+        let mut producer = FrameProducer::new(
+            "epoch-1".to_string(),
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            BTreeMap::new(),
+        );
+
+        let mut sent = vec![producer.handshake()];
+        sent.extend(producer.interval(
+            std::time::Instant::now(),
+            &rows,
+            vec![(STREAM.to_string(), entry)],
+            producer_index.state(),
+            7,
+            |_| true,
+        ));
+
+        // Through the actual bytes, not the values.
+        let mut bytes = Vec::new();
+        dendro::replicate::wire::write_preamble(&mut bytes).unwrap();
+        for frame in &sent {
+            dendro::replicate::wire::encode_frame(frame, &mut bytes).unwrap();
+        }
+        let mut reader =
+            dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut received = Vec::new();
+        while let Some(frame) = reader.next_frame().unwrap() {
+            received.push(frame);
+        }
+
+        let mut sub = StreamSubscriber::new();
+        let applied = sub.apply(received).unwrap();
+
+        assert_eq!(
+            applied.rows_skipped, 0,
+            "the state the producer stamped is the state the consumer accumulated"
+        );
+        assert_eq!(applied.rows.len(), 1);
+        assert_eq!(applied.seq, 7);
+        assert_eq!(
+            sub.index().stream(STREAM).unwrap().labels(0).unwrap()["comm"],
+            "redis",
+            "and the identity came through the blob intact"
+        );
+
+        // The payload reaching the recording is the producer's own bytes, with
+        // its schema anchored inside — which is what makes this a passthrough
+        // rather than a re-encoding.
+        let decoded = crate::recorder::wal::decode_wal_group_row(&applied.rows[0].row).unwrap();
+        assert_eq!(
+            decoded.counters,
+            vec![Some(0)],
+            "the fixture value, through untouched"
+        );
+        assert_eq!(
+            decoded.schema.map(|s| s.counters.len()),
+            Some(1),
+            "the first row of a stream anchors its schema"
+        );
+    }
+
     /// What an interval costs, steady-state against the tick that re-sends.
     ///
     /// **A model of `delta`, not `delta`.** The measured numbers this is built
