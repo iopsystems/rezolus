@@ -77,9 +77,14 @@ const _: () = assert!(
     "the writer's page cache must be smaller than the reader's"
 );
 
-/// v3. Written once at creation; a reader that finds anything else should
-/// refuse the file rather than guess.
-const SCHEMA_VERSION: i64 = 3;
+/// Written once at creation; a reader that finds anything else should refuse
+/// the file rather than guess.
+///
+/// 4 added `caller_rows`. The container shape is otherwise unchanged and the
+/// addition is purely additive, so a v3 archive still opens: reads of that
+/// table tolerate its absence rather than failing, because an archive written
+/// before it existed genuinely has no caller rows. See `read_caller_rows`.
+const SCHEMA_VERSION: i64 = 4;
 
 /// One recording's identity: everything known when the recording starts.
 #[derive(Clone)]
@@ -1294,6 +1299,88 @@ impl RezDb {
     }
 
     /// The recording's `(ts, offset_ns)` clock observations, oldest first.
+    /// The caller's rows for one stream, oldest first and in insertion order
+    /// within a timestamp.
+    ///
+    /// An archive written before schema 4 has no such table. That is not an
+    /// error and not an empty result standing in for one: it genuinely has no
+    /// caller rows, so it reads as none.
+    pub fn read_caller_rows(
+        &self,
+        recording_id: i64,
+        stream: &str,
+        start_ts: u64,
+        end_ts: u64,
+    ) -> Result<Vec<(u64, Vec<u8>)>, String> {
+        if !self.has_table("caller_rows")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ts, blob FROM caller_rows \
+                 WHERE recording_id = ?1 AND stream = ?2 AND ts >= ?3 AND ts <= ?4 \
+                 ORDER BY ts, seq",
+            )
+            .map_err(|e| format!("failed to query caller rows: {e}"))?;
+        let rows = stmt
+            .query_map(
+                // Saturating, not `as`. SQLite integers are signed, and
+                // `u64::MAX as i64` is -1 — an open-ended read spelt the
+                // obvious way would match nothing at all and read as "this
+                // recording has no caller rows".
+                rusqlite::params![
+                    recording_id,
+                    stream,
+                    start_ts.min(i64::MAX as u64) as i64,
+                    end_ts.min(i64::MAX as u64) as i64,
+                ],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .map_err(|e| format!("failed to query caller rows: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (ts, blob) = row.map_err(|e| format!("failed to read a caller row: {e}"))?;
+            out.push((ts as u64, blob));
+        }
+        Ok(out)
+    }
+
+    /// Every stream that has caller rows in this recording.
+    pub fn caller_row_streams(&self, recording_id: i64) -> Result<Vec<String>, String> {
+        if !self.has_table("caller_rows")? {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT stream FROM caller_rows WHERE recording_id = ?1 ORDER BY stream",
+            )
+            .map_err(|e| format!("failed to query caller row streams: {e}"))?;
+        let rows = stmt
+            .query_map([recording_id], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("failed to query caller row streams: {e}"))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| format!("failed to read a caller row stream: {e}"))?);
+        }
+        Ok(out)
+    }
+
+    fn has_table(&self, name: &str) -> Result<bool, String> {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [name],
+                |_| Ok(()),
+            )
+            .map(|_| true)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(false),
+                other => Err(format!("failed to look for table `{name}`: {other}")),
+            })
+    }
+
     pub fn read_clock_offsets(&self, recording_id: i64) -> Result<Vec<(u64, i64)>, String> {
         let mut stmt = self
             .conn
@@ -1381,6 +1468,35 @@ impl RezTx<'_> {
     }
 
     /// Append one `(ts, offset_ns)` clock observation for the recording.
+    /// Append caller rows for one stream, in the order given.
+    ///
+    /// `seq` disambiguates rows sharing a timestamp, which is a real case: an
+    /// interval that moves several groups writes one entry per group at the
+    /// same tick. Assigned here from what is already stored rather than by the
+    /// caller, so two writers cannot pick the same one.
+    pub fn insert_caller_rows(
+        &self,
+        recording_id: i64,
+        stream: &str,
+        rows: &[(u64, Vec<u8>)],
+    ) -> Result<(), String> {
+        let mut stmt = self
+            .tx
+            .prepare(
+                "INSERT INTO caller_rows(recording_id, stream, ts, seq, blob) \
+                 VALUES (?1, ?2, ?3, \
+                   (SELECT COALESCE(MAX(seq) + 1, 0) FROM caller_rows \
+                    WHERE recording_id = ?1 AND stream = ?2 AND ts = ?3), \
+                   ?4)",
+            )
+            .map_err(|e| format!("failed to prepare a caller row insert: {e}"))?;
+        for (ts, blob) in rows {
+            stmt.execute(rusqlite::params![recording_id, stream, *ts as i64, blob])
+                .map_err(|e| format!("failed to insert a caller row: {e}"))?;
+        }
+        Ok(())
+    }
+
     pub fn insert_clock_offset(
         &self,
         recording_id: i64,
@@ -1494,12 +1610,149 @@ CREATE TABLE clock_offsets(
   ts INTEGER NOT NULL,
   offset_ns INTEGER NOT NULL
 );
+-- The caller's time-keyed store: what a slot MEANT, from when. A column's
+-- metadata cannot express change, so a fact that changes over time — slot v3
+-- held task A and now holds task B — belongs here, keyed by the time it
+-- changed, and never in a schema. Opaque: the container stores and returns the
+-- blob and never decodes it. Several rows may share a timestamp and read back
+-- in insertion order, which is why the key carries `seq` rather than being
+-- (recording, stream, ts).
+CREATE TABLE caller_rows(
+  recording_id INTEGER NOT NULL REFERENCES recordings(id),
+  stream TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  seq INTEGER NOT NULL,
+  blob BLOB NOT NULL,
+  PRIMARY KEY (recording_id, stream, ts, seq)
+);
 CREATE TABLE schema_version(version INTEGER NOT NULL);
 ";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seed_recording(db: &RezDb) -> i64 {
+        db.insert_recording(&RecordingMeta {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: 1_700_000_000_000_000_000,
+        })
+        .unwrap()
+    }
+
+    /// The blob is the caller's and stays the caller's: the container stores
+    /// and returns it and never decodes it. Round-tripping bytes rather than a
+    /// decoded shape is what says so.
+    #[test]
+    fn caller_rows_round_trip_as_opaque_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rec = seed_recording(&db);
+
+        let entries = vec![
+            (1_000u64, vec![0x93, 0x01, 0x02]),
+            (2_000, vec![0xff, 0x00]),
+        ];
+        db.transaction(|tx| tx.insert_caller_rows(rec, "cpu_usage/task", &entries))
+            .unwrap();
+
+        let back = db
+            .read_caller_rows(rec, "cpu_usage/task", 0, u64::MAX)
+            .unwrap();
+        assert_eq!(back, entries);
+    }
+
+    /// Several entries may share a timestamp — one interval that moves three
+    /// groups writes three at the same tick — and they must read back in the
+    /// order they were written. A consumer applies them in sequence, so an
+    /// order that varied would apply a later state before an earlier one.
+    #[test]
+    fn entries_sharing_a_timestamp_read_back_in_insertion_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rec = seed_recording(&db);
+
+        let entries: Vec<(u64, Vec<u8>)> = (0u8..5).map(|n| (7_000u64, vec![n])).collect();
+        db.transaction(|tx| tx.insert_caller_rows(rec, "s", &entries))
+            .unwrap();
+
+        let back = db.read_caller_rows(rec, "s", 0, u64::MAX).unwrap();
+        assert_eq!(
+            back.iter().map(|(_, b)| b[0]).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4],
+        );
+    }
+
+    /// And across separate transactions, since a recording writes one tick per
+    /// transaction. `seq` is assigned from what is already stored, so the
+    /// second batch must continue the first rather than collide with it.
+    #[test]
+    fn a_later_batch_continues_the_sequence_at_the_same_timestamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rec = seed_recording(&db);
+
+        db.transaction(|tx| tx.insert_caller_rows(rec, "s", &[(9_000, vec![1])]))
+            .unwrap();
+        db.transaction(|tx| tx.insert_caller_rows(rec, "s", &[(9_000, vec![2])]))
+            .unwrap();
+
+        let back = db.read_caller_rows(rec, "s", 0, u64::MAX).unwrap();
+        assert_eq!(
+            back.iter().map(|(_, b)| b[0]).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    /// Entries are per stream and per recording. A read that leaked across
+    /// either would attribute one group's identity to another, which is the
+    /// failure the whole index exists to prevent.
+    #[test]
+    fn entries_do_not_leak_across_streams_or_recordings() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let a = seed_recording(&db);
+        let b = seed_recording(&db);
+
+        db.transaction(|tx| {
+            tx.insert_caller_rows(a, "one", &[(1, vec![b'a'])])?;
+            tx.insert_caller_rows(a, "two", &[(1, vec![b'b'])])?;
+            tx.insert_caller_rows(b, "one", &[(1, vec![b'c'])])
+        })
+        .unwrap();
+
+        assert_eq!(
+            db.read_caller_rows(a, "one", 0, u64::MAX).unwrap(),
+            vec![(1u64, vec![b'a'])]
+        );
+        assert_eq!(
+            db.read_caller_rows(b, "one", 0, u64::MAX).unwrap(),
+            vec![(1u64, vec![b'c'])]
+        );
+        assert_eq!(
+            db.caller_row_streams(a).unwrap(),
+            vec!["one".to_string(), "two".to_string()]
+        );
+        assert_eq!(db.caller_row_streams(b).unwrap(), vec!["one".to_string()]);
+    }
+
+    /// An archive written before schema 4 has no such table. It reads as no
+    /// caller rows, which is what it is — not an error, and not an empty result
+    /// standing in for one.
+    #[test]
+    fn an_archive_without_the_table_reads_as_having_no_caller_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v3.rez");
+        let db = RezDb::create(&path).unwrap();
+        let rec = seed_recording(&db);
+        db.conn.execute("DROP TABLE caller_rows", []).unwrap();
+
+        assert_eq!(db.read_caller_rows(rec, "s", 0, u64::MAX).unwrap(), vec![]);
+        assert_eq!(db.caller_row_streams(rec).unwrap(), Vec::<String>::new());
+    }
 
     #[test]
     fn create_applies_the_one_way_pragmas() {

@@ -165,6 +165,29 @@ pub fn copy_recordings_into(
         for (ts, offset) in src.read_clock_offsets(rec.id)? {
             tx.insert_clock_offset(id, ts, offset)?;
         }
+
+        // What each slot MEANT, from when. Carried verbatim even by a
+        // projection that drops most columns: an entry is keyed by time rather
+        // than by segment, and a filtered archive whose remaining columns
+        // referenced identity that had been dropped would read as unattributed
+        // rather than as filtered.
+        //
+        // Bounded at the window's END but NOT at its start, which is the whole
+        // subtlety. A slot's identity is established by the entry that last
+        // changed it, and that entry is usually long before any window an
+        // operator asks for — hindsight's dump narrows to an incident, and the
+        // task occupying a slot during it was very likely assigned there
+        // minutes earlier. Applying `spec.start` here would drop exactly the
+        // entries the surviving rows depend on and leave the copy attributing
+        // nothing. Entries after `spec.end` describe times the copy does not
+        // contain, so those do go.
+        //
+        // Cheap for the same reason the offsets are: entries are written when
+        // identity moves, not per tick.
+        for stream in src.caller_row_streams(rec.id)? {
+            let rows = src.read_caller_rows(rec.id, &stream, 0, spec.end)?;
+            tx.insert_caller_rows(id, &stream, &rows)?;
+        }
     }
     Ok(copied)
 }
@@ -436,7 +459,13 @@ mod tests {
     #[test]
     fn every_schema_table_is_either_copied_or_deliberately_dropped() {
         /// Carried across by `copy_recordings_into`.
-        const COPIED: &[&str] = &["recordings", "segments", "wal", "clock_offsets"];
+        const COPIED: &[&str] = &[
+            "recordings",
+            "segments",
+            "wal",
+            "clock_offsets",
+            "caller_rows",
+        ];
         /// Not carried, and correct not to be.
         const NOT_CARRIED: &[&str] = &[
             // Written by `RezDb::create` for the destination itself; copying
@@ -464,6 +493,82 @@ mod tests {
              is handled. Copy it, or list it in NOT_CARRIED with the reason."
         );
     }
+    /// Caller rows survive a rewrite, and the window is applied at its END
+    /// only.
+    ///
+    /// The guard test above forces the copy to EXIST. This is whether it is
+    /// right. The subtlety it protects: a slot's identity is established by
+    /// the entry that last changed it, usually long before any window an
+    /// operator asks for — hindsight narrows to an incident, and the task in a
+    /// slot during it was assigned there minutes earlier. Applying the
+    /// window's start would drop exactly the entries the surviving rows depend
+    /// on, and the copy would attribute nothing.
+    #[test]
+    fn a_rewrite_carries_identity_established_before_its_window() {
+        use super::*;
+        use crate::rez_sqlite::{RecordingMeta, RezDb};
+        use std::collections::BTreeMap;
+
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("src.rez");
+        let mut src = RezDb::create(&src_path).unwrap();
+        let rec = src
+            .insert_recording(&RecordingMeta {
+                labels: [("source".to_string(), "rezolus".to_string())]
+                    .into_iter()
+                    .collect(),
+                metadata: BTreeMap::new(),
+                clock_anchor_wall_ns: 0,
+            })
+            .unwrap();
+        src.transaction(|tx| {
+            tx.insert_caller_rows(
+                rec,
+                "cpu_usage/task",
+                &[
+                    // Long before the window: what slot 0 means.
+                    (1_000, vec![b'o', b'l', b'd']),
+                    // Inside it: the slot was recycled.
+                    (5_000, vec![b'n', b'e', b'w']),
+                    // After it: describes a time this copy will not contain.
+                    (9_000, vec![b'l', b'a', b't', b'e']),
+                ],
+            )
+        })
+        .unwrap();
+
+        let dst_path = dir.path().join("dst.rez");
+        let mut dst = RezDb::create(&dst_path).unwrap();
+        dst.transaction(|tx| {
+            copy_recordings_into(
+                &src,
+                tx,
+                &CopySpec {
+                    start: 4_000,
+                    end: 6_000,
+                    keep_samplers: None,
+                    metadata_extra: None,
+                    keep_metrics: None,
+                },
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+
+        let copied = dst.read_recordings().unwrap();
+        assert_eq!(copied.len(), 1);
+        let rows = dst
+            .read_caller_rows(copied[0].id, "cpu_usage/task", 0, u64::MAX)
+            .unwrap();
+        let blobs: Vec<&[u8]> = rows.iter().map(|(_, b)| b.as_slice()).collect();
+        assert_eq!(
+            blobs,
+            vec![&b"old"[..], &b"new"[..]],
+            "the entry before the window establishes what the window's rows mean and \
+             must survive; the one after it describes a time the copy does not hold"
+        );
+    }
+
     /// A tar archive upgrades to v3 with its data and its identity intact:
     /// segment BLOBs byte-for-byte, labels, metadata, and — the one most
     /// easily lost — the `complete` flag, so a recording recovered from a
