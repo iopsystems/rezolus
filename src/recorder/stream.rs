@@ -223,6 +223,102 @@ fn frame_kind(frame: &Frame) -> &'static str {
     }
 }
 
+/// Frames out of a byte stream that arrives in pieces.
+///
+/// dendro's `FrameReader` wants a `Read`, and an HTTP response body is an
+/// async stream of chunks that respects no frame boundary — one chunk may hold
+/// three frames, or a third of one. This holds the remainder between chunks and
+/// yields whole frames as they complete, using the same length prefix the
+/// encoder writes.
+///
+/// It is the first consumer of `MAGIC`, `PROTOCOL_VERSION`,
+/// `LENGTH_PREFIX_BYTES` and `MAX_FRAME_BYTES`, which exist for exactly this:
+/// pairing a reader that owns its source with a caller that does not.
+#[derive(Debug, Default)]
+pub(crate) struct FrameDecoder {
+    buf: Vec<u8>,
+    preamble_read: bool,
+}
+
+impl FrameDecoder {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a chunk and take whatever frames it completed.
+    ///
+    /// An empty result is normal: a chunk that does not finish a frame
+    /// produces nothing and is not an error.
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<Frame>, String> {
+        self.buf.extend_from_slice(chunk);
+        let mut out = Vec::new();
+
+        if !self.preamble_read {
+            let want = dendro::replicate::wire::MAGIC.len() + 2;
+            if self.buf.len() < want {
+                return Ok(out);
+            }
+            let magic = &self.buf[..dendro::replicate::wire::MAGIC.len()];
+            if magic != dendro::replicate::wire::MAGIC {
+                // Named rather than shrugged at: the overwhelmingly likely
+                // cause is an endpoint serving the older msgpack stream, or
+                // something that is not this endpoint at all, and a decoder
+                // that limped on would report malformed frames forever
+                // instead of the one fact that explains them.
+                return Err(
+                    "the stream does not begin with dendro's replication magic; this is \
+                     not a replication stream"
+                        .to_string(),
+                );
+            }
+            let version = u16::from_le_bytes([
+                self.buf[dendro::replicate::wire::MAGIC.len()],
+                self.buf[dendro::replicate::wire::MAGIC.len() + 1],
+            ]);
+            if version != dendro::replicate::wire::PROTOCOL_VERSION {
+                return Err(format!(
+                    "replication protocol version {version}, but this build speaks {}",
+                    dendro::replicate::wire::PROTOCOL_VERSION
+                ));
+            }
+            self.buf.drain(..want);
+            self.preamble_read = true;
+        }
+
+        loop {
+            const PREFIX: usize = dendro::replicate::wire::LENGTH_PREFIX_BYTES;
+            if self.buf.len() < PREFIX {
+                break;
+            }
+            let len =
+                u32::from_le_bytes([self.buf[0], self.buf[1], self.buf[2], self.buf[3]]) as usize;
+            if len > dendro::replicate::wire::MAX_FRAME_BYTES {
+                // A corrupt or hostile prefix is otherwise an allocation of up
+                // to 4 GiB, which is an out-of-memory rather than an error.
+                return Err(format!(
+                    "a frame declares {len} bytes, past the {} byte limit",
+                    dendro::replicate::wire::MAX_FRAME_BYTES
+                ));
+            }
+            if self.buf.len() < PREFIX + len {
+                break;
+            }
+            let frame = dendro::replicate::wire::decode_payload(&self.buf[PREFIX..PREFIX + len])
+                .map_err(|e| format!("undecodable replication frame: {e}"))?;
+            self.buf.drain(..PREFIX + len);
+            out.push(frame);
+        }
+
+        Ok(out)
+    }
+
+    /// Bytes held back because they do not yet complete a frame. A stream that
+    /// ended with some is a truncated stream, which a caller may want to say.
+    pub(crate) fn pending(&self) -> usize {
+        self.buf.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,6 +371,88 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    fn encoded_stream(frames: &[Frame]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        dendro::replicate::wire::write_preamble(&mut bytes).unwrap();
+        for f in frames {
+            dendro::replicate::wire::encode_frame(f, &mut bytes).unwrap();
+        }
+        bytes
+    }
+
+    /// The case the decoder exists for: chunk boundaries that fall wherever
+    /// the network put them. Feeding a stream one byte at a time is the
+    /// cruellest split available and must produce exactly the frames that went
+    /// in, in order.
+    #[test]
+    fn frames_survive_being_split_at_every_byte() {
+        let sent = vec![
+            handshake(),
+            rows_frame(1, dendro::replicate::NO_INDEX_STATE, 2),
+            rows_frame(2, dendro::replicate::NO_INDEX_STATE, 0),
+        ];
+        let bytes = encoded_stream(&sent);
+
+        let mut decoder = FrameDecoder::new();
+        let mut got = Vec::new();
+        for b in &bytes {
+            got.extend(decoder.push(&[*b]).unwrap());
+        }
+        assert_eq!(got, sent);
+        assert_eq!(decoder.pending(), 0, "nothing held back at the end");
+    }
+
+    /// And the other extreme: everything in one chunk.
+    #[test]
+    fn frames_survive_arriving_all_at_once() {
+        let sent = vec![
+            handshake(),
+            rows_frame(1, dendro::replicate::NO_INDEX_STATE, 1),
+        ];
+        let mut decoder = FrameDecoder::new();
+        assert_eq!(decoder.push(&encoded_stream(&sent)).unwrap(), sent);
+    }
+
+    /// A partial frame is not an error and not a frame: it is held until the
+    /// rest arrives. A decoder that errored here would fail on every stream
+    /// whose chunks did not happen to align.
+    #[test]
+    fn a_partial_frame_yields_nothing_and_is_not_an_error() {
+        let bytes = encoded_stream(&[handshake()]);
+        let mut decoder = FrameDecoder::new();
+        let half = bytes.len() / 2;
+        assert!(decoder.push(&bytes[..half]).unwrap().is_empty());
+        assert!(decoder.pending() > 0);
+        assert_eq!(decoder.push(&bytes[half..]).unwrap().len(), 1);
+    }
+
+    /// Wrong magic is named for what it is. The likely cause is an endpoint
+    /// serving the older msgpack stream, and a decoder that limped on would
+    /// report malformed frames forever instead of the one fact that explains
+    /// them.
+    #[test]
+    fn a_stream_that_is_not_a_replication_stream_says_so() {
+        let mut decoder = FrameDecoder::new();
+        let err = decoder
+            .push(b"\x93\x01\x02 this is msgpack, not frames")
+            .expect_err("must refuse");
+        assert!(err.contains("not a replication stream"), "{err}");
+    }
+
+    /// A length prefix past the limit is refused rather than allocated. A
+    /// corrupt or hostile four-byte length is otherwise an allocation of up to
+    /// 4 GiB, which is an out-of-memory rather than an error.
+    #[test]
+    fn an_absurd_frame_length_is_refused_rather_than_allocated() {
+        let mut bytes = Vec::new();
+        dendro::replicate::wire::write_preamble(&mut bytes).unwrap();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+
+        let mut decoder = FrameDecoder::new();
+        let err = decoder.push(&bytes).expect_err("must refuse");
+        assert!(err.contains("past the"), "{err}");
     }
 
     /// The ordinary interval: identity first, then the rows that reference it.
