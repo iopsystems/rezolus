@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html class="light" lang="en">
+<html lang="en">
 
 <head>
     <meta charset="utf-8" />
@@ -8,6 +8,39 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <meta name="description"
         content="Rezolus is a high-resolution systems &amp; performance telemetry agent using eBPF for low-overhead instrumentation on Linux." />
+    <script id="homepage-theme">
+        (() => {
+            const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+            let preference = null;
+            try { preference = localStorage.getItem('rezolus-homepage-theme'); } catch {}
+            if (preference !== 'light' && preference !== 'dark') preference = null;
+            let dark = preference ? preference === 'dark' : systemTheme.matches;
+            const apply = () => {
+                document.documentElement.classList.toggle('dark', dark);
+                document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+                const button = document.getElementById('theme-toggle');
+                if (button) {
+                    button.setAttribute('aria-pressed', String(dark));
+                    button.setAttribute('title', dark ? 'Switch to light mode' : 'Switch to dark mode');
+                    button.querySelector('span').textContent = dark ? 'light_mode' : 'dark_mode';
+                }
+            };
+            // Apply before styles load to avoid flashing the wrong theme.
+            apply();
+            systemTheme.addEventListener('change', (event) => {
+                if (preference === null) { dark = event.matches; apply(); }
+            });
+            document.addEventListener('DOMContentLoaded', () => {
+                apply();
+                document.getElementById('theme-toggle').addEventListener('click', () => {
+                    dark = !dark;
+                    preference = dark ? 'dark' : 'light';
+                    try { localStorage.setItem('rezolus-homepage-theme', preference); } catch {}
+                    apply();
+                });
+            });
+        })();
+    </script>
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Jost:wght@100..900&amp;family=JetBrains+Mono:wght@700&amp;display=swap"
@@ -17,7 +50,7 @@
         rel="stylesheet" />
     <script>
         tailwind.config = {
-            darkMode: "media",
+            darkMode: "class",
             theme: {
                 extend: {
                     colors: {
@@ -103,13 +136,11 @@
                 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%230b5cd5' stroke-opacity='0.10' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --paper-tile:
-                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
-                --paper-tile-major:
-                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
-            }
+        :root.dark {
+            --paper-tile:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
+            --paper-tile-major:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
         }
 
         body {
@@ -120,9 +151,7 @@
             background-attachment: fixed;
         }
 
-        @media (prefers-color-scheme: dark) {
-            body { background-color: #0f172a; }
-        }
+        html.dark body { background-color: #0f172a; }
 
         /* The major grid is the same tile at exactly 6x -- six small triangles
            along each side of a major one -- so its vertices land on minor
@@ -146,13 +175,11 @@
             --band: rgba(255, 255, 255, 0.94);
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --surface-solid: rgba(15, 23, 42, 0.86);
-                --surface-edge: rgba(148, 163, 184, 0.12);
-                /* "almost white" inverts to a lifted slate, not to white. */
-                --band: rgba(30, 41, 59, 0.88);
-            }
+        :root.dark {
+            --surface-solid: rgba(15, 23, 42, 0.86);
+            --surface-edge: rgba(148, 163, 184, 0.12);
+            /* "almost white" inverts to a lifted slate, not to white. */
+            --band: rgba(30, 41, 59, 0.88);
         }
 
         .card-surface,
@@ -196,9 +223,7 @@
            midway between two labels instead of hugging one of them. */
         :root { --nav-rule: rgba(15, 23, 42, 0.12); }
 
-        @media (prefers-color-scheme: dark) {
-            :root { --nav-rule: rgba(148, 163, 184, 0.18); }
-        }
+        :root.dark { --nav-rule: rgba(148, 163, 184, 0.18); }
 
         .nav-links > a + a {
             border-left: 1px solid var(--nav-rule);
@@ -224,7 +249,7 @@
         class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
         <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <a href="/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
-            <div class="hidden md:flex items-center gap-6 text-base font-semibold nav-links">
+            <div class="hidden lg:flex items-center gap-6 text-base font-semibold nav-links">
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#use-cases">Use Cases</a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
@@ -238,19 +263,26 @@
             </div>
             <div class="flex items-center gap-2">
                 <a href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener"
-                    class="inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-base font-bold no-underline hover:opacity-90 transition-opacity">
+                    class="hidden sm:inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-base font-bold no-underline hover:opacity-90 transition-opacity">
                     GitHub<span class="material-symbols-outlined text-[14px] opacity-80" data-icon="open_in_new">open_in_new</span>
                 </a>
+                <button id="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false"
+                    title="Switch to dark mode"
+                    class="inline-flex shrink-0 items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500">
+                    <span class="material-symbols-outlined" aria-hidden="true">dark_mode</span>
+                </button>
                 <button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu"
                     aria-label="Open menu"
-                    class="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                    class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
                     <span class="material-symbols-outlined" data-icon="menu">menu</span>
                 </button>
             </div>
         </div>
         <div id="nav-menu" hidden
-            class="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+            class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
             <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-base font-semibold">
+                <a class="sm:hidden py-3 text-slate-600 dark:text-slate-300 no-underline"
+                    href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener">GitHub</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#use-cases">Use Cases</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
@@ -269,8 +301,12 @@
     <!-- Hero -->
     <section class="pt-40 pb-24 px-6 paper-major">
         <div class="max-w-3xl mx-auto text-center">
+            <p class="text-base md:text-lg font-semibold uppercase tracking-wider leading-relaxed text-slate-700 dark:text-slate-200 mb-6">
+                For <span class="text-[#416f9e] dark:text-[#8bafd2]">physical AI</span> and
+                <span class="text-[#416f9e] dark:text-[#8bafd2]">latency-critical systems</span>
+            </p>
             <h1
-                class="hero-title text-5xl md:text-7xl tracking-tight text-slate-800 dark:text-white mb-8 leading-[1.05]">
+                class="hero-title text-5xl md:text-7xl tracking-tight text-slate-800 dark:text-slate-200 mb-8 leading-[1.05]">
                 High-resolution<br />systems &amp; performance<br />telemetry
             </h1>
             <p
@@ -295,7 +331,7 @@
     <section class="py-24 px-6 paper-major" id="use-cases">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-20 card-surface bare">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Where
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-200 mb-4">Where
                     microseconds make or break the product</h2>
                 <p class="text-xl text-slate-600 dark:text-slate-300 max-w-2xl mx-auto">Most off-the-shelf telemetry is built for
                     web services, where millisecond latencies and minutely averages are acceptable. The rest of the world needs better measurement.</p>
@@ -310,7 +346,7 @@
                             <span class="material-symbols-outlined text-blue-600 dark:text-blue-400"
                                 data-icon="candlestick_chart">candlestick_chart</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">High-frequency trading</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">High-frequency trading</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Everything about the application has been optimized to a T. But you still need to be sure that nothing in the environment could ruin the day. Rezolus uses the world's fastest histogram to catch the smallest delay.</p>
                 </div>
@@ -322,7 +358,7 @@
                             <span class="material-symbols-outlined text-green-600 dark:text-green-400"
                                 data-icon="directions_car">directions_car</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Autonomous systems</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Autonomous systems</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Perception and planning loops stick to a strict deadline. Rezolus runs well on embedded systems and monitors the possible sources of contention: scheduler, GPU, block I/O, locks, with recall in hindsight.</p>
                 </div>
@@ -334,7 +370,7 @@
                             <span class="material-symbols-outlined text-purple-600 dark:text-purple-400"
                                 data-icon="precision_manufacturing">precision_manufacturing</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Industrial control &amp; robotics</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Industrial control &amp; robotics</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">On a real-time kernel the chase is often down to the last cycle. Run-queue delay, involuntary context switches, CPU migrations, and TLB shootdowns are all included out of the box.</p>
                 </div>
@@ -346,7 +382,7 @@
                             <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
                                 data-icon="database">database</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Storage &amp; database appliances</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Storage &amp; database appliances</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Complex workloads stress systems in unpredictable ways. Capture both workload characteristics and device runtime behavior in their full dynamic range with histograms, plus drive health and temperature info for debugging.</p>
                 </div>
@@ -358,7 +394,7 @@
                             <span class="material-symbols-outlined text-rose-600 dark:text-rose-400"
                                 data-icon="cloud_off">cloud_off</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Air-gapped &amp; edge</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Air-gapped &amp; edge</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Local-first design fit inside one static binary. No time-series database, nothing phoning home, no need for third-party dashboards. Recordings land on local disk, and the viewer opens them readily in your browser.</p>
                 </div>
@@ -370,7 +406,7 @@
                             <span class="material-symbols-outlined text-cyan-600 dark:text-cyan-400"
                                 data-icon="router">router</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Network &amp; ISP infrastructure</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Network &amp; ISP infrastructure</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Light enough to provide fine-grain visibility into a box that runs close to line rate. Interface and ethtool counters sit alongside per-CPU scheduler and PMU behavior, so the box can speak to you when something is not right.</p>
                 </div>
@@ -378,7 +414,7 @@
             </div>
 
             <div class="mt-10 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 bg-white dark:bg-slate-800">
-                <h3 class="text-lg italic font-normal text-slate-900 dark:text-white mb-4">Why it is safe to leave running</h3>
+                <h3 class="text-lg italic font-normal text-slate-900 dark:text-slate-200 mb-4">Why it is safe to leave running</h3>
                 <ul class="space-y-3 list-disc pl-5 marker:text-slate-400 dark:marker:text-slate-600">
                     <li class="text-base text-slate-600 dark:text-slate-300 leading-relaxed"><span
                             class="font-bold text-slate-900 dark:text-white">Just a metrics agent.</span> Quantified
@@ -398,7 +434,7 @@
     <section class="py-24 px-6" id="features">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-20 card-surface bare">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Six
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-200 mb-4">Six
                     tools, one binary</h2>
                 <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Full
                     observability workflow from collection to analysis. Use it alone or integrate with OTel. </p>
@@ -413,7 +449,7 @@
                             <span class="material-symbols-outlined text-blue-600 dark:text-blue-400"
                                 data-icon="monitoring">monitoring</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Agent</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Agent</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Collects system metrics via
                         eBPF with near-zero overhead. Exposes data over HTTP for downstream consumers.</p>
@@ -426,7 +462,7 @@
                             <span class="material-symbols-outlined text-green-600 dark:text-green-400"
                                 data-icon="upload">upload</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Exporter</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Exporter</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Serves Prometheus-compatible
                         metrics with configurable histogram percentiles. Scrape-ready.</p>
@@ -439,7 +475,7 @@
                             <span class="material-symbols-outlined text-purple-600 dark:text-purple-400"
                                 data-icon="fiber_smart_record">fiber_smart_record</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Recorder</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Recorder</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Captures high-fidelity
                         metric
@@ -453,7 +489,7 @@
                             <span class="material-symbols-outlined text-amber-600 dark:text-amber-400"
                                 data-icon="history">history</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Hindsight</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Hindsight</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Maintains a rolling ring
                         buffer on disk. Trigger snapshots via signal or HTTP for post-incident analysis.</p>
@@ -466,7 +502,7 @@
                             <span class="material-symbols-outlined text-rose-600 dark:text-rose-400"
                                 data-icon="dashboard">dashboard</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">Viewer</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">Viewer</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">Interactive web dashboard
                         with
@@ -480,7 +516,7 @@
                             <span class="material-symbols-outlined text-cyan-600 dark:text-cyan-400"
                                 data-icon="smart_toy">smart_toy</span>
                         </div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">MCP Server</h3>
+                        <h3 class="text-lg font-bold text-slate-900 dark:text-slate-200">MCP Server</h3>
                     </div>
                     <p class="text-base text-slate-600 dark:text-slate-300 leading-relaxed">AI-guided analysis tools.
                         Query recordings with PromQL, detect anomalies, and correlate metrics.</p>
@@ -494,7 +530,7 @@
     <section class="py-24 px-6 bg-white dark:bg-slate-900" id="quickstart">
         <div class="max-w-2xl mx-auto">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">Up and
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-200 mb-4">Up and
                     running in seconds</h2>
             </div>
 
@@ -516,7 +552,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             1</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install and start</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Install and start</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-4">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -544,7 +580,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Explore your metrics</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Explore your metrics</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -578,7 +614,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             1</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Install</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Install</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -605,7 +641,7 @@
                         <div
                             class="w-8 h-8 rounded-full bg-primary text-white flex items-center justify-center text-sm font-bold shrink-0">
                             2</div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Explore local or remote metrics</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Explore local or remote metrics</h3>
                     </div>
                     <div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
                         <div class="flex items-center px-4 py-2 bg-slate-800 gap-2">
@@ -633,7 +669,7 @@
     <section class="py-24 px-6">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-16 card-surface">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">What it
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-200 mb-4">What it
                     measures</h2>
                 <p class="text-xl text-slate-600 dark:text-slate-300 max-w-xl mx-auto">Covering
                     the full Linux performance stack. Plus bring your own metrics.</p>
@@ -646,7 +682,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="memory">memory</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">CPU</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">CPU</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Usage, frequency, perf counters, cache, TLB</p>
                 </a>
@@ -656,7 +692,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="developer_board">developer_board</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">GPU</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">GPU</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">NVIDIA and Apple Silicon metrics</p>
                 </a>
@@ -666,7 +702,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="dynamic_form">dynamic_form</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Memory</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Memory</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Usage, vmstat, NUMA allocations</p>
                 </a>
@@ -676,7 +712,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="lan">lan</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Network</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Network</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Traffic, errors, ethtool counters</p>
                 </a>
@@ -686,7 +722,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="cable">cable</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">TCP</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">TCP</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Connect latency, jitter, retransmits</p>
                 </a>
@@ -696,7 +732,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="storage">storage</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Block I/O</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Block I/O</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Latency distributions, request counts</p>
                 </a>
@@ -706,7 +742,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="schedule">schedule</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Scheduler</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Scheduler</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Runqueue latency, context switches</p>
                 </a>
@@ -716,7 +752,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="terminal">terminal</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Syscall</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Syscall</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Counts and latency by type</p>
                 </a>
@@ -726,7 +762,7 @@
                         <div class="text-2xl leading-none"><span
                                 class="material-symbols-outlined text-slate-400 group-hover:text-blue-600 transition-colors"
                                 data-icon="speed">speed</span></div>
-                        <h3 class="text-base font-bold text-slate-900 dark:text-white">Rezolus</h3>
+                        <h3 class="text-base font-bold text-slate-900 dark:text-slate-200">Rezolus</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Self-monitoring: CPU, memory, I/O</p>
                 </a>
@@ -743,7 +779,7 @@
     <section class="py-24 px-6 bg-white dark:bg-slate-900">
         <div class="max-w-6xl mx-auto">
             <div class="text-center mb-16">
-                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-white mb-4">
+                <h2 class="text-3xl md:text-4xl font-black tracking-tight text-slate-900 dark:text-slate-200 mb-4">
                     Documentation</h2>
                 <p class="text-xl text-slate-600 dark:text-slate-300">Everything you need to deploy and operate Rezolus.
                 </p>
@@ -756,7 +792,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="download">download</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Installation</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">Installation</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Packages, source builds, platform support</p>
                 </a>
@@ -766,7 +802,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="rocket_launch">rocket_launch</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Usage</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">Usage</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Long-running, one-off, and offline analysis</p>
                 </a>
@@ -776,7 +812,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="account_tree">account_tree</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Architecture</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">Architecture</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Modes, samplers, eBPF integration</p>
                 </a>
@@ -786,7 +822,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="insights">insights</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">Metrics</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">Metrics</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Samplers and metric types, one by one</p>
                 </a>
@@ -796,7 +832,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="terminal">terminal</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">CLI &amp; Configuration</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">CLI &amp; Configuration</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">Commands, flags, TOML config reference</p>
                 </a>
@@ -806,7 +842,7 @@
                         <span
                             class="material-symbols-outlined text-2xl text-slate-400 group-hover:text-blue-600 transition-colors"
                             data-icon="api">api</span>
-                        <h3 class="text-xl font-bold text-slate-900 dark:text-white">API Reference</h3>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-slate-200">API Reference</h3>
                     </div>
                     <p class="text-base text-slate-500 dark:text-slate-400">HTTP endpoints for every mode</p>
                 </a>
@@ -831,8 +867,8 @@
     </footer>
 
     <script>
-        // Mobile nav. The links are `hidden md:flex`, so without this there is
-        // no way to reach them below 768px.
+        // Mobile nav. The links are `hidden lg:flex`, so without this there is
+        // no way to reach them below 1024px.
         const navToggle = document.getElementById('nav-toggle');
         const navMenu = document.getElementById('nav-menu');
         const setNav = (open) => {
@@ -849,7 +885,7 @@
             // open panel.
             navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
             // Reset when the viewport grows past the breakpoint that hides it.
-            window.matchMedia('(min-width: 768px)').addEventListener('change', (e) => {
+            window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => {
                 if (e.matches) setNav(false);
             });
         }
