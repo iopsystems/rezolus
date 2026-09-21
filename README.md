@@ -16,10 +16,10 @@ system-level evidence, not individual request traces or call-stack profiles.
 [Quick start](#quick-start) · [Choose a workflow](#choose-a-workflow) ·
 [Metrics](docs/metrics.md) · [Documentation map](#documentation-map)
 
-**See it before installing:** download the [sample recording](https://rezolus.com/viewer/data/demo.parquet)
-(about 1.2 MB), then open it in the [browser-only viewer](https://rezolus.com/viewer/).
-The recording is processed in your browser. Explore the scheduler and I/O
-histograms alongside CPU activity; you do not need a running agent.
+**See it before installing:** [explore the sample recording in the web viewer](https://rezolus.com/viewer/?capture=demo.parquet).
+The sample loads automatically and is processed in your browser. Explore the
+scheduler and I/O histograms alongside CPU activity; no installation or file
+upload is needed.
 
 ## Why Rezolus?
 
