@@ -2,9 +2,9 @@
 
 ### Added
 
-- Agent: an opt-in Linux `sensors` sampler reads native thermal zones, hwmon
+- Agent: an opt-in Linux `hw_sensors` sampler reads native thermal zones, hwmon
   temperature and electrical channels, fan RPM/PWM, and cooling states. Includes
-  INA3221 power derivation and Thor board interpretation, with a Sensors viewer
+  INA3221 power derivation and Thor board interpretation, with a Hardware Sensors viewer
   section. Reads run in the blocking pool at a configurable interval (default
   5s). Thor inventory fixtures and synthetic Orin layouts are tested; hardware
   timing and Orin validation are still required before fleet-wide enablement.

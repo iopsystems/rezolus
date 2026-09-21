@@ -1,6 +1,6 @@
 # Validate the hardware sensors sampler
 
-The `sensors` sampler is opt-in. It reads Linux sysfs without changing hardware
+The `hw_sensors` sampler is opt-in. It reads Linux sysfs without changing hardware
 settings. Its initial Tegra fixture comes from an AGX Thor developer kit running
 L4T R39.2.1 and kernel `6.8.12-tegra-bpf`; fixture tests do not measure hardware
 access cost or establish Orin hardware support.
@@ -44,7 +44,7 @@ policy = "normal"
 level = "debug"
 [defaults]
 enabled = false
-[samplers.sensors]
+[samplers.hw_sensors]
 enabled = true
 interval = "5s"
 EOF

@@ -5,7 +5,7 @@ use crate::plot::*;
 
 pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let mut view = View::new(data, sections);
-    let mut sensors = Group::new("Sensors", "sensors");
+    let mut sensors = Group::new("Hardware Sensors", "hw_sensors");
 
     if has_metric(data, "sensor_temperature") {
         let temperatures = sensors.subgroup("Temperature");

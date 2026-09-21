@@ -26,7 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const NAME: &str = "sensors";
+const NAME: &str = "hw_sensors";
 const SYSFS: &str = "/sys";
 const DEFAULT_READ_INTERVAL: Duration = Duration::from_secs(5);
 const REDISCOVERY_INTERVAL: Duration = Duration::from_secs(60);
@@ -39,7 +39,10 @@ fn init(config: Arc<Config>) -> SamplerResult {
     let interval = config
         .sampler_interval(NAME)
         .unwrap_or(DEFAULT_READ_INTERVAL);
-    Ok(Some(Box::new(Sensors::new(interval, PathBuf::from(SYSFS)))))
+    Ok(Some(Box::new(HwSensors::new(
+        interval,
+        PathBuf::from(SYSFS),
+    ))))
 }
 
 #[distributed_slice(SAMPLERS)]
@@ -403,7 +406,7 @@ fn sweep(state: &mut SweepState, sysfs: &Path) {
     );
 }
 
-struct Sensors {
+struct HwSensors {
     interval: Duration,
     last_read: Mutex<Throttle>,
     reading: Arc<AtomicBool>,
@@ -412,7 +415,7 @@ struct Sensors {
     sysfs: PathBuf,
 }
 
-impl Sensors {
+impl HwSensors {
     fn new(interval: Duration, sysfs: PathBuf) -> Self {
         // Initialization performs no device reads; the first blocking sweep
         // discovers and reads. Until it lands every family is explicitly empty.
@@ -457,7 +460,7 @@ fn lock_state(state: &Mutex<SweepState>) -> std::sync::MutexGuard<'_, SweepState
 }
 
 #[async_trait]
-impl Sampler for Sensors {
+impl Sampler for HwSensors {
     fn name(&self) -> &'static str {
         NAME
     }

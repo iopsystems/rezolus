@@ -318,7 +318,7 @@ enabled = false
 # opt-in only. Reads run on the blocking pool at `interval` (default 5s) and
 # sysfs capabilities are rediscovered every 60s; no hardware controls are
 # written. Missing permissions or unavailable channels appear as absent values.
-[samplers.sensors]
+[samplers.hw_sensors]
 enabled = false
 # interval = "5s"
 

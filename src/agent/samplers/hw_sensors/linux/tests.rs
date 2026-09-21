@@ -491,7 +491,7 @@ async fn refresh_dispatches_one_background_sweep_and_respects_both_guards() {
     let root = tempfile::tempdir().unwrap();
     let hwmon = make_hwmon(root.path(), "generic", &[("temp1_input", "42000")]);
     let _ = super::metric(Family::Temperature).set(0, i64::MIN);
-    let sampler = super::Sensors::new(Duration::from_secs(60), root.path().to_path_buf());
+    let sampler = super::HwSensors::new(Duration::from_secs(60), root.path().to_path_buf());
     assert_eq!(super::stats::SENSOR_TEMPERATURE_ACQ.member_bound(), Some(0));
     assert_eq!(super::metric(Family::Temperature).value(0), None);
 

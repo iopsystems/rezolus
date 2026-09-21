@@ -35,7 +35,7 @@ This guide walks you through all the available metrics, organized by category.
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
   - [scheduler_runqueue](#scheduler_runqueue)
-- [Sensors](#sensors)
+- [Hardware Sensors](#hardware-sensors)
 - [Syscall](#syscall)
   - [syscall_counts](#syscall_counts)
   - [syscall_latency](#syscall_latency)
@@ -664,13 +664,14 @@ performance and responsiveness.
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
 
-## Sensors
+## Hardware Sensors
 
-The Linux `sensors` sampler reads thermal zones, hwmon channels and thermal
-cooling devices. It is **opt-in**, including when `[defaults] enabled = true`:
+The Linux `hw_sensors` sampler monitors hardware health: temperature, power,
+voltage, current, fans, and cooling state. It reads thermal zones, hwmon
+channels, and thermal cooling devices. It is **opt-in**, including when `[defaults] enabled = true`:
 
 ```toml
-[samplers.sensors]
+[samplers.hw_sensors]
 enabled = true
 interval = "5s"
 ```
@@ -704,7 +705,7 @@ each family supports at most 256 lifetime identities, reporting overflow.
 | `sensor_fan_pwm` | Gauge | Fan command on a 0–255 scale, not measured rotation |
 | `sensor_cooling_state` | Gauge | Driver-defined cooling-state index, not a throttling percentage |
 
-The Sensors dashboard plots every family separately by sensor, converting
+The Hardware Sensors dashboard plots every family separately by sensor, converting
 temperature to Celsius, electrical measurements to W/V/A, and PWM to a fraction.
 Native sensor sources can overlap thermal zones or existing GPU/drive readings;
 these are distinct source series, not additive measurements. Power rails may
