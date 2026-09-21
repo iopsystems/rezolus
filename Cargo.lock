@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.20.1-alpha.25"
+version = "5.20.1-alpha.26"
 dependencies = [
  "allan",
  "anyhow",
