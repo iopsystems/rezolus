@@ -143,16 +143,6 @@ pub fn discover(sysfs: &Path) -> Discovery {
     for descriptor in &mut found.descriptors {
         descriptor.board_model.clone_from(&board.model);
         descriptor.soc_compatible.clone_from(&board.compatible);
-        // These are recorded series context. Include them in the published
-        // identity too, so a metadata replacement can never relabel a slot.
-        if let Some(model) = &board.model {
-            descriptor.sensor.push_str(":board_model=");
-            descriptor.sensor.push_str(model);
-        }
-        if let Some(compatible) = &board.compatible {
-            descriptor.sensor.push_str(":soc_compatible=");
-            descriptor.sensor.push_str(compatible);
-        }
     }
     found
         .descriptors
@@ -349,8 +339,8 @@ fn discover_hwmon(sysfs: &Path, board: &Board, found: &mut Discovery) {
             }
         }
 
-        for name in names {
-            let Some((prefix, index)) = input_attribute(&name) else {
+        for name in &names {
+            let Some((prefix, index)) = input_attribute(name) else {
                 continue;
             };
             let channel = format!("{prefix}{index}");
@@ -394,8 +384,8 @@ fn discover_hwmon(sysfs: &Path, board: &Board, found: &mut Discovery) {
             }
         }
 
-        for name in attribute_names(&node, &mut found.errors) {
-            if let Some(index) = exact_index(&name, "pwm") {
+        for name in &names {
+            if let Some(index) = exact_index(name, "pwm") {
                 let channel = format!("pwm{index}");
                 if let Some(input) = direct_spec(&node, &channel, "") {
                     // pwmN_enable selects the fan control method (0 means no
@@ -621,6 +611,11 @@ fn device_identity(sysfs: &Path, node: &Path, hwmon: bool) -> String {
         if device.file_name().and_then(|v| v.to_str()) == Some("hwmon") {
             device = device.parent().unwrap_or(device);
         }
+    }
+    // A parentless hwmon has no device identity beyond its class index.
+    // Keep the full path rather than collapsing all such chips to /devices/virtual.
+    if hwmon && device == sysfs.join("devices/virtual") {
+        device = canonical.as_path();
     }
     let relative = device.strip_prefix(sysfs).unwrap_or(device);
     format!("/{}", relative.to_string_lossy().trim_start_matches('/'))

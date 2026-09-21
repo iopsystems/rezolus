@@ -14,7 +14,9 @@ python3 scripts/sensor_inventory.py > sensors-inventory.json
 ```
 
 The JSON preserves native names, resolved paths, platform identity and read
-errors. This version includes NVIDIA's `rpm`, overcurrent event attributes,
+errors. Unavailable values are `null`; diagnostics are keyed by path in
+`read_errors`. Fixture loading omits unavailable attributes and accepts absent
+platform metadata, including on hosts without a device tree. This version includes NVIDIA's `rpm`, overcurrent event attributes,
 conversion intervals and shunt configuration, which the first Thor inventory
 omitted. It reads configuration but never writes it. Permission errors should
 be investigated before deciding whether elevated privileges are necessary.
@@ -97,3 +99,16 @@ drivers or change power, fan, thermal, or permission settings.
 References: [NVIDIA Thor power and thermal guide](https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonThor.html),
 [NVIDIA Orin guide](https://docs.nvidia.com/jetson/archives/r36.4.4/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html),
 [INA3221 ABI](https://www.kernel.org/doc/html/next/hwmon/ina3221.html).
+
+## Device churn and lifetime limits
+
+Each metric family has 256 lifetime slots. Removing a sensor does not free its
+slot; rediscovering the same identity restores it. Device renumbering (for
+example NVMe hot-swap) can create new identities and eventually exhaust the
+family's capacity. The agent logs an overflow warning and omits new identities;
+existing identities continue to work. Restarting the agent resets the slots.
+
+Parentless virtual hwmon devices retain their `hwmonN` component to distinguish
+otherwise identical devices. This fallback can also change across rediscovery.
+Recovering capacity without restarting requires a separate slot-reuse design
+that preserves the identity of samples already recorded.

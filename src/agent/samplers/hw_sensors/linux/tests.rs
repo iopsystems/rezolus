@@ -11,8 +11,8 @@ use tokio::sync::Mutex;
 
 #[derive(Deserialize)]
 struct Inventory {
-    model: String,
-    compatible: String,
+    model: Option<String>,
+    compatible: Option<String>,
     thermal_zones: Vec<Node>,
     cooling_devices: Vec<Node>,
     hwmon: Vec<Node>,
@@ -22,7 +22,7 @@ struct Inventory {
 struct Node {
     path: String,
     resolved_path: String,
-    attributes: BTreeMap<String, String>,
+    attributes: BTreeMap<String, Option<String>>,
 }
 
 fn write(path: impl AsRef<Path>, value: impl AsRef<[u8]>) {
@@ -34,15 +34,20 @@ fn write(path: impl AsRef<Path>, value: impl AsRef<[u8]>) {
 fn materialize_inventory() -> tempfile::TempDir {
     let inventory: Inventory =
         serde_json::from_str(include_str!("fixtures/thor-sensors.json")).unwrap();
+    materialize(inventory)
+}
+
+fn materialize(inventory: Inventory) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    write(
-        root.path().join("firmware/devicetree/base/model"),
-        inventory.model,
-    );
-    write(
-        root.path().join("firmware/devicetree/base/compatible"),
-        inventory.compatible.replace('\n', "\0"),
-    );
+    if let Some(model) = inventory.model {
+        write(root.path().join("firmware/devicetree/base/model"), model);
+    }
+    if let Some(compatible) = inventory.compatible {
+        write(
+            root.path().join("firmware/devicetree/base/compatible"),
+            compatible.replace('\n', "\0"),
+        );
+    }
     for node in inventory
         .thermal_zones
         .iter()
@@ -54,7 +59,9 @@ fn materialize_inventory() -> tempfile::TempDir {
             .join(node.resolved_path.trim_start_matches("/sys/"));
         std::fs::create_dir_all(&target).unwrap();
         for (name, value) in &node.attributes {
-            write(target.join(name), value);
+            if let Some(value) = value {
+                write(target.join(name), value);
+            }
         }
         let link = root.path().join(node.path.trim_start_matches("/sys/"));
         std::fs::create_dir_all(link.parent().unwrap()).unwrap();
@@ -276,6 +283,66 @@ fn synthetic_orin_layout_remains_generic_without_thor_scope() {
         power.soc_compatible.as_deref(),
         Some("nvidia,p3737-0000+p3701-0005,nvidia,tegra234")
     );
+}
+
+#[test]
+fn board_context_does_not_expand_sensor_identity() {
+    let root = materialize_inventory();
+    let before = discover(root.path()).descriptors;
+    std::fs::remove_dir_all(root.path().join("firmware")).unwrap();
+    let after = discover(root.path()).descriptors;
+    // Scope remains part of identity; compare channels without board-specific scope.
+    for descriptor in before.iter().filter(|d| d.scope.is_none()) {
+        assert!(after.iter().any(|d| d.sensor == descriptor.sensor));
+        assert!(descriptor.board_model.is_some());
+    }
+}
+
+#[test]
+fn parentless_hwmon_devices_keep_distinct_slots() {
+    let root = tempfile::tempdir().unwrap();
+    for (index, value) in [(0, "41000"), (1, "52000")] {
+        let device = root
+            .path()
+            .join(format!("devices/virtual/hwmon/hwmon{index}"));
+        write(device.join("name"), "virtual_chip");
+        write(device.join("temp1_input"), value);
+        let class = root.path().join(format!("class/hwmon/hwmon{index}"));
+        std::fs::create_dir_all(class.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(device, class).unwrap();
+    }
+    let mut slots = super::Slots::new(2);
+    let result = slots.reconcile(family_descriptors(root.path(), Family::Temperature));
+    assert_eq!(result.added.len(), 2);
+    assert_eq!(slots.active(), 2);
+    let values: Vec<_> = slots
+        .descriptors
+        .iter()
+        .flatten()
+        .map(|d| d.read().unwrap())
+        .collect();
+    assert_eq!(values, [41_000, 52_000]);
+}
+
+#[test]
+fn inventory_accepts_missing_platform_and_unreadable_attributes() {
+    let inventory: Inventory = serde_json::from_value(serde_json::json!({
+        "model": null,
+        "thermal_zones": [], "cooling_devices": [],
+        "hwmon": [{
+            "path": "/sys/class/hwmon/hwmon0",
+            "resolved_path": "/sys/devices/virtual/hwmon/hwmon0",
+            "attributes": {"name": "virtual_chip", "temp1_input": "42000", "temp2_input": null}
+        }]
+    }))
+    .unwrap();
+    let root = materialize(inventory);
+    let found = discover(root.path());
+    assert!(found.errors.is_empty());
+    assert_eq!(found.descriptors.len(), 1);
+    assert_eq!(found.descriptors[0].read().unwrap(), 42_000);
+    assert!(found.descriptors[0].board_model.is_none());
+    assert!(found.descriptors[0].soc_compatible.is_none());
 }
 
 #[test]
