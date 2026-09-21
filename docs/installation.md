@@ -20,8 +20,14 @@ package manager.
 - Amazon Linux: 2023
 
 ```bash
-curl -fsSL https://install.rezolus.com | bash
+curl -fsSL https://install.rezolus.com | sudo bash
 ```
+
+The Linux installer prompts before enabling the Agent and Exporter services.
+For unattended installation, append `-s -- -y` to `sudo bash`; add
+`--disable-services` to install without starting collection. Hindsight is
+disabled by default. See the [quick start](../README.md#quick-start) for a first
+recording and the [usage guide](usage.md) for service configuration.
 
 ## macOS
 
@@ -30,6 +36,10 @@ For macOS users, install via Homebrew:
 ```bash
 brew install iopsystems/iop/rezolus
 ```
+
+Local macOS collection provides CPU and Apple GPU metrics, not Linux eBPF
+samplers. The viewer, recorder, and analysis tools can also work with remote
+Linux agents or existing recordings. No systemd services are installed on macOS.
 
 Or build from source following the instructions below.
 
@@ -104,7 +114,7 @@ sudo apt install -y build-essential pkg-config libelf-dev clang
 # Enterprise Linux (Rocky, Alma, RHEL, ...) / Amazon Linux
 sudo dnf install -y gcc elfutils-devel clang
 
-# macOS (no eBPF; CPU usage only)
+# macOS (no Linux eBPF samplers)
 xcode-select --install
 ```
 

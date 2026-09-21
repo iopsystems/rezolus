@@ -72,13 +72,13 @@ pub fn command() -> Command {
              .rez      (default) A per-sampler archive: one table per sampler, each at its own\n    \
              \x20         cadence, carrying the window each read covered so PromQL rate()\n    \
              \x20         queries in `rezolus view` and `rezolus mcp` can report uncertainty\n    \
-             \x20         bounds instead of a bare number. Every endpoint must be a rezolus\n    \
-             \x20         (msgpack) one; several of them become one archive holding a\n    \
+             \x20         bounds instead of a bare number. Rezolus and Prometheus endpoints\n    \
+             \x20         are supported; several of them become one archive holding a\n    \
              \x20         recording each, which is what `rezolus view` reads as an A/B or\n    \
              \x20         multi-host comparison. Prefer it.\n    \
-             .parquet  One columnar table on a single uniform clock. Use it for a Prometheus\n    \
-             \x20         source, for a run mixing Prometheus and rezolus endpoints, or for\n    \
-             \x20         other parquet tooling. (Several rezolus endpoints do NOT need\n    \
+             .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
+             \x20         tabular export or other parquet tooling.\n    \
+             \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \
              \x20         parquet — .rez holds them as separate recordings.)\n    \
              .raw      The msgpack snapshots as scraped, concatenated (a Prometheus source\n    \
              \x20         is converted to snapshots on the way in, so either source works).\n    \
@@ -115,13 +115,13 @@ pub fn command() -> Command {
              rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez\n\n    \
              # Same host, two agents: give each a source= so the recordings are tellable apart\n    \
              rezolus record --endpoint http://localhost:4241,source=redis --endpoint http://localhost:4242,source=valkey -o ab.rez\n\n    \
-             # Record several endpoints into ONE combined parquet file (needed when one is Prometheus)\n    \
+             # Record several endpoints into ONE combined parquet file (uniform tabular export)\n    \
              rezolus record --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
              # ...or one file per endpoint: writes run_rezolus.parquet and run_svc.parquet\n    \
              rezolus record --separate --endpoint http://localhost:4241 --endpoint http://svc:9090/metrics,source=svc -o run.parquet\n\n    \
              # Capture raw msgpack now, convert later\n    \
              rezolus record -o run.raw --duration 1m && rezolus recording convert run.raw\n\n    \
-             # Require a .rez: fail rather than quietly fall back to parquet\n    \
+             # Explicitly select the .rez format\n    \
              rezolus record --url http://host:4241 --format rez --duration 5m\n\n    \
              # Take the endpoints and the output from a file\n    \
              rezolus record --config rec.toml\n    \
