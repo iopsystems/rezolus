@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html class="light" lang="en">
+<html lang="en">
 
 <head>
     <meta charset="utf-8" />
@@ -8,6 +8,39 @@
 <link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
     <meta name="description"
         content="Rezolus is a high-resolution systems &amp; performance telemetry agent using eBPF for low-overhead instrumentation on Linux." />
+    <script id="homepage-theme">
+        (() => {
+            const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+            let preference = null;
+            try { preference = localStorage.getItem('rezolus-homepage-theme'); } catch {}
+            if (preference !== 'light' && preference !== 'dark') preference = null;
+            let dark = preference ? preference === 'dark' : systemTheme.matches;
+            const apply = () => {
+                document.documentElement.classList.toggle('dark', dark);
+                document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+                const button = document.getElementById('theme-toggle');
+                if (button) {
+                    button.setAttribute('aria-pressed', String(dark));
+                    button.setAttribute('title', dark ? 'Switch to light mode' : 'Switch to dark mode');
+                    button.querySelector('span').textContent = dark ? 'light_mode' : 'dark_mode';
+                }
+            };
+            // Apply before styles load to avoid flashing the wrong theme.
+            apply();
+            systemTheme.addEventListener('change', (event) => {
+                if (preference === null) { dark = event.matches; apply(); }
+            });
+            document.addEventListener('DOMContentLoaded', () => {
+                apply();
+                document.getElementById('theme-toggle').addEventListener('click', () => {
+                    dark = !dark;
+                    preference = dark ? 'dark' : 'light';
+                    try { localStorage.setItem('rezolus-homepage-theme', preference); } catch {}
+                    apply();
+                });
+            });
+        })();
+    </script>
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=Jost:wght@100..900&amp;family=JetBrains+Mono:wght@700&amp;display=swap"
@@ -17,7 +50,7 @@
         rel="stylesheet" />
     <script>
         tailwind.config = {
-            darkMode: "media",
+            darkMode: "class",
             theme: {
                 extend: {
                     colors: {
@@ -103,13 +136,11 @@
                 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%230b5cd5' stroke-opacity='0.10' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --paper-tile:
-                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
-                --paper-tile-major:
-                    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
-            }
+        :root.dark {
+            --paper-tile:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='84' viewBox='0 0 48 84'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.05' stroke-width='1'%3E%3Cpath d='M0 0H48M0 42H48M0 84H48'/%3E%3Cpath d='M0 0L48 84M48 0L0 84'/%3E%3C/g%3E%3C/svg%3E");
+            --paper-tile-major:
+                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='288' height='504' viewBox='0 0 288 504'%3E%3Cg fill='none' stroke='%237db0ff' stroke-opacity='0.08' stroke-width='1'%3E%3Cpath d='M0 0H288M0 252H288M0 504H288'/%3E%3Cpath d='M0 0L288 504M288 0L0 504'/%3E%3C/g%3E%3C/svg%3E");
         }
 
         body {
@@ -120,9 +151,7 @@
             background-attachment: fixed;
         }
 
-        @media (prefers-color-scheme: dark) {
-            body { background-color: #0f172a; }
-        }
+        html.dark body { background-color: #0f172a; }
 
         /* The major grid is the same tile at exactly 6x -- six small triangles
            along each side of a major one -- so its vertices land on minor
@@ -146,13 +175,11 @@
             --band: rgba(255, 255, 255, 0.94);
         }
 
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --surface-solid: rgba(15, 23, 42, 0.86);
-                --surface-edge: rgba(148, 163, 184, 0.12);
-                /* "almost white" inverts to a lifted slate, not to white. */
-                --band: rgba(30, 41, 59, 0.88);
-            }
+        :root.dark {
+            --surface-solid: rgba(15, 23, 42, 0.86);
+            --surface-edge: rgba(148, 163, 184, 0.12);
+            /* "almost white" inverts to a lifted slate, not to white. */
+            --band: rgba(30, 41, 59, 0.88);
         }
 
         .card-surface,
@@ -196,9 +223,7 @@
            midway between two labels instead of hugging one of them. */
         :root { --nav-rule: rgba(15, 23, 42, 0.12); }
 
-        @media (prefers-color-scheme: dark) {
-            :root { --nav-rule: rgba(148, 163, 184, 0.18); }
-        }
+        :root.dark { --nav-rule: rgba(148, 163, 184, 0.18); }
 
         .nav-links > a + a {
             border-left: 1px solid var(--nav-rule);
@@ -224,7 +249,7 @@
         class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
         <div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
             <a href="/" class="brand text-slate-800 dark:text-white no-underline">REZOLUS</a>
-            <div class="hidden md:flex items-center gap-6 text-base font-semibold nav-links">
+            <div class="hidden lg:flex items-center gap-6 text-base font-semibold nav-links">
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#use-cases">Use Cases</a>
                 <a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
@@ -238,19 +263,26 @@
             </div>
             <div class="flex items-center gap-2">
                 <a href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener"
-                    class="inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-base font-bold no-underline hover:opacity-90 transition-opacity">
+                    class="hidden sm:inline-flex items-center gap-1 bg-primary dark:bg-blue-600 text-white px-5 py-2 rounded-lg text-base font-bold no-underline hover:opacity-90 transition-opacity">
                     GitHub<span class="material-symbols-outlined text-[14px] opacity-80" data-icon="open_in_new">open_in_new</span>
                 </a>
+                <button id="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="false"
+                    title="Switch to dark mode"
+                    class="inline-flex shrink-0 items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500">
+                    <span class="material-symbols-outlined" aria-hidden="true">dark_mode</span>
+                </button>
                 <button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu"
                     aria-label="Open menu"
-                    class="md:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+                    class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
                     <span class="material-symbols-outlined" data-icon="menu">menu</span>
                 </button>
             </div>
         </div>
         <div id="nav-menu" hidden
-            class="md:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+            class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
             <div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-base font-semibold">
+                <a class="sm:hidden py-3 text-slate-600 dark:text-slate-300 no-underline"
+                    href="https://github.com/iopsystems/rezolus" target="_blank" rel="noopener">GitHub</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
                     href="#use-cases">Use Cases</a>
                 <a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline"
@@ -835,8 +867,8 @@
     </footer>
 
     <script>
-        // Mobile nav. The links are `hidden md:flex`, so without this there is
-        // no way to reach them below 768px.
+        // Mobile nav. The links are `hidden lg:flex`, so without this there is
+        // no way to reach them below 1024px.
         const navToggle = document.getElementById('nav-toggle');
         const navMenu = document.getElementById('nav-menu');
         const setNav = (open) => {
@@ -853,7 +885,7 @@
             // open panel.
             navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
             // Reset when the viewport grows past the breakpoint that hides it.
-            window.matchMedia('(min-width: 768px)').addEventListener('change', (e) => {
+            window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => {
                 if (e.matches) setNav(false);
             });
         }
