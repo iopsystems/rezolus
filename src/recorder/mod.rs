@@ -367,7 +367,8 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata 
         _ => None,
     };
 
-    let (version, producer_epoch) = fetch_agent_identity(client, base_url).await;
+    let (version, producer_epoch, clock_anchor_wall_ns) =
+        fetch_agent_identity(client, base_url).await;
 
     AgentMetadata {
         systeminfo,
@@ -375,6 +376,7 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata 
         sampler_status,
         version,
         producer_epoch,
+        clock_anchor_wall_ns,
     }
 }
 
@@ -391,7 +393,10 @@ async fn fetch_agent_metadata(client: &Client, base_url: &Url) -> AgentMetadata 
 /// ever shipped. A source that answers neither (a Prometheus exporter, an
 /// agent behind a proxy that rewrites `/`) simply records no version, which is
 /// how every recording before this change reads.
-async fn fetch_agent_identity(client: &Client, base_url: &Url) -> (Option<String>, Option<String>) {
+async fn fetch_agent_identity(
+    client: &Client,
+    base_url: &Url,
+) -> (Option<String>, Option<String>, Option<i64>) {
     let mut status_url = base_url.clone();
     status_url.set_path("/status");
     if let Ok(response) = client.get(status_url).send().await {
@@ -402,11 +407,16 @@ async fn fetch_agent_identity(client: &Client, base_url: &Url) -> (Option<String
                 {
                     let epoch =
                         (!status.producer_epoch.is_empty()).then_some(status.producer_epoch);
+                    // Zero is what an agent older than the anchor
+                    // deserializes to, and no real anchor is zero: that is
+                    // 1970, and the agent would have to have started then.
+                    let anchor =
+                        (status.clock_anchor_wall_ns != 0).then_some(status.clock_anchor_wall_ns);
                     if !status.version.is_empty() {
-                        return (Some(status.version), epoch);
+                        return (Some(status.version), epoch, anchor);
                     }
                     if epoch.is_some() {
-                        return (None, epoch);
+                        return (None, epoch, anchor);
                     }
                 }
             }
@@ -418,14 +428,14 @@ async fn fetch_agent_identity(client: &Client, base_url: &Url) -> (Option<String
     let body = match client.get(root_url).send().await {
         Ok(response) if response.status().is_success() => match response.text().await {
             Ok(body) => body,
-            Err(_) => return (None, None),
+            Err(_) => return (None, None, None),
         },
-        _ => return (None, None),
+        _ => return (None, None, None),
     };
     // No epoch from this path by construction: an agent old enough to lack
     // `/status` predates the epoch entirely, and inventing one here would
     // claim a restart boundary nobody observed.
-    (parse_root_version(&body), None)
+    (parse_root_version(&body), None, None)
 }
 
 /// Pull the version out of the agent's root page, whose first line is
@@ -460,6 +470,35 @@ fn snapshot_producer_epoch(snapshot: &metriken_exposition::Snapshot) -> Option<&
         .get(parquet_metadata::KEY_PRODUCER_EPOCH)
         .map(String::as_str)
         .filter(|e| !e.is_empty())
+}
+
+/// The producer's own stamp for this pass, if it sent one.
+///
+/// Returns `(ts, wall_offset)` on the AGENT's timeline: when it read the
+/// values, and the wall clock's disagreement with that timeline at the read.
+///
+/// The recorder's alternative is its own tick, which names when it ASKED. The
+/// two differ by the network round trip and by however long the agent had been
+/// serving this pass from its TTL cache — a scrape inside that window gets
+/// values read up to a TTL earlier, and one HTTP response looks the same
+/// either way. Only the agent can tell the difference, so when it does, that
+/// is what the recording keeps.
+///
+/// Absent for a Prometheus source, which has no such clock to offer, and for
+/// an agent older than these keys. Both fall back to the recorder's stamp,
+/// which is what every recording before this held.
+fn snapshot_producer_stamp(snapshot: &metriken_exposition::Snapshot) -> Option<(u64, i64)> {
+    use metriken_exposition::Snapshot;
+    let metadata = match snapshot {
+        Snapshot::V1(s) => &s.metadata,
+        Snapshot::V2(s) => &s.metadata,
+        Snapshot::V3(s) => &s.metadata,
+    };
+    let ts: i64 = metadata.get("ts")?.parse().ok()?;
+    let wall_offset: i64 = metadata.get("wall_offset")?.parse().ok()?;
+    // A negative stamp is not a timeline this recorder can write: `wal.ts` is
+    // unsigned, and a producer that sent one is not one to guess for.
+    Some((u64::try_from(ts).ok()?, wall_offset))
 }
 
 /// Warn once when the agent's epoch changes mid-recording.
@@ -718,6 +757,14 @@ struct RezStream {
     /// `StreamRecorderV3::ingest` building its rows and its send returning, so
     /// a failure to commit loses the tick exactly as a failed send always did.
     staged: Vec<rez_sqlite::TickBatch>,
+    /// The last stamp each recording ingested, for its closing clock
+    /// observation.
+    ///
+    /// Per recording rather than one for the archive: a recording that keeps
+    /// the agent's timestamps must close on the agent's clock, and one that
+    /// keeps the recorder's must close on the recorder's. One value for all of
+    /// them would be right for at most one.
+    last_stamp: std::collections::BTreeMap<usize, (u64, i64)>,
     /// Canonical label key -> the endpoint URL that claimed it first, for the
     /// indistinguishable-labels warning.
     ///
@@ -763,6 +810,8 @@ impl RezStream {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
+        self.last_stamp
+            .insert(endpoint, (anchored_ts, wall_offset_ns));
         let rows = match self.recs.get_mut(&endpoint) {
             Some(rec) => rec.stage(snapshot, anchored_ts, wall_offset_ns)?,
             None => {
@@ -813,7 +862,21 @@ impl RezStream {
         let seed = rez_v3_writer::ManifestSeed {
             labels,
             metadata: build_rez_metadata(config, ep),
-            clock_anchor_wall_ns,
+            // The SOURCE's anchor where there is one. This recording's rows
+            // carry the agent's timestamps, so anchoring it on the recorder's
+            // clock instead would make `ts + wall_offset` resolve against a
+            // reading neither party took — and the two clocks are on different
+            // hosts, so the error is the skew between them, not a rounding.
+            //
+            // A Prometheus source, or an agent too old to report an anchor,
+            // keeps the recorder's: that recording's rows are the recorder's
+            // stamps too, so the pair stays coherent either way. Coherence is
+            // per recording, which is what lets one archive hold both.
+            clock_anchor_wall_ns: ep
+                .agent
+                .clock_anchor_wall_ns
+                .and_then(|a| u64::try_from(a).ok())
+                .unwrap_or(clock_anchor_wall_ns),
         };
         let writer = self.archive.add_recording(seed)?;
         self.recs
@@ -856,13 +919,18 @@ impl RezStream {
             mut archive,
             seen_labels: _,
             staged: _,
+            last_stamp,
         } = self;
         // Every recording is finalized, even if an earlier one failed: they
         // are independent rows in one archive, and stopping at the first
         // failure would leave the rest marked incomplete for a fault that was
         // not theirs.
         let mut first_err = None;
-        for (_, rec) in recs {
+        for (idx, rec) in recs {
+            // This recording's own last observation. The argument is the
+            // fallback for one that ingested nothing, which has no clock of
+            // its own to close on.
+            let clock_offset = last_stamp.get(&idx).copied().unwrap_or(clock_offset);
             if let Err(e) = rec.finalize(clock_offset) {
                 first_err.get_or_insert(e);
             }
@@ -932,6 +1000,7 @@ fn start_rez_recorder(
     let archive = rez_v3_writer::RezArchive::create(&config.output)?;
     let mut stream = RezStream {
         recs: BTreeMap::new(),
+        last_stamp: BTreeMap::new(),
         seen_labels: BTreeMap::new(),
         staged: Vec::new(),
         archive,
@@ -1614,12 +1683,17 @@ pub fn run(mut config: RecordingConfig) {
                                 },
                             };
                             if let (Some(snapshot), Some(rec)) = (snapshot, rez_recorder.as_mut()) {
+                                // The producer's stamp when it sent one, this
+                                // tick's otherwise. See
+                                // `snapshot_producer_stamp`.
+                                let (ts, wall_offset) = snapshot_producer_stamp(&snapshot)
+                                    .unwrap_or((anchored_ns, wall_offset_ns));
                                 if let Err(e) = rec.stage(
                                     idx,
                                     &endpoints[idx].config.url,
                                     &snapshot,
-                                    anchored_ns,
-                                    wall_offset_ns,
+                                    ts,
+                                    wall_offset,
                                 ) {
                                     ingest_failed.get_or_insert(e);
                                 }
@@ -2571,6 +2645,104 @@ mod tests {
             "and must name the endpoint, not its index, got: {err}"
         );
         rec.discard();
+    }
+
+    /// The recorder keeps the producer's stamp when the agent sends one, and
+    /// falls back to its own tick when it does not.
+    ///
+    /// The fallback is not a nicety: a Prometheus target has no such clock,
+    /// and neither does an agent older than these keys, and a recorder that
+    /// insisted on one would have nothing to stamp their rows with.
+    #[test]
+    fn a_producers_stamp_is_used_where_there_is_one_and_not_invented_where_there_is_not() {
+        use metriken_exposition::{Snapshot, SnapshotV2};
+
+        let with = |pairs: &[(&str, &str)]| {
+            Snapshot::V2(SnapshotV2 {
+                systemtime: std::time::SystemTime::UNIX_EPOCH,
+                duration: Duration::from_secs(1),
+                metadata: pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                counters: Vec::new(),
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            })
+        };
+
+        assert_eq!(
+            snapshot_producer_stamp(&with(&[
+                ("ts", "1700000000000000000"),
+                ("wall_offset", "-42")
+            ])),
+            Some((1_700_000_000_000_000_000, -42)),
+            "both halves come from the producer or neither does"
+        );
+        assert_eq!(
+            snapshot_producer_stamp(&with(&[("ts", "1700000000000000000")])),
+            None,
+            "a ts with no offset cannot be turned into a wall clock, so it is \
+             not half-used"
+        );
+        assert_eq!(
+            snapshot_producer_stamp(&with(&[])),
+            None,
+            "a source that sends no stamp gets the recorder's"
+        );
+        assert_eq!(
+            snapshot_producer_stamp(&with(&[("ts", "-1"), ("wall_offset", "0")])),
+            None,
+            "a negative stamp is not a timeline this archive can hold"
+        );
+    }
+
+    /// A rezolus recording is anchored on the AGENT's timeline, not the
+    /// recorder's.
+    ///
+    /// Its rows carry the agent's timestamps, and `ts + wall_offset` is how a
+    /// consumer turns one into a wall clock. Anchoring the recording on the
+    /// recorder's clock while filling it with the agent's stamps would resolve
+    /// to a wall time neither host observed — and the error is the skew
+    /// between two machines, not a rounding.
+    #[test]
+    fn a_recording_is_anchored_on_the_source_that_fills_it() {
+        const AGENT_ANCHOR: i64 = 1_600_000_000_000_000_000;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("anchored.rez");
+        let config = rez_config(&path);
+
+        let mut agent = rez_endpoint();
+        agent.agent.clock_anchor_wall_ns = Some(AGENT_ANCHOR);
+        // A Prometheus target has no clock of its own to offer, so it keeps
+        // the recorder's — one archive, two recordings, each coherent.
+        let prom = rez_endpoint_b();
+
+        let mut rec = start_rez_recorder(&config, &[(0, &agent), (1, &prom)], TEST_ANCHOR).unwrap();
+        tick(&mut rec, 0, 0).expect("ingest a");
+        tick(&mut rec, 1, 0).expect("ingest b");
+        rec.finalize((TEST_ANCHOR, 0)).unwrap();
+
+        let db = rez_sqlite::RezDb::open(&path).expect("the archive opens");
+        let recordings = db.read_recordings().expect("the manifest reads");
+        let anchor_of = |source: &str| -> u64 {
+            recordings
+                .iter()
+                .find(|r| r.meta.labels.get("source").map(String::as_str) == Some(source))
+                .unwrap_or_else(|| panic!("a recording for {source}"))
+                .meta
+                .clock_anchor_wall_ns
+        };
+        assert_eq!(
+            anchor_of("rezolus"),
+            AGENT_ANCHOR as u64,
+            "the agent's recording takes the agent's anchor"
+        );
+        assert_eq!(
+            anchor_of("valkey"),
+            TEST_ANCHOR,
+            "a source with no anchor of its own keeps the recorder's"
+        );
     }
 
     #[test]
