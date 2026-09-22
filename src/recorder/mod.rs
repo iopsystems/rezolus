@@ -717,7 +717,7 @@ struct RezStream {
     /// recorder's dedup and seal accounting — the same as the moment between
     /// `StreamRecorderV3::ingest` building its rows and its send returning, so
     /// a failure to commit loses the tick exactly as a failed send always did.
-    staged: Vec<(i64, Vec<rez_sqlite::WalRow>)>,
+    staged: Vec<rez_sqlite::TickBatch>,
     /// Canonical label key -> the endpoint URL that claimed it first, for the
     /// indistinguishable-labels warning.
     ///
@@ -774,7 +774,11 @@ impl RezStream {
         };
         // Keyed by recording id, which is what the writer commits against.
         if let Some(rec) = self.recs.get(&endpoint) {
-            self.staged.push((rec.recording_id(), rows));
+            self.staged.push(rez_sqlite::TickBatch {
+                recording_id: rec.recording_id(),
+                rows,
+                index_entries: Vec::new(),
+            });
         }
         Ok(())
     }

@@ -27,7 +27,7 @@ use metriken_exposition::{GroupSnapshot, Snapshot};
 use tracing::warn;
 
 use super::rez::{dedup_key, entries_approx_bytes, group_approx_bytes, group_by_sampler};
-use super::rez_sqlite::{RecordingMeta, RezDb, SegmentMeta, WalRow};
+use super::rez_sqlite::{IndexEntries, RecordingMeta, RezDb, SegmentMeta, TickBatch, WalRow};
 use super::seal_policy::{SealPolicy, SegmentAccount};
 use super::wal::{
     decode_wal_group_row, encode_wal_group_row, encode_wal_row, materialize_wal_tail,
@@ -84,7 +84,7 @@ enum Msg {
     /// linearly with endpoint count. `seal_batch` already refused the same
     /// trade ("12 implicit commits would be 12 fsyncs at `synchronous=FULL`
     /// against a ~46 ms tick"); this carries the argument across recordings.
-    Wal { ticks: Vec<(i64, Vec<WalRow>)> },
+    Wal { ticks: Vec<TickBatch> },
     /// One seal batch for one recording = one transaction.
     Seal {
         recording_id: i64,
@@ -312,11 +312,8 @@ impl RezArchive {
     ///
     /// An empty batch does not send: it still checks the writer is alive, so a
     /// tick where nothing advanced cannot mask a dead writer.
-    pub fn wal_tick(&mut self, ticks: Vec<(i64, Vec<WalRow>)>) -> Result<(), String> {
-        let ticks: Vec<(i64, Vec<WalRow>)> = ticks
-            .into_iter()
-            .filter(|(_, rows)| !rows.is_empty())
-            .collect();
+    pub fn wal_tick(&mut self, ticks: Vec<TickBatch>) -> Result<(), String> {
+        let ticks: Vec<TickBatch> = ticks.into_iter().filter(|t| !t.is_empty()).collect();
         if ticks.is_empty() {
             return self.check_alive();
         }
@@ -464,12 +461,28 @@ impl RecordingWriter {
     /// tick once, through [`RezArchive::wal_tick`]: one transaction instead of
     /// one per recording.
     pub fn wal(&mut self, rows: Vec<WalRow>) -> Result<(), String> {
-        if rows.is_empty() {
+        self.wal_with_index(rows, Vec::new())
+    }
+
+    /// One tick's rows together with the index entries describing their slots.
+    ///
+    /// One call rather than a row send followed by an entry send: the two
+    /// commit in one transaction, which is what stops a crash leaving a tick's
+    /// rows present and the state they name absent.
+    pub fn wal_with_index(
+        &mut self,
+        rows: Vec<WalRow>,
+        index_entries: IndexEntries,
+    ) -> Result<(), String> {
+        let tick = TickBatch {
+            recording_id: self.recording_id,
+            rows,
+            index_entries,
+        };
+        if tick.is_empty() {
             return self.check_alive();
         }
-        self.send(Msg::Wal {
-            ticks: vec![(self.recording_id, rows)],
-        })
+        self.send(Msg::Wal { ticks: vec![tick] })
     }
 
     /// Hand one seal batch (= one transaction) to the writer, as the samplers
@@ -1415,8 +1428,25 @@ impl StreamRecorderV3 {
         anchored_ts: u64,
         wall_offset_ns: i64,
     ) -> Result<(), String> {
+        self.ingest_rows_with_index(rows, anchored_ts, wall_offset_ns, Vec::new())
+    }
+
+    /// [`ingest_rows`](Self::ingest_rows), plus the index entries describing
+    /// what this tick's slots mean.
+    ///
+    /// The entries come from the producer rather than from the rows, which is
+    /// why they are a parameter: a subscriber receives them as their own
+    /// frames. They commit with the rows — see
+    /// [`RecordingWriter::wal_with_index`].
+    pub fn ingest_rows_with_index(
+        &mut self,
+        rows: &AgentRows,
+        anchored_ts: u64,
+        wall_offset_ns: i64,
+        index_entries: IndexEntries,
+    ) -> Result<(), String> {
         let rows = self.stage_rows(rows, anchored_ts, wall_offset_ns)?;
-        self.handle.wal(rows)
+        self.handle.wal_with_index(rows, index_entries)
     }
 
     /// Build this tick's WAL rows from a producer that already encoded them.
@@ -2023,7 +2053,7 @@ mod tests {
             let baseline = archive.commits_for_test();
 
             let ts = 1_000_000_000u64;
-            let staged: Vec<(i64, Vec<WalRow>)> = recs
+            let staged: Vec<TickBatch> = recs
                 .iter_mut()
                 .map(|rec| {
                     let rows = rec
@@ -2033,7 +2063,11 @@ mod tests {
                             0,
                         )
                         .unwrap();
-                    (rec.recording_id(), rows)
+                    TickBatch {
+                        recording_id: rec.recording_id(),
+                        rows,
+                        index_entries: Vec::new(),
+                    }
                 })
                 .collect();
             archive.wal_tick(staged).unwrap();
@@ -2066,6 +2100,51 @@ mod tests {
         // writer that committed once and dropped three would pass above.
         assert_eq!(one_rows, 1);
         assert_eq!(four_rows, 4, "every recording's row must be in that commit");
+    }
+
+    /// A tick's rows and the index entries describing them commit together.
+    ///
+    /// A row names the index state it was built against, and a consumer
+    /// holding a different state skips those rows rather than attributing them
+    /// wrongly. So a crash that kept a tick's rows and lost its entries would
+    /// not lose a tick — it would leave that tick's rows permanently
+    /// unresolvable, which is worse. One transaction is what rules that out,
+    /// and the commit count is how it is checked: two commits would mean two
+    /// windows to crash in.
+    #[test]
+    fn a_tick_commits_its_rows_and_its_index_entries_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut writer = archive.add_recording(seed()).unwrap();
+
+        let ts = 1_000_000_000u64;
+        let baseline = archive.commits_for_test();
+        writer
+            .wal_with_index(
+                vec![WalRow {
+                    sampler: "cpu_usage".to_string(),
+                    ts,
+                    wall_offset: 0,
+                    row: vec![9, 9],
+                }],
+                vec![("cpu_usage/usage".to_string(), vec![(ts, vec![1, 2, 3])])],
+            )
+            .unwrap();
+        let commits = archive.commits_for_test() - baseline;
+        assert_eq!(commits, 1, "one transaction, not one per kind of row");
+
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_wal(1, "cpu_usage").unwrap().len(),
+            1,
+            "the rows landed"
+        );
+        let entries = db
+            .read_caller_rows(1, "cpu_usage/usage", 0, u64::MAX)
+            .unwrap();
+        assert_eq!(entries.len(), 1, "and so did the entry describing them");
+        assert_eq!(entries[0].1, vec![1, 2, 3]);
     }
 
     /// THE guarantee this cadence exists for: a plain copy of a live archive
