@@ -219,9 +219,10 @@ Scraping stays the default and the transport is never auto-detected. `--stream`
 records to `.rez` only, and every endpoint must be a rezolus agent that serves
 the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
 from before `/metrics/stream`) fails the run rather than being scraped. An
-endpoint that is merely unreachable is retried each tick, and a stream that
-drops mid-run is reconnected each interval, with the drop and the reconnect
-logged; rows between the two are lost, as a failed scrape's are.
+endpoint that is merely unreachable is retried each tick. A stream that drops
+mid-run, or that produces no frame for the scrape timeout, is reconnected after
+one interval (at least a second), with the drop and the reconnect logged; rows
+between the two are lost, as a failed scrape's are.
 
 ## Viewer
 

@@ -72,7 +72,8 @@ target/release/rezolus record --stream --url http://localhost:4241 -o out.rez   
 # --stream is opt-in and never auto-detected: .rez only, rezolus agents only. An endpoint
 # that cannot serve the stream (Prometheus, V2 agent, no /metrics/stream) fails the run
 # rather than being scraped; an unreachable one is retried each tick, and a stream that
-# drops mid-run is reconnected. Rows and index entries commit in one transaction per tick.
+# drops (or goes silent for the scrape timeout) is reconnected after one interval, at least
+# a second. Rows and index entries commit in one transaction per tick.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]

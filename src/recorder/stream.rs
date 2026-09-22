@@ -51,10 +51,14 @@ pub(crate) struct Applied {
 /// One interval, in the shape the writer stages.
 ///
 /// `rows` is grouped by the producer's stamp: one `AgentRows` per distinct
-/// `(ts, wall_offset)`, which for a well-formed interval is exactly one — the
-/// producer stamps a whole pass once. Grouping rather than assuming keeps a
-/// relay that batches several passes into one frame from landing them all on
-/// the first pass's stamp.
+/// `ts`, which for a well-formed interval is exactly one — the producer stamps
+/// a whole pass once. Grouping rather than assuming keeps a relay that batches
+/// several passes into one frame from landing them all on the first pass's
+/// stamp. By `ts` alone, not `(ts, wall_offset)`: the archive's WAL key is
+/// `(recording, stream, ts)`, so two passes at one `ts` are one row's worth of
+/// key however their wall offsets differ, and staging them as two passes would
+/// let a stream present in both collide on that key and kill the writer. The
+/// first row's `wall_offset` stands for the pass.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Interval {
     pub rows: Vec<AgentRows>,
@@ -77,7 +81,7 @@ impl Applied {
     /// refuses one: the archive's `ts` is unsigned, and a producer that sent
     /// one is not one to guess for.
     pub(crate) fn for_writer(self) -> Result<Interval, String> {
-        let mut by_stamp: std::collections::BTreeMap<(i64, i64), Vec<AgentRow>> =
+        let mut by_stamp: std::collections::BTreeMap<i64, (i64, Vec<AgentRow>)> =
             std::collections::BTreeMap::new();
         for row in self.rows {
             if row.ts < 0 {
@@ -87,13 +91,14 @@ impl Applied {
                 ));
             }
             by_stamp
-                .entry((row.ts, row.wall_offset))
-                .or_default()
+                .entry(row.ts)
+                .or_insert_with(|| (row.wall_offset, Vec::new()))
+                .1
                 .push(AgentRow::from_payload(row.stream, row.row)?);
         }
         let rows = by_stamp
             .into_iter()
-            .map(|((ts, wall_offset), rows)| AgentRows {
+            .map(|(ts, (wall_offset, rows))| AgentRows {
                 // `ts + wall_offset` is the wall clock at the pass by the
                 // producer's own definition; the stream carries no pass
                 // duration, so that field is what a windowless reading gets.
@@ -476,22 +481,28 @@ impl Subscription {
             })?;
 
         if !response.status().is_success() {
-            // 409 is the agent saying it has no acquisition groups to stream —
-            // a V2 agent. Worth distinguishing from a transport failure,
-            // because retrying will never fix it.
-            return Err(ConnectError::Unsupported(
-                match response.status().as_u16() {
-                    409 => format!(
-                        "{url} cannot serve a replication stream: the agent reports no \
+            // Which class a status falls in is what the recorder acts on: an
+            // answer that will not change with retrying ends the run, one
+            // that might is retried. 404 and 409 are the agent saying what it
+            // is. A 5xx, 408 or 429 is the path between here and the agent —
+            // a proxy answering while the agent behind it restarts is the
+            // common case, and it is exactly the moment a stream has just
+            // dropped and the pump is reconnecting.
+            let code = response.status().as_u16();
+            return Err(match code {
+                409 => ConnectError::Unsupported(format!(
+                    "{url} cannot serve a replication stream: the agent reports no \
                      acquisition groups, which a V2 agent never has"
-                    ),
-                    404 => format!(
-                        "{url} returned HTTP 404: this agent has no replication stream (it \
+                )),
+                404 => ConnectError::Unsupported(format!(
+                    "{url} returned HTTP 404: this agent has no replication stream (it \
                      predates /metrics/stream)"
-                    ),
-                    code => format!("{url} returned HTTP {code}"),
-                },
-            ));
+                )),
+                408 | 429 | 500..=599 => {
+                    ConnectError::Unreachable(format!("{url} returned HTTP {code}"))
+                }
+                _ => ConnectError::Unsupported(format!("{url} returned HTTP {code}")),
+            });
         }
 
         // Checked before any bytes, so an agent serving the older msgpack
@@ -653,18 +664,28 @@ pub(crate) enum StreamEvent {
 /// scrape path re-probes an unreachable endpoint at — with a floor of one
 /// second so a short interval against a dead host is not a tight loop. Exits
 /// when the loop has gone away (the send fails) or the agent refuses.
+///
+/// `timeout` bounds every wait on the socket. The agent sends a frame every
+/// interval, empty when nothing is new, and says so is the keepalive: a
+/// connection that produces nothing for longer than that is dead whatever the
+/// kernel thinks, since a peer that vanished without a RST — a firewall that
+/// dropped the state, a proxy that stopped forwarding — never closes it. The
+/// scrape path bounds every scrape the same way; without this the stream had
+/// no equivalent, and a silent connection was a recording that ended early
+/// with no warning.
 pub(crate) async fn pump(
     idx: usize,
     mut sub: Subscription,
     client: reqwest::Client,
     base: reqwest::Url,
     interval: Duration,
+    timeout: Duration,
     tx: tokio::sync::mpsc::Sender<(usize, StreamEvent)>,
 ) {
     let retry = interval.max(Duration::from_secs(1));
     loop {
-        let outcome = match sub.next_interval().await {
-            Ok(Some(applied)) => {
+        let outcome = match tokio::time::timeout(timeout, sub.next_interval()).await {
+            Ok(Ok(Some(applied))) => {
                 if tx
                     .send((idx, StreamEvent::Interval(applied)))
                     .await
@@ -674,8 +695,12 @@ pub(crate) async fn pump(
                 }
                 continue;
             }
-            Ok(None) => "the agent closed the stream".to_string(),
-            Err(e) => e,
+            Ok(Ok(None)) => "the agent closed the stream".to_string(),
+            Ok(Err(e)) => e,
+            Err(_) => format!(
+                "no frame arrived within {}; the connection is dead",
+                humantime::format_duration(timeout)
+            ),
         };
         // The connection's skip count goes with its obituary: it is the one
         // number that says whether the rows it did deliver were attributable.
@@ -688,10 +713,14 @@ pub(crate) async fn pump(
         }
         sub = loop {
             tokio::time::sleep(retry).await;
-            match Subscription::connect(&client, &base, interval).await {
-                Ok(sub) => break sub,
-                Err(ConnectError::Unreachable(_)) => continue,
-                Err(ConnectError::Unsupported(e)) => {
+            let connected =
+                tokio::time::timeout(timeout, Subscription::connect(&client, &base, interval))
+                    .await;
+            match connected {
+                Ok(Ok(sub)) => break sub,
+                // A connect that hangs is an outage like any other.
+                Err(_) | Ok(Err(ConnectError::Unreachable(_))) => continue,
+                Ok(Err(ConnectError::Unsupported(e))) => {
                     let _ = tx.send((idx, StreamEvent::Refused(e))).await;
                     return;
                 }
@@ -1219,6 +1248,24 @@ mod tests {
             vec![5_000, 6_000]
         );
         assert!(interval.rows.iter().all(|p| p.rows.len() == 1));
+    }
+
+    /// Two rows at one `ts` are one pass whatever their wall offsets say,
+    /// because one `ts` is one WAL key per stream: staged as two passes, a
+    /// stream present in both would collide on it and kill the writer.
+    #[test]
+    fn rows_at_one_stamp_are_one_pass_whatever_their_wall_offsets() {
+        let applied = Applied {
+            rows: vec![
+                wal_row(STREAM, 5_000, 0, payload(1, true, 5_000)),
+                wal_row("b/two", 5_000, 9, payload(1, true, 5_000)),
+            ],
+            ..Applied::default()
+        };
+        let interval = applied.for_writer().unwrap();
+        assert_eq!(interval.rows.len(), 1);
+        assert_eq!(interval.rows[0].rows.len(), 2);
+        assert_eq!(interval.rows[0].wall_offset, 0, "the first row's stands");
     }
 
     /// The archive's `ts` is unsigned. A producer stamping before the epoch

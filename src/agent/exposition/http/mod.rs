@@ -728,6 +728,90 @@ mod stream_tests {
         }
     }
 
+    /// A 5xx is the path between here and the agent answering, not the
+    /// agent: a proxy says 502 while the agent behind it restarts, which is
+    /// exactly when a stream has just dropped and the pump is reconnecting.
+    /// Classifying it as `Unsupported` made that restart end the recording.
+    #[tokio::test]
+    async fn a_server_error_is_an_outage_not_a_refusal() {
+        use crate::recorder::stream::{ConnectError, Subscription};
+        let proxy_down = Router::new().route(
+            "/metrics/stream",
+            get(|| async { (axum::http::StatusCode::SERVICE_UNAVAILABLE, "upstream down") }),
+        );
+        let base = serve(proxy_down).await;
+        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unreachable(e)) => assert!(e.contains("503"), "{e}"),
+            Err(ConnectError::Unsupported(e)) => {
+                panic!("a 503 will change on retry and must not end the run: {e}")
+            }
+            Ok(_) => panic!("there is no stream behind a 503"),
+        }
+    }
+
+    /// A connection that stays open and says nothing is dead, whatever the
+    /// kernel thinks: a peer that vanished without a RST never closes it. The
+    /// agent sends a frame every interval, empty when nothing is new, so a
+    /// silence longer than the timeout is the signal. Without the bound, the
+    /// pump sat in the read for the rest of the run and the recording ended
+    /// early with no warning.
+    #[tokio::test]
+    async fn a_stream_that_goes_silent_after_its_handshake_is_reported_dropped() {
+        use crate::recorder::stream::{pump, StreamEvent, Subscription};
+
+        // The opening bytes of a real stream, then nothing, forever.
+        let silent = Router::new().route(
+            "/metrics/stream",
+            get(|| async {
+                let mut opening = Vec::new();
+                dendro::replicate::wire::write_preamble(&mut opening).unwrap();
+                let mut producer = frames::FrameProducer::new(
+                    "epoch-silent".to_string(),
+                    Default::default(),
+                    Default::default(),
+                );
+                dendro::replicate::wire::encode_frame(&producer.handshake(), &mut opening).unwrap();
+                let body = axum::body::Body::from_stream(async_stream::stream! {
+                    yield Ok::<_, std::io::Error>(bytes::Bytes::from(opening));
+                    std::future::pending::<()>().await;
+                });
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static(frames::CONTENT_TYPE),
+                    )],
+                    body,
+                )
+            }),
+        );
+        let base = serve(silent).await;
+        let client = test_client();
+        let sub = Subscription::connect(&client, &base, Duration::from_millis(100))
+            .await
+            .expect("the handshake arrives, so the connect succeeds");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(pump(
+            0,
+            sub,
+            client,
+            base,
+            Duration::from_millis(100),
+            Duration::from_millis(500),
+            tx,
+        ));
+        let (_, event) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("the silence is noticed inside the timeout")
+            .expect("the pump is alive");
+        match event {
+            StreamEvent::Dropped(reason) => {
+                assert!(reason.contains("no frame"), "{reason}");
+            }
+            other => panic!("a silent stream must be reported dropped, got {other:?}"),
+        }
+    }
+
     /// Nothing listening is the other class: an outage, retried each tick
     /// exactly as a scrape of a down endpoint is.
     #[tokio::test]
@@ -842,7 +926,15 @@ mod stream_tests {
         let first = sub.source().cloned().unwrap();
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(16);
-        tokio::spawn(pump(3, sub, client.clone(), base.clone(), interval, tx));
+        tokio::spawn(pump(
+            3,
+            sub,
+            client.clone(),
+            base.clone(),
+            interval,
+            Duration::from_secs(10),
+            tx,
+        ));
 
         // Waits for the next event of the kind `want` accepts, skipping the
         // intervals that keep arriving in between.

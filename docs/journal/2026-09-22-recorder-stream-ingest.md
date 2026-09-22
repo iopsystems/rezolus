@@ -65,11 +65,11 @@ per tick, as with scraping. The loop never awaits a connection: a loop that did
 would stall every endpoint's commit on the slowest socket.
 
 The recording is anchored on the handshake's `clock_anchor_wall_ns` and its
-uuid is the epoch, overriding what `/status` said a moment earlier
-(`adopt_source`): the rows are on the handshake's timeline, and an agent that
-restarted between the two fetches would otherwise be anchored on a clock it no
-longer keeps. `Subscription::connect` now waits for the handshake so
-`source()` is known before the recording is opened.
+uuid is the epoch (`adopt_source`). `/status` is read first and the handshake
+after it, so the handshake is the newer observation and wins: the rows are on
+its timeline, and an agent that restarted between the two would otherwise be
+anchored on a clock it no longer keeps. `Subscription::connect` now waits for
+the handshake so `source()` is known before the recording is opened.
 
 Failure classes are split by whether retrying can change the answer
 (`stream::ConnectError`). `Unsupported` — a 404, the 409 a V2 agent gives, a
@@ -134,6 +134,42 @@ its interval asked for. It cost one wasted iteration here: the end-of-run wait
 was first justified by the 93-against-95 count from a shared-agent run, and
 the count did not move when the wait went in. The wait is still right — the
 last-row timestamp shows it — but the number that motivated it was this.
+
+## What an adversarial review found
+
+Two confirmed defects in the first cut, both in the same shape: the transport
+bounded nothing the scrape path bounds.
+
+- **A silent connection was never detected.** `next_interval` awaited the next
+  chunk unbounded, and the reconnect `connect` was unbounded too. A peer that
+  vanishes without a RST — a firewall dropping idle state, a proxy that stops
+  forwarding — never closes the socket, so the pump sat in the read for the
+  rest of the run, the endpoint stayed Active, and the recording finalized
+  clean and short with no warning. The protocol already had the fix: the agent
+  sends a frame every interval, empty when nothing is new, as the keepalive.
+  The pump now bounds every socket wait by the scrape timeout and reports
+  silence past it as `Dropped`. Proven with a route that sends the handshake
+  and then hangs; the test fails with the bound removed.
+- **Every non-2xx was `Unsupported`, so a transient 502 was fatal.** At
+  startup that exited 1; on reconnect it ended the recording — and a proxy
+  answering 502 while the agent behind it restarts is exactly when a stream
+  has just dropped. 5xx, 408 and 429 are `Unreachable` now; 404, 409 and a
+  wrong content type stay `Unsupported`. The original test covered only 404
+  and 409, which is how it got through.
+
+Three smaller ones, also fixed: the end-of-run grace was a `recv` with a
+timeout, which returns at once on anything already queued, so under ctrl-c the
+frame in flight was still dropped (now an unconditional sleep, then drain);
+`for_writer` grouped by `(ts, wall_offset)`, so a relay stamping two passes at
+one `ts` could collide on the WAL key (now by `ts` alone); and `open_stream`
+read the handshake before `/status`, so an agent restarting between the two got
+a restart warning pointing backwards (now `/status` first, so the handshake is
+the newer observation). A wall-clock note on the reconnect cadence: it is
+`interval` floored at one second, and the docs said "each interval".
+
+What the review checked and found sound is listed in #1272; the runtime shape,
+the channel, the WAL key from the real producer, the index entry keying, the
+payload re-encode and the config guards all held.
 
 ## What this does not do
 

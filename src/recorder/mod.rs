@@ -175,8 +175,9 @@ pub fn command() -> Command {
              slot means) committed beside the rows it describes. Scraping stays the\n\
              default and the transport is never auto-detected: --stream against an\n\
              endpoint that cannot serve it fails the run rather than scraping instead. A\n\
-             stream that drops mid-run is reconnected each interval, like a scrape\n\
-             that fails is retried.",
+             stream that drops mid-run is reconnected after one interval (at least a\n\
+             second), like a scrape that fails is retried, and one that goes silent for\n\
+             the scrape timeout counts as dropped.",
         )
         .arg(
             clap::Arg::new("URL")
@@ -262,7 +263,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("STREAM")
                 .long("stream")
-                .help("Subscribe to each agent's replication stream (/metrics/stream) instead of scraping it: the agent pushes one frame per --interval carrying only the groups it re-read, plus the identity index the recording stores beside its rows. Opt-in and never auto-detected. .rez output only, and rezolus agents only: an endpoint that cannot serve the stream (a Prometheus exporter, a V2 agent, an agent without /metrics/stream) fails the run rather than being scraped, while one that is merely unreachable is retried each tick as usual")
+                .help("Subscribe to each agent's replication stream (/metrics/stream) instead of scraping it: the agent pushes one frame per --interval carrying only the groups it re-read, plus the identity index the recording stores beside its rows. Opt-in and never auto-detected. .rez output only, and rezolus agents only: an endpoint that cannot serve the stream (a Prometheus exporter, a V2 agent, an agent without /metrics/stream) fails the run rather than being scraped, while one that is merely unreachable is retried each tick as usual. A stream that drops mid-run is reconnected after one interval (at least a second), and a connection that produces no frame for the scrape timeout is treated as dropped")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -572,8 +573,14 @@ fn note_epoch(ep: &mut EndpointState, seen: &str) {
 ///   stream and judged on the answer — see [`stream::ConnectError`] for the
 ///   split between "not there" and "cannot".
 ///
+/// `/status` is read BEFORE the stream is opened, so the handshake is the
+/// later of the two observations. The other order installed the handshake's
+/// epoch over a newer `/status` reading, and an agent that restarted between
+/// the two got a restart warning pointing backwards.
+///
 /// `timeout` bounds the connect and the handshake together, for the reason
-/// the scrape path bounds a probe: this runs on the tick loop.
+/// the scrape path bounds a probe: this runs on the tick loop. The metadata
+/// fetch is not bounded, exactly as the scrape path's is not.
 async fn open_stream(
     client: &Client,
     ep: &mut EndpointState,
@@ -587,6 +594,7 @@ async fn open_stream(
             ep.config.url
         )));
     }
+    let agent = fetch_agent_metadata(client, &ep.config.url).await;
     let sub = match tokio::time::timeout(
         timeout,
         stream::Subscription::connect(client, &ep.config.url, interval),
@@ -624,7 +632,7 @@ async fn open_stream(
     if ep.config.source.is_none() {
         ep.config.source = Some("rezolus".to_string());
     }
-    ep.agent = fetch_agent_metadata(client, &ep.config.url).await;
+    ep.agent = agent;
     adopt_source(ep, &source);
     ep.scrape_url = Some(ep.config.url.clone());
     ep.detected_protocol = Some(Protocol::Msgpack);
@@ -1818,6 +1826,7 @@ pub fn run(mut config: RecordingConfig) {
                 client.clone(),
                 url,
                 interval_dur,
+                scrape_timeout,
                 stream_tx.clone(),
             ));
         };
@@ -2339,28 +2348,22 @@ pub fn run(mut config: RecordingConfig) {
         // ctrl-c lands anywhere inside an interval. Without a wait, that
         // frame is never committed and the recording ends one interval short
         // of the window it was asked for. So the pumps get one interval's
-        // grace — bounded, so a dead agent cannot hold the exit — and
-        // whatever arrived is committed once.
-        if config.stream {
+        // grace — an unconditional sleep, because a `recv` would return at
+        // once on anything already queued and the frame still in flight would
+        // be dropped after all; bounded, so a dead agent cannot hold the exit
+        // — and whatever arrived is committed once.
+        //
+        // Skipped when the recording already failed: it was reported when it
+        // did, and there is nothing left to commit into.
+        if config.stream && rez_recorder.is_some() {
             let grace = interval_dur.min(Duration::from_secs(2));
-            let failed = match tokio::time::timeout(grace, stream_rx.recv()).await {
-                Ok(Some((idx, event))) => handle_stream_event(
-                    idx,
-                    event,
-                    &mut endpoints,
-                    rez_recorder.as_mut(),
-                    wall_now_ns(),
-                ),
-                _ => None,
-            }
-            .or_else(|| {
-                drain_stream_events(
-                    &mut stream_rx,
-                    &mut endpoints,
-                    rez_recorder.as_mut(),
-                    wall_now_ns(),
-                )
-            })
+            tokio::time::sleep(grace).await;
+            let failed = drain_stream_events(
+                &mut stream_rx,
+                &mut endpoints,
+                rez_recorder.as_mut(),
+                wall_now_ns(),
+            )
             .or_else(|| {
                 rez_recorder
                     .as_mut()
