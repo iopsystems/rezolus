@@ -1,6 +1,8 @@
 //! Shared acquisition-window timing for Regime-R samplers (read-at-refresh).
-//! Captures wall-clock begin + monotonic width so an NTP step during the read
-//! cannot corrupt the window. See
+//! Captures an anchored begin + monotonic width so an NTP step during the read
+//! cannot corrupt the window — begin comes from the source's timeline
+//! (`agent::epoch`), the same clock every row is stamped on, because the
+//! archive stores a window as an offset from its row's `ts`. See
 //! `docs/journal/2026-07-10-all-sampler-observation-windows.md`.
 //!
 //! Every Regime-R sampler now brackets its read section with a declared
@@ -16,15 +18,7 @@
 use metriken::Window;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-
-/// Wall-clock nanoseconds since the Unix epoch, saturating to 0 before it.
-fn now_wall_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0)
-}
+use std::time::Instant;
 
 /// A lock-free window slot shared between a sampler's acquisition path and
 /// the snapshot builder: a seqlock over (begin_ns, end_ns). One writer (the
@@ -373,10 +367,19 @@ pub(crate) struct AcquisitionGuard<'a> {
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 impl<'a> AcquisitionGuard<'a> {
     pub(crate) fn begin(slot: &'a GroupWindowSlot) -> Self {
+        let begin_mono = Instant::now();
         Self {
             slot,
-            begin_ns: now_wall_ns(),
-            begin_mono: Instant::now(),
+            // The source's timeline, the same one every row is stamped on.
+            //
+            // A window is stored in the archive as an OFFSET from its row's
+            // `ts` (`window_offset_columns` subtracts one from the other), so
+            // the two must be on one clock or the offset silently absorbs the
+            // difference between two. It used to be a raw wall reading, which
+            // also meant a clock step moved a window's origin while its width
+            // — derived monotonically — stayed put.
+            begin_ns: crate::agent::epoch::anchored_ts(begin_mono).max(0) as u64,
+            begin_mono,
             marked_end_ns: None,
         }
     }
@@ -446,6 +449,40 @@ impl<'a> AcquisitionGuard<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window's begin is on the SOURCE's timeline, the same one rows are
+    /// stamped on.
+    ///
+    /// The archive stores a window as an offset from its row's `ts`
+    /// (`window_offset_columns` subtracts one from the other), so two clocks
+    /// here would make that offset carry the difference between them rather
+    /// than the read's position within the tick.
+    ///
+    /// What this can check is the timeline's identity — the window falls
+    /// between two readings of it, which a clock with a different origin (a
+    /// monotonic count from boot, say) could not do. What it cannot check is
+    /// the case the change is FOR: an anchored begin and a raw wall begin
+    /// differ only once the wall clock steps, and a test cannot step the
+    /// machine's clock.
+    #[test]
+    fn a_windows_begin_is_on_the_sources_timeline() {
+        static SLOT: GroupWindowSlot = GroupWindowSlot::new();
+        let before = crate::agent::epoch::anchored_ts(Instant::now());
+        AcquisitionGuard::begin(&SLOT).finish();
+        let after = crate::agent::epoch::anchored_ts(Instant::now());
+
+        let w = SLOT.load().expect("the guard stamped it");
+        assert!(
+            (before as u64..=after as u64).contains(&w.begin_ns),
+            "the window began at {}, outside the {before}..={after} the source's \
+             clock read around it",
+            w.begin_ns
+        );
+        assert!(
+            w.end_ns >= w.begin_ns,
+            "a window does not end before it starts"
+        );
+    }
 
     #[test]
     fn group_slot_roundtrips_a_window() {

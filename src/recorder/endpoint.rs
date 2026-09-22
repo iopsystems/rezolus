@@ -60,6 +60,15 @@ pub struct AgentMetadata {
     /// when, and only when, every cumulative counter restarted from zero —
     /// which for a process-scoped producer is once per process.
     pub producer_epoch: Option<String>,
+    /// The wall clock the agent's timeline is anchored to, from `/status`.
+    ///
+    /// The recording is anchored here rather than on the recorder's own clock,
+    /// because its rows carry the agent's timestamps: an anchor from one clock
+    /// and rows from another would make `ts + wall_offset` resolve to a wall
+    /// time neither party observed. `None` for a Prometheus source, and for an
+    /// agent too old to report it — both then use the recorder's anchor, and
+    /// its stamps, together.
+    pub clock_anchor_wall_ns: Option<i64>,
 }
 
 /// Runtime state for a single endpoint during recording.

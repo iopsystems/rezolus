@@ -7,13 +7,17 @@
 //!
 //! # Time is the producer's
 //!
-//! The row endpoint stamps a WAL row's `ts` on the CONSUMER, deliberately: a
-//! recording's timeline is then the recorder's, which no agent clock can
-//! corrupt. Replication cannot work that way. dendro's FORMAT.md §5 says "one
-//! source is one clock domain: rows from two producers with two clocks belong
-//! in two sources", and the anchor that pins the timeline
-//! (`clock_anchor_wall_ns`) is a handshake field — the producer's. If a
-//! subscriber stamped, two recorders watching one agent would build two
+//! Both transports stamp on the PRODUCER, because the producer is the only
+//! party that knows when the values were read. A pass is cached for the
+//! agent's TTL, so a request arriving inside that window is answered from the
+//! cache and a consumer sees one HTTP response either way; on a stream there is
+//! no consumer tick at all, only the send, which is producer time plus
+//! transport delay.
+//!
+//! dendro's FORMAT.md §5 says "one source is one clock domain: rows from two
+//! producers with two clocks belong in two sources", and the anchor that pins
+//! the timeline (`clock_anchor_wall_ns`) is a handshake field — the producer's.
+//! If a subscriber stamped, two recorders watching one agent would build two
 //! timelines for the same source and could not be merged.
 //!
 //! So `ts` is anchored: `anchor_wall_ns + monotonic elapsed`, which has

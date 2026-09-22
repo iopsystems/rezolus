@@ -134,12 +134,18 @@ impl SnapshotBuilder {
         };
 
         let snapshot = match self.format {
-            SnapshotFormat::V2 => create(timestamp, duration, external_metrics),
+            SnapshotFormat::V2 => create(
+                timestamp,
+                duration,
+                external_metrics,
+                (sampled_ts, sampled_wall_offset),
+            ),
             SnapshotFormat::V3 => create_v3(
                 timestamp,
                 duration,
                 external_metrics,
                 &mut self.skeleton_cache,
+                (sampled_ts, sampled_wall_offset),
             ),
         };
 
@@ -454,6 +460,7 @@ fn create(
     timestamp: SystemTime,
     duration: Duration,
     external_metrics: Vec<ExternalMetric>,
+    stamp: (i64, i64),
 ) -> Snapshot {
     #[cfg(test)]
     let _serialize = BUILDER_TEST_LOCK
@@ -485,6 +492,13 @@ fn create(
                 "clock_anchor_wall_ns".to_string(),
                 crate::agent::epoch::clock_anchor_wall_ns().to_string(),
             ),
+            // The pass's own stamp on that timeline, and the wall clock's
+            // disagreement with it at the read. `ts + wall_offset ==
+            // systemtime`, so a consumer that keeps these keeps the moment the
+            // agent READ the values — which is not the moment it answered, and
+            // not the moment the answer arrived.
+            ("ts".to_string(), stamp.0.to_string()),
+            ("wall_offset".to_string(), stamp.1.to_string()),
         ]
         .into(),
         counters: Vec::new(),
@@ -2127,6 +2141,7 @@ fn create_v3(
     duration: Duration,
     external_metrics: Vec<ExternalMetric>,
     cache: &mut SkeletonCache,
+    stamp: (i64, i64),
 ) -> Snapshot {
     // See BUILDER_TEST_LOCK: serialise builder calls under `cargo test` so the
     // shared reader-stamped slots keep their single-writer invariant.
@@ -3058,6 +3073,13 @@ fn create_v3(
                 "clock_anchor_wall_ns".to_string(),
                 crate::agent::epoch::clock_anchor_wall_ns().to_string(),
             ),
+            // The pass's own stamp on that timeline, and the wall clock's
+            // disagreement with it at the read. `ts + wall_offset ==
+            // systemtime`, so a consumer that keeps these keeps the moment the
+            // agent READ the values — which is not the moment it answered, and
+            // not the moment the answer arrived.
+            ("ts".to_string(), stamp.0.to_string()),
+            ("wall_offset".to_string(), stamp.1.to_string()),
         ]
         .into(),
         groups: group_snapshots,
@@ -3183,7 +3205,7 @@ mod tests {
     #[test]
     fn built_snapshot_metric_carries_a_sampler_label() {
         SAMPLER_LABEL_PROBE.increment();
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3222,7 +3244,7 @@ mod tests {
             last_updated: std::time::Instant::now(),
             window: Some(win),
         };
-        let snap = create(SystemTime::now(), Duration::from_secs(5), vec![ext]);
+        let snap = create(SystemTime::now(), Duration::from_secs(5), vec![ext], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3241,7 +3263,7 @@ mod tests {
         // leak into V2 output as a new label (it would otherwise, since
         // `create` copies through every static metadata key unfiltered).
         V3_PROBE_COUNTER.increment();
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3295,7 +3317,7 @@ mod tests {
             .window()
             .expect("group was just stamped");
 
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3332,7 +3354,7 @@ mod tests {
     fn v2_output_is_windowless_for_a_declared_but_unstamped_group() {
         V2_GROUP_WINDOW_UNSTAMPED_PROBE.increment();
 
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3363,7 +3385,7 @@ mod tests {
         let win = Window::new(5_000, 9_000);
         V2_UNMIGRATED_WINDOWED_PROBE.set_with_window(3, win);
 
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -3429,7 +3451,7 @@ mod tests {
             .window()
             .expect("group was just stamped");
 
-        let v2 = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let v2 = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = v2 else {
             panic!("expected V2")
         };
@@ -3454,6 +3476,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = v3 else {
             panic!("expected V3")
@@ -3529,6 +3552,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = v3 else {
             panic!("expected V3")
@@ -3572,6 +3596,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -3622,6 +3647,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -3674,6 +3700,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -3691,6 +3718,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -3735,6 +3763,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -3976,7 +4005,13 @@ mod tests {
         let before = cache.index_state();
         let guard = group.acquire();
         guard.finish();
-        let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
+        let _ = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            cache,
+            (0, 0),
+        );
         cache
             .index_since(before)
             .expect("one pass is always inside the history")
@@ -4162,6 +4197,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         ) else {
             panic!("expected V3")
         };
@@ -4290,6 +4326,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -4324,6 +4361,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -4434,13 +4472,25 @@ mod tests {
     /// of accommodating it, which is what lets the margin below be tight enough
     /// to mean something.
     fn warm_then_measure_hit(cache: &mut SkeletonCache) -> (Snapshot, usize) {
-        let _ = create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache);
+        let _ = create_v3(
+            SystemTime::now(),
+            Duration::from_secs(1),
+            vec![],
+            cache,
+            (0, 0),
+        );
 
         let mut best = usize::MAX;
         let mut snapshot = None;
         for _ in 0..HIT_SAMPLES {
             let (snap, allocs) = count_allocations(|| {
-                create_v3(SystemTime::now(), Duration::from_secs(1), vec![], cache)
+                create_v3(
+                    SystemTime::now(),
+                    Duration::from_secs(1),
+                    vec![],
+                    cache,
+                    (0, 0),
+                )
             });
             best = best.min(allocs);
             snapshot = Some(snap);
@@ -4488,6 +4538,7 @@ mod tests {
                     Duration::from_secs(1),
                     vec![],
                     &mut settle,
+                    (0, 0),
                 );
             }
         }
@@ -4524,6 +4575,7 @@ mod tests {
                 Duration::from_secs(1),
                 vec![],
                 &mut cache,
+                (0, 0),
             )
         });
         let group_large_again = alloc_probe_group(&snap_large_again);
@@ -4622,6 +4674,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -4640,6 +4693,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -4664,6 +4718,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s3) = snap3 else {
             panic!("expected V3")
@@ -4691,6 +4746,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s4) = snap4 else {
             panic!("expected V3")
@@ -4736,6 +4792,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -4781,6 +4838,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -4840,6 +4898,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -4936,6 +4995,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -4959,6 +5019,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -5013,6 +5074,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -5079,6 +5141,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -5140,6 +5203,7 @@ mod tests {
                 counter(labels_b.clone(), 2),
                 gauge("ext_gauge"),
             ],
+            (0, 0),
         );
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
@@ -5181,6 +5245,7 @@ mod tests {
             SystemTime::now(),
             Duration::from_secs(1),
             vec![counter(labels_a.clone(), 9)],
+            (0, 0),
         );
         let Snapshot::V2(again) = again else {
             panic!("expected V2")
@@ -5226,6 +5291,7 @@ mod tests {
             Duration::from_secs(1),
             vec![make(labels_a.clone(), 1), make(labels_b.clone(), 2)],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -5263,6 +5329,7 @@ mod tests {
             Duration::from_secs(1),
             vec![make(labels_b.clone(), 2), make(labels_a.clone(), 1)],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -5325,6 +5392,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s1) = snap1 else {
             panic!("expected V3")
@@ -5354,6 +5422,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -5400,6 +5469,7 @@ mod tests {
                             Duration::from_secs(1),
                             vec![],
                             &mut cache,
+                            (0, 0),
                         );
                     }
                 })
@@ -5478,6 +5548,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -5530,6 +5601,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s) = snap else {
             panic!("expected V3")
@@ -5582,6 +5654,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s2) = snap2 else {
             panic!("expected V3")
@@ -5606,6 +5679,7 @@ mod tests {
             Duration::from_secs(1),
             vec![],
             &mut cache,
+            (0, 0),
         );
         let Snapshot::V3(s3) = snap3 else {
             panic!("expected V3")
@@ -5640,7 +5714,7 @@ mod tests {
     fn v2_output_carries_the_bracket_window_for_a_reader_stamped_group_member() {
         V2_READER_STAMPED_COUNTERS.add(2, 9);
 
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
@@ -5699,7 +5773,7 @@ mod tests {
             g.add(3, 11);
         }
 
-        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![]);
+        let snap = create(SystemTime::now(), Duration::from_secs(1), vec![], (0, 0));
         let Snapshot::V2(s) = snap else {
             panic!("expected V2")
         };
