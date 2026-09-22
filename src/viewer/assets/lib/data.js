@@ -43,16 +43,36 @@ const getRateMode = () => _rateMode;
 // Zoom drill-down: when set to { start, end } (seconds), range queries fetch
 // that window instead of the whole recording. Display mode keeps the same
 // point budget, so a narrower window comes back at higher resolution — and
-// once it fits the budget, at native 1s. Cleared (null) = full recording.
+// once it fits the budget, at the recording's native cadence. Cleared (null)
+// = full recording.
 let _rangeOverride = null;
 export const setRangeOverride = (range) => { _rangeOverride = range; };
 export const getRangeOverride = () => _rangeOverride;
 
+// The recording's sampling interval in seconds, defaulting to 1s only when
+// metadata doesn't state one. There is no 1s floor here: a recording made at
+// `--interval 100ms` has ten samples per second, and a 1s step throws nine of
+// them away — a 2 Hz signal in a 100ms recording reads as a flat line.
+export const nativeInterval = (meta) =>
+    (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
+
+// A query step or histogram stride of at least `target` seconds, never finer
+// than the recording's own cadence (asking for points the producer never read
+// buys interpolation, not resolution) and quantized to whole multiples of it
+// so a coarser step still lands on sample boundaries. `toFixed` trims the
+// binary-float tail that multiplying a sub-second interval leaves behind
+// (0.1 * 3 = 0.30000000000000004), which would otherwise reach the server in
+// a query string.
+export const stepAtLeast = (interval, target) => {
+    const native = (Number.isFinite(interval) && interval > 0) ? interval : 1;
+    if (!Number.isFinite(target) || target <= native) return native;
+    return Number((Math.ceil(target / native) * native).toFixed(6));
+};
+
 export const defaultRangeFor = (meta) => {
     const start = _rangeOverride ? _rangeOverride.start : meta.minTime;
     const end = _rangeOverride ? _rangeOverride.end : meta.maxTime;
-    const interval = (Number.isFinite(meta.interval) && meta.interval > 0) ? meta.interval : 1;
-    const step = _stepOverride || Math.max(1, interval);
+    const step = _stepOverride || nativeInterval(meta);
     return { start, end, step };
 };
 
@@ -213,8 +233,7 @@ const MIN_SAMPLES_PER_BUCKET = 5;
 const MIN_DISPLAY_BUCKETS = 48;
 const displayBudget = (meta, start, end) => {
     const px = pixelBudget();
-    const interval = (Number.isFinite(meta?.interval) && meta.interval > 0) ? meta.interval : 1;
-    const native = Math.max(1, Math.round((end - start) / interval));
+    const native = Math.max(1, Math.round((end - start) / nativeInterval(meta)));
     return Math.min(px, Math.max(MIN_DISPLAY_BUCKETS, Math.ceil(native / MIN_SAMPLES_PER_BUCKET)));
 };
 
@@ -961,9 +980,9 @@ const createDataApi = ({
     //                        node isn't present on a capture, that side
     //                        renders empty rather than silently fanning
     //                        out across all nodes.
-    //   stepOverride       — nullable; when > 1 triggers histogram-stride /
-    //                        counter-rate rewriting. Defaults to the
-    //                        module-level _stepOverride.
+    //   stepOverride       — nullable; when coarser than the recording's own
+    //                        cadence, triggers histogram-stride rewriting.
+    //                        Defaults to the module-level _stepOverride.
     const buildEffectiveQuery = (plot, opts = {}) => {
         if (!plot.promql_query) return null;
         const {
@@ -976,7 +995,11 @@ const createDataApi = ({
         const injectTopologyLabels = !crossCapture;
 
         let q = plot.promql_query;
-        const stepActive = stepOverride && stepOverride > 1;
+        // Coarser than native, not coarser than one second: on a 100ms
+        // recording a 1s override is a real 10x stride and must reach the
+        // query, and on a 5s recording a 1s override is not a stride at all.
+        const stepActive = stepOverride
+            && stepOverride > nativeInterval(cachedMetadata);
 
         if (plot.opts.type === 'histogram') {
             q = buildHistogramQuery(
@@ -1156,11 +1179,14 @@ const createDataApi = ({
         // override still wins.
         const meta = cachedMetadata || await fetchMetadata();
         const { start, end } = defaultRangeFor(meta);
-        const span = Math.max(1, end - start);
-        const stride = (_stepOverride && _stepOverride > 1)
+        const span = Math.max(0, end - start);
+        const native = nativeInterval(meta);
+        const stride = (_stepOverride && _stepOverride > native)
             ? _stepOverride
-            : Math.max(1, Math.ceil(span / pixelBudget()));
-        const strideSuffix = stride > 1 ? `, ${stride}` : '';
+            : stepAtLeast(native, span / pixelBudget());
+        // Omit the argument at native resolution: the engine then emits one
+        // column per tick, which is finer than any stride we could name.
+        const strideSuffix = stride > native ? `, ${stride}` : '';
         const q = `histogram_heatmap(${metricSelector}${strideSuffix})`;
 
         // Prefer the binary body (zero-copy typed arrays, no JSON parse of the
@@ -1239,16 +1265,17 @@ const createDataApi = ({
         // the passed `range`) — same decimate-then-refetch model as the bucket
         // heatmap, so the full-range Full/Tail fetch is light and a drill-down
         // sharpens the window. A manual step override still wins.
-        let eff = range;
-        if (!eff) {
-            const meta = cachedMetadata || await fetchMetadata();
-            eff = defaultRangeFor(meta);
-        }
-        const span = Math.max(1, eff.end - eff.start);
-        const stride = (_stepOverride && _stepOverride > 1)
+        // Metadata is needed either way: for the range when the caller passed
+        // none, and for the recording's cadence — which is the stride floor —
+        // in both cases.
+        const meta = cachedMetadata || await fetchMetadata();
+        const eff = range || defaultRangeFor(meta);
+        const span = Math.max(0, eff.end - eff.start);
+        const native = nativeInterval(meta);
+        const stride = (_stepOverride && _stepOverride > native)
             ? _stepOverride
-            : Math.max(1, Math.ceil(span / pixelBudget()));
-        const strideSuffix = stride > 1 ? `, ${stride}` : '';
+            : stepAtLeast(native, span / pixelBudget());
+        const strideSuffix = stride > native ? `, ${stride}` : '';
         const wrapped = `histogram_quantiles([${queryQuantiles.join(', ')}], ${metricSelector}${strideSuffix})`;
         const result = await fetchSpectrumViaCapture(wrapped, captureId, range);
 

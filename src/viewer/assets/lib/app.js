@@ -9,7 +9,7 @@ import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -202,14 +202,15 @@ const queryRangeFromMeta = (meta) => {
     const start = Number(minT);
     const end = Number(maxT);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    const interval = nativeInterval(data);
     return {
         start, end,
-        step: Math.max(1, Math.floor((end - start) / 500)),
+        step: stepAtLeast(interval, (end - start) / 500),
         // Native sampling step, so the compare-mode boxplot fetch can decimate
         // the experiment onto the SAME grid as the baseline (see
         // fetchExperimentResult). Distinct from `step`, which targets ~500
         // points for the plain matrix fetch.
-        interval: Math.max(1, Number(data.interval) || 1),
+        interval,
     };
 };
 

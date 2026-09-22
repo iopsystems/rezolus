@@ -9,7 +9,7 @@ import {
     queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
-    fetchQuantileSpectrumForPlot,
+    fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
@@ -246,10 +246,11 @@ const fetchExperimentResult = (vnode) => {
                         const start = Number(minT);
                         const end = Number(maxT);
                         if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                            const interval = nativeInterval(data);
                             range = {
                                 start, end,
-                                step: Math.max(1, Math.floor((end - start) / 500)),
-                                interval: Math.max(1, Number(data.interval) || 1),
+                                step: stepAtLeast(interval, (end - start) / 500),
+                                interval,
                             };
                         }
                     }
@@ -288,7 +289,7 @@ const fetchExperimentResult = (vnode) => {
             if (displayStyle === 'line' || displayStyle === 'scatter') {
                 const pts = (Array.isArray(spec.boxplot) && spec.boxplot[0]?.t?.length)
                     ? spec.boxplot[0].t.length : 500;
-                const nativeStep = Math.max(1, range.interval || 1);
+                const nativeStep = nativeInterval(range);
                 try {
                     vnode.state.experimentBoxplot = await queryRangeDisplayForCapture(
                         CAPTURE_EXPERIMENT, query, range.start, range.end, nativeStep, pts,
@@ -328,7 +329,9 @@ const fetchBaselineRange = async () => {
         if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
             return null;
         }
-        return { start, end };
+        // `interval` rides along so the shared-step calculation below can
+        // floor at the baseline's own cadence rather than at one second.
+        return { start, end, interval: nativeInterval(data) };
     } catch (_) {
         return null;
     }
@@ -353,7 +356,10 @@ const kickOffSpectrumFetch = (vnode, spec, kind) => {
             let expRangeOut = expRange || null;
             if (baseRangeBare && expRange?.step) {
                 // Coarsest step avoids oversampling either capture.
-                const baseStep = Math.max(1, Math.floor((baseRangeBare.end - baseRangeBare.start) / 500));
+                const baseStep = stepAtLeast(
+                    baseRangeBare.interval,
+                    (baseRangeBare.end - baseRangeBare.start) / 500,
+                );
                 const sharedStep = Math.max(baseStep, expRange.step);
                 baseRange = { ...baseRangeBare, step: sharedStep };
                 expRangeOut = { ...expRange, step: sharedStep };
@@ -398,10 +404,11 @@ const rangeFromMeta = (meta) => {
     const start = Number(minT);
     const end = Number(maxT);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+    const interval = nativeInterval(data);
     return {
         start, end,
-        step: Math.max(1, Math.floor((end - start) / 500)),
-        interval: Math.max(1, Number(data.interval) || 1),
+        step: stepAtLeast(interval, (end - start) / 500),
+        interval,
     };
 };
 
@@ -455,7 +462,7 @@ const fetchExtraCaptures = (vnode) => {
                 if (wantBoxplot) {
                     try {
                         boxplot = await queryRangeDisplayForCapture(
-                            cap.id, query, range.start, range.end, Math.max(1, range.interval || 1), pts,
+                            cap.id, query, range.start, range.end, nativeInterval(range), pts,
                         );
                     } catch (_) { /* leave null → raw-matrix fallback */ }
                 }
