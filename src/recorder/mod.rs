@@ -550,9 +550,19 @@ async fn sleep_until_opt(deadline: Option<Instant>) {
 /// stamps each metric's own window and this bracket is ignored for it.
 struct Scraped {
     body: Vec<u8>,
-    /// Wall-clock ns when the request was sent.
+    /// When the request was sent, on the recorder's own anchored timeline.
+    ///
+    /// Anchored rather than a raw wall reading because these two become the
+    /// scrape's acquisition window, and a window is stored in the archive as
+    /// an OFFSET from its row's `ts` (`window_offset_columns` subtracts one
+    /// from the other). The row's `ts` is anchored, so a raw-wall window made
+    /// that offset carry the wall-versus-anchor divergence — exactly the
+    /// quantity `wall_offset` exists to record — instead of the read's
+    /// position within the tick. The error is zero on a freshly started
+    /// recorder and grows with every step or slew, and the window is what
+    /// `rate()` prices its uncertainty band from.
     request_ns: u64,
-    /// Wall-clock ns when the response finished arriving.
+    /// When the response finished arriving, same timeline.
     response_ns: u64,
 }
 
@@ -563,8 +573,13 @@ fn wall_now_ns() -> u64 {
         .as_nanos() as u64
 }
 
-async fn scrape_one(client: &Client, url: &Url) -> Result<Scraped, String> {
-    let request_ns = wall_now_ns();
+async fn scrape_one(
+    client: &Client,
+    url: &Url,
+    anchor_wall_ns: u64,
+    anchor_mono: Instant,
+) -> Result<Scraped, String> {
+    let request_ns = anchored_at(anchor_wall_ns, anchor_mono.elapsed());
     let response = client
         .get(url.clone())
         .send()
@@ -584,7 +599,7 @@ async fn scrape_one(client: &Client, url: &Url) -> Result<Scraped, String> {
         // Read AFTER the body, not after the headers: the values are in the
         // body, so a bracket that closed at the response line would exclude
         // part of the interval they were actually read over.
-        response_ns: wall_now_ns(),
+        response_ns: anchored_at(anchor_wall_ns, anchor_mono.elapsed()),
     })
 }
 
@@ -1091,8 +1106,17 @@ fn indistinguishable_warning(
 /// from the anchored stamp rides along as the per-row `:wall_offset` sidecar,
 /// so a step locates to the exact tick.
 pub(crate) fn anchored_stamp(anchor_wall_ns: u64, elapsed: Duration, wall_ns: u64) -> (u64, i64) {
-    let anchored_ns = anchor_wall_ns.saturating_add(elapsed.as_nanos() as u64);
+    let anchored_ns = anchored_at(anchor_wall_ns, elapsed);
     (anchored_ns, wall_ns as i64 - anchored_ns as i64)
+}
+
+/// A moment on the recording's timeline: `anchor + monotonic elapsed`.
+///
+/// Everything the recorder timestamps goes through here, so a row's `ts` and
+/// the window edges it is stored relative to come from one clock. Mixing the
+/// two was the defect this exists to prevent.
+pub(crate) fn anchored_at(anchor_wall_ns: u64, elapsed: Duration) -> u64 {
+    anchor_wall_ns.saturating_add(elapsed.as_nanos() as u64)
 }
 
 /// Build the `per_source_metadata` JSON written by the recorder.
@@ -1550,13 +1574,12 @@ pub fn run(mut config: RecordingConfig) {
             }
             // Both clocks, every tick. `wall_ns` is the raw reading every
             // non-`.rez` consumer has always used (endpoint success stamps, the
-            // prometheus converter, the msgpack spool); `.rez` rows are stamped
-            // on the anchored monotonic timeline and carry the difference as a
-            // per-row observation instead.
-            let wall_ns = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
+            // msgpack spool); `.rez` rows are stamped on the anchored monotonic
+            // timeline and carry the difference as a per-row observation
+            // instead. The prometheus converter used to be in the first group
+            // and is now in the second: its scrape window is stored relative
+            // to an anchored row `ts`, so it has to be anchored too.
+            let wall_ns = wall_now_ns();
             let (anchored_ns, wall_offset_ns) =
                 anchored_stamp(clock_anchor_wall_ns, clock_anchor_mono.elapsed(), wall_ns);
             last_clock = (anchored_ns, wall_offset_ns);
@@ -1587,16 +1610,18 @@ pub fn run(mut config: RecordingConfig) {
                     let client = client.clone();
                     let url = endpoints[idx].scrape_url.clone().unwrap();
                     async move {
-                        let result =
-                            match tokio::time::timeout(scrape_timeout, scrape_one(&client, &url))
-                                .await
-                            {
-                                Ok(result) => result,
-                                Err(_) => Err(format!(
-                                    "timed out after {}",
-                                    humantime::format_duration(scrape_timeout)
-                                )),
-                            };
+                        let result = match tokio::time::timeout(
+                            scrape_timeout,
+                            scrape_one(&client, &url, clock_anchor_wall_ns, clock_anchor_mono),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => Err(format!(
+                                "timed out after {}",
+                                humantime::format_duration(scrape_timeout)
+                            )),
+                        };
                         (idx, result)
                     }
                 })
@@ -2645,6 +2670,50 @@ mod tests {
             "and must name the endpoint, not its index, got: {err}"
         );
         rec.discard();
+    }
+
+    /// A window and the row it is stored against move together, and a raw
+    /// wall reading would not.
+    ///
+    /// The archive stores a window as an offset from its row's `ts`, so what
+    /// lands on disk is the SUBTRACTION of the two. Stated with a divergence
+    /// injected, because that is the only way to see the difference: with the
+    /// wall clock and the anchor agreeing — a machine that has not stepped
+    /// since the recording began — the two spellings produce identical bytes,
+    /// which is why the end-to-end test cannot tell them apart.
+    #[test]
+    fn a_window_and_its_row_are_read_off_one_clock() {
+        // A recorder 60 s into a run whose wall clock has since moved 30 s
+        // relative to its anchor.
+        const ANCHOR: u64 = 1_700_000_000_000_000_000;
+        const DIVERGENCE: i64 = 30_000_000_000;
+        let elapsed = Duration::from_secs(60);
+        let wall = ANCHOR + elapsed.as_nanos() as u64 + DIVERGENCE as u64;
+
+        let (row_ts, wall_offset) = anchored_stamp(ANCHOR, elapsed, wall);
+        assert_eq!(
+            wall_offset, DIVERGENCE,
+            "the divergence is recorded, not absorbed"
+        );
+
+        // The scrape's two readings, taken the way `scrape_one` takes them.
+        let begin = anchored_at(ANCHOR, elapsed);
+        let end = anchored_at(ANCHOR, elapsed + Duration::from_millis(2));
+        assert_eq!(
+            begin as i64 - row_ts as i64,
+            0,
+            "a request sent at the tick is at the tick"
+        );
+        assert_eq!(
+            end as i64 - row_ts as i64,
+            2_000_000,
+            "and the round trip's width is the round trip"
+        );
+
+        // The same edge read off the wall clock instead: out by the whole
+        // divergence, which is unbounded and grows for as long as the
+        // recording runs. That was the defect.
+        assert_eq!(wall as i64 - row_ts as i64, DIVERGENCE);
     }
 
     /// The recorder keeps the producer's stamp when the agent sends one, and

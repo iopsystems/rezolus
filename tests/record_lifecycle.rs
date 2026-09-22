@@ -198,6 +198,100 @@ fn a_prometheus_endpoint_records_into_a_rez() {
     );
 }
 
+/// A scrape's acquisition window is on the same clock as the row that holds
+/// it.
+///
+/// The archive stores a window as an OFFSET from its row's `ts`
+/// (`window_offset_columns` subtracts one from the other), so the two have to
+/// come from one clock. The window used to be a raw wall reading while the row
+/// was anchored, which made that offset carry the wall-versus-anchor
+/// divergence — the very quantity `wall_offset` exists to record — instead of
+/// the read's position within the tick. And the window is what `rate()` prices
+/// its uncertainty band from.
+///
+/// End to end through the real binary, because the two clocks are read in
+/// different layers — `scrape_one` and the tick loop — and a unit test on
+/// either one cannot see them disagree.
+#[test]
+fn a_scrape_window_is_on_the_same_clock_as_its_row() {
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("window.rez");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    assert!(
+        out.status.success(),
+        "the run must exit 0\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Read the SEALED segment, not the WAL: finalize seals and prunes, and the
+    // sealed columns are what a consumer actually reads. `:window_begin` is
+    // the offset itself — the archive stores it relative to the row's `ts`, so
+    // the number under test is the number on disk.
+    use arrow::array::Array;
+
+    let db = rez::rez_sqlite::RezDb::open(&output).expect("the archive opens");
+    let segments = db
+        .read_segments(1, "prometheus/scrape")
+        .expect("the scrape's segments read back");
+    assert!(!segments.is_empty(), "the run sealed at least one segment");
+
+    let mut checked = 0usize;
+    for seg in &segments {
+        let bytes = db
+            .read_segment_bytes(1, "prometheus/scrape", seg.seq)
+            .expect("the segment's bytes read back")
+            .expect("a sealed segment has bytes");
+        let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+            bytes::Bytes::from(bytes),
+        )
+        .expect("the segment is parquet")
+        .build()
+        .expect("the segment reads");
+        for batch in reader {
+            let batch = batch.expect("a record batch");
+            let col = batch
+                .column_by_name(":window_begin")
+                .expect("a group table carries a table-level window");
+            let offsets = col
+                .as_any()
+                .downcast_ref::<arrow::array::Int64Array>()
+                .expect(":window_begin is an i64 offset from the row's ts");
+            for i in 0..offsets.len() {
+                if offsets.is_null(i) {
+                    continue;
+                }
+                let offset = offsets.value(i);
+                // The window brackets the round trip, so it sits within a
+                // scrape's distance of the row's own stamp. A window on a
+                // different clock is out by the divergence between the two,
+                // which is unbounded and grows for as long as the recording
+                // runs — a whole second is generous for a localhost scrape and
+                // still far tighter than any real divergence.
+                assert!(
+                    offset.abs() < 1_000_000_000,
+                    "a window beginning {offset} ns from its row's ts is not on \
+                     the row's clock"
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "at least one window was actually checked");
+}
+
 /// Several Prometheus endpoints in one run: each is its own recording, and
 /// each keeps its own metrics.
 ///
