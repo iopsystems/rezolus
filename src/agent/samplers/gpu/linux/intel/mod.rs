@@ -150,6 +150,41 @@ const GLOBAL_EVENTS: [(&str, &metriken::CounterGroup, Option<&str>); 2] = [
     ("requested-frequency", &GPU_FREQUENCY_REQUESTED, Some("M")),
 ];
 
+/// Identity for the per-engine slots, whose members are `engine_index` values.
+static ENGINE_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(ENGINE_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static ENGINE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &ENGINE_IDENTITY;
+
+static ENGINE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&GPU_INTEL_PMU_ENGINE_ACQ, &[&GPU_ENGINE_BUSY])];
+
+/// Identity for the per-device slots, whose members are GPU ids.
+static DEVICE_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(DEVICE_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static DEVICE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &DEVICE_IDENTITY;
+
+static DEVICE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &GPU_INTEL_PMU_DEVICE_ACQ,
+    &[&GPU_FREQUENCY_ACTUAL, &GPU_FREQUENCY_REQUESTED],
+)];
+
+/// Identity for the VRAM gauges, a different population from the device
+/// counters: only a GPU with device-local memory has them.
+static MEMORY_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(MEMORY_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static MEMORY_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &MEMORY_IDENTITY;
+
+static MEMORY_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &GPU_INTEL_PMU_MEMORY_ACQ,
+    &[&GPU_MEMORY_USED, &GPU_MEMORY_FREE],
+)];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     // Zero FIRST, so every exit below leaves the group empty rather than at
     // backing capacity. An unset bound falls back to this sampler's backing
@@ -511,24 +546,33 @@ impl Gpu {
             if !live_indices.contains(&metric_index) {
                 continue;
             }
-            for (_, metric, _) in ENGINE_SAMPLES {
-                metric.insert_metadata(metric_index, "id".to_string(), id.to_string());
-                metric.insert_metadata(metric_index, "device".to_string(), label.clone());
-                metric.insert_metadata(metric_index, "type".to_string(), gpu_type.to_string());
-                metric.insert_metadata(metric_index, "engine".to_string(), engine.clone());
-                metric.insert_metadata(
-                    metric_index,
-                    "engine_class".to_string(),
-                    engine_class(engine).to_string(),
-                );
-            }
+            // Written and published together: a GPU discovered after a
+            // subscriber connected would otherwise change identity with
+            // nothing to notice, there being no per-tick diff any more.
+            ENGINE_IDENTITY.set(
+                metric_index,
+                [
+                    ("id".to_string(), id.to_string()),
+                    ("device".to_string(), label.clone()),
+                    ("type".to_string(), gpu_type.to_string()),
+                    ("engine".to_string(), engine.clone()),
+                    ("engine_class".to_string(), engine_class(engine).to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            );
         }
 
-        for (_, metric, _) in GLOBAL_EVENTS {
-            metric.insert_metadata(id, "id".to_string(), id.to_string());
-            metric.insert_metadata(id, "device".to_string(), label.clone());
-            metric.insert_metadata(id, "type".to_string(), gpu_type.to_string());
-        }
+        DEVICE_IDENTITY.set(
+            id,
+            [
+                ("id".to_string(), id.to_string()),
+                ("device".to_string(), label.clone()),
+                ("type".to_string(), gpu_type.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
 
         // VRAM comes from the DRM query ioctl, not the PMU. Only a GPU with a
         // device-local memory region reports it, so probe once here and keep the
@@ -553,11 +597,16 @@ impl Gpu {
             });
 
         if drm.is_some() {
-            for metric in [&GPU_MEMORY_USED, &GPU_MEMORY_FREE] {
-                metric.insert_metadata(id, "id".to_string(), id.to_string());
-                metric.insert_metadata(id, "device".to_string(), label.clone());
-                metric.insert_metadata(id, "type".to_string(), gpu_type.to_string());
-            }
+            MEMORY_IDENTITY.set(
+                id,
+                [
+                    ("id".to_string(), id.to_string()),
+                    ("device".to_string(), label.clone()),
+                    ("type".to_string(), gpu_type.to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            );
         }
 
         Ok(Self {

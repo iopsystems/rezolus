@@ -175,7 +175,30 @@ impl std::error::Error for ApplyError {}
 #[derive(Clone, Debug, Default)]
 pub struct SlotIndex {
     live: BTreeMap<u32, BTreeMap<String, String>>,
+    /// The set's hash, maintained as slots move rather than recomputed.
+    ///
+    /// A XOR over each live slot's own hash. Recomputing meant serializing
+    /// every slot and every label the stream holds, and the producer takes the
+    /// state once per change — so on a host creating and exiting hundreds of
+    /// tasks a second, a 319-slot group was serialized hundreds of times a
+    /// second. Measured at 4.13x the agent's sampling CPU before this.
+    ///
+    /// XOR because it is incremental in both directions: a slot leaving is the
+    /// same operation as a slot arriving. It is a divergence check, not a
+    /// commitment — two consumers whose sets differ will differ here, which is
+    /// all rule 10 asks of it.
+    acc: u128,
     seen_full: bool,
+}
+
+/// One slot's contribution to its stream's hash.
+///
+/// Includes the slot number, so moving an identity from one slot to another
+/// changes the set's hash — under a XOR of labels alone the two would cancel.
+fn slot_hash(slot: u32, labels: &BTreeMap<String, String>) -> u128 {
+    let bytes = rmp_serde::to_vec(&(slot, labels)).expect("slot serialization is infallible");
+    let (hi, lo) = crate::schema::fnv1a_128(&bytes);
+    ((hi as u128) << 64) | lo as u128
 }
 
 impl SlotIndex {
@@ -207,8 +230,22 @@ impl SlotIndex {
     /// [`GroupSchema::hash`](crate::schema::GroupSchema::hash) uses, over a
     /// different domain.
     pub fn state(&self) -> IndexState {
-        let bytes = rmp_serde::to_vec(&self.live).expect("slot set serialization is infallible");
-        crate::schema::fnv1a_128(&bytes)
+        ((self.acc >> 64) as u64, self.acc as u64)
+    }
+
+    /// Put a slot in, or take it out, keeping `acc` in step.
+    ///
+    /// Every mutation of `live` goes through here. One that did not would
+    /// leave the hash stale, and a stale hash is silent: rows simply stop being
+    /// attributable with nothing saying why.
+    fn put(&mut self, slot: u32, labels: Option<BTreeMap<String, String>>) {
+        if let Some(old) = self.live.remove(&slot) {
+            self.acc ^= slot_hash(slot, &old);
+        }
+        if let Some(labels) = labels {
+            self.acc ^= slot_hash(slot, &labels);
+            self.live.insert(slot, labels);
+        }
     }
 
     /// Producer side: fold this tick's complete live set in, and return what
@@ -252,7 +289,14 @@ impl SlotIndex {
             return None;
         }
 
-        self.live = next;
+        for slot in self.live.keys().copied().collect::<Vec<_>>() {
+            if !next.contains_key(&slot) {
+                self.put(slot, None);
+            }
+        }
+        for (slot, labels) in next {
+            self.put(slot, Some(labels));
+        }
         self.seen_full = true;
 
         // The first entry of a stream is a `Full` whatever it contains, so a
@@ -297,18 +341,17 @@ impl SlotIndex {
             return Err(ApplyError::DeltaBeforeFull);
         }
 
-        let mut next = match change.kind {
-            EntryKind::Full => BTreeMap::new(),
-            EntryKind::Delta => self.live.clone(),
-        };
+        if change.kind == EntryKind::Full {
+            for slot in self.live.keys().copied().collect::<Vec<_>>() {
+                self.put(slot, None);
+            }
+        }
         for slot in &change.removed {
-            next.remove(slot);
+            self.put(*slot, None);
         }
         for e in &change.slots {
-            next.insert(e.slot, e.labels.clone());
+            self.put(e.slot, Some(e.labels.clone()));
         }
-
-        self.live = next;
         self.seen_full = true;
         Ok(())
     }
@@ -332,6 +375,19 @@ pub struct SlotChange {
 #[derive(Clone, Debug, Default)]
 pub struct SourceIndex {
     streams: BTreeMap<String, SlotIndex>,
+    /// Each stream's own state, recomputed only when that stream changes.
+    ///
+    /// Not a micro-optimisation. A stream's hash is a serialization of every
+    /// slot and every label it holds, and `state()` used to ask every stream
+    /// for one — so the source hash was O(total labels), and the snapshot
+    /// builder takes it once per pass whether or not anything moved. Measured
+    /// against v5.20.0 on a 32-CPU host with ~3,500 declared members, that was
+    /// **1.67 ms per scrape**, a third of the agent's whole sampling CPU.
+    ///
+    /// Holding each stream's hash makes `state()` O(streams) — tens of
+    /// entries — and confines the expensive part to the stream that actually
+    /// changed, which is the one that has to pay it.
+    stream_states: BTreeMap<String, IndexState>,
 }
 
 impl SourceIndex {
@@ -346,14 +402,24 @@ impl SourceIndex {
     /// contributes, so a group appearing changes the source state even before
     /// it has a slot.
     pub fn state(&self) -> IndexState {
-        let per_stream: BTreeMap<&str, IndexState> = self
-            .streams
-            .iter()
-            .map(|(name, index)| (name.as_str(), index.state()))
-            .collect();
-        let bytes =
-            rmp_serde::to_vec(&per_stream).expect("index state serialization is infallible");
+        let bytes = rmp_serde::to_vec(&self.stream_states)
+            .expect("index state serialization is infallible");
         crate::schema::fnv1a_128(&bytes)
+    }
+
+    /// Mutate one stream, and recompute its hash.
+    ///
+    /// Every mutation goes through here. A caller that reached into `streams`
+    /// directly would leave `stream_states` stale, and a stale source state is
+    /// silent: rows would simply stop being attributable, with nothing saying
+    /// why. Routing them all through one place is what makes that impossible
+    /// rather than merely discouraged.
+    fn with_stream<R>(&mut self, stream: &str, f: impl FnOnce(&mut SlotIndex) -> R) -> R {
+        let index = self.streams.entry(stream.to_string()).or_default();
+        let out = f(index);
+        let restated = index.state();
+        self.stream_states.insert(stream.to_string(), restated);
+        out
     }
 
     pub fn stream(&self, stream: &str) -> Option<&SlotIndex> {
@@ -364,17 +430,40 @@ impl SourceIndex {
         self.streams.iter().map(|(k, v)| (k.as_str(), v))
     }
 
+    /// Producer side: record a change the caller already knows about.
+    ///
+    /// [`observe`](Self::observe) takes a whole live set and diffs it, which
+    /// means the caller had to build one — and building one means cloning every
+    /// slot's labels to compare them. A caller told what changed, at the moment
+    /// it changed, has nothing to diff and passes the change straight in.
+    ///
+    /// Returns `None` when the change is empty on a stream already known, so a
+    /// stream that did not move stays silent.
+    pub fn record(&mut self, stream: &str, change: SlotChange) -> Option<IndexEntry> {
+        let known = self.streams.contains_key(stream);
+        if known && change.slots.is_empty() && change.removed.is_empty() {
+            return None;
+        }
+        let kind = change.kind;
+        let slots = change.slots.clone();
+        let removed = change.removed.clone();
+        self.with_stream(stream, |index| index.apply(&change))
+            .ok()?;
+        Some(IndexEntry {
+            kind,
+            slots,
+            removed,
+            state: self.state(),
+        })
+    }
+
     /// Producer side: fold one stream's live set in and return the entry to
     /// transmit, stamped with the source's state after the fold.
     pub fn observe<I>(&mut self, stream: &str, observed: I) -> Option<IndexEntry>
     where
         I: IntoIterator<Item = (u32, BTreeMap<String, String>)>,
     {
-        let change = self
-            .streams
-            .entry(stream.to_string())
-            .or_default()
-            .observe(observed)?;
+        let change = self.with_stream(stream, |index| index.observe(observed))?;
         Some(IndexEntry {
             kind: change.kind,
             slots: change.slots,
@@ -430,10 +519,7 @@ impl SourceIndex {
             slots: entry.slots.clone(),
             removed: entry.removed.clone(),
         };
-        self.streams
-            .entry(stream.to_string())
-            .or_default()
-            .apply(&change)
+        self.with_stream(stream, |index| index.apply(&change))
     }
 
     /// Consumer side: apply a received entry to one stream, refusing it if the
@@ -460,11 +546,7 @@ impl SourceIndex {
         };
 
         let mut candidate = self.clone();
-        candidate
-            .streams
-            .entry(stream.to_string())
-            .or_default()
-            .apply(&change)?;
+        candidate.with_stream(stream, |index| index.apply(&change))?;
 
         let actual = candidate.state();
         if actual != entry.state {
@@ -792,6 +874,144 @@ mod tests {
             producer.stream(S).unwrap().slots().collect::<Vec<_>>(),
             vec![2, 5, 9]
         );
+    }
+
+    /// The incrementally-maintained hash must equal one computed from scratch.
+    ///
+    /// `acc` is XORed as slots move rather than recomputed, so a mutation that
+    /// failed to keep it in step would leave it stale — and stale is silent:
+    /// rows stop being attributable with nothing saying why. This folds the
+    /// live set from nothing and compares, after adds, changes and removals,
+    /// through both the producer path and the consumer path.
+    ///
+    /// It matters more than it looks: `the_cached_state_equals_a_full_recomputation`
+    /// below can no longer check this level, because the per-stream value it
+    /// reads IS the incremental one.
+    #[test]
+    fn the_incremental_slot_hash_equals_one_folded_from_scratch() {
+        fn from_scratch(index: &SlotIndex) -> u128 {
+            index
+                .live
+                .iter()
+                .fold(0u128, |acc, (slot, labels)| acc ^ slot_hash(*slot, labels))
+        }
+
+        let mut idx = SlotIndex::new();
+        assert_eq!(idx.acc, from_scratch(&idx), "empty");
+
+        idx.observe(vec![task(0, "redis"), task(1, "nginx")])
+            .unwrap();
+        assert_eq!(idx.acc, from_scratch(&idx), "after adds");
+
+        // A recycle: same slot, different occupant.
+        idx.observe(vec![task(0, "valkey"), task(1, "nginx")])
+            .unwrap();
+        assert_eq!(idx.acc, from_scratch(&idx), "after a recycle");
+
+        // A removal.
+        idx.observe(vec![task(0, "valkey")]).unwrap();
+        assert_eq!(idx.acc, from_scratch(&idx), "after a removal");
+
+        // And through the consumer path, which mutates differently.
+        let mut consumer = SlotIndex::new();
+        consumer
+            .apply(&SlotChange {
+                kind: EntryKind::Full,
+                slots: vec![
+                    SlotEntry {
+                        slot: 3,
+                        labels: labels(&[("comm", "a")]),
+                    },
+                    SlotEntry {
+                        slot: 4,
+                        labels: labels(&[("comm", "b")]),
+                    },
+                ],
+                removed: Vec::new(),
+            })
+            .unwrap();
+        assert_eq!(consumer.acc, from_scratch(&consumer), "after a full");
+        consumer
+            .apply(&SlotChange {
+                kind: EntryKind::Delta,
+                slots: vec![SlotEntry {
+                    slot: 3,
+                    labels: labels(&[("comm", "c")]),
+                }],
+                removed: vec![4],
+            })
+            .unwrap();
+        assert_eq!(consumer.acc, from_scratch(&consumer), "after a delta");
+    }
+
+    /// Moving an identity between slots must change the set's hash. Under a XOR
+    /// of labels alone the two contributions would cancel and the move would be
+    /// invisible, which is why the slot number is inside each slot's hash.
+    #[test]
+    fn moving_an_identity_between_slots_changes_the_hash() {
+        let mut a = SlotIndex::new();
+        a.observe(vec![task(1, "x"), task(2, "y")]).unwrap();
+
+        let mut b = SlotIndex::new();
+        b.observe(vec![task(1, "y"), task(2, "x")]).unwrap();
+
+        assert_ne!(
+            a.state(),
+            b.state(),
+            "swapped occupants are a different set"
+        );
+    }
+
+    /// The cached state must always equal what the expensive path would
+    /// produce.
+    ///
+    /// `state()` reads per-stream hashes rather than re-serializing every slot
+    /// of every stream. That is only sound while every mutation restates the
+    /// stream it touched, and a stale hash is SILENT — rows would simply stop
+    /// being attributable, with nothing saying why. This recomputes the old
+    /// way and compares, after a sequence that adds, changes and removes.
+    #[test]
+    fn the_cached_state_equals_a_full_recomputation() {
+        // What `state()` did before it was cached: every stream's slots,
+        // serialized and hashed together. Kept here rather than in the type,
+        // because the type having two ways to answer is the thing that rots.
+        fn recompute(index: &SourceIndex) -> IndexState {
+            let per_stream: BTreeMap<&str, IndexState> = index
+                .streams()
+                .map(|(name, slots)| (name, slots.state()))
+                .collect();
+            crate::schema::fnv1a_128(&rmp_serde::to_vec(&per_stream).unwrap())
+        }
+
+        let mut idx = SourceIndex::new();
+        assert_eq!(idx.state(), recompute(&idx), "empty");
+
+        idx.observe("a/one", vec![task(0, "redis"), task(1, "nginx")])
+            .unwrap();
+        assert_eq!(idx.state(), recompute(&idx), "after the first stream");
+
+        idx.observe("b/two", vec![task(0, "cron")]).unwrap();
+        assert_eq!(idx.state(), recompute(&idx), "after a second stream");
+
+        // A change, and a removal.
+        idx.observe("a/one", vec![task(0, "valkey")]).unwrap();
+        assert_eq!(
+            idx.state(),
+            recompute(&idx),
+            "after a recycle and a removal"
+        );
+
+        // And through the consumer side, which mutates by a different path.
+        let mut producer = SourceIndex::new();
+        let entry = producer.observe("c/three", vec![task(4, "x")]).unwrap();
+        let mut consumer = SourceIndex::new();
+        consumer.apply("c/three", &entry).unwrap();
+        assert_eq!(
+            consumer.state(),
+            recompute(&consumer),
+            "after apply, not just observe"
+        );
+        assert_eq!(consumer.state(), producer.state());
     }
 
     /// What Phase 2 of #1224 is for, in bytes.

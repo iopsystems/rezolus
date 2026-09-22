@@ -16,6 +16,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
+use tokio::sync::broadcast;
 
 pub struct SnapshotBuilder {
     cached: Option<CachedSnapshot>,
@@ -1101,6 +1102,15 @@ pub(crate) struct SkeletonCache {
     /// compared equal, and member metadata is part of a schema, so a hit means
     /// identity did not move.
     slots: crate::recorder::index::SourceIndex,
+    /// Identity changes the samplers have published, drained once per pass.
+    ///
+    /// `None` while nothing wants an index, which is the normal state: an
+    /// exporter scraping `/metrics/binary` reads values, not identity. Holding
+    /// a receiver would make every publish store a change for a consumer that
+    /// does not exist.
+    identity: Option<broadcast::Receiver<crate::agent::identity::SlotChanged>>,
+    /// How many times the channel overflowed and the index had to be rebuilt.
+    resyncs: u64,
     /// Entries this pass produced, before they are folded into `history`.
     index_entries: Vec<(String, crate::recorder::index::IndexEntry)>,
     history: IndexHistory,
@@ -1205,24 +1215,134 @@ impl SkeletonCache {
             entries: HashMap::new(),
             rebuilds: 0,
             slots: crate::recorder::index::SourceIndex::new(),
+            identity: None,
+            resyncs: 0,
             index_entries: Vec::new(),
             history: IndexHistory::default(),
         }
     }
 
-    /// Fold one group's freshly observed slot labels in, recording an entry
-    /// when identity actually moved.
+    /// Take what the samplers have published since the last pass.
     ///
-    /// Call only for a group whose schema was rebuilt this tick. On a hit the
-    /// labels were never read, and observing an empty set would be read as
-    /// every slot having been removed.
-    fn observe_slots(
-        &mut self,
-        group_name: &str,
-        observed: BTreeMap<u32, BTreeMap<String, String>>,
-    ) {
-        if let Some(entry) = self.slots.observe(group_name, observed) {
-            self.index_entries.push((group_name.to_string(), entry));
+    /// Identity is not discovered here. It is published at the moment it
+    /// changes — a `task_info` event arriving, a filesystem unmounting — and
+    /// this only folds those changes in. The previous version walked every
+    /// group every tick and compared each slot against last tick to work out
+    /// what had moved, which costs O(live slots) whether anything moved or not
+    /// and was measured at 1.24x the agent's whole sampling CPU.
+    ///
+    /// Gated on demand. With nothing streaming there is no receiver, so a
+    /// publish stores nothing and there is nothing to drain — an exporter
+    /// scraping `/metrics/binary` reads values, not identity, and should pay
+    /// for neither.
+    fn drain_identity(&mut self) {
+        match (crate::agent::identity::wanted(), self.identity.is_some()) {
+            (true, false) => {
+                // Subscribe FIRST, then read current state. The other order
+                // loses any change landing between the two, and nothing would
+                // notice: the slot it described would simply never be
+                // mentioned again.
+                self.identity = Some(crate::agent::identity::subscribe());
+                // And seed from what the samplers hold now. The broadcast
+                // carries only what changes after this point, so a slot
+                // assigned earlier and never touched again would otherwise
+                // never be described to a subscriber.
+                self.slots = crate::recorder::index::SourceIndex::new();
+                self.seed_index();
+            }
+            (false, true) => {
+                self.identity = None;
+                return;
+            }
+            (false, false) => return,
+            (true, true) => {}
+        }
+
+        // Drained into a buffer first: `try_recv` borrows the receiver, and
+        // applying a change needs `self`.
+        let mut changes = Vec::new();
+        let mut lagged = 0u64;
+        if let Some(rx) = self.identity.as_mut() {
+            loop {
+                match rx.try_recv() {
+                    Ok(change) => changes.push(change),
+                    Err(broadcast::error::TryRecvError::Lagged(missed)) => {
+                        lagged += missed;
+                        // Keep draining: what is still buffered is newer than
+                        // what was lost.
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+
+        if lagged > 0 {
+            // The changes behind the overflow are gone. Start the index again
+            // so every stream restates rather than carrying a set that is
+            // missing whatever those changes said.
+            warn!(
+                "identity changes overflowed the channel ({lagged} lost); restating the \
+                 slot index"
+            );
+            self.resyncs += 1;
+            self.slots = crate::recorder::index::SourceIndex::new();
+        }
+
+        for change in changes {
+            self.apply_change(change);
+        }
+    }
+
+    /// Fold in what every group currently means.
+    ///
+    /// Run once, when something starts wanting an index. A change published
+    /// between subscribing and this read arrives on the channel as well, and
+    /// applying it twice is harmless — a slot's identity is replaced, not
+    /// accumulated.
+    fn seed_index(&mut self) {
+        for (sampler, group, slot, labels) in crate::agent::identity::current_state() {
+            self.apply_change(crate::agent::identity::SlotChanged {
+                sampler,
+                group,
+                slot,
+                labels: Some(labels),
+                generation: 0,
+            });
+        }
+    }
+
+    /// One published change, folded into the index.
+    fn apply_change(&mut self, change: crate::agent::identity::SlotChanged) {
+        let stream = format!("{}/{}", change.sampler, change.group);
+        let slots = match &change.labels {
+            Some(labels) => vec![crate::recorder::index::SlotEntry {
+                slot: change.slot,
+                labels: labels.clone(),
+            }],
+            None => Vec::new(),
+        };
+        let removed = if change.labels.is_none() {
+            vec![change.slot]
+        } else {
+            Vec::new()
+        };
+        let known = self.slots.stream(&stream).is_some();
+        let entry = self.slots.record(
+            &stream,
+            crate::recorder::index::SlotChange {
+                // A stream's first entry restates it whole, so a subscriber
+                // has a base to apply later deltas to.
+                kind: if known {
+                    crate::recorder::index::EntryKind::Delta
+                } else {
+                    crate::recorder::index::EntryKind::Full
+                },
+                slots,
+                removed,
+            },
+        );
+        if let Some(entry) = entry {
+            self.index_entries.push((stream, entry));
         }
     }
 
@@ -1230,7 +1350,9 @@ impl SkeletonCache {
     /// from there.
     fn begin_pass(&mut self) -> crate::recorder::index::IndexState {
         self.index_entries.clear();
-        self.slots.state()
+        let before = self.slots.state();
+        self.drain_identity();
+        before
     }
 
     /// Fold the pass's entries into the history.
@@ -1271,14 +1393,6 @@ impl SkeletonCache {
     /// fell out of the history.
     pub(crate) fn index_resyncs(&self) -> u64 {
         self.history.resyncs
-    }
-
-    /// Every group's live slot set, for a caller that needs the full state
-    /// rather than the change — connect-time completeness and the seal-cadence
-    /// resend.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn slot_index(&self) -> &crate::recorder::index::SourceIndex {
-        &self.slots
     }
 
     /// Number of times a group's schema has been rebuilt (hash recomputed)
@@ -1753,11 +1867,6 @@ struct GroupBuilder {
     reader_guard: Option<AcquisitionGuard<'static>>,
     needs_schema: bool,
     walk_identity: GroupIdentityAccum,
-    /// What the sampler attached to each populated slot, captured during the
-    /// same walk that reads the values — see `SkeletonCache::observe_slots`.
-    /// Empty on a cache hit, which is exactly when there is nothing to
-    /// observe.
-    slot_labels: BTreeMap<u32, BTreeMap<String, String>>,
     counter_descs: Vec<MetricDesc>,
     counter_values: Vec<Option<u64>>,
     gauge_descs: Vec<MetricDesc>,
@@ -1773,7 +1882,6 @@ impl Default for GroupBuilder {
             reader_guard: None,
             needs_schema: true,
             walk_identity: GroupIdentityAccum::default(),
-            slot_labels: BTreeMap::new(),
             counter_descs: Vec::new(),
             counter_values: Vec::new(),
             gauge_descs: Vec::new(),
@@ -2272,16 +2380,6 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
-                                    // The same map, kept unmerged. Once it is
-                                    // folded into `entry_metadata` above the
-                                    // per-slot half cannot be told from the
-                                    // metric-level half again — a member key
-                                    // may shadow a metric one — and an index
-                                    // entry needs the per-slot half alone.
-                                    group.slot_labels.insert(
-                                        idx as u32,
-                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                                    );
                                 }
                                 group.counter_descs.push(MetricDesc {
                                     name: format!("{metric_id}x{idx}"),
@@ -2380,16 +2478,6 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
-                                    // The same map, kept unmerged. Once it is
-                                    // folded into `entry_metadata` above the
-                                    // per-slot half cannot be told from the
-                                    // metric-level half again — a member key
-                                    // may shadow a metric one — and an index
-                                    // entry needs the per-slot half alone.
-                                    group.slot_labels.insert(
-                                        idx as u32,
-                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                                    );
                                 }
                             });
 
@@ -2433,16 +2521,6 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
-                                    // The same map, kept unmerged. Once it is
-                                    // folded into `entry_metadata` above the
-                                    // per-slot half cannot be told from the
-                                    // metric-level half again — a member key
-                                    // may shadow a metric one — and an index
-                                    // entry needs the per-slot half alone.
-                                    group.slot_labels.insert(
-                                        idx as u32,
-                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                                    );
                                 }
                                 group.gauge_descs.push(MetricDesc {
                                     name: format!("{metric_id}x{idx}"),
@@ -2497,16 +2575,6 @@ fn create_v3(
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
                                     }
-                                    // The same map, kept unmerged. Once it is
-                                    // folded into `entry_metadata` above the
-                                    // per-slot half cannot be told from the
-                                    // metric-level half again — a member key
-                                    // may shadow a metric one — and an index
-                                    // entry needs the per-slot half alone.
-                                    group.slot_labels.insert(
-                                        idx as u32,
-                                        m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-                                    );
                                 }
                             });
 
@@ -2732,7 +2800,7 @@ fn create_v3(
 
     let mut group_snapshots: Vec<GroupSnapshot> = Vec::with_capacity(groups.len());
 
-    for (group_key, mut group) in groups {
+    for (group_key, group) in groups {
         // A metric routes to (and so creates) a `GroupBuilder` before its
         // `Value` is matched above, so a metric whose value kind isn't one
         // `create_v3` knows how to expose (falls into the `_ => {}` arm —
@@ -2802,14 +2870,6 @@ fn create_v3(
             let latest_window = group_registry.get(&group_key).and_then(|ag| ag.window());
             resolve_walk_window(group.window, latest_window)
         };
-
-        // Only on a miss: see `observe_slots`. `group.slot_labels` is empty on
-        // a hit because the hit walk reads values without touching metadata,
-        // and an empty observation means "every slot is gone", not "nothing
-        // changed".
-        if group.needs_schema {
-            cache.observe_slots(&group_name, std::mem::take(&mut group.slot_labels));
-        }
 
         let (schema, hash) = if group.needs_schema {
             let schema = GroupSchema {
@@ -3784,6 +3844,47 @@ mod tests {
     )]
     static V3_CAPTURE_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
 
+    // A third probe group, for the recycle test. Every test that asserts a
+    // COUNT of entries for a stream needs its own stream: the identity channel
+    // is process-wide, caches subscribe at construction, and tests run in
+    // parallel — so a sibling publishing to a shared group lands in this
+    // cache's drain and inflates the count.
+    static V3_RECYCLE_PROBE_GROUP: AcquisitionGroup =
+        AcquisitionGroup::new_reader_stamped("unattributed", "recycle_slot_probe");
+
+    #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+    static V3_RECYCLE_PROBE_GROUP_ENTRY: &'static AcquisitionGroup = &V3_RECYCLE_PROBE_GROUP;
+
+    #[metric(
+        name = "snapshot_v3_recycle_slot_probe",
+        metadata = { acq_group = "recycle_slot_probe" }
+    )]
+    static V3_RECYCLE_PROBE_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
+
+    // Registered like a sampler's own, so a cache that subscribes after the
+    // slot was written seeds from it. Without this the tests only ever
+    // exercised the changes-after-subscribe half.
+    #[distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+    static RECYCLE_IDENTITY_ENTRY: &'static crate::agent::identity::SlotIdentity =
+        &RECYCLE_IDENTITY;
+
+    static RECYCLE_IDENTITY: crate::agent::identity::SlotIdentity =
+        crate::agent::identity::SlotIdentity::new(RECYCLE_IDENTITY_GROUPS);
+    static RECYCLE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+        &[(&V3_RECYCLE_PROBE_GROUP, &[&V3_RECYCLE_PROBE_COUNTERS])];
+
+    // Registered like a sampler's own, so a cache that subscribes after the
+    // slot was written seeds from it. Without this the tests only ever
+    // exercised the changes-after-subscribe half.
+    #[distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+    static CAPTURE_IDENTITY_ENTRY: &'static crate::agent::identity::SlotIdentity =
+        &CAPTURE_IDENTITY;
+
+    static CAPTURE_IDENTITY: crate::agent::identity::SlotIdentity =
+        crate::agent::identity::SlotIdentity::new(CAPTURE_IDENTITY_GROUPS);
+    static CAPTURE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+        &[(&V3_CAPTURE_GROUP, &[&V3_CAPTURE_COUNTERS])];
+
     // A second group, for the one test whose assertion is about ABSENCE. The
     // others filter to their own slot and so tolerate a sibling test writing
     // metadata concurrently; "the next tick emits nothing" cannot, because any
@@ -3801,6 +3902,17 @@ mod tests {
     )]
     static V3_STEADY_COUNTERS: metriken::CounterGroup = metriken::CounterGroup::new(16);
 
+    // Registered like a sampler's own, so a cache that subscribes after the
+    // slot was written seeds from it. Without this the tests only ever
+    // exercised the changes-after-subscribe half.
+    #[distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+    static STEADY_IDENTITY_ENTRY: &'static crate::agent::identity::SlotIdentity = &STEADY_IDENTITY;
+
+    static STEADY_IDENTITY: crate::agent::identity::SlotIdentity =
+        crate::agent::identity::SlotIdentity::new(STEADY_IDENTITY_GROUPS);
+    static STEADY_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+        &[(&V3_STEADY_GROUP, &[&V3_STEADY_COUNTERS])];
+
     fn tick_all_entries(
         group: &AcquisitionGroup,
         cache: &mut SkeletonCache,
@@ -3816,38 +3928,30 @@ mod tests {
             .expect("one pass is always inside the history")
     }
 
-    fn tick_entries(
-        group: &AcquisitionGroup,
-        name: &str,
-        cache: &mut SkeletonCache,
-    ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
-        let want = format!("unattributed/{name}");
-        tick_all_entries(group, cache)
-            .into_iter()
-            .filter(|(group_name, _)| *group_name == want)
-            .collect()
-    }
-
     fn capture_tick(
         cache: &mut SkeletonCache,
     ) -> Vec<(String, crate::recorder::index::IndexEntry)> {
-        tick_entries(&V3_CAPTURE_GROUP, "capture_probe", cache)
+        let want = "unattributed/capture_probe";
+        tick_all_entries(&V3_CAPTURE_GROUP, cache)
+            .into_iter()
+            .filter(|(name, _)| name == want)
+            .collect()
     }
 
-    /// The capture takes what the SAMPLER attached to a slot, not the merged
-    /// metadata a `MetricDesc` carries.
+    /// An entry carries what the SAMPLER attached to the slot, and nothing the
+    /// builder adds around it.
     ///
-    /// `create_v3` builds a descriptor's metadata as metric-level ∪ `{id}` ∪
-    /// `load_metadata(idx)`, merged with `insert` — so a member key can shadow
-    /// a metric-level one and nothing afterwards records which was which.
-    /// Splitting identity back out downstream would be a guess, and a wrong
-    /// guess misattributes a slot rather than failing.
+    /// `create_v3` merges metric-level metadata, an `id`, and the sampler's own
+    /// labels into each descriptor, and once merged the per-slot half cannot be
+    /// told from the rest — a member key may shadow a metric one. Identity now
+    /// comes from the publish rather than from that merged view, so the
+    /// distinction holds by construction; this is what says so.
     #[test]
-    fn the_capture_takes_the_samplers_labels_and_not_the_merged_ones() {
+    fn an_entry_carries_the_samplers_labels_and_not_the_merged_ones() {
+        // The index is only maintained while something wants it.
+        let _want = crate::agent::identity::Demand::register();
         let mut cache = SkeletonCache::new();
-
-        V3_CAPTURE_COUNTERS.set(4, 1);
-        V3_CAPTURE_COUNTERS.set_metadata(
+        CAPTURE_IDENTITY.set(
             4,
             [
                 ("comm".to_string(), "redis".to_string()),
@@ -3857,82 +3961,76 @@ mod tests {
         );
 
         let entries = capture_tick(&mut cache);
-        assert_eq!(
-            entries.len(),
-            1,
-            "a new group's first tick states its slots"
-        );
-        let (_, entry) = &entries[0];
-        assert_eq!(entry.kind, crate::recorder::index::EntryKind::Full);
-        let slot = entry
+        assert_eq!(entries.len(), 1, "the publish produced one entry");
+        let slot = entries[0]
+            .1
             .slots
             .iter()
             .find(|e| e.slot == 4)
-            .expect("the populated slot");
+            .expect("the published slot");
         assert_eq!(slot.labels.get("comm").map(String::as_str), Some("redis"));
-        assert_eq!(
-            slot.labels.get("cgroup").map(String::as_str),
-            Some("/system.slice")
-        );
-        // The keys `create_v3` adds itself describe the metric or the walk, not
-        // the slot, and must not reach an index entry.
         for key in ["metric", "sampler", "id"] {
             assert!(
                 !slot.labels.contains_key(key),
-                "`{key}` is not something the sampler attached to slot 4: {:?}",
+                "`{key}` describes the metric or the walk, not the slot: {:?}",
                 slot.labels
             );
         }
     }
 
-    /// A steady tick is silent. This is the whole saving: a group whose slots
-    /// did not move sends nothing, where today an unrelated schema change
-    /// re-sends every descriptor.
+    /// A pass over a group whose identity did not move produces nothing.
+    ///
+    /// This is the whole saving. The previous design walked every slot of every
+    /// changed group every tick to discover that; now a tick with no publish
+    /// behind it has nothing to fold in.
     #[test]
-    fn a_tick_that_moves_nothing_produces_no_entry() {
+    fn a_pass_with_no_published_change_produces_no_entry() {
+        // The index is only maintained while something wants it.
+        let _want = crate::agent::identity::Demand::register();
         let mut cache = SkeletonCache::new();
+        STEADY_IDENTITY.set(6, [("comm".to_string(), "steady".to_string())].into());
+        let want = "unattributed/steady_probe";
+        let first: Vec<_> = tick_all_entries(&V3_STEADY_GROUP, &mut cache)
+            .into_iter()
+            .filter(|(n, _)| n == want)
+            .collect();
+        assert_eq!(first.len(), 1, "the opening entry");
 
-        V3_STEADY_COUNTERS.set(6, 1);
-        V3_STEADY_COUNTERS.set_metadata(6, [("comm".to_string(), "steady".to_string())].into());
-        assert_eq!(
-            tick_entries(&V3_STEADY_GROUP, "steady_probe", &mut cache).len(),
-            1,
-            "the opening entry"
-        );
-
-        // Same slots, same labels, a fresh value.
-        V3_STEADY_COUNTERS.set(6, 2);
+        // A pass with nothing published in between.
+        let second: Vec<_> = tick_all_entries(&V3_STEADY_GROUP, &mut cache)
+            .into_iter()
+            .filter(|(n, _)| n == want)
+            .collect();
         assert!(
-            tick_entries(&V3_STEADY_GROUP, "steady_probe", &mut cache).is_empty(),
-            "nothing about identity changed, so nothing is transmitted"
+            second.is_empty(),
+            "nothing was published, so nothing is transmitted"
         );
     }
 
-    /// The `cpu_usage_task` case end to end: a slot whose occupant changed
-    /// produces one delta naming that slot, not a rebuilt group.
+    /// The `cpu_usage_task` case: a slot whose occupant changed produces one
+    /// delta naming that slot, not a rebuilt group.
     #[test]
-    fn a_recycled_slot_produces_one_delta_through_the_builder() {
+    fn a_recycled_slot_produces_one_delta() {
+        // The index is only maintained while something wants it.
+        let _want = crate::agent::identity::Demand::register();
+        let want = "unattributed/recycle_slot_probe";
+        let tick =
+            |cache: &mut SkeletonCache| -> Vec<(String, crate::recorder::index::IndexEntry)> {
+                tick_all_entries(&V3_RECYCLE_PROBE_GROUP, cache)
+                    .into_iter()
+                    .filter(|(n, _)| n == want)
+                    .collect()
+            };
+
         let mut cache = SkeletonCache::new();
+        RECYCLE_IDENTITY.set(11, [("comm".to_string(), "before".to_string())].into());
+        tick(&mut cache);
 
-        V3_CAPTURE_COUNTERS.set(11, 1);
-        V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "before".to_string())].into());
-        let mut consumer = crate::recorder::index::SourceIndex::new();
-        for (stream, entry) in tick_all_entries(&V3_CAPTURE_GROUP, &mut cache) {
-            consumer
-                .apply(&stream, &entry)
-                .expect("opening entries apply");
-        }
+        RECYCLE_IDENTITY.set(11, [("comm".to_string(), "after".to_string())].into());
+        let entries = tick(&mut cache);
 
-        V3_CAPTURE_COUNTERS.set(11, 1);
-        V3_CAPTURE_COUNTERS.set_metadata(11, [("comm".to_string(), "after".to_string())].into());
-
-        let all = tick_all_entries(&V3_CAPTURE_GROUP, &mut cache);
-        let mine: Vec<_> = all
-            .iter()
-            .filter(|(name, _)| name == "unattributed/capture_probe")
-            .collect();
-        assert_eq!(mine.len(), 1, "one entry for the probe group");
-        let entry = &mine[0].1;
+        assert_eq!(entries.len(), 1);
+        let entry = &entries[0].1;
         assert_eq!(entry.kind, crate::recorder::index::EntryKind::Delta);
         let changed: Vec<_> = entry.slots.iter().filter(|e| e.slot == 11).collect();
         assert_eq!(changed.len(), 1, "one slot changed");
@@ -3944,18 +4042,6 @@ mod tests {
             !entry.removed.contains(&11),
             "the slot never stopped being live"
         );
-
-        // A consumer applying this tick's entries in order arrives at the
-        // producer's state. Asserting `entry.state == cache.slot_index()
-        // .state()` directly would be wrong: an entry carries the state as of
-        // ITSELF, and any group that missed later in the same tick moves the
-        // source past it.
-        for (stream, entry) in &all {
-            consumer
-                .apply(stream, entry)
-                .expect("this tick's entries apply");
-        }
-        assert_eq!(consumer.state(), cache.slot_index().state());
     }
 
     // What `rez::index` rests on, made checkable. A reader-stamped group with

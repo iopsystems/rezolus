@@ -10,6 +10,21 @@ use linkme::distributed_slice;
 // — unlike `cpu_tlb_flush`'s cgroup breakdown, see its stats.rs) — see
 // `docs/principles.md` principle 18 and
 // `crate::agent::timing::AcquisitionGroup::set_reader_stamped`.
+/// The stream metrics with no `acq_group` land in: `create_v3` routes them to
+/// a default group named `"<sampler>/main"`.
+///
+/// Deliberately NOT registered in `ACQUISITION_GROUPS`. Registering it would
+/// DECLARE the group, which changes how the builder treats those metrics —
+/// membership, windows and all. This exists only so identity written to them
+/// can be published under the name they actually appear as, rather than going
+/// unpublished because no static happened to name it.
+// Used only by this sampler's Linux module; `stats.rs` compiles everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub static CGROUP_BANDWIDTH_DEFAULT_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("cpu_bandwidth"),
+    "main",
+);
+
 pub static CGROUP_THROTTLED_TIME_ACQ: AcquisitionGroup = AcquisitionGroup::new_reader_stamped(
     crate::agent::samplers::bpf_sampler_name("cpu_bandwidth"),
     "cpu_bandwidth_cgroup_throttled_time",

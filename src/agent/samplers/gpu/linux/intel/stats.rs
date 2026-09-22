@@ -69,6 +69,19 @@ pub static GPU_INTEL_PMU_DEVICE_ACQ: AcquisitionGroup =
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static GPU_INTEL_PMU_DEVICE_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_DEVICE_ACQ;
 
+/// Window for the VRAM gauges, whose members are the GPUs that HAVE VRAM.
+///
+/// They were in `gpu_intel_pmu_devices` and labeled only for a GPU with a
+/// device-local memory region, so an integrated GPU's slot meant something on
+/// the frequency counters and nothing on the memory gauges beside them —
+/// one slot meaning two things inside one group, which a slot index cannot
+/// express. Same split, same reason, as `drivehealth_nvme`.
+pub static GPU_INTEL_PMU_MEMORY_ACQ: AcquisitionGroup =
+    AcquisitionGroup::new(super::NAME, "gpu_intel_pmu_memory");
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static GPU_INTEL_PMU_MEMORY_ACQ_REG: &'static AcquisitionGroup = &GPU_INTEL_PMU_MEMORY_ACQ;
+
 // ----- Per-engine occupancy -----
 //
 // `MAX_GPUS * MAX_ENGINES` wide: entry `gpu * MAX_ENGINES + engine`. The engine
@@ -120,13 +133,13 @@ pub static GPU_FREQUENCY_REQUESTED: CounterGroup = CounterGroup::new(MAX_GPUS);
 #[metric(
     name = "gpu_memory",
     description = "The amount of GPU device memory (VRAM) free.",
-    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", state = "free", unit = "bytes" }
+    metadata = { acq_group = "gpu_intel_pmu_memory", vendor = "intel", state = "free", unit = "bytes" }
 )]
 pub static GPU_MEMORY_FREE: GaugeGroup = GaugeGroup::new(MAX_GPUS);
 
 #[metric(
     name = "gpu_memory",
     description = "The amount of GPU device memory (VRAM) used.",
-    metadata = { acq_group = "gpu_intel_pmu_devices", vendor = "intel", state = "used", unit = "bytes" }
+    metadata = { acq_group = "gpu_intel_pmu_memory", vendor = "intel", state = "used", unit = "bytes" }
 )]
 pub static GPU_MEMORY_USED: GaugeGroup = GaugeGroup::new(MAX_GPUS);

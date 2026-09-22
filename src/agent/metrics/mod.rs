@@ -1,58 +1,86 @@
-#[cfg(target_os = "linux")]
 use metriken::{CounterGroup, GaugeGroup, WindowedCounterGroup, WindowedGaugeGroup};
 
-/// Trait for group metrics that support per-entry metadata management.
+/// Writing one slot's labels on a group metric.
 ///
-/// This is used by BPF ringbuffer handlers to attach cgroup/task metadata to
-/// group metric entries. Both `CounterGroup` and `GaugeGroup` from metriken
-/// have these methods as inherent impls; this trait allows them to be used
-/// as trait objects in heterogeneous slices.
-#[cfg(target_os = "linux")]
+/// An implementation detail of [`SlotIdentity`](crate::agent::identity::SlotIdentity),
+/// which is the only thing that should call it. Identity that changes without
+/// being published is invisible to a subscriber for the life of its
+/// connection — there is no longer a per-tick diff to notice — so the way to
+/// write it is the way that tells someone.
+///
+/// The trait is not gated; its metriken impls are. That is what lets a test
+/// build a `SlotIdentity` over a fake on any platform, rather than the publish
+/// path being exercised only where BPF runs.
 pub trait GroupMetadata: Sync {
-    fn insert_metadata(&self, idx: usize, key: String, value: String);
+    /// Replace a slot's whole label set in one update.
+    ///
+    /// One call rather than one per label, which is what makes a slot's
+    /// re-assignment atomic to a reader: setting four labels with four calls
+    /// let a reader see a slot half-way through changing hands and attribute a
+    /// new task's numbers under part of the old task's name.
+    fn set_metadata(&self, idx: usize, labels: std::collections::BTreeMap<String, String>);
     fn clear_metadata(&self, idx: usize);
+    /// Every populated slot and what it means, right now.
+    ///
+    /// What a consumer connecting mid-life needs: the broadcast only carries
+    /// what changes AFTER it subscribes, so without this a slot that was
+    /// assigned before it arrived and never moves again would never be
+    /// described.
+    fn metadata_snapshot(&self) -> Vec<(usize, std::collections::HashMap<String, String>)>;
 }
 
-#[cfg(target_os = "linux")]
 impl GroupMetadata for CounterGroup {
-    fn insert_metadata(&self, idx: usize, key: String, value: String) {
-        CounterGroup::insert_metadata(self, idx, key, value);
+    fn set_metadata(&self, idx: usize, labels: std::collections::BTreeMap<String, String>) {
+        CounterGroup::set_metadata(self, idx, labels.into_iter().collect());
     }
 
     fn clear_metadata(&self, idx: usize) {
         CounterGroup::clear_metadata(self, idx);
     }
+
+    fn metadata_snapshot(&self) -> Vec<(usize, std::collections::HashMap<String, String>)> {
+        CounterGroup::metadata_snapshot(self)
+    }
 }
 
-#[cfg(target_os = "linux")]
 impl GroupMetadata for GaugeGroup {
-    fn insert_metadata(&self, idx: usize, key: String, value: String) {
-        GaugeGroup::insert_metadata(self, idx, key, value);
+    fn set_metadata(&self, idx: usize, labels: std::collections::BTreeMap<String, String>) {
+        GaugeGroup::set_metadata(self, idx, labels.into_iter().collect());
     }
 
     fn clear_metadata(&self, idx: usize) {
         GaugeGroup::clear_metadata(self, idx);
     }
+
+    fn metadata_snapshot(&self) -> Vec<(usize, std::collections::HashMap<String, String>)> {
+        GaugeGroup::metadata_snapshot(self)
+    }
 }
 
-#[cfg(target_os = "linux")]
 impl GroupMetadata for WindowedCounterGroup {
-    fn insert_metadata(&self, idx: usize, key: String, value: String) {
-        WindowedCounterGroup::insert_metadata(self, idx, key, value);
+    fn set_metadata(&self, idx: usize, labels: std::collections::BTreeMap<String, String>) {
+        WindowedCounterGroup::set_metadata(self, idx, labels.into_iter().collect());
     }
 
     fn clear_metadata(&self, idx: usize) {
         WindowedCounterGroup::clear_metadata(self, idx);
     }
+
+    fn metadata_snapshot(&self) -> Vec<(usize, std::collections::HashMap<String, String>)> {
+        WindowedCounterGroup::metadata_snapshot(self)
+    }
 }
 
-#[cfg(target_os = "linux")]
 impl GroupMetadata for WindowedGaugeGroup {
-    fn insert_metadata(&self, idx: usize, key: String, value: String) {
-        WindowedGaugeGroup::insert_metadata(self, idx, key, value);
+    fn set_metadata(&self, idx: usize, labels: std::collections::BTreeMap<String, String>) {
+        WindowedGaugeGroup::set_metadata(self, idx, labels.into_iter().collect());
     }
 
     fn clear_metadata(&self, idx: usize) {
         WindowedGaugeGroup::clear_metadata(self, idx);
+    }
+
+    fn metadata_snapshot(&self) -> Vec<(usize, std::collections::HashMap<String, String>)> {
+        WindowedGaugeGroup::metadata_snapshot(self)
     }
 }

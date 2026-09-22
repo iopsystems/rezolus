@@ -27,10 +27,22 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-static CGROUP_METRICS: &[&dyn GroupMetadata] = &[&CGROUP_CPU_MIGRATIONS];
+/// Every group a cgroup id reaches, paired with the metrics carrying it.
+///
+/// One id spans several streams, and a subscriber keeps identity per
+/// stream — so each needs its own entry. Pairing them here is what stops a
+/// call site publishing one group's identity under another's name.
+static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
+
+static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&CGROUP_MIGRATIONS_ACQ, &[&CGROUP_CPU_MIGRATIONS])];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
-    process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
+    process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
 }
 
 fn init(config: Arc<Config>) -> SamplerResult {
