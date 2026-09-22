@@ -109,6 +109,30 @@ pub fn anchored_ts(now: Instant) -> i64 {
     src.anchor_wall_ns + now.saturating_duration_since(src.anchor).as_nanos() as i64
 }
 
+/// Anchor this process's timeline now, if nothing has yet.
+///
+/// Called at startup so the anchor precedes every sample. Without it the
+/// timeline is anchored by whichever consumer asks first, and any `Instant`
+/// taken before that saturates to the anchor — several samples could share one
+/// timestamp, and the agent would report a start time later than its own.
+pub fn anchor_now() {
+    let _ = source();
+}
+
+/// This moment as `(anchored ts, wall_offset)`.
+///
+/// `wall_offset` is the wall clock's disagreement with the timeline at this
+/// moment: `ts + wall_offset` is the wall clock. It is a per-observation value
+/// rather than a property of the source precisely because it moves — that is
+/// what locates a clock step to the moment it happened, instead of absorbing
+/// it into every timestamp after.
+pub fn anchored_now() -> (i64, i64) {
+    let now = Instant::now();
+    let wall = wall_now_ns();
+    let ts = anchored_ts(now);
+    (ts, wall - ts)
+}
+
 /// A random RFC 4122 version-4 UUID, formatted canonically.
 ///
 /// Same shape dendro mints for a source, so the two are comparable by eye in a

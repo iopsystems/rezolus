@@ -399,7 +399,6 @@ fn rows_frames(
             last_index = Some(index);
 
             let produced = producer.interval(
-                Instant::now(),
                 &rows,
                 entries,
                 state,
