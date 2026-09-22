@@ -551,6 +551,11 @@ mod stream_tests {
         let mut sub = Subscription::connect(&client, &base, Duration::from_secs(1))
             .await
             .expect("subscribes");
+        assert!(
+            sub.source().is_some(),
+            "connect returns with the handshake applied: the recorder opens the \
+             recording on its anchor before the first interval"
+        );
 
         let applied = tokio::time::timeout(Duration::from_secs(10), sub.next_interval())
             .await
@@ -660,5 +665,240 @@ mod stream_tests {
             seqs[3] == seqs[2] + 1,
             "the clamped frame must continue the sequence, got {seqs:?}"
         );
+    }
+
+    fn test_state(config_toml: &str) -> AppState {
+        let config: Config = toml::from_str(config_toml).expect("valid config");
+        AppState {
+            builder: Arc::new(Mutex::new(SnapshotBuilder::new(
+                Arc::new(config),
+                Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+                None,
+            ))),
+            subscribers: Subscribers::new(),
+            ttl: Duration::from_secs(1),
+        }
+    }
+
+    fn test_client() -> reqwest::Client {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        reqwest::Client::builder().http1_only().build().unwrap()
+    }
+
+    /// Serve `router` on a free port from the test's own runtime.
+    async fn serve(router: Router) -> reqwest::Url {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        reqwest::Url::parse(&format!("http://{addr}")).unwrap()
+    }
+
+    /// `--stream` against an agent that cannot serve it fails loudly, and
+    /// the two ways an agent can fail to serve it both classify as
+    /// `Unsupported`: retrying will not change either answer, so the recorder
+    /// must not sit in its retry loop on them.
+    #[tokio::test]
+    async fn an_agent_that_cannot_serve_the_stream_is_refused_as_unsupported() {
+        use crate::recorder::stream::{ConnectError, Subscription};
+        let client = test_client();
+
+        // An agent from before the route existed: 404.
+        let old = Router::new().route("/", get(root));
+        let base = serve(old).await;
+        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unsupported(e)) => {
+                assert!(e.contains("404"), "{e}");
+                assert!(e.contains("/metrics/stream"), "names the route: {e}");
+            }
+            Err(ConnectError::Unreachable(e)) => panic!("a 404 is an answer, not an outage: {e}"),
+            Ok(_) => panic!("there is no stream to subscribe to"),
+        }
+
+        // A V2 agent: the route exists and answers 409.
+        let v2 = test_state("[general]\nttl = \"1s\"\nsnapshot_format = \"v2\"\n");
+        let base = serve(app(v2)).await;
+        match Subscription::connect(&client, &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unsupported(e)) => {
+                assert!(e.contains("V2"), "says what kind of agent this is: {e}");
+            }
+            Err(ConnectError::Unreachable(e)) => panic!("a 409 is an answer, not an outage: {e}"),
+            Ok(_) => panic!("a V2 agent has nothing to stream"),
+        }
+    }
+
+    /// Nothing listening is the other class: an outage, retried each tick
+    /// exactly as a scrape of a down endpoint is.
+    #[tokio::test]
+    async fn a_port_with_nothing_on_it_is_unreachable() {
+        use crate::recorder::stream::{ConnectError, Subscription};
+        // Bind to learn a free port, then release it.
+        let addr = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        };
+        let base = reqwest::Url::parse(&format!("http://{addr}")).unwrap();
+        match Subscription::connect(&test_client(), &base, Duration::from_secs(1)).await {
+            Err(ConnectError::Unreachable(_)) => {}
+            Err(ConnectError::Unsupported(e)) => {
+                panic!("a refused connection is an outage, not a refusal: {e}")
+            }
+            Ok(_) => panic!("nothing is listening"),
+        }
+    }
+
+    /// An agent on its own runtime on its own thread, so that stopping it
+    /// closes every connection it holds — the shape a crashed or restarted
+    /// agent has on the wire. Aborting an `axum::serve` task would not do:
+    /// it spawns a task per connection, and those outlive the acceptor.
+    struct KillableAgent {
+        addr: std::net::SocketAddr,
+        stop: Option<tokio::sync::oneshot::Sender<()>>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl KillableAgent {
+        /// Start on `addr`, or a free port when `None`. Binding retries for
+        /// a few seconds so a restart on the port a previous agent just
+        /// released does not race its close.
+        fn start(addr: Option<std::net::SocketAddr>) -> Self {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let listener = loop {
+                match std::net::TcpListener::bind(
+                    addr.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap()),
+                ) {
+                    Ok(l) => break l,
+                    Err(e) if std::time::Instant::now() < deadline => {
+                        let _ = e;
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(e) => panic!("could not bind {addr:?}: {e}"),
+                }
+            };
+            listener.set_nonblocking(true).unwrap();
+            let addr = listener.local_addr().unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+            let thread = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(async move {
+                    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                    let state = test_state("[general]\nttl = \"1s\"\nsnapshot_format = \"v3\"\n");
+                    tokio::select! {
+                        _ = axum::serve(listener, app(state)) => {}
+                        _ = stopped => {}
+                    }
+                });
+                // The runtime drops here, and every connection task with it.
+            });
+            Self {
+                addr,
+                stop: Some(stop),
+                thread: Some(thread),
+            }
+        }
+
+        fn kill(mut self) -> std::net::SocketAddr {
+            let _ = self.stop.take().unwrap().send(());
+            self.thread.take().unwrap().join().unwrap();
+            self.addr
+        }
+    }
+
+    impl Drop for KillableAgent {
+        fn drop(&mut self) {
+            if let Some(stop) = self.stop.take() {
+                let _ = stop.send(());
+            }
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    /// The pump's whole life: intervals flow, the agent goes away, the drop
+    /// is reported, the agent comes back, the reconnect is reported with the
+    /// source its new handshake named, and intervals flow again — through
+    /// the real socket, the real producer and the real subscriber.
+    ///
+    /// The rows between the drop and the reconnect are lost, and the report
+    /// is what records that: the reconnected subscription's own `gap` cannot,
+    /// because it counts from its own first frame.
+    #[tokio::test]
+    async fn a_dropped_stream_is_reconnected_and_both_ends_are_reported() {
+        use crate::recorder::stream::{pump, StreamEvent, Subscription};
+
+        let agent = KillableAgent::start(None);
+        let client = test_client();
+        let base = reqwest::Url::parse(&format!("http://{}", agent.addr)).unwrap();
+        let interval = Duration::from_secs(1);
+
+        let sub = Subscription::connect(&client, &base, interval)
+            .await
+            .expect("subscribes");
+        let first = sub.source().cloned().unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        tokio::spawn(pump(3, sub, client.clone(), base.clone(), interval, tx));
+
+        // Waits for the next event of the kind `want` accepts, skipping the
+        // intervals that keep arriving in between.
+        async fn next_matching<T>(
+            rx: &mut tokio::sync::mpsc::Receiver<(usize, StreamEvent)>,
+            mut want: impl FnMut(StreamEvent) -> Option<T>,
+        ) -> T {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            loop {
+                let (idx, event) = tokio::time::timeout_at(deadline, rx.recv())
+                    .await
+                    .expect("an event arrives inside the deadline")
+                    .expect("the pump is alive");
+                assert_eq!(idx, 3, "events carry the endpoint they are for");
+                if let Some(t) = want(event) {
+                    return t;
+                }
+            }
+        }
+
+        let applied = next_matching(&mut rx, |e| match e {
+            StreamEvent::Interval(a) => Some(a),
+            _ => None,
+        })
+        .await;
+        assert_eq!(applied.rows_skipped, 0);
+
+        let addr = agent.kill();
+        let reason = next_matching(&mut rx, |e| match e {
+            StreamEvent::Dropped(reason) => Some(reason),
+            StreamEvent::Interval(_) => None,
+            other => panic!("before a reconnect there is nothing else to report: {other:?}"),
+        })
+        .await;
+        assert!(!reason.is_empty());
+
+        // Back on the same port. The pump retries every `interval` (floored
+        // at a second), so this is found on its next attempt.
+        let _agent = KillableAgent::start(Some(addr));
+        let source = next_matching(&mut rx, |e| match e {
+            StreamEvent::Connected(source) => Some(source),
+            StreamEvent::Refused(e) => panic!("a v3 agent came back: {e}"),
+            _ => None,
+        })
+        .await;
+        assert_eq!(
+            source.uuid, first.uuid,
+            "same process, same epoch: the loop is told the source so it can tell"
+        );
+
+        // And it is flowing again.
+        let again = next_matching(&mut rx, |e| match e {
+            StreamEvent::Interval(a) => Some(a),
+            _ => None,
+        })
+        .await;
+        assert_eq!(again.rows_skipped, 0);
     }
 }

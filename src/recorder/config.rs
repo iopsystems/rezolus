@@ -42,6 +42,10 @@ pub struct RecordingConfig {
     /// or an output extension. Only such a run may fall back from `.rez` to
     /// parquet for an endpoint `.rez` cannot record.
     pub format_defaulted: bool,
+    /// `--stream`: subscribe to each agent's replication stream instead of
+    /// scraping it. Opt-in, never detected — see `reject_stream_without_rez`
+    /// and the recorder's startup for what it refuses.
+    pub stream: bool,
 }
 
 /// Default endpoint used when neither `--url` nor a positional URL is given.
@@ -199,6 +203,44 @@ fn reject_separate_with_rez(
     Ok(())
 }
 
+/// `--stream` feeds the `.rez` writer and nothing else.
+///
+/// The stream carries WAL rows and index entries — the archive's own shapes —
+/// and there is no parquet or raw form of either, so a run that asked for one
+/// of those formats has asked for two things that cannot both happen.
+/// Rejected at parse time rather than demoted: `--stream` is an explicit
+/// choice, and the recorder's rule is that an explicit choice is never
+/// silently substituted (see `demote_from_rez`).
+///
+/// `--separate` with several endpoints is the one way a defaulted `.rez` can
+/// still turn into parquet at startup, so that combination is refused here
+/// too rather than letting the demotion discover the conflict a moment later.
+fn reject_stream_without_rez(
+    stream: bool,
+    format: Format,
+    separate: bool,
+    endpoints: usize,
+) -> Result<(), String> {
+    if !stream {
+        return Ok(());
+    }
+    if format != Format::Rez {
+        return Err(format!(
+            "--stream records to .rez only (the stream carries the archive's own rows, \
+             which have no {} form); drop --stream, or record to a .rez",
+            format_name(format)
+        ));
+    }
+    if separate && endpoints > 1 {
+        return Err(
+            "--stream cannot be combined with --separate: the stream records to one .rez \
+             archive, and --separate asks for a file per endpoint"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 impl RecordingConfig {
     pub fn from_args(args: &ArgMatches) -> Result<Self, String> {
         let verbose = *args.get_one::<u8>("VERBOSE").unwrap_or(&0);
@@ -208,6 +250,7 @@ impl RecordingConfig {
         let duration = args.get_one::<humantime::Duration>("DURATION").copied();
         let explicit_format = args.get_one::<Format>("FORMAT").copied();
         let separate = args.get_flag("SEPARATE");
+        let stream = args.get_flag("STREAM");
         let metadata: Vec<(String, String)> = args
             .get_many::<String>("METADATA")
             .unwrap_or_default()
@@ -293,6 +336,7 @@ impl RecordingConfig {
                 plan.defaulted,
                 toml_cfg.endpoints.len(),
             )?;
+            reject_stream_without_rez(stream, plan.format, separate, toml_cfg.endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -306,6 +350,7 @@ impl RecordingConfig {
                 endpoints: toml_cfg.endpoints,
                 command: command.clone(),
                 format_defaulted: plan.defaulted,
+                stream,
             });
         }
 
@@ -319,6 +364,7 @@ impl RecordingConfig {
                 return Err("at least one --endpoint is required".to_string());
             }
             reject_separate_with_rez(separate, plan.format, plan.defaulted, endpoints.len())?;
+            reject_stream_without_rez(stream, plan.format, separate, endpoints.len())?;
 
             return Ok(RecordingConfig {
                 interval,
@@ -332,6 +378,7 @@ impl RecordingConfig {
                 endpoints,
                 command: command.clone(),
                 format_defaulted: plan.defaulted,
+                stream,
             });
         }
 
@@ -360,6 +407,7 @@ impl RecordingConfig {
         };
         // One endpoint by construction, so `--separate` has nothing to split.
         reject_separate_with_rez(separate, plan.format, plan.defaulted, 1)?;
+        reject_stream_without_rez(stream, plan.format, separate, 1)?;
 
         Ok(RecordingConfig {
             interval,
@@ -373,6 +421,7 @@ impl RecordingConfig {
             endpoints: vec![endpoint],
             command,
             format_defaulted: plan.defaulted,
+            stream,
         })
     }
 }
@@ -449,6 +498,55 @@ mod tests {
                 ("role".to_string(), "server".to_string()),
             ]
         );
+    }
+
+    /// `--stream` is a transport for the `.rez` writer and nothing else. A
+    /// parquet or raw run that asks for it has asked for two things that
+    /// cannot both happen, and it is refused at parse time — an explicit
+    /// choice is never silently substituted.
+    #[test]
+    fn stream_is_accepted_for_rez_and_refused_for_every_other_format() {
+        let parse = |args: &[&str]| {
+            let mut argv = vec!["record"];
+            argv.extend_from_slice(args);
+            crate::recorder::command()
+                .try_get_matches_from(argv)
+                .map_err(|e| e.to_string())
+                .and_then(|m| RecordingConfig::from_args(&m))
+        };
+
+        // The default output is a .rez, and an explicit one is too.
+        assert!(parse(&["--stream"]).unwrap().stream);
+        assert!(parse(&["--stream", "-o", "out.rez"]).unwrap().stream);
+        assert!(!parse(&[]).unwrap().stream, "opt-in: off unless asked for");
+
+        for args in [
+            &["--stream", "-o", "out.parquet"][..],
+            &["--stream", "--format", "raw"],
+            &["--stream", "--format", "parquet", "-o", "out.parquet"],
+        ] {
+            let err = parse(args)
+                .err()
+                .unwrap_or_else(|| panic!("{args:?} must be refused"));
+            assert!(err.contains("--stream"), "{args:?}: {err}");
+            assert!(err.contains(".rez"), "{args:?}: {err}");
+        }
+
+        // --separate with several endpoints is the one way a defaulted .rez
+        // can still become parquet at startup; refused up front instead.
+        let err = parse(&[
+            "--stream",
+            "--separate",
+            "--endpoint",
+            "http://a:4241",
+            "--endpoint",
+            "http://b:4241",
+        ])
+        .err()
+        .expect("stream + separate + several endpoints must be refused");
+        assert!(err.contains("--separate"), "{err}");
+        // ...but with one endpoint --separate is a no-op and stays one.
+        assert!(parse(&["--stream", "--separate"]).unwrap().stream);
     }
 
     /// `--rez-version` is gone, and a script still passing it must FAIL rather

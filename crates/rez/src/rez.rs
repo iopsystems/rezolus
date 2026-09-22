@@ -1459,6 +1459,25 @@ pub fn group_approx_bytes(g: &metriken_exposition::GroupSnapshot) -> usize {
     bytes
 }
 
+/// [`group_approx_bytes`] for a row that arrived already encoded.
+///
+/// The replication stream carries a group's tick as a [`WalGroupRow`] with
+/// no envelope, so the seal meter has to be recomputed from the decoded
+/// values on the consumer. Same formula, same constants, so a recording taken
+/// off the stream segments where a scraped one does.
+/// `a_decoded_row_is_metered_like_the_group_it_came_from` pins the two.
+///
+/// [`WalGroupRow`]: crate::wal::WalGroupRow
+pub fn wal_group_row_approx_bytes(row: &crate::wal::WalGroupRow) -> usize {
+    let mut bytes = WINDOW_SLOT_BYTES;
+    bytes += row.counters.iter().filter(|v| v.is_some()).count() * VALUE_SLOT_BYTES;
+    bytes += row.gauges.iter().filter(|v| v.is_some()).count() * VALUE_SLOT_BYTES;
+    for (_, _, buckets) in row.histograms.iter().flatten() {
+        bytes += VALUE_SLOT_BYTES + buckets.len() * HISTOGRAM_BUCKET_BYTES;
+    }
+    bytes
+}
+
 /// A growing V3 acquisition-group table: like [`TableBuilder`], but rows
 /// carry ONE table-level acquisition window (`RezTable::table_window`)
 /// instead of a window per metric, and membership per row comes from a
@@ -2188,6 +2207,40 @@ mod builder_tests {
         let before = b.approx_bytes();
         b.push_entries(2_000, 0, &entries);
         assert_eq!(entries_approx_bytes(&entries), b.approx_bytes() - before);
+    }
+
+    /// The replication stream carries no `approx_bytes`, so the consumer
+    /// meters a decoded row itself. It must arrive at the number the
+    /// snapshot path charges for the same group — a seal policy that saw
+    /// different numbers from the two transports would break segments at
+    /// different rows for the same data.
+    ///
+    /// Every slot kind is present, and some are absent, because each is a
+    /// separate term in the formula: a helper that miscounted `None`
+    /// slots or histogram buckets would pass on a group of plain counters.
+    #[test]
+    fn a_decoded_row_is_metered_like_the_group_it_came_from() {
+        let g = metriken_exposition::GroupSnapshot {
+            name: "s/g".to_string(),
+            schema_hash: (1, 2),
+            schema: None,
+            window: Some(Window::new(900, 1_000).into()),
+            counters: vec![Some(1), None, Some(3)],
+            gauges: vec![None, Some(-4)],
+            histograms: vec![Some(hist(7, 64)), None],
+        };
+        let row = crate::wal::wal_group_row(&g, None);
+        let decoded =
+            crate::wal::decode_wal_group_row(&crate::wal::encode_wal_group_row(&row).unwrap())
+                .unwrap();
+
+        assert_eq!(wal_group_row_approx_bytes(&decoded), group_approx_bytes(&g));
+        // And it is not a constant: the buckets are the dominant term.
+        assert!(
+            wal_group_row_approx_bytes(&decoded)
+                > WINDOW_SLOT_BYTES + 4 * VALUE_SLOT_BYTES + HISTOGRAM_BUCKET_BYTES,
+            "the histogram's buckets must be charged"
+        );
     }
 
     // Regression: `approx_bytes` bounds resident memory, and it used to charge

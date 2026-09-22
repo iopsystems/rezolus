@@ -22,9 +22,12 @@
 //! [`Applied::rows_skipped`] is how a caller finds out it happened.
 
 use crate::recorder::index::{IndexEntry, IndexState, SourceIndex};
+use crate::recorder::rez_sqlite::IndexEntries;
+use crate::recorder::wire::{AgentRow, AgentRows};
 
 use dendro::archive::WalRow;
 use dendro::replicate::Frame;
+use std::time::Duration;
 
 /// What one interval's frames amounted to.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -34,14 +37,89 @@ pub(crate) struct Applied {
     pub seq: u64,
     /// Rows whose index state resolved, ready for the writer.
     pub rows: Vec<WalRow>,
-    /// Index entries, by stream, for `caller_rows`. The blob is opaque here
-    /// exactly as it is in the archive.
-    pub entries: Vec<(String, Vec<u8>)>,
+    /// Index entries for `caller_rows`: `(stream, ts, blob)`. The blob is
+    /// opaque here exactly as it is in the archive; `ts` is the producer's
+    /// stamp on the frame, which is the stamp of the rows the entry describes.
+    pub entries: Vec<(String, i64, Vec<u8>)>,
     /// Rows dropped because the state they named is not the state this
     /// subscriber holds.
     pub rows_skipped: usize,
     /// Whether `seq` jumped, meaning intervals produced no frame at all.
     pub gap: bool,
+}
+
+/// One interval, in the shape the writer stages.
+///
+/// `rows` is grouped by the producer's stamp: one `AgentRows` per distinct
+/// `(ts, wall_offset)`, which for a well-formed interval is exactly one — the
+/// producer stamps a whole pass once. Grouping rather than assuming keeps a
+/// relay that batches several passes into one frame from landing them all on
+/// the first pass's stamp.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Interval {
+    pub rows: Vec<AgentRows>,
+    pub index_entries: IndexEntries,
+}
+
+impl Applied {
+    /// Turn the rows and entries into what `StreamRecorderV3::stage_rows`
+    /// and `RecordingWriter::wal_with_index` take.
+    ///
+    /// Each payload is decoded once, here, to rebuild the envelope the row
+    /// endpoint would have sent — see [`AgentRow::from_payload`] for why the
+    /// stream is fed through the same staging path rather than a new one.
+    /// A payload that will not decode fails the interval rather than being
+    /// dropped: the producer is this binary, so an undecodable row is a
+    /// version mismatch, and a stream that quietly thinned itself would
+    /// record a gap nothing explains.
+    ///
+    /// A negative stamp is refused for the reason `snapshot_producer_stamp`
+    /// refuses one: the archive's `ts` is unsigned, and a producer that sent
+    /// one is not one to guess for.
+    pub(crate) fn for_writer(self) -> Result<Interval, String> {
+        let mut by_stamp: std::collections::BTreeMap<(i64, i64), Vec<AgentRow>> =
+            std::collections::BTreeMap::new();
+        for row in self.rows {
+            if row.ts < 0 {
+                return Err(format!(
+                    "stream {} stamped a row at {} ns, before the epoch",
+                    row.stream, row.ts
+                ));
+            }
+            by_stamp
+                .entry((row.ts, row.wall_offset))
+                .or_default()
+                .push(AgentRow::from_payload(row.stream, row.row)?);
+        }
+        let rows = by_stamp
+            .into_iter()
+            .map(|((ts, wall_offset), rows)| AgentRows {
+                // `ts + wall_offset` is the wall clock at the pass by the
+                // producer's own definition; the stream carries no pass
+                // duration, so that field is what a windowless reading gets.
+                wall_ns: ts.saturating_add(wall_offset).max(0) as u64,
+                duration_ns: 0,
+                ts,
+                wall_offset,
+                rows,
+            })
+            .collect();
+
+        let mut index_entries: IndexEntries = Vec::new();
+        for (stream, ts, blob) in self.entries {
+            let ts = u64::try_from(ts).map_err(|_| {
+                format!("index entry on `{stream}` stamped at {ts} ns, before the epoch")
+            })?;
+            match index_entries.iter_mut().find(|(s, _)| *s == stream) {
+                Some((_, rows)) => rows.push((ts, blob)),
+                None => index_entries.push((stream, vec![(ts, blob)])),
+            }
+        }
+        Ok(Interval {
+            rows,
+            index_entries,
+        })
+    }
 }
 
 /// The source a stream is carrying, from its handshake.
@@ -80,7 +158,8 @@ impl StreamSubscriber {
     }
 
     /// What a slot currently means, for a caller that wants to read identity
-    /// rather than just store it.
+    /// rather than just store it. The recorder stores; the tests read.
+    #[cfg(test)]
     pub(crate) fn index(&self) -> &SourceIndex {
         &self.index
     }
@@ -141,7 +220,7 @@ impl StreamSubscriber {
                     self.index
                         .apply_unchecked(&stream, &entry)
                         .map_err(|e| format!("index entry on `{stream}` at {ts}: {e}"))?;
-                    out.entries.push((stream, blob));
+                    out.entries.push((stream, ts, blob));
                 }
 
                 Frame::Rows {
@@ -323,6 +402,33 @@ impl FrameDecoder {
     }
 }
 
+/// Why a subscription could not be opened, split by whether trying again
+/// could change the answer.
+///
+/// The recorder treats the two differently on purpose. An agent that is not
+/// there yet is the ordinary "will retry each tick" case scraping already has.
+/// An agent that answered and cannot serve the stream — no route (404), no
+/// acquisition groups to stream (the 409 a V2 agent gives), a body of the
+/// wrong type — is a configuration the run was not written for, and it fails
+/// loudly rather than falling back to scraping: `--stream` names a transport,
+/// and a run that silently used another would put two endpoints of one A/B on
+/// different transports.
+#[derive(Debug)]
+pub(crate) enum ConnectError {
+    /// Nothing answered, or the connection dropped before the handshake.
+    Unreachable(String),
+    /// Something answered, and it cannot serve a replication stream.
+    Unsupported(String),
+}
+
+impl std::fmt::Display for ConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectError::Unreachable(e) | ConnectError::Unsupported(e) => f.write_str(e),
+        }
+    }
+}
+
 /// One live subscription to an agent.
 ///
 /// Owns the connection, the decoder and the subscriber, and hands back one
@@ -333,20 +439,30 @@ pub(crate) struct Subscription {
     subscriber: StreamSubscriber,
     /// Frames decoded but not yet part of a complete interval.
     pending: Vec<Frame>,
+    /// The agent's `x-rezolus-update-floor`: how often a frame can carry
+    /// anything new, which is its snapshot TTL. `None` when the agent did
+    /// not say.
+    update_floor: Option<Duration>,
 }
 
 impl Subscription {
-    /// Open a subscription asking for `interval`.
+    /// Open a subscription asking for `interval`, and wait for its handshake.
     ///
     /// The interval is a request, not a guarantee: the agent's TTL is the
     /// floor on how often anything can be new, and it reports that floor in
     /// `x-rezolus-update-floor`. Asking for less is legal and gets the frames
     /// asked for, most of them empty.
+    ///
+    /// Returns only once the handshake has been applied, so
+    /// [`source`](Self::source) is `Some` on every open subscription. The
+    /// recorder needs the handshake's anchor to open the recording the rows
+    /// will land in, and a first frame that is not a handshake is not this
+    /// protocol — both are better learned here than one interval later.
     pub(crate) async fn connect(
         client: &reqwest::Client,
         base: &reqwest::Url,
-        interval: std::time::Duration,
-    ) -> Result<Self, String> {
+        interval: Duration,
+    ) -> Result<Self, ConnectError> {
         let mut url = base.clone();
         url.set_path("/metrics/stream");
         url.set_query(Some(&format!(
@@ -354,23 +470,28 @@ impl Subscription {
             humantime::format_duration(interval)
         )));
 
-        let response = client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|e| format!("failed to subscribe to {url}: {e}"))?;
+        let response =
+            client.get(url.clone()).send().await.map_err(|e| {
+                ConnectError::Unreachable(format!("failed to subscribe to {url}: {e}"))
+            })?;
 
         if !response.status().is_success() {
             // 409 is the agent saying it has no acquisition groups to stream —
             // a V2 agent. Worth distinguishing from a transport failure,
             // because retrying will never fix it.
-            return Err(match response.status().as_u16() {
-                409 => format!(
-                    "{url} cannot serve a replication stream: the agent reports no \
+            return Err(ConnectError::Unsupported(
+                match response.status().as_u16() {
+                    409 => format!(
+                        "{url} cannot serve a replication stream: the agent reports no \
                      acquisition groups, which a V2 agent never has"
-                ),
-                code => format!("{url} returned HTTP {code}"),
-            });
+                    ),
+                    404 => format!(
+                        "{url} returned HTTP 404: this agent has no replication stream (it \
+                     predates /metrics/stream)"
+                    ),
+                    code => format!("{url} returned HTTP {code}"),
+                },
+            ));
         }
 
         // Checked before any bytes, so an agent serving the older msgpack
@@ -384,19 +505,54 @@ impl Subscription {
             .unwrap_or("")
             .to_string();
         if content_type != crate::agent::REPLICATION_CONTENT_TYPE {
-            return Err(format!(
+            return Err(ConnectError::Unsupported(format!(
                 "{url} serves `{content_type}`, not `{}` — this build speaks only the \
                  replication stream",
                 crate::agent::REPLICATION_CONTENT_TYPE
-            ));
+            )));
         }
 
-        Ok(Self {
+        let update_floor = response
+            .headers()
+            .get("x-rezolus-update-floor")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| humantime::parse_duration(v).ok());
+
+        let mut sub = Self {
             response,
             decoder: FrameDecoder::new(),
             subscriber: StreamSubscriber::new(),
             pending: Vec::new(),
-        })
+            update_floor,
+        };
+
+        // The handshake is the first frame by protocol. Anything else first
+        // is a producer this subscriber was not written for, and a connection
+        // that ends before it is a transport failure like any other.
+        while sub.pending.is_empty() {
+            if !sub.fill().await.map_err(ConnectError::Unreachable)? {
+                return Err(ConnectError::Unreachable(format!(
+                    "{url} closed the stream before sending a handshake"
+                )));
+            }
+        }
+        match sub.pending.first() {
+            Some(Frame::Handshake { .. }) => {
+                let handshake = sub.pending.remove(0);
+                sub.subscriber
+                    .apply(vec![handshake])
+                    .map_err(ConnectError::Unsupported)?;
+            }
+            Some(other) => {
+                return Err(ConnectError::Unsupported(format!(
+                    "{url} opened its stream with a {} frame instead of a handshake",
+                    frame_kind(other)
+                )))
+            }
+            None => unreachable!("the loop above exits with a frame pending"),
+        }
+
+        Ok(sub)
     }
 
     /// The next complete interval, or `None` when the agent closed the stream.
@@ -416,25 +572,33 @@ impl Subscription {
                 let batch: Vec<Frame> = self.pending.drain(..=at).collect();
                 return self.subscriber.apply(batch).map(Some);
             }
-
-            let chunk = self
-                .response
-                .chunk()
-                .await
-                .map_err(|e| format!("replication stream failed: {e}"))?;
-            let Some(chunk) = chunk else {
-                // The agent closed. Bytes still held back mean it closed
-                // mid-frame, which is worth saying — a clean end leaves none.
-                if self.decoder.pending() > 0 {
-                    return Err(format!(
-                        "the agent closed the stream mid-frame, with {} byte(s) unread",
-                        self.decoder.pending()
-                    ));
-                }
+            if !self.fill().await? {
                 return Ok(None);
-            };
-            self.pending.extend(self.decoder.push(&chunk)?);
+            }
         }
+    }
+
+    /// Read one chunk off the connection and decode what it completes into
+    /// `pending`. `Ok(false)` means the agent closed the stream cleanly.
+    async fn fill(&mut self) -> Result<bool, String> {
+        let chunk = self
+            .response
+            .chunk()
+            .await
+            .map_err(|e| format!("replication stream failed: {e}"))?;
+        let Some(chunk) = chunk else {
+            // The agent closed. Bytes still held back mean it closed
+            // mid-frame, which is worth saying — a clean end leaves none.
+            if self.decoder.pending() > 0 {
+                return Err(format!(
+                    "the agent closed the stream mid-frame, with {} byte(s) unread",
+                    self.decoder.pending()
+                ));
+            }
+            return Ok(false);
+        };
+        self.pending.extend(self.decoder.push(&chunk)?);
+        Ok(true)
     }
 
     /// Rows dropped over this subscription's life.
@@ -442,10 +606,108 @@ impl Subscription {
         self.subscriber.skipped_total()
     }
 
+    /// How often this agent can have anything new to send — its snapshot
+    /// TTL, as it reported it. An interval shorter than this is served, but
+    /// most of its frames are empty, and a recording stamped with that
+    /// interval would claim a resolution the data does not have.
+    pub(crate) fn update_floor(&self) -> Option<Duration> {
+        self.update_floor
+    }
+
     /// The source this subscription is carrying, once its handshake has been
     /// applied.
     pub(crate) fn source(&self) -> Option<&Source> {
         self.subscriber.source()
+    }
+}
+
+/// What a [`pump`] reports to the recording loop.
+#[derive(Debug)]
+pub(crate) enum StreamEvent {
+    /// One interval, applied.
+    Interval(Applied),
+    /// The connection ended — the agent closed it, or it failed — and the pump
+    /// is reconnecting. Rows between here and the next `Connected` are lost,
+    /// which the reconnecting subscription's `gap` will not show (it counts
+    /// from its own first frame), so this is the record of it.
+    Dropped(String),
+    /// A fresh connection is up, with the source its handshake named. The
+    /// loop compares it with the source the recording opened on: a different
+    /// uuid is a restarted agent, and every cumulative counter reset with it.
+    Connected(Source),
+    /// The agent answered a reconnect and cannot serve the stream. Retrying
+    /// will not change that, so the pump has stopped.
+    Refused(String),
+}
+
+/// Drive one subscription for the life of the run.
+///
+/// Holds the connection so the recording loop does not have to: the loop's
+/// job is to commit whatever arrived each tick, and a loop that also awaited
+/// each endpoint's next frame would stall every other endpoint's commit on the
+/// slowest connection. Each interval is sent as it completes; the channel is
+/// bounded, so a loop that stops draining pushes back on the socket rather
+/// than on memory.
+///
+/// A dropped connection is reconnected after `interval` — the cadence the
+/// scrape path re-probes an unreachable endpoint at — with a floor of one
+/// second so a short interval against a dead host is not a tight loop. Exits
+/// when the loop has gone away (the send fails) or the agent refuses.
+pub(crate) async fn pump(
+    idx: usize,
+    mut sub: Subscription,
+    client: reqwest::Client,
+    base: reqwest::Url,
+    interval: Duration,
+    tx: tokio::sync::mpsc::Sender<(usize, StreamEvent)>,
+) {
+    let retry = interval.max(Duration::from_secs(1));
+    loop {
+        let outcome = match sub.next_interval().await {
+            Ok(Some(applied)) => {
+                if tx
+                    .send((idx, StreamEvent::Interval(applied)))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                continue;
+            }
+            Ok(None) => "the agent closed the stream".to_string(),
+            Err(e) => e,
+        };
+        // The connection's skip count goes with its obituary: it is the one
+        // number that says whether the rows it did deliver were attributable.
+        let outcome = match sub.skipped_total() {
+            0 => outcome,
+            n => format!("{outcome}; {n} row(s) over the connection named an unheld index state"),
+        };
+        if tx.send((idx, StreamEvent::Dropped(outcome))).await.is_err() {
+            return;
+        }
+        sub = loop {
+            tokio::time::sleep(retry).await;
+            match Subscription::connect(&client, &base, interval).await {
+                Ok(sub) => break sub,
+                Err(ConnectError::Unreachable(_)) => continue,
+                Err(ConnectError::Unsupported(e)) => {
+                    let _ = tx.send((idx, StreamEvent::Refused(e))).await;
+                    return;
+                }
+            }
+        };
+        let source = sub
+            .source()
+            .cloned()
+            .expect("connect returns only once the handshake has been applied");
+        if tx
+            .send((idx, StreamEvent::Connected(source)))
+            .await
+            .is_err()
+        {
+            return;
+        }
     }
 }
 
@@ -849,5 +1111,153 @@ mod tests {
             ])
             .expect_err("must refuse");
         assert!(err.contains("segment"), "{err}");
+    }
+
+    /// A payload the producer would send: an encoded `WalGroupRow`, with the
+    /// schema inside on its first mention and absent after.
+    fn payload(n: usize, with_schema: bool, window_end: u64) -> Vec<u8> {
+        let schema = crate::recorder::schema::GroupSchema {
+            counters: (0..n)
+                .map(|i| crate::recorder::schema::MetricDesc {
+                    name: format!("0x{i}"),
+                    metadata: [("metric".to_string(), "cpu_usage_user".to_string())]
+                        .into_iter()
+                        .collect(),
+                })
+                .collect(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+        crate::recorder::wal::encode_wal_group_row(&crate::recorder::wal::WalGroupRow {
+            schema_hash: schema.hash(),
+            schema: with_schema.then_some(schema),
+            window: Some((window_end - 500, window_end)),
+            counters: (0..n).map(|i| Some(i as u64)).collect(),
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        })
+        .unwrap()
+    }
+
+    fn wal_row(stream: &str, ts: i64, wall_offset: i64, row: Vec<u8>) -> WalRow {
+        WalRow {
+            stream: stream.to_string(),
+            ts,
+            wall_offset,
+            row,
+        }
+    }
+
+    /// The ordinary interval: every row shares the pass's stamp, so the
+    /// writer gets ONE `AgentRows` at that stamp, each row's envelope rebuilt
+    /// from its payload, and the index entries keyed by stream at the same
+    /// stamp.
+    #[test]
+    fn an_interval_becomes_one_pass_at_the_producers_stamp() {
+        let applied = Applied {
+            seq: 3,
+            rows: vec![
+                wal_row(STREAM, 5_000, 7, payload(2, true, 5_000)),
+                wal_row("b/two", 5_000, 7, payload(1, false, 5_000)),
+            ],
+            entries: vec![
+                (STREAM.to_string(), 5_000, vec![1, 2]),
+                (STREAM.to_string(), 5_000, vec![3]),
+                ("b/two".to_string(), 5_000, vec![4]),
+            ],
+            rows_skipped: 0,
+            gap: false,
+        };
+        let interval = applied.for_writer().unwrap();
+
+        assert_eq!(interval.rows.len(), 1, "one pass, not one per row");
+        let pass = &interval.rows[0];
+        assert_eq!((pass.ts, pass.wall_offset), (5_000, 7));
+        assert_eq!(
+            pass.wall_ns, 5_007,
+            "the wall clock at the pass is ts + wall_offset, by definition"
+        );
+        assert_eq!(pass.rows.len(), 2);
+        assert_eq!(pass.rows[0].stream, STREAM);
+        assert_eq!(pass.rows[0].arity, (2, 0, 0));
+        assert!(
+            pass.rows[0].schema.is_some(),
+            "the first mention's schema is lifted into the envelope"
+        );
+        assert_eq!(pass.rows[0].window, Some((4_500, 5_000)));
+        assert_eq!(pass.rows[1].stream, "b/two");
+        assert!(pass.rows[1].schema.is_none());
+
+        // Grouped by stream, in the order the entries arrived within a
+        // stream — `caller_rows` numbers same-ts entries by insertion.
+        assert_eq!(
+            interval.index_entries,
+            vec![
+                (
+                    STREAM.to_string(),
+                    vec![(5_000, vec![1, 2]), (5_000, vec![3])]
+                ),
+                ("b/two".to_string(), vec![(5_000, vec![4])]),
+            ]
+        );
+    }
+
+    /// A frame carrying two stamps is two passes: a relay that batched them
+    /// must not have the second pass's rows attributed to the first's clock.
+    #[test]
+    fn rows_at_two_stamps_become_two_passes() {
+        let applied = Applied {
+            rows: vec![
+                wal_row(STREAM, 5_000, 0, payload(1, true, 5_000)),
+                wal_row(STREAM, 6_000, 0, payload(1, false, 6_000)),
+            ],
+            ..Applied::default()
+        };
+        let interval = applied.for_writer().unwrap();
+        assert_eq!(
+            interval.rows.iter().map(|p| p.ts).collect::<Vec<_>>(),
+            vec![5_000, 6_000]
+        );
+        assert!(interval.rows.iter().all(|p| p.rows.len() == 1));
+    }
+
+    /// The archive's `ts` is unsigned. A producer stamping before the epoch
+    /// is refused, not clamped: a clamp would put its rows at 1970 and a
+    /// consumer would draw them there.
+    #[test]
+    fn a_stamp_before_the_epoch_is_refused() {
+        let rows = Applied {
+            rows: vec![wal_row(STREAM, -1, 0, payload(1, true, 5_000))],
+            ..Applied::default()
+        };
+        let err = rows.for_writer().expect_err("a negative row stamp");
+        assert!(
+            err.contains(STREAM) && err.contains("before the epoch"),
+            "{err}"
+        );
+
+        let entries = Applied {
+            entries: vec![(STREAM.to_string(), -1, vec![1])],
+            ..Applied::default()
+        };
+        let err = entries.for_writer().expect_err("a negative entry stamp");
+        assert!(
+            err.contains(STREAM) && err.contains("before the epoch"),
+            "{err}"
+        );
+    }
+
+    /// A payload that will not decode fails the interval and names the
+    /// stream. The producer is this binary, so the cause is a version
+    /// mismatch, and a subscriber that quietly dropped the row would record a
+    /// gap nothing explains.
+    #[test]
+    fn an_undecodable_payload_fails_the_interval_by_name() {
+        let applied = Applied {
+            rows: vec![wal_row(STREAM, 5_000, 0, vec![0x93, 0x01])],
+            ..Applied::default()
+        };
+        let err = applied.for_writer().expect_err("must refuse");
+        assert!(err.contains(STREAM), "{err}");
     }
 }

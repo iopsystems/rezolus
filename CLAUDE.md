@@ -59,6 +59,7 @@ target/release/rezolus record                                                   
 target/release/rezolus record --url http://localhost:4241 -o out.rez --label arm=redis  # per-sampler .rez archive
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez  # one recording per endpoint
 target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
+target/release/rezolus record --stream --url http://localhost:4241 -o out.rez   # subscribe to /metrics/stream instead of scraping
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
 # (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
 # the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.
@@ -68,6 +69,10 @@ target/release/rezolus record --url http://host:9090/metrics -o out.parquet --me
 # demotes the format, since one archive cannot be one file per endpoint.
 # Also: --metadata key=value (repeatable), --label key=value (repeatable; tags a .rez
 # recording, source/host auto-populated), --interval, --duration.
+# --stream is opt-in and never auto-detected: .rez only, rezolus agents only. An endpoint
+# that cannot serve the stream (Prometheus, V2 agent, no /metrics/stream) fails the run
+# rather than being scraped; an unreachable one is retried each tick, and a stream that
+# drops mid-run is reconnected. Rows and index entries commit in one transaction per tick.
 
 # Viewer - web dashboard for parquet files, live agents, or upload mode
 target/release/rezolus view output.parquet [experiment.parquet] [--listen ADDR]

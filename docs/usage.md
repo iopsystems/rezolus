@@ -201,6 +201,28 @@ releases still open everywhere, and `rezolus recording upgrade old.rez` converts
 one to the current container — as does rewriting it with `combine`, `filter` or
 `annotate`, all of which read either container and emit the current one.
 
+### Streaming instead of scraping
+
+`--stream` subscribes to each agent's replication stream (`/metrics/stream`)
+instead of scraping it. The agent pushes one frame per `--interval`, carrying
+only the acquisition groups it re-read since the last frame, stamped when the
+agent sampled rather than when the recorder asked. The identity index — which
+task or cgroup each slot means — arrives on the same stream and is committed in
+the same transaction as the rows it describes.
+
+```bash
+rezolus record --stream --url http://localhost:4241 -o run.rez
+rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez
+```
+
+Scraping stays the default and the transport is never auto-detected. `--stream`
+records to `.rez` only, and every endpoint must be a rezolus agent that serves
+the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
+from before `/metrics/stream`) fails the run rather than being scraped. An
+endpoint that is merely unreachable is retried each tick, and a stream that
+drops mid-run is reconnected each interval, with the drop and the reconnect
+logged; rows between the two are lost, as a failed scrape's are.
+
 ## Viewer
 
 `rezolus view` runs a Rust HTTP server that reads recordings or streams a live
