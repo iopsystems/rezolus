@@ -9,6 +9,7 @@ mod cpu;
 mod exceptions;
 mod filesystem;
 mod gpu;
+mod hw_sensors;
 mod memory;
 mod network;
 mod overview;
@@ -28,6 +29,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Query Explorer", "/query", query_explorer::generate),
     ("CPU", "/cpu", cpu::generate),
     ("GPU", "/gpu", gpu::generate),
+    ("Hardware Sensors", "/hw_sensors", hw_sensors::generate),
     ("Memory", "/memory", memory::generate),
     ("Network", "/network", network::generate),
     ("Scheduler", "/scheduler", scheduler::generate),

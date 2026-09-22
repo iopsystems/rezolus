@@ -471,6 +471,7 @@ mod tests {
         "gpu_apple",
         "gpu_intel_pmu",
         "gpu_nvidia",
+        "hw_sensors",
         "memory_meminfo",
         "memory_vmstat",
         "network_ethtool",
