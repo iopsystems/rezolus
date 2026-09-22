@@ -121,6 +121,58 @@ pub struct AgentRow {
     pub row: Vec<u8>,
 }
 
+impl AgentRow {
+    /// Rebuild the envelope from a payload that arrived without one.
+    ///
+    /// The replication stream carries a group's tick as a bare
+    /// [`WalGroupRow`](crate::wal::WalGroupRow): `stream`, a stamp, and the
+    /// encoded row. Every cleartext field above is inside that payload, so the
+    /// subscriber decodes it once here and hands the result to the same
+    /// [`StreamRecorderV3::stage_rows`] the row endpoint feeds — decision for
+    /// decision, rather than a third copy of the staging rules keyed on a
+    /// third shape. The decode is the cost of that reuse; `stage_rows` then
+    /// touches the payload only on the tick it re-anchors.
+    ///
+    /// A payload that carries a schema — the producer's first mention of that
+    /// generation on a connection — has it lifted into the envelope and is
+    /// re-encoded without it, so `row` keeps the contract the module docs
+    /// state: the consumer decides where a schema anchors, never the producer.
+    /// Every other payload passes through as the bytes that arrived.
+    ///
+    /// `approx_bytes` is recomputed with the formula the snapshot path uses
+    /// (`wal_group_row_approx_bytes`), so a recording taken off the stream
+    /// seals at the same rows as one scraped.
+    ///
+    /// [`StreamRecorderV3::stage_rows`]: crate::rez_v3_writer::StreamRecorderV3::stage_rows
+    pub fn from_payload(stream: String, payload: Vec<u8>) -> Result<Self, String> {
+        let mut decoded = crate::wal::decode_wal_group_row(&payload)
+            .map_err(|e| format!("stream {stream}: {e}"))?;
+        let arity = (
+            decoded.counters.len() as u32,
+            decoded.gauges.len() as u32,
+            decoded.histograms.len() as u32,
+        );
+        let approx_bytes = crate::rez::wal_group_row_approx_bytes(&decoded) as u32;
+        let (schema, row) = match decoded.schema.take() {
+            Some(schema) => {
+                let row = crate::wal::encode_wal_group_row(&decoded)
+                    .map_err(|e| format!("stream {stream}: {e}"))?;
+                (Some(schema), row)
+            }
+            None => (None, payload),
+        };
+        Ok(AgentRow {
+            stream,
+            window: decoded.window,
+            schema_hash: decoded.schema_hash,
+            schema,
+            arity,
+            approx_bytes,
+            row,
+        })
+    }
+}
+
 /// One scrape's worth of rows: the row-format equivalent of a `SnapshotV3`.
 ///
 /// `wall_ns` and `duration_ns` mirror `SnapshotV3`'s `systemtime`/`duration`,
@@ -538,5 +590,80 @@ mod tests {
             at += len;
         }
         assert_eq!(seen, vec![0, 1, 2, 3]);
+    }
+
+    /// The replication stream carries a payload and no envelope, and the
+    /// envelope rebuilt from it must be the one the row endpoint would have
+    /// sent for the same group — every field, because each one drives a
+    /// staging decision. Checked against `encode_group`, the row endpoint's
+    /// own builder, rather than against constants.
+    ///
+    /// Both payload shapes the producer sends: with the schema inside (its
+    /// first mention on a connection) and without (every later tick).
+    #[cfg(feature = "write")]
+    #[test]
+    fn an_envelope_rebuilt_from_a_stream_payload_matches_the_row_endpoints() {
+        use crate::wal::{encode_wal_group_row, wal_group_row};
+
+        let desc = |name: &str| metriken_exposition::MetricDesc {
+            name: name.to_string(),
+            metadata: [("metric".to_string(), format!("m{name}"))]
+                .into_iter()
+                .collect(),
+        };
+        let producer_schema = metriken_exposition::GroupSchema {
+            counters: vec![desc("0"), desc("1")],
+            gauges: Vec::new(),
+            histograms: vec![desc("2")],
+        };
+        let schema: crate::schema::GroupSchema = (&producer_schema).into();
+        let mut h = histogram::Histogram::new(3, 8).unwrap();
+        h.increment(5).unwrap();
+        let g = metriken_exposition::GroupSnapshot {
+            name: "cpu_usage/percpu".to_string(),
+            schema_hash: producer_schema.hash(),
+            schema: Some(std::sync::Arc::new(producer_schema.clone())),
+            window: Some(metriken::Window::new(900, 1_000)),
+            counters: vec![Some(7), None],
+            gauges: Vec::new(),
+            histograms: vec![Some(h)],
+        };
+        let from_endpoint = encode_group(&g).unwrap();
+
+        // First mention: the schema rides inside the payload.
+        let anchored = encode_wal_group_row(&wal_group_row(&g, Some(schema.clone()))).unwrap();
+        let rebuilt = AgentRow::from_payload(g.name.clone(), anchored).unwrap();
+        assert_eq!(rebuilt, from_endpoint, "a schema-carrying payload");
+        assert_eq!(rebuilt.schema.as_ref().unwrap().hash(), rebuilt.schema_hash);
+
+        // Every later tick: no schema in the payload, and the bytes are passed
+        // through rather than re-encoded.
+        let bare = encode_wal_group_row(&wal_group_row(&g, None)).unwrap();
+        let rebuilt = AgentRow::from_payload(g.name.clone(), bare.clone()).unwrap();
+        assert_eq!(rebuilt.row, bare, "passed through, not re-encoded");
+        assert_eq!(
+            AgentRow {
+                schema: None,
+                ..from_endpoint.clone()
+            },
+            rebuilt,
+            "a bare payload"
+        );
+        assert_eq!(rebuilt.arity, (2, 0, 1));
+        assert_eq!(
+            rebuilt.approx_bytes as usize,
+            crate::rez::group_approx_bytes(&g),
+            "metered as the snapshot path meters it"
+        );
+    }
+
+    /// Bytes that are not a group row are an error naming the stream, not a
+    /// row with garbage in it: the stream is the one identifier a caller has
+    /// to act on.
+    #[test]
+    fn a_payload_that_is_not_a_group_row_is_refused_by_name() {
+        let err = AgentRow::from_payload("cpu/usage".to_string(), vec![0x93, 0x01, 0x02])
+            .expect_err("must refuse");
+        assert!(err.contains("cpu/usage"), "{err}");
     }
 }

@@ -4,8 +4,8 @@ mod child;
 mod config;
 mod endpoint;
 mod prometheus;
-/// Consuming an agent replication stream — #1224 Phase 3.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Consuming an agent replication stream — #1224 Phase 3, the `--stream`
+/// ingest path.
 pub(crate) mod stream;
 // The `.rez` format lives in its own crate so the WASM viewer can read the
 // archives this binary writes (`rezolus` is binary-only, so nothing could
@@ -166,7 +166,18 @@ pub fn command() -> Command {
              is taken: a SIGKILL or a power loss costs at most one sampling interval, for\n\
              every sampler. `rezolus recording metadata -i out.rez` reports an interrupted\n\
              recording as \"not cleanly finalized\" and how many samples are still in its\n\
-             write-ahead log.",
+             write-ahead log.\n\n\
+             STREAMING INSTEAD OF SCRAPING:\n\n\
+             --stream subscribes to each agent's /metrics/stream and records what it\n\
+             pushes: one frame per --interval, carrying only the acquisition groups the\n\
+             agent re-read since the last one, stamped when the agent sampled rather than\n\
+             when the recorder asked, plus the identity index (which task or cgroup each\n\
+             slot means) committed beside the rows it describes. Scraping stays the\n\
+             default and the transport is never auto-detected: --stream against an\n\
+             endpoint that cannot serve it fails the run rather than scraping instead. A\n\
+             stream that drops mid-run is reconnected after one interval (at least a\n\
+             second), like a scrape that fails is retried, and one that goes silent for\n\
+             the scrape timeout counts as dropped.",
         )
         .arg(
             clap::Arg::new("URL")
@@ -248,6 +259,12 @@ pub fn command() -> Command {
                 .short('l')
                 .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that. .rez output ONLY — dropped for parquet and raw, where --metadata is the equivalent")
                 .action(clap::ArgAction::Append),
+        )
+        .arg(
+            clap::Arg::new("STREAM")
+                .long("stream")
+                .help("Subscribe to each agent's replication stream (/metrics/stream) instead of scraping it: the agent pushes one frame per --interval carrying only the groups it re-read, plus the identity index the recording stores beside its rows. Opt-in and never auto-detected. .rez output only, and rezolus agents only: an endpoint that cannot serve the stream (a Prometheus exporter, a V2 agent, an agent without /metrics/stream) fails the run rather than being scraped, while one that is merely unreachable is retried each tick as usual. A stream that drops mid-run is reconnected after one interval (at least a second), and a connection that produces no frame for the scrape timeout is treated as dropped")
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             clap::Arg::new("URL_FLAG")
@@ -513,9 +530,17 @@ fn snapshot_producer_stamp(snapshot: &metriken_exposition::Snapshot) -> Option<(
 /// the difference between an operator having a chance to notice and having
 /// none. Persisting the history as dendro's `producer_epochs` is the fix.
 fn note_epoch_change(ep: &mut EndpointState, snapshot: &metriken_exposition::Snapshot) {
-    let Some(seen) = snapshot_producer_epoch(snapshot) else {
-        return;
-    };
+    if let Some(seen) = snapshot_producer_epoch(snapshot) {
+        note_epoch(ep, seen);
+    }
+}
+
+/// The epoch an endpoint's source now carries, against the one on record.
+///
+/// The shared half of [`note_epoch_change`]: the scrape path reads the epoch
+/// off a snapshot, the stream path off a handshake, and both must react the
+/// same way to the same change.
+fn note_epoch(ep: &mut EndpointState, seen: &str) {
     match ep.agent.producer_epoch.as_deref() {
         // First epoch observed on an endpoint whose `/status` did not carry
         // one: adopt it rather than warn. Nothing restarted.
@@ -523,12 +548,203 @@ fn note_epoch_change(ep: &mut EndpointState, snapshot: &metriken_exposition::Sna
         Some(known) if known == seen => {}
         Some(known) => {
             warn!(
-                "{}: the agent restarted mid-recording (producer epoch {known} -> {seen});                  every cumulative counter reset at this point, and rows from here on are                  stamped with the earlier epoch",
+                "{}: the agent restarted mid-recording (producer epoch {known} -> {seen}); \
+                 every cumulative counter reset at this point, and rows from here on are \
+                 stamped with the earlier epoch",
                 ep.config.source_label()
             );
             ep.agent.producer_epoch = Some(seen.to_string());
         }
     }
+}
+
+/// Open a replication stream to `ep` and mark it active.
+///
+/// The stream path's `probe_endpoint` + `fetch_agent_metadata`. Two things
+/// differ from the scrape path, and both follow from the handshake being the
+/// authority on the rows that will arrive:
+///
+/// - The recording's anchor and epoch are the handshake's, overriding what
+///   `/status` said a moment earlier. The rows are stamped on the handshake's
+///   timeline; an agent that restarted between the two fetches would
+///   otherwise have its rows anchored on a clock it no longer keeps.
+/// - There is no protocol detection. An endpoint declared `prometheus` is
+///   refused before a byte is sent, and everything else is asked for the
+///   stream and judged on the answer — see [`stream::ConnectError`] for the
+///   split between "not there" and "cannot".
+///
+/// `/status` is read BEFORE the stream is opened, so the handshake is the
+/// later of the two observations. The other order installed the handshake's
+/// epoch over a newer `/status` reading, and an agent that restarted between
+/// the two got a restart warning pointing backwards.
+///
+/// `timeout` bounds the connect and the handshake together, for the reason
+/// the scrape path bounds a probe: this runs on the tick loop. The metadata
+/// fetch is not bounded, exactly as the scrape path's is not.
+async fn open_stream(
+    client: &Client,
+    ep: &mut EndpointState,
+    interval: Duration,
+    timeout: Duration,
+) -> Result<stream::Subscription, stream::ConnectError> {
+    if ep.config.protocol == Some(Protocol::Prometheus) {
+        return Err(stream::ConnectError::Unsupported(format!(
+            "{} is declared protocol=prometheus, and a Prometheus endpoint has no \
+             replication stream to subscribe to",
+            ep.config.url
+        )));
+    }
+    let agent = fetch_agent_metadata(client, &ep.config.url).await;
+    let sub = match tokio::time::timeout(
+        timeout,
+        stream::Subscription::connect(client, &ep.config.url, interval),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(stream::ConnectError::Unreachable(format!(
+                "{} did not complete a handshake within {}",
+                ep.config.url,
+                humantime::format_duration(timeout)
+            )))
+        }
+    };
+    let source = sub
+        .source()
+        .cloned()
+        .expect("connect returns only once the handshake has been applied");
+    if let Some(floor) = sub.update_floor().filter(|floor| interval < *floor) {
+        // The agent serves the interval asked for, but nothing in it can be
+        // new more often than its TTL: the frames between are empty. Said
+        // once, at connect, because the recording's `sampling_interval_ms`
+        // will claim the asked-for cadence and the data will not have it.
+        warn!(
+            "{}: --interval {} is shorter than the agent's snapshot TTL of {}; a frame \
+             can only carry new readings every {}, and the rest will be empty",
+            ep.config.url,
+            humantime::format_duration(interval),
+            humantime::format_duration(floor),
+            humantime::format_duration(floor)
+        );
+    }
+
+    if ep.config.source.is_none() {
+        ep.config.source = Some("rezolus".to_string());
+    }
+    ep.agent = agent;
+    adopt_source(ep, &source);
+    ep.scrape_url = Some(ep.config.url.clone());
+    ep.detected_protocol = Some(Protocol::Msgpack);
+    ep.status = EndpointStatus::Active;
+    Ok(sub)
+}
+
+/// Take the handshake's word on the endpoint's timeline and epoch.
+///
+/// Also the reconnect path: a new connection's handshake names the source
+/// again, and a different uuid is a restarted agent, which `note_epoch`
+/// warns about exactly as the scrape path does on a changed snapshot epoch.
+fn adopt_source(ep: &mut EndpointState, source: &stream::Source) {
+    // Zero is what no agent anchors at (1970), so it is not an anchor.
+    if source.clock_anchor_wall_ns != 0 {
+        ep.agent.clock_anchor_wall_ns = Some(source.clock_anchor_wall_ns);
+    }
+    if let Some(uuid) = source.uuid.as_deref().filter(|u| !u.is_empty()) {
+        note_epoch(ep, uuid);
+    }
+}
+
+/// Stage everything the stream pumps have delivered so far.
+///
+/// Returns the first failure that ends the recording: an interval that could
+/// not be staged, or an agent that came back unable to serve the stream.
+/// Never waits — the pumps deliver for as long as they run, and this is
+/// called from the tick and once more on the way out.
+fn drain_stream_events(
+    rx: &mut tokio::sync::mpsc::Receiver<(usize, stream::StreamEvent)>,
+    endpoints: &mut [EndpointState],
+    mut rez_recorder: Option<&mut RezStream>,
+    wall_ns: u64,
+) -> Option<String> {
+    let mut failed: Option<String> = None;
+    while let Ok((idx, event)) = rx.try_recv() {
+        if let Some(e) =
+            handle_stream_event(idx, event, endpoints, rez_recorder.as_deref_mut(), wall_ns)
+        {
+            failed.get_or_insert(e);
+        }
+    }
+    failed
+}
+
+/// Act on one event from a pump. `Some` is a failure that ends the recording:
+/// an interval that could not be staged, or an agent that came back unable to
+/// serve the stream.
+fn handle_stream_event(
+    idx: usize,
+    event: stream::StreamEvent,
+    endpoints: &mut [EndpointState],
+    rez_recorder: Option<&mut RezStream>,
+    wall_ns: u64,
+) -> Option<String> {
+    let mut failed: Option<String> = None;
+    let label = endpoints[idx].config.source_label().to_string();
+    match event {
+        stream::StreamEvent::Interval(applied) => {
+            endpoints[idx].record_success(wall_ns);
+            if applied.gap {
+                // Every interval gets a frame, so a jump is a lost
+                // reading rather than a quiet one — the distinction
+                // empty frames exist to preserve.
+                warn!(
+                    "{label}: the stream jumped to interval {}; the intervals before it \
+                         produced no frame (the subscription was starved, or frames were lost)",
+                    applied.seq
+                );
+            }
+            if applied.rows_skipped > 0 {
+                // Rule 10: rows naming an index state this recorder does
+                // not hold are not attributed. Said each time — a stream
+                // that keeps doing this is a broken stream, not an idle
+                // one.
+                warn!(
+                    "{label}: {} row(s) in interval {} named an index state this recorder \
+                         does not hold and were not recorded",
+                    applied.rows_skipped, applied.seq
+                );
+            }
+            if let Some(rec) = rez_recorder {
+                if let Err(e) = rec.stage_stream(idx, &endpoints[idx].config.url, applied) {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        stream::StreamEvent::Dropped(e) => {
+            warn!(
+                "{label} ({}): the stream ended ({e}); reconnecting",
+                endpoints[idx].config.url
+            );
+        }
+        stream::StreamEvent::Connected(source) => {
+            info!(
+                "{label} ({}): stream reconnected",
+                endpoints[idx].config.url
+            );
+            adopt_source(&mut endpoints[idx], &source);
+        }
+        stream::StreamEvent::Refused(e) => {
+            // The agent came back unable to serve the stream. Fatal for
+            // the reason it is fatal at startup: the run named its
+            // transport, and there is no quiet substitute. What is on
+            // disk is kept and named.
+            failed.get_or_insert(format!(
+                "{label} ({}) can no longer serve its replication stream: {e}",
+                endpoints[idx].config.url
+            ));
+        }
+    }
+    failed
 }
 
 /// `sleep_until(deadline)` when there is one, otherwise a future that never
@@ -844,6 +1060,44 @@ impl RezStream {
                 index_entries: Vec::new(),
             });
         }
+        Ok(())
+    }
+
+    /// Stage one interval off an endpoint's replication stream.
+    ///
+    /// [`stage`](Self::stage) for the stream path. The rows go through the
+    /// same `stage_rows` the row endpoint feeds (see `Applied::for_writer`),
+    /// and the interval's index entries ride in the same `TickBatch`, so they
+    /// commit in the transaction that commits the rows they describe — the
+    /// guarantee `RecordingWriter::wal_with_index` exists for.
+    ///
+    /// The stamp is the producer's: an interval carries when the agent
+    /// sampled, and there is no recorder-side reading to prefer over it.
+    fn stage_stream(
+        &mut self,
+        endpoint: usize,
+        url: &Url,
+        applied: stream::Applied,
+    ) -> Result<(), String> {
+        let interval = applied.for_writer()?;
+        let Some(rec) = self.recs.get_mut(&endpoint) else {
+            return Err(format!(
+                "{url} streamed an interval with no .rez recording open for it; its rows \
+                 would be discarded"
+            ));
+        };
+        let mut rows = Vec::new();
+        for pass in &interval.rows {
+            let ts = u64::try_from(pass.ts)
+                .map_err(|_| format!("{url} stamped a pass at {} ns, before the epoch", pass.ts))?;
+            self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
+            rows.extend(rec.stage_rows(pass, ts, pass.wall_offset)?);
+        }
+        self.staged.push(rez_sqlite::TickBatch {
+            recording_id: rec.recording_id(),
+            rows,
+            index_entries: interval.index_entries,
+        });
         Ok(())
     }
 
@@ -1183,6 +1437,33 @@ struct EndpointWriter {
 /// correspondingly long stall.
 const MAX_SCRAPE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a single scrape, probe or stream connect may take before the tick
+/// gives up on it.
+///
+/// Without a bound a *hung* endpoint (stalled server, SYN blackhole) parks the
+/// tick for TCP-timeout scales, and the tick is what drives `.rez` age seals
+/// and the ctrl-c check (`STATE` is only re-checked at the loop top) — so one
+/// hung endpoint would stall durability and shutdown, not just this sample.
+///
+/// Deliberately generous rather than exactly one interval: this must catch a
+/// *hung* endpoint, not a merely slow one. A local agent already takes ~75 ms
+/// to answer, so at `--interval 5ms` a one-interval bound would time out every
+/// single scrape and record nothing at all, where the honest outcome is
+/// sampling at the endpoint's pace. Floored so short intervals stay
+/// recordable, capped so a long interval still hands back a bounded tick.
+fn tick_timeout(interval: Duration) -> Duration {
+    (interval * 2).clamp(Duration::from_secs(2), MAX_SCRAPE_TIMEOUT)
+}
+
+/// Intervals a stream pump may have queued for the tick loop before its send
+/// blocks, per endpoint.
+///
+/// The loop drains the queue every tick, so this only fills when the loop
+/// falls behind the agent's frame rate — a slow commit, or an `--interval`
+/// shorter than the writer can keep up with. Bounded so that case pushes back
+/// on the socket rather than growing without limit.
+const STREAM_QUEUE_PER_ENDPOINT: usize = 16;
+
 /// Handle a run that asked for (or defaulted to) `.rez` output that this
 /// endpoint set cannot produce: either rewrite `config` to record parquet and
 /// carry on, or exit non-zero.
@@ -1312,9 +1593,56 @@ pub fn run(mut config: RecordingConfig) {
 
     let out_dir = output_dir(&config.output);
 
+    // `--stream` was refused at parse time for every format but `.rez`, and
+    // the one demotion that can still flip the format (`--separate` with
+    // several endpoints on a defaulted `.rez`) was refused alongside it. So
+    // this cannot fire; it is the backstop that turns a future gap into an
+    // error rather than a stream fed to a writer that is not there.
+    if config.stream && !rez_mode {
+        eprintln!("error: --stream records to .rez only, and this run is not writing one");
+        std::process::exit(1);
+    }
+
+    let interval_dur: Duration = config.interval.into();
+    let connect_timeout = tick_timeout(interval_dur);
+
+    // Subscriptions opened at startup, one slot per endpoint, handed to their
+    // pumps once the archive they feed exists. Only `--stream` fills any.
+    let mut opened: Vec<Option<stream::Subscription>> = endpoints.iter().map(|_| None).collect();
+
     // Probe all endpoints (best-effort startup)
     rt.block_on(async {
-        for ep in &mut endpoints {
+        for (idx, ep) in endpoints.iter_mut().enumerate() {
+            if config.stream {
+                // No protocol detection on this path: the endpoint is asked
+                // for the stream and judged on its answer. "Cannot serve it"
+                // is fatal here, before anything is written, because the run
+                // was told which transport to use and a run that quietly used
+                // another would put two endpoints of one A/B on different
+                // transports. "Not there yet" is the ordinary retry-each-tick
+                // case scraping has always had.
+                match open_stream(&client, ep, interval_dur, connect_timeout).await {
+                    Ok(sub) => {
+                        info!(
+                            "endpoint {} ({}): subscribed to its replication stream",
+                            ep.config.source_label(),
+                            ep.config.url
+                        );
+                        opened[idx] = Some(sub);
+                    }
+                    Err(stream::ConnectError::Unsupported(e)) => {
+                        eprintln!("error: --stream: {e}");
+                        std::process::exit(1);
+                    }
+                    Err(stream::ConnectError::Unreachable(e)) => {
+                        warn!(
+                            "endpoint {} not reachable ({e}), will retry each tick",
+                            ep.config.url
+                        );
+                    }
+                }
+                continue;
+            }
             match probe_endpoint(&client, &ep.config).await {
                 Some((protocol, url)) => {
                     if ep.config.source.is_none() {
@@ -1472,7 +1800,6 @@ pub fn run(mut config: RecordingConfig) {
         };
         let mut outcome: Option<child::Outcome> = None;
 
-        let interval_dur: Duration = config.interval.into();
         let start = Instant::now() + interval_dur;
         // In wrapped mode the cap is intentionally measured from command spawn
         // (`Instant::now()`), which differs from the non-wrapped path's `start`
@@ -1481,21 +1808,33 @@ pub fn run(mut config: RecordingConfig) {
         let cap_deadline: Option<Instant> =
             config.duration.map(|d| Instant::now() + Duration::from(d));
         let mut interval = crate::common::aligned_interval(interval_dur);
-        // How long a single scrape or probe may take before the tick gives up on
-        // it. Without a bound a *hung* endpoint (stalled server, SYN blackhole)
-        // parks `join_all` for TCP-timeout scales, and the tick is what drives
-        // `.rez` age seals and the ctrl-c check (`STATE` is only re-checked at
-        // the loop top) — so one hung endpoint would stall durability and
-        // shutdown, not just this sample.
-        //
-        // Deliberately generous rather than exactly one interval: this must
-        // catch a *hung* endpoint, not a merely slow one. A local agent already
-        // takes ~75 ms to answer, so at `--interval 5ms` a one-interval bound
-        // would time out every single scrape and record nothing at all, where
-        // the honest outcome is sampling at the endpoint's pace. Floored so
-        // short intervals stay recordable, capped so a long interval still
-        // hands back a bounded tick.
-        let scrape_timeout = (interval_dur * 2).clamp(Duration::from_secs(2), MAX_SCRAPE_TIMEOUT);
+        // See `tick_timeout` for why this is generous rather than one interval.
+        let scrape_timeout = tick_timeout(interval_dur);
+
+        // The stream pumps. One task per subscribed endpoint, each holding
+        // its connection and sending intervals down one channel the loop
+        // drains every tick; see `stream::pump` for why the loop does not
+        // await the connections itself. Spawned here rather than at startup
+        // so nothing is in flight before the archive they feed exists.
+        let (stream_tx, mut stream_rx) = tokio::sync::mpsc::channel::<(usize, stream::StreamEvent)>(
+            STREAM_QUEUE_PER_ENDPOINT * endpoints.len().max(1),
+        );
+        let spawn_pump = |idx: usize, sub: stream::Subscription, url: Url| {
+            tokio::spawn(stream::pump(
+                idx,
+                sub,
+                client.clone(),
+                url,
+                interval_dur,
+                scrape_timeout,
+                stream_tx.clone(),
+            ));
+        };
+        for (idx, sub) in opened.iter_mut().enumerate() {
+            if let Some(sub) = sub.take() {
+                spawn_pump(idx, sub, endpoints[idx].config.url.clone());
+            }
+        }
         // The last tick's clock observation, handed to `.rez` finalization so
         // the manifest's `clock_offsets` series covers the tail of the
         // recording. Seeded with the anchor itself (offset 0 by definition).
@@ -1596,11 +1935,13 @@ pub fn run(mut config: RecordingConfig) {
             // than finalizing one recording short.
             let mut late_endpoint_failure: Option<String> = None;
 
-            // Scrape all active endpoints concurrently
+            // Scrape all active endpoints concurrently. Under `--stream`
+            // nothing is scraped: the pumps deliver, and the loop only
+            // commits, below.
             let active_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
-                .filter(|(_, ep)| ep.status == EndpointStatus::Active)
+                .filter(|(_, ep)| ep.status == EndpointStatus::Active && !config.stream)
                 .map(|(i, _)| i)
                 .collect();
 
@@ -1791,6 +2132,19 @@ pub fn run(mut config: RecordingConfig) {
                 }
             }
 
+            // Everything the pumps delivered since the last tick. Drained
+            // rather than awaited: a tick commits what has arrived, and an
+            // endpoint whose frame is late is committed next tick, exactly
+            // as a scrape that missed the tick would be.
+            if let Some(e) = drain_stream_events(
+                &mut stream_rx,
+                &mut endpoints,
+                rez_recorder.as_mut(),
+                wall_ns,
+            ) {
+                ingest_failed.get_or_insert(e);
+            }
+
             let pending_indices: Vec<usize> = endpoints
                 .iter()
                 .enumerate()
@@ -1799,6 +2153,50 @@ pub fn run(mut config: RecordingConfig) {
                 .collect();
 
             for idx in pending_indices {
+                if config.stream {
+                    // The stream path's late activation: the same connect
+                    // as startup, with the same split. "Cannot serve it"
+                    // fails the recording here rather than the process —
+                    // there is an archive with other recordings in it by
+                    // now, and it is kept and named on the way out.
+                    match open_stream(&client, &mut endpoints[idx], interval_dur, scrape_timeout)
+                        .await
+                    {
+                        Ok(sub) => {
+                            info!(
+                                "endpoint {} ({}) now reachable, subscribed to its \
+                                 replication stream",
+                                endpoints[idx].config.source_label(),
+                                endpoints[idx].config.url
+                            );
+                            // `None` means the recording already failed and
+                            // was reported; the loop is about to exit.
+                            if let Some(rec) = rez_recorder.as_mut() {
+                                match rec.add_endpoint(
+                                    idx,
+                                    &config,
+                                    &endpoints[idx],
+                                    clock_anchor_wall_ns,
+                                ) {
+                                    Ok(()) => {
+                                        spawn_pump(idx, sub, endpoints[idx].config.url.clone())
+                                    }
+                                    Err(e) => {
+                                        late_endpoint_failure.get_or_insert(format!(
+                                            "failed to open a .rez recording for {}: {e}",
+                                            endpoints[idx].config.url
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Err(stream::ConnectError::Unsupported(e)) => {
+                            late_endpoint_failure.get_or_insert(format!("--stream: {e}"));
+                        }
+                        Err(stream::ConnectError::Unreachable(_)) => {}
+                    }
+                    continue;
+                }
                 // Bounded like the scrapes above, and for the same reason: the
                 // probe runs on the loop, so a hung endpoint here would stall
                 // the tick. A timeout is just a failed probe — retried next tick.
@@ -1943,6 +2341,42 @@ pub fn run(mut config: RecordingConfig) {
         }
 
         // ── Finalization ──────────────────────────────────────────────────
+
+        // The interval in flight. The agent frames on its own boundary and
+        // the loop's deadline sits on the same boundary, so the final frame
+        // lands a few milliseconds AFTER the tick that ended the loop, and a
+        // ctrl-c lands anywhere inside an interval. Without a wait, that
+        // frame is never committed and the recording ends one interval short
+        // of the window it was asked for. So the pumps get one interval's
+        // grace — an unconditional sleep, because a `recv` would return at
+        // once on anything already queued and the frame still in flight would
+        // be dropped after all; bounded, so a dead agent cannot hold the exit
+        // — and whatever arrived is committed once.
+        //
+        // Skipped when the recording already failed: it was reported when it
+        // did, and there is nothing left to commit into.
+        if config.stream && rez_recorder.is_some() {
+            let grace = interval_dur.min(Duration::from_secs(2));
+            tokio::time::sleep(grace).await;
+            let failed = drain_stream_events(
+                &mut stream_rx,
+                &mut endpoints,
+                rez_recorder.as_mut(),
+                wall_now_ns(),
+            )
+            .or_else(|| {
+                rez_recorder
+                    .as_mut()
+                    .and_then(|rec| rec.commit_tick().err())
+            });
+            if let Some(e) = failed {
+                eprintln!("error: recording failed: {e}");
+                recording_failed.store(true, Ordering::SeqCst);
+                if let Some(rec) = rez_recorder.take() {
+                    eprintln!("{}", rec.recovery_note());
+                }
+            }
+        }
 
         for ew in writers.iter_mut().flatten() {
             let _ = ew.writer.flush();
@@ -2555,6 +2989,7 @@ mod tests {
             endpoints: Vec::new(),
             command: None,
             format_defaulted: false,
+            stream: false,
         }
     }
 
@@ -2940,6 +3375,237 @@ mod tests {
         // The recording's identity survives: labels the run was tagged with,
         // and the metadata the manifest used to carry.
         assert_eq!(reader.source(), "rezolus");
+    }
+
+    /// The `--stream` pipe end to end: an agent-shaped sequence of frames,
+    /// applied by the recorder's subscriber, staged through `stage_stream`,
+    /// committed a tick at a time, and read back through the same reader
+    /// every consumer uses.
+    ///
+    /// The frames are built here in the shape the agent's `FrameProducer`
+    /// emits — a handshake, the index, then rows whose payload carries the
+    /// schema on its first mention and not after — rather than by that
+    /// producer, which is private to the agent. The socket-level tests beside
+    /// it cover the real producer against the real `Subscription`.
+    ///
+    /// Two things are checked that no piece proves alone. The rows come back
+    /// as values — a counter rising 1/s reads as 1/s, on the producer's
+    /// stamps — and the index entry that arrived in the same interval is in
+    /// the same archive's `caller_rows`, byte for byte, which is what the
+    /// `TickBatch` plumbing exists for.
+    #[test]
+    fn a_streamed_recording_round_trips_its_rows_and_its_index() {
+        use crate::recorder::index::SourceIndex;
+        use crate::recorder::stream::StreamSubscriber;
+        use dendro::replicate::Frame;
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
+        use std::time::SystemTime;
+
+        const STREAM: &str = "fake/ops";
+        const PRODUCER_ANCHOR: i64 = 1_700_000_000_000_000_000;
+
+        // The producer side, as the agent runs it: one slot in the index.
+        let mut index = SourceIndex::new();
+        let entry = index
+            .observe(
+                STREAM,
+                vec![(
+                    0u32,
+                    [("comm".to_string(), "redis".to_string())]
+                        .into_iter()
+                        .collect(),
+                )],
+            )
+            .expect("a first observation is a change");
+        let handshake = Frame::Handshake {
+            source: 0,
+            uuid: Some("epoch-1".to_string()),
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: PRODUCER_ANCHOR,
+            complete: false,
+        };
+        let schema = GroupSchema {
+            counters: vec![MetricDesc {
+                name: "0x0".to_string(),
+                metadata: [("metric".to_string(), "fake_ops".to_string())]
+                    .into_iter()
+                    .collect(),
+            }],
+            gauges: Vec::new(),
+            histograms: Vec::new(),
+        };
+
+        let mut sub = StreamSubscriber::new();
+        sub.apply(vec![handshake]).unwrap();
+        let source = sub
+            .source()
+            .cloned()
+            .expect("the handshake names the source");
+
+        // The recording is anchored on the handshake, as the loop does it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("streamed.rez");
+        let config = rez_config(&path);
+        let mut ep = rez_endpoint();
+        adopt_source(&mut ep, &source);
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("epoch-1"));
+        let mut rec = start_rez_recorder(&config, &[(0, &ep)], TEST_ANCHOR).unwrap();
+
+        let anchor = u64::try_from(source.clock_anchor_wall_ns).unwrap();
+        let ticks = 4u64;
+        for i in 0..ticks {
+            let ts = anchor + i * TEST_SECOND;
+            let group = GroupSnapshot {
+                name: STREAM.to_string(),
+                schema_hash: schema.hash(),
+                // The agent's own cache rule: the schema travels once.
+                schema: (i == 0).then(|| std::sync::Arc::new(schema.clone())),
+                window: Some(metriken::Window::new(ts - 500, ts)),
+                counters: vec![Some(i)],
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            };
+            let snapshot = Snapshot::V3(SnapshotV3 {
+                systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts),
+                duration: Duration::from_millis(1),
+                metadata: Default::default(),
+                groups: vec![group],
+            });
+            let Snapshot::V3(v3) = &snapshot else {
+                unreachable!()
+            };
+            // The producer's payload: the schema inside on its first mention,
+            // absent after (`FrameProducer::interval`'s rule).
+            let payload = wal::encode_wal_group_row(&wal::wal_group_row(
+                &v3.groups[0],
+                (i == 0).then(|| (&schema).into()),
+            ))
+            .unwrap();
+            let mut frames = Vec::new();
+            // The index goes out with the first interval, as on connect.
+            if i == 0 {
+                for (stream, entry) in index.full_entries() {
+                    frames.push(Frame::Index {
+                        source: 0,
+                        stream,
+                        ts: ts as i64,
+                        kind: entry.kind.into(),
+                        state: entry.state,
+                        blob: entry.encode(),
+                    });
+                }
+            }
+            frames.push(Frame::Rows {
+                source: 0,
+                seq: i,
+                index_state: index.state(),
+                rows: vec![dendro::archive::WalRow {
+                    stream: STREAM.to_string(),
+                    ts: ts as i64,
+                    wall_offset: 3,
+                    row: payload,
+                }],
+            });
+
+            let applied = sub.apply(frames).unwrap();
+            assert_eq!(applied.rows_skipped, 0, "tick {i}");
+            assert_eq!(applied.rows.len(), 1, "tick {i}");
+            rec.stage_stream(0, &ep.config.url, applied).unwrap();
+            rec.commit_tick().unwrap();
+            rec.maybe_seal().unwrap();
+        }
+        let last = anchor + (ticks - 1) * TEST_SECOND;
+        rec.finalize((last, 3)).unwrap();
+
+        // The rows, as values.
+        use metriken_query::MetricsSource;
+        let reader = crate::rez_reader::RezReader::open_with_pool(
+            &path,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        assert_eq!(reader.counter_names(), vec!["fake_ops".to_string()]);
+        let (start, end) = reader.time_range().unwrap();
+        assert_eq!(
+            (start * 1e9) as u64,
+            anchor,
+            "the rows sit on the producer's stamps, not the recorder's tick"
+        );
+        let r = reader.query_range("rate(fake_ops[5s])", start, end + 1.0, 1.0);
+        let metriken_query::QueryResult::Matrix { result } = r.expect("the query must resolve")
+        else {
+            panic!("a range query over a counter is a matrix");
+        };
+        let points: Vec<f64> = result
+            .iter()
+            .flat_map(|s| s.values.iter().map(|(_, v)| *v))
+            .collect();
+        assert!(!points.is_empty(), "the streamed rows must come back out");
+        assert!(
+            points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
+            "a counter rising 1/s must read back as 1/s: {points:?}"
+        );
+
+        // The index entry, in the same archive, as sent.
+        let db = rez_sqlite::RezDb::open(&path).unwrap();
+        let stored = db.read_caller_rows(1, STREAM, 0, u64::MAX).unwrap();
+        assert_eq!(stored.len(), 1, "one entry was sent, one must be stored");
+        assert_eq!(stored[0].0, anchor, "stamped as the rows it describes");
+        assert_eq!(stored[0].1, entry.encode(), "stored verbatim");
+    }
+
+    /// An interval with no recording to land in is an error, as a scrape
+    /// with none is: in `.rez` mode nothing else would catch the rows.
+    #[test]
+    fn a_streamed_interval_with_no_recording_is_an_error_not_a_silent_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let config = rez_config(&path);
+        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        let url = Url::parse("http://localhost:4242").unwrap();
+        let err = rec
+            .stage_stream(1, &url, stream::Applied::default())
+            .expect_err("endpoint 1 has no recording");
+        assert!(
+            err.contains("discarded") && err.contains("http://"),
+            "{err}"
+        );
+        rec.discard();
+    }
+
+    /// The handshake is the authority on the timeline the rows arrive on, so
+    /// it overrides what `/status` said a moment earlier — and on a reconnect
+    /// a new uuid is a restarted agent, tracked the way a changed snapshot
+    /// epoch is on the scrape path.
+    #[test]
+    fn a_handshake_sets_the_anchor_and_epoch_and_a_new_uuid_is_a_restart() {
+        let source = |uuid: Option<&str>, anchor: i64| stream::Source {
+            uuid: uuid.map(String::from),
+            labels: BTreeMap::new(),
+            metadata: BTreeMap::new(),
+            clock_anchor_wall_ns: anchor,
+        };
+        let mut ep = rez_endpoint();
+        ep.agent.clock_anchor_wall_ns = Some(1);
+        ep.agent.producer_epoch = Some("from-status".to_string());
+
+        adopt_source(&mut ep, &source(Some("from-handshake"), 42));
+        assert_eq!(ep.agent.clock_anchor_wall_ns, Some(42));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("from-handshake"));
+
+        // A restart: the epoch moves with it.
+        adopt_source(&mut ep, &source(Some("after-restart"), 43));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("after-restart"));
+        assert_eq!(ep.agent.clock_anchor_wall_ns, Some(43));
+
+        // A handshake with nothing to say leaves what is known alone: zero is
+        // not an anchor and an absent uuid is not a restart.
+        adopt_source(&mut ep, &source(None, 0));
+        assert_eq!(ep.agent.clock_anchor_wall_ns, Some(43));
+        assert_eq!(ep.agent.producer_epoch.as_deref(), Some("after-restart"));
     }
 
     #[test]
