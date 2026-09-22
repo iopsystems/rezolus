@@ -125,10 +125,21 @@ pub struct AgentRow {
 ///
 /// `wall_ns` and `duration_ns` mirror `SnapshotV3`'s `systemtime`/`duration`,
 /// which a consumer needs for the same reasons it does there — clock
-/// reconciliation and the sampling-latency record. The rows themselves carry
-/// no timestamp: a WAL row's `ts` is the CONSUMER's monotonic stamp for the
-/// tick (the `wal` table's key), never the producer's, exactly as on the
-/// snapshot path.
+/// reconciliation and the sampling-latency record.
+///
+/// # The producer stamps the tick
+///
+/// `ts` and `wall_offset` are the producer's, and they describe when it READ
+/// the values, not when it answered. Those differ: the agent caches a pass for
+/// its TTL, so a request arriving inside that window is answered from the
+/// cache, and a consumer cannot tell that from one HTTP response. Stamping on
+/// the consumer would record the moment it asked and attribute values to it —
+/// wrong by up to a TTL on a scrape, and by the transport delay on a stream,
+/// where there is no consumer tick at all.
+///
+/// `ts` is anchored (`clock_anchor_wall_ns + monotonic elapsed`) so it cannot
+/// go backwards through a clock step; `ts + wall_offset` recovers the wall
+/// clock, which is the same value `wall_ns` carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentRows {
     /// The producer's wall clock when the scrape was taken, in nanoseconds
@@ -136,6 +147,10 @@ pub struct AgentRows {
     pub wall_ns: u64,
     /// How long the producer's sampling pass took, in nanoseconds.
     pub duration_ns: u64,
+    /// The pass's stamp on the producer's timeline.
+    pub ts: i64,
+    /// Wall clock minus `ts` at the pass, so `ts + wall_offset == wall_ns`.
+    pub wall_offset: i64,
     pub rows: Vec<AgentRow>,
 }
 
@@ -183,7 +198,11 @@ pub fn encode_group(g: &metriken_exposition::GroupSnapshot) -> Result<AgentRow, 
 /// error rather than an empty body: silently returning nothing would look to
 /// a consumer exactly like an agent whose samplers are all disabled.
 #[cfg(feature = "write")]
-pub fn encode_snapshot(snapshot: &metriken_exposition::Snapshot) -> Result<AgentRows, String> {
+pub fn encode_snapshot(
+    snapshot: &metriken_exposition::Snapshot,
+    ts: i64,
+    wall_offset: i64,
+) -> Result<AgentRows, String> {
     let metriken_exposition::Snapshot::V3(v3) = snapshot else {
         return Err(
             "the row format carries acquisition groups, which only a V3 snapshot has".to_string(),
@@ -196,6 +215,8 @@ pub fn encode_snapshot(snapshot: &metriken_exposition::Snapshot) -> Result<Agent
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0),
         duration_ns: v3.duration.as_nanos() as u64,
+        ts,
+        wall_offset,
         rows: v3
             .groups
             .iter()
@@ -294,6 +315,8 @@ struct AgentRowRef<'a> {
 struct AgentRowsRef<'a> {
     wall_ns: u64,
     duration_ns: u64,
+    ts: i64,
+    wall_offset: i64,
     rows: Vec<AgentRowRef<'a>>,
 }
 
@@ -369,6 +392,8 @@ pub fn encode_frame_filtered(
     let view = AgentRowsRef {
         wall_ns: rows.wall_ns,
         duration_ns: rows.duration_ns,
+        ts: rows.ts,
+        wall_offset: rows.wall_offset,
         rows: kept,
     };
     let payload =
@@ -393,6 +418,8 @@ mod tests {
         AgentRows {
             wall_ns: 7,
             duration_ns: 3,
+            ts: 4,
+            wall_offset: 3,
             rows: vec![AgentRow {
                 stream: "cpu/usage".to_string(),
                 window: Some((1, 2)),

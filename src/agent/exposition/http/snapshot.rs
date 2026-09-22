@@ -46,6 +46,20 @@ pub struct SnapshotBuilder {
 struct CachedSnapshot {
     timestamp: Instant,
     snapshot: Snapshot,
+    /// When this pass READ the values, on the source's timeline, and the wall
+    /// clock's disagreement with it at that moment.
+    ///
+    /// Stamped once, at the pass, and carried by every body built from it.
+    /// That is the whole point: inside the TTL a request is answered from this
+    /// cache, so a body stamped when the request arrived would claim values
+    /// were read up to a TTL after they actually were. The agent is the only
+    /// party that knows the difference — a consumer sees one HTTP response and
+    /// cannot tell a fresh pass from a cached one.
+    ///
+    /// `ts + wall_offset` is the same wall clock `systemtime` carries, by
+    /// construction: both come from the one pair of readings taken at the pass.
+    sampled_ts: i64,
+    sampled_wall_offset: i64,
     /// The encoded bodies for this snapshot, filled on first request for each
     /// format and reused for every later request that hits the same cached
     /// snapshot.
@@ -93,7 +107,13 @@ impl SnapshotBuilder {
         self.samples += 1;
         let last = Instant::now();
 
-        let timestamp = SystemTime::now();
+        // One pair of readings for the pass: the anchored stamp every body
+        // will carry, and the wall clock `systemtime` reports. Taken together
+        // so `ts + wall_offset == systemtime` holds exactly rather than
+        // approximately.
+        let (sampled_ts, sampled_wall_offset) = crate::agent::epoch::anchored_now();
+        let timestamp = SystemTime::UNIX_EPOCH
+            + Duration::from_nanos((sampled_ts + sampled_wall_offset).max(0) as u64);
 
         let s: Vec<_> = self
             .samplers
@@ -126,6 +146,8 @@ impl SnapshotBuilder {
         self.cached = Some(CachedSnapshot {
             snapshot,
             timestamp: last,
+            sampled_ts,
+            sampled_wall_offset,
             msgpack: OnceLock::new(),
             json: OnceLock::new(),
             rows: OnceLock::new(),
@@ -214,9 +236,13 @@ impl SnapshotBuilder {
         cached
             .rows_full
             .get_or_init(|| {
-                crate::recorder::wire::encode_snapshot(&cached.snapshot)
-                    .ok()
-                    .map(Arc::new)
+                crate::recorder::wire::encode_snapshot(
+                    &cached.snapshot,
+                    cached.sampled_ts,
+                    cached.sampled_wall_offset,
+                )
+                .ok()
+                .map(Arc::new)
             })
             .clone()
     }
@@ -299,7 +325,11 @@ impl SnapshotBuilder {
 
         let mut rows = {
             let cached = self.cached.as_ref().expect("build populates the cache");
-            crate::recorder::wire::encode_snapshot(&cached.snapshot)?
+            crate::recorder::wire::encode_snapshot(
+                &cached.snapshot,
+                cached.sampled_ts,
+                cached.sampled_wall_offset,
+            )?
         };
 
         if !all {
@@ -442,6 +472,18 @@ fn create(
             (
                 "producer_epoch".to_string(),
                 crate::agent::epoch::producer_epoch().to_string(),
+            ),
+            // The timeline `systemtime` sits on. A consumer that has this can
+            // place a reading without trusting its own clock to agree with
+            // this host's, and can tell a wall-clock step from elapsed time:
+            // `systemtime` moves with a step, the anchor does not.
+            //
+            // Carried here as well as on `/status` because a snapshot is the
+            // whole of what some consumers ever read, and an anchor fetched
+            // separately could belong to a different run of the agent.
+            (
+                "clock_anchor_wall_ns".to_string(),
+                crate::agent::epoch::clock_anchor_wall_ns().to_string(),
             ),
         ]
         .into(),
@@ -3003,6 +3045,18 @@ fn create_v3(
             (
                 "producer_epoch".to_string(),
                 crate::agent::epoch::producer_epoch().to_string(),
+            ),
+            // The timeline `systemtime` sits on. A consumer that has this can
+            // place a reading without trusting its own clock to agree with
+            // this host's, and can tell a wall-clock step from elapsed time:
+            // `systemtime` moves with a step, the anchor does not.
+            //
+            // Carried here as well as on `/status` because a snapshot is the
+            // whole of what some consumers ever read, and an anchor fetched
+            // separately could belong to a different run of the agent.
+            (
+                "clock_anchor_wall_ns".to_string(),
+                crate::agent::epoch::clock_anchor_wall_ns().to_string(),
             ),
         ]
         .into(),
@@ -5697,6 +5751,89 @@ mod tests {
     ///
     /// The cache stored only the `Snapshot`, so every request re-serialized the
     /// whole thing — measured at 3.47 MB per request on a 26-sampler host, and
+    /// A body says when the values were READ, not when the request arrived.
+    ///
+    /// Inside the TTL a request is answered from the cache, and a consumer
+    /// sees one HTTP response either way — it cannot tell a fresh pass from a
+    /// cached one. So an agent that stamped at request time would date values
+    /// up to a TTL later than they were read, and only the agent is in a
+    /// position to know the difference. (For a stream it is worse: there is no
+    /// consumer request at all, only whenever the frame was sent.)
+    ///
+    /// The lag is what makes this a real assertion rather than a tautology
+    /// about cached bytes: stamping at request time would put `ts` at roughly
+    /// now, and this requires it to be behind now by the time that has passed
+    /// since the pass.
+    #[tokio::test]
+    async fn a_body_is_stamped_when_it_was_sampled_not_when_it_was_asked_for() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\n").expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let now = Instant::now();
+        let _ = builder.build_msgpack(now).await;
+        let sampled_ts = builder.cached.as_ref().expect("a pass ran").sampled_ts;
+
+        std::thread::sleep(Duration::from_millis(50));
+        let later = crate::agent::epoch::anchored_ts(Instant::now());
+        // The same cached pass, requested again well after it ran.
+        let _ = builder.build_msgpack(now).await;
+        let again = builder.cached.as_ref().expect("still cached").sampled_ts;
+
+        assert_eq!(again, sampled_ts, "one pass, one stamp");
+        assert!(
+            later - sampled_ts >= 40_000_000,
+            "the stamp must lag the request by the age of the pass; it is only \
+             {} ns behind",
+            later - sampled_ts
+        );
+    }
+
+    /// The two clocks a snapshot carries agree by construction.
+    ///
+    /// `systemtime` is the wall clock and `ts` is the anchored timeline, and a
+    /// consumer converts between them with `wall_offset`. They come from one
+    /// pair of readings taken at the pass, so the identity is exact rather
+    /// than approximate — a consumer can use either and get the same answer.
+    #[tokio::test]
+    async fn the_anchored_stamp_and_the_wall_clock_agree() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v3\"\n")
+            .expect("valid config");
+        let mut builder = SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        );
+
+        let snapshot = builder.build(Instant::now()).await.clone();
+        let cached = builder.cached.as_ref().expect("a pass ran");
+        let Snapshot::V3(v3) = &snapshot else {
+            panic!("a v3 snapshot")
+        };
+        let wall = v3
+            .systemtime
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("after the epoch")
+            .as_nanos() as i64;
+        assert_eq!(
+            cached.sampled_ts + cached.sampled_wall_offset,
+            wall,
+            "ts + wall_offset is systemtime"
+        );
+        assert_eq!(
+            v3.metadata.get("clock_anchor_wall_ns").map(String::as_str),
+            Some(
+                crate::agent::epoch::clock_anchor_wall_ns()
+                    .to_string()
+                    .as_str()
+            ),
+            "and the anchor that timeline is relative to rides along"
+        );
+    }
+
     /// `to_vec` grows from empty by doubling, so that was also about a dozen
     /// reallocate-and-copy steps per request, all discarded. Identical
     /// allocation identity is the direct evidence that no second encode

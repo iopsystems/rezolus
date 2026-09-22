@@ -45,7 +45,6 @@
 //! which under replication is the subscriber's business.
 
 use std::collections::BTreeMap;
-use std::time::Instant;
 
 use dendro::archive::WalRow;
 use dendro::replicate::{Frame, IndexState};
@@ -95,13 +94,6 @@ impl FrameProducer {
         }
     }
 
-    /// `anchor_wall_ns + monotonic elapsed` — FORMAT.md §5's anchored `ts`.
-    ///
-    /// The source's anchor, not this producer's: see the module docs.
-    fn ts_at(&self, now: Instant) -> i64 {
-        crate::agent::epoch::anchored_ts(now)
-    }
-
     /// The opening frame. Sent once per connection, before anything else.
     pub(crate) fn handshake(&mut self) -> Frame {
         self.handshake_sent = true;
@@ -134,15 +126,19 @@ impl FrameProducer {
     /// an interval the subscriber asked for produced no reading.
     pub(crate) fn interval(
         &mut self,
-        now: Instant,
         rows: &AgentRows,
         entries: Vec<(String, IndexEntry)>,
         index_state: IndexState,
         seq: u64,
         mut keep: impl FnMut(&crate::recorder::wire::AgentRow) -> bool,
     ) -> Vec<Frame> {
-        let ts = self.ts_at(now);
-        let wall_offset = rows.wall_ns as i64 - ts;
+        // The pass's own stamp, carried through rather than re-read here. A
+        // frame emitted now can describe a pass that ran up to a TTL ago —
+        // the snapshot is cached and a subscriber's interval does not drive
+        // sampling — so stamping at emission would date every reading to the
+        // moment it was sent.
+        let ts = rows.ts;
+        let wall_offset = rows.wall_offset;
 
         let mut frames = Vec::with_capacity(entries.len() + 1);
         for (stream, entry) in entries {
@@ -248,7 +244,6 @@ mod tests {
     use super::*;
     use crate::recorder::index::SourceIndex;
     use crate::recorder::wire::{AgentRow, AgentRows};
-    use std::time::Duration;
 
     pub(super) const STREAM: &str = "cpu_usage/cpu_usage_task";
 
@@ -281,6 +276,8 @@ mod tests {
 
     pub(super) fn rows(n: usize, wall_ns: u64) -> AgentRows {
         AgentRows {
+            ts: wall_ns as i64,
+            wall_offset: 0,
             wall_ns,
             duration_ns: 1_000,
             rows: vec![AgentRow {
@@ -312,14 +309,7 @@ mod tests {
     #[test]
     fn the_first_row_of_a_stream_carries_its_schema_inside_the_payload() {
         let mut p = producer();
-        let frames = p.interval(
-            Instant::now(),
-            &rows(3, 2_000),
-            Vec::new(),
-            (0, 0),
-            7,
-            |_| true,
-        );
+        let frames = p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame closes the interval")
@@ -343,22 +333,8 @@ mod tests {
     #[test]
     fn a_schema_already_sent_is_not_sent_again() {
         let mut p = producer();
-        p.interval(
-            Instant::now(),
-            &rows(3, 2_000),
-            Vec::new(),
-            (0, 0),
-            7,
-            |_| true,
-        );
-        let frames = p.interval(
-            Instant::now(),
-            &rows(3, 3_000),
-            Vec::new(),
-            (0, 0),
-            8,
-            |_| true,
-        );
+        p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
+        let frames = p.interval(&rows(3, 3_000), Vec::new(), (0, 0), 8, |_| true);
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame")
@@ -377,22 +353,8 @@ mod tests {
     #[test]
     fn a_changed_schema_is_sent_again() {
         let mut p = producer();
-        p.interval(
-            Instant::now(),
-            &rows(3, 2_000),
-            Vec::new(),
-            (0, 0),
-            7,
-            |_| true,
-        );
-        let frames = p.interval(
-            Instant::now(),
-            &rows(4, 3_000),
-            Vec::new(),
-            (0, 0),
-            8,
-            |_| true,
-        );
+        p.interval(&rows(3, 2_000), Vec::new(), (0, 0), 7, |_| true);
+        let frames = p.interval(&rows(4, 3_000), Vec::new(), (0, 0), 8, |_| true);
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame")
@@ -421,7 +383,6 @@ mod tests {
             .unwrap();
 
         let frames = p.interval(
-            Instant::now(),
             &rows(3, 2_000),
             vec![(STREAM.to_string(), entry)],
             index.state(),
@@ -434,53 +395,50 @@ mod tests {
         assert_eq!(frames.len(), 2);
     }
 
-    /// `ts` is anchored and `wall_offset` recovers the wall clock — FORMAT.md
-    /// §5.
+    /// A frame carries the stamp of the PASS it describes, not the moment it
+    /// was emitted.
     ///
-    /// Stated against the source's real anchor rather than an injected one,
-    /// which is what having one anchor per process costs: the timeline is no
-    /// longer a parameter. The claim survives it, because what is asserted is
-    /// a RELATION — a tick one second of monotonic time later is one second
-    /// later on the timeline, whatever the wall clock did in between — and
-    /// `epoch::anchored_ts` is the same function the producer used, so a
-    /// producer that stopped anchoring would fail this rather than agree with
-    /// it by construction.
+    /// The two differ by however long the snapshot sat in the TTL cache. A
+    /// subscriber's interval does not drive sampling — that is #1226's whole
+    /// point — so a frame sent now routinely describes values read earlier,
+    /// and stamping at emission would date every reading to when it was sent.
+    /// The producer used to call `Instant::now()` here; this is what says it
+    /// must not.
+    ///
+    /// `wall_offset` rides along untouched for the same reason, so
+    /// `ts + wall_offset` still recovers the wall clock AT THE READ rather
+    /// than at the send — which is what makes an NTP step locate to the tick
+    /// it happened on.
     #[test]
-    fn ts_is_anchored_and_wall_offset_recovers_the_wall_clock() {
+    fn a_frame_carries_the_stamp_of_the_pass_not_of_the_send() {
         let mut p = producer();
-        // Touched first, so the timeline is anchored BEFORE `base`. The anchor
-        // is minted on first use, and an instant that precedes it saturates to
-        // it — which would make the relation below hold by a millisecond less
-        // than a second, depending on which test in the binary ran first.
-        let _ = crate::agent::epoch::clock_anchor_wall_ns();
-        let base = Instant::now();
-        let base_ts = crate::agent::epoch::anchored_ts(base);
+        // A pass that ran a second ago, when the wall clock disagreed with the
+        // timeline by five seconds — the step this design exists for.
+        let pass_ts = 1_700_000_000_000_000_000i64;
+        let pass_offset = 5_000_000_000i64;
+        let mut tick = rows(3, (pass_ts + pass_offset) as u64);
+        tick.ts = pass_ts;
+        tick.wall_offset = pass_offset;
 
-        // A tick one second of MONOTONIC time later, whose wall clock says
-        // something else entirely — the NTP step this design exists for.
-        let stepped_wall = (base_ts + 5_000_000_000) as u64;
-        let frames = p.interval(
-            base + Duration::from_secs(1),
-            &rows(3, stepped_wall),
-            Vec::new(),
-            (0, 0),
-            7,
-            |_| true,
-        );
+        let frames = p.interval(&tick, Vec::new(), (0, 0), 7, |_| true);
 
         let Some(Frame::Rows { rows, .. }) = frames.last() else {
             panic!("a rows frame")
         };
         let row = &rows[0];
         assert_eq!(
-            row.ts,
-            base_ts + 1_000_000_000,
-            "ts advanced by monotonic elapsed, not by the wall clock"
+            row.ts, pass_ts,
+            "the frame is stamped when the values were read, not when it was sent"
         );
         assert_eq!(
             row.ts + row.wall_offset,
-            stepped_wall as i64,
+            (pass_ts + pass_offset),
             "ts + wall_offset is the wall clock at the read"
+        );
+        assert_ne!(
+            row.ts,
+            crate::agent::epoch::anchored_ts(std::time::Instant::now()),
+            "and emphatically not the moment of the send"
         );
     }
 
@@ -524,7 +482,6 @@ mod tests {
 
         let mut sent = vec![p.handshake()];
         sent.extend(p.interval(
-            Instant::now(),
             &rows(3, 2_000),
             vec![(STREAM.to_string(), entry)],
             index.state(),
@@ -576,14 +533,7 @@ mod tests {
     #[test]
     fn rows_naming_a_state_the_subscriber_lacks_are_skipped() {
         let mut p = producer();
-        let frames = p.interval(
-            Instant::now(),
-            &rows(3, 2_000),
-            Vec::new(),
-            (0xdead, 0xbeef),
-            7,
-            |_| true,
-        );
+        let frames = p.interval(&rows(3, 2_000), Vec::new(), (0xdead, 0xbeef), 7, |_| true);
         let Some(Frame::Rows { index_state, .. }) = frames.last() else {
             panic!("a rows frame")
         };
@@ -672,7 +622,6 @@ mod tests {
 
         let mut sent = vec![producer.handshake()];
         sent.extend(producer.interval(
-            std::time::Instant::now(),
             &rows,
             vec![(STREAM.to_string(), entry)],
             producer_index.state(),
@@ -782,6 +731,8 @@ mod tests {
             AgentRows {
                 wall_ns: 2_000,
                 duration_ns: 1_000,
+                ts: 2_000,
+                wall_offset: 0,
                 rows,
             }
         };
@@ -801,7 +752,6 @@ mod tests {
             .observe(STREAM, (0..TASKS).map(|s| task_labels(s, 0)))
             .unwrap();
         let opening = p.interval(
-            Instant::now(),
             &tick(0),
             vec![(STREAM.to_string(), opening_entry)],
             index.state(),
@@ -816,7 +766,6 @@ mod tests {
             .observe(STREAM, (0..TASKS).map(|s| task_labels(s, 1)))
             .unwrap();
         let steady = p.interval(
-            Instant::now(),
             &tick(1),
             vec![(STREAM.to_string(), churn_entry)],
             index.state(),
@@ -941,6 +890,8 @@ mod archive_as_a_source {
             AgentRows {
                 wall_ns: 2_000,
                 duration_ns: 1_000,
+                ts: 2_000,
+                wall_offset: 0,
                 rows,
             }
         };
@@ -959,8 +910,8 @@ mod archive_as_a_source {
         let mut direct_bytes = 0usize;
         for seq in 0..TICKS {
             let t = tick();
-            let start = Instant::now();
-            let frames = p.interval(Instant::now(), &t, Vec::new(), (0, 0), seq as u64, |_| true);
+            let start = std::time::Instant::now();
+            let frames = p.interval(&t, Vec::new(), (0, 0), seq as u64, |_| true);
             direct.push(start.elapsed());
             direct_bytes += encoded(&frames);
         }
@@ -996,7 +947,7 @@ mod archive_as_a_source {
 
             // 1. The write itself. Asynchronous — this hands rows to the
             //    writer thread and returns.
-            let start = Instant::now();
+            let start = std::time::Instant::now();
             let wal: Vec<dendro::archive::WalRow> = t
                 .rows
                 .iter()
@@ -1027,9 +978,9 @@ mod archive_as_a_source {
             //    archive rather than reopening per attempt — a spin charges
             //    the wait to CPU, and reopening charges every attempt a fresh
             //    SQLite open, neither of which a real agent would do.
-            let waited = Instant::now();
+            let waited = std::time::Instant::now();
             loop {
-                let call = Instant::now();
+                let call = std::time::Instant::now();
                 let frames = publisher.next(&db).expect("tailing keeps up");
                 let elapsed = call.elapsed();
                 let rows: usize = frames

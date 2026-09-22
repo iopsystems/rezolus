@@ -40,6 +40,11 @@ static AGENT_START: OnceLock<Instant> = OnceLock::new();
 /// Record the agent's start time. Idempotent; the first call wins.
 fn record_agent_start() {
     let _ = AGENT_START.set(Instant::now());
+    // Anchor the timeline here rather than letting the first consumer do it.
+    // The anchor is minted on first use, and an `Instant` taken before it
+    // saturates to it — so a lazily anchored agent would stamp its first
+    // samples with one timestamp and report a start time later than its own.
+    epoch::anchor_now();
 }
 
 /// Seconds since the agent started, or 0 if never recorded (e.g. a unit test
