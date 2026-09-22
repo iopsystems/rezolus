@@ -244,7 +244,6 @@ mod tests {
     use super::*;
     use crate::recorder::index::SourceIndex;
     use crate::recorder::wire::{AgentRow, AgentRows};
-    use std::time::Duration;
 
     pub(super) const STREAM: &str = "cpu_usage/cpu_usage_task";
 
