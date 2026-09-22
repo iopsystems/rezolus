@@ -302,14 +302,14 @@ struct SamplerReader {
     pool: Arc<BufferPool>,
     /// Built on first access, never at open.
     reader: std::sync::OnceLock<Option<TableReader>>,
-    /// Row timestamps as the query path indexes them, read once.
+    /// Row timestamps, read once.
     ///
     /// Reading them means decoding a whole column, and the cross-cadence
     /// policy asks for them on every query that spans samplers. A reader's
     /// view is fixed once it is open — a live archive is re-opened, and the
     /// WAL tail is materialized at open — so one read is enough, and the
     /// viewer holds its readers for the life of the process.
-    snapped_timestamps: std::sync::OnceLock<Vec<u64>>,
+    row_timestamps: std::sync::OnceLock<Vec<u64>>,
 }
 
 impl SamplerReader {
@@ -422,10 +422,10 @@ impl SamplerReader {
             .as_ref()
     }
 
-    fn snapped_timestamps(&self) -> &[u64] {
-        self.snapped_timestamps.get_or_init(|| {
+    fn row_timestamps(&self) -> &[u64] {
+        self.row_timestamps.get_or_init(|| {
             self.reader()
-                .map(|r| r.as_dyn().snapped_sample_timestamps())
+                .map(|r| r.as_dyn().sample_timestamps())
                 .unwrap_or_default()
         })
     }
@@ -811,6 +811,7 @@ impl RezReader {
             // linear in TABLE COUNT, not archive bytes, so it is the cost that
             // grows as samplers and acquisition groups multiply.
             let mut pending: Vec<PendingProbe> = Vec::new();
+            let mut measured_intervals: BTreeMap<String, Option<f64>> = BTreeMap::new();
 
             for sampler in db.all_samplers(rec.id)? {
                 let metas = db.read_segment_meta(rec.id, &sampler)?;
@@ -845,6 +846,25 @@ impl RezReader {
                     (Some(b), Some(e)) => Some((b, e)),
                     _ => None,
                 };
+                // The table's cadence, measured: its span over its gaps. A
+                // segment footer states one too, but only because a producer
+                // wrote it there, and a `.rez` segment does not — which had
+                // every archive reporting the 1 s default whatever it held.
+                // The catalog knows the span and the row count already, so
+                // this costs no decode. Nothing needs it to be exact any
+                // more: it is the staleness hint and the step the viewer
+                // opens at, not something the data is rounded to.
+                let rows = sealed.rows + wal.rows;
+                let measured = span.filter(|_| rows >= 2).map(|(b, e)| {
+                    let gap_ns = e.saturating_sub(b) as f64 / (rows - 1) as f64;
+                    // Rounded to whole milliseconds, which is what a real
+                    // interval is. Purely so the grid the viewer opens at is a
+                    // round number and two recordings of one nominal cadence
+                    // agree on it — 99.996714ms and 100.004ms would otherwise
+                    // be different grids in an A/B. Nothing is rounded TO this.
+                    (gap_ns / 1e6).round().max(1.0) / 1e3
+                });
+                measured_intervals.insert(sampler.clone(), measured);
 
                 pending.push((sampler, bytes, span));
             }
@@ -854,7 +874,13 @@ impl RezReader {
 
             let mut tables = Vec::new();
             for probe in probed {
-                let (sampler, names, interval, span) = probe?;
+                let (sampler, names, probed_interval, span) = probe?;
+                let interval = measured_intervals
+                    .get(&sampler)
+                    .copied()
+                    .flatten()
+                    .filter(|i| *i > 0.0)
+                    .unwrap_or(probed_interval);
                 tables.push(SamplerReader {
                     recording,
                     sampler: sampler.clone(),
@@ -875,7 +901,7 @@ impl RezReader {
                     },
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
-                    snapped_timestamps: std::sync::OnceLock::new(),
+                    row_timestamps: std::sync::OnceLock::new(),
                 });
             }
 
@@ -971,7 +997,7 @@ impl RezReader {
                     segments: SegmentSource::Bytes(segments),
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
-                    snapped_timestamps: std::sync::OnceLock::new(),
+                    row_timestamps: std::sync::OnceLock::new(),
                 });
             }
         }
@@ -1247,11 +1273,8 @@ impl RezReader {
         // Cadence comes from the ROWS, not from `interval()`: that reports the
         // recording's nominal interval, which every table in an archive shares
         // — on a real recording a 1 s sampler and a 30 s one both answered 1.0,
-        // so asking it can never detect a cadence difference. And it must be
-        // the SNAPPED rows, because those are the instants the query path
-        // indexes samples by; a raw row at 1.5 s on a 1 s grid is indexed at
-        // 2.0 s, so asking for 1.5 s falls before the series starts and
-        // silently yields nothing.
+        // so asking it can never detect a cadence difference. These are the
+        // instants the query path reads, nothing having rounded them.
         //
         // Cadence is a property of the SAMPLER, not of a table. Two group
         // tables of one sampler are read together on one schedule; a group that
@@ -1263,7 +1286,7 @@ impl RezReader {
         // table — the one that shows the underlying read schedule.
         let mut by_sampler: BTreeMap<&str, (u64, &[u64])> = BTreeMap::new();
         for t in &owners {
-            let ts = t.snapped_timestamps();
+            let ts = t.row_timestamps();
             let Some(gap) = typical_gap_ns(ts) else {
                 continue;
             };
@@ -4081,7 +4104,7 @@ mod tests {
         );
         assert_eq!(
             aligned,
-            vec![5.0, 11.0],
+            vec![4.5, 10.5],
             "composed + eval timestamps must match the direct reader's answer"
         );
 
@@ -4112,12 +4135,14 @@ mod tests {
             .map(|(t, _)| *t)
             .collect();
 
-        // The slow sampler's three rows, as the query path indexes them (its
-        // raw 1.5/4.5/10.5 s snap to the nominal grid). N rows span N-1 gaps,
-        // so the first yields no rate — nothing precedes it to measure across.
+        // The slow sampler's own three rows, at 1.5/4.5/10.5 s. N rows span
+        // N-1 gaps, so the first yields no rate — nothing precedes it to
+        // measure across. These used to read 5.0/11.0: the query path rounded
+        // every timestamp to a nominal 1 s grid, so a row read at 4.5 s was
+        // indexed at 5.0 s, half a second from where it was taken.
         assert_eq!(
             times,
-            vec![5.0, 11.0],
+            vec![4.5, 10.5],
             "points must sit on the slow sampler's own rows"
         );
         // The discriminating property: those two points are 6 s apart, having

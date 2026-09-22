@@ -6,7 +6,7 @@ import { ViewerApi } from './viewer_api.js';
 import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
-import { clearMetadataCache, processDashboardData, CAPTURE_EXPERIMENT } from './data.js';
+import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
@@ -384,7 +384,7 @@ const bootstrap = async () => {
                 experimentQueryRange = {
                     start,
                     end,
-                    step: Math.max(1, Math.floor((end - start) / 500)),
+                    step: stepAtLeast(nativeInterval(data), (end - start) / 500),
                 };
             }
         }
