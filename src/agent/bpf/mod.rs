@@ -12,7 +12,6 @@ use std::sync::OnceLock;
 
 use crate::agent::samplers::Sampler;
 use crate::agent::timing::AcquisitionGroup;
-use crate::agent::GroupMetadata;
 use crate::*;
 
 /// Returns true if the running kernel exposes its own BTF
@@ -288,7 +287,10 @@ pub(crate) fn possible_cpus() -> usize {
     })
 }
 
-pub fn process_cgroup_info<T>(data: &[u8], metrics: &[&dyn GroupMetadata]) -> i32
+pub fn process_cgroup_info<T>(
+    data: &[u8],
+    identity: &'static crate::agent::identity::SlotIdentity,
+) -> i32
 where
     T: CgroupInfo + plain::Plain + Default,
 {
@@ -328,12 +330,14 @@ where
             "".to_string()
         };
 
-        // Update metadata for all provided metrics
+        // Written and published together. A cgroup whose name changed without
+        // being published is invisible to a subscriber for the life of its
+        // connection — there is no per-tick diff to notice it any more.
         if !path.is_empty() {
-            let id = cgroup_info.id() as usize;
-            for metric in metrics {
-                metric.insert_metadata(id, "name".to_string(), path.clone());
-            }
+            identity.set(
+                cgroup_info.id() as usize,
+                [("name".to_string(), path)].into_iter().collect(),
+            );
         }
     }
 

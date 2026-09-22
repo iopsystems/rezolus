@@ -49,22 +49,42 @@ static NVME_COUNTER_GROUPS: &[&dyn GroupMetadata] = &[
     &DRIVE_THERMAL_THROTTLE_TRANSITIONS_2,
 ];
 
-/// Apply the per-drive labels (`device`, `type`, and `model`/`serial` when
-/// present) to one metric group at index `idx`.
-fn label_group(group: &dyn GroupMetadata, idx: usize, drive: &Drive) {
-    group.insert_metadata(idx, "device".to_string(), drive.device.clone());
-    group.insert_metadata(
-        idx,
-        "type".to_string(),
-        drive.drive_type.as_str().to_string(),
-    );
+/// The per-drive labels: `device`, `type`, and `model`/`serial` when present.
+fn drive_labels(drive: &Drive) -> std::collections::BTreeMap<String, String> {
+    let mut labels = std::collections::BTreeMap::new();
+    labels.insert("device".to_string(), drive.device.clone());
+    labels.insert("type".to_string(), drive.drive_type.as_str().to_string());
     if !drive.model.is_empty() {
-        group.insert_metadata(idx, "model".to_string(), drive.model.clone());
+        labels.insert("model".to_string(), drive.model.clone());
     }
     if !drive.serial.is_empty() {
-        group.insert_metadata(idx, "serial".to_string(), drive.serial.clone());
+        labels.insert("serial".to_string(), drive.serial.clone());
     }
+    labels
 }
+
+/// The temperature gauge covers every drive; the NVMe thermal counters are a
+/// different population and live in their own group. They were one group, with
+/// the counters labeled only for NVMe drives — so a SATA drive's slot meant
+/// something on the gauge and nothing on the counters beside it, inside one
+/// group. A slot index cannot express that.
+static SWEEP_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(SWEEP_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static SWEEP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &SWEEP_IDENTITY;
+
+static SWEEP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&DRIVEHEALTH_SWEEP_ACQ, &[&DRIVE_TEMPERATURE])];
+
+static NVME_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(NVME_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static NVME_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &NVME_IDENTITY;
+
+static NVME_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&DRIVEHEALTH_NVME_ACQ, NVME_COUNTER_GROUPS)];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
@@ -131,17 +151,28 @@ impl DriveHealth {
         // is for sparse/task-style membership). Set once at startup
         // discovery, before any snapshot walk reads it.
         DRIVEHEALTH_SWEEP_ACQ.set_member_bound(drives.len());
+        // The NVMe group's population is the NVMe drives, not every drive. A
+        // bound over all of them would declare members that will never be
+        // written and publish an honest-looking zero for each — the same
+        // over-declaration #1238 fixed for per-CPU groups.
+        DRIVEHEALTH_NVME_ACQ.set_member_set(
+            &drives
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.drive_type == DriveType::Nvme)
+                .map(|(idx, _)| idx)
+                .collect::<Vec<_>>(),
+        );
 
         // Per-index labels are read once at discovery and never change for the
         // life of the process (startup-only discovery; hotplug is out of scope
         // for Phase 1). Temperature is labeled for every drive; the NVMe-only
         // throttle counters are labeled only for NVMe drives.
         for (idx, drive) in drives.iter().enumerate() {
-            label_group(&DRIVE_TEMPERATURE, idx, drive);
+            let labels = drive_labels(drive);
+            SWEEP_IDENTITY.set(idx, labels.clone());
             if drive.drive_type == DriveType::Nvme {
-                for group in NVME_COUNTER_GROUPS {
-                    label_group(*group, idx, drive);
-                }
+                NVME_IDENTITY.set(idx, labels);
             }
         }
 

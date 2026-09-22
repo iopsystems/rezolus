@@ -12,6 +12,15 @@ mod exposition;
 /// module for it would be the wrong dependency.
 pub(crate) const REPLICATION_CONTENT_TYPE: &str = "application/vnd.rezolus.replication.v1+dendro";
 mod external_metrics;
+/// What a slot means, published when it changes — #1224.
+///
+/// Every production caller is a BPF ringbuf handler, so on a non-Linux build
+/// nothing here is reached and all of it reads as dead. The tests reach it on
+/// every platform, which is why `GroupMetadata` is not gated: the publish path
+/// is the part most worth exercising, and gating it would confine that to
+/// where BPF runs.
+#[cfg_attr(not(test), allow(dead_code))]
+pub mod identity;
 mod metrics;
 pub mod sampler_status;
 mod samplers;

@@ -8,6 +8,22 @@ use metriken::*;
 /// on a single machine and leaves room for the port counters in #1213.
 pub const MAX_INTERFACES: usize = 64;
 
+/// The stream these metrics appear as. None of them declares an `acq_group`,
+/// so `create_v3` routes them to the default group `"<sampler>/main"`.
+///
+/// Deliberately NOT registered in `ACQUISITION_GROUPS` — registering it would
+/// declare the group and change how the builder treats these metrics. It
+/// exists so identity written to them is published under the name they
+/// actually appear as, rather than going unpublished because no static named
+/// it.
+// Used only by this sampler's Linux module; `stats.rs` compiles everywhere.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub static ETHTOOL_DEFAULT_ACQ: crate::agent::timing::AcquisitionGroup =
+    crate::agent::timing::AcquisitionGroup::new(
+        crate::agent::samplers::bpf_sampler_name("network_ethtool"),
+        "main",
+    );
+
 #[metric(
     name = "network_ena_bandwidth_allowance_exceeded",
     description = "Packets queued or dropped due to inbound bandwidth allowance being exceeded on an ENA network interface",

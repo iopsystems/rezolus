@@ -93,6 +93,28 @@ static GROUPS: &[&GaugeGroup] = &[
     &FILESYSTEM_READONLY,
 ];
 
+/// What a filesystem slot means. Unlike a GPU or a drive this genuinely moves
+/// at runtime — a mount appears, a filesystem is unmounted and its slot is
+/// reused — so a subscriber told only at connect would be wrong within
+/// minutes.
+static MOUNT_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(MOUNT_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static MOUNT_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &MOUNT_IDENTITY;
+
+static MOUNT_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &FILESYSTEM_SWEEP_ACQ,
+    &[
+        &FILESYSTEM_TOTAL,
+        &FILESYSTEM_FREE,
+        &FILESYSTEM_AVAILABLE,
+        &FILESYSTEM_INODES_TOTAL,
+        &FILESYSTEM_INODES_FREE,
+        &FILESYSTEM_READONLY,
+    ],
+)];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -334,19 +356,21 @@ fn vacate(slot: usize) {
     for group in GROUPS {
         // Must use the absent sentinel, not zero, when a filesystem leaves.
         let _ = group.set(slot, i64::MIN);
-        group.clear_metadata(slot);
     }
+    // And say so. A subscriber not told keeps attributing rows to a filesystem
+    // that is no longer mounted, and the slot is reusable immediately.
+    MOUNT_IDENTITY.clear(slot);
 }
 
 fn label(slot: usize, mount: &MountEntry, block_device: Option<&str>) {
-    for group in GROUPS {
-        group.insert_metadata(slot, "mount".to_string(), mount.mount_point.clone());
-        group.insert_metadata(slot, "fstype".to_string(), mount.fstype.clone());
-        group.insert_metadata(slot, "devnum".to_string(), mount.device.clone());
-        if let Some(name) = block_device {
-            group.insert_metadata(slot, "block_device".to_string(), name.to_string());
-        }
+    let mut labels = std::collections::BTreeMap::new();
+    labels.insert("mount".to_string(), mount.mount_point.clone());
+    labels.insert("fstype".to_string(), mount.fstype.clone());
+    labels.insert("devnum".to_string(), mount.device.clone());
+    if let Some(name) = block_device {
+        labels.insert("block_device".to_string(), name.to_string());
     }
+    MOUNT_IDENTITY.set(slot, labels);
 }
 
 /// The kernel's name for block device `devnum` (`nvme0n1p5`, `dm-0`), from its

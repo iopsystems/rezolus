@@ -40,6 +40,24 @@ pub static DRIVEHEALTH_SWEEP_ACQ: AcquisitionGroup = AcquisitionGroup::new(
 #[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
 static DRIVEHEALTH_SWEEP_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_SWEEP_ACQ;
 
+/// The NVMe-only thermal counters, which are a different population from the
+/// temperature gauge beside them.
+///
+/// They were in `drivehealth_sweep` and labeled only for NVMe drives, so a SATA
+/// drive's slot carried labels on the temperature gauge and none on these —
+/// one slot meaning two things inside one group. That is exactly what a slot
+/// index cannot express, and what
+/// `a_groups_metrics_agree_on_slot_order_and_on_what_each_slot_means` pins for
+/// every other group. Splitting them says what was already true: these
+/// describe NVMe drives, and the gauge describes all of them.
+pub static DRIVEHEALTH_NVME_ACQ: AcquisitionGroup = AcquisitionGroup::new(
+    crate::agent::samplers::bpf_sampler_name("drivehealth"),
+    "drivehealth_nvme",
+);
+
+#[distributed_slice(crate::agent::samplers::ACQUISITION_GROUPS)]
+static DRIVEHEALTH_NVME_ACQ_REG: &'static AcquisitionGroup = &DRIVEHEALTH_NVME_ACQ;
+
 #[metric(
     name = "drive_temperature",
     description = "The current drive temperature in degrees Celsius (C). Labeled with the drive's `serial` when available, which is potentially sensitive but included for stable cross-reboot fleet identity.",
@@ -53,41 +71,41 @@ pub static DRIVE_TEMPERATURE: GaugeGroup = GaugeGroup::new(MAX_DRIVES);
 #[metric(
     name = "drive_temperature_warning_time",
     description = "Cumulative seconds the NVMe composite temperature was at or above the warning threshold (WCTEMP).",
-    metadata = { unit = "seconds", acq_group = "drivehealth_sweep" }
+    metadata = { unit = "seconds", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_WARNING_TIME: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_temperature_critical_time",
     description = "Cumulative seconds the NVMe composite temperature was at or above the critical threshold (CCTEMP).",
-    metadata = { unit = "seconds", acq_group = "drivehealth_sweep" }
+    metadata = { unit = "seconds", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_TEMPERATURE_CRITICAL_TIME: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_thermal_throttle_time",
     description = "Cumulative seconds spent in NVMe host-controlled thermal-management state TMT1 (only nonzero when HCTM is enabled).",
-    metadata = { level = "1", unit = "seconds", acq_group = "drivehealth_sweep" }
+    metadata = { level = "1", unit = "seconds", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_THERMAL_THROTTLE_TIME_1: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_thermal_throttle_time",
     description = "Cumulative seconds spent in NVMe host-controlled thermal-management state TMT2 (only nonzero when HCTM is enabled).",
-    metadata = { level = "2", unit = "seconds", acq_group = "drivehealth_sweep" }
+    metadata = { level = "2", unit = "seconds", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_THERMAL_THROTTLE_TIME_2: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_thermal_throttle_transitions",
     description = "Number of transitions into NVMe host-controlled thermal-management state TMT1 (only nonzero when HCTM is enabled).",
-    metadata = { level = "1", acq_group = "drivehealth_sweep" }
+    metadata = { level = "1", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_1: CounterGroup = CounterGroup::new(MAX_DRIVES);
 
 #[metric(
     name = "drive_thermal_throttle_transitions",
     description = "Number of transitions into NVMe host-controlled thermal-management state TMT2 (only nonzero when HCTM is enabled).",
-    metadata = { level = "2", acq_group = "drivehealth_sweep" }
+    metadata = { level = "2", acq_group = "drivehealth_nvme" }
 )]
 pub static DRIVE_THERMAL_THROTTLE_TRANSITIONS_2: CounterGroup = CounterGroup::new(MAX_DRIVES);

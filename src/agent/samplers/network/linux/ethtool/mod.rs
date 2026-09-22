@@ -126,6 +126,24 @@ impl Ifreq {
     }
 }
 
+/// What an interface slot means, across every metric of the group.
+static INTERFACE_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(INTERFACE_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static INTERFACE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &INTERFACE_IDENTITY;
+
+static INTERFACE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &ETHTOOL_DEFAULT_ACQ,
+    &[
+        &ENA_BW_IN_ALLOWANCE_EXCEEDED,
+        &ENA_BW_OUT_ALLOWANCE_EXCEEDED,
+        &ENA_PPS_ALLOWANCE_EXCEEDED,
+        &ENA_CONNTRACK_ALLOWANCE_EXCEEDED,
+        &ENA_LINKLOCAL_ALLOWANCE_EXCEEDED,
+    ],
+)];
+
 /// A tracked stat: its index in the ethtool stats array and the metric to update.
 struct TrackedStat {
     index: usize,
@@ -257,13 +275,17 @@ impl EthtoolInner {
                     break;
                 }
                 tracked.slot = interfaces.len();
-                for stat in &tracked.stats {
-                    stat.metric.insert_metadata(
-                        tracked.slot,
-                        "interface".to_string(),
-                        tracked.name.clone(),
-                    );
-                }
+                // Labeled across EVERY metric of the group, not just the stats
+                // this NIC reports. Slot N means this interface for the whole
+                // group; labeling only the reported subset left one slot
+                // meaning something on some metrics and nothing on others,
+                // which a slot index cannot express.
+                INTERFACE_IDENTITY.set(
+                    tracked.slot,
+                    [("interface".to_string(), tracked.name.clone())]
+                        .into_iter()
+                        .collect(),
+                );
                 interfaces.push(tracked);
             }
         }

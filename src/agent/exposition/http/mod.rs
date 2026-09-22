@@ -280,6 +280,11 @@ fn rows_frames(
     wall_now: impl Fn() -> u64,
 ) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
     async_stream::try_stream! {
+        // Held for the life of this subscription. Identity is published and
+        // folded into the index only while something wants it; without this the
+        // agent maintains one for nobody, which measured at ~0.3 ms a scrape on
+        // a host with busy task churn.
+        let _identity = crate::agent::identity::Demand::register();
         let interval = subscription.interval();
         // Per group, the end of the acquisition window this connection has
         // already been told about. A snapshot carries every group the agent

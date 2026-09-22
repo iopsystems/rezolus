@@ -37,15 +37,39 @@ impl_cgroup_info!(bpf::types::cgroup_info);
 unsafe impl plain::Plain for bpf::types::task_info {}
 unsafe impl plain::Plain for bpf::types::task_exit {}
 
-static CGROUP_METRICS: &[&dyn GroupMetadata] = &[
-    &CGROUP_CPU_USAGE_USER,
-    &CGROUP_CPU_USAGE_SYSTEM,
-    &CGROUP_CPU_USAGE_EXITED,
+/// Every group a cgroup id reaches, paired with the metrics carrying it.
+///
+/// One id spans several streams, and a subscriber keeps identity per
+/// stream — so each needs its own entry. Pairing them here is what stops a
+/// call site publishing one group's identity under another's name.
+static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static CGROUP_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &CGROUP_IDENTITY;
+
+static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[
+    (&CGROUP_EXITED_ACQ, &[&CGROUP_CPU_USAGE_EXITED]),
+    (
+        &CGROUP_USAGE_ACQ,
+        &[&CGROUP_CPU_USAGE_USER, &CGROUP_CPU_USAGE_SYSTEM],
+    ),
 ];
 static TASK_METRICS: &[&dyn GroupMetadata] = &[&TASK_CPU_USAGE];
 
+/// The only way this sampler writes what a task slot means. The group and the
+/// metrics are bound here so no call site can pair them wrongly.
+static TASK_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(TASK_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static TASK_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &TASK_IDENTITY;
+
+static TASK_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
+    &[(&TASK_USAGE_ACQ, TASK_METRICS)];
+
 fn handle_cgroup_info(data: &[u8]) -> i32 {
-    process_cgroup_info::<bpf::types::cgroup_info>(data, CGROUP_METRICS)
+    process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)
 }
 
 fn handle_task_info(data: &[u8]) -> i32 {
@@ -90,14 +114,19 @@ fn handle_task_info(data: &[u8]) -> i32 {
             "/".to_string()
         };
 
-        for metric in TASK_METRICS {
-            metric.insert_metadata(pid, "pid".to_string(), pid.to_string());
-            metric.insert_metadata(pid, "tgid".to_string(), tgid.to_string());
-            if !comm.is_empty() {
-                metric.insert_metadata(pid, "comm".to_string(), comm.clone());
-            }
-            metric.insert_metadata(pid, "cgroup".to_string(), cgroup.clone());
+        // Built once and set once. Setting the four labels separately left a
+        // window where a reader could see a slot half-way through changing
+        // hands — the new task's pid beside the old task's comm — and would
+        // have given the publish four changes to describe instead of one. See
+        // `agent::identity`.
+        let mut labels = std::collections::BTreeMap::new();
+        labels.insert("pid".to_string(), pid.to_string());
+        labels.insert("tgid".to_string(), tgid.to_string());
+        if !comm.is_empty() {
+            labels.insert("comm".to_string(), comm);
         }
+        labels.insert("cgroup".to_string(), cgroup);
+        TASK_IDENTITY.set(pid, labels);
     }
 
     0
@@ -109,9 +138,7 @@ fn handle_task_exit(data: &[u8]) -> i32 {
     if plain::copy_from_bytes(&mut exit, data).is_ok() {
         let pid = exit.pid as usize;
 
-        for metric in TASK_METRICS {
-            metric.clear_metadata(pid);
-        }
+        TASK_IDENTITY.clear(pid);
     }
 
     0
