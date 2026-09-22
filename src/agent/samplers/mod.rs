@@ -10,6 +10,7 @@ mod cpu;
 mod drivehealth;
 mod filesystem;
 mod gpu;
+mod hw_sensors;
 mod memory;
 mod network;
 mod rezolus;

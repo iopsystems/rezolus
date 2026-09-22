@@ -113,7 +113,7 @@
             // ignored by histograms and corrupts counter rate semantics.
             // Mirrors defaultRangeFor in ../data.js.
             const start = minTime;
-            const step = Math.max(1, meta.interval || 1);
+            const step = (Number.isFinite(meta.interval) && meta.interval > 0) ? meta.interval : 1;
 
             const node = await selectedNode();
             const query = node

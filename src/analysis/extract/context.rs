@@ -72,6 +72,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "gpu_apple",
     "gpu_intel_pmu",
     "gpu_nvidia",
+    "hw_sensors",
     "memory_meminfo",
     "memory_vmstat",
     "network_ethtool",
@@ -247,6 +248,13 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("scheduler_discarded_samples", "scheduler_runqueue"),
     ("scheduler_offcpu", "scheduler_runqueue"),
     ("scheduler_running", "scheduler_runqueue"),
+    ("sensor_cooling_state", "hw_sensors"),
+    ("sensor_current", "hw_sensors"),
+    ("sensor_fan_pwm", "hw_sensors"),
+    ("sensor_fan_speed", "hw_sensors"),
+    ("sensor_power", "hw_sensors"),
+    ("sensor_temperature", "hw_sensors"),
+    ("sensor_voltage", "hw_sensors"),
     ("softirq", "cpu_usage"),
     ("softirq_time", "cpu_usage"),
     ("syscall", "syscall_counts"),
@@ -374,6 +382,7 @@ const DOMAIN_ALIASES: &[(&str, &str)] = &[
     ("drive", "drivehealth"), // drivehealth sampler emits drive_* metrics
     ("gpmu", "gpu"),          // gpu_amd_pmu sampler emits gpmu_* metrics
     ("package", "cpu"),       // cpu_power sampler emits package_c*_residency metrics
+    ("sensor", "hw"),         // hw_sensors sampler emits sensor_* metrics
 ];
 
 /// Domain of a sampler or metric name: its first `_`-separated token, except
@@ -487,6 +496,7 @@ mod tests {
         // drivehealth sampler emits drive_* metrics: first-token domain
         // "drive" must alias to the sampler's domain "drivehealth".
         assert_eq!(domain_of("drive_temperature"), "drivehealth");
+        assert_eq!(domain_of("sensor_temperature"), domain_of("hw_sensors"));
         // gpu_amd_pmu sampler emits gpmu_* metrics: first-token domain
         // "gpmu" must alias to the sampler's domain "gpu".
         assert_eq!(domain_of("gpmu_busy_cycles"), "gpu");

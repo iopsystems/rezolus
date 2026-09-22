@@ -218,6 +218,7 @@ const TopNav = {
             (attrs.start_time != null && attrs.end_time != null) &&
                 m(GranularitySelector, {
                     value: attrs.granularity,
+                    interval: attrs.interval,
                     onChange: attrs.onGranularityChange,
                     hidden: attrs.sectionRoute === '/systeminfo' || attrs.sectionRoute === '/report',
                 }),

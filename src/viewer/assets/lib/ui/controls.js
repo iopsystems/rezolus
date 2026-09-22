@@ -298,14 +298,29 @@ const TimeRangeBar = {
     },
 };
 
-// Granularity (step) selector — lets users override the auto-calculated query step.
-const GRANULARITY_OPTIONS = [
-    { value: '', label: 'Auto' },
-    { value: '1', label: '1s' },
-    { value: '5', label: '5s' },
-    { value: '15', label: '15s' },
-    { value: '60', label: '1m' },
-];
+// Granularity (step) selector — lets users override the auto-calculated query
+// step. Offered steps start at the recording's own sampling interval: a step
+// finer than the cadence has nothing left to resolve, and a recording made at
+// `--interval 100ms` has useful choices well below one second.
+const GRANULARITY_LADDER = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 5, 15, 60];
+
+const formatStep = (secs) => {
+    if (secs < 1) return `${Math.round(secs * 1000)}ms`;
+    if (secs < 60) return `${Number(secs.toFixed(3))}s`;
+    return `${Number((secs / 60).toFixed(3))}m`;
+};
+
+const granularityOptions = (interval) => {
+    const native = (Number.isFinite(interval) && interval > 0) ? interval : 1;
+    const steps = GRANULARITY_LADDER.filter((s) => s >= native);
+    // A recording whose cadence isn't on the ladder (250ms, 2s) still gets its
+    // own native step as the first choice.
+    if (!steps.length || Math.abs(steps[0] - native) > 1e-9) steps.unshift(native);
+    return [
+        { value: '', label: 'Auto' },
+        ...steps.map((s) => ({ value: String(s), label: formatStep(s) })),
+    ];
+};
 
 const GranularitySelector = {
     view(vnode) {
@@ -320,10 +335,12 @@ const GranularitySelector = {
             m('select.granularity-select', {
                 value: value == null ? '' : String(value),
                 onchange: (e) => {
-                    const val = e.target.value === '' ? null : parseInt(e.target.value, 10);
+                    // parseFloat, not parseInt: a sub-second step is a fraction
+                    // of a second and parseInt would truncate 0.1 to 0.
+                    const val = e.target.value === '' ? null : parseFloat(e.target.value);
                     onChange(val);
                 },
-            }, GRANULARITY_OPTIONS.map(opt =>
+            }, granularityOptions(vnode.attrs.interval).map(opt =>
                 m('option', { value: opt.value }, opt.label),
             )),
         ]);
@@ -366,4 +383,4 @@ const TimeModeSelector = {
     },
 };
 
-export { TimeRangeBar, GranularitySelector, TimeModeSelector };
+export { TimeRangeBar, GranularitySelector, TimeModeSelector, granularityOptions };

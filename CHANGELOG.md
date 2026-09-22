@@ -1,7 +1,34 @@
 ## [Unreleased]
 
+### Fixed
+
+- Viewer: a recording made below a one-second cadence is read and drawn at that
+  cadence instead of at one second. The frontend floored every query step and
+  histogram stride at 1s, so nine of every ten samples of a `--interval 100ms`
+  recording were discarded and a 2 Hz signal came back as a flat line at its
+  mean. Nothing in the query path required the floor — the engine takes `step`
+  as seconds and works in nanoseconds — and the Step selector now offers the
+  sub-second choices such a recording can resolve.
+- `.rez`: a sub-second archive reads back the values it holds. The query engine
+  rounded every timestamp to a grid taken from the file's declared
+  `sampling_interval_ms` — a key a `.rez` segment does not carry, so it assumed
+  one second — and ten rows of a 100ms second collapsed onto one instant,
+  leaving a sub-second query returning held-forward copies of each second's
+  survivor. metriken-query 0.24.0 reads the recorded timestamps instead.
+  **Existing archives were never damaged, only misread**: they need no
+  re-recording. `RezReader::interval()` now reports a measured cadence rather
+  than the 1s default every `.rez` inherited, which is what lets the viewer
+  open a sub-second recording at its own resolution.
+
 ### Added
 
+- Agent: an opt-in Linux `hw_sensors` sampler reads native thermal zones, hwmon
+  temperature and electrical channels, fan RPM/PWM, and cooling states. Includes
+  INA3221 power derivation and Thor board interpretation, with a Hardware Sensors viewer
+  section. Reads run in the blocking pool at a configurable interval (default
+  5s). Thor inventory fixtures and synthetic Orin layouts are tested; hardware
+  timing and Orin validation are still required before fleet-wide enablement.
+  (#1203)
 - Agent: a `filesystem` sampler reports total, free and available bytes and
   total and free inodes, plus whether it is read-only, for every locally mounted
   filesystem: one series per filesystem, labeled by `mount`, `fstype`, `devnum`

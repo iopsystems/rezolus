@@ -4,6 +4,7 @@
 .claude/*
 !.claude/skills/
 !.claude/scripts/
+.superpowers/
 docs/superpowers/
 target
 site/viewer/pkg/

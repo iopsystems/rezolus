@@ -35,6 +35,7 @@ This guide walks you through all the available metrics, organized by category.
   - [network_traffic](#network_traffic)
 - [Scheduler](#scheduler)
   - [scheduler_runqueue](#scheduler_runqueue)
+- [Hardware Sensors](#hardware-sensors)
 - [Syscall](#syscall)
   - [syscall_counts](#syscall_counts)
   - [syscall_latency](#syscall_latency)
@@ -662,6 +663,65 @@ performance and responsiveness.
 | `scheduler_running` | Distribution of the amount of time tasks were on-CPU | |
 | `scheduler_offcpu` | Distribution of the amount of time tasks were off-CPU | |
 | `scheduler_context_switch` | The number of involuntary context switches | `kind=involuntary` |
+
+## Hardware Sensors
+
+The Linux `hw_sensors` sampler monitors hardware health: temperature, power,
+voltage, current, fans, and cooling state. It reads thermal zones, hwmon
+channels, and thermal cooling devices. It is **opt-in**, including when `[defaults] enabled = true`:
+
+```toml
+[samplers.hw_sensors]
+enabled = true
+interval = "5s"
+```
+
+Reads run in a nonoverlapping blocking task, dispatched by consumer activity
+at most once per interval (5 seconds by default). Discovery runs every 60
+seconds during sampling; descriptive metadata is cached between passes.
+Failed, disabled, faulted, removed or unreadable measurements are absent from
+the live endpoint rather than zero. If every channel in a family fails, its
+last successful acquisition window remains unchanged; a recorder that
+deduplicates windows can retain the previous observation without an outage
+marker. A sysfs read can invoke hardware access, so this sampler's cost must
+be measured on the target before fleet-wide enablement.
+
+Each family identifies a native channel with `sensor`, `source`, `chip`,
+`channel`, and a native `label` when supplied by the kernel. `board_model` and
+`soc_compatible` preserve platform identity when available; `scope` records
+verified board-specific interpretation. Derived power carries
+`derived=voltage_x_current`.
+Unknown boards retain native readings without inferred CPU/GPU associations.
+Sensor slots are never reused for a different identity during the process;
+each family supports at most 256 lifetime identities, reporting overflow.
+
+| Metric | Type | Stored unit / interpretation |
+| --- | --- | --- |
+| `sensor_temperature` | Gauge | Millidegrees Celsius per temperature channel; signed |
+| `sensor_power` | Gauge | Microwatts per channel; direct hwmon reading or checked INA3221 voltage × current |
+| `sensor_voltage` | Gauge | Millivolts per bus-voltage channel; excludes INA3221 shunt-voltage channels |
+| `sensor_current` | Gauge | Milliamps per current channel |
+| `sensor_fan_speed` | Gauge | Measured revolutions per minute, including NVIDIA `pwm_tach/rpm` |
+| `sensor_fan_pwm` | Gauge | Fan command on a 0–255 scale, not measured rotation |
+| `sensor_cooling_state` | Gauge | Driver-defined cooling-state index, not a throttling percentage |
+
+The Hardware Sensors dashboard plots every family separately by sensor, converting
+temperature to Celsius, electrical measurements to W/V/A, and PWM to a fraction.
+Native sensor sources can overlap thermal zones or existing GPU/drive readings;
+these are distinct source series, not additive measurements. Power rails may
+also overlap. Derived INA3221 power uses sequential voltage/current reads and
+does not claim an atomic electrical sample.
+
+The captured Thor fixture exposes GPU, CPU, two SoC thermal zones, and a junction
+zone; INA3221 rail measurements; INA238 input power; fan PWM; and cooling states.
+Thor INA238 input includes module and carrier, unlike Orin NX/Nano's module-only
+VDD_IN. Orin layouts have synthetic test coverage, not hardware validation.
+No NIC temperature is inferred from unlabeled external sensors.
+
+This first sampler does not record configurable limits, trip points, fan modes,
+or overcurrent event histories. A zero cooling state does not establish the
+absence of every form of hardware throttling. See [hardware validation and
+inventory commands](sensors-validation.md) for the remaining validation work.
 
 ## Syscall
 

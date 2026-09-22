@@ -27,7 +27,7 @@ fn enabled() -> bool {
 /// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
 /// section. Reserved for samplers whose cost makes accidental activation
 /// (e.g. via an absent/commented config) unacceptable.
-const OPT_IN_SAMPLERS: &[&str] = &["gpu_amd_pmu"];
+const OPT_IN_SAMPLERS: &[&str] = &["gpu_amd_pmu", "hw_sensors"];
 
 fn listen() -> String {
     "0.0.0.0:4241".into()
@@ -113,8 +113,9 @@ impl Config {
 
     /// The configured read interval for `name` (per-sampler override, falling
     /// back to the `defaults` section). `None` if unset anywhere, in which case
-    /// the sampler applies its own built-in default. Consumed by `drivehealth`,
-    /// which reads drive temperature on this cadence off the sample cycle.
+    /// the sampler applies its own built-in default. Consumed by samplers that
+    /// read cost-bearing sources off the sample cycle (`drivehealth`,
+    /// `filesystem`, GPU PMUs and `hw_sensors`).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn sampler_interval(&self, name: &str) -> Option<std::time::Duration> {
         self.samplers
@@ -173,6 +174,7 @@ mod tests {
         );
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
+        assert!(!c.enabled("hw_sensors"));
     }
 
     #[test]
@@ -186,6 +188,12 @@ mod tests {
     fn opt_in_sampler_on_only_when_explicitly_enabled() {
         let c = config("[defaults]\nenabled = true\n\n[samplers.gpu_amd_pmu]\nenabled = true\n");
         assert!(c.enabled("gpu_amd_pmu"));
+        let c = config("[samplers.hw_sensors]\nenabled = true\ninterval = \"7s\"\n");
+        assert!(c.enabled("hw_sensors"));
+        assert_eq!(
+            c.sampler_interval("hw_sensors"),
+            Some(Duration::from_secs(7))
+        );
     }
 
     #[test]

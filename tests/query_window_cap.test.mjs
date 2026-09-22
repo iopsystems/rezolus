@@ -53,15 +53,19 @@ test('executePromQLRangeQuery: step follows meta.interval (5s sampling)', async 
     assert.equal(calls[0].step, 5, 'step = native interval (5s)');
 });
 
-test('executePromQLRangeQuery: sub-second interval clamps to a 1s step floor', async () => {
-    // metriken itself floors step at interval().max(1.0); mirror that.
+test('executePromQLRangeQuery: sub-second interval queries at the sub-second step', async () => {
+    // There is no 1s floor. The engine takes `step` as f64 seconds and works
+    // in nanoseconds internally (`step_ns = step * 1e9`); the `interval().max(1.0)`
+    // in metriken-query is on the INSTANT-query path, where start == end and
+    // the step is degenerate anyway. Flooring here instead threw away nine of
+    // every ten samples of a 100ms recording.
     const minTime = 1_700_000_000;
     const maxTime = minTime + 600;
     const calls = [];
     const api = makeApi(calls, { minTime, maxTime, interval: 0.1 });
 
     await api.executePromQLRangeQuery('cpu_usage');
-    assert.equal(calls[0].step, 1, 'sub-second interval rounds up to a 1s step');
+    assert.equal(calls[0].step, 0.1, 'step = native interval (100ms)');
 });
 
 test('executePromQLRangeQuery: step override (Granularity selector) wins', async () => {
