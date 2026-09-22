@@ -27,6 +27,20 @@ pub struct AgentStatus {
     /// restarted from zero. See `crate::agent::epoch`.
     #[serde(default)]
     pub producer_epoch: String,
+    /// The wall clock this agent's timeline is anchored to, in nanoseconds
+    /// since the Unix epoch.
+    ///
+    /// Every timestamp the agent produces is `anchor + monotonic elapsed` from
+    /// here, so a consumer that has this can place a reading in wall time
+    /// without trusting its own clock to agree. It is minted with the epoch
+    /// and lasts exactly as long: the same restart resets both.
+    ///
+    /// Reported here as well as in a stream's handshake because a consumer
+    /// that scrapes rather than subscribes never sees a handshake, and it
+    /// needs the same anchor to interpret the same timestamps. Defaulted for
+    /// an older agent that has no anchor to report.
+    #[serde(default)]
+    pub clock_anchor_wall_ns: i64,
     pub uptime_seconds: u64,
     pub ttl_seconds: u64,
     /// The sampling clock's current period in milliseconds, or `None` when the
@@ -638,6 +652,7 @@ mod tests {
         let s = AgentStatus {
             version: "5.15.1-alpha.2".into(),
             producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
+            clock_anchor_wall_ns: 0,
             uptime_seconds: 11532,
             ttl_seconds: 60,
             sample_interval_ms: None,
