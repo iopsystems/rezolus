@@ -16,11 +16,19 @@
 //! subscriber stamped, two recorders watching one agent would build two
 //! timelines for the same source and could not be merged.
 //!
-//! So `ts` is anchored here: `anchor_wall_ns + monotonic elapsed`, which has
+//! So `ts` is anchored: `anchor_wall_ns + monotonic elapsed`, which has
 //! wall-clock magnitude but advances monotonically, so rows stay strictly
 //! increasing through an NTP step. `wall_offset` is wall minus `ts` at the
 //! moment of the read, so `ts + wall_offset` recovers the real wall clock and
 //! the divergence is visible rather than absorbed.
+//!
+//! The anchor comes from [`crate::agent::epoch`], where it is minted with the
+//! `producer_epoch` and is therefore one per PROCESS. It used to be minted
+//! here, per connection, which made the handshake advertise a different
+//! `clock_anchor_wall_ns` for each subscriber while naming the same source
+//! uuid: two subscribers to one agent were told the same source had two
+//! timelines, differing by however far the wall clock moved between their
+//! connections.
 //!
 //! # The schema travels inside the payload
 //!
@@ -37,7 +45,7 @@
 //! which under replication is the subscriber's business.
 
 use std::collections::BTreeMap;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use dendro::archive::WalRow;
 use dendro::replicate::{Frame, IndexState};
@@ -60,10 +68,6 @@ pub(crate) struct FrameProducer {
     uuid: String,
     labels: BTreeMap<String, String>,
     metadata: BTreeMap<String, String>,
-    /// The wall clock read once, with the monotonic instant it was read at.
-    /// Together they are the anchored timeline — see the module docs.
-    anchor_wall_ns: i64,
-    anchor: Instant,
     /// Schemas this subscriber has been sent, by stream. The same rule
     /// `SnapshotBuilder::emitted_schemas` follows, kept per subscription
     /// because a stream is only self-describing to someone who has the schema
@@ -82,35 +86,20 @@ impl FrameProducer {
         labels: BTreeMap<String, String>,
         metadata: BTreeMap<String, String>,
     ) -> Self {
-        Self::anchored_at(epoch, labels, metadata, SystemTime::now(), Instant::now())
-    }
-
-    /// The anchor injected, so a test can state the timeline rather than
-    /// observe it.
-    fn anchored_at(
-        epoch: String,
-        labels: BTreeMap<String, String>,
-        metadata: BTreeMap<String, String>,
-        wall: SystemTime,
-        anchor: Instant,
-    ) -> Self {
         Self {
             uuid: epoch,
             labels,
             metadata,
-            anchor_wall_ns: wall
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_nanos() as i64)
-                .unwrap_or(0),
-            anchor,
             sent_schemas: BTreeMap::new(),
             handshake_sent: false,
         }
     }
 
     /// `anchor_wall_ns + monotonic elapsed` — FORMAT.md §5's anchored `ts`.
+    ///
+    /// The source's anchor, not this producer's: see the module docs.
     fn ts_at(&self, now: Instant) -> i64 {
-        self.anchor_wall_ns + now.saturating_duration_since(self.anchor).as_nanos() as i64
+        crate::agent::epoch::anchored_ts(now)
     }
 
     /// The opening frame. Sent once per connection, before anything else.
@@ -121,7 +110,7 @@ impl FrameProducer {
             uuid: Some(self.uuid.clone()),
             labels: self.labels.clone(),
             metadata: self.metadata.clone(),
-            clock_anchor_wall_ns: self.anchor_wall_ns,
+            clock_anchor_wall_ns: crate::agent::epoch::clock_anchor_wall_ns(),
             // A live agent's source is open for as long as it is running.
             // `finish()` on the subscriber is what closes its copy, and it
             // must not be told the source ended when it has not.
@@ -307,14 +296,12 @@ mod tests {
     }
 
     pub(super) fn producer() -> FrameProducer {
-        FrameProducer::anchored_at(
+        FrameProducer::new(
             "11111111-2222-4333-8444-555555555555".to_string(),
             [("source".to_string(), "rezolus".to_string())]
                 .into_iter()
                 .collect(),
             BTreeMap::new(),
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-            Instant::now(),
         )
     }
 
@@ -448,25 +435,32 @@ mod tests {
     }
 
     /// `ts` is anchored and `wall_offset` recovers the wall clock — FORMAT.md
-    /// §5. The anchor is injected, so this states the timeline rather than
-    /// observing whatever the machine's clock did.
+    /// §5.
+    ///
+    /// Stated against the source's real anchor rather than an injected one,
+    /// which is what having one anchor per process costs: the timeline is no
+    /// longer a parameter. The claim survives it, because what is asserted is
+    /// a RELATION — a tick one second of monotonic time later is one second
+    /// later on the timeline, whatever the wall clock did in between — and
+    /// `epoch::anchored_ts` is the same function the producer used, so a
+    /// producer that stopped anchoring would fail this rather than agree with
+    /// it by construction.
     #[test]
     fn ts_is_anchored_and_wall_offset_recovers_the_wall_clock() {
-        let anchor = Instant::now();
-        let mut p = FrameProducer::anchored_at(
-            "epoch".to_string(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            UNIX_EPOCH + Duration::from_secs(1_700_000_000),
-            anchor,
-        );
-        let anchor_ns = 1_700_000_000_000_000_000i64;
+        let mut p = producer();
+        // Touched first, so the timeline is anchored BEFORE `base`. The anchor
+        // is minted on first use, and an instant that precedes it saturates to
+        // it — which would make the relation below hold by a millisecond less
+        // than a second, depending on which test in the binary ran first.
+        let _ = crate::agent::epoch::clock_anchor_wall_ns();
+        let base = Instant::now();
+        let base_ts = crate::agent::epoch::anchored_ts(base);
 
         // A tick one second of MONOTONIC time later, whose wall clock says
         // something else entirely — the NTP step this design exists for.
-        let stepped_wall = (anchor_ns + 5_000_000_000) as u64;
+        let stepped_wall = (base_ts + 5_000_000_000) as u64;
         let frames = p.interval(
-            anchor + Duration::from_secs(1),
+            base + Duration::from_secs(1),
             &rows(3, stepped_wall),
             Vec::new(),
             (0, 0),
@@ -480,7 +474,7 @@ mod tests {
         let row = &rows[0];
         assert_eq!(
             row.ts,
-            anchor_ns + 1_000_000_000,
+            base_ts + 1_000_000_000,
             "ts advanced by monotonic elapsed, not by the wall clock"
         );
         assert_eq!(
@@ -606,32 +600,35 @@ mod tests {
         assert!(rows.is_empty());
     }
 
-    /// The real constructor anchors to the clock rather than to anything a
-    /// test hands it. Every other test here injects the anchor, so without
-    /// this one `new` would go the whole way to production unexercised.
+    /// Two subscriptions to one agent are told the same timeline.
+    ///
+    /// The anchor used to be minted per producer, so each connection
+    /// advertised its own `clock_anchor_wall_ns` while naming the same source
+    /// uuid. A subscriber trusts the handshake to place every row it receives,
+    /// so that was the same source described as having two timelines, offset
+    /// by however far the wall clock moved between the connections — and two
+    /// recordings of one agent that could not be merged, with nothing saying
+    /// why.
     #[test]
-    fn new_anchors_to_the_wall_clock_it_was_built_at() {
-        let before = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-        let mut p = FrameProducer::new("epoch".to_string(), BTreeMap::new(), BTreeMap::new());
-        let after = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as i64;
-
-        let Frame::Handshake {
-            clock_anchor_wall_ns,
-            ..
-        } = p.handshake()
-        else {
-            panic!("a handshake")
+    fn every_subscription_is_told_the_same_source_timeline() {
+        let anchor_of = |p: &mut FrameProducer| {
+            let Frame::Handshake {
+                clock_anchor_wall_ns,
+                ..
+            } = p.handshake()
+            else {
+                panic!("a handshake")
+            };
+            clock_anchor_wall_ns
         };
-        assert!(
-            (before..=after).contains(&clock_anchor_wall_ns),
-            "the anchor is the wall clock at construction: {clock_anchor_wall_ns} \
-             outside {before}..={after}"
+
+        let first = anchor_of(&mut producer());
+        let second = anchor_of(&mut producer());
+        assert_eq!(first, second, "two subscriptions, one source, one timeline");
+        assert_eq!(
+            first,
+            crate::agent::epoch::clock_anchor_wall_ns(),
+            "and it is the source's anchor, not one this connection invented"
         );
     }
 
@@ -856,7 +853,12 @@ mod tests {
             panic!("a handshake")
         };
         assert!(p.has_sent_handshake());
-        assert_eq!(clock_anchor_wall_ns, 1_700_000_000_000_000_000);
+        assert_eq!(
+            clock_anchor_wall_ns,
+            crate::agent::epoch::clock_anchor_wall_ns(),
+            "the handshake pins the SOURCE's anchor — a subscriber places every \
+             row it receives against this"
+        );
         assert!(!complete, "a running agent's source has not ended");
         assert_eq!(
             uuid.as_deref(),

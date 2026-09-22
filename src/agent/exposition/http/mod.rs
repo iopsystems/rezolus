@@ -479,6 +479,7 @@ async fn status(
     axum::response::Json(crate::agent::sampler_status::AgentStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         producer_epoch: crate::agent::epoch::producer_epoch().to_string(),
+        clock_anchor_wall_ns: crate::agent::epoch::clock_anchor_wall_ns(),
         uptime_seconds: crate::agent::agent_uptime_seconds(),
         ttl_seconds: STATUS_TTL_SECONDS.get().copied().unwrap_or(0),
         sample_interval_ms: state.subscribers.fastest().map(|d| d.as_millis() as u64),

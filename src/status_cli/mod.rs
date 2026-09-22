@@ -361,6 +361,7 @@ mod tests {
         let s = AgentStatus {
             version: "5.15.1".into(),
             producer_epoch: "11111111-2222-4333-8444-555555555555".into(),
+            clock_anchor_wall_ns: 0,
             uptime_seconds: 11532,
             ttl_seconds: 60,
             sample_interval_ms: None,
