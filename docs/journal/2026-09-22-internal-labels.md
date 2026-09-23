@@ -1,7 +1,7 @@
 # Internal labels: the `__` rule, and what the incarnation id is called
 
 - **Opened:** 2026-09-22
-- **Status:** **OPEN — steps 1 and 2 shipped.** Step 1 is metriken-query
+- **Status:** **OPEN — steps 1, 2 and 3 shipped.** Step 1 is metriken-query
   0.25.0 (iopsystems/metriken#151, released in #152); step 2 is the rezolus
   consumers switching to its predicates. The audit is in
   [`docs/labels.md`](../labels.md); this entry records the decision and the
@@ -41,13 +41,31 @@ Full detail in `docs/labels.md`. The parts that decide things:
 
 ## Decisions
 
-- **Name:** `__incarnation__`, the singleton form `__name__` and `__run__` use.
-  Value: the id the agent mints into `SlotEntry` when a slot is assigned,
-  deterministic from producer epoch, slot and first-seen stamp, so two recorders
-  of one agent agree without coordination.
-- **Emitter:** the archive reader, from the index. It is never written into
-  column metadata, so no archive ever carries it and the on-disk schema does
-  not change for it.
+- **Name:** `__uid__`, the singleton form `__name__` and `__run__` use, and
+  Kubernetes's precedent for exactly this: an object recreated under the same
+  name gets a new `metadata.uid`. `__incarnation__` was the first choice; it is
+  real distributed-systems vocabulary (SWIM, Cassandra gossip) but reads as
+  mystical outside it.
+- **Where it is minted, revised.** The first plan minted it in `SlotEntry`
+  and had the reader emit it from the index, never on disk. Building step 3
+  showed that is the wrong place: `SlotIndex::observe` emits an entry only
+  when a slot's *labels* change, so a PID-reuse reassignment with identical
+  labels — the case the uid exists for — produced no entry and would have got
+  no uid. The assignment event is `SlotIdentity::set`, which already takes a
+  generation, so the uid is minted there, once per assignment from the
+  generation and the producer epoch, and inserted into the slot's label map.
+  It then travels with the labels everywhere they go without any consumer
+  being taught about it: snapshot descriptors, `.rez` column metadata, the
+  index entries a stream carries. Because step 2 landed first, every listing
+  and legend already hides it. The Prometheus exporter drops it, since
+  Prometheus strips `__` labels after relabeling anyway.
+- **What that buys today, before the cutover.** The `.rez` writer opens a new
+  column when a descriptor's metadata changes, so a same-label reassignment
+  now becomes a second column with its own `__uid__`, and metriken-query keys
+  series on the full label set. The PID-reuse artifact is fixed in the current
+  format, with no reader change. The cost is a schema resend on a same-label
+  reassignment that was previously silent, which is the correct behaviour and
+  leaves with the rest of identity at the cutover.
 - **The rule** (`docs/labels.md`, "Internal labels"): `__`-prefixed labels are
   identity and matchable, hidden from listings and legends, dropped by
   `without` alongside `__name__`. Enforced by one predicate on the label name,
@@ -55,6 +73,47 @@ Full detail in `docs/labels.md`. The parts that decide things:
 - **Shape:** a bare selector over a churning recording returns one series per
   incarnation, some with identical visible labels. Accepted as the truthful
   shape; aggregation collapses them.
+
+## Measured: what the uid costs the scrape path
+
+`delta`, 32 cores, main without the uid commit against the uid build, same
+sampler set, both scraped concurrently at 1 s for 120 s; `churn.sh` runs
+short-lived tasks that accrue CPU so slots are reassigned during the window.
+
+| run | without | with | ratio | per scrape | body |
+|---|---|---|---|---|---|
+| churn | 0.76 s | 0.85 s | 1.12x | 6.33 → 7.08 ms | 512 → 574 KB |
+| idle | 0.66 s | 0.71 s | 1.08x | 5.50 → 5.92 ms | 524 → 587 KB |
+
+A first comparison against an older control (`alpha.26`, before `hw_sensors`)
+gave the same shape and was confounded by the sampler set; these are not.
+
+The profile (perf on both agents, demangled with `rustfilt`) shows no new hot
+function. The growth is msgpack encoding — `write_str`, `Marker::to_u8`, the
+compound serializer — and `SlotIdentity::set` at 1.2% under churn. The cost
+is proportional to the bytes added: `/metrics/binary` re-encodes every
+descriptor's metadata on every scrape, and `__uid__=<16 hex>` on ~2,000
+slotted descriptors is ~60 KB per scrape. The stream sends a schema once per
+generation and does not pay it per tick; the cutover removes it entirely.
+
+Two things the profile found that were not the question asked:
+
+- **A re-announced slot must keep its uid.** The first cut minted one per
+  `set`. `drivehealth` sets every drive's labels on every sweep and `ethtool`
+  every interface's on every refresh, so every such series would have split
+  at every refresh, and the network group's schema was rebuilt and hashed
+  every tick for an occupant that never changed. Fixed: a live slot setting
+  identical labels keeps its uid and publishes nothing; a new uid is minted
+  only for a slot that was cleared (the PID-reuse case) or whose labels
+  changed.
+- **The hashing on the hot path predates the uid.** `identity_fold_metadata`
+  is 13–19% of the agent's CPU in both builds: the skeleton cache byte-hashes
+  every slot's labels every tick to notice a metadata change, and
+  `GroupSchema::hash` re-serializes and hashes a whole schema on any miss.
+  Every identity write now goes through `SlotIdentity::set`/`clear` except
+  one startup write in `hw_sensors`, so a per-group generation bumped there
+  is an O(1) change signal that could replace the per-tick fold. That is a
+  separate change and a larger saving than the uid costs.
 
 ## Path forward, in order
 
@@ -71,17 +130,22 @@ Full detail in `docs/labels.md`. The parts that decide things:
    TUI legends, boxplot, compare and explorers with the prefix predicate in one
    helper; the metric catalog and MCP listings use the same predicate. Small,
    mechanical, and it can land before anything emits a `__` label.
-3. **The reader** (#1224 §2, reader side): `SlotEntry` gains the id; the
-   indexed group source in `crates/rez` replays `caller_rows` into per-slot
-   label timelines and emits `__incarnation__`. Verified against today's
-   `--stream` archives, which carry index and column identity together.
-4. **Writer side, additive**: evict `caller_rows` with segments; resend a
+3. **The uid at assignment** (revised, see Decisions): `SlotIdentity::set`
+   mints `__uid__` into the slot's labels; the exporter drops it.
+4. **Replace the per-tick identity fold with a generation** (see "Measured"):
+   the change signal exists now; the fold is 13–19% of agent CPU.
+5. **The reader** (#1224 §2, reader side): the indexed group source in
+   `crates/rez` replays `caller_rows` into per-slot label timelines, `__uid__`
+   included, for archives whose columns carry no identity. Verified against
+   today's `--stream` archives, which carry index and column identity
+   together.
+6. **Writer side, additive**: evict `caller_rows` with segments; resend a
    `Full` at the seal cadence.
-5. **Cutover branch**: descriptors become bare slot ids, identity leaves column
+7. **Cutover branch**: descriptors become bare slot ids, identity leaves column
    metadata, format version bumps.
 
-Step 2 before step 3 is the ordering that matters: the reader must not be the
-first thing to put a `__` label in front of a legend that will print it.
+Step 2 before step 3 was the ordering that mattered: the uid must not be the
+first `__` label in front of a legend that would print it.
 
 ## Related
 
