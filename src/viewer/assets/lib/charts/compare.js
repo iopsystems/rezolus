@@ -42,6 +42,7 @@ import { nullDiff, canonicalQuantileLabel, unifyHistogramRange, buildDeltaSpectr
 import { DIVERGING_BLUE_GREEN, DIVERGING_BLUE_GREEN_DARK, nullCellColor, resampleDivergingForRange } from './util/colormap.js';
 import { ensureHeatmapMatrix } from './util/heatmap_data.js';
 import { resolvedStyle } from './metric_types.js';
+import { visibleLabels } from '../labels.js';
 import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 
@@ -613,7 +614,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFo
 
 const multiLabel = (r) => {
     const mm = r.metric || {};
-    return Object.keys(mm).sort().filter((k) => k !== '__name__')
+    return visibleLabels(mm).map(([k]) => k).sort()
         .map((k) => `${k}=${mm[k]}`).join(',');
 };
 

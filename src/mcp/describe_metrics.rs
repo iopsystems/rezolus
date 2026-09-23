@@ -1,4 +1,4 @@
-use metriken_query::MetricsSource;
+use metriken_query::{is_internal_label, is_storage_key, MetricsSource};
 
 /// Format metrics description for display
 pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
@@ -14,7 +14,7 @@ pub fn format_metrics_description(data: &dyn MetricsSource) -> String {
         let mut all_keys = std::collections::HashSet::new();
         for labels in labels_list {
             for key in labels.keys() {
-                if key != "metric" && key != "unit" && key != "metric_type" {
+                if !is_storage_key(key) && !is_internal_label(key) {
                     all_keys.insert(key.clone());
                 }
             }

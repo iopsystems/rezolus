@@ -184,7 +184,7 @@ Parquet files produced by the recorder/hindsight use a columnar layout from `met
 - **`timestamp`** (UInt64) - Nanoseconds since Unix epoch. Present in every file.
 - **`duration`** (UInt64, nullable) - Snapshot collection duration in nanoseconds.
 - **Metric columns** - One per metric: counters (UInt64), gauges (Int64), histograms (List&lt;UInt64&gt;).
-- **Column metadata** - Each field carries `metric_type` ("counter"/"gauge"/"histogram"/"timestamp"/"duration") and metric labels.
+- **Column metadata** - Each field carries `metric_type` ("counter"/"gauge"/"histogram"/"timestamp"/"duration") and metric labels. `docs/labels.md` is the audit of which keys are storage keys (`metric`, `metric_type`, `unit`, histogram config: consumed on load, never labels), which are labels, and the `__` rule for internal labels (`__name__`, `__run__`, planned `__incarnation__`: identity and matchable, hidden from listings and legends).
 
 File-level metadata keys are defined in `src/parquet_metadata.rs`:
 - `source` - Recording source: `"rezolus"` (single) or `["rezolus","llm-perf"]` (combined).

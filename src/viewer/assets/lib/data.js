@@ -1,6 +1,7 @@
 import { ViewerApi } from './viewer_api.js';
 import { resolveStyle, buildHistogramQuery, isHistogramPlot } from './charts/metric_types.js';
 import { collectGroupPlots } from './features/group_utils.js';
+import { firstVisibleLabelValue } from './labels.js';
 
 // Capture-id constants. Typos become grep-able; use these in place of
 // raw 'baseline' / 'experiment' string literals.
@@ -255,15 +256,10 @@ const plotUsesDisplay = (plot) => {
     return plot.opts?.subtype === 'percentiles';
 };
 
-// A short series label from its distinguishing labels (first non-__name__).
-const displaySeriesName = (metric, i) => {
-    if (metric) {
-        for (const [k, v] of Object.entries(metric)) {
-            if (k !== '__name__') return v;
-        }
-    }
-    return `Series ${i + 1}`;
-};
+// A short series label from its distinguishing labels (the first visible
+// one; internal labels such as `__name__` and `__incarnation__` never name a
+// series).
+const displaySeriesName = (metric, i) => firstVisibleLabelValue(metric) ?? `Series ${i + 1}`;
 
 // Fetch + decode the display-mode boxplot response. Uses defaultRangeFor so
 // it honors the zoom range override (drill-down) with the same point budget.
@@ -870,12 +866,7 @@ const applyResultToPlot = (plot, result) => {
                             if (id !== undefined && vendor !== undefined) {
                                 seriesName = `${vendor} ${id}`;
                             } else {
-                                for (const [key, value] of Object.entries(item.metric)) {
-                                    if (key !== '__name__') {
-                                        seriesName = value;
-                                        break;
-                                    }
-                                }
+                                seriesName = firstVisibleLabelValue(item.metric) ?? seriesName;
                             }
                         }
 
@@ -1285,12 +1276,7 @@ const createDataApi = ({
         const collected = [];
         for (const item of result.data.result) {
             if (!item.values || !item.values.length) continue;
-            let name = null;
-            if (item.metric) {
-                for (const [k, v] of Object.entries(item.metric)) {
-                    if (k !== '__name__') { name = v; break; }
-                }
-            }
+            const name = firstVisibleLabelValue(item.metric);
             if (name == null) continue;
             if (!timestamps) timestamps = item.values.map(([ts]) => ts);
             const values = item.values.map(([, val]) => parseFloat(val));

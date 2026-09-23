@@ -1,4 +1,4 @@
-use metriken_query::MetricsSource;
+use metriken_query::{MetricsSource, is_internal_label, is_storage_key};
 use serde::Serialize;
 use std::collections::BTreeSet;
 
@@ -24,7 +24,16 @@ fn info_for(
     labels: Vec<std::collections::BTreeMap<String, String>>,
     descriptions: &serde_json::Map<String, serde_json::Value>,
 ) -> MetricInfo {
-    let keys: BTreeSet<String> = labels.iter().flat_map(|m| m.keys().cloned()).collect();
+    // The keys a person can filter on. Internal labels (`__name__`,
+    // `__run__`, `__incarnation__`) are identity, not something to list, and
+    // a storage key would only be here if a source handed raw metadata
+    // through; both rules are metriken-query's, see docs/labels.md.
+    let keys: BTreeSet<String> = labels
+        .iter()
+        .flat_map(|m| m.keys())
+        .filter(|k| !is_internal_label(k) && !is_storage_key(k))
+        .cloned()
+        .collect();
     MetricInfo {
         name: name.to_string(),
         metric_type: metric_type.to_string(),
@@ -113,6 +122,37 @@ mod tests {
                     .collect()
             })
             .collect()
+    }
+
+    /// The catalog lists keys a person can filter on. An internal label is
+    /// identity, not a filter, and a storage key is not a label at all; a
+    /// series carrying either still counts as a series.
+    #[test]
+    fn internal_labels_and_storage_keys_are_not_listed_as_filter_keys() {
+        let labels = labels_from(&[
+            &[
+                ("__name__", "cpu_usage"),
+                ("__incarnation__", "a"),
+                ("cpu", "0"),
+            ],
+            &[
+                ("__name__", "cpu_usage"),
+                ("__incarnation__", "b"),
+                ("cpu", "0"),
+            ],
+            &[
+                ("__run__", "1"),
+                ("metric_type", "counter"),
+                ("cpu", "1"),
+                ("mode", "user"),
+            ],
+        ]);
+        let info = info_for("cpu_usage", "counter", labels, &desc(&[]));
+        assert_eq!(info.label_keys, vec!["cpu".to_string(), "mode".to_string()]);
+        assert_eq!(
+            info.series_count, 3,
+            "hidden labels still make distinct series"
+        );
     }
 
     fn desc(entries: &[(&str, &str)]) -> serde_json::Map<String, serde_json::Value> {

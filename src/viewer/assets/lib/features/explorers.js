@@ -2,6 +2,7 @@ import { ChartsState, Chart } from '../charts/chart.js';
 import { executePromQLRangeQuery, fetchHeatmapForPlot, getSelectedNode, injectLabel } from '../data.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec } from '../charts/metric_types.js';
 import { collectGroupPlots } from './group_utils.js';
+import { visibleLabels } from '../labels.js';
 
 const UNIT_OPTIONS = [
     { value: '', label: 'Auto (none)' },
@@ -44,9 +45,8 @@ const buildSeriesLabel = (metric, fallbackIdx) => {
     const labels = [];
     if (metric.id !== undefined) labels.push(`id=${metric.id}`);
 
-    const excluded = ['__name__', 'id', 'metric', 'metric_type', 'unit'];
-    const other = Object.entries(metric)
-        .filter(([k]) => !excluded.includes(k))
+    const other = visibleLabels(metric)
+        .filter(([k]) => k !== 'id')
         .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([k, v]) => `${k}=${v}`);
     labels.push(...other);

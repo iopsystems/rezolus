@@ -15,6 +15,7 @@ import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compa
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
 import { ViewerApi } from './viewer_api.js';
+import { firstVisibleLabelValue } from './labels.js';
 
 // Normalization helpers for compare-mode captures.
 
@@ -122,13 +123,8 @@ const extractExperimentCapture = (spec, promqlResult, options = {}) => {
     if (style === 'multi') {
         // Match baseline's label convention: first non-__name__ metric
         // label's value (see applyResultToPlot's series-name loop).
-        cap.seriesMap = promqlResultToSeriesMap(results, (item) => {
-            const mm = item.metric || {};
-            for (const [k, v] of Object.entries(mm)) {
-                if (k !== '__name__') return String(v);
-            }
-            return null;
-        });
+        cap.seriesMap = promqlResultToSeriesMap(results, (item) =>
+            firstVisibleLabelValue(item.metric));
         return cap;
     }
 

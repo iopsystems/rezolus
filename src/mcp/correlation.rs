@@ -1,4 +1,4 @@
-use metriken_query::{MatrixSample, MetricsSource, QueryResult};
+use metriken_query::{is_internal_label, is_storage_key, MatrixSample, MetricsSource, QueryResult};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -815,9 +815,6 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
                     .or_else(|| labels.get("__name__"))
                     .map(|s| s.as_str());
 
-                // Labels to omit from the label selector
-                let omit_labels = ["metric", "metric_type", "unit", "__name__"];
-
                 let mut label_parts = Vec::new();
 
                 // 'id' goes first if present
@@ -827,7 +824,11 @@ pub fn format_correlation_result(result: &CorrelationResult) -> String {
 
                 let mut remaining_labels: Vec<(String, String)> = labels
                     .iter()
-                    .filter(|(k, _)| k.as_str() != "id" && !omit_labels.contains(&k.as_str()))
+                    // Storage keys and internal labels are not part of a
+                    // selector a person would write back.
+                    .filter(|(k, _)| {
+                        k.as_str() != "id" && !is_storage_key(k) && !is_internal_label(k)
+                    })
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
                 remaining_labels.sort_by(|a, b| a.0.cmp(&b.0));
