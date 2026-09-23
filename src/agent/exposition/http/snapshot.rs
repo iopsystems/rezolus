@@ -1083,15 +1083,16 @@ fn create(
 ///
 /// - **Identity** ([`GroupSkeleton::identity`]) — internal, never
 ///   transmitted, cheap to fold: per group per tick, for each kind in fixed
-///   order (counters, gauges, histograms), for each member in the same
-///   order the schema lists them, fold the member's identity (its metric id
-///   and, for a group entry, its index — as raw integer bytes, no
-///   `format!`) then its metadata as sorted key/value pairs (via the
-///   borrowing `with_metadata`/`for_each_metadata` accessors, sorted on a
-///   small inline stack buffer — see `identity_fold_metadata` — no
-///   allocation for the metadata maps rezolus samplers actually produce).
-///   128-bit FNV-1a, same collision reasoning as the wire hash: a collision
-///   here would serve a stale schema — the C1 failure class below.
+///   order (counters, gauges, histograms), for each metric fold its id and
+///   the version of its per-entry metadata (`metadata_version`, one atomic
+///   load — see `fold_group_version`), then for each member in the same
+///   order the schema lists them fold its index — raw integer bytes, no
+///   `format!`, no allocation. The version stands in for the metadata
+///   itself: metriken bumps it on every mutation, so the labels are never
+///   read on a hit tick. They used to be byte-hashed for every member every
+///   tick, which was 13–19% of the agent's sampling CPU. 128-bit FNV-1a,
+///   same collision reasoning as the wire hash: a collision here would
+///   serve a stale schema — the C1 failure class below.
 /// - **Wire `schema_hash`** ([`GroupSkeleton::hash`]) — unchanged:
 ///   [`GroupSchema::hash`], computed only on a miss.
 ///
@@ -1101,9 +1102,9 @@ fn create(
 /// registration and never mutates at runtime — `insert_metadata`/
 /// `set_metadata` are only ever called on a `CounterGroup`/`GaugeGroup`'s
 /// PER-INDEX metadata (a task's `comm`, a cgroup's `name`), never on a
-/// `MetricEntry`'s own `metadata()`. That per-index metadata IS what
-/// identity folds, via the same borrowing accessors, so the C1 case below
-/// still forces a miss.
+/// `MetricEntry`'s own `metadata()`. That per-index metadata is what the
+/// folded version tracks — every such write bumps it inside metriken's
+/// store, whoever the writer is — so the C1 case below still forces a miss.
 ///
 /// # Delivered: a hit allocates a small, member-count-independent constant
 ///
@@ -1132,10 +1133,12 @@ fn create(
 /// cache would call that a hit, keep serving the OLD occupant's metadata
 /// under an UNCHANGED `schema_hash`, and a receiver caching parsed schemas
 /// by `(name, schema_hash)` would bind new values to dead labels
-/// indefinitely. The identity fold covers names AND per-index metadata for
-/// exactly this reason — see
+/// indefinitely. The identity fold covers names AND the per-index metadata
+/// version for exactly this reason — see
 /// `declared_group_schema_reflects_metadata_mutated_at_a_stable_index`, the
-/// pinned regression test.
+/// pinned regression test, which mutates metadata through metriken directly
+/// rather than through `SlotIdentity`, and so also pins that the signal
+/// lives in the store and not in the agent's own write path.
 ///
 /// # No eviction
 ///
@@ -1475,98 +1478,25 @@ fn identity_fold(mut acc: u128, bytes: &[u8]) -> u128 {
     acc
 }
 
-/// Fold a length-prefixed byte string into `acc`: the byte length as fixed-
-/// width `u64` bytes, then the bytes themselves. Plain concatenation of
-/// variable-length strings is ambiguous at the boundary — folding `"ab"`
-/// then `"cd"` produces the exact same bytes, and therefore the exact same
-/// hash, as folding `"a"` then `"bcd"`. Framing every variable-length input
-/// this way makes the byte stream self-describing, so two DIFFERENT
-/// (key, value, ...) sequences can never fold to the same identity by
-/// boundary-shifting into each other — the property `GroupSchema::hash`
-/// gets for free from msgpack's own framing, needed here too: an
-/// undetected collision here means a stale schema served under a changed
-/// identity, the same failure class the C1 regression fixed for the wire
-/// hash. Fixed-width fields (`metric_id`/`idx`, always exactly 8 bytes via
-/// `to_le_bytes()`) don't need this — their width never varies, so they
-/// can't shift.
-#[inline]
-fn identity_fold_len_prefixed(acc: u128, bytes: &[u8]) -> u128 {
-    let acc = identity_fold(acc, &(bytes.len() as u64).to_le_bytes());
-    identity_fold(acc, bytes)
-}
-
-/// Fold a group member's metadata into `acc` as sorted `(key, value)`
-/// pairs, so the fold is deterministic regardless of the source
-/// `HashMap`'s iteration order (the same non-determinism the sparse-group
-/// arms in `create_v3` already sort around). The pair COUNT is folded
-/// first (fixed-width, so it can't be confused with a key/value), then
-/// each key and value length-prefixed (see `identity_fold_len_prefixed`),
-/// so the whole (count, pairs) sequence is unambiguous regardless of
-/// content — including at the boundary with whatever this member's caller
-/// folds next (a following member's fixed-width `metric_id`/`idx` prefix
-/// can never be mistaken for "one more pair" of this one).
+/// Fold a group metric's identity prefix: its registry id and the version of
+/// its per-entry metadata.
 ///
-/// Sorts on a fixed-size stack array — no heap allocation — for the common
-/// case. Every metadata map a rezolus sampler attaches today has at most a
-/// handful of entries (`pid`/`tgid`/`comm`/`cgroup` is the largest, at 4);
-/// `INLINE` is set well above that. A map that somehow exceeds it falls
-/// back to a one-off heap `Vec` rather than silently truncating; that
-/// fallback is not expected to ever trigger in practice.
-fn identity_fold_metadata(acc: u128, metadata: &HashMap<String, String>) -> u128 {
-    const INLINE: usize = 16;
-    if metadata.len() <= INLINE {
-        let mut buf: [(&str, &str); INLINE] = [("", ""); INLINE];
-        let mut n = 0;
-        for (k, v) in metadata {
-            buf[n] = (k.as_str(), v.as_str());
-            n += 1;
-        }
-        let pairs = &mut buf[..n];
-        pairs.sort_unstable();
-        let mut h = identity_fold(acc, &(pairs.len() as u64).to_le_bytes());
-        for (k, v) in pairs.iter() {
-            h = identity_fold_len_prefixed(h, k.as_bytes());
-            h = identity_fold_len_prefixed(h, v.as_bytes());
-        }
-        h
-    } else {
-        let mut pairs: Vec<(&str, &str)> = metadata
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        pairs.sort_unstable();
-        let mut h = identity_fold(acc, &(pairs.len() as u64).to_le_bytes());
-        for (k, v) in pairs {
-            h = identity_fold_len_prefixed(h, k.as_bytes());
-            h = identity_fold_len_prefixed(h, v.as_bytes());
-        }
-        h
-    }
-}
-
-/// Fold a member's OPTIONAL metadata (`with_metadata`'s result — `None` for
-/// an index with no metadata attached at all, `Some` (possibly an empty
-/// map) for one that does) into `acc`, folding a 1-byte presence flag FIRST
-/// so "absent" and "present-but-empty" can never alias.
+/// The version stands in for the labels themselves. The pre-pass used to
+/// byte-hash every entry's label map every tick to notice a slot relabelled
+/// at a stable index (a recycled pid, a recreated cgroup); metriken's store
+/// now bumps a counter on every mutation, so one atomic load per metric says
+/// the same thing, and this fold was 13–19% of the agent's sampling CPU.
 ///
-/// Without the flag, "absent" contributes zero bytes and "present, zero
-/// pairs" contributes exactly the 8-byte zero-count prefix
-/// `identity_fold_metadata` folds for an empty map — a real, constructible
-/// collision: a member with `m: None` immediately followed by the NEXT
-/// member's `metric_id`/`idx` prefix folds the exact same bytes as a member
-/// with `m: Some(empty)` (contributing that 8-byte zero count) immediately
-/// followed by a DIFFERENT next member whose `metric_id`/`idx` bytes happen
-/// to fill the gap the same way — reachable in a synthetic registry where a
-/// group's later member's `metric_id` is small enough to overlap. Folding
-/// presence (0 = absent, 1 = present) first means "absent" is now exactly
-/// 1 byte and "present" is at least 9 (1 + the 8-byte count), so the two
-/// can never be confused regardless of what follows.
+/// **The version is folded BEFORE the members are read**, here and in the
+/// walk that builds the schema. A mutation landing between this read and a
+/// member's metadata read then shows as a changed version on the next tick
+/// and costs one spurious rebuild. The other order could store a schema built
+/// from old metadata under a NEW version, and the pre-pass would call it a
+/// hit forever.
 #[inline]
-fn identity_fold_metadata_presence(acc: u128, m: Option<&HashMap<String, String>>) -> u128 {
-    match m {
-        Some(m) => identity_fold_metadata(identity_fold(acc, &[1u8]), m),
-        None => identity_fold(acc, &[0u8]),
-    }
+fn fold_group_version(acc: u128, metric_id: u64, version: u64) -> u128 {
+    let h = identity_fold(acc, &metric_id.to_le_bytes());
+    identity_fold(h, &version.to_le_bytes())
 }
 
 /// Per-group running identity, one accumulator per kind so the final
@@ -1788,18 +1718,15 @@ fn fold_group_identities<'a>(
                 accum.gauges = identity_fold(accum.gauges, &metric_id.to_le_bytes());
             }
             Value::CounterGroup(g) => {
+                // The version FIRST, then membership — see `fold_group_version`.
+                accum.counters =
+                    fold_group_version(accum.counters, metric_id, g.metadata_version());
                 if reader_stamped {
                     idx_scratch.clear();
                     g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
                     idx_scratch.sort_unstable();
                     for &idx in idx_scratch.iter() {
-                        let idx64 = idx as u64;
-                        g.with_metadata(idx, &mut |m| {
-                            let mut h = identity_fold(accum.counters, &metric_id.to_le_bytes());
-                            h = identity_fold(h, &idx64.to_le_bytes());
-                            h = identity_fold_metadata_presence(h, m);
-                            accum.counters = h;
-                        });
+                        accum.counters = identity_fold(accum.counters, &(idx as u64).to_le_bytes());
                     }
                 } else {
                     for idx in members(member_set, member_bound, g.entries()) {
@@ -1811,57 +1738,28 @@ fn fold_group_identities<'a>(
                                 continue;
                             }
                         }
-                        let idx64 = idx as u64;
-                        accum.counters = identity_fold(accum.counters, &metric_id.to_le_bytes());
-                        accum.counters = identity_fold(accum.counters, &idx64.to_le_bytes());
-                        g.with_metadata(idx, &mut |m| {
-                            accum.counters = identity_fold_metadata_presence(accum.counters, m);
-                        });
+                        accum.counters = identity_fold(accum.counters, &(idx as u64).to_le_bytes());
                     }
                 }
             }
             Value::GaugeGroup(g) => {
+                accum.gauges = fold_group_version(accum.gauges, metric_id, g.metadata_version());
                 if reader_stamped {
                     idx_scratch.clear();
                     g.for_each_metadata(&mut |idx, _| idx_scratch.push(idx));
                     idx_scratch.sort_unstable();
                     for &idx in idx_scratch.iter() {
-                        let idx64 = idx as u64;
-                        g.with_metadata(idx, &mut |m| {
-                            let mut h = identity_fold(accum.gauges, &metric_id.to_le_bytes());
-                            h = identity_fold(h, &idx64.to_le_bytes());
-                            h = identity_fold_metadata_presence(h, m);
-                            accum.gauges = h;
-                        });
+                        accum.gauges = identity_fold(accum.gauges, &(idx as u64).to_le_bytes());
                     }
                 } else {
                     for idx in members(member_set, member_bound, g.entries()) {
                         if !declared && g.gauge_value(idx).is_none() {
                             continue;
                         }
-                        let idx64 = idx as u64;
-                        accum.gauges = identity_fold(accum.gauges, &metric_id.to_le_bytes());
-                        accum.gauges = identity_fold(accum.gauges, &idx64.to_le_bytes());
-                        g.with_metadata(idx, &mut |m| {
-                            accum.gauges = identity_fold_metadata_presence(accum.gauges, m);
-                        });
+                        accum.gauges = identity_fold(accum.gauges, &(idx as u64).to_le_bytes());
                     }
                 }
             }
-            // Declared: registration membership, always a member (see
-            // create_v3's declared Histogram arm). Default: membership by
-            // presence — only a member once it has loaded a value. Note:
-            // `h.load()` here materializes and allocates the histogram's
-            // bucket snapshot just to check `.is_some()` — wasted on the
-            // `declared` side (short-circuited by `||`, never called) but
-            // NOT on the default side. Every histogram in this codebase is
-            // declared today (grep confirms it), so this is a dead cost in
-            // practice, not a live one — but a genuinely undeclared
-            // histogram falling back to this arm would pay a real
-            // allocation per tick here, on both hit and miss ticks (this
-            // pass always runs). Left as-is rather than adding a
-            // presence-only check metriken doesn't expose, since it isn't
-            // costing anything today.
             Value::Histogram(h) if declared || h.load().is_some() => {
                 accum.histograms = identity_fold(accum.histograms, &metric_id.to_le_bytes());
             }
@@ -1904,7 +1802,7 @@ fn fold_group_identities<'a>(
 ///
 /// `walk_identity` is folded ALONGSIDE `counter_descs`/`gauge_descs`/
 /// `histogram_descs` on the MISS path only (see `create_v3`'s `if
-/// group.needs_schema` arm) — the same `identity_fold`/`identity_fold_metadata`
+/// group.needs_schema` arm) — the same `fold_group_version`/`identity_fold`
 /// calls `fold_group_identities` makes, applied to what THIS walk actually
 /// pushes into the schema rather than to the pre-pass's own read. Finalize
 /// stores `walk_identity.finish()`, not the pre-pass's identity, as the
@@ -2369,6 +2267,12 @@ fn create_v3(
                     group.gauge_values.push(Some(v));
                 }
                 Value::CounterGroup(g) => {
+                    // The version first, then the members — see `fold_group_version`.
+                    group.walk_identity.counters = fold_group_version(
+                        group.walk_identity.counters,
+                        metric_id_u64,
+                        g.metadata_version(),
+                    );
                     if reader_stamped {
                         // Reader-stamped (mmap-direct `PackedCounters`)
                         // group: membership is metadata-presence, not
@@ -2407,30 +2311,16 @@ fn create_v3(
                             // read and the metadata read are not atomic.
                             let v = g.counter_value(idx);
                             let idx64 = idx as u64;
+                            // Fold this member's identity from what THIS
+                            // walk observed — the same fold, in the same
+                            // order, as fold_group_identities' matching arm,
+                            // so a later tick's pre-pass can reproduce this
+                            // exact value on a genuine hit. Membership only:
+                            // the labels are covered by the version folded
+                            // at the top of this arm.
+                            group.walk_identity.counters =
+                                identity_fold(group.walk_identity.counters, &idx64.to_le_bytes());
                             g.with_metadata(idx, &mut |m| {
-                                // Fold this member's identity from what
-                                // THIS walk observed — same
-                                // identity_fold/identity_fold_metadata
-                                // calls, same argument order, as
-                                // fold_group_identities' matching arm, so a
-                                // later tick's pre-pass can reproduce this
-                                // exact value on a genuine hit.
-                                group.walk_identity.counters = identity_fold(
-                                    group.walk_identity.counters,
-                                    &metric_id_u64.to_le_bytes(),
-                                );
-                                group.walk_identity.counters = identity_fold(
-                                    group.walk_identity.counters,
-                                    &idx64.to_le_bytes(),
-                                );
-                                // See identity_fold_metadata_presence's doc
-                                // comment for why the presence flag is
-                                // folded regardless of Some/None.
-                                group.walk_identity.counters = identity_fold_metadata_presence(
-                                    group.walk_identity.counters,
-                                    m,
-                                );
-
                                 let mut entry_metadata = metadata.clone();
                                 entry_metadata.insert("id".to_string(), idx.to_string());
                                 if let Some(m) = m {
@@ -2516,21 +2406,10 @@ fn create_v3(
                             let mut entry_metadata = metadata.clone();
                             entry_metadata.insert("id".to_string(), idx.to_string());
                             let idx64 = idx as u64;
+                            // See the reader-stamped arm above.
+                            group.walk_identity.counters =
+                                identity_fold(group.walk_identity.counters, &idx64.to_le_bytes());
                             g.with_metadata(idx, &mut |m| {
-                                // See the reader-stamped arm above for why
-                                // this folds the SAME bytes, same order.
-                                group.walk_identity.counters = identity_fold(
-                                    group.walk_identity.counters,
-                                    &metric_id_u64.to_le_bytes(),
-                                );
-                                group.walk_identity.counters = identity_fold(
-                                    group.walk_identity.counters,
-                                    &idx64.to_le_bytes(),
-                                );
-                                group.walk_identity.counters = identity_fold_metadata_presence(
-                                    group.walk_identity.counters,
-                                    m,
-                                );
                                 if let Some(m) = m {
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());
@@ -2547,6 +2426,12 @@ fn create_v3(
                     }
                 }
                 Value::GaugeGroup(g) => {
+                    // The version first, then the members — see `fold_group_version`.
+                    group.walk_identity.gauges = fold_group_version(
+                        group.walk_identity.gauges,
+                        metric_id_u64,
+                        g.metadata_version(),
+                    );
                     if reader_stamped {
                         // See the identical branch on the CounterGroup arm
                         // above for the full rationale (walk-cost grounding,
@@ -2562,16 +2447,9 @@ fn create_v3(
                         for &idx in idx_scratch.iter() {
                             let v = g.gauge_value(idx);
                             let idx64 = idx as u64;
+                            group.walk_identity.gauges =
+                                identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
                             g.with_metadata(idx, &mut |m| {
-                                group.walk_identity.gauges = identity_fold(
-                                    group.walk_identity.gauges,
-                                    &metric_id_u64.to_le_bytes(),
-                                );
-                                group.walk_identity.gauges =
-                                    identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
-                                group.walk_identity.gauges =
-                                    identity_fold_metadata_presence(group.walk_identity.gauges, m);
-
                                 let mut entry_metadata = metadata.clone();
                                 entry_metadata.insert("id".to_string(), idx.to_string());
                                 if let Some(m) = m {
@@ -2619,15 +2497,9 @@ fn create_v3(
                             let mut entry_metadata = metadata.clone();
                             entry_metadata.insert("id".to_string(), idx.to_string());
                             let idx64 = idx as u64;
+                            group.walk_identity.gauges =
+                                identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
                             g.with_metadata(idx, &mut |m| {
-                                group.walk_identity.gauges = identity_fold(
-                                    group.walk_identity.gauges,
-                                    &metric_id_u64.to_le_bytes(),
-                                );
-                                group.walk_identity.gauges =
-                                    identity_fold(group.walk_identity.gauges, &idx64.to_le_bytes());
-                                group.walk_identity.gauges =
-                                    identity_fold_metadata_presence(group.walk_identity.gauges, m);
                                 if let Some(m) = m {
                                     for (k, v) in m {
                                         entry_metadata.insert(k.clone(), v.clone());

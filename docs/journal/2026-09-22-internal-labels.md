@@ -1,7 +1,7 @@
 # Internal labels: the `__` rule, and what the incarnation id is called
 
 - **Opened:** 2026-09-22
-- **Status:** **OPEN — steps 1, 2 and 3 shipped.** Step 1 is metriken-query
+- **Status:** **OPEN — steps 1–3 shipped, step 4 in review.** Step 1 is metriken-query
   0.25.0 (iopsystems/metriken#151, released in #152); step 2 is the rezolus
   consumers switching to its predicates. The audit is in
   [`docs/labels.md`](../labels.md); this entry records the decision and the
@@ -115,6 +115,31 @@ Two things the profile found that were not the question asked:
   is an O(1) change signal that could replace the per-tick fold. That is a
   separate change and a larger saving than the uid costs.
 
+## Measured: the version fold
+
+metriken's group metadata store now carries a version bumped on every
+mutation (iopsystems/metriken#153), and the skeleton cache folds that one
+value per metric instead of hashing every entry's labels. Same harness, main
+with the uid against this build:
+
+| run | before | after | ratio | per scrape |
+|---|---|---|---|---|
+| churn | 0.92 s | 0.78 s | 0.85x | 7.67 → 6.50 ms |
+| idle | 0.81 s | 0.68 s | 0.84x | 6.75 → 5.67 ms |
+
+Bodies are byte-identical, as they should be: nothing on the wire changed.
+The profile shows `identity_fold_metadata` at 13.6% before and absent after;
+what remains at the top is msgpack encoding of the schema every scrape,
+which is the snapshot endpoint's known cost and the cutover's to remove.
+Against main *without* the uid the net is about 0.94x, so the correctness
+fix and the hashing removal together leave the scrape path cheaper than
+where the day started.
+
+The signal lives in metriken's store rather than in `SlotIdentity` because
+one sampler (`hw_sensors`) writes metadata directly, and the pinned test
+`declared_group_schema_reflects_metadata_mutated_at_a_stable_index` mutates
+through metriken too; both still force a rebuild.
+
 ## Path forward, in order
 
 1. **metriken-query** (in-house, `~/workspace/iopsystems/metriken`): a single
@@ -132,8 +157,8 @@ Two things the profile found that were not the question asked:
    mechanical, and it can land before anything emits a `__` label.
 3. **The uid at assignment** (revised, see Decisions): `SlotIdentity::set`
    mints `__uid__` into the slot's labels; the exporter drops it.
-4. **Replace the per-tick identity fold with a generation** (see "Measured"):
-   the change signal exists now; the fold is 13–19% of agent CPU.
+4. **Replace the per-tick identity fold with a version** — done, see
+   "Measured: the version fold". Needs metriken-core 0.4.0 / metriken 0.12.0.
 5. **The reader** (#1224 §2, reader side): the indexed group source in
    `crates/rez` replays `caller_rows` into per-slot label timelines, `__uid__`
    included, for archives whose columns carry no identity. Verified against
