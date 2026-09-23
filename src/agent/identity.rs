@@ -276,11 +276,29 @@ pub fn current_state() -> Vec<(&'static str, &'static str, u32, BTreeMap<String,
 /// wrong pairing publishes identity under the wrong stream name, silently.
 pub struct SlotIdentity {
     groups: &'static [GroupMetrics],
+    /// What each live slot currently means and the uid it was given, so a
+    /// re-announcement can be told from a reassignment.
+    ///
+    /// Samplers re-set slots they already hold: `drivehealth` sets every
+    /// drive's labels on every sweep, `ethtool` every interface's on every
+    /// refresh. Those are the same occupant saying its name again, and a uid
+    /// minted per call would split every such series at every refresh. A new
+    /// uid is minted only when the slot was not live — never set, or cleared
+    /// since — or when its labels changed. A `BTreeMap` because it is built
+    /// in a `const fn`; the map is small (one entry per live slot) and is
+    /// touched once per assignment event, not per tick.
+    live: std::sync::Mutex<Occupants>,
 }
+
+/// Per slot: the labels it was last set to (without the uid) and the uid.
+type Occupants = BTreeMap<usize, (BTreeMap<String, String>, String)>;
 
 impl SlotIdentity {
     pub const fn new(groups: &'static [GroupMetrics]) -> Self {
-        Self { groups }
+        Self {
+            groups,
+            live: std::sync::Mutex::new(BTreeMap::new()),
+        }
     }
 
     /// Set what this slot means, everywhere it means anything, and tell
@@ -291,12 +309,27 @@ impl SlotIdentity {
     /// through changing hands — a new task's pid beside the old task's comm —
     /// and gave the publish four changes to describe instead of one.
     pub fn set(&self, slot: usize, mut labels: BTreeMap<String, String>) {
-        // One generation and one uid for the whole assignment, however many
-        // groups the slot spans: a cgroup id written by `scheduler_runqueue`
-        // reaches three streams, and they must agree on which occupant this
-        // is.
-        let generation = next_generation();
-        labels.insert(UID_LABEL.to_string(), mint_uid(generation));
+        // A live slot re-announcing the same labels is the same occupant:
+        // keep its uid and say nothing. Every metric already holds these
+        // labels, and a subscriber already knows them.
+        //
+        // One generation and one uid for the whole assignment otherwise,
+        // however many groups the slot spans: a cgroup id written by
+        // `scheduler_runqueue` reaches three streams, and they must agree on
+        // which occupant this is.
+        let uid = {
+            let mut live = self.live.lock().unwrap_or_else(|e| e.into_inner());
+            match live.get(&slot) {
+                Some((current, uid)) if *current == labels => return,
+                _ => {
+                    let uid = mint_uid(next_generation());
+                    live.insert(slot, (labels.clone(), uid.clone()));
+                    uid
+                }
+            }
+        };
+        labels.insert(UID_LABEL.to_string(), uid);
+        let generation = generation();
         for (acq, metrics) in self.groups {
             for metric in *metrics {
                 metric.set_metadata(slot, labels.clone());
@@ -308,6 +341,12 @@ impl SlotIdentity {
     /// The slot no longer means anything. Published for the same reason: a
     /// subscriber that is not told keeps attributing rows to a dead task.
     pub fn clear(&self, slot: usize) {
+        // Forget the occupant, so the next assignment to this slot is a new
+        // one whatever labels it brings: that is the PID-reuse case.
+        self.live
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&slot);
         let generation = next_generation();
         for (acq, metrics) in self.groups {
             for metric in *metrics {
@@ -435,6 +474,61 @@ mod tests {
         assert_eq!(mine[0].labels.as_ref().map(visible), Some(labels("redis")));
     }
 
+    /// A live slot setting the same labels again is the same occupant
+    /// saying its name again — `drivehealth` does it for every drive on
+    /// every sweep, `ethtool` for every interface on every refresh. It keeps
+    /// its uid, or every such series would split at every refresh, and it
+    /// publishes nothing, since nothing a subscriber holds has changed.
+    #[test]
+    fn a_re_announcement_keeps_its_uid_and_is_not_published() {
+        let _want = want();
+        let mut rx = subscribe();
+        FAKE_IDENTITY.set(13, labels("nvme0"));
+        let first = FAKE_A
+            .written
+            .lock()
+            .unwrap()
+            .get(&13)
+            .cloned()
+            .flatten()
+            .unwrap();
+        FAKE_IDENTITY.set(13, labels("nvme0"));
+        FAKE_IDENTITY.set(13, labels("nvme0"));
+        let again = FAKE_A
+            .written
+            .lock()
+            .unwrap()
+            .get(&13)
+            .cloned()
+            .flatten()
+            .unwrap();
+        assert_eq!(
+            again[UID_LABEL], first[UID_LABEL],
+            "same occupant, same uid"
+        );
+
+        let all = drain(&mut rx);
+        assert_eq!(
+            for_slot(&all, 13).len(),
+            1,
+            "one assignment was published, not three"
+        );
+
+        // A different name on a live slot is a new occupant even without a
+        // clear between: an exec changed the comm.
+        FAKE_IDENTITY.set(13, labels("nvme0n1"));
+        let renamed = FAKE_A
+            .written
+            .lock()
+            .unwrap()
+            .get(&13)
+            .cloned()
+            .flatten()
+            .unwrap();
+        assert_ne!(renamed[UID_LABEL], first[UID_LABEL]);
+        assert_eq!(for_slot(&drain(&mut rx), 13).len(), 1);
+    }
+
     /// The labels a person sees: everything but the uid. Tests compare on
     /// these where the uid's value is not the point.
     fn visible(labels: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -456,10 +550,16 @@ mod tests {
         let _want = want();
         let mut rx = subscribe();
         FAKE_IDENTITY.set(11, labels("valkey"));
+        // The task exits and the kernel hands its pid to a new task with
+        // the same comm.
+        FAKE_IDENTITY.clear(11);
         FAKE_IDENTITY.set(11, labels("valkey"));
 
         let all = drain(&mut rx);
-        let mine = for_slot(&all, 11);
+        let mine: Vec<&SlotChanged> = for_slot(&all, 11)
+            .into_iter()
+            .filter(|c| c.labels.is_some())
+            .collect();
         assert_eq!(mine.len(), 2, "two assignments, two changes");
         let uid = |c: &SlotChanged| c.labels.as_ref().unwrap()[UID_LABEL].clone();
         assert_ne!(
