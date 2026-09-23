@@ -61,7 +61,10 @@ Full detail in `docs/labels.md`. The parts that decide things:
    where only `__name__` is exempted today, in the `*_labels()` listings and
    `label_values`, and make `__run__` follow it instead of its own checks. Unify
    the two loaders' storage-key skip lists into one so live and recorded
-   histograms carry the same labels. Release, bump here.
+   histograms carry the same labels. A test pins both the storage-key list
+   and the predicate, so a key added to one loader and not the other fails a
+   build rather than surfacing as two extra labels on a live histogram.
+   Release, bump here.
 2. **rezolus consumers**: replace the literal `__name__` checks in the web and
    TUI legends, boxplot, compare and explorers with the prefix predicate in one
    helper; the metric catalog and MCP listings use the same predicate. Small,
