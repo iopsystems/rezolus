@@ -1,3 +1,5 @@
+import { visibleLabels } from '../labels.js';
+
 // Render a decoded display-mode boxplot series (see data.js
 // `decodeDisplayBinary`) as echarts series: a robust median line, plus two
 // nested filled bands — the inner `[lo,hi]` typical-spread band and the outer
@@ -335,12 +337,12 @@ export function buildDivergenceBand(band, opts = {}) {
     ];
 }
 
-// Label a series from its distinguishing labels (drop __name__ and the noisy
-// endpoint/source), e.g. `cpu_cycles{id=0}`, for a readable legend.
+// Label a series from its distinguishing labels (drop internal labels and
+// the noisy endpoint/source), e.g. `cpu_cycles{id=0}`, for a readable legend.
 const seriesLabel = (metric, i) => {
     const name = metric?.__name__ || `series ${i}`;
-    const rest = Object.entries(metric || {})
-        .filter(([k]) => k !== '__name__' && k !== 'endpoint' && k !== 'source')
+    const rest = visibleLabels(metric)
+        .filter(([k]) => k !== 'endpoint' && k !== 'source')
         .map(([k, v]) => `${k}=${v}`)
         .join(',');
     return rest ? `${name}{${rest}}` : name;

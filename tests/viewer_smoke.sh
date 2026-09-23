@@ -10,7 +10,7 @@
 # Live mode is intentionally skipped — it requires a running rezolus
 # agent and isn't reproducible from a dev/CI machine without one.
 #
-# Requirements: cargo, bash 4+, curl, jq. Listens on 18500-18504.
+# Requirements: cargo, bash 4+, curl, jq. Listens on 18500-18508.
 # Exits 0 on full pass, 1 on first failed assertion (with the failing
 # server's log printed for context).
 
@@ -306,7 +306,7 @@ if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersi
          "no old store identifiers" "$LOGDIR/file.log"
 fi
 
-PORT_AB_COMBINED=18504
+PORT_AB_COMBINED=18508
 COMBINED_AB_TAR="$LOGDIR/combined-ab.parquet.ab.tar"
 
 echo "==> parquet combine --ab produces a *.parquet.ab.tar tarball"
@@ -338,7 +338,7 @@ echo "==> viewer auto-detects combined-AB tarball and reports compare_mode"
     --listen 127.0.0.1:$PORT_AB_COMBINED \
     > "$LOGDIR/ab-combined.log" 2>&1 &
 PID_AB_COMBINED=$!
-trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_NWAY $PID_PROXY $PID_AB_COMBINED 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 
 wait_for_port $PORT_AB_COMBINED || {
     echo "--- log for combined-AB viewer ---"
@@ -377,7 +377,7 @@ echo "==> trimmed report loads in a fresh viewer with report mode active"
     --listen 127.0.0.1:$PORT_REPORT \
     > "$LOGDIR/report.log" 2>&1 &
 PID_REPORT=$!
-trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED $PID_REPORT 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_NWAY $PID_PROXY $PID_AB_COMBINED $PID_REPORT 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 
 wait_for_port $PORT_REPORT || {
     echo "--- log for report viewer ---"
@@ -414,7 +414,7 @@ echo "==> simple-capture: non-Rezolus parquet fixture"
     --listen 127.0.0.1:$PORT_SIMPLE \
     > "$LOGDIR/simple.log" 2>&1 &
 PID_SIMPLE=$!
-trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_PROXY $PID_AB_COMBINED $PID_REPORT $PID_SIMPLE 2>/dev/null || true; wait 2>/dev/null || true' EXIT
+trap 'kill $PID_UPLOAD $PID_FILE $PID_AB $PID_NWAY $PID_PROXY $PID_AB_COMBINED $PID_REPORT $PID_SIMPLE 2>/dev/null || true; wait 2>/dev/null || true' EXIT
 
 wait_for_port $PORT_SIMPLE || {
     echo "--- log for simple-capture viewer ---"

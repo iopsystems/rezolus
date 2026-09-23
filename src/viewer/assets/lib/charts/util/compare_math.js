@@ -1,3 +1,4 @@
+import { firstVisibleLabelValue } from '../../labels.js';
 // Pure comparison math. No DOM, no echarts, no mithril. Safe to run in Node.
 // Null-propagation is the universal rule: if either operand is null,
 // undefined, or NaN, the result is null.
@@ -189,9 +190,7 @@ export const canonicalQuantileLabel = (input) => {
         const mm = input.metric || input;
         raw = mm.quantile;
         if (raw == null) {
-            for (const [k, v] of Object.entries(mm)) {
-                if (k !== '__name__') { raw = v; break; }
-            }
+            raw = firstVisibleLabelValue(mm);
         }
     }
     if (typeof raw === 'string') {

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use metriken_query::{MetricsSource, QueryResult};
+use metriken_query::{is_internal_label, is_storage_key, MetricsSource, QueryResult};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -185,7 +185,7 @@ fn show_available_labels(
 
     for labels in labels_list {
         for (key, value) in labels.iter() {
-            if key != "metric" && key != "unit" && key != "metric_type" {
+            if !is_storage_key(key) && !is_internal_label(key) {
                 label_values
                     .entry(key.clone())
                     .or_default()

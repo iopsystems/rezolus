@@ -1,7 +1,7 @@
 //! Bridges `PlotDef`s to `MetricsSource::query_range` and shapes results
 //! into chart-ready series.
 
-use metriken_query::{MetricsSource, QueryResult};
+use metriken_query::{is_internal_label, MetricsSource, QueryResult};
 
 use super::model::{PlotDef, PlotKind};
 use super::window::TimeWindow;
@@ -97,10 +97,11 @@ fn series_label(metric: &std::collections::HashMap<String, String>) -> String {
         }
         return q.clone();
     }
-    // Fall back to a single non-name label value if present.
+    // Fall back to the first visible label's value, if any. Internal labels
+    // sort first, so "not `__name__`" would pick `__incarnation__` here.
     metric
         .iter()
-        .find(|(k, _)| k.as_str() != "__name__")
+        .find(|(k, _)| !is_internal_label(k))
         .map(|(_, v)| v.clone())
         .unwrap_or_default()
 }
