@@ -1,10 +1,11 @@
 # Internal labels: the `__` rule, and what the incarnation id is called
 
 - **Opened:** 2026-09-22
-- **Status:** **OPEN — steps 1–4 shipped, step 5 (the reader) in review.**
-  Step 1 is metriken-query 0.25.0 (iopsystems/metriken#151, released in
-  #152); step 2 is the rezolus consumers switching to its predicates; step 4
-  is #1277 on metriken-core 0.3.2 / metriken 0.11.1. The audit is in
+- **Status:** **OPEN — steps 1–5 shipped, step 6 (retention of the index) in
+  review.** Step 1 is metriken-query 0.25.0 (iopsystems/metriken#151,
+  released in #152); step 2 is the rezolus consumers switching to its
+  predicates; step 4 is #1277 on metriken-core 0.3.2 / metriken 0.11.1; step
+  5 is #1280 on metriken-query 0.26.0. The audit is in
   [`docs/labels.md`](../labels.md); this entry records the decision and the
   order of work.
 - **Driver:** the reader-side half of #1224 §2 needs a per-occupant id so a
@@ -162,15 +163,19 @@ through metriken too; both still force a rebuild.
    "Measured: the version fold". Shipped on metriken-core 0.3.2 / metriken
    0.11.1 (a defaulted trait method, so a patch bump rather than the 0.4.0 /
    0.12.0 first planned).
-5. **The reader** (#1224 §2, reader side) — done, see "The reader" below.
+5. **The reader** (#1224 §2, reader side) — done (#1280), see "The reader"
+   below.
    `crates/rez/src/indexed.rs` replays `caller_rows` into per-slot occupancy
    spans and splits a group table's columns by occupant into a
    `MemoryStore`; the archive reader takes that path for every table whose
    stream has index entries. Verified against today's `--stream` archives,
    which carry index and column identity together. Needs metriken-query
    0.26.0 (iopsystems/metriken#155).
-6. **Writer side, additive**: evict `caller_rows` with segments; resend a
-   `Full` at the seal cadence.
+6. **Retention of the index** — done, see "Retention of the index" below.
+   The subscriber restates every stream's slot set as `Full` entries every
+   seal age; the writer cuts a stream's `caller_rows` back to the latest
+   `Full` at or before the row cutoff; the reader starts its replay at the
+   last `Full` before a table's first row.
 7. **Cutover branch**: descriptors become bare slot ids, identity leaves column
    metadata, format version bumps.
 
@@ -225,6 +230,47 @@ table over a long recording is the whole table in memory. The parquet path
 was tuned for the opposite (footer-only probes, ~1.37 ms per segment). The
 tables this applies to are exactly the churning ones, so this needs a number
 before step 7 makes it the only path.
+
+## Retention of the index
+
+Two problems with the index as #1272 wrote it. A rolling buffer evicts rows
+by age but never touched `caller_rows`, so a hindsight buffer fed by the
+stream would keep every identity change since connect for the life of the
+process. And a reader of a long recording replayed the stream's whole
+history to attribute its last hour, because the only `Full` was the one the
+producer sent at connect.
+
+The plan said "resend a `Full` at the seal cadence", by the producer. It is
+the subscriber that does it. The subscriber holds the same slot set the
+producer does — rule 10 checks that hash on every rows frame — so it can
+write the restatement itself, from `SourceIndex::full_entries`, stamped with
+the rows that tripped it, and the producer never has to know the recorder's
+cadence. `recorder::stream::RESTATE_EVERY` is 300 s, the seal policy's
+`max_age`, so any segment's rows are at most one restatement from a `Full`.
+Rows skipped under rule 10 do not trip it: the set the subscriber holds is
+not the one those rows named.
+
+Which entries are `Full` is not stored. The catalog keeps the blob opaque,
+and the two consumers of the fact get it two ways:
+
+- **The writer** sees each entry's kind on the way in (`IndexRow::full`,
+  in memory only) and keeps the `Full` timestamps per (recording, stream).
+  At retention it cuts each stream's history at the latest `Full` not after
+  the row cutoff — strictly before it, so the `Full` itself stays — and a
+  stream with no `Full` on record keeps everything. A writer that starts
+  against an archive with existing entries therefore evicts nothing until
+  its first restatement lands, which errs on keeping. Entries after the cut
+  are kept however old the rows they describe are; the safe side.
+- **The reader** walks a stream's entries newest-first from the table's
+  first row and stops at the first `Full` it decodes
+  (`RezDb::last_caller_row_at_or_before` with a predicate the reader
+  supplies), then reads forward from there. One restatement period of
+  entries at most, not the history.
+
+Pinned: a subscriber restates at the interval and not before, flagged and
+stamped as the rows; retention keeps the entry at the cut and the other
+stream's history; a recording whose head and index were evicted back to
+the restatement still attributes the surviving rows.
 
 ## Related
 

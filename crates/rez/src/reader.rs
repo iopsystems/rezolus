@@ -208,29 +208,42 @@ impl SegmentSource {
         }
     }
 
-    /// This table's identity index entries, oldest first — every one the
-    /// archive holds for the stream, since a slot's occupant at any row can
-    /// depend on an entry from long before it.
+    /// This table's identity index entries, oldest first, from the last
+    /// `Full` at or before `first_row_ts` — a slot's occupant at any row can
+    /// depend on an entry from long before it, and a `Full` is where that
+    /// dependence stops. A stream with no `Full` before its first row is
+    /// read from its beginning.
     ///
     /// Empty for a byte-backed tar archive: v2 has no index.
-    fn index_entries(&self) -> Result<IndexRows, Box<dyn std::error::Error>> {
+    fn index_entries(&self, first_row_ts: u64) -> Result<IndexRows, Box<dyn std::error::Error>> {
+        fn from_last_full(
+            db: &RezDb,
+            recording_id: i64,
+            stream: &str,
+            first_row_ts: u64,
+        ) -> Result<IndexRows, Box<dyn std::error::Error>> {
+            let from = db
+                .last_caller_row_at_or_before(recording_id, stream, first_row_ts, |blob| {
+                    crate::index::IndexEntry::decode(blob)
+                        .is_ok_and(|e| e.kind == crate::index::EntryKind::Full)
+                })?
+                .unwrap_or(0);
+            Ok(db.read_caller_rows(recording_id, stream, from, u64::MAX)?)
+        }
         match self {
             SegmentSource::Bytes(_) => Ok(Vec::new()),
             SegmentSource::Db {
                 path,
                 recording_id,
                 sampler,
-            } => {
-                let db = RezDb::open(path)?;
-                Ok(db.read_caller_rows(*recording_id, sampler, 0, u64::MAX)?)
-            }
+            } => from_last_full(&RezDb::open(path)?, *recording_id, sampler, first_row_ts),
             SegmentSource::SharedDb {
                 db,
                 recording_id,
                 sampler,
             } => {
                 let db = db.lock().unwrap_or_else(|e| e.into_inner());
-                Ok(db.read_caller_rows(*recording_id, sampler, 0, u64::MAX)?)
+                from_last_full(&db, *recording_id, sampler, first_row_ts)
             }
         }
     }
@@ -472,7 +485,8 @@ impl SamplerReader {
     /// to the parquet path, which would file every reused slot's rows under
     /// its first occupant.
     fn open_indexed(&self, segments: &[Vec<u8>]) -> Option<TableReader> {
-        let entries = match self.segments.index_entries() {
+        let first_row_ts = self.span.map(|(b, _)| b).unwrap_or(0);
+        let entries = match self.segments.index_entries(first_row_ts) {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!("reading the identity index for {}: {e}", self.sampler);
@@ -4409,6 +4423,10 @@ mod tests {
             }
         }
 
+        /// The tick at which the recorder restates the whole set, as it does
+        /// every seal age: a `Full` that changes nothing.
+        const RESTATED: u64 = 4;
+
         fn entry(tick: u64) -> Option<(u64, Vec<u8>)> {
             let e = match tick {
                 0 => IndexEntry {
@@ -4432,6 +4450,21 @@ mod tests {
                         slot: 0,
                         labels: labels(&[("comm", "valkey")]),
                     }],
+                    removed: Vec::new(),
+                    state: IndexState::default(),
+                },
+                RESTATED => IndexEntry {
+                    kind: EntryKind::Full,
+                    slots: vec![
+                        SlotEntry {
+                            slot: 0,
+                            labels: labels(&[("comm", "valkey")]),
+                        },
+                        SlotEntry {
+                            slot: 1,
+                            labels: labels(&[("comm", "nginx")]),
+                        },
+                    ],
                     removed: Vec::new(),
                     state: IndexState::default(),
                 },
@@ -4489,7 +4522,14 @@ mod tests {
                 });
                 let rows = rec.stage(&snap, ts(tick), 0).unwrap();
                 let index_entries = match (with_index, entry(tick)) {
-                    (true, Some(e)) => vec![(STREAM.to_string(), vec![e])],
+                    (true, Some((ts, blob))) => vec![(
+                        STREAM.to_string(),
+                        vec![crate::rez_sqlite::IndexRow {
+                            ts,
+                            blob,
+                            full: tick == 0 || tick == RESTATED,
+                        }],
+                    )],
                     _ => Vec::new(),
                 };
                 archive
@@ -4623,6 +4663,40 @@ mod tests {
                 plain.counter_labels("fake_ops").len(),
                 2,
                 "one series per slot, the handover invisible"
+            );
+        }
+
+        /// After retention has cut the head of the recording and its index
+        /// history back to the restatement, the surviving rows are still
+        /// attributed: the reader starts its replay at the last `Full` at
+        /// or before the table's first surviving row, which is exactly the
+        /// entry retention kept.
+        #[test]
+        fn a_retained_tail_is_attributed_from_the_restatement() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cutover.rez");
+            write(&path, false, true);
+            {
+                let mut db = RezDb::open(&path).unwrap();
+                db.evict_before(1, ts(RESTATED)).unwrap();
+                db.evict_caller_rows_before(1, STREAM, ts(RESTATED))
+                    .unwrap();
+                assert_eq!(
+                    db.read_caller_rows(1, STREAM, 0, u64::MAX).unwrap().len(),
+                    1,
+                    "fixture: only the restatement remains"
+                );
+            }
+            let reader = open(&path);
+            let got = series(&reader);
+            let labels_of: Vec<&BTreeMap<String, String>> = got.iter().map(|(l, _)| l).collect();
+            let want = |comm: &str, id: &str| {
+                labels(&[("__name__", "fake_ops"), ("comm", comm), ("id", id)])
+            };
+            assert_eq!(
+                labels_of,
+                vec![&want("nginx", "1"), &want("valkey", "0")],
+                "redis's rows are gone with the head; the rest are still named: {got:?}"
             );
         }
 

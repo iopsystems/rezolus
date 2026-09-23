@@ -131,6 +131,33 @@ enum Msg {
 /// handle reads it, keeping per-tick errors as specific as they were.
 type ErrorSlot = Arc<Mutex<Option<String>>>;
 
+/// Cut each stream's identity history at the latest `Full` not after
+/// `cutoff_ts`, dropping the entries before it and forgetting the `Full`s
+/// before it.
+///
+/// A stream whose every recorded `Full` is after the cutoff — or that has
+/// none on record, as every stream has when the writer starts — keeps its
+/// entries: the rows that survive the cutoff may depend on them.
+fn evict_index_history(
+    db: &mut RezDb,
+    fulls: &mut BTreeMap<(i64, String), Vec<u64>>,
+    recording_id: i64,
+    cutoff_ts: u64,
+) -> Result<(), String> {
+    for ((rec, stream), stamps) in fulls.iter_mut() {
+        if *rec != recording_id {
+            continue;
+        }
+        // Oldest first, so the last one at or before the cutoff is the cut.
+        let Some(cut) = stamps.iter().rev().find(|ts| **ts <= cutoff_ts).copied() else {
+            continue;
+        };
+        db.evict_caller_rows_before(recording_id, stream, cut)?;
+        stamps.retain(|ts| *ts >= cut);
+    }
+    Ok(())
+}
+
 /// Reclaim at most this many pages per retention pass — sized to fit inside a
 /// tick. The point of a cap at all is that a shrunken working set drains back
 /// to the filesystem gradually; a full `VACUUM` would return the same space in
@@ -673,6 +700,16 @@ fn writer_loop(
     // must not pay for a vacuum on the way down.
     let mut added: usize = 0;
     let mut finalized: usize = 0;
+    // Where each stream's identity history can be cut: the timestamps of the
+    // `Full` entries this writer has stored, per (recording, stream), oldest
+    // first. Retention needs them because an index entry is not
+    // self-contained the way a row is — a `Delta` means nothing without the
+    // `Full` before it — so a stream's entries are evicted only back to the
+    // latest `Full` that is not after the row cutoff. Kept in memory rather
+    // than in the catalog: the blob is opaque there, and a writer that starts
+    // with none simply evicts nothing until its first restatement lands,
+    // which errs on keeping.
+    let mut fulls: BTreeMap<(i64, String), Vec<u64>> = BTreeMap::new();
     // When the sidecar was last folded into the archive. Advanced on every
     // checkpoint, including ones taken while idle — the guarantee is about
     // elapsed time, not about arriving messages.
@@ -718,7 +755,19 @@ fn writer_loop(
                 }
                 let _ = reply.send(inserted);
             }
-            Ok(Msg::Wal { ticks }) => db.insert_wal_rows_batch(&ticks)?,
+            Ok(Msg::Wal { ticks }) => {
+                db.insert_wal_rows_batch(&ticks)?;
+                for tick in &ticks {
+                    for (stream, rows) in &tick.index_entries {
+                        for row in rows.iter().filter(|r| r.full) {
+                            fulls
+                                .entry((tick.recording_id, stream.clone()))
+                                .or_default()
+                                .push(row.ts);
+                        }
+                    }
+                }
+            }
             #[cfg(any(test, feature = "test-support"))]
             Ok(Msg::Commits(reply)) => {
                 let _ = reply.send(db.commits());
@@ -736,6 +785,7 @@ fn writer_loop(
                 cutoff_ts,
             }) => {
                 db.evict_before(recording_id, cutoff_ts)?;
+                evict_index_history(db, &mut fulls, recording_id, cutoff_ts)?;
                 reclaim_if_fragmented(db)?;
             }
             Ok(Msg::Finalize {
@@ -1801,6 +1851,7 @@ mod tests {
     use crate::rez::recorder_tests_support::counter;
     use crate::rez::write_table_parquet;
     use crate::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
+    use crate::rez_sqlite::IndexRow;
     use crate::wal::{decode_wal_group_row, decode_wal_row};
     use crate::window::Window;
 
@@ -2128,7 +2179,14 @@ mod tests {
                     wall_offset: 0,
                     row: vec![9, 9],
                 }],
-                vec![("cpu_usage/usage".to_string(), vec![(ts, vec![1, 2, 3])])],
+                vec![(
+                    "cpu_usage/usage".to_string(),
+                    vec![IndexRow {
+                        ts,
+                        blob: vec![1, 2, 3],
+                        full: true,
+                    }],
+                )],
             )
             .unwrap();
         let commits = archive.commits_for_test() - baseline;
@@ -2145,6 +2203,98 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1, "and so did the entry describing them");
         assert_eq!(entries[0].1, vec![1, 2, 3]);
+    }
+
+    /// Retention cuts a stream's index history at the latest `Full` that is
+    /// not after the row cutoff, and nowhere else. A `Delta` is meaningless
+    /// without the `Full` before it, so the cut can only ever land ON a
+    /// `Full`; and the rows that survive a cutoff may have been described by
+    /// entries from before it, so entries after the cut are kept however old
+    /// they are. A stream that never restated keeps everything.
+    #[test]
+    fn retention_cuts_index_history_at_the_last_full_before_the_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut writer = archive.add_recording(seed()).unwrap();
+
+        // `restated` restates at 3_000; `never` sends one Full at connect and
+        // deltas from then on.
+        let entries = [
+            (1_000u64, true),
+            (2_000, false),
+            (3_000, true),
+            (4_000, false),
+            (5_000, false),
+        ];
+        for (ts, full) in entries {
+            let row = |stream: &str, full: bool| {
+                (
+                    stream.to_string(),
+                    vec![IndexRow {
+                        ts,
+                        blob: vec![full as u8],
+                        full,
+                    }],
+                )
+            };
+            writer
+                .wal_with_index(
+                    vec![WalRow {
+                        sampler: "cpu_usage".to_string(),
+                        ts,
+                        wall_offset: 0,
+                        row: vec![9, 9],
+                    }],
+                    vec![row("cpu/restated", full), row("cpu/never", ts == 1_000)],
+                )
+                .unwrap();
+        }
+        let stamps = |db: &RezDb, stream: &str| -> Vec<u64> {
+            db.read_caller_rows(1, stream, 0, u64::MAX)
+                .unwrap()
+                .into_iter()
+                .map(|(ts, _)| ts)
+                .collect()
+        };
+
+        // Before the restatement: the only Full is the first entry, so the
+        // cut lands there and nothing goes.
+        writer.evict_before(2_500).unwrap();
+        writer.sync().unwrap();
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(
+            stamps(&db, "cpu/restated"),
+            vec![1_000, 2_000, 3_000, 4_000, 5_000]
+        );
+        drop(db);
+
+        // Past it: everything before the 3_000 Full goes, and it stays.
+        writer.evict_before(3_500).unwrap();
+        writer.sync().unwrap();
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(stamps(&db, "cpu/restated"), vec![3_000, 4_000, 5_000]);
+        assert_eq!(
+            stamps(&db, "cpu/never"),
+            vec![1_000, 2_000, 3_000, 4_000, 5_000],
+            "a stream with no later Full keeps its history"
+        );
+        drop(db);
+
+        // Far past everything: the cut is still the last Full, so the
+        // entries after it are kept even though every row they describe is
+        // gone. Keeping too much is the safe side.
+        writer.evict_before(50_000).unwrap();
+        writer.sync().unwrap();
+        let db = RezDb::open(&path).unwrap();
+        assert_eq!(stamps(&db, "cpu/restated"), vec![3_000, 4_000, 5_000]);
+        assert_eq!(
+            db.read_wal(1, "cpu_usage").unwrap().len(),
+            0,
+            "fixture: the rows themselves were evicted"
+        );
+        drop(writer);
+        drop(archive);
     }
 
     /// THE guarantee this cadence exists for: a plain copy of a live archive
