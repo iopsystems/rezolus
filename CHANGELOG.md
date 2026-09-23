@@ -1,34 +1,23 @@
 ## [Unreleased]
 
-### Fixed
-
-- Viewer: a recording made below a one-second cadence is read and drawn at that
-  cadence instead of at one second. The frontend floored every query step and
-  histogram stride at 1s, so nine of every ten samples of a `--interval 100ms`
-  recording were discarded and a 2 Hz signal came back as a flat line at its
-  mean. Nothing in the query path required the floor — the engine takes `step`
-  as seconds and works in nanoseconds — and the Step selector now offers the
-  sub-second choices such a recording can resolve.
-- `.rez`: a sub-second archive reads back the values it holds. The query engine
-  rounded every timestamp to a grid taken from the file's declared
-  `sampling_interval_ms` — a key a `.rez` segment does not carry, so it assumed
-  one second — and ten rows of a 100ms second collapsed onto one instant,
-  leaving a sub-second query returning held-forward copies of each second's
-  survivor. metriken-query 0.24.0 reads the recorded timestamps instead.
-  **Existing archives were never damaged, only misread**: they need no
-  re-recording. `RezReader::interval()` now reports a measured cadence rather
-  than the 1s default every `.rez` inherited, which is what lets the viewer
-  open a sub-second recording at its own resolution.
+## [5.21.0] - 2026-09-23
 
 ### Added
 
-- Agent: an opt-in Linux `hw_sensors` sampler reads native thermal zones, hwmon
-  temperature and electrical channels, fan RPM/PWM, and cooling states. Includes
-  INA3221 power derivation and Thor board interpretation, with a Hardware Sensors viewer
-  section. Reads run in the blocking pool at a configurable interval (default
-  5s). Thor inventory fixtures and synthetic Orin layouts are tested; hardware
-  timing and Orin validation are still required before fleet-wide enablement.
-  (#1203)
+- Agent: a `cpu_power` sampler reports CPU energy, power and idle-state
+  residency, with Power and C-State Residency sections in the CPU dashboard.
+  Everything is read through perf: the sampler discovers the `power`,
+  `power_core`, `cstate_core` and `cstate_pkg` PMUs from
+  `/sys/bus/event_source/devices` and opens counters on the CPUs each PMU's
+  cpumask permits, so there is no vendor or model detection — which PMUs exist,
+  which events they expose and which CPUs may read them are all properties the
+  kernel already publishes, and they vary by part as much as by vendor. (#1071)
+- Agent: an Intel GPU sampler, `gpu_intel_pmu`, covering integrated GPUs and
+  discrete Arc cards through the i915/xe PMU. Each GPU registers its own PMU,
+  discovered at init along with the engine set that GPU actually exposes: the
+  perf type is assigned at boot and the engine set differs per part, so nothing
+  is hardcoded. The viewer's per-GPU charts distinguish two vendors on one
+  host. (#1173)
 - Agent: a `filesystem` sampler reports total, free and available bytes and
   total and free inodes, plus whether it is read-only, for every locally mounted
   filesystem: one series per filesystem, labeled by `mount`, `fstype`, `devnum`
@@ -41,6 +30,190 @@
   run at most once per `[samplers.filesystem] interval` (default 60s), off the
   scrape cycle. The viewer gains a Filesystem section with one line per filesystem.
   (#1202)
+- Agent: an opt-in Linux `hw_sensors` sampler reads native thermal zones, hwmon
+  temperature and electrical channels, fan RPM/PWM, and cooling states. Includes
+  INA3221 power derivation and Thor board interpretation, with a Hardware Sensors viewer
+  section. Reads run in the blocking pool at a configurable interval (default
+  5s). Thor inventory fixtures and synthetic Orin layouts are tested; hardware
+  timing and Orin validation are still required before fleet-wide enablement.
+  (#1203)
+- Agent: `network_host_bytes` and `network_host_packets` count north/south
+  traffic once, at the host boundary. The existing `network_bytes`/
+  `network_packets` count TX once per `net_device` the skb is handed to rather
+  than once per packet leaving the host, so a bonded host reports about twice
+  its real egress and VLAN-over-bond three times. RX is not symmetric, which
+  makes the older pair asymmetrically inflated rather than uniformly wrong. The
+  new counters are additive; the old pair is unchanged. (#1214)
+- Viewer: the host-boundary series appears above the per-interface panels in
+  both dashboards and the TUI, rather than replacing them. The per-interface
+  sum measured 3.04x the real figure on a bonded host, and about 1000x at idle
+  on one running VMs, where loopback and virtual-interface traffic dominate.
+  (#1219)
+- Agent: `/metrics/rows`, a row-format endpoint that names a schema by hash
+  instead of resending it on every scrape. `/metrics/binary` ships every
+  acquisition group's full `GroupSchema` every time because each consumer
+  decodes one snapshot in isolation; a consumer that keeps a cache does not
+  need that. (#1237)
+- Agent: a sampling clock of its own, running only while something is
+  subscribed. `refresh()` was previously reachable from one place — a request
+  whose TTL had expired — so the request was the cadence. Demand-driven rather
+  than unconditional because a cross-CPU perf read measured 1002us p50 idle
+  against 52us under load (19.3x): a perf event opened on another CPU charges
+  that core's C-state exit latency to the read. (#1240)
+- Agent: a sampling pass is served as dendro replication frames on
+  `/metrics/stream`, with a slot index so that per-CPU churn stops resending
+  schemas, and the index entries for a tick commit in the same transaction as
+  the rows they describe. (#1247, #1249, #1254, #1257, #1260, #1266, #1267)
+- Recorder: `--stream` subscribes to an agent's `/metrics/stream` instead of
+  scraping it. A pump task per endpoint holds the subscription and the tick
+  loop drains it, staging rows through the same path the row endpoint feeds.
+  The recording is anchored on the handshake's clock and epoch. (#1261, #1272)
+- Agent and recorder: a body carries the moment the values were read, and a
+  recording keeps it. A timestamp used to be whatever clock read last — the
+  recorder's tick when scraping, frame-emission time when streaming — and
+  neither names the sample. Because the agent serves a cached pass for its TTL,
+  a scrape inside that window gets values read up to a TTL earlier and one HTTP
+  response looks the same either way. (#1269, #1270)
+- Recorder: a capture records the version of the agent that produced it, under
+  the `version` metadata key, in the `.rez` per-recording manifest and the
+  parquet footer alike. Sampler behavior changes between builds, so when two
+  recordings of one host disagree the first question is which agent versions
+  wrote them — previously unanswerable from the files. (#1211)
+- Agent: a `producer_epoch`, a v4 UUID minted once per process and carried on
+  every snapshot. A consumer cannot otherwise tell a counter that was RESET
+  from one that WRAPPED — both went down, and the arithmetic differs. The epoch
+  changes when, and only when, every cumulative counter restarted from zero
+  together. (#1231)
+- Agent: a slot assignment mints its occupant's `__uid__`. A slot's labels say
+  what it means, and two different things can carry the same labels — a PID
+  wraps onto the same comm, a cgroup is deleted and recreated at the same path,
+  a task restarts under the same name. A reader keying series on labels alone
+  fuses those into one series with a reset in the middle, and attributes one
+  task's counter to another. The uid is minted once per assignment from the
+  assignment's generation and the producer epoch, and travels with the labels
+  everywhere they already go: snapshot descriptors, `.rez` column metadata, and
+  the identity index a stream carries. (#1276)
+- Site: a physical AI section and a homepage theme toggle (#1262), and the
+  README is now a guide to Rezolus workflows (#1263).
+
+### Changed
+
+- Agent: `network_traffic` attaches BTF-typed (`tp_btf`) rather than `raw_tp`.
+  Without argument types the verifier compiles every field access to a
+  `bpf_probe_read_kernel` call, and on a probe whose whole body is ~45ns one or
+  two of those dominate it — which is why the host-boundary counters in #1214
+  cost +28.8ns/run (+64%). (#1235)
+- Agent: the schema cache validates by metadata version rather than by hashing
+  labels. It folded every entry's label map into a 128-bit hash, for every slot
+  of every group, every tick, so that a slot relabelled at a stable index would
+  be noticed — measured at 13-19% of the agent's sampling CPU on a 32-core host
+  in every build profiled. Labels only change on a slot assignment, and the
+  metric store bumps a version on every mutation, so one version per metric now
+  stands in for the fold. (#1277)
+- Recorder: provenance describes a recording rather than a metric, and the
+  Prometheus converter no longer labels individual metrics with it. (#1258,
+  #1259)
+- Consumers hide internal labels by rule rather than by name. A `__`-prefixed
+  label is identity-bearing and matchable but dropped by `without` and hidden
+  in output, so every place that hid `__name__` by name, or listed storage keys
+  by name, now goes through one predicate — `is_internal_label`/`is_storage_key`
+  in the metric catalog, MCP `describe-metrics`, anomaly and correlation
+  selectors and the TUI legend, and a shared `labels.js` for the web legends,
+  boxplot, compare and explorers. Without this a `__`-prefixed label would have
+  become the legend text of every series carrying it, because the frontend
+  named a series by the first label that is not `__name__` and labels arrive
+  sorted. (#1275)
+
+### Fixed
+
+- Viewer: a recording made below a one-second cadence is read and drawn at that
+  cadence instead of at one second. The frontend floored every query step and
+  histogram stride at 1s, so nine of every ten samples of a `--interval 100ms`
+  recording were discarded and a 2 Hz signal came back as a flat line at its
+  mean. Nothing in the query path required the floor — the engine takes `step`
+  as seconds and works in nanoseconds — and the Step selector now offers the
+  sub-second choices such a recording can resolve. (#1273)
+- `.rez`: a sub-second archive reads back the values it holds. The query engine
+  rounded every timestamp to a grid taken from the file's declared
+  `sampling_interval_ms` — a key a `.rez` segment does not carry, so it assumed
+  one second — and ten rows of a 100ms second collapsed onto one instant,
+  leaving a sub-second query returning held-forward copies of each second's
+  survivor. metriken-query 0.24.0 reads the recorded timestamps instead.
+  **Existing archives were never damaged, only misread**: they need no
+  re-recording. `RezReader::interval()` now reports a measured cadence rather
+  than the 1s default every `.rez` inherited, which is what lets the viewer
+  open a sub-second recording at its own resolution.
+- Agent: `network_ethtool` counters have per-interface identity. One
+  `&'static LazyCounter` was shared across every interface per stat NAME and
+  written with `set()`, so on a host where more than one interface exposes ENA
+  allowance stats, whichever interface `read_dir` enumerated last silently
+  overwrote the others. Multi-ENI EC2 instances are ordinary, so this was not a
+  corner case on the hosts this sampler exists to serve. (#1216)
+- Hindsight: the daemon writes its buffer out before exiting. The packaged
+  service set `KillSignal=SIGKILL`, which cannot be caught, so every
+  `systemctl stop` and `restart` threw away the lookback window — the one thing
+  a flight recorder exists to keep — and orphaned the staging directory, so
+  repeated restarts accumulated buffers until the filesystem filled. (#1225)
+- Hindsight: the rolling buffer gets its own directory under `/var/lib`. It
+  previously went wherever `output` pointed, defaulting to `/tmp/rezolus.rez`,
+  so out of the box a buffer sized for a useful lookback — hundreds of
+  megabytes to gigabytes — was created on tmpfs. That is memory with extra
+  steps, competing with the workload being observed, on the same host, during
+  the incident being recorded. (#1234)
+- Agent: a tap device is present, not absent. `collect_nics` kept only
+  interfaces whose `operstate` is exactly `up`, and a tap reports `unknown` for
+  its whole life because there is no carrier to report on, so every VM tap and
+  tun interface was missing from the hardware inventory embedded in every
+  recording taken on a hypervisor or VPN host. (#1236)
+- Agent: a per-CPU group declares the CPUs the host has, not the slots it could
+  have. Membership was a dense prefix over `possible_cpus()`, which returns
+  `max_id + 1` over hot-addable ids and may have gaps. (#1244)
+- `.rez`: a relabeled group slot gets its own column rather than the previous
+  occupant's. A slot's descriptor name is `{metric_id}x{slot}` whatever its
+  labels are, and columns were keyed on that name alone with metadata copied
+  only at creation, so a reused slot wrote into the first identity's column and
+  kept its labels. (#1232)
+- `.rez`: an index entry's state belongs to the source, not to one stream.
+  dendro's subscriber keeps one `index_state` per source, so with several
+  groups emitting index frames in a tick only the last one's state survived.
+  (#1251)
+- Viewer: every per-point column is clipped when serving a display tile.
+  `uncLo`, `uncHi` and the interpolated flags are indexed by the same point
+  index as `t` but came through at full length, misaligned by the window's
+  start. (#1250)
+- Viewer: only a decimated tile is judged against the point budget. A tile that
+  was never decimated already holds every sample the recording has across its
+  range, so no refetch can return more, and rejecting it forced one anyway.
+  (#1252)
+- Agent: one clock anchor per agent, not one per connection. Every subscription
+  minted its own anchor and advertised it in the handshake, so two subscribers
+  to one agent were told the same source had two timelines. (#1268)
+- Recorder: a scrape's window is read off the row's own clock. `request_ns`/
+  `response_ns` came from a raw wall reading while the row holding them is
+  stamped on the recorder's anchored timeline, and the archive stores a window
+  as an offset from its row's `ts` — so the offset carried the wall-versus-
+  anchor divergence instead of the read's position within the tick. (#1271)
+
+### Security
+
+- rustls 0.23.45, for RUSTSEC-2026-0285: TLS 1.3 handshake messages sent at the
+  wrong encryption level were accepted when they followed a key-changing
+  message in the same record, where RFC 8446 section 5.1 requires terminating
+  the connection. (#1212)
+
+### Dependencies
+
+- Two grouped dependency updates, 23 and 21 crates (#1210, #1264). The second
+  takes `histogram` 1.6.0, which validates configurations and bucket counts on
+  deserialize; the exporter now relies on that rather than re-checking a
+  histogram it cannot rebuild.
+- dendro moves from git to crates.io and then to 0.2.0 and 0.2.1, pinning the
+  replication contract the streaming endpoints are built on. (#1230, #1246,
+  #1255)
+- metriken-query 0.25.0. 0.24.0 stopped rounding a recording's timestamps to a
+  declared sampling grid, which is what lets a sub-second recording read back
+  the values it holds; 0.25.0 makes `__`-prefixed labels internal. (#1273,
+  #1275)
 
 ## [5.20.0] - 2026-09-10
 
@@ -1278,7 +1451,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.20.0...HEAD
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.21.0...HEAD
+[5.21.0]: https://github.com/iopsystems/rezolus/compare/v5.20.0...v5.21.0
 [5.20.0]: https://github.com/iopsystems/rezolus/compare/v5.19.1...v5.20.0
 [5.19.1]: https://github.com/iopsystems/rezolus/compare/v5.19.0...v5.19.1
 [5.19.0]: https://github.com/iopsystems/rezolus/compare/v5.18.0...v5.19.0
