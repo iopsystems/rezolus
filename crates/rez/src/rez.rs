@@ -120,10 +120,8 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-// Only the test-only eager reader (read_table_parquet) needs these.
-#[cfg(any(test, feature = "test-support"))]
+// The eager reader (`read_table_parquet`) needs these.
 use arrow::array::ListArray;
-#[cfg(any(test, feature = "test-support"))]
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 /// Per-metric column values for a table (row-aligned with the table's timestamps).
@@ -387,18 +385,20 @@ pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
     Ok(buf)
 }
 
-#[cfg(any(test, feature = "test-support"))]
 fn u64_col(a: &ArrayRef) -> &UInt64Array {
     a.as_any()
         .downcast_ref::<UInt64Array>()
         .expect("UInt64 column")
 }
 
-/// Deserialize one table from parquet bytes. Test-only: the production read
-/// path decodes tables lazily via metriken-query's `ParquetReader`
-/// (`read_archive_bytes` → `RezReader`); this eager decoder exists to verify
-/// the write path independently.
-#[cfg(any(test, feature = "test-support"))]
+/// Deserialize one table from parquet bytes.
+///
+/// The production read path decodes most tables lazily via metriken-query's
+/// `ParquetReader` (`read_archive_bytes` → `RezReader`). This eager decoder
+/// was written to verify the write path independently, and is now also the
+/// decoder behind [`crate::indexed`]: a table whose slots are described by
+/// the identity index is split by occupant before the query engine sees it,
+/// and that split needs every row in hand rather than a footer.
 pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, RezError> {
     let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))?.build()?;
 

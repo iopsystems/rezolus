@@ -1,9 +1,10 @@
 # Internal labels: the `__` rule, and what the incarnation id is called
 
 - **Opened:** 2026-09-22
-- **Status:** **OPEN — steps 1–3 shipped, step 4 in review.** Step 1 is metriken-query
-  0.25.0 (iopsystems/metriken#151, released in #152); step 2 is the rezolus
-  consumers switching to its predicates. The audit is in
+- **Status:** **OPEN — steps 1–4 shipped, step 5 (the reader) in review.**
+  Step 1 is metriken-query 0.25.0 (iopsystems/metriken#151, released in
+  #152); step 2 is the rezolus consumers switching to its predicates; step 4
+  is #1277 on metriken-core 0.3.2 / metriken 0.11.1. The audit is in
   [`docs/labels.md`](../labels.md); this entry records the decision and the
   order of work.
 - **Driver:** the reader-side half of #1224 §2 needs a per-occupant id so a
@@ -158,12 +159,16 @@ through metriken too; both still force a rebuild.
 3. **The uid at assignment** (revised, see Decisions): `SlotIdentity::set`
    mints `__uid__` into the slot's labels; the exporter drops it.
 4. **Replace the per-tick identity fold with a version** — done, see
-   "Measured: the version fold". Needs metriken-core 0.4.0 / metriken 0.12.0.
-5. **The reader** (#1224 §2, reader side): the indexed group source in
-   `crates/rez` replays `caller_rows` into per-slot label timelines, `__uid__`
-   included, for archives whose columns carry no identity. Verified against
-   today's `--stream` archives, which carry index and column identity
-   together.
+   "Measured: the version fold". Shipped on metriken-core 0.3.2 / metriken
+   0.11.1 (a defaulted trait method, so a patch bump rather than the 0.4.0 /
+   0.12.0 first planned).
+5. **The reader** (#1224 §2, reader side) — done, see "The reader" below.
+   `crates/rez/src/indexed.rs` replays `caller_rows` into per-slot occupancy
+   spans and splits a group table's columns by occupant into a
+   `MemoryStore`; the archive reader takes that path for every table whose
+   stream has index entries. Verified against today's `--stream` archives,
+   which carry index and column identity together. Needs metriken-query
+   0.26.0 (iopsystems/metriken#155).
 6. **Writer side, additive**: evict `caller_rows` with segments; resend a
    `Full` at the seal cadence.
 7. **Cutover branch**: descriptors become bare slot ids, identity leaves column
@@ -171,6 +176,55 @@ through metriken too; both still force a rebuild.
 
 Step 2 before step 3 was the ordering that mattered: the uid must not be the
 first `__` label in front of a legend that would print it.
+
+## The reader
+
+A group table's column is a slot, and the archive reader used to file every
+row of a column under the labels in that column's field metadata. When a
+slot changes hands inside a segment the table builder already opens a second
+column (`{metric_id}x{slot}#2`) with the new labels, so the parquet path does
+see a handover — but only because the writer copied the labels into the
+column, which is what step 7 stops doing.
+
+`crates/rez/src/indexed.rs` reads the table the other way round:
+
+- **Replay.** The stream's `caller_rows` entries, in `(ts, seq)` order, go
+  through the same `SlotIndex::apply` the subscriber uses. After each entry
+  the live set is diffed against the open spans: a slot whose labels changed
+  or that left closes its span at the entry's timestamp and a new one opens
+  there. An entry takes effect *at* its timestamp because the recorder
+  commits a tick's rows and the entries describing them together, stamped
+  alike. A `Delta` before the first `Full` is skipped and counted, not fatal.
+- **Split.** Every segment (sealed, then the WAL tail) is decoded eagerly with
+  `read_table_parquet`, which was a test-only function until now. Each
+  column's slot is its `id` metadata, or failing that the `{metric_id}x{slot}`
+  name with any `#generation` suffix removed. Each row goes to the series of
+  the slot's occupant at that timestamp: the column's own labels (storage
+  keys removed, as the parquet loader does) with the occupant's index labels
+  laid over them, index winning. A row with no occupant on record keeps the
+  column's labels and is counted; nothing is dropped.
+- **Compose.** The series go into a `MemoryStore` — counters and gauges with
+  their per-sample windows from the table-level window pair, histograms as
+  cumulative sparse snapshots with `__run__` numbered the way the segmented
+  reader numbers them — and the store declares the table's row timestamps as
+  its own. It composes as a union child and as a composition source beside
+  the parquet-backed tables, so nothing above `TableReader` changed.
+
+The oracle: the same six-tick archive with a handover is written twice, with
+and without its index entries, and `rate()` over it — labels, values,
+timestamps, uncertainty bands — is identical on both paths. On the
+index-only shape the cutover will write, the parquet path sees one series
+per slot and the indexed path sees three, split at the handover, with the
+second occupant's own slope. A mutation that disables the index path fails
+the split tests and leaves the oracle green, which is the intended shape: the
+oracle proves agreement, the split tests prove the path is taken.
+
+Not measured yet: open cost. The indexed path decodes every segment of a
+table at first query rather than reading footers, which for a 300-slot task
+table over a long recording is the whole table in memory. The parquet path
+was tuned for the opposite (footer-only probes, ~1.37 ms per segment). The
+tables this applies to are exactly the churning ones, so this needs a number
+before step 7 makes it the only path.
 
 ## Related
 

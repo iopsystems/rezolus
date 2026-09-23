@@ -46,6 +46,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
+use metriken_query::MemoryStore;
 use metriken_query::{
     BufferPool, CompositionSource, MetricsSource, ParquetReader, QueryError, QueryOptions,
     QueryResult, RateMode, SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
@@ -63,6 +64,9 @@ use crate::wal::materialize_wal_tail;
 enum TableReader {
     Single(ParquetReader),
     Segmented(SegmentedParquetReader),
+    /// A group table whose slots the identity index describes, split by
+    /// occupant into an in-memory store — see [`crate::indexed`].
+    Indexed(MemoryStore),
 }
 
 /// Parse one probe segment's footer per table.
@@ -142,6 +146,9 @@ type PendingProbe = (String, Vec<u8>, Option<(u64, u64)>);
 /// its span.
 type ProbedTable = (String, TableNames, f64, Option<(u64, u64)>);
 
+/// A stream's identity index entries as the catalog returns them: `(ts, blob)`.
+type IndexRows = Vec<(u64, Vec<u8>)>;
+
 /// Where a table's segment payloads come from.
 ///
 /// v2 (tar) has no index — the whole archive is already in memory by the time
@@ -200,6 +207,33 @@ impl SegmentSource {
             }
         }
     }
+
+    /// This table's identity index entries, oldest first — every one the
+    /// archive holds for the stream, since a slot's occupant at any row can
+    /// depend on an entry from long before it.
+    ///
+    /// Empty for a byte-backed tar archive: v2 has no index.
+    fn index_entries(&self) -> Result<IndexRows, Box<dyn std::error::Error>> {
+        match self {
+            SegmentSource::Bytes(_) => Ok(Vec::new()),
+            SegmentSource::Db {
+                path,
+                recording_id,
+                sampler,
+            } => {
+                let db = RezDb::open(path)?;
+                Ok(db.read_caller_rows(*recording_id, sampler, 0, u64::MAX)?)
+            }
+            SegmentSource::SharedDb {
+                db,
+                recording_id,
+                sampler,
+            } => {
+                let db = db.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(db.read_caller_rows(*recording_id, sampler, 0, u64::MAX)?)
+            }
+        }
+    }
 }
 
 /// A table's metric names by kind, probed from one segment's footer.
@@ -229,6 +263,7 @@ impl TableReader {
         match self {
             TableReader::Single(r) => r,
             TableReader::Segmented(r) => r,
+            TableReader::Indexed(s) => s,
         }
     }
 
@@ -236,6 +271,7 @@ impl TableReader {
         match self {
             TableReader::Single(r) => UnionChild::from(r),
             TableReader::Segmented(r) => UnionChild::from(r),
+            TableReader::Indexed(s) => UnionChild::from(s),
         }
     }
 
@@ -246,6 +282,7 @@ impl TableReader {
         match self {
             TableReader::Single(r) => CompositionSource::from(r),
             TableReader::Segmented(r) => CompositionSource::from(r),
+            TableReader::Indexed(s) => CompositionSource::from(s),
         }
     }
 }
@@ -299,6 +336,10 @@ struct SamplerReader {
     interval: f64,
     /// Where the full segment set comes from, resolved on first use.
     segments: SegmentSource,
+    /// Whether the identity index describes this table's slots — the archive
+    /// holds `caller_rows` for its stream — in which case the table is read
+    /// through [`crate::indexed`] rather than straight off its parquet.
+    indexed: bool,
     pool: Arc<BufferPool>,
     /// Built on first access, never at open.
     reader: std::sync::OnceLock<Option<TableReader>>,
@@ -406,6 +447,9 @@ impl SamplerReader {
                         return None;
                     }
                 };
+                if self.indexed {
+                    return self.open_indexed(&segments);
+                }
                 match <[Vec<u8>; 1]>::try_from(segments) {
                     Ok([bytes]) => ParquetReader::open_bytes_with_pool(bytes, pool)
                         .map(TableReader::Single)
@@ -420,6 +464,40 @@ impl SamplerReader {
                 .ok()
             })
             .as_ref()
+    }
+
+    /// The indexed build: the segments split by occupant. A failure to read
+    /// or replay the index is a failure to open the table, reported the same
+    /// way a segment that would not parse is — never a silent fall-through
+    /// to the parquet path, which would file every reused slot's rows under
+    /// its first occupant.
+    fn open_indexed(&self, segments: &[Vec<u8>]) -> Option<TableReader> {
+        let entries = match self.segments.index_entries() {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("reading the identity index for {}: {e}", self.sampler);
+                return None;
+            }
+        };
+        let interval_ms = (self.interval * 1000.0).round().max(1.0) as u64;
+        match crate::indexed::build(&self.sampler, segments, &entries, interval_ms) {
+            Ok(t) => {
+                if t.unattributed > 0 || t.skipped_before_full > 0 {
+                    tracing::warn!(
+                        "table {}: {} rows had no occupant in the identity index and kept \
+                         their column's labels ({} entries preceded the first full index)",
+                        self.sampler,
+                        t.unattributed,
+                        t.skipped_before_full
+                    );
+                }
+                Some(TableReader::Indexed(t.store))
+            }
+            Err(e) => {
+                tracing::warn!("splitting table {} by occupant: {e}", self.sampler);
+                None
+            }
+        }
     }
 
     fn row_timestamps(&self) -> &[u64] {
@@ -812,6 +890,9 @@ impl RezReader {
             // grows as samplers and acquisition groups multiply.
             let mut pending: Vec<PendingProbe> = Vec::new();
             let mut measured_intervals: BTreeMap<String, Option<f64>> = BTreeMap::new();
+            // The streams the identity index describes. One catalog query per
+            // recording; a table named here is read through the index.
+            let indexed: HashSet<String> = db.caller_row_streams(rec.id)?.into_iter().collect();
 
             for sampler in db.all_samplers(rec.id)? {
                 let metas = db.read_segment_meta(rec.id, &sampler)?;
@@ -887,6 +968,7 @@ impl RezReader {
                     names,
                     span,
                     interval,
+                    indexed: indexed.contains(&sampler),
                     segments: match &path {
                         Some(path) => SegmentSource::Db {
                             path: path.clone(),
@@ -994,6 +1076,7 @@ impl RezReader {
                     names,
                     span,
                     interval,
+                    indexed: false,
                     segments: SegmentSource::Bytes(segments),
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
@@ -4264,5 +4347,339 @@ mod tests {
                 .is_ok(),
             "a query spanning two samplers of one recording must answer"
         );
+    }
+
+    /// Fixtures and checks for a group table read through the identity index.
+    mod indexed {
+        use super::*;
+        use crate::index::{EntryKind, IndexEntry, IndexState, SlotEntry};
+        use crate::rez_sqlite::TickBatch;
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+        use crate::seal_policy::SealPolicy;
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, SnapshotV3};
+        use std::time::Duration;
+
+        const STREAM: &str = "fake/ops";
+        const TICKS: u64 = 6;
+        /// One result series: its labels and its `(timestamp, value)` points.
+        type Series = (BTreeMap<String, String>, Vec<(f64, f64)>);
+        /// The tick at which slot 0 changes hands: redis leaves, valkey lands.
+        const HANDOVER: u64 = 3;
+
+        fn ts(tick: u64) -> u64 {
+            1_000_000_000 * (tick + 1)
+        }
+
+        fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        /// Which occupant slot 0 has at `tick`.
+        fn slot0_comm(tick: u64) -> &'static str {
+            if tick < HANDOVER {
+                "redis"
+            } else {
+                "valkey"
+            }
+        }
+
+        /// The group's schema at `tick`. `labelled` is the shape agents write
+        /// today, where a slot's labels are copied into its member's metadata;
+        /// unlabelled is the shape after #1224 step 7, where a member carries
+        /// only its metric and slot and the index is the one place the labels
+        /// live.
+        fn schema(tick: u64, labelled: bool) -> GroupSchema {
+            let member = |slot: u32, comm: &str| {
+                let mut m = labels(&[("metric", "fake_ops"), ("id", &slot.to_string())]);
+                if labelled {
+                    m.insert("comm".to_string(), comm.to_string());
+                }
+                MetricDesc {
+                    name: format!("7x{slot}"),
+                    metadata: m,
+                }
+            };
+            GroupSchema {
+                counters: vec![member(0, slot0_comm(tick)), member(1, "nginx")],
+                gauges: Vec::new(),
+                histograms: Vec::new(),
+            }
+        }
+
+        fn entry(tick: u64) -> Option<(u64, Vec<u8>)> {
+            let e = match tick {
+                0 => IndexEntry {
+                    kind: EntryKind::Full,
+                    slots: vec![
+                        SlotEntry {
+                            slot: 0,
+                            labels: labels(&[("comm", "redis")]),
+                        },
+                        SlotEntry {
+                            slot: 1,
+                            labels: labels(&[("comm", "nginx")]),
+                        },
+                    ],
+                    removed: Vec::new(),
+                    state: IndexState::default(),
+                },
+                HANDOVER => IndexEntry {
+                    kind: EntryKind::Delta,
+                    slots: vec![SlotEntry {
+                        slot: 0,
+                        labels: labels(&[("comm", "valkey")]),
+                    }],
+                    removed: Vec::new(),
+                    state: IndexState::default(),
+                },
+                _ => return None,
+            };
+            Some((ts(tick), e.encode()))
+        }
+
+        /// Write `TICKS` ticks of one two-slot group, slot 0 changing hands at
+        /// `HANDOVER`, sealed every two rows so the table is several segments
+        /// plus a WAL tail. With `with_index` the handover is in `caller_rows`.
+        fn write(path: &Path, labelled: bool, with_index: bool) {
+            let seed = ManifestSeed {
+                labels: labels(&[("source", "rezolus")]),
+                metadata: labels(&[("sampling_interval_ms", "1000")]),
+                clock_anchor_wall_ns: ts(0),
+            };
+            let (mut archive, writer) = RezArchive::single(path, seed).unwrap();
+            let rid = writer.recording_id();
+            let mut rec = StreamRecorderV3::with_policy(
+                writer,
+                SealPolicy {
+                    max_bytes: usize::MAX,
+                    max_rows: 2,
+                    max_age: Duration::from_secs(3600),
+                },
+            );
+            for tick in 0..TICKS {
+                let sch = schema(tick, labelled);
+                let g = GroupSnapshot {
+                    name: STREAM.to_string(),
+                    schema_hash: sch.hash(),
+                    schema: Some(Arc::new(sch)),
+                    window: Some(metriken::Window::new(ts(tick) - 5_000_000, ts(tick))),
+                    // Slot 0 restarts from zero at the handover with a
+                    // different slope: a read that merged the two occupants
+                    // would show a counter reset there, and a rate that
+                    // crossed it would not be 10 or 7.
+                    counters: vec![
+                        Some(if tick < HANDOVER {
+                            tick * 10
+                        } else {
+                            (tick - HANDOVER) * 7
+                        }),
+                        Some(tick * 3),
+                    ],
+                    gauges: Vec::new(),
+                    histograms: Vec::new(),
+                };
+                let snap = Snapshot::V3(SnapshotV3 {
+                    systemtime: SystemTime::UNIX_EPOCH + Duration::from_nanos(ts(tick)),
+                    duration: Duration::ZERO,
+                    metadata: HashMap::new(),
+                    groups: vec![g],
+                });
+                let rows = rec.stage(&snap, ts(tick), 0).unwrap();
+                let index_entries = match (with_index, entry(tick)) {
+                    (true, Some(e)) => vec![(STREAM.to_string(), vec![e])],
+                    _ => Vec::new(),
+                };
+                archive
+                    .wal_tick(vec![TickBatch {
+                        recording_id: rid,
+                        rows,
+                        index_entries,
+                    }])
+                    .unwrap();
+                rec.maybe_seal().unwrap();
+            }
+            rec.sync().unwrap();
+            drop(rec);
+            drop(archive);
+        }
+
+        fn open(path: &Path) -> RezReader {
+            let mut readers =
+                RezReader::open_recordings(path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+            assert_eq!(readers.len(), 1);
+            readers.pop().unwrap().1
+        }
+
+        /// Every series of `rate(fake_ops[2s])` as `(labels, values)`, in a
+        /// fixed order. A rate rather than the bare counter because that is
+        /// what the engine evaluates over a range for a counter, and because
+        /// a rate is what a merged handover would corrupt.
+        fn series(reader: &RezReader) -> Vec<Series> {
+            let (start, end) = reader.time_range().unwrap();
+            let r = reader
+                .query_range("rate(fake_ops[2s])", start, end, 1.0)
+                .expect("the query must resolve");
+            let QueryResult::Matrix { result } = r else {
+                panic!("a range query over a counter is a matrix");
+            };
+            let mut out: Vec<_> = result
+                .into_iter()
+                .map(|s| (s.metric.into_iter().collect::<BTreeMap<_, _>>(), s.values))
+                .collect();
+            out.sort_by(|a, b| a.0.cmp(&b.0));
+            out
+        }
+
+        /// THE oracle. On an archive written the way agents write today —
+        /// a slot's labels in its column's metadata as well as in the index —
+        /// reading through the index yields exactly what reading the parquet
+        /// does: the same series, the same labels, the same values on the
+        /// same timestamps. The index path is a second implementation of the
+        /// same attribution, and this is what keeps it honest until the
+        /// column metadata goes away and it becomes the only one.
+        #[test]
+        fn the_index_path_agrees_with_the_parquet_path_on_a_dual_carrying_archive() {
+            let dir = tempfile::tempdir().unwrap();
+            let plain = dir.path().join("plain.rez");
+            let indexed = dir.path().join("indexed.rez");
+            write(&plain, true, false);
+            write(&indexed, true, true);
+
+            let plain = open(&plain);
+            let indexed = open(&indexed);
+
+            let expected = series(&plain);
+            assert_eq!(
+                expected.len(),
+                3,
+                "the parquet path itself sees the handover as two series: {expected:?}"
+            );
+            assert_eq!(series(&indexed), expected);
+
+            let mut a = plain.counter_labels("fake_ops");
+            let mut b = indexed.counter_labels("fake_ops");
+            a.sort();
+            b.sort();
+            assert_eq!(a, b);
+            assert_eq!(indexed.sample_timestamps(), plain.sample_timestamps());
+            assert_eq!(indexed.time_range_ns(), plain.time_range_ns());
+        }
+
+        /// The shape the cutover produces: a column that says which metric
+        /// and which slot and nothing else. Read as parquet, every row of
+        /// slot 0 is one series with no `comm` at all; read through the
+        /// index, the rows before the handover are redis's and the rows from
+        /// it on are valkey's, and neither has a value on the other's ticks.
+        #[test]
+        fn an_index_only_archive_is_split_by_occupant() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cutover.rez");
+            write(&path, false, true);
+            let reader = open(&path);
+
+            let got = series(&reader);
+            let labels_of: Vec<&BTreeMap<String, String>> = got.iter().map(|(l, _)| l).collect();
+            let want = |comm: &str, id: &str| {
+                labels(&[("__name__", "fake_ops"), ("comm", comm), ("id", id)])
+            };
+            assert_eq!(
+                labels_of,
+                vec![
+                    &want("nginx", "1"),
+                    &want("redis", "0"),
+                    &want("valkey", "0")
+                ],
+                "{got:?}"
+            );
+            let points = |comm: &str| -> Vec<(f64, f64)> {
+                got.iter()
+                    .find(|(l, _)| l["comm"] == comm)
+                    .map(|(_, v)| v.clone())
+                    .unwrap()
+            };
+            // Ticks are at 1s..6s; a 2s rate needs two samples, so each
+            // occupant's first tick has no point. Redis holds ticks 1-3,
+            // valkey 4-6, and neither rate crosses the handover.
+            assert_eq!(points("redis"), vec![(2.0, 10.0), (3.0, 10.0)]);
+            assert_eq!(points("valkey"), vec![(5.0, 7.0), (6.0, 7.0)]);
+            assert_eq!(
+                points("nginx"),
+                vec![(2.0, 3.0), (3.0, 3.0), (4.0, 3.0), (5.0, 3.0), (6.0, 3.0)]
+            );
+
+            // And the parquet path, on the same file, cannot tell them apart —
+            // which is the whole reason the index path exists.
+            let db = RezDb::open(&path).unwrap();
+            let segments = super::super::table_segments(&db, 1, STREAM).unwrap();
+            let plain = SegmentedParquetReader::open_bytes_with_pool(
+                segments,
+                BufferPool::new(16 * 1024 * 1024),
+            )
+            .unwrap();
+            assert_eq!(
+                plain.counter_labels("fake_ops").len(),
+                2,
+                "one series per slot, the handover invisible"
+            );
+        }
+
+        /// The browser opens an archive from bytes and reads it through the
+        /// same split — the shared-connection arm of `SegmentSource`.
+        #[test]
+        fn the_split_also_applies_when_opened_from_bytes() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cutover.rez");
+            write(&path, false, true);
+            let mut readers = RezReader::open_recordings_from_bytes(
+                std::fs::read(&path).unwrap(),
+                BufferPool::new(16 * 1024 * 1024),
+            )
+            .unwrap();
+            let reader = readers.pop().unwrap().1;
+            assert_eq!(series(&reader).len(), 3);
+        }
+
+        /// Windows survive the split: `rate()` over the indexed table carries
+        /// the same uncertainty band the parquet path computes from the
+        /// table-level window columns.
+        #[test]
+        fn rate_bands_survive_the_split() {
+            let dir = tempfile::tempdir().unwrap();
+            let plain = dir.path().join("plain.rez");
+            let indexed = dir.path().join("indexed.rez");
+            write(&plain, true, false);
+            write(&indexed, true, true);
+            let bands = |path: &Path| {
+                let reader = open(path);
+                let (start, end) = reader.time_range().unwrap();
+                let QueryResult::Matrix { result } = reader
+                    .query_range("rate(fake_ops[2s])", start, end, 1.0)
+                    .unwrap()
+                else {
+                    panic!("matrix");
+                };
+                let mut out: Vec<_> = result
+                    .into_iter()
+                    .map(|s| {
+                        (
+                            s.metric.into_iter().collect::<BTreeMap<_, _>>(),
+                            s.values,
+                            s.intervals,
+                        )
+                    })
+                    .collect();
+                out.sort_by(|a, b| a.0.cmp(&b.0));
+                out
+            };
+            let expected = bands(&plain);
+            assert!(
+                expected.iter().any(|(_, _, i)| i.is_some()),
+                "the fixture's windows must produce a band on the parquet path: {expected:?}"
+            );
+            assert_eq!(bands(&indexed), expected);
+        }
     }
 }

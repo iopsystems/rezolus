@@ -21,6 +21,9 @@ mod dendro_replicate_contract;
 /// `caller_rows` holds. Not behind `write`: a reader has to decode identity to
 /// make sense of an archive's values, so this is read-path code.
 pub mod index;
+/// A group table split by occupant through that index, for the reader. Not
+/// behind `write` for the same reason.
+pub mod indexed;
 /// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
 /// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
 pub mod parquet_ingest;
