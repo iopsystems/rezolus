@@ -74,6 +74,47 @@ Full detail in `docs/labels.md`. The parts that decide things:
   incarnation, some with identical visible labels. Accepted as the truthful
   shape; aggregation collapses them.
 
+## Measured: what the uid costs the scrape path
+
+`delta`, 32 cores, main without the uid commit against the uid build, same
+sampler set, both scraped concurrently at 1 s for 120 s; `churn.sh` runs
+short-lived tasks that accrue CPU so slots are reassigned during the window.
+
+| run | without | with | ratio | per scrape | body |
+|---|---|---|---|---|---|
+| churn | 0.76 s | 0.85 s | 1.12x | 6.33 → 7.08 ms | 512 → 574 KB |
+| idle | 0.66 s | 0.71 s | 1.08x | 5.50 → 5.92 ms | 524 → 587 KB |
+
+A first comparison against an older control (`alpha.26`, before `hw_sensors`)
+gave the same shape and was confounded by the sampler set; these are not.
+
+The profile (perf on both agents, demangled with `rustfilt`) shows no new hot
+function. The growth is msgpack encoding — `write_str`, `Marker::to_u8`, the
+compound serializer — and `SlotIdentity::set` at 1.2% under churn. The cost
+is proportional to the bytes added: `/metrics/binary` re-encodes every
+descriptor's metadata on every scrape, and `__uid__=<16 hex>` on ~2,000
+slotted descriptors is ~60 KB per scrape. The stream sends a schema once per
+generation and does not pay it per tick; the cutover removes it entirely.
+
+Two things the profile found that were not the question asked:
+
+- **A re-announced slot must keep its uid.** The first cut minted one per
+  `set`. `drivehealth` sets every drive's labels on every sweep and `ethtool`
+  every interface's on every refresh, so every such series would have split
+  at every refresh, and the network group's schema was rebuilt and hashed
+  every tick for an occupant that never changed. Fixed: a live slot setting
+  identical labels keeps its uid and publishes nothing; a new uid is minted
+  only for a slot that was cleared (the PID-reuse case) or whose labels
+  changed.
+- **The hashing on the hot path predates the uid.** `identity_fold_metadata`
+  is 13–19% of the agent's CPU in both builds: the skeleton cache byte-hashes
+  every slot's labels every tick to notice a metadata change, and
+  `GroupSchema::hash` re-serializes and hashes a whole schema on any miss.
+  Every identity write now goes through `SlotIdentity::set`/`clear` except
+  one startup write in `hw_sensors`, so a per-group generation bumped there
+  is an O(1) change signal that could replace the per-tick fold. That is a
+  separate change and a larger saving than the uid costs.
+
 ## Path forward, in order
 
 1. **metriken-query** (in-house, `~/workspace/iopsystems/metriken`): a single
@@ -91,14 +132,16 @@ Full detail in `docs/labels.md`. The parts that decide things:
    mechanical, and it can land before anything emits a `__` label.
 3. **The uid at assignment** (revised, see Decisions): `SlotIdentity::set`
    mints `__uid__` into the slot's labels; the exporter drops it.
-4. **The reader** (#1224 §2, reader side): the indexed group source in
+4. **Replace the per-tick identity fold with a generation** (see "Measured"):
+   the change signal exists now; the fold is 13–19% of agent CPU.
+5. **The reader** (#1224 §2, reader side): the indexed group source in
    `crates/rez` replays `caller_rows` into per-slot label timelines, `__uid__`
    included, for archives whose columns carry no identity. Verified against
    today's `--stream` archives, which carry index and column identity
    together.
-5. **Writer side, additive**: evict `caller_rows` with segments; resend a
+6. **Writer side, additive**: evict `caller_rows` with segments; resend a
    `Full` at the seal cadence.
-6. **Cutover branch**: descriptors become bare slot ids, identity leaves column
+7. **Cutover branch**: descriptors become bare slot ids, identity leaves column
    metadata, format version bumps.
 
 Step 2 before step 3 was the ordering that mattered: the uid must not be the
