@@ -166,11 +166,27 @@ const LIVE_WAL_PREDICATE: &str = "recording_id = ?1 AND sampler = ?2 \
             WHERE recording_id = ?1 AND sampler = ?2), \
            0)";
 
-/// A tick's index entries, per stream: `(ts, blob)` pairs for `caller_rows`.
+/// One identity index entry on its way into `caller_rows`.
+///
+/// `full` is not stored. The archive keeps the blob opaque, and what the
+/// writer needs the flag for — knowing where a stream's history can be cut
+/// (see [`RezDb::evict_caller_rows_before`]) — it needs while the writer is
+/// running, from what passed through it. A reader that needs the same fact
+/// decodes the blob, which it has to do anyway to use it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexRow {
+    pub ts: u64,
+    pub blob: Vec<u8>,
+    /// Whether this entry states the stream's whole slot set (`Full`) rather
+    /// than a change to it (`Delta`).
+    pub full: bool,
+}
+
+/// A tick's index entries, per stream, for `caller_rows`.
 ///
 /// The blob is opaque all the way through — the producer encoded it, the
 /// archive stores it, and nothing between decodes it.
-pub type IndexEntries = Vec<(String, Vec<(u64, Vec<u8>)>)>;
+pub type IndexEntries = Vec<(String, Vec<IndexRow>)>;
 
 /// One recording's contribution to one tick: its rows, and the index entries
 /// describing what those rows' slots mean.
@@ -977,7 +993,9 @@ impl RezDb {
             for tick in ticks {
                 tx.insert_wal_rows(tick.recording_id, &tick.rows)?;
                 for (stream, rows) in &tick.index_entries {
-                    tx.insert_caller_rows(tick.recording_id, stream, rows)?;
+                    let rows: Vec<(u64, Vec<u8>)> =
+                        rows.iter().map(|r| (r.ts, r.blob.clone())).collect();
+                    tx.insert_caller_rows(tick.recording_id, stream, &rows)?;
                 }
             }
             Ok(())
@@ -1194,6 +1212,36 @@ impl RezDb {
         })
     }
 
+    /// Drop one stream's identity index entries older than `cutoff_ts`.
+    ///
+    /// Separate from [`evict_before`](Self::evict_before), and with its own
+    /// cutoff, because the two cutoffs are not the same number. A row is
+    /// self-contained: once it is older than the lookback it can go. An index
+    /// entry is not — a `Delta` means nothing without the `Full` before it,
+    /// and a retained row's slot may have been described by an entry written
+    /// long before the lookback. So the caller cuts a stream's history at the
+    /// latest `Full` that is not after the row cutoff, which is a fact about
+    /// the blobs (opaque here) that the writer tracks as it stores them.
+    ///
+    /// Strictly older: the entry AT the cutoff is the `Full` everything after
+    /// it depends on.
+    pub fn evict_caller_rows_before(
+        &mut self,
+        recording_id: i64,
+        stream: &str,
+        cutoff_ts: u64,
+    ) -> Result<usize, String> {
+        if !self.has_table("caller_rows")? {
+            return Ok(0);
+        }
+        self.conn
+            .execute(
+                "DELETE FROM caller_rows WHERE recording_id = ?1 AND stream = ?2 AND ts < ?3",
+                rusqlite::params![recording_id, stream, cutoff_ts.min(i64::MAX as u64) as i64],
+            )
+            .map_err(|e| format!("failed to evict caller rows: {e}"))
+    }
+
     /// Return `pages` freed pages to the filesystem, or as many as the free
     /// list holds. Requires `auto_vacuum=INCREMENTAL`, which is set at
     /// creation and cannot be turned on later without a full `VACUUM`.
@@ -1380,6 +1428,47 @@ impl RezDb {
             out.push((ts as u64, blob));
         }
         Ok(out)
+    }
+
+    /// The timestamp of the newest entry at or before `upto` that `pred`
+    /// accepts, walking newest-first and stopping at the first hit.
+    ///
+    /// The catalog does not decode blobs, so what to look for is the caller's:
+    /// a reader looking for the last `Full` before a table's first row passes
+    /// a predicate that decodes the entry's kind. Newest-first because the hit
+    /// is expected close to `upto` — a full restatement lands every seal age —
+    /// so this reads a few entries rather than a stream's history.
+    pub fn last_caller_row_at_or_before(
+        &self,
+        recording_id: i64,
+        stream: &str,
+        upto: u64,
+        mut pred: impl FnMut(&[u8]) -> bool,
+    ) -> Result<Option<u64>, String> {
+        if !self.has_table("caller_rows")? {
+            return Ok(None);
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ts, blob FROM caller_rows \
+                 WHERE recording_id = ?1 AND stream = ?2 AND ts <= ?3 \
+                 ORDER BY ts DESC, seq DESC",
+            )
+            .map_err(|e| format!("failed to query caller rows: {e}"))?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![recording_id, stream, upto.min(i64::MAX as u64) as i64],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .map_err(|e| format!("failed to query caller rows: {e}"))?;
+        for row in rows {
+            let (ts, blob) = row.map_err(|e| format!("failed to read a caller row: {e}"))?;
+            if pred(&blob) {
+                return Ok(Some(ts as u64));
+            }
+        }
+        Ok(None)
     }
 
     /// Every stream that has caller rows in this recording.
@@ -1699,6 +1788,88 @@ mod tests {
             .read_caller_rows(rec, "cpu_usage/task", 0, u64::MAX)
             .unwrap();
         assert_eq!(back, entries);
+    }
+
+    /// Eviction of index entries is per stream and strictly before the cut:
+    /// the entry AT the cut is the `Full` the rest depend on, and another
+    /// stream's history is another stream's.
+    #[test]
+    fn caller_rows_evict_per_stream_and_keep_the_entry_at_the_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rec = seed_recording(&db);
+        let entries: Vec<(u64, Vec<u8>)> = (1..=5u8).map(|n| (n as u64 * 1_000, vec![n])).collect();
+        db.transaction(|tx| {
+            tx.insert_caller_rows(rec, "a", &entries)?;
+            tx.insert_caller_rows(rec, "b", &entries)
+        })
+        .unwrap();
+
+        assert_eq!(db.evict_caller_rows_before(rec, "a", 3_000).unwrap(), 2);
+        let a: Vec<u64> = db
+            .read_caller_rows(rec, "a", 0, u64::MAX)
+            .unwrap()
+            .into_iter()
+            .map(|(ts, _)| ts)
+            .collect();
+        assert_eq!(a, vec![3_000, 4_000, 5_000]);
+        assert_eq!(
+            db.read_caller_rows(rec, "b", 0, u64::MAX).unwrap().len(),
+            5,
+            "the other stream is untouched"
+        );
+        assert_eq!(
+            db.evict_caller_rows_before(rec, "a", 3_000).unwrap(),
+            0,
+            "idempotent"
+        );
+    }
+
+    /// The newest-first probe stops at the first entry the predicate accepts
+    /// and never looks past `upto`.
+    #[test]
+    fn the_last_caller_row_probe_walks_newest_first_and_stops() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut db = RezDb::create(&dir.path().join("t.rez")).unwrap();
+        let rec = seed_recording(&db);
+        // Blob `1` marks the entries a caller is looking for.
+        let entries: Vec<(u64, Vec<u8>)> = vec![
+            (1_000, vec![1]),
+            (2_000, vec![0]),
+            (3_000, vec![1]),
+            (4_000, vec![0]),
+            (5_000, vec![1]),
+        ];
+        db.transaction(|tx| tx.insert_caller_rows(rec, "s", &entries))
+            .unwrap();
+
+        let mut looked_at = Vec::new();
+        let hit = db
+            .last_caller_row_at_or_before(rec, "s", 4_500, |b| {
+                looked_at.push(b[0]);
+                b[0] == 1
+            })
+            .unwrap();
+        assert_eq!(hit, Some(3_000));
+        assert_eq!(looked_at, vec![0, 1], "4_000 then 3_000, and no further");
+
+        assert_eq!(
+            db.last_caller_row_at_or_before(rec, "s", 500, |_| true)
+                .unwrap(),
+            None,
+            "nothing at or before the bound"
+        );
+        assert_eq!(
+            db.last_caller_row_at_or_before(rec, "s", u64::MAX, |b| b[0] == 1)
+                .unwrap(),
+            Some(5_000)
+        );
+        assert_eq!(
+            db.last_caller_row_at_or_before(rec, "s", 2_500, |b| b[0] == 7)
+                .unwrap(),
+            None,
+            "a predicate nothing satisfies"
+        );
     }
 
     /// Several entries may share a timestamp — one interval that moves three

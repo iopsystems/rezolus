@@ -52,10 +52,12 @@ pub type IndexState = (u64, u64);
 /// correspondence in both directions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntryKind {
-    /// Every live slot. Sent on connect, so a subscriber starts complete, and
-    /// re-sent at the seal cadence, because `caller_rows` is evicted on the
-    /// same cutoff as segments — state written once at t0 is deleted while
-    /// later rows still reference it.
+    /// Every live slot. Sent by the producer on connect, so a subscriber
+    /// starts complete, and written again by the subscriber every seal age
+    /// (`recorder::stream::RESTATE_EVERY`) from the set it holds, because
+    /// retention cuts a stream's `caller_rows` back to a `Full` and nowhere
+    /// else — state written once at t0 would otherwise be kept for the life
+    /// of a rolling buffer, or deleted while later rows still reference it.
     Full,
     /// Only slots added or whose labels changed, plus the slots cleared.
     /// Meaningless without a `Full` before it.
