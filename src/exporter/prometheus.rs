@@ -147,11 +147,34 @@ impl PrometheusFormat for Histogram {
     }
 }
 
+/// The label set as the exposition format wants it: sorted, and without
+/// internal labels. Prometheus reserves `__`-prefixed names and drops them
+/// after relabeling, so a `__uid__` sent here would cost bytes on every scrape
+/// and survive nowhere; it is the agent's series identity, not the scraper's.
 fn format_metadata(metadata: &HashMap<String, String>) -> String {
     let mut metadata: Vec<String> = metadata
         .iter()
+        .filter(|(key, _)| !metriken_query::is_internal_label(key))
         .map(|(key, value)| format!("{key}=\"{value}\""))
         .collect();
     metadata.sort();
     metadata.join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_labels_are_not_exported() {
+        let metadata: HashMap<String, String> = [
+            ("__uid__", "0123456789abcdef"),
+            ("comm", "redis"),
+            ("id", "7"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(format_metadata(&metadata), "comm=\"redis\", id=\"7\"");
+    }
 }

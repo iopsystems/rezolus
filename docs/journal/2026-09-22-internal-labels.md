@@ -1,7 +1,7 @@
 # Internal labels: the `__` rule, and what the incarnation id is called
 
 - **Opened:** 2026-09-22
-- **Status:** **OPEN — steps 1 and 2 shipped.** Step 1 is metriken-query
+- **Status:** **OPEN — steps 1, 2 and 3 shipped.** Step 1 is metriken-query
   0.25.0 (iopsystems/metriken#151, released in #152); step 2 is the rezolus
   consumers switching to its predicates. The audit is in
   [`docs/labels.md`](../labels.md); this entry records the decision and the
@@ -41,13 +41,31 @@ Full detail in `docs/labels.md`. The parts that decide things:
 
 ## Decisions
 
-- **Name:** `__incarnation__`, the singleton form `__name__` and `__run__` use.
-  Value: the id the agent mints into `SlotEntry` when a slot is assigned,
-  deterministic from producer epoch, slot and first-seen stamp, so two recorders
-  of one agent agree without coordination.
-- **Emitter:** the archive reader, from the index. It is never written into
-  column metadata, so no archive ever carries it and the on-disk schema does
-  not change for it.
+- **Name:** `__uid__`, the singleton form `__name__` and `__run__` use, and
+  Kubernetes's precedent for exactly this: an object recreated under the same
+  name gets a new `metadata.uid`. `__incarnation__` was the first choice; it is
+  real distributed-systems vocabulary (SWIM, Cassandra gossip) but reads as
+  mystical outside it.
+- **Where it is minted, revised.** The first plan minted it in `SlotEntry`
+  and had the reader emit it from the index, never on disk. Building step 3
+  showed that is the wrong place: `SlotIndex::observe` emits an entry only
+  when a slot's *labels* change, so a PID-reuse reassignment with identical
+  labels — the case the uid exists for — produced no entry and would have got
+  no uid. The assignment event is `SlotIdentity::set`, which already takes a
+  generation, so the uid is minted there, once per assignment from the
+  generation and the producer epoch, and inserted into the slot's label map.
+  It then travels with the labels everywhere they go without any consumer
+  being taught about it: snapshot descriptors, `.rez` column metadata, the
+  index entries a stream carries. Because step 2 landed first, every listing
+  and legend already hides it. The Prometheus exporter drops it, since
+  Prometheus strips `__` labels after relabeling anyway.
+- **What that buys today, before the cutover.** The `.rez` writer opens a new
+  column when a descriptor's metadata changes, so a same-label reassignment
+  now becomes a second column with its own `__uid__`, and metriken-query keys
+  series on the full label set. The PID-reuse artifact is fixed in the current
+  format, with no reader change. The cost is a schema resend on a same-label
+  reassignment that was previously silent, which is the correct behaviour and
+  leaves with the rest of identity at the cutover.
 - **The rule** (`docs/labels.md`, "Internal labels"): `__`-prefixed labels are
   identity and matchable, hidden from listings and legends, dropped by
   `without` alongside `__name__`. Enforced by one predicate on the label name,
@@ -71,17 +89,20 @@ Full detail in `docs/labels.md`. The parts that decide things:
    TUI legends, boxplot, compare and explorers with the prefix predicate in one
    helper; the metric catalog and MCP listings use the same predicate. Small,
    mechanical, and it can land before anything emits a `__` label.
-3. **The reader** (#1224 §2, reader side): `SlotEntry` gains the id; the
-   indexed group source in `crates/rez` replays `caller_rows` into per-slot
-   label timelines and emits `__incarnation__`. Verified against today's
-   `--stream` archives, which carry index and column identity together.
-4. **Writer side, additive**: evict `caller_rows` with segments; resend a
+3. **The uid at assignment** (revised, see Decisions): `SlotIdentity::set`
+   mints `__uid__` into the slot's labels; the exporter drops it.
+4. **The reader** (#1224 §2, reader side): the indexed group source in
+   `crates/rez` replays `caller_rows` into per-slot label timelines, `__uid__`
+   included, for archives whose columns carry no identity. Verified against
+   today's `--stream` archives, which carry index and column identity
+   together.
+5. **Writer side, additive**: evict `caller_rows` with segments; resend a
    `Full` at the seal cadence.
-5. **Cutover branch**: descriptors become bare slot ids, identity leaves column
+6. **Cutover branch**: descriptors become bare slot ids, identity leaves column
    metadata, format version bumps.
 
-Step 2 before step 3 is the ordering that matters: the reader must not be the
-first thing to put a `__` label in front of a legend that will print it.
+Step 2 before step 3 was the ordering that mattered: the uid must not be the
+first `__` label in front of a legend that would print it.
 
 ## Related
 

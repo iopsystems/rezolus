@@ -16,7 +16,7 @@ splits it into three kinds, and the split is the whole subject of this document.
 |---|---|---|---|
 | **storage key** | `metric`, `metric_type`, `unit`, `grouping_power`, `max_value_power` | column field metadata | consumed or discarded on load; never a label |
 | **label** | `id`, `cpu`, `name`, `op`, `sampler`, `comm`, `pid`, `device`, `mount` | column field metadata | part of the series' identity; shown, listed, aggregated |
-| **internal label** | `__name__`, `__run__`, (planned) `__incarnation__` | never on disk; minted by the query layer or the archive reader | part of the series' identity and matchable in a selector; hidden from listings and legends |
+| **internal label** | `__name__`, `__run__`, `__uid__` | `__name__` and `__run__` are minted by the query layer; `__uid__` is minted by the agent at slot assignment and travels with the slot's labels, on disk included | part of the series' identity and matchable in a selector; hidden from listings and legends |
 
 Prometheus draws the same lines. Its data model says "label names beginning
 with `__` MUST be reserved for internal Prometheus use", the metric name is
@@ -58,7 +58,8 @@ matches on a subset and fails closed on an absent key (`labels.rs:100`).
 |---|---|---|
 | `sampler` | set on every metric by the agent at `snapshot.rs:425` | what `sum by (sampler)` groups on. The static `sampler = "..."` declared in ten `stats.rs` files is dead: `:425` overwrites it |
 | `id` | group index (`snapshot.rs:822` and siblings) | the most-aggregated label in the dashboards: `by (id)` 44 times |
-| identity labels: `comm`, `pid`, `tgid`, `cgroup`, `device`, `mount`, `sensor`, `vendor`, hw_sensors' `board_model`/`chip`/`channel`/`label`/`scope` | `SlotIdentity::set` (`src/agent/identity.rs:249`) | **mutable**: a slot's labels change when its occupant does. Today that change is written into column metadata, which is the churn #1224 §2 removes |
+| identity labels: `comm`, `pid`, `tgid`, `cgroup`, `device`, `mount`, `sensor`, `vendor`, hw_sensors' `board_model`/`chip`/`channel`/`label`/`scope` | `SlotIdentity::set` (`src/agent/identity.rs`) | **mutable**: a slot's labels change when its occupant does. Today that change is written into column metadata, which is the churn #1224 §2 removes |
+| `__uid__` | `SlotIdentity::set`, one per assignment, from the assignment's generation and the producer epoch | the occupant. Two assignments with identical labels (a PID wrapped onto the same comm, a cgroup recreated at the same path) get different uids and are different series. Internal: hidden everywhere, matchable in a selector |
 | static labels: `op`, `vendor`, `error`, `kind`, `direction`, `state`, `counter`, `reason`, `clock`, `pipe`, `level`, `frequency` | declared per metric | immutable for the life of the metric |
 | `source` | `source=external` on external metrics (`snapshot.rs:1031`); `combine` adds `source`, `node`, `instance` to every column (`combine.rs:988`) | the metric browser hides `source` (`metric_browser.js:87`) |
 | `__run__` | injected by the segmented reader when a histogram's bucket config differs across segments (`segmented.rs:431-450`) | already a reserved internal label; matchable (`:623`), listed only on conflict (`:705`) |
@@ -73,24 +74,25 @@ relabeled slot gets (`rez.rs:25-34`, `:1608`; `parquet.rs:1684-1704`).
 An internal label is one the query engine needs for identity that a person
 reading a chart does not. The rule, adopted from Prometheus:
 
-1. **Its name begins with `__`.** Nothing on disk uses the prefix, so an archive
-   can never collide with one.
+1. **Its name begins with `__`.** The agent writes exactly one such label,
+   `__uid__`; no writer emits another, and the loaders do not check, so a
+   stray `__` key in column metadata is kept as a label.
 2. **It is part of series identity and matchable in a selector.**
-   `foo{__incarnation__="..."}` works; a bare `foo` returns every incarnation
+   `foo{__uid__="..."}` works; a bare `foo` returns every occupant
    as its own series.
 3. **It is hidden.** Label listings (`counter_labels` and friends,
    `label_values`, the metric catalog, `describe-metrics`), legends and series
    keys in the viewer, and MCP output omit it.
 4. **Aggregation drops it.** `by (...)` already keeps only what it names;
    `without (...)` drops what it names plus every `__` label, as it already
-   drops `__name__`. An aggregate is over a set of series, and the incarnation
-   of one input is meaningless for the sum.
+   drops `__name__`. An aggregate is over a set of series, and which occupant
+   each input was is meaningless for the sum.
 
 Rule 4 has a consequence worth stating: a bare selector over a recording with
 task churn returns more series than visible label sets, two of which may show
 identical labels. That is the truthful shape. The alternative, one series
 across a PID reuse, attributes one task's counter to another, which is the
-defect the incarnation exists to remove.
+defect the uid exists to remove.
 
 ### Where the rule is enforced
 
