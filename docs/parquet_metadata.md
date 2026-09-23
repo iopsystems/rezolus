@@ -15,6 +15,10 @@ Rezolus recordings carry metadata in one of two places depending on format:
 The viewer, MCP, and downstream tools rely on this metadata to interpret the
 data, distinguish recordings, build dashboards, and combine files.
 
+This document covers *file-level* metadata. For per-column field metadata —
+which keys are storage keys, which become series labels, and the `__` rule for
+internal labels — see [labels.md](labels.md).
+
 ## Inspecting metadata
 
 ```bash
