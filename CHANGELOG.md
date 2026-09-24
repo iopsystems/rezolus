@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [5.22.1] - 2026-09-24
+
 ### Changed
 
 - Viewer/dashboard: the section payload no longer carries `num_series`.
