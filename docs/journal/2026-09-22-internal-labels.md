@@ -224,12 +224,45 @@ second occupant's own slope. A mutation that disables the index path fails
 the split tests and leaves the oracle green, which is the intended shape: the
 oracle proves agreement, the split tests prove the path is taken.
 
-Not measured yet: open cost. The indexed path decodes every segment of a
-table at first query rather than reading footers, which for a 300-slot task
-table over a long recording is the whole table in memory. The parquet path
-was tuned for the opposite (footer-only probes, ~1.37 ms per segment). The
-tables this applies to are exactly the churning ones, so this needs a number
-before step 7 makes it the only path.
+### Measured: open cost
+
+The indexed path decodes every segment of a table at first query rather
+than reading footers, and the tables it applies to are exactly the churning
+ones, so it needed a number before step 7 makes it the only path.
+
+Fixture (delta, 32 cores): one agent, `record --stream` for 600 s under
+`/tmp/churn.sh` (16 short-lived `awk` tasks at a time, continuously). The
+task stream (`cpu_usage/cpu_usage_task`) wrote 248,511 index entries —
+414/s, 21.5 MB of blobs — over 3 segments and 384 rows. The archive was
+then copied and `caller_rows` deleted from the copy, so the reader takes the
+parquet path on identical rows. `sum(rate(task_cpu_usage[1m]))` via
+`mcp query`, five runs each, `/usr/bin/time`:
+
+| | parquet path | indexed, as merged in #1280 | indexed, after the fix |
+|---|---|---|---|
+| query wall | 0.40–0.43 s | 20–22 s | 0.58–0.65 s |
+| query CPU (user) | 0.32–0.38 s | 19.8–21.8 s | 0.48–0.58 s |
+| `describe-metrics` wall | 0.25 s | 20 s | 0.86 s |
+| max RSS | 185 MB | 181 MB | 180 MB |
+
+The 20 s was the replay, not the decode: `Occupants::replay` diffed the
+whole live slot set after every entry, so its cost was entries × live
+slots, and it went through `SlotIndex::apply`, which serializes each slot to
+maintain a state hash the reader never reads. The fix touches only the slots
+an entry names — a `Delta` costs the size of the change — and diffs the
+whole set only on a `Full`, once per restatement. 248k entries now replay in
+about 0.2 s, which is the whole gap between the two paths on this query.
+Output on the two paths was byte-identical.
+
+`describe-metrics` pays more than a query because it lists every table's
+labels and so builds every indexed table (17 streams here), where the
+parquet path answers from footers. 0.6 s on a ten-minute churn archive is
+acceptable; on a day-long one the replay starts at the last restatement, so
+it is bounded by the restatement period rather than the recording.
+
+Not yet measured: a table with thousands of live slots over many segments,
+where the decode rather than the replay dominates. This fixture's table had
+384 rows.
 
 ## Retention of the index
 
