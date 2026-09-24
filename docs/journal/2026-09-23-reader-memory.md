@@ -1,7 +1,8 @@
 # Long recordings: memory proportional to the query, not the file
 
 - **Opened:** 2026-09-23
-- **Status:** **OPEN — steps 1 and 2 in review, step 3 in progress.**
+- **Status:** **OPEN — all three steps in review** (rezolus #1283, #1284,
+  and the metriken-query 0.29.0 bump; metriken #157, #159, #161).
 - **Driver:** a 1.28 GB `.rez` (one host, 9.6 hours at 1 s, 49 tables, 5,874
   segments) opened and queried, but memory scaled with the file: 4.1 GB
   resident after the viewer built its dashboard, 9.4 GB after one query over
@@ -138,14 +139,61 @@ dual-carrying archive; an index-only archive splits at the handover; a
 retained tail attributes from the restatement) run through the relabel
 path unchanged.
 
+## Step 3: rate over a sample stream (iopsystems/metriken#161)
+
+The all-task query was two materializations deep. `DataSource::counters`
+returned every series whole, so 76M samples were resident before the first
+point was computed; then the dispatcher ran each series' rate producer to
+completion into a `Vec<Point>` before the pipeline saw it, because the
+producer borrowed the samples and could not outlive them. The aggregate
+downstream only ever needed one point per series.
+
+The first cut — producers own their samples, no collected points — changed
+nothing measurable (10.3 GB), which said the samples, not the points, were
+the bulk. So the engine reads a series as a stream. `counter_streams` hands
+out one `CounterStream` per series; the segmented source implements it by
+reading one column of one segment at a time, from positions indexed at
+open (sixteen bytes per column per segment, column labels interned), and
+a relabelled series reads its column and keeps its runs. The grid rate
+producer consumes the stream and keeps only the samples bracketing its
+current interval — pulling the first nine for the typical spacing, as the
+slice version took them — and lets the rest go. Its results are unchanged,
+which the ten rate-semantics tests (holes, bands, interpolation flags,
+explicit points, span) pin; the vector constructor those tests drive is a
+stream over vectors.
+
+Two things the profile found on the way, each a third or so of the query's
+CPU before it was fixed: `Schema::index_of("duration")` on a schema without
+that column formats every field name into its error, and it ran once per
+column read, a million times; and the typical spacing was cloned and sorted
+per emitted point.
+
+Same fixture, release build, `/usr/bin/time -l`:
+
+| operation | before | after step 1 | after step 3 |
+|---|---|---|---|
+| `mcp describe-metrics` | 4.4 GB, 5.0 s | 0.20 GB, 3.7 s | 0.25 GB, 4.3 s |
+| one filtered task series | 2.3 GB, 2.1 s | 0.67 GB, 3.7 s | 0.46 GB, 3.6 s |
+| all 6,644 task series, `sum(rate())` | 11.9 GB, 18.3 s | 10.1 GB, 19.6 s | 0.98 GB, 15.8 s |
+| viewer after `/sections` | 4.1 GB | 0.19 GB | 0.25 GB |
+| viewer after the all-task query | 8.6 GB, 9.4 GB on repeat | 5.6 GB | 3.0 GB |
+
+The viewer's resident size after the all-task query is three times the
+`mcp` peak for the same query because its two caches — opened segments and
+decoded row groups — are each budgeted at `--cache-size-mb` (500 MB by
+default) and both fill on that query; `mcp` runs with 256 MB. That is the
+one knob left, and it is bounded.
+
+Not done: gauge queries still materialize `Gauges` whole (the producers own
+their samples, so no collected points, but the samples are resident); the
+same stream shape would apply. Histogram streams were lazy already.
+
 ## Path forward
 
 1. Segments on demand — done.
 2. The indexed reader on the same store — done.
-3. Streaming aggregation in the engine for `sum`/`count`/`avg`/`min`/`max`
-   over `rate`/`irate` and raw selectors: fold series as they are read
-   instead of collecting them all. This is what gets the all-task query
-   under a gigabyte.
+3. Rate over a sample stream — done. Gauges the same way when a wide gauge
+   table shows up.
 
 ## Related
 
