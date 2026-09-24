@@ -1863,7 +1863,6 @@ mod tests {
             42,
             1000,
             2000,
-            99,
         );
         assert_eq!(payload["sections"], serde_json::Value::Array(sections));
         assert!(payload.get("groups").is_none());
@@ -1874,7 +1873,7 @@ mod tests {
         assert_eq!(payload["filesize"], serde_json::json!(42u64));
         assert_eq!(payload["start_time"], serde_json::json!(1000u64));
         assert_eq!(payload["end_time"], serde_json::json!(2000u64));
-        assert_eq!(payload["num_series"], serde_json::json!(99usize));
+        assert!(payload.get("num_series").is_none());
     }
 
     #[test]

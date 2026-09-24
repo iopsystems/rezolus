@@ -92,8 +92,6 @@ pub struct View {
     start_time: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     end_time: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_series: Option<usize>,
     groups: Vec<Group>,
     sections: Vec<Section>,
     #[serde(skip_serializing_if = "HashMap::is_empty")]
@@ -113,9 +111,6 @@ impl View {
             None => (None, None),
         };
 
-        // Count total time series (each metric x label combination)
-        let num_series = Some(data.total_series_count());
-
         Self {
             interval,
             source,
@@ -124,7 +119,6 @@ impl View {
             filesize: None,
             start_time,
             end_time,
-            num_series,
             groups: Vec::new(),
             sections,
             metadata: HashMap::new(),

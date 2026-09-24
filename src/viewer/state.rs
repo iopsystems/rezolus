@@ -231,8 +231,6 @@ impl AppState {
             .time_range()
             .map(|(min, max)| ((min * 1000.0) as u64, (max * 1000.0) as u64))
             .unwrap_or((0, 0));
-        let num_series = data.total_series_count();
-
         build_sections_metadata_payload(
             sections_array,
             &source,
@@ -242,7 +240,6 @@ impl AppState {
             filesize,
             start_time,
             end_time,
-            num_series,
         )
     }
 }
@@ -259,7 +256,6 @@ pub fn build_sections_metadata_payload(
     filesize: u64,
     start_time: u64,
     end_time: u64,
-    num_series: usize,
 ) -> serde_json::Value {
     serde_json::json!({
         "sections": sections,
@@ -270,7 +266,6 @@ pub fn build_sections_metadata_payload(
         "filesize": filesize,
         "start_time": start_time,
         "end_time": end_time,
-        "num_series": num_series,
     })
 }
 
