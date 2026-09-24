@@ -1,5 +1,58 @@
 ## [Unreleased]
 
+## [5.22.0] - 2026-09-23
+
+### Added
+
+- Reader: a group table whose slots the identity index describes is read
+  through it. A group table's columns are its slots, and a slot changes hands
+  — a task exits and another lands in its BPF map slot, a cgroup id is
+  recycled — so a column's own labels can only say what the slot meant when
+  the segment was written. The reader now replays the stream's `caller_rows`
+  into per-slot occupancy spans and cuts each column into one series per
+  occupant, labelled with what the index says, with the occupant's `__uid__`
+  on it. On archives that carry identity in both places today the two read
+  paths agree series for series; once the writer stops copying identity into
+  column metadata, the index is where the labels live. (#1280, #1284)
+- Recorder: `record --stream` restates every stream's slot set into the
+  archive every 300 s (the seal policy's age bound), so a rolling buffer can
+  evict identity history and a reader of a long recording replays one
+  restatement period rather than everything since connect. Retention cuts a
+  stream's `caller_rows` back to the latest full restatement at or before the
+  row cutoff and never past it; a stream with none on record keeps its
+  history. (#1281)
+
+### Changed
+
+- Reader: a `.rez` table's segments are fetched from the archive as a query
+  touches them, through a cache bounded by `--cache-size-mb`, instead of
+  every segment's bytes and parsed footer being held for the reader's life.
+  Open reads each footer once for the identity indexes and a per-segment time
+  span, then lets it go. On a 1.3 GB, 9.6-hour archive whose per-task table
+  had 159 segments of up to 2,851 columns, the viewer's resident size after
+  building its dashboard went from 4.1 GB to 0.25 GB and `mcp
+  describe-metrics` from 4.4 GB to 0.25 GB. Needs metriken-query 0.27.0.
+  (#1283)
+- Reader: `rate()` and `irate()` read each series as a sample stream and keep
+  one interval's worth of it, so a query over many series costs the series it
+  is looking at rather than the whole table. On the same archive,
+  `sum(rate(task_cpu_usage[1m]))` over 6,644 task series peaked at 11.9 GB
+  before and 0.98 GB after, with identical output. Needs metriken-query
+  0.29.0. (#1286)
+- Reader: composing a recording (systemslab's path) hands out one lazy child
+  per table, built from the catalog the reader probes at open; a table opens
+  the first time a composed query names one of its metrics, and composed
+  `rate()` queries stream. Composing this archive used to open every table's
+  every segment footer before any query. Needs metriken-query 0.30.0.
+  (#1287)
+
+### Fixed
+
+- Reader: replaying a stream's identity index diffed the whole live slot set
+  after every entry and serialized every slot for a state hash the reader
+  never reads. On a ten-minute recording under task churn (248,511 entries)
+  a query took 20 s; it takes 0.6 s. (#1282)
+
 ## [5.21.0] - 2026-09-23
 
 ### Added
