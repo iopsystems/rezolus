@@ -46,7 +46,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use metriken_query::MemoryStore;
 use metriken_query::{
     BufferPool, CompositionSource, MetricsSource, ParquetReader, QueryError, QueryOptions,
     QueryResult, RateMode, SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
@@ -56,18 +55,17 @@ use crate::rez::{self, RecordingBytes};
 use crate::rez_sqlite::RezDb;
 use crate::wal::materialize_wal_tail;
 
-/// The concrete reader shapes a `.rez` table opens as, kept concrete (not
+/// The concrete reader a `.rez` table opens as, kept concrete (not
 /// type-erased behind `Box<dyn MetricsSource>`) so a same-timeline union can
-/// borrow each table's raw `DataSource` handle via
-/// `UnionChild::from(&SegmentedParquetReader)`/`from(&MemoryStore)` — that
-/// composition needs the concrete type, not the trait object.
+/// borrow the table's raw `DataSource` handle via
+/// `UnionChild::from(&SegmentedParquetReader)` — that composition needs the
+/// concrete type, not the trait object.
 enum TableReader {
     /// A table read from its segments on demand — one segment or many; the
-    /// segmented reader fetches only what a query touches either way.
+    /// segmented reader fetches only what a query touches either way. A
+    /// group table whose slots the identity index describes opens as the
+    /// same reader with a relabelling — see [`crate::indexed`].
     Segmented(SegmentedParquetReader),
-    /// A group table whose slots the identity index describes, split by
-    /// occupant into an in-memory store — see [`crate::indexed`].
-    Indexed(MemoryStore),
 }
 
 /// Parse one probe segment's footer per table.
@@ -317,34 +315,6 @@ impl SegmentSource {
         Ok((!store.is_empty()).then_some(store))
     }
 
-    /// Every segment of this table, materialized. Only the indexed path
-    /// still needs the whole table in hand; the parquet path pulls through
-    /// [`store`](Self::store).
-    fn all(&self) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
-        match self {
-            SegmentSource::Bytes(b) => Ok(b.clone()),
-            SegmentSource::Db {
-                path,
-                recording_id,
-                sampler,
-            } => {
-                let db = RezDb::open(path)?;
-                table_segments(&db, *recording_id, sampler)
-            }
-            SegmentSource::SharedDb {
-                db,
-                recording_id,
-                sampler,
-            } => {
-                // A poisoned lock means another thread panicked mid-read. The
-                // catalog is read-only here, so nothing is half-written and
-                // the data is still good.
-                let db = db.lock().unwrap_or_else(|e| e.into_inner());
-                table_segments(&db, *recording_id, sampler)
-            }
-        }
-    }
-
     /// This table's identity index entries, oldest first, from the last
     /// `Full` at or before `first_row_ts` — a slot's occupant at any row can
     /// depend on an entry from long before it, and a `Full` is where that
@@ -412,14 +382,12 @@ impl TableReader {
     fn as_dyn(&self) -> &dyn MetricsSource {
         match self {
             TableReader::Segmented(r) => r,
-            TableReader::Indexed(s) => s,
         }
     }
 
     fn union_child(&self) -> UnionChild {
         match self {
             TableReader::Segmented(r) => UnionChild::from(r),
-            TableReader::Indexed(s) => UnionChild::from(s),
         }
     }
 
@@ -429,7 +397,6 @@ impl TableReader {
     fn composition_source(&self) -> CompositionSource {
         match self {
             TableReader::Segmented(r) => CompositionSource::from(r),
-            TableReader::Indexed(s) => CompositionSource::from(s),
         }
     }
 }
@@ -542,18 +509,24 @@ impl SamplerReader {
 
         let mut out: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
 
-        let segments = match self.segments.all() {
-            Ok(s) => s,
+        let first = match self.segments.store() {
+            Ok(Some(store)) => store.bytes(0),
+            Ok(None) => return out,
             Err(e) => {
                 tracing::warn!("fetching segments for {}: {e}", self.sampler);
                 return out;
             }
         };
-        let Some(first) = segments.into_iter().next() else {
-            return out;
+        let first = match first {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return out,
+            Err(e) => {
+                tracing::warn!("fetching the first segment of {}: {e}", self.sampler);
+                return out;
+            }
         };
 
-        let builder = match ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(first)) {
+        let builder = match ParquetRecordBatchReaderBuilder::try_new(first) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!("reading schema for {}: {e}", self.sampler);
@@ -577,20 +550,6 @@ impl SamplerReader {
         self.reader
             .get_or_init(|| {
                 let pool = Arc::clone(&self.pool);
-                if self.indexed {
-                    let segments = match self.segments.all() {
-                        Ok(s) if !s.is_empty() => s,
-                        Ok(_) => {
-                            self.warn_evicted();
-                            return None;
-                        }
-                        Err(e) => {
-                            tracing::warn!("fetching segments for {}: {e}", self.sampler);
-                            return None;
-                        }
-                    };
-                    return self.open_indexed(&segments);
-                }
                 // The store fetches segments as queries touch them; nothing
                 // is read here beyond the catalog and the live WAL tail.
                 let store = match self.segments.store() {
@@ -607,7 +566,14 @@ impl SamplerReader {
                         return None;
                     }
                 };
-                SegmentedParquetReader::open_with_pool(store, pool)
+                let opened = match self.relabel() {
+                    Some(Ok(relabel)) => {
+                        SegmentedParquetReader::open_relabeled_with_pool(store, pool, relabel)
+                    }
+                    Some(Err(())) => return None,
+                    None => SegmentedParquetReader::open_with_pool(store, pool),
+                };
+                opened
                     .map(TableReader::Segmented)
                     .map_err(|e| {
                         tracing::warn!("reopening table {}: {e}", self.sampler);
@@ -625,39 +591,42 @@ impl SamplerReader {
         );
     }
 
-    /// The indexed build: the segments split by occupant. A failure to read
-    /// or replay the index is a failure to open the table, reported the same
-    /// way a segment that would not parse is — never a silent fall-through
-    /// to the parquet path, which would file every reused slot's rows under
-    /// its first occupant.
-    fn open_indexed(&self, segments: &[Vec<u8>]) -> Option<TableReader> {
+    /// The relabelling an indexed table opens with: its identity index
+    /// replayed into occupancy spans. `None` for a table the index does not
+    /// describe; `Some(Err(()))` when the index could not be read or
+    /// replayed, which is a failure to open the table, reported the same way
+    /// a segment that would not parse is — never a silent fall-through to
+    /// the plain path, which would file every reused slot's rows under its
+    /// first occupant.
+    fn relabel(&self) -> Option<Result<Arc<dyn metriken_query::ColumnRelabel>, ()>> {
+        if !self.indexed {
+            return None;
+        }
         let first_row_ts = self.span.map(|(b, _)| b).unwrap_or(0);
         let entries = match self.segments.index_entries(first_row_ts) {
             Ok(e) => e,
             Err(e) => {
                 tracing::warn!("reading the identity index for {}: {e}", self.sampler);
-                return None;
+                return Some(Err(()));
             }
         };
-        let interval_ms = (self.interval * 1000.0).round().max(1.0) as u64;
-        match crate::indexed::build(&self.sampler, segments, &entries, interval_ms) {
-            Ok(t) => {
-                if t.unattributed > 0 || t.skipped_before_full > 0 {
-                    tracing::warn!(
-                        "table {}: {} rows had no occupant in the identity index and kept \
-                         their column's labels ({} entries preceded the first full index)",
-                        self.sampler,
-                        t.unattributed,
-                        t.skipped_before_full
-                    );
-                }
-                Some(TableReader::Indexed(t.store))
-            }
+        let occupants = match crate::indexed::Occupants::replay(&entries) {
+            Ok(o) => o,
             Err(e) => {
-                tracing::warn!("splitting table {} by occupant: {e}", self.sampler);
-                None
+                tracing::warn!("replaying the identity index for {}: {e}", self.sampler);
+                return Some(Err(()));
             }
+        };
+        if occupants.skipped_before_full > 0 {
+            tracing::warn!(
+                "table {}: {} index entries preceded the first full index and were skipped",
+                self.sampler,
+                occupants.skipped_before_full
+            );
         }
+        Some(Ok(Arc::new(crate::indexed::OccupantRelabel::new(
+            occupants,
+        ))))
     }
 
     fn row_timestamps(&self) -> &[u64] {
