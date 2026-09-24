@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Changed
+
+- Viewer/dashboard: the section payload no longer carries `num_series`. It
+  was a badge that neither viewer displayed, and computing it counted every
+  label set of every metric, which on a `.rez` built every table's reader —
+  for an indexed table, replaying the identity index — on every section
+  request, undoing the lazy open. Nothing else consumed the number.
+
 ## [5.22.0] - 2026-09-23
 
 ### Added

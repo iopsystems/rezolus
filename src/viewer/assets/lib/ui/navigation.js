@@ -30,7 +30,6 @@ const buildTopNavAttrs = ({
     version: data.version,
     interval: data.interval,
     filesize: data.filesize,
-    num_series: data.num_series,
     liveMode,
     recording,
     fileChecksum,
@@ -66,7 +65,7 @@ const createMainComponent = ({
     buildAttrs,
 }) => ({
     view({
-        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, num_series, metadata, compareMode },
+        attrs: { activeSection, groups, sections, source, version, filename, interval, filesize, start_time, end_time, metadata, compareMode },
     }) {
         const badgeAttrs = typeof getCompareBadgeAttrs === 'function'
             ? getCompareBadgeAttrs()
@@ -74,7 +73,7 @@ const createMainComponent = ({
         return m(
             'div',
             m(TopNav, buildAttrs(
-                { groups, filename, source, version, interval, filesize, num_series },
+                { groups, filename, source, version, interval, filesize },
                 activeSection?.route,
                 {
                     start_time,

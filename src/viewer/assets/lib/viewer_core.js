@@ -827,7 +827,6 @@ export function buildClientOnlySectionView(Main, sectionResponseCache, getSectio
                 filesize: anyCached?.filesize,
                 start_time: anyCached?.start_time,
                 end_time: anyCached?.end_time,
-                num_series: anyCached?.num_series,
             });
         },
     };

@@ -105,7 +105,6 @@ export function createSourceRoutes(deps) {
                             version: anyCached.version,
                             interval: anyCached.interval,
                             filesize: anyCached.filesize,
-                            num_series: anyCached.num_series,
                         };
                         return m('div', [
                             m(TopNav, topNavAttrs(data, activeSection.route)),
