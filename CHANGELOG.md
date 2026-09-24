@@ -8,8 +8,8 @@
   the identity index — the first time `/api/v1/sections` was asked, and
   re-walked the labels on every ask after that, undoing the lazy open for
   the first request a page makes. The rezolus viewer never rendered the
-  number. systemslab's metrics page shows it as "N series" and needs to
-  drop that label (or count from its catalog) when it takes this version.
+  number; systemslab's metrics page showed it as "N series" and drops that
+  label in iopsystems/systemslab#6268.
 
 ## [5.22.0] - 2026-09-23
 
