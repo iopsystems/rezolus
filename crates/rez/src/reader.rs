@@ -56,13 +56,14 @@ use crate::rez::{self, RecordingBytes};
 use crate::rez_sqlite::RezDb;
 use crate::wal::materialize_wal_tail;
 
-/// The two concrete reader shapes a `.rez` table opens as, kept concrete
-/// (not type-erased behind `Box<dyn MetricsSource>`) so a same-timeline
-/// union can borrow each table's raw `DataSource` handle via
-/// `UnionChild::from(&ParquetReader)`/`from(&SegmentedParquetReader)` —
-/// that composition needs the concrete type, not the trait object.
+/// The concrete reader shapes a `.rez` table opens as, kept concrete (not
+/// type-erased behind `Box<dyn MetricsSource>`) so a same-timeline union can
+/// borrow each table's raw `DataSource` handle via
+/// `UnionChild::from(&SegmentedParquetReader)`/`from(&MemoryStore)` — that
+/// composition needs the concrete type, not the trait object.
 enum TableReader {
-    Single(ParquetReader),
+    /// A table read from its segments on demand — one segment or many; the
+    /// segmented reader fetches only what a query touches either way.
     Segmented(SegmentedParquetReader),
     /// A group table whose slots the identity index describes, split by
     /// occupant into an in-memory store — see [`crate::indexed`].
@@ -180,9 +181,145 @@ enum SegmentSource {
     },
 }
 
+/// A connection to the archive a store reads through: the file, opened once
+/// on first use and kept, or the catalog every table of a byte-backed
+/// archive shares.
+enum DbHandle {
+    Path {
+        path: std::path::PathBuf,
+        conn: std::sync::Mutex<Option<RezDb>>,
+    },
+    Shared(Arc<std::sync::Mutex<RezDb>>),
+}
+
+impl DbHandle {
+    fn with<T>(
+        &self,
+        f: impl FnOnce(&RezDb) -> Result<T, String>,
+    ) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            DbHandle::Path { path, conn } => {
+                let mut conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+                if conn.is_none() {
+                    *conn = Some(RezDb::open(path)?);
+                }
+                Ok(f(conn.as_ref().expect("opened above"))?)
+            }
+            DbHandle::Shared(db) => {
+                // A poisoned lock means another thread panicked mid-read. The
+                // catalog is read-only here, so nothing is half-written and
+                // the data is still good.
+                let db = db.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(f(&db)?)
+            }
+        }
+    }
+}
+
+/// One table's segments, fetched from the archive as a query needs them —
+/// the `SegmentStore` the segmented reader pulls through.
+///
+/// Built when the table is first queried: the sealed segments' sequence
+/// numbers from the catalog, and the live WAL tail materialized once as the
+/// newest segment. The tail is the one thing held in memory — it is at most
+/// a segment's worth of rows, and it is the part of the table SQLite cannot
+/// hand back as parquet. Sealed segments are read by sequence number on
+/// demand; one that retention has removed since reads as gone and the
+/// reader skips it, which is exactly what a live hindsight buffer wants.
+struct DbSegmentStore {
+    db: DbHandle,
+    recording_id: i64,
+    sampler: String,
+    seqs: Vec<u64>,
+    tail: Option<bytes::Bytes>,
+}
+
+impl DbSegmentStore {
+    fn build(
+        db: DbHandle,
+        recording_id: i64,
+        sampler: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let (seqs, tail) = db
+            .with(|db| {
+                let seqs: Vec<u64> = db
+                    .read_segment_meta(recording_id, sampler)?
+                    .into_iter()
+                    .map(|(seq, _)| seq)
+                    .collect();
+                let tail = materialize_wal_tail(sampler, &db.live_wal(recording_id, sampler)?)
+                    .map_err(|e| e.to_string())?
+                    .map(|t| bytes::Bytes::from(t.bytes));
+                Ok((seqs, tail))
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            db,
+            recording_id,
+            sampler: sampler.to_string(),
+            seqs,
+            tail,
+        })
+    }
+}
+
+impl metriken_query::SegmentStore for DbSegmentStore {
+    fn len(&self) -> usize {
+        self.seqs.len() + usize::from(self.tail.is_some())
+    }
+
+    fn bytes(&self, idx: usize) -> metriken_query::SegmentBytes {
+        match self.seqs.get(idx) {
+            Some(seq) => {
+                let seq = *seq;
+                let bytes = self
+                    .db
+                    .with(|db| db.read_segment_bytes(self.recording_id, &self.sampler, seq))?;
+                Ok(bytes.map(bytes::Bytes::from))
+            }
+            None if idx == self.seqs.len() => Ok(self.tail.clone()),
+            None => Ok(None),
+        }
+    }
+}
+
 impl SegmentSource {
-    /// Every segment of this table, materialized. Called only when the table
-    /// is actually queried.
+    /// This table as a store the segmented reader fetches from on demand.
+    /// `None` when the table has no segments and no tail any more — evicted
+    /// between the probe and the query.
+    fn store(
+        &self,
+    ) -> Result<Option<Arc<dyn metriken_query::SegmentStore>>, Box<dyn std::error::Error>> {
+        let store: Arc<dyn metriken_query::SegmentStore> = match self {
+            SegmentSource::Bytes(b) => Arc::new(metriken_query::InMemorySegments::new(b.clone())),
+            SegmentSource::Db {
+                path,
+                recording_id,
+                sampler,
+            } => Arc::new(DbSegmentStore::build(
+                DbHandle::Path {
+                    path: path.clone(),
+                    conn: std::sync::Mutex::new(None),
+                },
+                *recording_id,
+                sampler,
+            )?),
+            SegmentSource::SharedDb {
+                db,
+                recording_id,
+                sampler,
+            } => Arc::new(DbSegmentStore::build(
+                DbHandle::Shared(Arc::clone(db)),
+                *recording_id,
+                sampler,
+            )?),
+        };
+        Ok((!store.is_empty()).then_some(store))
+    }
+
+    /// Every segment of this table, materialized. Only the indexed path
+    /// still needs the whole table in hand; the parquet path pulls through
+    /// [`store`](Self::store).
     fn all(&self) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
         match self {
             SegmentSource::Bytes(b) => Ok(b.clone()),
@@ -274,7 +411,6 @@ impl TableNames {
 impl TableReader {
     fn as_dyn(&self) -> &dyn MetricsSource {
         match self {
-            TableReader::Single(r) => r,
             TableReader::Segmented(r) => r,
             TableReader::Indexed(s) => s,
         }
@@ -282,7 +418,6 @@ impl TableReader {
 
     fn union_child(&self) -> UnionChild {
         match self {
-            TableReader::Single(r) => UnionChild::from(r),
             TableReader::Segmented(r) => UnionChild::from(r),
             TableReader::Indexed(s) => UnionChild::from(s),
         }
@@ -293,7 +428,6 @@ impl TableReader {
     /// than into a same-recording union.
     fn composition_source(&self) -> CompositionSource {
         match self {
-            TableReader::Single(r) => CompositionSource::from(r),
             TableReader::Segmented(r) => CompositionSource::from(r),
             TableReader::Indexed(s) => CompositionSource::from(s),
         }
@@ -370,12 +504,13 @@ impl SamplerReader {
     /// The table's reader, built on first use — `None` if its segments have
     /// gone since the probe.
     ///
-    /// Single-segment tables keep the plain reader — the streaming writer's
-    /// slow samplers and every atomically written archive land there, and there
-    /// is nothing for the splice to do. Multi-segment tables get the
-    /// segment-aware source, which splices raw samples below PromQL evaluation
-    /// so a `rate()` window straddling a seal boundary still computes on
-    /// complete data.
+    /// Every table opens as the segmented reader over a store that fetches
+    /// segments from the archive as queries touch them: nothing is read here
+    /// beyond the catalog and the live WAL tail, and a query pays for the
+    /// segments in its range rather than for the table. The splice below
+    /// PromQL evaluation is what makes a `rate()` window straddling a seal
+    /// boundary compute on complete data; a one-segment table has nothing to
+    /// splice and costs nothing extra for going through it.
     ///
     /// **Fallible because a `.rez` is readable while it is written.** This used
     /// to `.expect("segments opened at probe time cannot fail to reopen")`,
@@ -442,17 +577,29 @@ impl SamplerReader {
         self.reader
             .get_or_init(|| {
                 let pool = Arc::clone(&self.pool);
-                let segments = match self.segments.all() {
-                    Ok(s) if !s.is_empty() => s,
+                if self.indexed {
+                    let segments = match self.segments.all() {
+                        Ok(s) if !s.is_empty() => s,
+                        Ok(_) => {
+                            self.warn_evicted();
+                            return None;
+                        }
+                        Err(e) => {
+                            tracing::warn!("fetching segments for {}: {e}", self.sampler);
+                            return None;
+                        }
+                    };
+                    return self.open_indexed(&segments);
+                }
+                // The store fetches segments as queries touch them; nothing
+                // is read here beyond the catalog and the live WAL tail.
+                let store = match self.segments.store() {
+                    Ok(Some(store)) => store,
                     // Empty is the eviction case; an error is a genuine read
                     // failure. Both mean this table cannot answer, and neither
                     // is worth taking the process down for.
-                    Ok(_) => {
-                        tracing::warn!(
-                            "table {} had rows at open and none now; it was evicted or \
-                             rotated while being read, and is reported as absent",
-                            self.sampler
-                        );
+                    Ok(None) => {
+                        self.warn_evicted();
                         return None;
                     }
                     Err(e) => {
@@ -460,23 +607,22 @@ impl SamplerReader {
                         return None;
                     }
                 };
-                if self.indexed {
-                    return self.open_indexed(&segments);
-                }
-                match <[Vec<u8>; 1]>::try_from(segments) {
-                    Ok([bytes]) => ParquetReader::open_bytes_with_pool(bytes, pool)
-                        .map(TableReader::Single)
-                        .map_err(|e| format!("{e}")),
-                    Err(segments) => SegmentedParquetReader::open_bytes_with_pool(segments, pool)
-                        .map(TableReader::Segmented)
-                        .map_err(|e| format!("{e}")),
-                }
-                .map_err(|e| {
-                    tracing::warn!("reopening table {}: {e}", self.sampler);
-                })
-                .ok()
+                SegmentedParquetReader::open_with_pool(store, pool)
+                    .map(TableReader::Segmented)
+                    .map_err(|e| {
+                        tracing::warn!("reopening table {}: {e}", self.sampler);
+                    })
+                    .ok()
             })
             .as_ref()
+    }
+
+    fn warn_evicted(&self) {
+        tracing::warn!(
+            "table {} had rows at open and none now; it was evicted or \
+             rotated while being read, and is reported as absent",
+            self.sampler
+        );
     }
 
     /// The indexed build: the segments split by occupant. A failure to read
