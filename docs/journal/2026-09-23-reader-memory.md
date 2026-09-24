@@ -1,7 +1,7 @@
 # Long recordings: memory proportional to the query, not the file
 
 - **Opened:** 2026-09-23
-- **Status:** **OPEN — step 1 of 3 in review.**
+- **Status:** **OPEN — steps 1 and 2 in review, step 3 in progress.**
 - **Driver:** a 1.28 GB `.rez` (one host, 9.6 hours at 1 s, 49 tables, 5,874
   segments) opened and queried, but memory scaled with the file: 4.1 GB
   resident after the viewer built its dashboard, 9.4 GB after one query over
@@ -96,12 +96,52 @@ The filtered query got slower because its footers are parsed twice now,
 once at open and once when the query touches them; repeated queries find
 them in the cache. The all-task query is cost 3, untouched by this step.
 
+## Step 2: the indexed reader on the same store (iopsystems/metriken#159)
+
+The indexed reader decoded every segment of a table into `RezTable`s and
+assembled a `MemoryStore` of split series at first query — the whole table
+in memory, which on the fixture above is the one thing step 1 had just
+stopped doing for every other table.
+
+It is now a relabelling of the segmented reader rather than a reader of its
+own. metriken-query gained `ColumnRelabel`: at open a column says what label
+sets it can present as (`identities`), which is what the identity indexes,
+listings and column map are built from; at query time a counter or gauge
+column's samples are cut into runs by occupant (`split`), histogram rows are
+relabelled one at a time by timestamp (`at`), and each run is spliced as a
+piece of the series it presents as, exactly as a plain series is. A filter
+on a key the index supplies (`comm="redis"`) is not on the column, so
+`segment_filter` turns it into the slots whose occupants match
+(`id="3|17"`), the segment decodes those columns only, and the original
+filter is applied to the relabelled runs afterwards.
+
+rez's `OccupantRelabel` implements it over `Occupants`: one binary search
+per run boundary, the overlay computed once per run. A slot the index never
+named is read as it is. The `MemoryStore` assembly, the eager decode and
+`SegmentSource::all()` are gone; `TableReader` has one variant.
+
+Measured on delta's churn archive (the identity arc's fixture: ten minutes,
+248k index entries on the task stream), `sum(rate(task_cpu_usage[1m]))`
+five times each:
+
+| | parquet path | indexed, `MemoryStore` (#1282) | indexed, relabel |
+|---|---|---|---|
+| query wall | 0.48–0.54 s | 0.58–0.65 s | 0.71–0.78 s |
+| query max RSS | 193 MB | 180 MB | 199 MB |
+| `describe-metrics` | 0.23 s, 104 MB | 0.86 s | 0.54 s, 142 MB |
+
+Slower per query than the store it replaces on this small table — the
+footers are parsed again per query, and the store had them decoded once —
+and no longer proportional to the table: memory is the parquet path's plus
+the occupancy spans. The reader oracle tests (both paths agree on a
+dual-carrying archive; an index-only archive splits at the handover; a
+retained tail attributes from the restatement) run through the relabel
+path unchanged.
+
 ## Path forward
 
-1. Segments on demand — this step.
-2. The indexed reader (`crates/rez/src/indexed.rs`) becomes segment-wise on
-   the same store, so the cutover (identity arc step 7) does not regress
-   this.
+1. Segments on demand — done.
+2. The indexed reader on the same store — done.
 3. Streaming aggregation in the engine for `sum`/`count`/`avg`/`min`/`max`
    over `rate`/`irate` and raw selectors: fold series as they are read
    instead of collecting them all. This is what gets the all-task query

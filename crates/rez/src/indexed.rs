@@ -8,11 +8,18 @@
 //! change), not in the column. Read as parquet, the column's field metadata
 //! carries whatever labels the slot had when the segment was built, and every
 //! row of that column is filed under them, whoever occupied the slot at the
-//! time. This module replays the index into per-slot occupancy spans, decodes
-//! the table's segments, and cuts each column into one series per occupant,
-//! labelled with what the index says. The result is a
-//! [`MemoryStore`](metriken_query::MemoryStore), which composes beside the
-//! parquet-backed tables in the same union.
+//! time. This module replays the index into per-slot occupancy spans
+//! ([`Occupants`]) and hands them to the segmented reader as a
+//! [`ColumnRelabel`]: at open it says what label sets each slot column can
+//! present as, and at query time it cuts a column's samples into runs by
+//! occupant. The reader stays lazy — segments fetched as a query touches
+//! them, nothing decoded that the query does not read — and the split costs
+//! a binary search per run boundary rather than a decode of the table.
+//!
+//! It used to decode every segment into a `MemoryStore` at first query. On a
+//! ten-hour archive whose task table is 159 segments of up to 2,851 columns,
+//! that is the whole table in memory, which is what the archive reader had
+//! just stopped doing for every other table.
 //!
 //! The archive's rows do not change; only what they are attributed to. That
 //! is why the split happens on read: the recorder writes what it received,
@@ -21,26 +28,29 @@
 //!
 //! # Where the labels come from
 //!
-//! A series' labels are the column's own field metadata (its storage keys
-//! removed, exactly as the parquet loader does it) with the occupant's index
-//! labels laid over the top. The index wins on a conflict. Today's archives
-//! carry the same labels in both places — a column's metadata still holds the
-//! occupant's labels and its `__uid__` — so the overlay changes nothing and
-//! the two read paths agree series for series, which is what the oracle test
-//! below pins. Once the writer stops copying identity into column metadata
-//! (#1224 §2, step 7), the index is the only place the labels live, and this
-//! path is the one that still knows them.
+//! A series' labels are the column's own (its storage keys removed, exactly
+//! as the parquet loader does it) with the occupant's index labels laid over
+//! the top. The index wins on a conflict. Today's archives carry the same
+//! labels in both places — a column's metadata still holds the occupant's
+//! labels and its `__uid__` — so the overlay changes nothing and the two read
+//! paths agree series for series, which is what the oracle test in the reader
+//! pins. Once the writer stops copying identity into column metadata (#1224
+//! §2, step 7), the index is the only place the labels live, and this path is
+//! the one that still knows them.
 //!
-//! A row with no occupant on record — before the stream's first `Full`, or a
-//! slot the index never named — keeps the column's own labels and is counted
-//! in [`IndexedTable::unattributed`]. Nothing is dropped.
+//! A sample with no occupant on record keeps the column's own labels, which
+//! the reader then does not find in its identity index and drops with a
+//! warning; [`OccupantRelabel::unattributed`] counts them. In a well-formed
+//! archive there are none: rows and the entries describing them commit
+//! together, and retention cuts entries back only to a `Full` at or before
+//! the row cutoff.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
-use metriken_query::{is_storage_key, HistogramSnapshot, MemoryStore};
+use metriken_query::{ColumnRelabel, Labels, Run};
 
 use crate::index::{EntryKind, IndexEntry};
-use crate::rez::{read_table_parquet, RezColumn, RezTable, RezValues};
 
 /// One slot's occupant over `[from, to)`, in row timestamps. `to` is `None`
 /// while the occupant is still live at the end of the index.
@@ -183,268 +193,168 @@ impl Occupants {
     }
 }
 
-/// A table read through the index.
-pub struct IndexedTable {
-    /// The split series, as a source the union composes.
-    pub store: MemoryStore,
-    /// Series inserted.
-    pub series: usize,
-    /// Rows of slotted columns that had no occupant on record and kept the
-    /// column's own labels.
-    pub unattributed: usize,
+/// The identity index of one stream, as the segmented reader's
+/// [`ColumnRelabel`].
+pub struct OccupantRelabel {
+    occupants: Occupants,
+    /// Label keys the index supplies. A filter on one of them cannot be
+    /// asked of a column, whose own labels do not carry it.
+    supplied: BTreeSet<String>,
+    /// Samples of slot columns that had no occupant on record.
+    unattributed: AtomicUsize,
+}
+
+impl OccupantRelabel {
+    pub fn new(occupants: Occupants) -> Self {
+        let supplied = occupants
+            .spans
+            .values()
+            .flatten()
+            .flat_map(|o| o.labels.keys().cloned())
+            .collect();
+        Self {
+            occupants,
+            supplied,
+            unattributed: AtomicUsize::new(0),
+        }
+    }
+
     /// See [`Occupants::skipped_before_full`].
-    pub skipped_before_full: usize,
-}
-
-/// The slot a column stands for.
-///
-/// The `id` metadata is the member index the agent stamps on every group
-/// member, and the column name is `{metric_id}x{slot}` with an optional
-/// `#generation` suffix the table builder adds when a slot was relabelled
-/// within one segment (`GroupTableBuilder::get_or_create`). Either answers;
-/// the name is the fallback for a column whose metadata was trimmed. A column
-/// with neither is not a slot — a group can carry a plain member — and is
-/// read under its own labels.
-pub fn column_slot(column: &RezColumn) -> Option<u32> {
-    if let Some(id) = column
-        .metadata
-        .get("id")
-        .and_then(|v| v.parse::<u32>().ok())
-    {
-        return Some(id);
+    pub fn skipped_before_full(&self) -> usize {
+        self.occupants.skipped_before_full
     }
-    let name = column
-        .name
-        .rsplit_once('#')
-        .filter(|(_, generation)| generation.parse::<u32>().is_ok())
-        .map(|(base, _)| base)
-        .unwrap_or(&column.name);
-    let (metric_id, slot) = name.rsplit_once('x')?;
-    metric_id.parse::<u64>().ok()?;
-    slot.parse::<u32>().ok()
+
+    /// Samples of slot columns that had no occupant on record, so far.
+    pub fn unattributed(&self) -> usize {
+        self.unattributed.load(Ordering::Relaxed)
+    }
+
+    /// The slot a column stands for, if the index describes it: its `id`
+    /// label, the member index the agent stamps on every group member. A
+    /// column without one is not a slot — a group can carry a plain member
+    /// — and a slot the index never named has nothing to say about it;
+    /// either is read under its own labels.
+    fn slot_of(&self, labels: &Labels) -> Option<u32> {
+        let slot: u32 = labels.inner.get("id")?.parse().ok()?;
+        (!self.occupants.spans(slot).is_empty()).then_some(slot)
+    }
+
+    /// The column's labels with the occupant's laid over them.
+    fn overlay(base: &Labels, occupant: &BTreeMap<String, String>) -> Labels {
+        let mut out = base.clone();
+        for (k, v) in occupant {
+            out.inner.insert(k.clone(), v.clone());
+        }
+        out
+    }
 }
 
-/// A series under assembly: one occupant of one column, or one unslotted
-/// column, accumulated across segments.
-struct SeriesBuild {
-    timestamps: Vec<u64>,
-    values: SeriesValues,
-    /// One per sample. A `None` anywhere and the series is inserted without
-    /// windows: the engine takes a window per sample or none at all.
-    windows: Vec<Option<(u64, u64)>>,
-}
+impl ColumnRelabel for OccupantRelabel {
+    fn identities(&self, _name: &str, labels: &Labels) -> Option<Vec<Labels>> {
+        let slot = self.slot_of(labels)?;
+        let mut out: Vec<Labels> = Vec::new();
+        for span in self.occupants.spans(slot) {
+            let l = Self::overlay(labels, &span.labels);
+            if !out.contains(&l) {
+                out.push(l);
+            }
+        }
+        Some(out)
+    }
 
-enum SeriesValues {
-    Counter(Vec<u64>),
-    Gauge(Vec<i64>),
-    Histogram(histogram::Config, Vec<HistogramSnapshot>),
-}
-
-/// Series identity while assembling: the name, the labels, and for a
-/// histogram its bucket configuration, since two configurations cannot share
-/// one series (the parquet reader splits them into `__run__` series, and so
-/// does this).
-type SeriesKey = (String, BTreeMap<String, String>, Option<(u8, u8)>);
-
-/// Split `segments` — a table's sealed segments then its WAL tail, oldest
-/// first — by the occupants `entries` describe, into a store.
-///
-/// `interval_ms` is the table's cadence, which the store reports as its own.
-pub fn build(
-    table_key: &str,
-    segments: &[Vec<u8>],
-    entries: &[(u64, Vec<u8>)],
-    interval_ms: u64,
-) -> Result<IndexedTable, String> {
-    let occupants = Occupants::replay(entries)?;
-    let mut series: Vec<(SeriesKey, SeriesBuild)> = Vec::new();
-    let mut by_key: HashMap<SeriesKey, usize> = HashMap::new();
-    let mut sample_timestamps: Vec<u64> = Vec::new();
-    let mut unattributed = 0usize;
-
-    for bytes in segments {
-        let table = read_table_parquet(table_key.to_string(), bytes.clone())
-            .map_err(|e| format!("decoding a segment of {table_key}: {e}"))?;
-        sample_timestamps.extend_from_slice(&table.timestamps);
-        for column in &table.columns {
-            let name = column
-                .metadata
-                .get("metric")
-                .cloned()
-                .unwrap_or_else(|| column.name.clone());
-            let base_labels: BTreeMap<String, String> = column
-                .metadata
-                .iter()
-                .filter(|(k, _)| !is_storage_key(k))
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
-            let slot = column_slot(column);
-            let config = match &column.values {
-                RezValues::Histogram(hs) => hs
-                    .iter()
-                    .flatten()
-                    .next()
-                    .map(|h| (h.config().grouping_power(), h.config().max_value_power())),
-                _ => None,
+    /// Runs follow the slot's spans: one binary search per span boundary,
+    /// the overlay computed once per run rather than once per sample.
+    fn split(&self, _name: &str, labels: &Labels, timestamps: &[u64]) -> Option<Vec<Run>> {
+        let slot = self.slot_of(labels)?;
+        let spans = self.occupants.spans(slot);
+        let n = timestamps.len();
+        let mut runs: Vec<Run> = Vec::new();
+        let mut i = 0;
+        let mut si = 0;
+        while i < n {
+            let ts = timestamps[i];
+            while si < spans.len() && spans[si].to.is_some_and(|to| to <= ts) {
+                si += 1;
+            }
+            let (run_labels, until) = match spans.get(si) {
+                Some(span) if span.from <= ts => (Self::overlay(labels, &span.labels), span.to),
+                // In a gap before the next span, or past the last one.
+                next => (labels.clone(), next.map(|s| s.from)),
             };
-
-            for row in 0..table.timestamps.len() {
-                if !has_value(column, row) {
-                    continue;
-                }
-                let ts = table.timestamps[row];
-                let occupant = slot.and_then(|s| occupants.at(s, ts));
-                let labels = match occupant {
-                    Some(o) => {
-                        let mut l = base_labels.clone();
-                        l.extend(o.labels.iter().map(|(k, v)| (k.clone(), v.clone())));
-                        l
-                    }
-                    None => {
-                        if slot.is_some() {
-                            unattributed += 1;
-                        }
-                        base_labels.clone()
-                    }
-                };
-                let key = (name.clone(), labels, config);
-                let idx = match by_key.get(&key) {
-                    Some(i) => *i,
-                    None => {
-                        let values = match &column.values {
-                            RezValues::Counter(_) => SeriesValues::Counter(Vec::new()),
-                            RezValues::Gauge(_) => SeriesValues::Gauge(Vec::new()),
-                            RezValues::Histogram(_) => {
-                                let (gp, mvp) = config.expect("a present histogram has a config");
-                                let config = histogram::Config::new(gp, mvp)
-                                    .map_err(|e| format!("{name}: bucket config: {e}"))?;
-                                SeriesValues::Histogram(config, Vec::new())
-                            }
-                        };
-                        series.push((
-                            key.clone(),
-                            SeriesBuild {
-                                timestamps: Vec::new(),
-                                values,
-                                windows: Vec::new(),
-                            },
-                        ));
-                        by_key.insert(key, series.len() - 1);
-                        series.len() - 1
-                    }
-                };
-                let build = &mut series[idx].1;
-                build.timestamps.push(ts);
-                build.windows.push(row_window(&table, column, row));
-                match (&mut build.values, &column.values) {
-                    (SeriesValues::Counter(out), RezValues::Counter(v)) => {
-                        out.push(v[row].expect("checked present"))
-                    }
-                    (SeriesValues::Gauge(out), RezValues::Gauge(v)) => {
-                        out.push(v[row].expect("checked present"))
-                    }
-                    (SeriesValues::Histogram(_, out), RezValues::Histogram(v)) => {
-                        out.push(snapshot(v[row].as_ref().expect("checked present")))
-                    }
-                    _ => unreachable!("a series keeps its column's kind"),
-                }
+            let j = match until {
+                Some(end) => i + timestamps[i..].partition_point(|t| *t < end),
+                None => n,
+            };
+            if run_labels == *labels {
+                self.unattributed.fetch_add(j - i, Ordering::Relaxed);
             }
+            runs.push((run_labels, i..j));
+            i = j;
         }
+        Some(runs)
     }
 
-    // `__run__` for a histogram name that resolved to more than one bucket
-    // configuration, numbered in first-seen order — the segmented reader's
-    // policy, so the two paths name the same runs.
-    let mut runs: HashMap<String, Vec<(u8, u8)>> = HashMap::new();
-    for ((name, _, config), _) in &series {
-        if let Some(c) = config {
-            let v = runs.entry(name.clone()).or_default();
-            if !v.contains(c) {
-                v.push(*c);
+    fn at(&self, _name: &str, labels: &Labels, timestamp: u64) -> Option<Labels> {
+        let slot = self.slot_of(labels)?;
+        Some(match self.occupants.at(slot, timestamp) {
+            Some(o) => Self::overlay(labels, &o.labels),
+            None => {
+                self.unattributed.fetch_add(1, Ordering::Relaxed);
+                labels.clone()
             }
-        }
+        })
     }
 
-    let store = MemoryStore::builder()
-        .sampling_interval_ms(interval_ms.max(1))
-        .build();
-    let count = series.len();
-    for ((name, mut labels, config), build) in series {
-        if let Some(c) = config {
-            let configs = &runs[&name];
-            if configs.len() > 1 {
-                let run = configs.iter().position(|x| *x == c).expect("listed");
-                labels.insert("__run__".to_string(), run.to_string());
-            }
-        }
-        let windows = build
-            .windows
+    /// A filter on keys the index supplies becomes a filter on the slots
+    /// whose occupants match: `comm="redis"` asks the segment for
+    /// `id="3|17"`, and the reader applies `comm="redis"` to the relabelled
+    /// runs afterwards. Without this the segment would decode every column
+    /// of the metric — or, worse, match none, since a filter key absent from
+    /// the column's labels fails closed.
+    fn segment_filter(&self, _name: &str, filter: &Labels) -> Labels {
+        let (ours, theirs): (BTreeMap<String, String>, BTreeMap<String, String>) = filter
+            .inner
             .iter()
-            .copied()
-            .collect::<Option<Vec<(u64, u64)>>>();
-        match build.values {
-            SeriesValues::Counter(values) => {
-                store.insert_counter_series(&name, labels, build.timestamps, values, windows)?
-            }
-            SeriesValues::Gauge(values) => {
-                store.insert_gauge_series(&name, labels, build.timestamps, values, windows)?
-            }
-            SeriesValues::Histogram(config, snapshots) => {
-                store.insert_histogram_series(&name, labels, config, build.timestamps, snapshots)?
-            }
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .partition(|(k, _)| self.supplied.contains(k));
+        if ours.is_empty() {
+            return filter.clone();
         }
+        let ours = Labels { inner: ours };
+        let mut out = Labels { inner: theirs };
+        let id_filter = out.inner.remove("id");
+        let slots: Vec<String> = self
+            .occupants
+            .slots()
+            .filter(|slot| {
+                self.occupants.spans(*slot).iter().any(|span| {
+                    Labels {
+                        inner: span.labels.clone(),
+                    }
+                    .matches(&ours)
+                })
+            })
+            .map(|slot| slot.to_string())
+            .filter(|slot| match &id_filter {
+                Some(existing) => Labels {
+                    inner: [("id".to_string(), slot.clone())].into_iter().collect(),
+                }
+                .matches(&Labels {
+                    inner: [("id".to_string(), existing.clone())].into_iter().collect(),
+                }),
+                None => true,
+            })
+            .collect();
+        // No slot can match: a value no `id` carries, so the segment answers
+        // nothing rather than everything.
+        let alternation = if slots.is_empty() {
+            "(none)".to_string()
+        } else {
+            slots.join("|")
+        };
+        out.inner.insert("id".to_string(), alternation);
+        out
     }
-    sample_timestamps.sort_unstable();
-    sample_timestamps.dedup();
-    store.set_sample_timestamps(sample_timestamps);
-
-    Ok(IndexedTable {
-        store,
-        series: count,
-        unattributed,
-        skipped_before_full: occupants.skipped_before_full,
-    })
-}
-
-fn has_value(column: &RezColumn, row: usize) -> bool {
-    match &column.values {
-        RezValues::Counter(v) => v.get(row).is_some_and(Option::is_some),
-        RezValues::Gauge(v) => v.get(row).is_some_and(Option::is_some),
-        RezValues::Histogram(v) => v.get(row).is_some_and(Option::is_some),
-    }
-}
-
-/// The acquisition window of one sample: the column's own if it carries
-/// them (a V2-shaped table), else the table's (a group table, one window per
-/// row for every member).
-fn row_window(table: &RezTable, column: &RezColumn, row: usize) -> Option<(u64, u64)> {
-    // The decoder gives every column a windows vector the length of the
-    // table, all `None` for a group table, so the column's entry is consulted
-    // for a window and not for whether it has one.
-    let w = column
-        .windows
-        .get(row)
-        .copied()
-        .flatten()
-        .or_else(|| table.table_window.as_ref()?.get(row).copied().flatten());
-    w.map(|w| (w.begin_ns, w.end_ns))
-}
-
-/// A histogram as the store holds it: the cumulative count at every
-/// non-empty bucket. The same shape `MemoryStore::ingest_snapshot` builds.
-fn snapshot(h: &histogram::Histogram) -> HistogramSnapshot {
-    let mut index = Vec::new();
-    let mut count = Vec::new();
-    let mut running: u64 = 0;
-    for (i, bucket) in h.iter().enumerate() {
-        let c = bucket.count();
-        if c > 0 {
-            running = running.saturating_add(c);
-            index.push(i as u32);
-            count.push(running);
-        }
-    }
-    HistogramSnapshot { index, count }
 }
 
 #[cfg(test)]
@@ -605,49 +515,126 @@ mod tests {
         assert_eq!(occ.spans(3)[0].labels["comm"], "b");
     }
 
-    fn column(name: &str, metadata: &[(&str, &str)]) -> RezColumn {
-        RezColumn {
-            name: name.to_string(),
-            metadata: metadata
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            values: RezValues::Counter(Vec::new()),
-            windows: Vec::new(),
+    fn lb(pairs: &[(&str, &str)]) -> Labels {
+        Labels {
+            inner: labels(pairs),
         }
     }
 
-    #[test]
-    fn a_columns_slot_is_its_id_or_failing_that_its_name() {
-        assert_eq!(column_slot(&column("17x4", &[("id", "4")])), Some(4));
-        assert_eq!(column_slot(&column("17x4", &[])), Some(4), "from the name");
-        assert_eq!(
-            column_slot(&column("17x4#2", &[])),
-            Some(4),
-            "generation suffix ignored"
-        );
-        assert_eq!(
-            column_slot(&column("17x4", &[("id", "9")])),
-            Some(9),
-            "metadata wins"
-        );
-        assert_eq!(column_slot(&column("17", &[])), None, "a plain member");
-        assert_eq!(column_slot(&column("written", &[])), None);
-        assert_eq!(
-            column_slot(&column("boxx4", &[])),
-            None,
-            "the metric half is numeric"
-        );
+    fn handover() -> OccupantRelabel {
+        let entries = vec![
+            (
+                100,
+                entry(
+                    EntryKind::Full,
+                    &[(3, &[("comm", "redis")]), (4, &[("comm", "nginx")])],
+                    &[],
+                ),
+            ),
+            (
+                250,
+                entry(EntryKind::Delta, &[(3, &[("comm", "valkey")])], &[]),
+            ),
+        ];
+        OccupantRelabel::new(Occupants::replay(&entries).unwrap())
     }
 
     #[test]
-    fn a_snapshot_is_cumulative_over_the_non_empty_buckets() {
-        let mut h = histogram::Histogram::new(4, 12).unwrap();
-        h.increment(1).unwrap();
-        h.increment(1).unwrap();
-        h.increment(100).unwrap();
-        let s = snapshot(&h);
-        assert_eq!(s.index.len(), 2);
-        assert_eq!(s.count, vec![2, 3]);
+    fn a_slot_column_presents_as_each_of_its_occupants() {
+        let r = handover();
+        let col = lb(&[("id", "3"), ("metric_kind", "x")]);
+        assert_eq!(
+            r.identities("m", &col),
+            Some(vec![
+                lb(&[("id", "3"), ("metric_kind", "x"), ("comm", "redis")]),
+                lb(&[("id", "3"), ("metric_kind", "x"), ("comm", "valkey")]),
+            ])
+        );
+        assert_eq!(
+            r.identities("m", &lb(&[("plain", "1")])),
+            None,
+            "not a slot"
+        );
+        assert_eq!(
+            r.identities("m", &lb(&[("id", "9")])),
+            None,
+            "a slot the index never named is read as it is"
+        );
+        assert_eq!(r.split("m", &lb(&[("id", "9")]), &[100, 200]), None);
+    }
+
+    #[test]
+    fn a_columns_samples_are_cut_at_the_handover() {
+        let r = handover();
+        let col = lb(&[("id", "3")]);
+        let runs = r.split("m", &col, &[100, 150, 200, 250, 300]).unwrap();
+        assert_eq!(
+            runs,
+            vec![
+                (lb(&[("id", "3"), ("comm", "redis")]), 0..3),
+                (lb(&[("id", "3"), ("comm", "valkey")]), 3..5),
+            ]
+        );
+        assert_eq!(r.unattributed(), 0);
+        assert_eq!(
+            r.at("m", &col, 249),
+            Some(lb(&[("id", "3"), ("comm", "redis")]))
+        );
+        assert_eq!(
+            r.at("m", &col, 250),
+            Some(lb(&[("id", "3"), ("comm", "valkey")]))
+        );
+    }
+
+    /// Samples before the first entry have no occupant: they keep the
+    /// column's labels and are counted.
+    #[test]
+    fn samples_with_no_occupant_keep_the_columns_labels_and_are_counted() {
+        let r = handover();
+        let col = lb(&[("id", "3")]);
+        let runs = r.split("m", &col, &[50, 75, 100]).unwrap();
+        assert_eq!(
+            runs,
+            vec![
+                (col.clone(), 0..2),
+                (lb(&[("id", "3"), ("comm", "redis")]), 2..3),
+            ]
+        );
+        assert_eq!(r.unattributed(), 2);
+    }
+
+    /// A filter on an index-supplied key is turned into the slots whose
+    /// occupants match, so the segment decodes those columns only.
+    #[test]
+    fn a_filter_on_an_index_label_becomes_a_slot_filter() {
+        let r = handover();
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("comm", "valkey")])),
+            lb(&[("id", "3")])
+        );
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("comm", "~redis|nginx")])),
+            lb(&[("id", "3|4")])
+        );
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("comm", "postgres")])),
+            lb(&[("id", "(none)")]),
+            "no slot ever held it: match nothing, not everything"
+        );
+        // Keys the columns carry pass through; an `id` the query already
+        // pinned is intersected.
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("comm", "nginx"), ("id", "4"), ("host", "a")])),
+            lb(&[("id", "4"), ("host", "a")])
+        );
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("comm", "nginx"), ("id", "3")])),
+            lb(&[("id", "(none)")])
+        );
+        assert_eq!(
+            r.segment_filter("m", &lb(&[("host", "a")])),
+            lb(&[("host", "a")]),
+            "nothing of ours: unchanged"
+        );
     }
 }
