@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use metriken_query::{is_storage_key, HistogramSnapshot, MemoryStore};
 
-use crate::index::{ApplyError, IndexEntry, SlotChange, SlotIndex};
+use crate::index::{EntryKind, IndexEntry};
 use crate::rez::{read_table_parquet, RezColumn, RezTable, RezValues};
 
 /// One slot's occupant over `[from, to)`, in row timestamps. `to` is `None`
@@ -81,45 +81,66 @@ impl Occupants {
     /// error: the archive is still readable, and the rows it would have
     /// described fall back to their column's labels.
     pub fn replay(entries: &[(u64, Vec<u8>)]) -> Result<Self, String> {
-        let mut index = SlotIndex::new();
+        // Slot -> (since, labels) for every slot currently occupied. Kept
+        // directly rather than behind `SlotIndex`: the reader needs the spans,
+        // not the state hash, and the hash costs a serialization per slot per
+        // change. Measured before this: 248k entries of a churning task
+        // stream (414/s over ten minutes) took 20 s to replay, against 0.4 s
+        // for the parquet path on the same rows, because every entry also
+        // diffed the whole live set.
         let mut open: BTreeMap<u32, (u64, BTreeMap<String, String>)> = BTreeMap::new();
         let mut out = Occupants::default();
+        let mut seen_full = false;
 
         for (ts, blob) in entries {
             let entry =
                 IndexEntry::decode(blob).map_err(|e| format!("index entry at {ts}: {e}"))?;
-            let change = SlotChange {
-                kind: entry.kind,
-                slots: entry.slots,
-                removed: entry.removed,
-            };
-            match index.apply(&change) {
-                Ok(()) => {}
-                Err(ApplyError::DeltaBeforeFull) => {
+            match entry.kind {
+                EntryKind::Delta if !seen_full => {
                     out.skipped_before_full += 1;
-                    continue;
                 }
-                Err(e) => return Err(format!("index entry at {ts}: {e}")),
-            }
-
-            // Diff the live set against the open spans. Done on the whole set
-            // rather than on the entry's own `slots`/`removed` because a
-            // `Full` states the set and names nothing that left it.
-            let live: BTreeMap<u32, &BTreeMap<String, String>> = index
-                .slots()
-                .map(|s| (s, index.labels(s).expect("a live slot has labels")))
-                .collect();
-            let ended: Vec<u32> = open
-                .iter()
-                .filter(|(slot, (_, labels))| live.get(slot) != Some(&labels))
-                .map(|(slot, _)| *slot)
-                .collect();
-            for slot in ended {
-                let (from, labels) = open.remove(&slot).expect("listed from open");
-                out.close(slot, from, Some(*ts), labels);
-            }
-            for (slot, labels) in live {
-                open.entry(slot).or_insert_with(|| (*ts, labels.clone()));
+                EntryKind::Delta => {
+                    // Only the slots the entry names can have changed, so
+                    // only they are touched: the cost of a change is the size
+                    // of the change, not of the live set.
+                    for slot in &entry.removed {
+                        if let Some((from, labels)) = open.remove(slot) {
+                            out.close(*slot, from, Some(*ts), labels);
+                        }
+                    }
+                    for e in entry.slots {
+                        if open.get(&e.slot).is_some_and(|(_, l)| *l == e.labels) {
+                            continue;
+                        }
+                        if let Some((from, labels)) = open.remove(&e.slot) {
+                            out.close(e.slot, from, Some(*ts), labels);
+                        }
+                        open.insert(e.slot, (*ts, e.labels));
+                    }
+                }
+                EntryKind::Full => {
+                    // A `Full` states the set and names nothing that left it,
+                    // so this is the one place the whole live set is diffed.
+                    // Once per restatement, not per change.
+                    seen_full = true;
+                    let next: BTreeMap<u32, BTreeMap<String, String>> = entry
+                        .slots
+                        .into_iter()
+                        .map(|e| (e.slot, e.labels))
+                        .collect();
+                    let ended: Vec<u32> = open
+                        .iter()
+                        .filter(|(slot, (_, labels))| next.get(slot) != Some(labels))
+                        .map(|(slot, _)| *slot)
+                        .collect();
+                    for slot in ended {
+                        let (from, labels) = open.remove(&slot).expect("listed from open");
+                        out.close(slot, from, Some(*ts), labels);
+                    }
+                    for (slot, labels) in next {
+                        open.entry(slot).or_insert((*ts, labels));
+                    }
+                }
             }
         }
         for (slot, (from, labels)) in open {
