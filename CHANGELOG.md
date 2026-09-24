@@ -2,11 +2,14 @@
 
 ### Changed
 
-- Viewer/dashboard: the section payload no longer carries `num_series`. It
-  was a badge that neither viewer displayed, and computing it counted every
-  label set of every metric, which on a `.rez` built every table's reader —
-  for an indexed table, replaying the identity index — on every section
-  request, undoing the lazy open. Nothing else consumed the number.
+- Viewer/dashboard: the section payload no longer carries `num_series`.
+  Computing it counted every label set of every metric, which on a `.rez`
+  forced every table's reader to be built — for an indexed table, replaying
+  the identity index — the first time `/api/v1/sections` was asked, and
+  re-walked the labels on every ask after that, undoing the lazy open for
+  the first request a page makes. The rezolus viewer never rendered the
+  number. systemslab's metrics page shows it as "N series" and needs to
+  drop that label (or count from its catalog) when it takes this version.
 
 ## [5.22.0] - 2026-09-23
 
