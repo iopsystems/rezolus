@@ -188,12 +188,36 @@ Not done: gauge queries still materialize `Gauges` whole (the producers own
 their samples, so no collected points, but the samples are resident); the
 same stream shape would apply. Histogram streams were lazy already.
 
+## The composition path (iopsystems/metriken#163)
+
+Sean measured the same file from the other entry point: systemslab
+composes every table of every `.rez` artifact through
+`RezReader::composition_sources()`, which opened every table up front — 14 s
+and 4 GB on this archive before step 1, and after it still every segment
+footer of every table before any query. His `CompositionSource::lazy` is a
+composition child that answers names, time range, interval and metadata
+from a catalog and loads its source the first time a query names one of
+its metrics; rez's `composition_sources()` now hands out one per table,
+built from the catalog the reader already probes at open. `total_series_count`
+on a composed reader asks each child (`DataSource::series_count`), so a
+child with a catalog count answers without loading.
+
+Two things the streaming rate needed there: `MultiParquetSource` and the
+lazy child both hand out `counter_streams`, so a composed `rate()` streams
+as an uncomposed one does. Without that the composition path had fallen to
+the trait default and materialized every child's series again.
+
+Not measured through systemslab yet; that is the bump to metriken-query
+0.30.0 and a rez rev that carries this.
+
 ## Path forward
 
 1. Segments on demand — done.
 2. The indexed reader on the same store — done.
 3. Rate over a sample stream — done. Gauges the same way when a wide gauge
    table shows up.
+4. The composition path lazy and streaming — done in the crates; systemslab
+   bumps to take it.
 
 ## Related
 

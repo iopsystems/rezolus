@@ -642,7 +642,9 @@ impl SamplerReader {
 /// recording; every recording's tables are flattened into `tables`
 /// (multi-recording faceting is Phase C).
 pub struct RezReader {
-    tables: Vec<SamplerReader>,
+    /// Shared so a lazy composition child can hold a table and open it on
+    /// first use after this reader has handed it out.
+    tables: Vec<Arc<SamplerReader>>,
     /// The (first) recording's file-level metadata, for `source`/`version`/etc.
     metadata: BTreeMap<String, String>,
     filename: Option<String>,
@@ -758,27 +760,40 @@ impl RezReader {
             .into());
         }
 
+        // Each table is a lazy child: its names, span and interval come from
+        // the catalog this reader probed at open, and the table itself opens
+        // the first time a composed query names one of its metrics. Composing
+        // an archive used to open every table here — every segment footer of
+        // every table, before any query — which on a 1.3 GB archive was
+        // seconds per artifact and, before the segmented reader stopped
+        // holding bytes, 4 GB.
+        //
+        // A table whose segments cannot be opened when it is finally asked
+        // answers empty, logged by the child; there is no longer an up-front
+        // moment at which "none of them could be opened" is known.
         let sources: Vec<CompositionSource> = self
             .tables
             .iter()
-            .filter_map(|t| t.reader())
-            .map(TableReader::composition_source)
+            .map(|t| {
+                let mut catalog = metriken_query::CompositionCatalog::new(t.interval)
+                    .counters(t.names.counters.iter().cloned())
+                    .gauges(t.names.gauges.iter().cloned())
+                    .histograms(t.names.histograms.iter().cloned())
+                    .metadata(
+                        self.metadata
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect(),
+                    );
+                if let Some((start, end)) = t.span {
+                    catalog = catalog.time_range_ns(start, end);
+                }
+                let table = Arc::clone(t);
+                CompositionSource::lazy(catalog, move || {
+                    Ok(table.reader().map(TableReader::composition_source))
+                })
+            })
             .collect();
-
-        // A table whose segments cannot be opened is skipped above. Dropping
-        // EVERY table silently would be indistinguishable from a recording that
-        // was simply flat: the caller composes nothing, `build()` succeeds on
-        // the other arms, and every query about this one answers empty. That is
-        // the same silent per-arm loss the refusal above exists to prevent, so
-        // say it rather than return an empty vec.
-        if sources.is_empty() && !self.tables.is_empty() {
-            return Err(format!(
-                "none of this recording's {} tables could be opened -- their segments were \
-                 evicted or are unreadable -- so composing it would contribute nothing",
-                self.tables.len()
-            )
-            .into());
-        }
 
         Ok(sources)
     }
@@ -1091,7 +1106,7 @@ impl RezReader {
                     .flatten()
                     .filter(|i| *i > 0.0)
                     .unwrap_or(probed_interval);
-                tables.push(SamplerReader {
+                tables.push(Arc::new(SamplerReader {
                     recording,
                     sampler: sampler.clone(),
                     names,
@@ -1113,7 +1128,7 @@ impl RezReader {
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
                     row_timestamps: std::sync::OnceLock::new(),
-                });
+                }));
             }
 
             out.push((
@@ -1199,7 +1214,7 @@ impl RezReader {
                     (only, None) | (None, only) => only,
                 };
 
-                tables.push(SamplerReader {
+                tables.push(Arc::new(SamplerReader {
                     recording,
                     sampler,
                     names,
@@ -1210,7 +1225,7 @@ impl RezReader {
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
                     row_timestamps: std::sync::OnceLock::new(),
-                });
+                }));
             }
         }
         Ok(Self {
@@ -1237,6 +1252,7 @@ impl RezReader {
         Ok(self
             .tables
             .iter()
+            .map(|t| &**t)
             .filter(|t| referenced.iter().any(|m| t.names.holds(m)))
             .collect())
     }
@@ -4475,6 +4491,95 @@ mod tests {
                 .query_range("rate(cpu_cycles[2s]) + rate(reads[4s])", 0.0, 10.0, 1.0)
                 .is_ok(),
             "a query spanning two samplers of one recording must answer"
+        );
+    }
+
+    /// Composing a recording hands out one lazy child per table: nothing is
+    /// opened until a composed query names a metric a table holds, and then
+    /// only that table.
+    #[test]
+    fn composition_children_open_their_table_on_first_use() {
+        use crate::rez::recorder_tests_support::{counter, snap};
+        use crate::rez_v3_writer::{ManifestSeed, RezArchive, StreamRecorderV3};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lazy.rez");
+        let seed = ManifestSeed {
+            labels: [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect(),
+            metadata: Default::default(),
+            clock_anchor_wall_ns: 1_000_000_000,
+        };
+        let (archive, writer) = RezArchive::single(&path, seed).unwrap();
+        let mut rec = StreamRecorderV3::new(writer);
+        for t in 0..3u64 {
+            let ts = 1_000_000_000 * (t + 1);
+            rec.ingest(
+                &snap(
+                    ts,
+                    vec![
+                        counter("cpu_cycles", "cpu_usage", t * 10, None),
+                        counter("net_bytes", "network_traffic", t * 3, None),
+                    ],
+                ),
+                ts,
+                0,
+            )
+            .unwrap();
+        }
+        rec.sync().unwrap();
+        drop(rec);
+        drop(archive);
+
+        let mut readers =
+            RezReader::open_recordings(&path, BufferPool::new(16 * 1024 * 1024)).unwrap();
+        let reader = readers.pop().unwrap().1;
+        let opened = |reader: &RezReader| -> Vec<String> {
+            reader
+                .tables
+                .iter()
+                .filter(|t| t.reader.get().is_some())
+                .map(|t| t.sampler.clone())
+                .collect()
+        };
+        assert!(
+            opened(&reader).is_empty(),
+            "open probes footers, opens nothing"
+        );
+
+        let mut builder = metriken_query::ParquetReader::builder();
+        for source in reader.composition_sources().unwrap() {
+            builder = builder.source_labeled(source, [("job", "a")]);
+        }
+        let composed = builder.build().unwrap();
+        assert!(
+            opened(&reader).is_empty(),
+            "composing opens nothing either: {:?}",
+            opened(&reader)
+        );
+        let mut names = composed.counter_names();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["cpu_cycles".to_string(), "net_bytes".to_string()],
+            "names answer from the catalog"
+        );
+        assert!(opened(&reader).is_empty());
+
+        let (start, end) = composed.time_range().unwrap();
+        let QueryResult::Matrix { result } = composed
+            .query_range("rate(cpu_cycles[1s])", start, end + 1.0, 1.0)
+            .unwrap()
+        else {
+            panic!("matrix");
+        };
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].metric["job"], "a");
+        assert_eq!(
+            opened(&reader),
+            vec!["cpu_usage".to_string()],
+            "the query opened the table it named and no other"
         );
     }
 
