@@ -142,14 +142,17 @@ are the test: the derived split must equal the index's.
 
 ### Slot columns
 
-- **Bounded-slot tables:** one column per metric and slot, named
+- **Bounded-slot tables** (cgroup, device, mount, interface, GPU, per-CPU;
+  see "Per-stream considerations" for why each is wide): one column per
+  metric and slot, named
   `{metric_id}x{slot}` as today, with no `#N` suffix. In a 5.21+ recording,
   a slot's `#N` columns hold disjoint rows (the builder pads each with nulls
   outside its occupancy), and the converter merges them into the one slot
   column. It refuses a table where two of them overlap, which would mean the
   premise is wrong. Who occupied the slot when is the index's.
 - **Tables with no slots:** unchanged, apart from the dropped provenance keys.
-- **The unbounded-slot table (`cpu_usage_task`):** long; see below.
+- **The unbounded-slot table (`cpu_usage_task`):** long, keyed by occupant;
+  see "The per-task table".
 
 ### The identity index
 
@@ -185,6 +188,84 @@ make it a timestamped change log, which is what `caller_rows` already is.
 With identity out of field metadata, a stream's schema is small and changes
 rarely, and a reader learns it from one segment.
 
+## Per-stream considerations
+
+Every group with slots that can change hands has a `SlotIdentity`
+(`git grep "SlotIdentity::new" src/agent`). Tasks and cgroups are the only
+ones that churn; the rest hold a handful of slots that change rarely. Each
+kind was considered on its own, because the layout is decided by how wide a
+table can get, not by whether its slots can be reassigned: the time-keyed
+index already handles reassignment.
+
+| identity | samplers | slot key | how many slots | churn | layout |
+|---|---|---|---|---|---|
+| task | `cpu_usage` (`cpu_usage_task`) | TID | unbounded up to `PID_MAX_LIMIT`; measured 14,011 per segment at the median, 38,388 max, 396,117 in 2.3 h | high: every thread that lives about a sample interval | **long, keyed by occupant** |
+| cgroup | `cpu_usage`, `cpu_bandwidth`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall_counts` | CPU-controller `css.id` | the host's live cgroups, capped by rezolus at 4,096; measured 31–57 | low to moderate: pod and job churn on a busy node | **wide by slot, time-keyed index** |
+| drive | `drivehealth` (sweep, NVMe) | drive index | 2 measured | rare | wide by slot, index |
+| mount | `filesystem` | mount index | 3 measured | rare (remount) | wide by slot, index |
+| interface | `network_ethtool` | interface index | a few | rare | wide by slot, index |
+| GPU engine, device, memory | `gpu` (Intel) | device index | a few | rare | wide by slot, index |
+| CPU | per-CPU groups | CPU id | CPUs (16 measured) | none; the slot is the identity | wide by slot, one `Full` |
+| none | plain groups | — | — | — | unchanged |
+
+### Tasks: why long
+
+The TID space is `PID_MAX_LIMIT`, which on 64-bit is `4 * 1024 * 1024`
+(`include/linux/threads.h:34`), the same as rezolus's `MAX_PID`
+(`src/agent/bpf/task.h:14`), so the task group covers every TID the kernel can
+give out and cannot overflow. A wide table's width is the number of distinct
+threads a segment saw, which a thread-per-request workload drives up without
+limit. The reasoning is in "The per-task table" below.
+
+### Cgroups: considered, and wide is better
+
+A cgroup slot can be reassigned exactly as a task slot can, so the same
+occupant-keyed long layout was considered for it. It is not used, because
+size, not reassignment, is what rules out wide, and a cgroup table's width is
+bounded by the host's live cgroups:
+
+- **The slot is the CPU controller's css id** (`task->sched_task_group->css.id`,
+  `src/agent/bpf/cgroup.h:38`). The kernel allocates it with
+  `cgroup_idr_alloc(&ss->css_idr, NULL, 2, 0, …)` (`kernel/cgroup/cgroup.c:5936`
+  on current master): `idr_alloc` with no upper bound, returning the lowest
+  free id. Ids are dense and a freed one is reused at once, so the largest id
+  in use tracks the number of live CPU-controller cgroups. Churn reuses slots;
+  only a larger live set widens the table.
+- **Reassignment is detected and indexed.** A reused id comes with a new
+  `css.serial_nr`, which `handle_new_cgroup` compares (`cgroup.h:37-53`), and
+  `SlotIdentity::set` then mints a new occupant. The time-keyed index and the
+  indexed reader (#1280) attribute the rows; identity is captured with the
+  values since #1249.
+- **The tables are dense.** Cgroups live long next to threads, and the
+  measured tables were 98–100% full, which is where wide is cheapest.
+- **At rezolus's cap the cost is bounded.** At 4,096 slots a table's footer
+  would be about 4,096 × ~700 bytes, near 3 MB per table per segment, from
+  InfluxData's per-column figure with statistics off (Prior art), so an
+  estimate, somewhat higher with statistics. A typical Kubernetes node is far
+  below the cap: 110 pods by default at a few cgroups each, plus systemd
+  units, is about 300–1,000.
+
+What long would buy for cgroups is one reader path and identity recorded once
+per occupant. That is a simplification, not a fix for a measured cost, and
+the wide path already exists and is tested.
+
+**4,096 is rezolus's cap, not the kernel's.** `MAX_CGROUPS`
+(`src/agent/bpf/cgroup.h:10`, from #582) sizes rezolus's BPF maps, and a
+cgroup whose id is 4,096 or more is dropped in BPF with no count and no
+status (`cgroup.h:42`, and `:126` in `handle_new_cgroup_from_css`; the same bound at `mod.bpf.c:361`, `:421`). That is a
+silent gap on a host with more than about 4,094 live CPU-controller cgroups,
+counting dying ones that still hold their ids. Tracked in the backlog.
+
+**A detail for any future move to long:** each sampler has its own cgroup
+`SlotIdentity` (seven of them), so one cgroup gets a different `__uid__` in
+each sampler. An occupant key shared across cgroup tables would have to be
+matched by labels, not by uid.
+
+**Reopen** if a recording from a host with thousands of live cgroups and
+heavy pod or job churn shows cgroup-table footers or the index join as a
+measurable cost. No such recording exists yet; cgroup tables at that scale
+are unmeasured.
+
 ## The per-task table: long
 
 **Per-thread is a requirement.** The task table exists to show processes with
@@ -217,11 +298,33 @@ per-task overhead on top.
 **The layout.**
 
 - Columns: `timestamp`, the tick's `:wall_offset`, `:window_begin` and
-  `:window_width`, `slot: UInt32` (the TID), and one column per metric in the
+  `:window_width`, `occupant: UInt64`, and one column per metric in the
   group. No null cells.
-- Identity as for the wide tables: the index maps a slot to its occupant over
-  time, so a thread that renames itself (`pthread_setname_np`) is a `Delta`
-  with its new `comm`.
+- **Rows are keyed by occupant, not by TID.** An occupant is one immutable
+  label set: `SlotIdentity::set` (`src/agent/identity.rs:311`) mints a new
+  generation and `__uid__` whenever a slot's labels change, including a
+  thread renaming itself (`pthread_setname_np`). So a row names its own
+  series, the reader groups rows by key into series through a plain map, and
+  no row depends on the index putting a TID's handover on the right side of
+  a tick. The TID is an ordinary label, `pid`, beside `tgid` and `comm`.
+- **The key is a dense number the writer assigns per source**, 0, 1, 2… in
+  order of first sight, not a UUID. A time-based UUID (v7) was considered: it
+  is 16 bytes per row where an observation is otherwise one 8-byte value, and
+  uniqueness across hosts is not needed inside a source, whose `__uid__`
+  labels already carry the producer epoch. The agent's own generation
+  counter is not available to a scrape recording, which sees only its hash.
+  A dense number increases monotonically, repeats in runs once sorted, and
+  works the same for `--stream`, scrape and 5.18–5.20 recordings (where it is
+  an internal key and claims nothing a label would). `u64`, since the busy
+  host minted about 396,000 occupants in 2.3 hours. Pyroscope's `uint32
+  SeriesIndex` is the same shape (Prior art).
+- **The index for a long table** is the occupant table: one `caller_rows`
+  entry per occupant, at the time it was first seen, mapping its number to
+  its labels (with the real `__uid__` where the recording has one). It is
+  kept under one name per identity, `identity/task`, which `caller_rows`
+  allows for a name no stream uses, and it is restated and evicted as the
+  time-keyed index is. The writer keeps the map from `__uid__` (or label set)
+  to number beside its `SourceIndex`.
 - **The write rule:** a group whose slot space is the PID space is written
   long; bounded groups (per-CPU, cgroup, device) stay wide. The agent knows
   which a group is when it declares it, so the writer never has to see the
@@ -230,10 +333,10 @@ per-task overhead on top.
 **Row order: arrival order at seal by default, sorted where a re-encode
 already happens; whether to sort at seal is measured, not assumed.** A tick's values arrive in ascending slot order (a row's values are
 the live slots by rank, `crates/rez/src/index.rs`), so a segment written as it
-arrives is sorted by `(timestamp, slot)` at no cost. Sorting it by `(slot,
-timestamp)` would make each thread's samples contiguous, let a single-thread
-query skip pages on the page index's `slot` bounds, and make timestamp deltas
-small within a thread. But on the busy host's worst segment that is about
+arrives is ordered by `(timestamp, slot)` at no cost. Sorting it by
+`(occupant, timestamp)` would make each thread's samples contiguous, let a
+single-thread query skip pages on the page index's `occupant` bounds, and make
+timestamp deltas small within a thread. But on the busy host's worst segment that is about
 1.2M rows (10.6% of 301 ticks × 37,644 slots) to sort and permute at seal, on
 the path that already showed a 73 ms p99.9 stall at 50 ms sampling when the
 buffer ran in-process (#1224). So:
@@ -246,14 +349,14 @@ buffer ran in-process (#1224). So:
   interpreting values;
 - a sorted segment declares its order in parquet's `sorting_columns`, which is
   per row group, so every row group carries it. A reader uses the page index
-  on `slot` whether or not a segment declares a sort: pruning on page min/max
+  on `occupant` whether or not a segment declares a sort: pruning on page min/max
   is correct on unsorted data, only less selective, and `sorting_columns` lets
   it binary-search the bounds instead of scanning them.
 
 In arrival order a single-thread query decodes every page of the segment's
-`slot` column, since every page spans every slot. That column is 4-byte TIDs
-in ascending runs per tick, which should compress well; how well is part of
-the gate.
+`occupant` column, since every page spans every thread. Occupant numbers are
+assigned in order of first sight, so within a tick they are close together;
+how well that compresses is part of the gate.
 
 Deferring the sort has precedent and so does not deferring it (see Prior
 art): TimescaleDB, Iceberg and Delta sort when they compress or rewrite, off
@@ -313,8 +416,10 @@ Collected 2026-09-25; each claim is from the linked page.
   (https://grafana.com/docs/pyroscope/latest/reference-pyroscope-architecture/block-format/),
   and the Cortex parquet proposal splits a labels file from a chunks file
   (https://cortexmetrics.io/docs/proposals/parquet-storage/). Neither handles a
-  key the OS reuses, as it reuses TIDs; here the index resolves `(slot, time)`
-  to an occupant, and 5.21+ recordings carry `__uid__` as the fingerprint.
+  key the OS reuses, as it reuses TIDs. The long task table avoids the
+  question by keying rows on an occupant number, never a TID; the wide tables
+  resolve `(slot, time)` to an occupant through the index; 5.21+ recordings
+  carry `__uid__` as the fingerprint across recordings.
 - **Sort at rewrite:** TimescaleDB applies `orderby` when it compresses an aged
   chunk
   (https://github.com/timescale/docs.timescale.com-content/blob/master/using-timescaledb/compression.md);
