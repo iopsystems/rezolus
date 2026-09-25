@@ -106,6 +106,9 @@ target/release/rezolus recording combine a.parquet b.parquet --ab baseline=redis
 target/release/rezolus recording filter file.parquet -o slim.parquet   # drop columns not needed by KPIs
 target/release/rezolus recording upgrade old.rez                       # v1/v2 tar .rez -> v3 SQLite (in place)
 target/release/rezolus recording upgrade old.rez -o new.rez            # ...or to a new file
+target/release/rezolus recording upgrade --to dendro in.rez -o out.dendro  # any .rez -> dendro archive (new file only;
+#   no rezolus release reads it yet, and RezDb::open refuses one by name). Segment/WAL/caller-row bytes are
+#   copied verbatim, only live WAL rows, u64 timestamps checked into i64. crates/rez/src/to_dendro.rs.
 target/release/rezolus recording snapshot live.rez -o incident.rez     # complete copy of an archive still being written
 # .rez archives: metadata describes the manifest (recordings, labels, tables + cadence; V3 group
 #   tables appear as <sampler>/<group>);

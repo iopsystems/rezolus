@@ -413,8 +413,28 @@ impl RezDb {
         // (hindsight's staged dump) take it too, deliberately: they are
         // short-lived, offline and bounded by the dump, so no long-running
         // process holds it.
+        db.refuse_dendro(&path.display().to_string())?;
         db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
         Ok(db)
+    }
+
+    /// Refuse a dendro archive by name. Both are SQLite files, so format
+    /// detection calls a dendro archive a v3 `.rez`, and without this the
+    /// first query fails with `no such table: recordings`, which says nothing
+    /// about why. dendro stamps its `application_id` into the header; a
+    /// `.rez` leaves it zero.
+    fn refuse_dendro(&self, what: &str) -> Result<(), String> {
+        let id: i64 = self
+            .conn
+            .pragma_query_value(None, "application_id", |row| row.get(0))
+            .map_err(|e| format!("failed to read {what}'s application_id: {e}"))?;
+        if id == i64::from(dendro::archive::APPLICATION_ID) {
+            return Err(format!(
+                "{what} is a dendro archive (as written by `recording upgrade --to dendro`), \
+                 not a .rez; this version of rezolus reads .rez archives only"
+            ));
+        }
+        Ok(())
     }
 
     /// Open a `.rez` that exists only as bytes — an upload in a browser,
@@ -471,6 +491,7 @@ impl RezDb {
             #[cfg(any(test, feature = "test-support"))]
             commits: std::cell::Cell::new(0),
         };
+        db.refuse_dendro("the uploaded file")?;
         db.apply_connection_pragmas(READER_CACHE_SIZE_KIB)?;
 
         // A `.rez` always has a `recordings` table. Its absence has one

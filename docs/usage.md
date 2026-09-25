@@ -283,6 +283,9 @@ and flags differ by format; check `rezolus recording <subcommand> --help`.
 - **Filter** — drop parquet columns not referenced by service KPIs, or select
   samplers from a `.rez` archive.
 - **Upgrade** — convert older tar-based `.rez` archives to the SQLite container.
+  With `--to dendro`, write a copy as a dendro archive instead, the container
+  rezolus 6.0 is planned to write. No current rezolus reads the result, so it
+  is always a new file (`-o`, which must not exist), never a replacement.
 - **Snapshot** — copy a live `.rez` consistently, including committed data in
   SQLite's sidecar. Prefer this over copying an active file with `cp`.
 
@@ -294,6 +297,7 @@ rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
 rezolus recording filter rezolus.parquet -o slim.parquet
 rezolus recording snapshot live.rez -o incident.rez
 rezolus recording upgrade old.rez
+rezolus recording upgrade --to dendro capture.rez -o capture.dendro
 ```
 
 `convert` infers the sampling interval from the median gap between snapshot
