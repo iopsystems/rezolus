@@ -576,6 +576,35 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   arms were finalized; hindsight reads a buffer with a live WAL tail, which
   materializes differently. *Reopen:* measure alongside the first fix.
 
+## dendro archives (6.0)
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md).
+
+- **The per-task table's long layout: confirm by measurement** — Open. Convert
+  `cpu_usage_task` wide-bare and long, from the busy (10.6% non-null) and quiet
+  (98%) recordings and a synthetic thread-per-request spike at 1 s and 100 ms.
+  Measure bytes on disk, bytes read at open, all-thread and single-thread query
+  cost on sorted and arrival-order segments, seal time with and without the
+  sort, and compression. Per-thread stays: thread pools per kind of work are
+  the reason the table exists.
+- **A sort key in dendro's `CompactSpec`** — Open, only if the gate shows
+  arrival order costs a single-thread query too much. Compaction already
+  re-encodes, so a caller-named sort key sorts off the tick path; segments
+  declare it in parquet `sorting_columns`.
+- **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
+  slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
+- **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Identity
+  from `caller_rows`, one schema read per stream. Any on-demand segment loading
+  it needs is added to dendro, not built in rezolus.
+- **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
+  copy. Oracle: on `--stream` recordings the derived index must equal the
+  recorded one, and every series must read back the same as through the `.rez`
+  reader.
+- **5.18–5.20 mid-segment occupant changes** — By design. The file does not
+  record the new occupant's labels (#1232), so a conversion keeps what the file
+  records. Reopen only if a recording from that range needs per-task
+  attribution badly enough to accept unlabelled occupants.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
