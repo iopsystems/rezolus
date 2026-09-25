@@ -605,6 +605,49 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   records. Reopen only if a recording from that range needs per-task
   attribution badly enough to accept unlabelled occupants.
 
+## Agent — per-task CPU usage completeness
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md),
+"Is the per-task data worth keeping"; the evidence is in the insights-model
+repo's `docs/signal-gaps.md` and its eval verdicts.
+
+- **Per-task `task_cpu_usage` has missed CPU the cgroup counters saw** — Open.
+  Two recorded cases: a CPU burner that "per-task task_cpu_usage did not
+  capture … so attribution rests on cgroup counters", and a degraded-sampler
+  run where per-task counters accounted for about 10 of about 113 core-seconds,
+  the hot task showing "max 1.0 core but ~0 window mean". Per-thread
+  attribution is what analysts use this table for, so a gap here makes the
+  data less trustworthy than the analysis assumes.
+
+  **Not the accounting hook.** `cpuacct_account_field` (`mod.bpf.c:384`) runs
+  on the kernel's CPU-time accounting for the running task, and in the same
+  handler the delta is added to `task_cpu_usage[pid]` and then to the task's
+  cgroup. When the cgroup counter moved, the per-task counter was credited
+  too, so the loss is downstream of it. Candidates, none tested:
+
+  - **A task counted but never exported.** Task-group membership comes from
+    metadata presence (`src/agent/bpf/builder.rs:1194-1198`), and a task's
+    labels arrive through `handle_new_task` and a ring buffer. A task whose
+    metadata never arrived has a counter nobody reads.
+  - **Exit before a sample.** At exit the task's total moves to the exited
+    counters and its slot is zeroed (`mod.bpf.c:401-433`). A worker that
+    lives less than a sample interval, or exits just before the scrape after
+    the burn, shows in `cgroup_exited` and not per task. By design, but the
+    analysis did not look at `cgroup_exited`.
+  - **Resets inside the window.** PID reuse or exit zeroes the counter;
+    "max 1.0 core, ~0 mean" reads like a series that reset or was sampled
+    sparsely, which the reader's `rate()` then mis-summarizes.
+  - **The first observation is skipped by design** (`mod.bpf.c:313-317`), a
+    small loss per task, large only for many short tasks.
+
+  **Test first:** the exit handler documents a reconciliation, `sum(live
+  tasks) + exited ≈ cgroup total` (`mod.bpf.c:402-408`). Run a controlled
+  workload on Linux (long-lived burners, short-lived workers, thread-per-request
+  churn) and check the identity per cgroup per window. Where it does not hold,
+  the gap is in export or in the reader; where it does, the missing CPU is in
+  `exited`, and the fix is for consumers (dashboards, MCP, the insights model)
+  to read it.
+
 ## Agent — cgroup slots
 
 Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: considered, and wide is better".

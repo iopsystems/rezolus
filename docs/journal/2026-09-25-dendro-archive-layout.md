@@ -274,6 +274,24 @@ thread (per kernel task), not rolled up to the process. Its identity labels,
 `pid` (the TID), `tgid` and `comm`, are what let a query take CPU by pool
 within one process: `sum by (comm) (rate(task_cpu_usage{tgid="…"}[1m]))`.
 
+**Is the per-task data worth keeping** (checked 2026-09-25). Its cost: the
+`task_cpu_usage` BPF array is 32 MiB of preallocated kernel memory
+(`MAX_PID` × `u64`); the other per-task maps in `cpu_usage` (`task_utime`,
+`task_stime`, `task_start_times`, 96 MiB) are needed anyway, since per-CPU and
+per-cgroup usage are computed from their per-task deltas. Downstream it is
+most of a recording (434 of 579 MB in the 5.22.0 one, 668 of 1,272 MB in the
+older one) and most of the wire churn (#1224). Nothing built into rezolus
+reads it: no dashboard section, MCP tool or feature extraction queries it.
+It is used through queries: the insights-model evaluations attribute CPU to
+threads by `comm` and `tgid` with it, and the `measure-performance` skill
+reads server threads' CPU from it. Those evaluations also record it missing
+CPU that the cgroup counters saw; that is the backlog item "Per-task
+`task_cpu_usage` has missed CPU the cgroup counters saw" (`docs/backlog.md`,
+"Agent — per-task CPU usage completeness"). The decision is to build the long
+layout regardless, since dendro should handle this cardinality whatever the
+sampler does, and to fix the sampler's completeness separately so the data
+earns its cost.
+
 **How wide it can get.** The group is sized at `MAX_PID = 4194304` (2^22,
 `src/agent/bpf/task.h:14`; `TASK_CPU_USAGE: CounterGroup::new(MAX_PID)`,
 `src/agent/samplers/cpu/linux/usage/stats.rs:150`). A task's exported counter
