@@ -86,9 +86,8 @@ static __always_inline bool crosses_host_boundary(struct net_device* dev) {
  * structs — which is the entire point of having two — rather than in what they
  * count.
  */
-static __always_inline void account(u32 rx_or_tx_bytes, u32 rx_or_tx_packets,
-                                    u32 host_bytes_idx, u32 host_packets_idx, u64 len,
-                                    bool crosses_boundary) {
+static __always_inline void account(u32 rx_or_tx_bytes, u32 rx_or_tx_packets, u32 host_bytes_idx,
+                                    u32 host_packets_idx, u64 len, bool crosses_boundary) {
     u32 offset = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id();
 
     array_incr(&counters, offset + rx_or_tx_packets);
@@ -129,8 +128,7 @@ int BPF_PROG(netif_receive_skb_btf, struct sk_buff* skb) {
     // in the host-scoped RX total while its TX counterpart did not.
     struct net_device* dev = skb->dev;
 
-    account(RX_BYTES, RX_PACKETS, RX_HOST_BYTES, RX_HOST_PACKETS, skb->len,
-            dev && dev->dev.parent);
+    account(RX_BYTES, RX_PACKETS, RX_HOST_BYTES, RX_HOST_PACKETS, skb->len, dev && dev->dev.parent);
     return 0;
 }
 
@@ -139,8 +137,7 @@ int BPF_PROG(net_dev_start_xmit_btf, struct sk_buff* skb, struct net_device* dev
     // `dev` is this layer's netdev, so on a bond this fires for bond0 AND for
     // the slave. Only the slave has a bus parent, so the host-scoped counters
     // see the packet exactly once.
-    account(TX_BYTES, TX_PACKETS, TX_HOST_BYTES, TX_HOST_PACKETS, skb->len,
-            dev && dev->dev.parent);
+    account(TX_BYTES, TX_PACKETS, TX_HOST_BYTES, TX_HOST_PACKETS, skb->len, dev && dev->dev.parent);
     return 0;
 }
 
