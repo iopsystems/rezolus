@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+### Fixed
+
+- Recorder: retention of the identity index kept too little. It cut each
+  stream's `caller_rows` at the latest `Full` at or before the row cutoff, but
+  a segment is evicted only when its newest row is older than the cutoff, so a
+  segment spanning the cutoff kept rows older than it and lost the `Full`
+  they depend on. The reader would then skip the `Delta`s before its first
+  `Full`, so up to one seal age (300 s) of rows at the old end of a rolling
+  buffer would read without their task and cgroup labels. The cut is now the
+  latest `Full` at or before the oldest row the stream still holds after
+  eviction. No shipped path hit this: `hindsight` is the only caller of
+  retention and it scrapes, so it writes no index, and `record --stream`
+  writes the index but never evicts. It would have appeared once the rolling
+  buffer took the stream. (introduced in #1281, v5.22.0)
+
 ## [5.22.1] - 2026-09-24
 
 ### Changed

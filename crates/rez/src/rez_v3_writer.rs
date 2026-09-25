@@ -131,13 +131,19 @@ enum Msg {
 /// handle reads it, keeping per-tick errors as specific as they were.
 type ErrorSlot = Arc<Mutex<Option<String>>>;
 
-/// Cut each stream's identity history at the latest `Full` not after
-/// `cutoff_ts`, dropping the entries before it and forgetting the `Full`s
-/// before it.
+/// Cut each stream's identity history at the latest `Full` not after the
+/// oldest row the stream still holds, dropping the entries before it and
+/// forgetting the `Full`s before it. Runs after the rows' own eviction.
 ///
-/// A stream whose every recorded `Full` is after the cutoff — or that has
+/// The oldest surviving row, not `cutoff_ts`: a segment is evicted only when
+/// its newest row is older than the cutoff, so a segment spanning the cutoff
+/// keeps rows older than it, and those rows need the `Full` before them. A
+/// stream with no rows left is cut at the cutoff, since the next row it gets
+/// is after it.
+///
+/// A stream whose every recorded `Full` is after that point — or that has
 /// none on record, as every stream has when the writer starts — keeps its
-/// entries: the rows that survive the cutoff may depend on them.
+/// entries: the rows that survive may depend on them.
 fn evict_index_history(
     db: &mut RezDb,
     fulls: &mut BTreeMap<(i64, String), Vec<u64>>,
@@ -148,8 +154,11 @@ fn evict_index_history(
         if *rec != recording_id {
             continue;
         }
-        // Oldest first, so the last one at or before the cutoff is the cut.
-        let Some(cut) = stamps.iter().rev().find(|ts| **ts <= cutoff_ts).copied() else {
+        let bound = db
+            .oldest_row_ts(recording_id, stream)?
+            .map_or(cutoff_ts, |oldest| oldest.min(cutoff_ts));
+        // Oldest first, so the last one at or before the bound is the cut.
+        let Some(cut) = stamps.iter().rev().find(|ts| **ts <= bound).copied() else {
             continue;
         };
         db.evict_caller_rows_before(recording_id, stream, cut)?;
@@ -2293,6 +2302,80 @@ mod tests {
             0,
             "fixture: the rows themselves were evicted"
         );
+        drop(writer);
+        drop(archive);
+    }
+
+    /// A segment that spans the cutoff survives with rows older than it, and
+    /// the index keeps the `Full` those rows depend on. Cutting at the latest
+    /// `Full` not after the cutoff (3_000 here) would drop the entries at
+    /// 1_000 and 2_000 while the rows at 1_000 and 2_000 stay readable, and
+    /// the reader would skip the `Delta`s it finds before its first `Full`,
+    /// leaving those rows unattributed.
+    #[test]
+    fn retention_keeps_the_full_a_spanning_segment_depends_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.rez");
+        let mut archive = RezArchive::create(&path).unwrap();
+        let mut writer = archive.add_recording(seed()).unwrap();
+
+        for (ts, full) in [
+            (1_000u64, true),
+            (2_000, false),
+            (3_000, true),
+            (4_000, false),
+        ] {
+            writer
+                .wal_with_index(
+                    vec![wal_row("cpu_usage", ts)],
+                    vec![(
+                        "cpu_usage".to_string(),
+                        vec![IndexRow {
+                            ts,
+                            blob: vec![full as u8],
+                            full,
+                        }],
+                    )],
+                )
+                .unwrap();
+        }
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
+        writer.evict_before(3_500).unwrap();
+        writer.sync().unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        let segments = db.read_segments(1, "cpu_usage").unwrap();
+        assert_eq!(
+            segments.len(),
+            1,
+            "fixture: the segment (1_000..=4_000) spans the cutoff and is kept"
+        );
+        let stamps: Vec<u64> = db
+            .read_caller_rows(1, "cpu_usage", 0, u64::MAX)
+            .unwrap()
+            .into_iter()
+            .map(|(ts, _)| ts)
+            .collect();
+        assert_eq!(stamps, vec![1_000, 2_000, 3_000, 4_000]);
+        drop(db);
+
+        // Once the segment is gone, with rows only after the 3_000 Full, the
+        // cut moves up to it.
+        writer
+            .wal_with_index(vec![wal_row("cpu_usage", 5_000)], vec![])
+            .unwrap();
+        writer.seal(vec!["cpu_usage".to_string()]).unwrap();
+        writer.evict_before(4_500).unwrap();
+        writer.sync().unwrap();
+        let db = RezDb::open(&path).unwrap();
+        let stamps: Vec<u64> = db
+            .read_caller_rows(1, "cpu_usage", 0, u64::MAX)
+            .unwrap()
+            .into_iter()
+            .map(|(ts, _)| ts)
+            .collect();
+        assert_eq!(stamps, vec![3_000, 4_000]);
+        drop(db);
         drop(writer);
         drop(archive);
     }
