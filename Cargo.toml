@@ -38,8 +38,9 @@ dashboard = { path = "crates/dashboard" }
 # `Result` the deliberate exceptions. Replication is unconditional as of that
 # release; there is no longer a feature to ask for. 0.2.1 is documentation
 # only: `Frame::Rows.seq` no longer has to start at zero, which is what lets
-# rezolus send the subscription's interval index.
-dendro = { version = "0.2.1", default-features = false }
+# rezolus send the subscription's interval index. 0.2.2 adds retention floors
+# for `caller_rows` (a `Full` that surviving rows depend on is kept).
+dendro = { version = "0.2.2", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -48,7 +49,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.22.2-alpha.3"
+version = "5.22.2-alpha.4"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
