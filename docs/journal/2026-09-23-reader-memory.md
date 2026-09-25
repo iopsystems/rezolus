@@ -1,8 +1,10 @@
 # Long recordings: memory proportional to the query, not the file
 
 - **Opened:** 2026-09-23
-- **Status:** **OPEN — all three steps in review** (rezolus #1283, #1284,
-  and the metriken-query 0.29.0 bump; metriken #157, #159, #161).
+- **Status:** **SHIPPED** in v5.22.0 (rezolus #1283, #1284, #1286, #1287;
+  metriken-query 0.27.0 to 0.30.0) and taken by systemslab in
+  iopsystems/systemslab#6263, measured there 2026-09-24 (below). Follow-up
+  in v5.22.1 (#1296). Updated 2026-09-24.
 - **Driver:** a 1.28 GB `.rez` (one host, 9.6 hours at 1 s, 49 tables, 5,874
   segments) opened and queried, but memory scaled with the file: 4.1 GB
   resident after the viewer built its dashboard, 9.4 GB after one query over
@@ -200,15 +202,32 @@ from a catalog and loads its source the first time a query names one of
 its metrics; rez's `composition_sources()` now hands out one per table,
 built from the catalog the reader already probes at open. `total_series_count`
 on a composed reader asks each child (`DataSource::series_count`), so a
-child with a catalog count answers without loading.
+child with a catalog count answers without loading; rez's children carry no
+count, so the fallback label walk loaded them. On an uncomposed `RezReader`
+the same call opened every table, and the only consumer was a `num_series`
+badge neither viewer rendered, so v5.22.1 removed the field and the call
+(#1296; systemslab dropped its badge in iopsystems/systemslab#6268).
 
 Two things the streaming rate needed there: `MultiParquetSource` and the
 lazy child both hand out `counter_streams`, so a composed `rate()` streams
 as an uncomposed one does. Without that the composition path had fallen to
 the trait default and materialized every child's series again.
 
-Not measured through systemslab yet; that is the bump to metriken-query
-0.30.0 and a rez rev that carries this.
+Measured through systemslab on 2026-09-24, upgrading its server from a
+build pinned to the pre-step reader to one on v5.22.0 (iopsystems/systemslab#6263),
+against an 82 MB `.rez` artifact:
+
+| | before | after |
+|---|---|---|
+| server RSS idle | 1.78 GB (9 days up) | 0.14 GB |
+| after `dashboard/sections` | 2.05 GB | 0.25 GB |
+| after four plot queries | 2.08 GB | 0.29 GB |
+| `dashboard/sections` | 0.33 s | 0.08 s |
+
+Query values differed from the old server's and matched `rezolus mcp query`
+on the downloaded artifact exactly: the old build pinned metriken-query
+0.21.0, which still rounded sample timestamps to the grid (removed in
+0.24.0).
 
 ## Path forward
 
@@ -216,11 +235,19 @@ Not measured through systemslab yet; that is the bump to metriken-query
 2. The indexed reader on the same store — done.
 3. Rate over a sample stream — done. Gauges the same way when a wide gauge
    table shows up.
-4. The composition path lazy and streaming — done in the crates; systemslab
-   bumps to take it.
+4. The composition path lazy and streaming — done, and measured through
+   systemslab (above).
+5. The format itself: the sealed phase still lives in the live phase's
+   container, so open probes footers through whole-blob reads and a
+   consumer downloads a whole archive to read a source name. Designed as
+   two forms of one archive in iopsystems/dendro#17, with three live-form
+   additions (a caller-owned `stream_summary`, a range-readable `header`
+   table, incremental blob reads) marked ready to build.
 
 ## Related
 
+- iopsystems/dendro#17, the design this entry's costs argue for.
+- iopsystems/systemslab#6263 (the bump), #6268 (the badge).
 - [Internal labels](2026-09-22-internal-labels.md), whose "Measured: open
   cost" section found the indexed reader's replay cost; this entry is the
   parquet path's.
