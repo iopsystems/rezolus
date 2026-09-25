@@ -239,10 +239,12 @@ on the downloaded artifact exactly: the old build pinned metriken-query
    systemslab (above).
 5. The format itself: the sealed phase still lives in the live phase's
    container, so open probes footers through whole-blob reads and a
-   consumer downloads a whole archive to read a source name. Designed as
-   two forms of one archive in iopsystems/dendro#17, with three live-form
-   additions (a caller-owned `stream_summary`, a range-readable `header`
-   table, incremental blob reads) marked ready to build.
+   consumer downloads a whole archive to read a source name. Designed in
+   iopsystems/dendro#17 as a five-step ladder: a caller-owned
+   `stream_summary`, a range-readable `header` table on root page 3,
+   incremental blob reads, a `VACUUM INTO` copy at 64 KiB pages read through
+   a caching range VFS, and a flat layout only for a reader that must not
+   carry SQLite. The first three change nothing about the container.
 
 ## Related
 
