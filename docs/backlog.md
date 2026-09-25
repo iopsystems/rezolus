@@ -605,6 +605,30 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   records. Reopen only if a recording from that range needs per-task
   attribution badly enough to accept unlabelled occupants.
 
+## Agent — cgroup slots
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: considered, and wide is better".
+
+- **Cgroups past `MAX_CGROUPS` are dropped silently** — Open. `MAX_CGROUPS =
+  4096` (`src/agent/bpf/cgroup.h:10`) is rezolus's BPF map size, not a kernel
+  limit: the kernel allocates the CPU controller's `css.id` lowest-free with no
+  upper bound (`kernel/cgroup/cgroup.c`, `cgroup_idr_alloc(&ss->css_idr, NULL,
+  2, 0, …)`). A cgroup whose id is 4,096 or more returns `-1` from
+  `handle_new_cgroup` and `handle_new_cgroup_from_css` (`cgroup.h:42`, `:126`) and is skipped at every other use of the
+  id (`cpu/linux/usage/mod.bpf.c:361`, `:421`), with no counter and nothing in
+  `rezolus status`. That happens once more than about 4,094 CPU-controller
+  cgroups are live, counting dying ones that still hold their ids. Count the
+  drops in BPF, surface them as a metric and a `status` degradation, and then
+  decide whether the cap should be larger or sized to the host.
+- **A cgroup can go unnamed while the `cgroup_info` ringbuf is full** — Open.
+  `handle_new_cgroup` returns `-1` without advancing the serial number, so a
+  later event retries (`cgroup.h:59-65`, `:144-149`), but until one arrives the cgroup's
+  values have no `name`. Count ringbuf-full drops next to the overflow count,
+  so an unrecorded or unnamed cgroup is visible either way.
+- **Tasks cannot overflow the same way** — By design. `MAX_PID = 4194304`
+  (`src/agent/bpf/task.h:14`) equals the kernel's `PID_MAX_LIMIT` on 64-bit
+  (`include/linux/threads.h:34`), so every TID fits.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
