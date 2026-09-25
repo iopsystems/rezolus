@@ -174,7 +174,8 @@ through metriken too; both still force a rebuild.
 6. **Retention of the index** — done, see "Retention of the index" below.
    The subscriber restates every stream's slot set as `Full` entries every
    seal age; the writer cuts a stream's `caller_rows` back to the latest
-   `Full` at or before the row cutoff; the reader starts its replay at the
+   `Full` at or before the stream's oldest surviving row (the row cutoff
+   until 2026-09-25, see below); the reader starts its replay at the
    last `Full` before a table's first row.
 7. **Cutover branch**: descriptors become bare slot ids, identity leaves column
    metadata, format version bumps.
@@ -289,11 +290,22 @@ and the two consumers of the fact get it two ways:
 - **The writer** sees each entry's kind on the way in (`IndexRow::full`,
   in memory only) and keeps the `Full` timestamps per (recording, stream).
   At retention it cuts each stream's history at the latest `Full` not after
-  the row cutoff — strictly before it, so the `Full` itself stays — and a
+  the oldest row the stream still holds once the rows are evicted, or the
+  row cutoff when it holds none — strictly before it, so the `Full` itself
+  stays — and a
   stream with no `Full` on record keeps everything. A writer that starts
   against an archive with existing entries therefore evicts nothing until
   its first restatement lands, which errs on keeping. Entries after the cut
   are kept however old the rows they describe are; the safe side.
+  The bound was the row cutoff when this shipped (#1281), which was wrong:
+  a segment is evicted only when its newest row is older than the cutoff,
+  so a segment spanning the cutoff keeps older rows, and cutting at the
+  cutoff dropped the `Full` those rows needed. At the 300 s seal age that
+  would be up to 300 s of rows at the old end of a rolling buffer read
+  without identity. Latent: hindsight, the only caller of retention, scrapes
+  and writes no index, and `record --stream` never evicts. Found 2026-09-25 by an adversarial review of the same rule in
+  dendro (iopsystems/dendro#18), which now asks the caller for the floor
+  with the oldest surviving row for the same reason.
 - **The reader** walks a stream's entries newest-first from the table's
   first row and stops at the first `Full` it decodes
   (`RezDb::last_caller_row_at_or_before` with a predicate the reader

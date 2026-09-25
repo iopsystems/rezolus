@@ -1212,6 +1212,28 @@ impl RezDb {
         })
     }
 
+    /// The oldest row `sampler` still holds, segments and WAL together, or
+    /// `None` when it holds none.
+    ///
+    /// Can be older than the last retention cutoff: a segment is evicted only
+    /// when its NEWEST row is older than the cutoff, so a segment spanning
+    /// the cutoff keeps older rows, and the identity index has to keep what
+    /// those rows depend on.
+    pub fn oldest_row_ts(&self, recording_id: i64, sampler: &str) -> Result<Option<u64>, String> {
+        self.conn
+            .query_row(
+                "SELECT MIN(oldest) FROM ( \
+                   SELECT MIN(first_ts) AS oldest FROM segments \
+                     WHERE recording_id = ?1 AND sampler = ?2 \
+                   UNION ALL \
+                   SELECT MIN(ts) FROM wal WHERE recording_id = ?1 AND sampler = ?2)",
+                rusqlite::params![recording_id, sampler],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map(|ts| ts.map(|ts| ts.max(0) as u64))
+            .map_err(|e| format!("failed to find the oldest {sampler} row: {e}"))
+    }
+
     /// Drop one stream's identity index entries older than `cutoff_ts`.
     ///
     /// Separate from [`evict_before`](Self::evict_before), and with its own
