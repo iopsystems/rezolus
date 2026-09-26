@@ -633,7 +633,14 @@ In every run the cgroup total equalled the per-task totals moved to the
 exited counter, so the loss is not between rezolus's own counters. Three
 separate mechanisms account for the rest:
 
-- **Fix 1 — accounting must not depend on metadata delivery** — Open, first.
+- **Fix 1 — accounting must not depend on metadata delivery** — In review,
+  #1303. That PR also fixes a second cause found while measuring it: every
+  task's first observation was skipped, which drops all the CPU of a thread
+  that lives about one tick. Under 60 s of `stress-ng --pthread` (about 18,000
+  threads/s) the slice's CPU went from 22% of `cpu.stat` (5.20.0) to 32% with
+  this fix alone and 85% with both; per-run probe cost unchanged (986 against
+  985 ns). The remaining 15% under that churn is unexplained; see #1303.
+  Original description:
   Under task churn the `task_info` ring buffer overflows: userspace drains it
   only when a snapshot is taken (`rb.consume()` after `sync.wait_trigger()`,
   `src/agent/bpf/builder.rs:966-970`), and it holds about 1,130 events
@@ -684,6 +691,12 @@ separate mechanisms account for the rest:
   telemetry can make host and cgroup CPU totals wrong on high-churn hosts.
 
 Also found on these runs, separate from the sampler:
+
+- **Recordings of a 5.22.2-alpha agent end with a row stamped about 940 s
+  late** — Open. In both recordings of the #1303 build, every table's last
+  row was about 940 s past the recording's end, and `rate()` over the
+  recording spans the gap. Not investigated; producer-stamped timestamps
+  (#1269) are the first place to look.
 
 - **A 5.20-or-earlier recording can attribute a new cgroup's CPU to the
   previous occupant of its CSS id** — By design (fixed forward by #1232). The
