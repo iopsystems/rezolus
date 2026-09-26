@@ -576,6 +576,161 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
   arms were finalized; hindsight reads a buffer with a live WAL tail, which
   materializes differently. *Reopen:* measure alongside the first fix.
 
+## dendro archives (6.0)
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md).
+
+- **The per-task table's long layout: confirm by measurement** — Open. Convert
+  `cpu_usage_task` wide-bare and long, from the busy (10.6% non-null) and quiet
+  (98%) recordings and a synthetic thread-per-request spike at 1 s and 100 ms.
+  Measure bytes on disk, bytes read at open, all-thread and single-thread query
+  cost on sorted and arrival-order segments, seal time with and without the
+  sort, and compression. Per-thread stays: thread pools per kind of work are
+  the reason the table exists.
+- **A sort key in dendro's `CompactSpec`** — Open, only if the gate shows
+  arrival order costs a single-thread query too much. Compaction already
+  re-encodes, so a caller-named sort key sorts off the tick path; segments
+  declare it in parquet `sorting_columns`.
+- **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
+  slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
+- **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Identity
+  from `caller_rows`, one schema read per stream. Any on-demand segment loading
+  it needs is added to dendro, not built in rezolus.
+- **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
+  copy. Oracle: on `--stream` recordings the derived index must equal the
+  recorded one, and every series must read back the same as through the `.rez`
+  reader.
+- **5.18–5.20 mid-segment occupant changes** — By design. The file does not
+  record the new occupant's labels (#1232), so a conversion keeps what the file
+  records. Reopen only if a recording from that range needs per-task
+  attribution badly enough to accept unlabelled occupants.
+
+## Agent — per-task CPU usage completeness
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md),
+"Is the per-task data worth keeping". The question came from the insights-model
+repo's `docs/signal-gaps.md`, where per-task `task_cpu_usage` missed CPU the
+cgroup counters saw.
+
+**Measured on delta, 2026-09-25/26.** rezolus 5.20.0 agent (its BPF accounting
+is identical to `main`'s; only #1244 and #1266 touched this sampler since),
+recorded with the current recorder at 1 s, against the kernel's `cpu.stat` per
+workload sampled every 0.5 s. Four workloads for 120 s: A, two long-lived CPU
+burners; B, 794 processes of 0.3 s; C, `stress-ng --pthread`, about 2.15M
+threads (17,900/s), mostly kernel time; D, 84 threads of 2–4 s. Then D alone as
+a control (39 threads, 60 s).
+
+| | kernel | rezolus |
+|---|---|---|
+| user, A–D together | 610.6 core-s | 591.7 (−3%) |
+| system, A–D together | 182.3 | 56.3 (**−69%**) |
+| D alone, total | 60.7 | 59.9 (−1%) |
+| A, live per-task series | 237.0 | 234.4 (−1%) |
+| B, live per-task series | 235.9 | 0.0 |
+| D alone, live per-task series | 60.7 | 21.0 (35%) |
+
+In every run the cgroup total equalled the per-task totals moved to the
+exited counter, so the loss is not between rezolus's own counters. Three
+separate mechanisms account for the rest:
+
+- **Fix 1 — accounting must not depend on metadata delivery** — In review,
+  #1303. That PR also fixes a second cause found while measuring it: every
+  task's first observation was skipped, which drops all the CPU of a thread
+  that lives about one tick. Under 60 s of `stress-ng --pthread` (about 18,000
+  threads/s) the slice's CPU went from 22% of `cpu.stat` (5.20.0) to 32% with
+  this fix alone and 85% with both; per-run probe cost unchanged (986 against
+  985 ns). The remaining 15% under that churn is unexplained; see #1303.
+  Original description:
+  Under task churn the `task_info` ring buffer overflows: userspace drains it
+  only when a snapshot is taken (`rb.consume()` after `sync.wait_trigger()`,
+  `src/agent/bpf/builder.rs:966-970`), and it holds about 1,130 events
+  (262,144 bytes, `TASK_RINGBUF_CAPACITY`; 220-byte `task_info` plus header).
+  A task whose new-task event is dropped re-enters `handle_new_task` on every
+  `cpuacct_account_field` hit and re-zeroes `task_utime`/`task_stime` each
+  time (`cpu/linux/usage/mod.bpf.c:236-262` documents this), so its deltas are
+  all skipped and its CPU is missing from the **per-CPU and per-cgroup
+  totals**, not only the per-task view. That is the −69% system time above;
+  with no churn (D alone) totals were within 1%. The comment there assumes
+  ring buffer pressure is "normally sub-millisecond, since it drains every
+  snapshot"; at a 1 s snapshot cadence it lasts up to a second. Fix: commit the
+  task's baseline unconditionally and retry the metadata send through its own
+  flag, so a dropped event costs at most an unlabelled task. Verify by
+  repeating workload C and comparing system time to `cpu.stat`.
+- **Fix 2 — stop losing task events silently** — Open.
+  - Count `task_info`, `task_exit` and `cgroup_info` ring buffer drops in
+    BPF and surface them in `rezolus status`.
+  - Shrink `task_info`: 192 of its 220 bytes are three 64-byte cgroup path
+    names (`src/agent/bpf/task.h:18-26`) that the cgroup identity already
+    carries. Sending the cgroup id instead fits about six times the events per
+    drain.
+  - Handle a dropped exit. `sched_process_exit` fires once, so a dropped
+    `task_exit` leaves a phantom metadata-presence member
+    (`mod.bpf.c:434-442`): 1,573 series from workload C were still exported
+    more than five minutes after their threads exited. Untested: whether a
+    phantom clears when its TID is reused and relabelled.
+- **Fix 3 — optionally export only tasks above a CPU threshold per
+  interval** — Idea. The churn threads carry little per-thread meaning, and
+  their CPU stays exact in the cgroup and exited totals. A threshold keeps the
+  hot threads analysts look for and cuts the cardinality that dominates
+  recordings and the wire. `signal-gaps.md` already names "top-N thresholds".
+- **Fix 4a — the reader treats a task series as starting from zero** — Open.
+  Short-lived tasks are exported (in the control, about 38 of 39 threads
+  appeared), but `rate()` takes a series' first sample as its baseline, so the
+  CPU a task used before its first scrape is never counted, and the CPU after
+  its last scrape goes to the exited counter. That left 35% of a 2–4 s
+  thread's CPU visible per task. The agent zeroes a task's counters at creation
+  (`mod.bpf.c:230-234`), so the reader can credit the first sample's whole
+  level.
+- **Fix 4b — consumers read `cgroup_cpu_usage_exited_tasks`** — Open. A task
+  shorter than one scrape interval (workload B) is visible only there, by
+  design (`mod.bpf.c:402-408`). The insights-model analyses and the
+  `measure-performance` skill should add it to per-task attribution.
+- **Revisit condition:** if per-task data is still not useful after fixes 1–4,
+  because analyses do not use it or cannot trust it, make it opt-in rather than
+  removing it. Fix 1 comes first either way: until it lands, per-task
+  telemetry can make host and cgroup CPU totals wrong on high-churn hosts.
+
+Also found on these runs, separate from the sampler:
+
+- **Recordings of a 5.22.2-alpha agent end with a row stamped about 940 s
+  late** — Open. In both recordings of the #1303 build, every table's last
+  row was about 940 s past the recording's end, and `rate()` over the
+  recording spans the gap. Not investigated; producer-stamped timestamps
+  (#1269) are the first place to look.
+
+- **A 5.20-or-earlier recording can attribute a new cgroup's CPU to the
+  previous occupant of its CSS id** — By design (fixed forward by #1232). The
+  first run's `/rzt.slice` reused id 107, and the 5.20.0 recorder filed all of
+  its CPU under `/system.slice/slipwayd.service` for the whole recording.
+- **metriken-query supports no `increase` or `max_over_time`, and a bare
+  selector on `cgroup_cpu_usage` fails with "Metric not found" while `rate()`
+  works** — Open. Reproduced on recordings from both the 5.20.0 and the current
+  recorder. It forced these measurements to integrate `rate()`.
+
+## Agent — cgroup slots
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: considered, and wide is better".
+
+- **Cgroups past `MAX_CGROUPS` are dropped silently** — Open. `MAX_CGROUPS =
+  4096` (`src/agent/bpf/cgroup.h:10`) is rezolus's BPF map size, not a kernel
+  limit: the kernel allocates the CPU controller's `css.id` lowest-free with no
+  upper bound (`kernel/cgroup/cgroup.c`, `cgroup_idr_alloc(&ss->css_idr, NULL,
+  2, 0, …)`). A cgroup whose id is 4,096 or more returns `-1` from
+  `handle_new_cgroup` and `handle_new_cgroup_from_css` (`cgroup.h:42`, `:126`) and is skipped at every other use of the
+  id (`cpu/linux/usage/mod.bpf.c:361`, `:421`), with no counter and nothing in
+  `rezolus status`. That happens once more than about 4,094 CPU-controller
+  cgroups are live, counting dying ones that still hold their ids. Count the
+  drops in BPF, surface them as a metric and a `status` degradation, and then
+  decide whether the cap should be larger or sized to the host.
+- **A cgroup can go unnamed while the `cgroup_info` ringbuf is full** — Open.
+  `handle_new_cgroup` returns `-1` without advancing the serial number, so a
+  later event retries (`cgroup.h:59-65`, `:144-149`), but until one arrives the cgroup's
+  values have no `name`. Count ringbuf-full drops next to the overflow count,
+  so an unrecorded or unnamed cgroup is visible either way.
+- **Tasks cannot overflow the same way** — By design. `MAX_PID = 4194304`
+  (`src/agent/bpf/task.h:14`) equals the kernel's `PID_MAX_LIMIT` on 64-bit
+  (`include/linux/threads.h:34`), so every TID fits.
+
 ## Agent — drive health sampler
 
 Source: [drive health sampler — Phase 1 (module-free)](journal/2026-07-06-drive-health-sampler.md).
