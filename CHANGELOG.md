@@ -2,6 +2,27 @@
 
 ### Fixed
 
+- Agent: `cpu_usage` lost CPU from the per-CPU and per-cgroup totals under
+  task churn, not only from the per-task view. Two causes, both in how a new
+  task is started in BPF:
+  - A task whose `task_info` event did not fit in the ring buffer (drained
+    only when a snapshot is taken, about 1,130 events) looked new on every
+    accounting hit and had its baseline re-zeroed each time, so every delta
+    was skipped. The baseline is now set once per task instance and only the
+    metadata send is retried.
+  - Every task's first observation was skipped, which drops all the CPU of a
+    thread that lives about one tick, and each field's first non-zero value.
+    A task that started after the agent attached is now counted from zero; one
+    that predates it is counted from its first observation, so an agent
+    restart still does not credit running tasks' lifetime CPU to one tick.
+
+  Measured on a 32-core host with 60 s of `stress-ng --pthread` (about 18,000
+  threads/s) against the kernel's `cpu.stat`: the cgroup's CPU went from 22%
+  of the kernel's figure (5.20.0) to 85%, system time from 20 to 80 of 94
+  core-seconds. Without churn, totals were already within 1%.
+
+### Fixed
+
 - Recorder: retention of the identity index kept too little. It cut each
   stream's `caller_rows` at the latest `Full` at or before the row cutoff, but
   a segment is evicted only when its newest row is older than the cutoff, so a
