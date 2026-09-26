@@ -285,12 +285,16 @@ reads it: no dashboard section, MCP tool or feature extraction queries it.
 It is used through queries: the insights-model evaluations attribute CPU to
 threads by `comm` and `tgid` with it, and the `measure-performance` skill
 reads server threads' CPU from it. Those evaluations also record it missing
-CPU that the cgroup counters saw; that is the backlog item "Per-task
-`task_cpu_usage` has missed CPU the cgroup counters saw" (`docs/backlog.md`,
-"Agent — per-task CPU usage completeness"). The decision is to build the long
-layout regardless, since dendro should handle this cardinality whatever the
-sampler does, and to fix the sampler's completeness separately so the data
-earns its cost.
+CPU that the cgroup counters saw. Measured on delta (2026-09-25/26, against the
+kernel's `cpu.stat`): long-lived threads are within 1%, but under heavy thread
+churn the task event ring buffer overflows, and because per-task accounting is
+tied to metadata delivery the loss reaches the host and cgroup totals (system
+time 69% short); short-lived tasks lose CPU to how `rate()` reads a series that
+starts above zero. The mechanisms, measurements and ordered fixes are in
+`docs/backlog.md`, "Agent — per-task CPU usage completeness". The decision is
+to keep per-task telemetry, build the long layout regardless (dendro should
+handle this cardinality whatever the sampler does), and fix the sampler, the
+first fix being to stop per-task metadata delivery from affecting totals.
 
 **How wide it can get.** The group is sized at `MAX_PID = 4194304` (2^22,
 `src/agent/bpf/task.h:14`; `TASK_CPU_USAGE: CounterGroup::new(MAX_PID)`,
