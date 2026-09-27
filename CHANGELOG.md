@@ -20,6 +20,12 @@
 
 ### Fixed
 
+- Agent: a `/metrics/stream` interval with no reading to send (before the
+  first sampling pass, or when a snapshot failed to encode) now gets an empty
+  `Rows` frame with the next `seq`, as every other interval does. It was
+  skipped, which left a gap a subscriber reads as lost intervals, and a
+  subscriber waiting on its first interval waited for the next one.
+
 - Agent: `cpu_usage` lost CPU from the per-CPU and per-cgroup totals under
   task churn, not only from the per-task view. Two causes, both in how a new
   task is started in BPF:
