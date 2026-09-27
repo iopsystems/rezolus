@@ -973,13 +973,24 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
             s.segments("fake") >= 2 && (1..=2).contains(&s.table("fake").live_wal_rows)
         });
         let live_before = at_dump.table("fake").live_wal_rows;
+        let segments_before = at_dump.segments("fake");
         h.dump_to(&dest);
         // Read /status again AFTER the dump so the live-row count at the moment
         // the snapshot was taken is BRACKETED rather than guessed. The buffer is
         // still ingesting at 10 Hz, so any fixed tolerance on `live_before` is a
         // bet on how long the dump takes — and on a loaded CI runner that bet
         // loses (observed: 1 row before, a 7-row tail).
-        let live_after = h.status().table("fake").live_wal_rows;
+        let after = h.status();
+        let live_after = after.table("fake").live_wal_rows;
+        // The bracket holds only if nothing sealed between the two reads.
+        // Retention here is 15 minutes, so the segment count only rises: a
+        // change means a seal emptied the WAL in between, and then
+        // `live_after` counts rows written since that seal, not the rows the
+        // dump saw. Comparing the row counts cannot tell: a seal followed by
+        // new rows can leave `live_after >= live_before` (observed: 2 before,
+        // 5 after, a 1-row tail). So that draw is taken again, like a dump
+        // that landed on a seal boundary.
+        let sealed_between = after.segments("fake") != segments_before;
 
         let dumped = read_rez(&dest, "fake");
         // True of every dump taken here, not only the one that is kept.
@@ -998,17 +1009,19 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         // preceded it. A full last segment means the snapshot landed on a seal
         // boundary with no live tail to carry, and every claim below would hold
         // vacuously — so that dump is discarded and the phase drawn again.
-        if tail_rows < SEGMENT_ROWS {
+        if tail_rows < SEGMENT_ROWS && !sealed_between {
             break (dumped, live_before, live_after);
         }
-        missed.push(tail_rows);
+        missed.push(if sealed_between {
+            format!("{tail_rows} rows, sealed between the /status reads")
+        } else {
+            format!("{tail_rows} rows, a full segment")
+        });
         assert!(
             missed.len() < DUMP_ATTEMPTS,
-            "fixture: {DUMP_ATTEMPTS} dumps in a row landed on a seal boundary \
-             with no live tail to carry — last segments held {missed:?} rows, a \
-             full {SEGMENT_ROWS} every time. One is the phase race; this many \
-             means the buffer is sealing between the /status read and every \
-             snapshot the test takes"
+            "fixture: {DUMP_ATTEMPTS} dumps in a row were unusable — {missed:?}. \
+             One is the phase race; this many means the buffer is sealing \
+             between the /status reads and every snapshot the test takes"
         );
     };
 
@@ -1016,18 +1029,16 @@ fn a_dump_cuts_the_timeline_at_its_snapshot_and_seals_the_live_tail() {
         .segments
         .last()
         .expect("the dump must hold at least the tail");
-    // `live_after` can be lower than `live_before` if a seal landed between
-    // the two reads, which resets the WAL — in that case the tail is bounded
-    // by a full segment instead, which the assertion above already covers.
-    if live_after >= live_before {
-        assert!(
-            (live_before..=live_after).contains(&tail.rows),
-            "the tail must be the rows that were live in the WAL when the dump \
-             was taken: /status said {live_before} live rows before the dump and \
-             {live_after} after, so the tail should be in that range — it holds {}",
-            tail.rows
-        );
-    }
+    // No seal landed between the two reads (the loop redraws when one did),
+    // so the WAL only grew across the dump and the tail it captured lies
+    // between them.
+    assert!(
+        (live_before..=live_after).contains(&tail.rows),
+        "the tail must be the rows that were live in the WAL when the dump \
+         was taken: /status said {live_before} live rows before the dump and \
+         {live_after} after, so the tail should be in that range — it holds {}",
+        tail.rows
+    );
     assert_eq!(
         tail.timestamps.len(),
         tail.rows as usize,
