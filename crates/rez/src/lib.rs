@@ -47,6 +47,10 @@ pub mod rez_v3_rewrite;
 pub mod rez_v3_writer;
 pub mod schema;
 pub mod seal_policy;
+/// A v3 `.rez` rewritten as a dendro archive. Behind `write` because it
+/// needs dendro's append side.
+#[cfg(feature = "write")]
+pub mod to_dendro;
 pub mod wal;
 pub mod window;
 pub mod wire;

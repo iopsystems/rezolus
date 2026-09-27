@@ -535,7 +535,7 @@ pub fn command() -> Command {
         )
         .subcommand(
             Command::new("upgrade")
-                .about("Upgrade a v1/v2 (tar) .rez archive to the v3 (SQLite) container")
+                .about("Upgrade a v1/v2 (tar) .rez archive to the v3 (SQLite) container, or convert one to dendro")
                 .long_about(
                     "Rewrite a v1 or v2 `.rez` (a tar archive) as a v3 `.rez` (a single\n\
                      SQLite file), the container the recorder and hindsight write today.\n\n\
@@ -549,11 +549,20 @@ pub fn command() -> Command {
                      otherwise changing it. A v3 input is refused rather than copied:\n\
                      \"upgrade\" on something already current is far more likely a mistaken\n\
                      path than a request for a duplicate.\n\n\
+                     WITH `--to dendro`: write a dendro archive, the container rezolus 6.0\n\
+                     is planned to write (#1224). Takes a v1, v2 or v3 `.rez`. Recordings\n\
+                     become sources and tables become streams; segment, WAL and caller-row\n\
+                     bytes are copied unchanged, and WAL rows a segment already holds are\n\
+                     dropped. `-o` is required and must not exist, and the input is never\n\
+                     replaced, because no rezolus release reads a dendro archive yet: the\n\
+                     viewer, MCP and `recording` tools will refuse the output.\n\n\
                      EXAMPLES:\n    \
                      # Upgrade in place\n    \
                      rezolus recording upgrade old.rez\n\n    \
                      # ...or leave the original alone\n    \
-                     rezolus recording upgrade old.rez -o new.rez",
+                     rezolus recording upgrade old.rez -o new.rez\n\n    \
+                     # Convert to a dendro archive\n    \
+                     rezolus recording upgrade --to dendro capture.rez -o capture.dendro",
                 )
                 .arg(
                     clap::Arg::new("FILE")
@@ -566,8 +575,17 @@ pub fn command() -> Command {
                         .short('o')
                         .long("output")
                         .value_name("REZ")
-                        .help("Write here instead of replacing the input in place")
-                        .value_parser(value_parser!(PathBuf)),
+                        .help("Write here instead of replacing the input in place (required with --to dendro)")
+                        .value_parser(value_parser!(PathBuf))
+                        .required_if_eq("to", "dendro"),
+                )
+                .arg(
+                    clap::Arg::new("to")
+                        .long("to")
+                        .value_name("FORMAT")
+                        .help("Target container: `v3` (a v3 .rez, the default) or `dendro`")
+                        .value_parser(["v3", "dendro"])
+                        .default_value("v3"),
                 ),
         )
         .subcommand(
@@ -693,6 +711,58 @@ fn upgrade_rez(
     Ok(())
 }
 
+/// Convert a `.rez` (any version) into a new dendro archive at `output`.
+///
+/// Never in place and never over an existing file: no rezolus release reads
+/// the result, so replacing an archive with it would lose the only copy a
+/// viewer can open.
+fn upgrade_to_dendro(
+    path: &std::path::Path,
+    output: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::recorder::rez::{detect_rez_format, RezFormat};
+
+    if output.exists() {
+        return Err(format!(
+            "{} already exists; refusing to replace it",
+            output.display()
+        )
+        .into());
+    }
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
+    let staging = match dir {
+        Some(dir) => tempfile::tempdir_in(dir),
+        None => tempfile::tempdir(),
+    }?;
+
+    // A tar archive goes through the v3 upgrade first, into the staging dir.
+    let v3 = match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
+        RezFormat::V3Sqlite => path.to_path_buf(),
+        RezFormat::V2Tar => {
+            let upgraded = staging.path().join("upgraded.rez");
+            crate::recorder::rez_v3_rewrite::upgrade_tar_to_v3(path, &upgraded)?;
+            upgraded
+        }
+        RezFormat::NotRez => return Err(format!("{} is not a .rez archive", path.display()).into()),
+    };
+
+    let staged = staging.path().join("converted.dendro");
+    let done = rez::to_dendro::convert_v3_to_dendro(&v3, &staged)?;
+    std::fs::rename(&staged, output)?;
+    println!(
+        "converted {:?} to a dendro archive at {:?}: {} source(s), {} segment(s), \
+         {} live WAL row(s), {} caller row(s), {} clock offset(s)",
+        path,
+        output,
+        done.sources,
+        done.segments,
+        done.wal_rows,
+        done.caller_rows,
+        done.clock_offsets
+    );
+    Ok(())
+}
+
 pub fn run(args: ArgMatches) {
     use crate::viewer::load_template_registry;
 
@@ -724,7 +794,10 @@ pub fn run(args: ArgMatches) {
         Some(("upgrade", sub_args)) => {
             let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
             let output = sub_args.get_one::<PathBuf>("output").map(|p| p.as_path());
-            upgrade_rez(path, output)
+            match sub_args.get_one::<String>("to").map(String::as_str) {
+                Some("dendro") => upgrade_to_dendro(path, output.expect("clap requires -o")),
+                _ => upgrade_rez(path, output),
+            }
         }
         Some(("snapshot", sub_args)) => {
             let path = sub_args.get_one::<PathBuf>("FILE").unwrap();
@@ -927,5 +1000,78 @@ mod command_name_tests {
             );
             assert_eq!(sub.subcommand_name(), Some("metadata"));
         }
+    }
+}
+
+#[cfg(test)]
+mod upgrade_to_dendro_tests {
+    use super::upgrade_to_dendro;
+    use ::rez::rez::recorder_tests_support::{counter, snap};
+    use dendro::archive::Archive;
+
+    /// A v2 tar archive with two samplers, built the way the old recorder
+    /// wrote one.
+    fn tar_rez(dir: &std::path::Path) -> std::path::PathBuf {
+        use crate::recorder::rez::{detect_rez_format, RezFormat, RezRecorder};
+        let labels: std::collections::BTreeMap<String, String> =
+            [("source".to_string(), "rezolus".to_string())]
+                .into_iter()
+                .collect();
+        let mut r = RezRecorder::new(labels.clone(), labels, "rezolus".to_string());
+        for i in 0..3u64 {
+            let ts = 1_000_000_000 * (i + 1);
+            r.ingest(
+                &snap(
+                    ts,
+                    vec![
+                        counter("cpu_cycles", "cpu_usage", i, None),
+                        counter("reads", "blockio_requests", i, None),
+                    ],
+                ),
+                ts,
+            );
+        }
+        let path = dir.join("old.rez");
+        r.finalize(&path).unwrap();
+        assert_eq!(detect_rez_format(&path).unwrap(), RezFormat::V2Tar);
+        path
+    }
+
+    #[test]
+    fn a_tar_archive_converts_through_the_v3_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = tar_rez(dir.path());
+        let dest = dir.path().join("out.dendro");
+        upgrade_to_dendro(&src, &dest).unwrap();
+
+        // Before anything opens the output: a reader's connection leaves
+        // `-wal`/`-shm` files of its own, and the claim here is that the
+        // conversion leaves neither those nor its staging directory.
+        let mut names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["old.rez".to_string(), "out.dendro".to_string()]);
+
+        let out = Archive::open(&dest).unwrap();
+        let sources = out.read_sources().unwrap();
+        assert_eq!(sources.len(), 1);
+        assert!(sources[0].complete);
+        assert_eq!(
+            out.all_streams(sources[0].id).unwrap(),
+            vec!["blockio_requests".to_string(), "cpu_usage".to_string()]
+        );
+    }
+
+    #[test]
+    fn an_existing_output_is_refused_and_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = tar_rez(dir.path());
+        let dest = dir.path().join("out.dendro");
+        std::fs::write(&dest, b"keep me").unwrap();
+        let err = upgrade_to_dendro(&src, &dest).unwrap_err().to_string();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
     }
 }

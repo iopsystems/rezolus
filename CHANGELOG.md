@@ -1,5 +1,18 @@
 ## [Unreleased]
 
+### Added
+
+- `recording upgrade --to dendro in.rez -o out.dendro` writes a copy of a
+  `.rez` (v1, v2 or v3) as a dendro archive, the container #1224 plans for
+  6.0. Recordings become sources and tables become streams; segment, WAL and
+  caller-row bytes are copied unchanged, and WAL rows a sealed segment
+  already holds are dropped. A timestamp above `i64::MAX` is refused rather
+  than wrapped. `-o` is required and must not exist, because no rezolus
+  release reads the output yet; opening one anywhere a `.rez` is expected now
+  fails naming it as a dendro archive rather than with `no such table:
+  recordings`. Measured on a 1.28 GB, 5,874-segment archive: 7.0 s, and the
+  output matches the input table by table.
+
 ### Fixed
 
 - Recorder: retention of the identity index kept too little. It cut each
