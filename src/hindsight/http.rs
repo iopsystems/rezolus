@@ -205,7 +205,10 @@ pub async fn serve(
         .await
         .expect("failed to bind HTTP listener");
 
-    info!("HTTP endpoint listening on {}", listen);
+    // The address actually bound, which differs from `listen` when it names
+    // port 0: that is the only way to learn which port was picked.
+    let bound = listener.local_addr().unwrap_or(listen);
+    info!("HTTP endpoint listening on {bound}");
 
     axum::serve(listener, app)
         .await

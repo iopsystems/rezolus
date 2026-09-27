@@ -534,6 +534,15 @@ mod stream_tests {
             ttl: Duration::from_secs(1),
         };
 
+        // Build one snapshot before the clock below starts. The first pass
+        // misses the skeleton cache and builds every group's schema from the
+        // global registry: about 200 ms in a debug build alone, and seconds
+        // when the rest of this binary's tests run beside it, which is how a
+        // CI runner once spent the whole 10 s timeout before the first
+        // interval. Later passes hit the cache, so the interval waited on
+        // below is the stream's own latency rather than a one-time build.
+        state.builder.lock().await.rows_at(Instant::now()).await;
+
         // Port 0: the OS picks a free one, so this cannot collide with another
         // test or with something already running on the machine.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

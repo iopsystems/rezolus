@@ -145,27 +145,6 @@ fn http_client() -> reqwest::blocking::Client {
         .expect("failed to build an HTTP client")
 }
 
-/// An ephemeral port to hand the daemon's HTTP listener.
-///
-/// Bound and released, so between the release and the daemon's own bind there
-/// is a window in which anything on the machine can take it — including
-/// another test in this file, since the tests run in parallel and a released
-/// ephemeral port goes straight back to the kernel's pool. When that happens
-/// the daemon exits instead of serving, which is why [`Hindsight::start`]
-/// retries on a fresh port rather than trusting one reservation.
-/// How many ports to try before giving up. Each attempt is an independent draw
-/// from the ephemeral range, so three is ample for a race that needs a
-/// collision on the same port in the same instant.
-const PORT_ATTEMPTS: usize = 3;
-
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .expect("failed to reserve a port")
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 // ---------------------------------------------------------------------------
 // The daemon under test
 // ---------------------------------------------------------------------------
@@ -201,31 +180,21 @@ impl Hindsight {
     /// buffering.
     fn start(segment_rows: usize, width: usize) -> Self {
         let agent = spawn_fake_agent(width);
-        // The port is reserved and released before the daemon binds it (see
-        // `free_port`), so losing the race is expected occasionally rather than
-        // exceptional — observed in CI as "exited before its HTTP endpoint came
-        // up", after the daemon had already logged `buffering`, which is the
-        // step immediately before it binds the listener. A fresh port is a new
-        // draw, so retry rather than fail the run.
-        let mut failures = Vec::new();
-        for _ in 0..PORT_ATTEMPTS {
-            match Self::try_start(agent, segment_rows) {
-                Ok(h) => return h,
-                Err(why) => failures.push(why),
-            }
-        }
-        panic!(
-            "rezolus hindsight failed to come up in {PORT_ATTEMPTS} attempts; \
-             the daemon said:\n{}",
-            failures.join("\n---\n")
-        );
+        Self::try_start(agent, segment_rows)
+            .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"))
     }
 
-    /// One attempt at [`start`](Self::start). `Err` carries whatever the daemon
-    /// wrote to stderr, so a failure explains itself instead of just reporting
-    /// that the process is gone.
+    /// [`start`](Self::start), with `Err` carrying whatever the daemon wrote to
+    /// stderr, so a failure explains itself instead of just reporting that the
+    /// process is gone.
+    ///
+    /// The daemon binds port 0 and reports the port it got. The harness used to
+    /// reserve a port, release it and hand it over, and the tests run in
+    /// parallel, so in that gap another test's fake agent (which binds port 0)
+    /// could be given the same port. The daemon then failed to bind and exited,
+    /// and `ready` reached the fake agent instead: CI saw its empty 404 fail
+    /// to parse as a `/status` body. With nothing reserved there is no gap.
     fn try_start(agent: u16, segment_rows: usize) -> Result<Self, String> {
-        let port = free_port();
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
         let config = dir.path().join("hindsight.toml");
         let output = dir.path().join("snapshot.rez");
@@ -238,7 +207,7 @@ impl Hindsight {
                  source = \"127.0.0.1:{agent}\"\n\
                  output = \"{}\"\n\
                  buffer_dir = \"{}\"\n\
-                 listen = \"127.0.0.1:{port}\"\n\
+                 listen = \"127.0.0.1:0\"\n\
                  segment_rows = {segment_rows}\n\
                  [log]\n\
                  level = \"info\"\n",
@@ -300,7 +269,7 @@ impl Hindsight {
 
         let mut h = Self {
             child,
-            port,
+            port: 0,
             buffer,
             output,
             log: lines,
@@ -311,14 +280,37 @@ impl Hindsight {
         Ok(h)
     }
 
-    /// Wait for the HTTP endpoint to answer.
+    /// Wait for the HTTP endpoint to come up, learn its port from the
+    /// daemon's log, and wait for it to answer.
     ///
     /// Separate from the startup log because the daemon binds its listener
-    /// AFTER logging "buffering": the connection is refused for a short window
-    /// on a busy machine, and treating that as a failure made every test in
-    /// this file flaky when they all started at once.
+    /// AFTER logging "buffering".
     fn ready(&mut self) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(60);
+        while self.port == 0 {
+            if let Some(port) = self.bound_port() {
+                self.port = port;
+                break;
+            }
+            if self
+                .child
+                .try_wait()
+                .expect("failed to poll the daemon")
+                .is_some()
+            {
+                return Err(format!(
+                    "exited before its HTTP endpoint came up: {}",
+                    self.log_text()
+                ));
+            }
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "timed out waiting for its HTTP endpoint to bind: {}",
+                    self.log_text()
+                ));
+            }
+            std::thread::sleep(INTERVAL / 4);
+        }
         while self.try_status().is_none() {
             if self
                 .child
@@ -326,10 +318,8 @@ impl Hindsight {
                 .expect("failed to poll the daemon")
                 .is_some()
             {
-                // Overwhelmingly the lost port race, but say what the daemon
-                // actually reported rather than guessing on its behalf.
                 return Err(format!(
-                    "exited before its HTTP endpoint came up on port {}: {}",
+                    "exited before its HTTP endpoint on port {} answered: {}",
                     self.port,
                     self.log_text()
                 ));
@@ -344,6 +334,19 @@ impl Hindsight {
             std::thread::sleep(INTERVAL / 4);
         }
         Ok(())
+    }
+
+    /// The port from the daemon's "HTTP endpoint listening on ADDR" line, once
+    /// it has written one.
+    fn bound_port(&self) -> Option<u16> {
+        let log = self.log.lock().unwrap();
+        log.iter().find_map(|line| {
+            let addr = line.split("HTTP endpoint listening on ").nth(1)?;
+            addr.trim()
+                .parse::<std::net::SocketAddr>()
+                .ok()
+                .map(|a| a.port())
+        })
     }
 
     /// Everything the daemon has written to stderr since startup, for failure
@@ -376,6 +379,16 @@ impl Hindsight {
     /// A *ranged* dump is the path that selects segments and materializes the
     /// live tail into one, which is the boundary these tests are about.
     fn dump_to(&self, dest: &Path) -> Duration {
+        let (elapsed, body) = self.dump_bytes();
+        std::fs::write(dest, &body).expect("failed to save the dump");
+        elapsed
+    }
+
+    /// `GET /dump?start=0`, checked to be a `.rez` and returned with how long
+    /// the request took. [`Self::dump_to`] saves it; a test that only needs the
+    /// dump to have happened can drop it, and so not spend time on a disk write
+    /// that it would otherwise have to count as time between dumps.
+    fn dump_bytes(&self) -> (Duration, bytes::Bytes) {
         let start = Instant::now();
         let body = self
             .client
@@ -390,8 +403,7 @@ impl Hindsight {
             "a dump must be a v3 .rez ({} bytes)",
             body.len()
         );
-        std::fs::write(dest, &body).expect("failed to save the dump");
-        elapsed
+        (elapsed, body)
     }
 
     /// Dump into the daemon's own configured output file over
@@ -710,9 +722,9 @@ fn assert_strictly_increasing(what: &str, stamps: &[u64]) {
 /// stall first if a reader could hold the writer off.
 #[test]
 fn sealing_continues_while_dumps_are_in_flight() {
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("dump.rez");
-    sealing_continues_through("GET /dump", 12, |h| h.dump_to(&dest));
+    // The body is dropped rather than saved: writing it to disk is time
+    // between dumps, which the fixture check below counts against coverage.
+    sealing_continues_through("GET /dump", 12, |h| h.dump_bytes().0);
 }
 
 /// The same claim over `POST /dump/file` — the path that writes the daemon's
@@ -855,7 +867,13 @@ fn sealing_continues_through(
     {
         busy += dump(&h);
         dumps += 1;
-        after = h.status();
+        // Only once the window is up: before then the loop continues whatever
+        // the tick count, and a /status request is time no dump occupies,
+        // which the coverage check below counts against the fixture. CI saw
+        // dumps cover 913 ms of a 1,430 ms window when every iteration made one.
+        if started.elapsed() >= window {
+            after = h.status();
+        }
     }
     let elapsed = started.elapsed();
     let (a, b) = (before.segments("fake"), after.segments("fake"));

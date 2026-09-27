@@ -13,6 +13,11 @@
   recordings`. Measured on a 1.28 GB, 5,874-segment archive: 7.0 s, and the
   output matches the input table by table.
 
+### Changed
+
+- Hindsight logs the address its HTTP endpoint actually bound, not the
+  configured one, so `listen = "127.0.0.1:0"` reports the port it got.
+
 ### Fixed
 
 - Agent: `cpu_usage` lost CPU from the per-CPU and per-cgroup totals under
