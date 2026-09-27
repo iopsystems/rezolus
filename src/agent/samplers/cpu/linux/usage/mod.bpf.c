@@ -201,13 +201,80 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_exited SEC(".maps");
 
+/*
+ * task_start_times holds, per pid, the start_time of the task instance whose
+ * counters are live, with METADATA_PENDING set until that instance's
+ * task_info has reached userspace. `task->start_time` is nanoseconds of
+ * CLOCK_MONOTONIC since boot, so bit 63 is never part of a real value. 0 is
+ * "no instance": the map's initial value, and what exit writes back.
+ */
+#define METADATA_PENDING (1ULL << 63)
+
+/*
+ * CLOCK_MONOTONIC when these programs first ran, the clock
+ * `task->start_time` is on. A task that started after it is counted from
+ * zero; one that started before is counted from its first observation, so an
+ * agent restart does not credit every running task's lifetime CPU to one
+ * tick. Set by the first handle_new_task call; racing CPUs all write a time
+ * from that same first moment, so which one wins does not matter.
+ */
+u64 attach_ns = 0;
+
 /**
- * handle_new_task - Check if task is new/reused and send info to userspace
+ * send_task_info - Send one task's metadata to userspace
+ * @task: The task_struct to describe
+ *
+ * Returns 1 when the event was submitted, 0 when the ringbuf was full.
+ */
+static __always_inline int send_task_info(struct task_struct* task) {
+    struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
+    if (!info)
+        return 0;
+
+    __builtin_memset(info, 0, sizeof(struct task_info));
+    populate_task_info(task, info);
+    bpf_ringbuf_submit(info, 0);
+    return 1;
+}
+
+/**
+ * handle_new_task - Start a new task instance's counters, and deliver its
+ * metadata
  * @task: The task_struct to check
  *
- * Returns 0 if new task was detected (info sent, or dropped on a full
- * ringbuf — the seen-marker is left unset so the next event retries),
- * 1 if existing task, -1 on error.
+ * Returns 0 if this is a new task (or a reused pid), 1 if it is a task
+ * already seen, -1 on error.
+ *
+ * Accounting and metadata delivery are separate. A new instance has its
+ * counters zeroed exactly once, and its start_time committed at the same
+ * time, whether or not its task_info fits in the ringbuf. If it does not,
+ * METADATA_PENDING stays set and later calls retry the send only. They never
+ * touch the counters again, so the deltas computed after this call are
+ * credited to the per-CPU and per-cgroup totals as for any other task.
+ *
+ * It used to commit start_time only after a successful send, so a task whose
+ * send failed looked new on every call and had its utime/stime baseline
+ * re-zeroed each time. Every delta was then skipped, and its CPU was missing
+ * from the per-CPU and per-cgroup totals as well as its own. That held while
+ * the ringbuf stayed full, which is up to one snapshot interval, since
+ * userspace drains it only when a snapshot is taken. Under heavy thread churn
+ * (about 17,900 threads/s, a 262 KiB ringbuf holding about 1,130 task_info
+ * events) system time came out 69% short against the kernel's cpu.stat; see
+ * docs/backlog.md, "Agent — per-task CPU usage completeness".
+ *
+ * The new instance's utime/stime baseline is set here too, once: zero for a
+ * task that started after `attach_ns`, so every tick it runs is counted,
+ * including the ones before its first observation; its current utime/stime
+ * for a task that predates the agent. It used to be left at zero and the
+ * first delta skipped for every task, which lost all the CPU of a thread
+ * that lives about one tick (most of a thread-churn workload's), and each
+ * field's first non-zero value for any task whose utime or stime was still
+ * zero when first seen.
+ *
+ * What a failed send still costs: the task is not exported while its
+ * metadata is pending, since group membership follows metadata presence
+ * (docs/principles.md principle 18). Its CPU is in the totals meanwhile, and
+ * in the exited counters if it exits before a send succeeds.
  */
 static __noinline int handle_new_task(struct task_struct* task) {
     if (!task)
@@ -223,49 +290,37 @@ static __noinline int handle_new_task(struct task_struct* task) {
     if (!last_start)
         return -1;
 
-    // Check if this is the same task we've seen before
-    if (*last_start == start_time)
-        return 1;
+    u64 marker = *last_start;
 
-    // New task or PID reuse - zero the counters first
+    // The instance whose counters are live: only its metadata may be owed.
+    if ((marker & ~METADATA_PENDING) == start_time) {
+        if ((marker & METADATA_PENDING) && send_task_info(task)) {
+            bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
+        }
+        return 1;
+    }
+
+    // New task or PID reuse: start its counters, once.
+    u64 now = bpf_ktime_get_ns();
+    if (attach_ns == 0)
+        attach_ns = now;
+
     u64 zero = 0;
-    bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
-    bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
+    if (start_time >= attach_ns) {
+        bpf_map_update_elem(&task_utime, &pid, &zero, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &pid, &zero, BPF_ANY);
+    } else {
+        u64 utime = BPF_CORE_READ(task, utime);
+        u64 stime = BPF_CORE_READ(task, stime);
+        bpf_map_update_elem(&task_utime, &pid, &utime, BPF_ANY);
+        bpf_map_update_elem(&task_stime, &pid, &stime, BPF_ANY);
+    }
     bpf_map_update_elem(&task_cpu_usage, &pid, &zero, BPF_ANY);
 
-    // Populate and send task info (use ringbuf_reserve to avoid stack allocation).
-    //
-    // task_start_times — the "seen this task already" marker — is committed
-    // ONLY after a successful submit below, mirroring cgroup.h's
-    // handle_new_cgroup pattern (serial number committed only once the
-    // cgroup_info send actually succeeds; see its doc comment). Committing
-    // it unconditionally, as this used to, would permanently suppress this
-    // task's metadata (comm, tgid, cgroup) the moment one ringbuf reserve
-    // failed: the *counter* (task_cpu_usage) keeps incrementing normally
-    // either way, but with no metadata ever registered for that pid,
-    // metadata-presence membership (docs/principles.md principle 18) would
-    // never surface it in V3 output — a live task gone permanently
-    // invisible, not just briefly stale.
-    //
-    // Tradeoff accepted: under SUSTAINED ringbuf pressure, a task whose
-    // first attempts all fail re-enters this "new task" branch on every
-    // subsequent `cpuacct_account_field` hit until one attempt succeeds,
-    // re-zeroing task_utime/task_stime/task_cpu_usage each time (harmless
-    // for a genuinely new task — already zero; for a PID-reuse case it
-    // discards usage accumulated since the previous retry). That window is
-    // bounded by however long the ringbuf stays full — normally
-    // sub-millisecond, since it drains every snapshot — and self-heals the
-    // moment one attempt succeeds. A strictly better failure mode than the
-    // permanent metadata loss this replaces.
-    struct task_info* info = bpf_ringbuf_reserve(&task_info, sizeof(struct task_info), 0);
-    if (!info)
-        return 0;
-
-    __builtin_memset(info, 0, sizeof(struct task_info));
-    populate_task_info(task, info);
-    bpf_ringbuf_submit(info, 0);
-
-    bpf_map_update_elem(&task_start_times, &pid, &start_time, BPF_ANY);
+    marker = start_time;
+    if (!send_task_info(task))
+        marker |= METADATA_PENDING;
+    bpf_map_update_elem(&task_start_times, &pid, &marker, BPF_ANY);
 
     return 0;
 }
@@ -310,16 +365,15 @@ static __always_inline int handle_cpuacct_account_field(struct task_struct* task
     u64 delta_utime = 0;
     u64 delta_stime = 0;
 
-    // Only calculate delta if we have valid previous values. A zero previous
-    // value means this is the first observation of the task: skipping the
-    // delta intentionally drops CPU time accrued before we started watching,
-    // otherwise an agent restart would dump every task's accumulated time
-    // into one tick and spike any rate() over these counters.
-    if (*last_utime != 0 && curr_utime >= *last_utime) {
+    // The baseline is set once per task instance by handle_new_task: zero
+    // for a task started after the agent attached, its utime/stime at first
+    // sight for one started before (so an agent restart does not credit a
+    // running task's whole lifetime to one tick). Every delta from it counts.
+    if (curr_utime >= *last_utime) {
         delta_utime = curr_utime - *last_utime;
     }
 
-    if (*last_stime != 0 && curr_stime >= *last_stime) {
+    if (curr_stime >= *last_stime) {
         delta_stime = curr_stime - *last_stime;
     }
 
