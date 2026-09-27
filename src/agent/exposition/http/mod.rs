@@ -353,36 +353,29 @@ fn rows_frames(
             // Ask for a snapshot, then take the index in the SAME lock. Two
             // locks would let a sampling pass land between them, and the rows
             // would name a state built from a walk they were not part of.
-            let (rows, entries, state) = {
+            let reading = {
                 let mut builder = builder.lock().await;
-                let Some(rows) = builder.rows_at(Instant::now()).await else {
-                    continue;
-                };
-                let state = builder.index_state();
-                // What this connection needs to reach `state`. `None` means it
-                // fell out of the history — see `IndexHistory` — and only the
-                // whole set will do.
-                let entries = match last_state {
-                    Some(held) => builder.index_since(held).unwrap_or_else(|| {
-                        warn!(
-                            "stream subscriber at {interval:?} fell out of the index history; \
-                             resending the whole slot set"
-                        );
-                        builder.index_full()
-                    }),
-                    None => builder.index_full(),
-                };
-                (rows, entries, state)
+                match builder.rows_at(Instant::now()).await {
+                    Some(rows) => {
+                        let state = builder.index_state();
+                        // What this connection needs to reach `state`. `None` means it
+                        // fell out of the history — see `IndexHistory` — and only the
+                        // whole set will do.
+                        let entries = match last_state {
+                            Some(held) => builder.index_since(held).unwrap_or_else(|| {
+                                warn!(
+                                    "stream subscriber at {interval:?} fell out of the index history; \
+                                     resending the whole slot set"
+                                );
+                                builder.index_full()
+                            }),
+                            None => builder.index_full(),
+                        };
+                        Some((rows, entries, state))
+                    }
+                    None => None,
+                }
             };
-            last_state = Some(state);
-
-            // The same reading as last time — reached when the interval asked
-            // for is shorter than the TTL, which is the case the TTL exists to
-            // bound. Nothing in this snapshot can have advanced, so every row
-            // is dropped below and the frame goes out empty, saying "your
-            // interval elapsed and there is nothing new".
-            let advanced = last_sent_wall != Some(rows.wall_ns);
-            last_sent_wall = Some(rows.wall_ns);
 
             if let Some(previous) = last_index {
                 if index > previous + 1 {
@@ -398,33 +391,67 @@ fn rows_frames(
             }
             last_index = Some(index);
 
-            let produced = producer.interval(
-                &rows,
-                entries,
-                state,
-                index,
-                |row| {
-                    // The whole snapshot is one this connection already has, so
-                    // nothing in it is new — including a windowless group,
-                    // which carries no evidence either way and would otherwise
-                    // be sent again on the strength of not being able to prove
-                    // itself stale.
-                    if !advanced {
-                        return false;
-                    }
-                    // Has this group actually been read again since this
-                    // connection last heard about it? A windowless group
-                    // carries no answer, so it is always sent — the same
-                    // disposition `stage_rows` gives it.
-                    if let Some(end) = row.window.map(|(_, end)| end) {
-                        if last_window.get(&row.stream) == Some(&end) {
-                            return false;
-                        }
-                        last_window.insert(row.stream.clone(), end);
-                    }
-                    true
-                },
-            );
+            let produced = match reading {
+                Some((rows, entries, state)) => {
+                    last_state = Some(state);
+
+                    // The same reading as last time — reached when the interval asked
+                    // for is shorter than the TTL, which is the case the TTL exists to
+                    // bound. Nothing in this snapshot can have advanced, so every row
+                    // is dropped below and the frame goes out empty, saying "your
+                    // interval elapsed and there is nothing new".
+                    let advanced = last_sent_wall != Some(rows.wall_ns);
+                    last_sent_wall = Some(rows.wall_ns);
+
+                    producer.interval(
+                        &rows,
+                        entries,
+                        state,
+                        index,
+                        |row| {
+                            // The whole snapshot is one this connection already has, so
+                            // nothing in it is new — including a windowless group,
+                            // which carries no evidence either way and would otherwise
+                            // be sent again on the strength of not being able to prove
+                            // itself stale.
+                            if !advanced {
+                                return false;
+                            }
+                            // Has this group actually been read again since this
+                            // connection last heard about it? A windowless group
+                            // carries no answer, so it is always sent — the same
+                            // disposition `stage_rows` gives it.
+                            if let Some(end) = row.window.map(|(_, end)| end) {
+                                if last_window.get(&row.stream) == Some(&end) {
+                                    return false;
+                                }
+                                last_window.insert(row.stream.clone(), end);
+                            }
+                            true
+                        },
+                    )
+                }
+                // No reading to send: before the first sampling pass, or when
+                // the snapshot failed to encode. The interval still elapsed,
+                // so it still gets a frame, the empty one. Skipping it would
+                // leave a gap in `seq`, which a subscriber reads as intervals
+                // it did not receive, and a subscriber waiting on its first
+                // interval would wait for the next one instead. The frame
+                // names the index state this connection already holds, and
+                // before the opening `Full` the no-index state, which every
+                // subscriber treats as resolvable; it carries no rows, so no
+                // row can be attributed against it either way.
+                None => {
+                    warn!(
+                        "stream subscriber at {interval:?}: no snapshot to send for \
+                         interval {index}; sending an empty frame"
+                    );
+                    vec![producer.empty_interval(
+                        last_state.unwrap_or(dendro::replicate::NO_INDEX_STATE),
+                        index,
+                    )]
+                }
+            };
 
             let mut body = Vec::new();
             for frame in &produced {
@@ -585,6 +612,81 @@ mod stream_tests {
             "the handshake arrived and identified the source"
         );
         assert_eq!(sub.skipped_total(), 0);
+    }
+
+    /// An interval with no reading to send still gets a frame: the empty one,
+    /// with the next `seq`. A V2 builder has no acquisition groups, so its
+    /// `rows_at` is `None` every interval, which is the case under test; the
+    /// route refuses V2, so the stream is driven directly.
+    ///
+    /// Before this, such an interval was skipped: no frame, a `seq` gap a
+    /// subscriber reads as lost intervals, and a stream that never yields at
+    /// all while the reading stays missing. Each wait is bounded on the paused
+    /// clock, so that failure shows as a timeout rather than a hung test.
+    #[tokio::test(start_paused = true)]
+    async fn an_interval_without_a_reading_still_gets_an_empty_frame() {
+        let config: Config = toml::from_str("[general]\nttl = \"60s\"\nsnapshot_format = \"v2\"\n")
+            .expect("valid config");
+        let builder = Arc::new(Mutex::new(SnapshotBuilder::new(
+            Arc::new(config),
+            Arc::new(Vec::<Box<dyn Sampler>>::new().into_boxed_slice()),
+            None,
+        )));
+        let subscription = Subscribers::new().register(Duration::from_secs(1));
+        let now = Arc::new(AtomicU64::new(1_700_000_000_000_000_000));
+        let clock_for_stream = Arc::clone(&now);
+        let stream = rows_frames(builder, subscription, move || {
+            clock_for_stream.load(Ordering::Relaxed)
+        });
+        futures::pin_mut!(stream);
+
+        let mut body = Vec::new();
+        for step in 0..5 {
+            if step > 0 {
+                now.fetch_add(1_000_000_000, Ordering::Relaxed);
+            }
+            let chunk = tokio::time::timeout(Duration::from_secs(10), stream.next())
+                .await
+                .unwrap_or_else(|_| panic!("chunk {step}: no frame within 10 s of stream time"))
+                .expect("the stream yields")
+                .expect("a chunk");
+            body.extend_from_slice(&chunk);
+        }
+
+        let mut reader = dendro::replicate::wire::FrameReader::new(std::io::Cursor::new(body))
+            .expect("the preamble reads");
+        let mut rows_frames_seen = Vec::new();
+        while let Some(frame) = reader.next_frame().expect("decodable") {
+            if let dendro::replicate::Frame::Rows {
+                seq,
+                index_state,
+                rows,
+                ..
+            } = frame
+            {
+                rows_frames_seen.push((seq, index_state, rows.len()));
+            }
+        }
+        assert_eq!(
+            rows_frames_seen.len(),
+            4,
+            "one rows frame per interval after the opening chunk: {rows_frames_seen:?}"
+        );
+        for (seq, index_state, rows) in &rows_frames_seen {
+            assert_eq!(*rows, 0, "an interval with no reading sends no rows");
+            assert_eq!(
+                *index_state,
+                dendro::replicate::NO_INDEX_STATE,
+                "before any index was sent, the frame names the no-index state (seq {seq})"
+            );
+        }
+        for pair in rows_frames_seen.windows(2) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].0 + 1,
+                "consecutive intervals, no gap: {rows_frames_seen:?}"
+            );
+        }
     }
 
     /// Drive the real frame stream with a wall clock the test owns, and step
