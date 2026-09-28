@@ -183,6 +183,11 @@ docs ahead of the code. Fixed in the same PR:
   read, which forgets the override and its cached extent, the time mode,
   the GPU and cgroup selections, and the URL keys. This also closes the
   "`uploadParquet` keeps `_rangeOverride`" bug the first pass had recorded.
+  The server path also never re-derived the node and instance state from
+  the uploaded file (only the initial load did), so `reapplyFileMetadata`
+  now runs `applyMultiNodeInfo` after an upload; as a side effect the
+  document title and the Metadata page, which read the same module
+  variable, show the uploaded file instead of the previous one.
 - **Clamp before the first load.** The async clamp raced the router's
   first `loadSection` (`refetchCurrentSectionInPlace` with no cached
   section falls back to a second concurrent load). Both shells now pass

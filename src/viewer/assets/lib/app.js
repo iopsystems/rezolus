@@ -568,9 +568,9 @@ const resetLinkedViewState = () => {
 // shell's upload path replaces the file without re-running initDashboard
 // and used to keep the previous file's node selection, so its queries
 // carried a node the new file never had.
-const reapplyFileMetadata = (fm) => {
+const reapplyFileMetadata = (fm, experimentFm = null) => {
     fileMetadata = fm || null;
-    applyMultiNodeInfo(null);
+    applyMultiNodeInfo(experimentFm || null);
 };
 
 const applyDisplayWindow = async (win) => {
