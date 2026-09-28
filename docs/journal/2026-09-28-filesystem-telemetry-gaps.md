@@ -1,0 +1,213 @@
+# Filesystem telemetry gaps, from a file-per-object cache characterization
+
+- **Opened:** 2026-09-28
+- **Status:** **OPEN — scoping, nothing built.** Lists the filesystem-level
+  measurements a storage characterization had to take by hand, states what an
+  always-on sampler would have said instead, and orders the work. Builds on
+  `2026-09-28-ext4-sampler.md`, whose phase 1 (`ext4_journal`) shipped in
+  #1321 and whose phases 2 and 3 this entry re-prioritizes.
+- **Driver:** a characterization of a cache that stores one file per object
+  (about 56 KiB each, tens of millions of files per host, several TB on a
+  local NVMe), evicts by file atime, and writes each object as a temp file,
+  `fsync`, then rename. Every finding below was reached with a one-off tool
+  — off-CPU profiles, `e2freefrag` after an 8 h soak, `/proc/fs/jbd2/*/info`,
+  `perf`, kworker CPU accounting from `top` — run by someone who already
+  suspected the answer. Rezolus was on the hosts and could name none of the
+  mechanisms. The findings are the requirements; the workload is described
+  only as far as the requirements need.
+- **Owner:** Brian Martin
+
+## What the characterization found, and what measured it
+
+| finding | how it was measured | what rezolus should have said, continuously |
+|---|---|---|
+| Overwriting hot keys shredded ext4 free space. Collapse at 55–60 minutes: p50 1.6 ms → 218 ms, throughput halved. After 8 h: 894 GB free in 10.3 M extents averaging 91 KB, 73% too small for one object; files averaged 2.1 extents. A kworker went from 0.006 to 0.743 of a core in `mballoc`; device latency flat; block-layer queue latency up 91x. | `e2freefrag` offline; `top` on the kworker; blockio queue latency (the one thing rezolus had) | allocator effort per allocation rising (block groups scanned, allocation criterion falling to the slow paths), allocated extent length falling below the request, and a rate of allocations per file above 1 — hours before the collapse, on the host that will collapse |
+| The same collapse on kernel 6.12 and 7.0; a suspected kernel regression was withdrawn. | repeating the soak on a second kernel | the same allocator signals on both hosts, so the comparison is two time series rather than two soaks |
+| atime is required and costs a cold inode-table read on the request path: `__ext4_get_inode_loc` off-CPU 1.46 s → 12.03 s, and requests queued behind a per-request permit for 87.85 s of lock wait. `vm.vfs_cache_pressure=1` removed it: p99 2.01 → 0.856 ms, device writes 26,711 → 2 MiB per 300 s, p99.99 6.7x worse for an unknown reason. | off-CPU and lock profiles; two sysctl arms | inode-table block reads per second, which is the synchronous read on the request path; the rate of deferred (`lazytime`) timestamp writes; and inode-cache residency, so "does the cache fit" is a gauge rather than a hope |
+| The write path loses the SLO: at 45 M objects the p99 crosses 1 ms at about 3.5% writes, and production is 12.5%. Removing the `fsync` cut device writes 19% and made p99.99 56x worse (2.01 → 113 ms) because dirty pages then flushed in bursts that throttled writers. | a write-ratio sweep; an `LD_PRELOAD` shim | fsync latency at the filesystem layer (`ext4_journal` now gives the commit phases); time writers spent throttled by writeback, which is the mechanism behind the 56x |
+| A ~300 MB write burst every ~5 s on read-only runs is the page-cache flusher (`dirty_writeback_centisecs`), not the journal commit interval: a 30x change in `commit=` did nothing, the flusher interval moved the period. | four arms of two sysctls, read off device-write charts | writeback runs by reason (periodic, background, sync) with pages written per run; dirty and writeback page gauges |
+| Eviction is episodic and large: one pass deleted 7.76 M files (461 GB) at about 4,400 unlinks/s on top of 2,300 inserts/s, after walking all 54.5 M. Two client-timeout bursts lined up with pass boundaries; causation not established. | server logs; client timeouts | unlink and inode-eviction rates, unlink latency, and the inode-table read storm the walk causes, on the same time axis as the request tail |
+| Write amplification measured 5.1x in one campaign and 1.48x in another for the same nominal setup, unexplained. | device bytes over client bytes, per campaign | bytes at the VFS layer, pages written by writeback, blocks logged to the journal, and bytes at the device, so the ratio decomposes into data, metadata and journal terms |
+| Two hosts with the same kernel-level work (syscall rates, context switches, CPU, TLB within 10%) differed 2x in block write p99, and socket-ready-to-read p99 was 4x worse with the runqueue idle. Hypothesis: slow file writes hold request threads. | comparing rezolus recordings; the hypothesis is untested | time request threads spend blocked in fsync and write, per cgroup, which is the hypothesis as a metric |
+| Most tunables were nulls: commit interval, `data=writeback`, I/O scheduler, writeback throttling latency target, inode readahead, ZFS. | a run per lever | not a telemetry gap; recorded here because the allocator and writeback signals above are what would have said *why* they were nulls |
+
+The filesystem the characterization settled on is ext4 with `bigalloc`
+(64 KiB clusters, 14% capacity cost), with tuned XFS as the alternative that
+was behind on p99 in every matched pair. Both are in scope below.
+
+## Capabilities
+
+Each capability names the hook, the metric, the finding it serves, the
+event-rate shape that decides its cost, and what it depends on. The kernel
+facts are checked against the vendored aarch64 `vmlinux.h`, which carries the
+`trace_event_raw_*` struct for every tracepoint named here except XFS's
+(XFS is a module on that kernel too; the module-BTF path #1321 built covers
+it).
+
+**C1. Writeback throttling and flusher activity** — a new `writeback` sampler
+on the `mm` writeback tracepoints, filesystem-agnostic.
+
+- `balance_dirty_pages`: fires when a task that has dirtied pages is
+  considered for throttling; carries `pause` (ms the task will sleep),
+  `paused` (cumulative), `dirty`, `bdi_dirty`, `dirty_ratelimit`,
+  `task_ratelimit` and `cgroup_ino`. Metrics: a histogram of non-zero
+  `pause`, a count of throttle events, and a count of calls. This is the
+  mechanism behind the 56x p99.99 without fsync, and it is what "dirty pages
+  accumulate and flush in bursts that throttle writers" looks like as a
+  number. Per-cgroup throttled time is available from `cgroup_ino` once the
+  cgroup-slot infrastructure is taught inode-keyed lookup; host-wide first.
+- `writeback_start` / `writeback_written` (`writeback_work_class`): one event
+  per writeback work item with `nr_pages`, `reason` (background, periodic,
+  sync, vmscan, foreign-flush, ...) and `sb_dev`. Metrics: runs and pages by
+  reason. The 5 s burst becomes a `reason=periodic` series with its page
+  count, and the null result for `commit=` is visible as that series not
+  moving.
+- Rate shape: `balance_dirty_pages` is called once per `ratelimit_pages`
+  dirtied (tens of pages), so under a 12% write mix at 20 K requests/s of
+  56 KiB objects it is on the order of a few thousand calls per second;
+  writeback work items are tens per second. Probe 1 for this sampler is the
+  measured call rate on a write-heavy fio run.
+- Not this: `writeback_dirty_page`, `wbc_writepage`, `writeback_dirty_inode`
+  are per page or per inode and stay out until measured.
+
+**C2. Allocator effort and fragmentation** — `ext4_alloc`, phase 2 of the ext4
+entry, with two additions.
+
+- As specified there: `ext4_mballoc_alloc` (requested vs allocated length,
+  groups scanned, criterion), `ext4_free_blocks`, inode allocate/free,
+  `ext4_writepages_result`, trim.
+- Added: a histogram of allocated extent length in blocks
+  (`ext4_alloc_allocation_sizes` in the ext4 entry's group list already
+  reserves it), and `ext4_mballoc_discard` / `ext4_discard_preallocations`
+  counts, because preallocation discard churn is what a delete-heavy
+  eviction pass does to the allocator.
+- Why: the collapse is an allocator that scans more groups per allocation
+  and returns shorter extents for longer; `2.1 extents per 56 KiB file` is
+  `allocations / files created > 1`, which is two counters this sampler has.
+  On `bigalloc` the same signals say whether the 64 KiB cluster is doing its
+  job, and they are the only way to evaluate the untested `-C 8192` cluster
+  size without another 8 h soak.
+- Rate shape: one `ext4_mballoc_alloc` per extent allocation, so per insert
+  on this workload and per writeback batch on a streaming one; tens of
+  thousands per second at most. Counters and one histogram.
+
+**C3. Metadata reads on the request path** — into `ext4_alloc` as a
+"metadata reads" group, or its own small sampler if the cadence differs.
+
+- `ext4_load_inode(sb, ino)`: fires in `__ext4_get_inode_loc` only when the
+  inode-table block is not in the buffer cache and must be read, so its rate
+  is exactly "synchronous 4 KiB metadata reads on the request path per
+  second". This is the atime finding as one counter, and the `vfs_cache_pressure`
+  fix as that counter going to zero.
+- `ext4_read_block_bitmap_load` / `ext4_load_inode_bitmap` (`ext4__bitmap_load`
+  class): bitmap block reads, the allocator's own cold-metadata cost.
+- `ext4_other_inode_update_time` and `ext4_mark_inode_dirty`: the deferred
+  timestamp writes `lazytime` batches, which under `strictatime,lazytime` is
+  where the atime *write* cost lands. `ext4_mark_inode_dirty` fires per
+  metadata change and is the hot one; measure first.
+- Rate shape: `ext4_load_inode` fires at up to the request rate when the
+  inode table is cold (20 K/s in the characterization) and near zero when
+  warm; that swing is the signal, and the per-event cost is one counter
+  increment.
+
+**C4. Per-filesystem attribution** — phase 3 of the ext4 entry, promoted.
+The cache device is not the root filesystem, and every capability above is a
+per-device question. The `dev_t → slot` lookup and `PackedCounters`-shaped
+banks are specified in that entry; the `filesystem` sampler's mount table
+supplies the labels. Histograms per filesystem still wait on histogram
+slots, so latency stays host-wide until then.
+
+**C5. VFS operation latency and blocked time, per filesystem and per cgroup**
+— a new `ext4_ops` sampler (name open).
+
+- `ext4_sync_file_enter` → `_exit` paired by thread: fsync latency per
+  filesystem, and its error count already in `ext4_journal`.
+- `ext4_unlink_enter` → `_exit` paired by thread: unlink latency, the
+  eviction pass as a latency distribution rather than a log line.
+- `fexit` on `ext4_file_write_iter` and `ext4_rename2` (BTF-gated, module
+  BTF on the kernels seen so far): write and rename latency and bytes
+  written at the VFS layer. `ext4_rename2` matters because the write path's
+  durability ends at a rename that is not itself fsynced.
+- Per cgroup: the sum of time spent blocked in each of these, as
+  `PackedCounters` by cgroup slot, which the syscall sampler already does
+  for counts. This is the "slow file writes hold request threads"
+  hypothesis as a metric, and it needs no per-thread state beyond the start
+  timestamp.
+- Depends on: a per-thread start array (the `MAX_PID` shape, 32 MB per
+  paired hook, or one shared array with the hook id in the value) or
+  `BPF_MAP_TYPE_TASK_STORAGE` once the kernel floor is 5.11. The ext4 entry
+  recorded both options and deferred the choice; C5 forces it.
+- Rate shape: fsync and unlink at request rate; write_iter at request rate;
+  one map write and one read per operation. This is the most expensive
+  sampler in the list and gets the bare-metal probe-cost bench before it is
+  on by default.
+
+**C6. Write amplification decomposition** — no new hooks; a dashboard and a
+documented ratio. Bytes returned by `ext4_file_write_iter` (C5), pages from
+`ext4_writepages_result` (C2), `ext4_journal_commit_blocks{kind="logged"}`
+(shipped), and `blockio_bytes{op="write"}` (shipped) put data, metadata plus
+journal, and device bytes on one axis. The 5.1x versus 1.48x discrepancy
+becomes a question of which term moved, answerable from the recording.
+
+**C7. Page-cache hit ratio** — `mm_filemap_add_to_page_cache` and
+`mm_filemap_delete_from_page_cache` count misses that add pages and
+evictions; hits have no tracepoint and would need `fentry` on
+`filemap_get_folio` at every read. Rate is the read rate. Deferred until C1
+through C5 exist; the read path was not where this characterization lost its
+SLO.
+
+**C8. XFS parity** — an `xfs_log` sampler on XFS's log-grant, AIL-push and
+CIL tracepoints, and an `xfs_alloc` on its allocator, so the tuned-XFS
+alternative is measurable on the same axes as `bigalloc`. XFS's tracepoints
+are in the `xfs` module; the module-BTF twin selection from #1321 applies
+unchanged. Separate design, after C1–C5.
+
+**C9. Adjuncts that are not eBPF.**
+
+- `memory_meminfo` does not expose `Dirty`, `Writeback`, `Dirty` thresholds
+  or `Buffers`-adjacent writeback state; the file is already read every
+  refresh, so these are new fields on an existing parse.
+- Slab gauges for `ext4_inode_cache`, `dentry` and `buffer_head` from
+  `/proc/slabinfo` at the `filesystem` sampler's 60 s off-cycle cadence.
+  "Does the ~46 GB inode cache stay resident" is this gauge; nothing in the
+  agent answers it today. Principle 15 exception, measured like
+  `filesystem`'s sweep.
+- `/sys/fs/ext4/<dev>/errors_count` and `lifetime_write_kbytes`, already in
+  the backlog from the ext4 entry.
+
+## Plan
+
+Ordered by which finding each closes, event-rate risk, and what it depends
+on. Every sampler carries the ext4 entry's gates: measured refresh
+microseconds, a rate probe on a representative workload before the hot hooks
+are attached, and the bare-metal probe-cost bench for anything at request
+rate.
+
+1. **`memory_meminfo` dirty/writeback fields** (C9). Parse-only; lands alone.
+2. **`writeback` sampler** (C1): `balance_dirty_pages` pause histogram and
+   counts, writeback runs and pages by reason. Rate probe first on a
+   write-heavy fio run. Filesystem-agnostic, so it serves the XFS arm too.
+3. **`ext4_alloc` with metadata reads** (C2, C3). The allocator signals and
+   `ext4_load_inode` together are what the two largest findings needed.
+4. **Slab gauges** (C9) beside `filesystem`'s sweep, so C3's inode-read rate
+   has its cause on the same dashboard.
+5. **Per-filesystem counters** (C4), the lookup-map decision measured on the
+   `ext4_alloc` bench.
+6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
+   amplification dashboard (C6) once its four terms exist.
+7. **XFS** (C8), then page cache (C7).
+
+## Deferred / reopen
+
+- **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages`
+  carries `cgroup_ino`, not the css id the cgroup slot machinery keys on; an
+  inode-keyed lookup is a `bpf/cgroup.h` change. Host-wide first.
+- **Per-thread start state for paired hooks** — Open, decision forced by C5:
+  one `MAX_PID` array per paired hook (32 MB each), one shared array with the
+  hook id in the value, or task local storage at a 5.11 floor.
+- **Page-cache hits** — Idea. Needs `fentry` at read rate; C7.
+- **Free-space fragmentation as a gauge** — By design, not eBPF. The state
+  `e2freefrag` reports is the on-disk bitmap; the allocator signals in C2
+  are its rate-of-change and the honest always-on proxy. Reopen if a cheap
+  periodic read of the group descriptors' free-block counts proves useful
+  as a 60 s gauge.

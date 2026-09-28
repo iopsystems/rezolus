@@ -914,6 +914,41 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
 - **XFS** — Idea. Its own tracepoint set and journaling model; a separate
   design.
 
+## Agent — filesystem telemetry gaps
+
+Source: [Filesystem telemetry gaps](journal/2026-09-28-filesystem-telemetry-gaps.md).
+Scoping only. Ordered as the entry's plan; each sampler carries the ext4
+entry's gates (measured refresh µs, a rate probe before hot hooks, the
+bare-metal probe-cost bench for anything at request rate).
+
+- **`memory_meminfo` dirty/writeback fields** — Open. `Dirty`, `Writeback`
+  and the dirty thresholds from a file the sampler already parses.
+- **`writeback` sampler** — Open. `balance_dirty_pages` pause histogram and
+  throttle counts; `writeback_start`/`writeback_written` runs and pages by
+  reason. Rate probe on a write-heavy fio run first. Filesystem-agnostic.
+- **`ext4_alloc` with metadata reads** — Roadmap (was phase 2 of the ext4
+  entry). Adds an allocated-extent-length histogram, preallocation discard
+  counts, and `ext4_load_inode` / bitmap-load counters for synchronous
+  metadata reads on the request path.
+- **Slab gauges** — Open. `ext4_inode_cache`, `dentry`, `buffer_head` from
+  `/proc/slabinfo` on the `filesystem` sweep's 60 s cadence; a principle 15
+  exception, measured.
+- **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
+  promoted): the cache device is never the root filesystem.
+- **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
+  enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
+  Forces the per-thread start-state decision (`MAX_PID` arrays vs task
+  local storage at a 5.11 floor). Bench before default-on.
+- **Write-amplification decomposition dashboard** — Roadmap. VFS bytes,
+  writeback pages, journal blocks logged, device bytes on one axis; no new
+  hooks once `ext4_ops` and `ext4_alloc` exist.
+- **XFS journal and allocator samplers** — Idea. Module tracepoints; the
+  module-BTF twin selection applies.
+- **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;
+  hits need `fentry` at read rate.
+- **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages` keys
+  by `cgroup_ino`, not css id; needs an inode-keyed lookup in `bpf/cgroup.h`.
+
 ## Agent — NVIDIA GPU sampler
 
 Source: PR #1108 (Tegra placeholder gating), grounded in a measured Tegra
