@@ -222,8 +222,15 @@ A `.rez` takes any number of endpoints, rezolus or Prometheus. A Prometheus targ
 
 ### `.rez` lives in its own crate
 
-`crates/rez` holds the whole format — container (v2 tar, v3 SQLite), writers,
-and the `RezReader` that presents an archive as a `metriken_query::MetricsSource`.
+`crates/rez` holds the `.rez` format — container (v2 tar, v3 SQLite), writers,
+and `RezReader`, which opens a `.rez` or dendro archive by content and presents
+it as a `metriken_query::MetricsSource`. The reader underneath is metriken's
+(`metriken-archive`'s `ArchiveReader`, which `RezReader` derefs to; the segment
+format, WAL rows and table builders are `metriken-segment`'s), per metriken's
+`docs/journal/2026-09-28-high-cardinality-stack.md`. What stays here is the
+`.rez` container (`RezDb`'s `metriken_archive::Catalog` impl, the tar path) and
+the identity-index relabel (`reader::IdentityIndex`, an
+`metriken_archive::IndexRelabel`).
 It is a workspace crate rather than a module of the binary because `rezolus` is
 **binary-only** (no `lib` target), so nothing can depend on it: a reader living
 there was reachable by the server viewer and by nothing else, which is why the

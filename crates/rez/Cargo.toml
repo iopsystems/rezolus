@@ -18,6 +18,7 @@ metriken = { workspace = true, optional = true }
 metriken-exposition = { workspace = true, optional = true }
 metriken-query.workspace = true
 metriken-segment.workspace = true
+metriken-archive.workspace = true
 parquet = { version = "58.2.0", default-features = false, features = [
     "arrow",
     "simdutf8",

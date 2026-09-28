@@ -19,6 +19,7 @@ metriken = "0.11.1"
 metriken-exposition = "0.21.1"
 metriken-query = { version = "0.33.0", default-features = false }
 metriken-segment = { version = "0.1.2", default-features = false }
+metriken-archive = { version = "0.1.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -54,7 +55,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.22.2-alpha.19"
+version = "5.22.2-alpha.20"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true
