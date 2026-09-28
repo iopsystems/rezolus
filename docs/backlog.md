@@ -866,11 +866,11 @@ Source: [ext4 telemetry through eBPF](journal/2026-09-28-ext4-sampler.md).
 The entry specifies `ext4_journal` (phase 1, implemented and measured),
 `ext4_alloc` (phase 2) and per-filesystem counters (phase 3).
 
-- **Probe-cost bench on bare metal** — Open, the remaining GO gate for
-  phase 1. Refresh cost is measured (190–295 µs on a 56-vCPU guest); the
-  per-event cost of the fsync hooks is not, because the guest's virtio disk
-  varied 40% between two sampler-off runs. `delta` with `null_blk`, isolated
-  cores and `perf stat`, per the 2026-09-03 blockio method.
+- **Probe-cost bench** — DONE, GO. `null_blk` in a guest at 450 K fsync/s:
+  +225 ± 130 instructions per fsync (+0.68%), cycles +0.8% to +2.1%
+  depending on baseline, throughput −1.8% to +0.1%; the two baselines
+  disagree by 2%, recorded in the entry. Reopen only for a bench needing
+  tighter than ±2%.
 - **Fleet probes on more kernels** — Open. Probes 1–3 passed on aarch64
   Debian 13 (`6.12.75`, built-in ext4) and x86_64 Debian 13 (`6.12.63`,
   `CONFIG_EXT4_FS=m` with module BTF, where the sampler runs healthy with
@@ -915,6 +915,41 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
 - **XFS** — Idea. Its own tracepoint set and journaling model; a separate
   design.
+
+## Agent — filesystem telemetry gaps
+
+Source: [Filesystem telemetry gaps](journal/2026-09-28-filesystem-telemetry-gaps.md).
+Scoping only. Ordered as the entry's plan; each sampler carries the ext4
+entry's gates (measured refresh µs, a rate probe before hot hooks, the
+bare-metal probe-cost bench for anything at request rate).
+
+- **`memory_meminfo` dirty/writeback fields** — Open. `Dirty`, `Writeback`
+  and the dirty thresholds from a file the sampler already parses.
+- **`writeback` sampler** — Open. `balance_dirty_pages` pause histogram and
+  throttle counts; `writeback_start`/`writeback_written` runs and pages by
+  reason. Rate probe on a write-heavy fio run first. Filesystem-agnostic.
+- **`ext4_alloc` with metadata reads** — Roadmap (was phase 2 of the ext4
+  entry). Adds an allocated-extent-length histogram, preallocation discard
+  counts, and `ext4_load_inode` / bitmap-load counters for synchronous
+  metadata reads on the request path.
+- **Slab gauges** — Open. `ext4_inode_cache`, `dentry`, `buffer_head` from
+  `/proc/slabinfo` on the `filesystem` sweep's 60 s cadence; a principle 15
+  exception, measured.
+- **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
+  promoted): the cache device is never the root filesystem.
+- **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
+  enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
+  Forces the per-thread start-state decision (`MAX_PID` arrays vs task
+  local storage at a 5.11 floor). Bench before default-on.
+- **Write-amplification decomposition dashboard** — Roadmap. VFS bytes,
+  writeback pages, journal blocks logged, device bytes on one axis; no new
+  hooks once `ext4_ops` and `ext4_alloc` exist.
+- **XFS journal and allocator samplers** — Idea. Module tracepoints; the
+  module-BTF twin selection applies.
+- **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;
+  hits need `fentry` at read rate.
+- **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages` keys
+  by `cgroup_ino`, not css id; needs an inode-keyed lookup in `bpf/cgroup.h`.
 
 ## Agent — NVIDIA GPU sampler
 

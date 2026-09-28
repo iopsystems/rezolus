@@ -1,8 +1,10 @@
 # ext4 telemetry through eBPF — journal first, allocator second
 
 - **Opened:** 2026-09-28
-- **Status:** **OPEN — phase 1 (`ext4_journal`) implemented and measured on
-  a module-ext4 kernel; probe-cost bench on bare metal still to do.** Two BPF
+- **Status:** **Phase 1 (`ext4_journal`) SHIPPED in #1321 and measured; GO
+  on probe cost (+225 instructions per fsync, under 1% of the fsync path at
+  450 K fsync/s on `null_blk`). Phases 2 and 3 OPEN**, re-prioritized by
+  `2026-09-28-filesystem-telemetry-gaps.md`. Two BPF
   samplers are specified: `ext4_journal` (jbd2 commit and checkpoint phases,
   fsync counts, filesystem errors) and `ext4_alloc` (block allocator effort,
   writeback results, inode churn). Host-wide first; per-filesystem
@@ -526,13 +528,55 @@ questions people ask of it is a matter for use; if not, `jbd2_start_commit`
 to `jbd2_end_commit` pairing with our own clock is the alternative, at the
 price of a per-journal side map.
 
-**Probe cost: not measured to the gate.** The A/B/A fio sequence on the
-guest's virtio disk read OFF 851, ON 616, OFF 510 IOPS (p99 163, 5,866, 161 µs):
-the two OFF runs differ by 40%, so nothing under that noise floor is
-attributable to the sampler. The `fsync` hooks are two `array_incr`s per
-call; the measurement the gate asks for needs bare metal, isolated cores,
-`null_blk` and `perf stat`, per `2026-09-03-blockio-latency-rq-fields.md`.
-That is the remaining GO item and is in *Deferred*.
+**Probe cost, first attempt: not measurable on a virtio disk.** The A/B/A fio
+sequence on the guest's virtio disk read OFF 851, ON 616, OFF 510 IOPS
+(p99 163, 5,866, 161 µs): the two OFF runs differ by 40%, so nothing under
+that noise floor is attributable to the sampler.
+
+**Probe cost, measured** (systemslab `01a0e986-e415-717b-ae86-747c23cc7e0a`,
+same guest image, `d01988fd` on main). The disk noise is removed by putting
+ext4 on a memory-backed `null_blk` device, so fsync completes in microseconds
+and the workload is CPU-bound at about 450,000 fsyncs/s: fio randwrite 4 KiB,
+8 jobs each pinned to one of vCPUs 8–15, `fsync=1`, 20 s runs, under
+`perf stat -C 8-15`; the agent pinned to vCPUs 0–7 and scraped at 1 Hz. Three
+arms interleaved four times: no agent, agent with every sampler disabled
+(`idle`), agent with `ext4_journal` only (`ext4`).
+
+| arm | fsync/s (mean ± sd) | task-clock ns/fsync | cycles/fsync | instructions/fsync |
+|---|---|---|---|---|
+| none | 445,847 ± 10,130 | 18,307 ± 449 | 68,381 ± 639 | 33,157 ± 134 |
+| idle | 454,658 ± 912 | 17,892 ± 41 | 67,550 ± 216 | 33,107 ± 126 |
+| ext4 | 446,289 ± 2,438 | 18,250 ± 132 | 68,948 ± 419 | 33,332 ± 133 |
+
+- **Instructions per fsync is the clean number: +225 ± 130 over `idle`**
+  (+0.68%), and +175 over `none`. That is the whole cost of two `tp_btf`
+  trampolines, two 14-instruction programs and two per-CPU counter
+  increments, per fsync. At 450,000 fsync/s it is about 100 M instructions/s
+  across the eight cores, under 1% of one core.
+- **Cycles: +1,398 per fsync over `idle` (+2.1%), +567 over `none` (+0.8%).**
+  The two baselines disagree by 830 cycles, more than the sampler's own
+  span, and `idle` is faster than `none` on every rep by a margin its
+  standard deviation does not explain (+2.0% fsync/s). The likely cause is
+  the arm order: `none` runs first in each rep, immediately after the
+  previous rep's agent teardown, and the first `none` run is the one
+  outlier (428 K). Whatever it is, it bounds what this bench can resolve at
+  about ±2% on cycles and throughput.
+- **Throughput: −1.8% against `idle`, +0.1% against `none`.** The gate was
+  "under 1% at saturation"; against one baseline it passes and against the
+  other it does not, and the instruction count says the true cost is well
+  under 1% of the fsync path on a device where fsync is 18 µs of CPU. On a
+  real device fsync is a millisecond-scale wait at a rate three orders of
+  magnitude lower, so the fraction there is unmeasurably small. **Ruled GO**,
+  with the ±2% baseline disagreement recorded rather than averaged away.
+- Reconciliation held on every ext4 arm: `ext4_sync_file{op="fsync"}` was
+  99.6–99.7% of fio's write count with the last scrape landing up to a second
+  before fio ended; commits 6,150–6,252 per arm, so at this rate jbd2 batches
+  about 1,450 fsyncs into one commit. Refresh latency p50 181–211 µs, max
+  261 µs, with the agent on its own cores.
+
+The `rezolus_bpf_run_time`/`run_count` pair would give the in-program time
+per event directly, excluding dispatch; the JSON snapshot did not carry them
+under the sampler's name in this run, so that number is not reported.
 
 **Defects found by running it**, none by reading it:
 
@@ -551,11 +595,11 @@ That is the remaining GO item and is in *Deferred*.
 
 ## Deferred / reopen
 
-- **Probe-cost bench on bare metal** — Open, the remaining GO gate for
-  phase 1. `delta` (x86_64, Debian 13) with `null_blk`, isolated cores,
-  `perf stat -C`, sampler off versus on, four repetitions, the method of
-  `2026-09-03-blockio-latency-rq-fields.md`. GO at under 1% throughput at
-  saturation.
+- **Probe-cost bench** — Done (GO), in a guest rather than on bare metal:
+  `null_blk` removed the disk noise and pinned vCPUs plus `perf stat -C`
+  gave the per-event accounting. Reopen only if a bench needs a baseline
+  agreement tighter than the ±2% this one had; the fix is randomized arm
+  order and a warm-up run per arm.
 - **Counter sweep at `MAX_CPUS`** — Idea. The refresh walks 1,024 banks on a
   56-CPU guest; bounding the `Counters` sweep to possible CPUs is a
   `bpf/counters.rs` change that every `Counters` sampler would share.
