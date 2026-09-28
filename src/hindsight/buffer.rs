@@ -481,11 +481,12 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 ///
 /// Both the whole buffer and a range go through dendro's
 /// `copy_sources_into`: whole segments overlapping the range, copied as they
-/// are, and the live WAL tail re-encoded into a segment through
-/// metriken-archive's encoder, in one read snapshot of the buffer. Not
-/// `VACUUM INTO` as for a `.rez`: dendro's `vacuum_into` needs a write
-/// handle, and the writer thread holds the only one a live buffer allows
-/// (on the read handle SQLite opens the destination read-only).
+/// are, the live WAL tail encoded into a final segment through
+/// metriken-archive's encoder, and the clock offsets, all in one read
+/// snapshot of the buffer. The dump is therefore fully sealed: a reader
+/// opening it has no WAL tail to rebuild, which a `VACUUM INTO` copy would
+/// carry over unsealed. (dendro's `vacuum_into` also fails on the read
+/// handle today: `query_only`, which `Archive::open` sets, refuses it.)
 ///
 /// A range starts one restatement period early when the buffer has long
 /// tables. An occupant's labels are written when it is first seen and

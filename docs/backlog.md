@@ -634,12 +634,13 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   - **E. 6.0 default**: `record` and `hindsight` write dendro by default,
     after D.
 - **dendro's `vacuum_into` fails on the read handle** — Open, a dendro
-  defect. SQLite opens `VACUUM INTO`'s destination with the source
-  connection's flags, so on `Archive::open` (read-only) the dump fails with
-  "attempt to write a readonly database"; a live buffer's writer holds the
-  only write handle allowed. Hindsight dumps a dendro buffer through
-  `copy_sources_into` instead. Reopen when dendro's dump works from the read
-  handle, which would also compact the free list on the way out.
+  defect. `Archive::open` sets `PRAGMA query_only = 1`, and SQLite refuses
+  `VACUUM INTO` under it ("attempt to write a readonly database"), though
+  the statement writes only the destination; a live archive allows no
+  other handle. Fix in dendro: lift `query_only` for that one statement
+  (the connection stays `SQLITE_OPEN_READ_ONLY`). Nothing in rezolus needs
+  it: hindsight dumps through `copy_sources_into`, which leaves no WAL tail
+  in the dump.
 - **The reader routes a table by one segment's footer** — Open. A metric
   that first appears in a later segment of the same table cannot be
   queried, in a `.rez` and a dendro archive alike (metriken

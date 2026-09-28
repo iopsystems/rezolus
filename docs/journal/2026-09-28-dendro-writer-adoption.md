@@ -105,12 +105,14 @@ both.
   dendro's catalog: page statistics, and per stream the sealed and live
   spans. A long table's occupant stream is listed as a table of its own.
 - A dump, whole or ranged, is dendro's `copy_sources_into` from the read
-  handle, with `Encoder::for_streams` (metriken-archive 0.2.4) re-encoding
-  the live tail. Not `VACUUM INTO`: dendro's `vacuum_into` needs a write
-  handle, and the writer thread holds the only one a live buffer allows. On
-  the read handle SQLite opens the destination read-only and the dump fails
-  ("attempt to write a readonly database"). The copy is then marked
-  complete, as a `.rez` dump is.
+  handle, with `Encoder::for_streams` (metriken-archive 0.2.4) encoding the
+  live tail into a final segment per stream; segments, clock offsets and
+  caller rows are copied as they are. The dump is fully sealed, so a reader
+  has no WAL tail to rebuild on every open, which a `VACUUM INTO` copy would
+  carry over unsealed (decided 2026-09-28). The copy is then marked
+  complete, as a `.rez` dump is. dendro's `vacuum_into` also fails on the
+  read handle today, because `Archive::open` sets `query_only`; see the
+  backlog.
 - A ranged dump of a buffer with long tables starts one restatement period
   (300 s) early. An occupant's labels are written at first sight and
   restated every period, so one first seen before the range is named only
