@@ -39,8 +39,10 @@ dashboard = { path = "crates/dashboard" }
 # release; there is no longer a feature to ask for. 0.2.1 is documentation
 # only: `Frame::Rows.seq` no longer has to start at zero, which is what lets
 # rezolus send the subscription's interval index. 0.2.2 adds retention floors
-# for `caller_rows` (a `Full` that surviving rows depend on is kept).
-dendro = { version = "0.2.2", default-features = false }
+# for `caller_rows` (a `Full` that surviving rows depend on is kept). 0.3.0
+# makes `Frame` `#[non_exhaustive]` (a match needs a wildcard arm) and has
+# `FrameReader` skip frame kinds it does not know.
+dendro = { version = "0.3.0", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -49,7 +51,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.22.2-alpha.10"
+version = "5.22.2-alpha.11"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

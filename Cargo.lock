@@ -1040,9 +1040,9 @@ dependencies = [
 
 [[package]]
 name = "dendro"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3a24b1bb9a400b87d08181c8a9ca4a43692db9938c6109f00ff5ee25a79243e"
+checksum = "897ba1f06a932ad6498f49692779879fe855a1f0ea834771d1ddc4e4ddb6065d"
 dependencies = [
  "arrow",
  "bytes",
@@ -3023,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.22.2-alpha.10"
+version = "5.22.2-alpha.11"
 dependencies = [
  "allan",
  "anyhow",
