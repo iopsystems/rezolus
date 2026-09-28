@@ -92,7 +92,7 @@ Both builders take a `toAxisMs` conversion, and the chart supplies
 heatmap pairs, both diff heatmaps, split lines) to the capture anchor the
 axis was rebased on, so events land where they belong in compare mode
 instead of at absolute epoch ms. The first build missed the two quantile
-builders; an adversarial review caught it before merge. The add-event form gained an
+builders. The add-event form gained an
 optional End (RFC 3339, must be after Timestamp; `duration_ns` is derived),
 and the info popover shows End, Duration and Details. Events remain one
 baseline-scoped list; the overlay and split charts place them by the first

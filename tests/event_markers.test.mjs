@@ -99,6 +99,8 @@ test('isRangeEvent and formatDuration', () => {
     assert.equal(isRangeEvent({ duration_ns: '5000000000' }), false);
     assert.equal(buildRangeSpans([{ timestamp: 1_000_000_000, duration_ns: '5000000000' }]), null);
     assert.equal(formatDuration(250_000_000), '250ms');
+    // The CLI can write sub-ms durations (duration_ns=1500); still a range.
+    assert.equal(formatDuration(400_000), '<1ms');
     // Round before choosing the unit, or 999.6 ms prints as "1000ms".
     assert.equal(formatDuration(999_600_000), '1s');
     assert.equal(formatDuration(40_000_000_000), '40s');

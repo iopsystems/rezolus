@@ -28,6 +28,7 @@ export const isRangeEvent = (e) =>
 export function formatDuration(ns) {
     if (!Number.isFinite(ns) || ns <= 0) return '';
     const ms = Math.round(ns / 1_000_000);
+    if (ms < 1) return '<1ms';
     if (ms < 1000) return `${ms}ms`;
     const totalSec = Math.round(ms / 1000);
     const h = Math.floor(totalSec / 3600);

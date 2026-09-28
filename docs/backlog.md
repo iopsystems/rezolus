@@ -1142,8 +1142,9 @@ Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-eve
   `div.event-range-band` drawn by `_renderEventBubbles`. The design called
   for an echarts `markArea`; the custom-series heatmaps never laid one out
   (see the entry), so the band is an overlay. An End field on the add-event
-  form; Duration/End/Details in the info popover. The CLI already accepted `duration=`/`duration_ns=` (the item
-  was wrong about that); it gained a test and help text. Fell out of it:
+  form; Duration/End/Details in the info popover. The CLI already accepted
+  `duration=`/`duration_ns=` (the item was wrong about that); it gained a
+  test and help text. Fell out of it:
   compare-mode charts now place events on their relative axis through
   `spec.eventTimeOriginSec` (every marker used to land off-grid there).
   Per-capture event lists remain with event-anchored alignment below.
