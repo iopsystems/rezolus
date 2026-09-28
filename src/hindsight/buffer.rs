@@ -419,15 +419,16 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
     .map_err(|e| format!("failed to stage the dump beside {}: {e}", dest.display()))?;
     if is_dendro(buffer) {
         let staged = staging.path().join("dump.dendro");
-        dump_dendro(buffer, &staged, range)?;
+        // Summarized before the rename, through the write handle `dump_dendro`
+        // closes; reopening the output read-only would leave `-wal`/`-shm`
+        // sidecars beside it, which only a write handle's close removes.
+        let mut summary = dump_dendro(buffer, &staged, range)?;
         std::fs::rename(&staged, dest).map_err(|e| {
             format!(
                 "failed to move the dump into place at {}: {e}",
                 dest.display()
             )
         })?;
-        let mut summary =
-            summarize_dendro(&dendro::archive::Archive::open(dest).map_err(|e| e.to_string())?)?;
         summary.bytes = bytes_on_disk(dest);
         return Ok(summary);
     }
@@ -493,7 +494,7 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 /// restated every period; one first seen before `start` is named only by a
 /// restatement at most a period before it. The dump reaches further than
 /// asked at each edge anyway (whole segments), and reports what it holds.
-fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<(), String> {
+fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summary, String> {
     use dendro::archive::{Archive, ArchiveMut};
     use dendro::rewrite::{copy_sources_into, CopySpec};
     let err = |e: dendro::Error| e.to_string();
@@ -539,9 +540,11 @@ fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<(), St
     for id in ids {
         db.mark_complete(id).map_err(err)?;
     }
-    // Dropping the handle folds its sidecar into the file before the rename.
+    let summary = summarize_dendro(&db)?;
+    // Dropping the write handle folds its sidecar into the file and removes
+    // it, so what gets renamed is the whole archive and nothing beside it.
     drop(db);
-    Ok(())
+    Ok(summary)
 }
 
 /// Build a fresh `.rez` at `staged` holding only the segments that overlap
@@ -1386,6 +1389,13 @@ mod tests {
         let dest = dir.path().join("dump.dendro");
         let summary = dump(&path, &dest, &TimeRange::new(None, None)).unwrap();
         assert_eq!(summary.rows, 10);
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = dir.path().join(format!("dump.dendro{suffix}"));
+            assert!(
+                !sidecar.exists(),
+                "the dump leaves no {suffix} sidecar beside the output"
+            );
+        }
         let reader = crate::rez_reader::RezReader::open_recordings(
             &dest,
             metriken_query::BufferPool::new(64 * 1024 * 1024),
