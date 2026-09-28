@@ -861,14 +861,22 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
 ## Agent — ext4 samplers
 
 Source: [ext4 telemetry through eBPF](journal/2026-09-28-ext4-sampler.md).
-The entry specifies `ext4_journal` (phase 1, implemented), `ext4_alloc`
-(phase 2) and per-filesystem counters (phase 3).
+The entry specifies `ext4_journal` (phase 1, implemented and measured),
+`ext4_alloc` (phase 2) and per-filesystem counters (phase 3).
 
+- **Probe-cost bench on bare metal** — Open, the remaining GO gate for
+  phase 1. Refresh cost is measured (190–295 µs on a 56-vCPU guest); the
+  per-event cost of the fsync hooks is not, because the guest's virtio disk
+  varied 40% between two sampler-off runs. `delta` with `null_blk`, isolated
+  cores and `perf stat`, per the 2026-09-03 blockio method.
 - **Fleet probes on more kernels** — Open. Probes 1–3 passed on aarch64
-  Debian 13 (`6.12.75`, built-in ext4, 250 Hz) and are recorded in the entry;
-  x86_64 Debian 13 runs with the build job. Still unprobed: a
-  `CONFIG_EXT4_FS=m` kernel (the case the x86_64 `vmlinux.h` proves exists),
-  RHEL-family (Rocky 10), and anything at the 5.8 floor.
+  Debian 13 (`6.12.75`, built-in ext4) and x86_64 Debian 13 (`6.12.63`,
+  `CONFIG_EXT4_FS=m` with module BTF, where the sampler runs healthy with
+  `tp_btf` twins from module BTF). Still unprobed: RHEL-family (Rocky 10)
+  and anything at the 5.8 floor.
+- **Counter sweep at `MAX_CPUS`** — Idea. `Counters::refresh` walks 1,024
+  banks whatever the CPU count; bounding it to possible CPUs is a
+  `bpf/counters.rs` change shared by every `Counters` sampler.
 - **`ext4_alloc` (phase 2)** — Roadmap. `ext4_mballoc_alloc`,
   `ext4_writepages_result`, inode and free-block counters, trim; its own
   bench on a write-heavy fio run since allocations track write throughput.
