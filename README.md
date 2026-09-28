@@ -17,7 +17,9 @@ system-level evidence, not individual request traces or call-stack profiles.
 [Metrics](docs/metrics.md) · [Documentation map](#documentation-map)
 
 **See it before installing:** [explore the sample recording in the web viewer](https://rezolus.com/viewer/?capture=demo.parquet).
-The sample loads automatically and is processed in your browser. Explore the
+The sample loads automatically and is processed in your browser. A viewer URL
+carries the time range and selectors, so a link reopens the same view (see
+[linking to a view](docs/usage.md#linking-to-a-view)). Explore the
 scheduler and I/O histograms alongside CPU activity; no installation or file
 upload is needed.
 

@@ -10,6 +10,7 @@ import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
 import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { composeAbReportPrefix } from './ab_filename.js';
+import { writeViewState } from '../ui/url_state.js';
 import { ViewerApi } from '../viewer_api.js';
 import { eventsStore } from '../events/events_store.js';
 import { renderMarkdown, renderMarkdownInline } from '../ui/markdown.js';
@@ -326,6 +327,8 @@ const setAnchor = (captureId, ms) => {
     if (!notebookStore.anchors) notebookStore.anchors = { baseline: 0, experiment: 0 };
     notebookStore.anchors[captureId] = Number(ms) || 0;
     persistNotebook();
+    // The anchor also rides in the link; a zero is "no shift" and drops the key.
+    writeViewState({ anchors: { [captureId]: notebookStore.anchors[captureId] } });
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 

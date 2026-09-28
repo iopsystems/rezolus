@@ -3,13 +3,13 @@
 
 import { ChartsState, Chart } from './charts/chart.js';
 import { QueryExplorer, SingleChartView } from './features/explorers.js';
-import { CgroupSelector } from './features/cgroup_selector.js';
+import { CgroupSelector, seedSelectedCgroups } from './features/cgroup_selector.js';
 import { GpuSelector } from './features/gpu_selector.js';
 import globalColorMapper from './charts/util/colormap.js';
 import { TopNav, Sidebar, countCharts, formatSize } from './ui/layout.js';
 import { collectGroupPlots } from './features/group_utils.js';
 import { CpuTopology } from './features/topology.js';
-import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
+import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, substituteCgroupPattern, processDashboardData, clearMetadataCache, clearDisplayTiles, setStepOverride, getStepOverride, setRateMode, getRateMode, setSelectedNode, setSelectedInstance, getSelectedNode, setSelectedGpus, getSelectedGpus, injectLabel, setDisplayMode, getDisplayMode, setRangeOverride, getRangeOverride, nativeInterval, stepAtLeast, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from './data.js';
 
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
@@ -20,6 +20,7 @@ import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
+import { readViewState, writeViewState, clearViewState } from './ui/url_state.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
@@ -354,10 +355,66 @@ const loadSection = async (section) => {
         // `gpus` carries the (vendor, id) pairs the selector filters on. Older
         // recordings have only `ids`; the selector falls back to those.
         gpuEntries = Array.isArray(gpuSel.gpus) ? gpuSel.gpus.slice() : [];
+
+        // The list is only known now, so this is where a selection seeded
+        // from the link is checked. A GPU this recording does not have would
+        // filter every chart to nothing; drop it, say so, fix the link.
+        if (selectedGpus.length > 0) {
+            // Resolve each selection to the recording's own entry, so the
+            // vendor that ends up in the query is the recording's (a link
+            // may say `nvidia:0` where this recording's sampler set no
+            // vendor; keeping `nvidia` would filter every chart to nothing).
+            const resolve = (g) => {
+                if (gpuEntries.length > 0) {
+                    const matches = gpuEntries.filter((x) => String(x.id) === String(g.id)
+                        && (g.vendor == null || x.vendor == null || String(x.vendor) === String(g.vendor)));
+                    if (matches.length === 0) return null;
+                    // A bare id that matches several vendors stays id-only
+                    // (the filter handles that form) rather than picking one
+                    // vendor by array order.
+                    if (matches.length > 1) return { vendor: null, id: String(g.id) };
+                    const e = matches[0];
+                    return { vendor: e.vendor != null ? String(e.vendor) : null, id: String(e.id) };
+                }
+                return gpuList.some((id) => String(id) === String(g.id))
+                    ? { vendor: null, id: String(g.id) }
+                    : null;
+            };
+            const resolved = selectedGpus.map((g) => [g, resolve(g)]);
+            const dropped = resolved.filter(([, r]) => !r)
+                .map(([g]) => (g.vendor != null ? `${g.vendor}:${g.id}` : String(g.id)));
+            const kept = resolved.map(([, r]) => r).filter(Boolean);
+            const changed = dropped.length > 0
+                || kept.some((r, i) => r.vendor !== (selectedGpus[i].vendor ?? null));
+            if (dropped.length > 0) {
+                console.warn(`[gpu] dropping selection not in this recording: ${dropped.join(', ')}`);
+            }
+            if (changed) {
+                selectedGpus = kept;
+                setSelectedGpus(kept);
+                writeViewState({ gpu: kept });
+            }
+        }
     }
 
     const processedData = await processDashboardData(data, activeCgroupPattern, `/${section}`);
-    return cacheSectionResponse(section, processedData);
+    const cached = cacheSectionResponse(section, processedData);
+
+    // A link range still waiting for the recording's extent: clamp it now
+    // that a section is loaded and nothing initial is in flight. Only the
+    // first section to land takes it.
+    if (_pendingLinkClamp) {
+        const link = _pendingLinkClamp;
+        _pendingLinkClamp = null;
+        baselineRange().then(async (full) => {
+            const clamped = clampLinkRange(link, full);
+            if (clamped === null) await applyDisplayWindow(null);
+            else if (clamped && (clamped.start !== link.from || clamped.end !== link.to)) {
+                await applyDisplayWindow(clamped);
+            }
+        }).catch(() => {});
+    }
+    return cached;
 };
 
 const preloadSections = (allSections) => {
@@ -457,8 +514,67 @@ const refetchCurrentSectionInPlace = async ({ signal, isStale } = {}) => {
     }
 };
 
-const applyDisplayWindow = async (win) => {
+// The one writer of the query-range override. It is the durable zoom state
+// (the visual `zoomLevel` is transient and cleared on every refetch), so it
+// is what the link carries: `from`/`to` follow it into the URL here and
+// nowhere else.
+const commitRangeOverride = (win) => {
     setRangeOverride(win); // { start, end } seconds, or null for full recording
+    writeViewState({ from: win ? win.start : null, to: win ? win.end : null });
+};
+
+// A link's from/to clamped to the recording's extent `full` (seconds).
+// Returns the window to apply, `null` when the two do not overlap (a
+// warning is logged and the keys removed), or `undefined` when `full` is
+// not known yet.
+const clampLinkRange = (link, full) => {
+    if (!full) return undefined;
+    const s = Math.max(full.start, link.from);
+    const e = Math.min(full.end, link.to);
+    if (!(e > s)) {
+        console.warn('[range] the link\'s from/to do not overlap this recording; showing the full range');
+        writeViewState({ from: null, to: null });
+        return null;
+    }
+    return { start: s, end: e };
+};
+
+// A link range that could not be clamped at bootstrap (no extent known);
+// consumed by loadSection once the first section is in, when charts exist
+// and no initial load is in flight to race.
+let _pendingLinkClamp = null;
+
+// Forget everything a link or a session put in the view: the range
+// override and its cached extent, the time mode, the GPU and cgroup
+// selections, and the URL keys that carried them. Both shells call this
+// when a different file is loaded, before the new file is read, so the
+// previous file's window is never applied to the new one. The node and
+// instance selections are re-derived from the new file's metadata by
+// applyMultiNodeInfo.
+const resetLinkedViewState = () => {
+    _baselineRange = null;
+    _pendingLinkClamp = null;
+    setRangeOverride(null);
+    currentTimeMode = 'grid';
+    setRateMode('grid');
+    selectedGpus = [];
+    setSelectedGpus([]);
+    seedSelectedCgroups([]);
+    clearViewState();
+};
+
+// Re-derive the node and service-instance state from a newly loaded file's
+// metadata. The site shell gets this through initDashboard; the server
+// shell's upload path replaces the file without re-running initDashboard
+// and used to keep the previous file's node selection, so its queries
+// carried a node the new file never had.
+const reapplyFileMetadata = (fm, experimentFm = null) => {
+    fileMetadata = fm || null;
+    applyMultiNodeInfo(experimentFm || null);
+};
+
+const applyDisplayWindow = async (win) => {
+    commitRangeOverride(win);
     _programmaticZoom = true;
     // Clear the zoom state silently — do NOT snap every chart back out to full
     // range before the refetch lands, or the old full-range data flashes for
@@ -531,6 +647,7 @@ if (typeof chartsState.subscribeZoom === 'function') {
 const changeNode = async (nodeName) => {
     selectedNode = nodeName;
     setSelectedNode(nodeName);
+    writeViewState({ node: nodeName });
     // Service routes don't depend on the node selector — keep their
     // caches and skip reload when one is the active route.
     clearNonServiceResponses(sectionCacheState);
@@ -552,6 +669,7 @@ const changeNode = async (nodeName) => {
 const changeGpu = async (gpus) => {
     selectedGpus = Array.isArray(gpus) ? gpus.slice() : [];
     setSelectedGpus(selectedGpus);
+    writeViewState({ gpu: selectedGpus });
     // Only the GPU section's charts depend on this; drop its cached data and
     // reload so the queries re-run with the id filter applied.
     clearNonServiceResponses(sectionCacheState);
@@ -566,6 +684,8 @@ const changeGpu = async (gpus) => {
 const changeInstance = async (serviceName, instanceId) => {
     selectedInstances[serviceName] = instanceId;
     setSelectedInstance(serviceName, instanceId);
+    // Scoped by the `/service/<name>` route in the hash; one key suffices.
+    writeViewState({ instance: instanceId });
     const svcKey = `service/${serviceName}`;
     delete sectionResponseCache[svcKey];
     m.redraw();
@@ -603,7 +723,7 @@ const changeGranularity = async (step) => {
     // zoom" and notifies subscribers with it. Clear the query-range
     // override too, so the visual zoom and the fetched range stay in
     // sync (a partial reset desyncs charts).
-    setRangeOverride(null);
+    commitRangeOverride(null);
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
@@ -623,6 +743,7 @@ const changeGranularity = async (step) => {
 const changeTimeMode = async (mode) => {
     currentTimeMode = mode === 'raw' ? 'raw' : 'grid';
     setRateMode(currentTimeMode);
+    writeViewState({ time: currentTimeMode });
 
     const currentRoute = m.route.get();
     const section = currentRoute ? currentRoute.replace(/^\//, '') : '';
@@ -637,7 +758,7 @@ const changeTimeMode = async (mode) => {
     // override. Resetting only the visual (setZoom) left `_rangeOverride`
     // pinned, so charts could desync — some refetched the stale zoom window
     // while others returned to full range. Both must clear together.
-    setRangeOverride(null);
+    commitRangeOverride(null);
     chartsState.setZoom(null, { source: null });
     chartsState.globalZoom = null;
 
@@ -994,9 +1115,84 @@ const initDashboard = (config = {}) => {
         setStepOverride(restoredStep);
     }
 
+    // View state carried by the link (ui/url_state.js). A key in the URL
+    // wins over localStorage for that key only. Order matters: time mode
+    // first (a mode change clears the range), then the selectors (each is
+    // validated when its list arrives, below and in loadSection), then the
+    // range, then the compare anchors once the compare state is known.
+    const linkState = readViewState();
+    if (linkState.time && !compareMode) {
+        // Set directly, not through changeTimeMode, which reloads and clears
+        // the range.
+        currentTimeMode = linkState.time;
+        setRateMode(currentTimeMode);
+    } else if (linkState.time === 'raw' && compareMode) {
+        console.warn('[time] compare mode uses aligned time; ignoring time=raw');
+        writeViewState({ time: null });
+    }
+    // applyMultiNodeInfo keeps a prior selection when the node exists in
+    // the union, so seeding it here is the validation.
+    if (linkState.node) selectedNode = linkState.node;
+
     applyMultiNodeInfo(config.experimentFileMetadata);
 
+    if (linkState.node && selectedNode !== linkState.node) {
+        console.warn(`[node] "${linkState.node}" is not in this recording; using ${selectedNode}`);
+        writeViewState({ node: null });
+    }
+    if (linkState.gpu.length > 0) {
+        // Validated in loadSection when the GPU section's list arrives.
+        selectedGpus = linkState.gpu.slice();
+        setSelectedGpus(selectedGpus);
+    }
+    if (linkState.instance) {
+        // Scoped by the `/service/<name>` in the hash.
+        const hash = window.location.hash || '';
+        const svc = hash.startsWith('#/service/')
+            ? decodeURIComponent(hash.slice('#/service/'.length).split('/')[0] || '')
+            : '';
+        const instances = svc ? (serviceInstances[svc] || []) : [];
+        if (instances.some((i) => String(i.id) === linkState.instance)) {
+            selectedInstances[svc] = linkState.instance;
+            setSelectedInstance(svc, linkState.instance);
+        } else {
+            console.warn(`[instance] "${linkState.instance}" is not an instance of ${svc || 'this route'}; ignoring`);
+            writeViewState({ instance: null });
+        }
+    }
+    seedSelectedCgroups(linkState.cgroup);
+
     liveMode = config.liveMode || false;
+
+    // The range: set synchronously so the first section fetch is already
+    // the window, clamped to the recording's extent. Both shells know the
+    // extent before this runs and pass it as `config.queryRange`; when
+    // they do not, the clamp waits for the first section to load (see
+    // loadSection) rather than refetching under a load still in flight.
+    // Live mode has no fixed extent; a relative form is not supported yet.
+    if (linkState.from != null && linkState.to != null) {
+        if (liveMode) {
+            console.warn('[range] from/to do not apply to a live agent; ignoring');
+            writeViewState({ from: null, to: null });
+        } else {
+            const known = config.queryRange
+                && Number.isFinite(config.queryRange.start)
+                && Number.isFinite(config.queryRange.end)
+                ? { start: config.queryRange.start, end: config.queryRange.end }
+                : null;
+            if (known) _baselineRange = known;
+            const clamped = clampLinkRange(linkState, known);
+            if (clamped === null) {
+                // Known extent, no overlap: warned inside clampLinkRange.
+            } else if (clamped) {
+                setRangeOverride(clamped);
+                writeViewState({ from: clamped.start, to: clamped.end });
+            } else {
+                setRangeOverride({ start: linkState.from, end: linkState.to });
+                _pendingLinkClamp = { from: linkState.from, to: linkState.to };
+            }
+        }
+    }
     recording = config.recording !== undefined ? config.recording : false;
     onStartRecording = config.onStartRecording || null;
     onStopRecording = config.onStopRecording || null;
@@ -1031,6 +1227,31 @@ const initDashboard = (config = {}) => {
 
     if (liveMode && onRefresh) {
         liveRefreshInterval = setInterval(onRefresh, 5000);
+    }
+
+    // Compare anchors from the link, once the compare state is known. Only
+    // the numeric form is applied here: `kind:` anchors resolve against each
+    // capture's events and are the alignment work's to apply; passing one
+    // to setAnchor would store 0 and strip it from the link. The
+    // attach-time clamp (attachExperiment) does not run on this path, so a
+    // link cannot start a chart past the end of the experiment's data.
+    if (compareMode) {
+        for (const id of [CAPTURE_BASELINE, CAPTURE_EXPERIMENT]) {
+            const v = linkState.anchors[id];
+            if (typeof v !== 'number') continue;
+            // Only the experiment is capped to its own duration, as the
+            // attach-time clamp does; the baseline's duration is not known
+            // here and its anchor was never clamped.
+            const capped = (id === CAPTURE_EXPERIMENT
+                && experimentDurationMs != null && v > experimentDurationMs)
+                ? experimentDurationMs
+                : v;
+            setAnchor(id, capped);
+        }
+        // Anchors restored from localStorage that the link did not name are
+        // in effect too; put them in the URL so the address bar describes
+        // the view a copied link will reproduce.
+        writeViewState({ anchors: notebookStore.anchors || {} });
     }
 
     // When the capture carries a service extension, default to that
@@ -1341,4 +1562,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

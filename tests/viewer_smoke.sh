@@ -289,6 +289,11 @@ for path in / /about /lib/style.css; do
     eq "static $path" "$status" "200" "$LOGDIR/upload.log"
 done
 
+echo "==> served JS bundle carries the URL view-state module"
+url_state_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/ui/url_state.js")
+echo "$url_state_js" | grep -q "parseViewState" \
+    || fail "ui/url_state.js missing parseViewState" "" "parseViewState present" "$LOGDIR/file.log"
+
 echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
 selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection/selection.js")
 echo "$selection_js" | grep -q "notebookStore" \

@@ -100,7 +100,9 @@ The screenshot is for the human in the PR. The JSON is what you assert on:
   "dimmer but meant to be read". Picking the wrong one looks fine in the CSS and
   wrong on screen.
 - **`consoleProblems`** — mithril keyed-fragment violations, exceptions in a
-  redraw. Silent in every other test layer.
+  redraw, and every `console.warn` (the viewer warns when it drops a link
+  parameter the recording cannot satisfy, so a check on such a link expects
+  those entries rather than an empty list). Silent in every other test layer.
 - **`failedRequests`** — a 404 on a newly added shared module means a missing
   `site/viewer/lib` symlink (see the `viewer-parity` skill), which breaks the
   static viewer completely.
