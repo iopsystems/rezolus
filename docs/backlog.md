@@ -628,6 +628,28 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   records. Reopen only if a recording from that range needs per-task
   attribution badly enough to accept unlabelled occupants.
 
+## Agent — histogram groups with slots (after 6.0)
+
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md).
+No sampler has a histogram group with slots. In the `.rez` layout each slot
+would be a 496-bucket list column in every segment. The long layout, which
+metriken-query reads from 0.31.0 (iopsystems/metriken#165), holds one row
+per observation, and a single-slot query decodes only its pages. Both items
+wait for the 6.0 writer, and both are gated on the refresh cost measured at
+fleet scale (docs/principles.md principle 16).
+
+- **Per-device block IO latency** — Idea. `blockio_latency` keeps host-wide
+  histograms per `op`, for device, queue and total time
+  (`src/agent/samplers/blockio/linux/latency/stats.rs`). Per device, a slow
+  or saturated device on a multi-disk host would stop averaging into the
+  rest, and the device/queue split would say which device queues. BPF memory
+  at grouping power 3: 496 buckets × 8 bytes, about 4 KB per histogram; 12
+  per device (4 ops × 3 families), about 48 KB; 64 devices, about 3 MB.
+- **Per-cgroup runqueue latency** — Idea. Which container waits for CPU,
+  where `scheduler_runqueue_runqlat` has one host-wide histogram. About 4 KB
+  per cgroup, 16 MB at the 4,096-cgroup cap, and a histogram exported per
+  live cgroup every tick, so the refresh cost is the question.
+
 ## Agent — per-task CPU usage completeness
 
 Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md),

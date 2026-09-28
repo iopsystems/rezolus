@@ -308,6 +308,35 @@ than about 4,094 live CPU-controller cgroups, counting dying ones that still
 hold their ids. Tracked in the backlog. The layout does not depend on the
 cap.
 
+### Groups without slots: one row per tick
+
+A group whose members are fixed metrics, told apart by a fixed label such
+as `op`, has no occupants: nothing is reassigned and the column count never
+changes. Long would replace a column per metric with an `occupant` column
+that names the metric. It would save the per-column footer and nothing
+else, and a read of one metric would need page pruning to match what
+reading its own column gives today. Measured (2026-09-28) on the three histogram tables of
+the two recordings (busy / quiet), the footer is a small share:
+
+| table | columns | size | footer |
+|---|---|---|---|
+| `blockio_latency_device_latencies` | 8 | 4.25 / 17.75 MB | 2.8% / 3.1% |
+| `syscall_latency_latencies` | 20 | 31.2 / 114.3 MB | 2.6% / 3.5% |
+| `scheduler_runqueue_runqlat` | 5 | 4.5 / 17.7 MB | 1.2% / 1.4% |
+
+Several of those columns are idle. `op=flush` is zero on every row of both
+recordings, and `op=discard` changed on 33 of 8,180 rows (busy) and 30 of
+34,678 (quiet). Each is about 3% of the table, because LZ4 compresses a
+repeated 496-bucket list well. Long would not remove them: the cells are
+not null, since a cumulative histogram has a value every tick.
+
+**Considered and declined: writing a value only when it changes.** The
+reader would hold the last value forward. It would remove idle columns'
+rows and idle threads' rows in the per-thread table, but it costs a
+comparison against the previous value of every cell at write time, and it
+makes a missing row ambiguous between "absent" and "unchanged", which the
+staleness bound and occupant liveness rely on.
+
 ## The per-task table: long
 
 **Per-thread is a requirement.** The task table exists to show processes with
