@@ -62,6 +62,7 @@ const DEFAULT_URL: &str = "http://localhost:4241";
 fn default_output_for(format: Format) -> PathBuf {
     PathBuf::from(match format {
         Format::Rez => "rezolus.rez",
+        Format::Dendro => "rezolus.dendro",
         Format::Parquet => "rezolus.parquet",
         Format::Raw => "rezolus.raw",
     })
@@ -73,6 +74,7 @@ fn default_output_for(format: Format) -> PathBuf {
 fn format_from_extension(path: &Path) -> Option<Format> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("rez") => Some(Format::Rez),
+        Some("dendro") => Some(Format::Dendro),
         Some("parquet") => Some(Format::Parquet),
         Some("raw") => Some(Format::Raw),
         _ => None,
@@ -129,9 +131,18 @@ fn resolve_format_and_output(
     })
 }
 
+/// Whether a format is an archive of recordings (`.rez` or dendro) rather
+/// than one file of rows. Archive formats hold every endpoint as its own
+/// recording, and are written through the recording writers, not the parquet
+/// or raw path.
+pub fn is_archive(format: Format) -> bool {
+    matches!(format, Format::Rez | Format::Dendro)
+}
+
 pub fn format_name(format: Format) -> &'static str {
     match format {
         Format::Rez => "rez",
+        Format::Dendro => "dendro",
         Format::Parquet => "parquet",
         Format::Raw => "raw",
     }
@@ -196,14 +207,14 @@ fn reject_separate_with_rez(
     defaulted: bool,
     endpoints: usize,
 ) -> Result<(), String> {
-    if separate && format == Format::Rez && !defaulted && endpoints > 1 {
-        return Err(
-            "--separate does not apply to .rez: every endpoint already becomes its \
+    if separate && is_archive(format) && !defaulted && endpoints > 1 {
+        return Err(format!(
+            "--separate does not apply to .{}: every endpoint already becomes its \
                     own recording inside the one archive. Drop --separate, or pass \
                     --format parquet (or -o with a .parquet extension) for a file per \
-                    endpoint"
-                .to_string(),
-        );
+                    endpoint",
+            format_name(format)
+        ));
     }
     Ok(())
 }
@@ -230,9 +241,16 @@ fn reject_stream_without_rez(
         return Ok(());
     }
     if format != Format::Rez {
+        let why = if format == Format::Dendro {
+            "the recorder cannot yet rebuild the stream's rows for a dendro archive".to_string()
+        } else {
+            format!(
+                "the stream carries the archive's own rows, which have no {} form",
+                format_name(format)
+            )
+        };
         return Err(format!(
-            "--stream records to .rez only (the stream carries the archive's own rows, \
-             which have no {} form); drop --stream, or record to a .rez",
+            "--stream records to .rez only, not .{} ({why}); drop --stream, or record to a .rez",
             format_name(format)
         ));
     }
@@ -314,6 +332,7 @@ impl RecordingConfig {
                         "parquet" => Format::Parquet,
                         "raw" => Format::Raw,
                         "rez" => Format::Rez,
+                        "dendro" => Format::Dendro,
                         other => return Err(format!("unknown format in config: {other}")),
                     }),
                     None => None,
@@ -533,6 +552,8 @@ mod tests {
             &["--stream", "-o", "out.parquet"][..],
             &["--stream", "--format", "raw"],
             &["--stream", "--format", "parquet", "-o", "out.parquet"],
+            &["--stream", "-o", "out.dendro"],
+            &["--stream", "--format", "dendro"],
         ] {
             let err = parse(args)
                 .err()
@@ -683,6 +704,7 @@ mod tests {
     fn an_explicit_format_names_the_default_file_after_itself() {
         for (format, name) in [
             (Format::Rez, "rezolus.rez"),
+            (Format::Dendro, "rezolus.dendro"),
             (Format::Parquet, "rezolus.parquet"),
             (Format::Raw, "rezolus.raw"),
         ] {
@@ -700,6 +722,7 @@ mod tests {
     fn the_output_extension_picks_the_format() {
         for (name, format) in [
             ("out.rez", Format::Rez),
+            ("out.dendro", Format::Dendro),
             ("out.parquet", Format::Parquet),
             ("out.raw", Format::Raw),
         ] {
@@ -836,6 +859,12 @@ mod tests {
         assert!(reject_separate_with_rez(true, Format::Raw, false, 2).is_ok());
         // And a .rez without --separate is the ordinary multi-recording case.
         assert!(reject_separate_with_rez(false, Format::Rez, false, 2).is_ok());
+
+        // A dendro archive holds a recording per endpoint the same way, and
+        // the refusal names the format the run asked for.
+        let err = reject_separate_with_rez(true, Format::Dendro, false, 2).unwrap_err();
+        assert!(err.contains(".dendro"), "{err}");
+        assert!(reject_separate_with_rez(false, Format::Dendro, false, 2).is_ok());
     }
 
     #[test]

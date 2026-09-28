@@ -110,6 +110,7 @@ play, which by default means `rezolus.rez`.
 | Extension | What it is | When |
 | --- | --- | --- |
 | `.rez` | **Default.** An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
+| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view` and `rezolus mcp` read it; the other `recording` subcommands and `--stream` do not yet. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
@@ -121,7 +122,8 @@ same archive.
 
 `--separate` with multiple endpoints requires parquet or raw: it requests one
 file per endpoint. If the output format was left at its default, that option
-selects parquet; an explicit `.rez` output instead produces an error.
+selects parquet; an explicit `.rez` or `.dendro` output instead produces an
+error.
 
 A `.rez` output path must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file. A
@@ -133,8 +135,8 @@ analyze bench.rez` gates on the benchmark; the exception is the `--duration`
 cap, which exits 124 if it has to kill the command.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
-command spawns and a `run_end` event when its exit is observed (both in `.rez`
-and parquet output; raw output has no metadata to carry them), named by the
+command spawns and a `run_end` event when its exit is observed (both in `.rez`,
+`.dendro` and parquet output; raw output has no metadata to carry them), named by the
 program alone. Pass `--record-command-line` to store the full argument list in
 the `run_start` event's details, since arguments can carry paths or tokens you
 may not want in a file you share.

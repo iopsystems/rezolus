@@ -603,9 +603,10 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   occupants. Compaction already re-encodes,
   so a caller-named sort key sorts off the tick path; segments declare it in
   parquet `sorting_columns`.
-- **Sort at seal** — Open, for the 6.0 writer (#1224). Measured upper bound
-  32 ms for the largest segment (about 526,000 rows); decide on the writer's
-  own seal path.
+- ~~**Sort at seal**~~ — Decided 2026-09-28: no. The writer seals long
+  segments in arrival order (metriken#184); sorting made the 100 ms
+  replays 6–20% larger and did not improve the tick path. Sorting is the
+  `CompactSpec` item above.
 - **A wide `.rez` segment with tens of thousands of columns cannot be
   read** — Open, a defect of the `.rez` layout today. A 1 s recording of the
   synthetic spike wrote task segments of up to 90,227 columns (the age bound
@@ -620,10 +621,26 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   on column count as well as bytes, rows and age.
 - **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
   slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
-- **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Occupant
-  labels from the occupant stream, rows grouped into series by occupant, one schema
-  read per stream. Any on-demand segment loading
-  it needs is added to dendro, not built in rezolus.
+- ~~**A rezolus reader for dendro archives, on dendro's API**~~ — Done
+  (#1312, #1315; the reader moved to metriken-archive in #1320).
+- **Recording to dendro archives** — Open, in stages
+  ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
+  out.dendro`, is built. Remaining:
+  - **B. hindsight on dendro**: the buffer, eviction, and `/status`,
+    `/dump`, `copy_range` on dendro's catalog and copy APIs.
+  - **C. `record --stream` to `.dendro`**: rebuild group schemas from the
+    stream's identity frames before the writer.
+  - **D. `recording` subcommands accept dendro**: `metadata`, `annotate`
+    (events via `ArchiveMut::patch_source_metadata`), `filter`, `combine`,
+    `snapshot`; and Save-as-Report.
+  - **E. 6.0 default**: `record` and `hindsight` write dendro by default,
+    after D.
+- **The reader routes a table by one segment's footer** — Open. A metric
+  that first appears in a later segment of the same table cannot be
+  queried, in a `.rez` and a dendro archive alike (metriken
+  `docs/journal/2026-09-28-archive-writer.md`). Samplers emit the same
+  metric names every tick, so it has not arisen; reopen for a producer
+  whose metric set grows mid-recording.
 - **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
   copy. Oracle: on `--stream` recordings the occupants derived from the columns
   must equal those the recorded index gives, and every series must read back
