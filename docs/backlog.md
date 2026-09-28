@@ -855,6 +855,56 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
   87-line mount table; container hosts carry thousands of mount lines. Reopen:
   measure on such a host before enabling the sampler fleet-wide.
 
+## Agent — ext4 samplers
+
+Source: [ext4 telemetry through eBPF](journal/2026-09-28-ext4-sampler.md).
+Design only; nothing built. The entry specifies `ext4_journal` (phase 1),
+`ext4_alloc` (phase 2) and per-filesystem counters (phase 3), and gates the
+build on three fleet probes.
+
+- **Fleet probes before build** — Open. Where ext4/jbd2 BTF lives on each
+  fleet kernel (`CONFIG_EXT4_FS`, `/sys/kernel/btf/{ext4,jbd2}`), the
+  tracepoint argument signatures on the oldest and newest kernel, and
+  `clock_getres(CLOCK_MONOTONIC_COARSE)` as the jiffy length. Results go in
+  the entry's *Go/no-go*.
+- **`kernel_btf_has_tracepoints`** — Open. `kernel_has_btf()` cannot select a
+  `tp_btf` twin for a tracepoint whose `btf_trace_*` typedef is in module BTF;
+  the helper checks vmlinux and every `/sys/kernel/btf/<module>`
+  (`src/agent/bpf/mod.rs`, beside `kernel_btf_has_funcs`).
+- **`sync` class in `syscall_latency`** — Open. `fsync`, `fdatasync`, `sync`,
+  `syncfs`, `msync` leave class 9 (`src/agent/samplers/syscall/linux/mod.rs`)
+  for their own histogram. Independent of the ext4 samplers and delivers
+  host-wide fsync latency with no new probe or map.
+- **sysfs `errors_count` and `lifetime_write_kbytes` in the `filesystem` sweep**
+  — Open. `/sys/fs/ext4/<block_device>/` per ext4 mount, read on the existing
+  60 s off-cycle sweep (`src/agent/samplers/filesystem/linux/mod.rs`). Works on
+  kernels the BPF sampler cannot run on.
+- **Per-filesystem sync latency** — Roadmap. Needs histogram groups with slots
+  (above, after 6.0) plus a per-thread start map: the `MAX_PID` array
+  (32 MB, as `syscall_latency`) or `BPF_MAP_TYPE_TASK_STORAGE` once the kernel
+  floor is 5.11.
+- **Phase 3 lookup map** — Open. `dev_t → slot`, userspace-written, BPF
+  read-only: `BPF_MAP_TYPE_HASH` with the principle 5 justification, or a
+  bounded linear scan over `MAX_FILESYSTEMS` `dev_t` values. Measure both on
+  the phase 1 bench before choosing.
+- **VFS-layer read/write latency via `fentry`/`fexit`** — Idea.
+  `ext4_file_read_iter`/`ext4_file_write_iter`; page-cache hit/miss split per
+  filesystem. Reopen with phase 3; check the symbol set on the oldest fleet
+  kernel first.
+- **Extent-status cache, handle-level stats, per-page writeback hooks** —
+  Idea. `ext4_es_lookup_extent_exit`, `jbd2_handle_stats`,
+  `ext4_journal_start`, `ext4_da_write_pages`, `ext4_da_reserve_space`: all
+  fire per lookup, per handle or per page. Measure the rate on a
+  representative workload before attaching any of them.
+- **Fast commit** — By design. `ext4_fc_*` off by default; reopen if a fleet
+  enables `fast_commit`.
+- **jbd2 counts include ocfs2** — By design until phase 3 assigns slots by
+  `fstype`.
+- **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
+  no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
+- **XFS** — Idea. Its own tracepoint set and journaling model; a separate
+  design.
+
 ## Agent — NVIDIA GPU sampler
 
 Source: PR #1108 (Tegra placeholder gating), grounded in a measured Tegra
