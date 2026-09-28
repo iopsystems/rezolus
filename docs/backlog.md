@@ -33,6 +33,9 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
   loaded-once parquet. No near-term demand.
 - **Baseline-anchor drag UI** — Open. Selection state already carries
   `anchors.baseline`; anchoring the baseline to a non-first sample has no UI yet.
+  Superseded in shape by event-anchored alignment
+  ([events as ranges](journal/2026-09-28-events-ranges-and-alignment.md)),
+  which writes both anchors from an event kind.
 - **Alias collision in saved A/B tarballs** — By design. When both sides share a
   filename basename, the compare badge shows two identical labels;
   `synthesize_ab_manifest` does not dedupe. Decided to let the user rename
@@ -1055,6 +1058,97 @@ Measured: an fentry probe is ~61 ns/call (56%) cheaper than kprobe on a clean
   fentries each need a trampoline; the 61 ns standalone win does not transfer to
   a hook several samplers share (principle 11). Measure those separately before
   migrating.
+
+## Viewer — investigation workflow (links, events, baselines, checks, MCP)
+
+Five design entries opened 2026-09-28, none built. They share one data model
+(events in the manifest, capture ids, the decimated wire) and are ordered by
+dependency: links and range events first, then event-anchored alignment, then
+the family baseline, then checks, then the MCP tools that expose them.
+
+Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-state.md).
+
+- **Encode view state in the hash route** — Open. `from`/`to`,
+  `anchor.<capture id>`, `time`, and the cgroup/GPU/node selectors as query
+  parameters on the hash route; `replaceState` on change; URL wins over
+  `localStorage` per key. Today only section and chart id are in the URL
+  (`src/viewer/assets/lib/app.js`). Document the parameters in `docs/usage.md`
+  as an interface.
+- **Live-mode relative ranges** (`?last=5m`) — Open. *Reopen:* when
+  live-agent links are requested.
+
+Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-events-ranges-and-alignment.md).
+
+- **Render `duration_ns` events as bands** — Open, smallest piece, lands
+  first. The field exists on `Event` (`crates/dashboard/src/events.rs`) and
+  nothing under `src/viewer/assets/lib/` reads it; `buildMarkLine`
+  (`charts/event_markers.js`) uses only `timestamp`. Add `markArea`, an end
+  field on the add-event form, and `duration=` on `annotate --event`.
+- **Recorder-emitted `run_start`/`run_end` events for `record -- cmd`** —
+  Open. Two questions to settle in the PR: `argv[0]` only by default (the
+  full command line can carry paths and tokens), and the event instant comes
+  from the recorder's clock, not the child's.
+- **Event-anchored compare alignment** — Open. An anchor may name an event
+  kind and resolve per capture; falls back to first sample with a notice.
+  Gives `anchors.baseline` its first writer, closing the inert plumbing the
+  A/B entry left standing (the "Baseline-anchor drag UI" item above becomes
+  this).
+- **Events from the agent's own status transitions** — Idea. *Reopen:* when
+  `/status` carries a transition log rather than current state.
+
+Source: [A baseline built from many recordings](journal/2026-09-28-baseline-from-many-recordings.md).
+
+- **`--baseline` may match a set** — Open. The match set is the family; each
+  member rebased by its own anchor, bucketed to one value per member per
+  bucket over the decimated wire, drawn as mean ± kσ or min/max with member
+  count in the tooltip. Spread view only, never overlaid with the measurement
+  band. *Gate:* 20-member dashboard load ≤ 2× the two-capture time in both
+  backends, else aggregation moves to the backend (new entry).
+- **Family over heatmaps and percentile charts** — Open. *Reopen:* after the
+  line case.
+
+Source: [Checks with verdicts, stored in the recording](journal/2026-09-28-checks-with-verdicts.md).
+
+- **`check` on a KPI and `recording check`** — Open. `above`/`below`, `for`,
+  `severity` on `Kpi` (`crates/dashboard/src/service_extension.rs`; the unread
+  `slo` field is removed or repurposed in the same change). Evaluates through
+  `metriken_query`, exit 1 on fail, `--annotate` writes violations as
+  `kind=check` range events carrying the check JSON. Rate checks compare
+  against the acquisition band and report `indeterminate` on a straddle.
+  *Gate:* if evaluating every KPI over the 9.6 h archive from the
+  reader-memory entry is slower than opening the viewer on it, the lazy
+  reader path is a prerequisite.
+- **Family checks** (`outside_family_sigma`) — Open, after the baseline lands.
+- **Checks from inside the viewer** — Open. *Reopen:* after the CLI has users.
+
+Source: [MCP write-back and tool tiers](journal/2026-09-28-mcp-write-back.md).
+
+- **Additive tools: `add_event`, `export_query`, `viewer_link`** — Open.
+  `add_event` writes through the manifest `UPDATE` shape with `source=mcp`;
+  `export_query` writes a range query to parquet/CSV under `--export-dir`;
+  `viewer_link` returns the hash fragment (full URL needs the viewer's
+  address; reopen if the fragment form proves insufficient).
+- **Mutating tier behind `rezolus mcp --allow-mutating`** — Open.
+  `remove_events`, `set_kpis`; the flag-off server must reject with a message
+  naming the flag.
+- **`rezolus mcp install`** — Open. Registers the server with known clients
+  and ships a skill carrying the workflow prose that lives in tool
+  descriptions today.
+- **`run_checks` tool** — Open, after checks land.
+
+Related ideas with no entry yet:
+
+- **Section-wide shared crosshair** — Idea. Hover cursor sync exists only
+  within a compare group (`ChartsState._compareCursorSubs`,
+  `src/viewer/assets/lib/charts/chart.js`); zoom is already global. A
+  section-wide crosshair behind a toggle is a different thing from the
+  pin-sync fan-out rejected in #828 and does not reopen that decision.
+- **One reference page for time semantics** — Idea. Null propagation in
+  compare, cross-cadence evaluation at the slow sampler's rows, the
+  acquisition band, Aligned/Raw time modes and decimation are each correct
+  and each documented in a different journal entry or in `CLAUDE.md`. A
+  single page under `docs/` that states the rules, plus an `llms.txt` index,
+  so an agent or a new reader gets them without the archaeology.
 
 ## Tooling / skills
 
