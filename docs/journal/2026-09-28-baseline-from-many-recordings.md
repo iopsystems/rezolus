@@ -50,7 +50,8 @@ and the CLI's exactly-one rule for `--baseline`/`--experiment` still holds.
 That keeps the server and WASM viewers in parity by construction (nothing
 derived from the archive changed) and drops the whole `.rez`-selection
 surface from the change. A CLI form that names the family by label stays a
-backlog item; today the family is what is open.
+backlog item; today the family is every attached capture but the
+experiment.
 
 **Align every member before aggregating.** Each member is rebased to relative
 time by its own anchor, which is why this depends on
@@ -140,8 +141,9 @@ costs the same 2.0 s at 4 and at 20 members (most of it the fixed wait for
 network idle after the redraw), and the aggregation runs over data the
 page already holds. The 5.4 s is the N-way overlay's first load, which
 predates this entry: `viewer_core.js` fetches the extra captures one at a
-time per chart (`for (const cap of extras)` with two awaited requests
-each), so a 20-arm archive issues 36 sequential round trips per chart. The
+time per chart (`for (const cap of extras)` with three awaited requests
+each: metadata, the range query, the display query), so a 20-arm archive
+issues 54 sequential round trips per chart. The
 NO-GO branch (move the statistic to the backend) would not touch that
 cost. Verdict: GO for the family band; the load cost is a backlog item on
 the N-way fetch loop, which should issue the per-capture requests in
@@ -155,8 +157,10 @@ per-capture calls are local, so its number can only be lower on the fetch
 loop.
 
 Correctness gate: a family of identical copies of one recording produces a
-zero-width band; a family with one member reproduces today's compare mode
-pixel for pixel (the `viewer-render` skill).
+zero-width band (held: the 20-copy archive above). The design's second
+gate, "a family of one reproduces today's compare mode", does not apply as
+built: below three captures the setting is ignored and the plain overlay
+stands, which a node test pins.
 
 ## Deferred / Reopen
 

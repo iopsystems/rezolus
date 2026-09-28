@@ -644,6 +644,7 @@ const buildPayload = (store, attrs, { includeNotes = true } = {}) => ({
     zoom: attrs.chartsState?.zoomLevel || null,
     step_override: attrs.stepOverride ?? null,
     anchors: store.anchors || { baseline: 0, experiment: 0 },
+    family: store.family || null,
     chartToggles: store.chartToggles || {},
     compare: store.compare || undefined,
     tagline: store.tagline,

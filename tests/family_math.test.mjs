@@ -55,6 +55,20 @@ test('members on different cadences are resampled onto the first member grid', (
     assert.deepEqual(band.upper, [0, 1, 2, 3, 4]);
 });
 
+test('exact matches at the next sample and an unsorted grid resolve', () => {
+    const t = [10, 20, 30];
+    const v = [1, 2, 3];
+    assert.deepEqual(resampleLinear([10, 20, 30], t, v), [1, 2, 3]);
+    assert.deepEqual(resampleLinear([30, 10, 25, 5], t, v), [3, 1, 2.5, null]);
+});
+
+test('a first member shorter than the others sets the grid', () => {
+    const band = familyBand([{ t: [0, 1], v: [1, 1] }, { t: [0, 1, 2, 3], v: [2, 2, 2, 2] }, { t: [0, 1, 2], v: [3, 3, 3] }], { kind: 'envelope' });
+    assert.deepEqual(band.t, [0, 1]);
+    assert.deepEqual(band.n, [3, 3]);
+    assert.deepEqual(band.upper, [3, 3]);
+});
+
 test('fewer than two usable members is no band', () => {
     assert.equal(familyBand([{ t: [0], v: [1] }]), null);
     assert.equal(familyBand([{ t: [0], v: [1] }, { t: [0, 1], v: [1] }]), null);

@@ -350,23 +350,27 @@ const overlayLine = ({ spec, captures, anchors, captureLabels, family }) => {
         .filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
 
-    // Family baseline: with three or more captures and the setting on, every
-    // capture but the experiment is a member of the baseline, drawn as ONE
-    // statistic band (mean ± k·sd or min..max) plus its mean, and the
-    // experiment as the only line over it. Twenty lines are not a baseline;
-    // a regression one sigma outside twenty prior runs is invisible in them
-    // and is exactly what the band shows. Members are already rebased, so
-    // the band is on the first member's relative grid. The measurement band
-    // (acquisition uncertainty) stays off this chart: a spread band and a
-    // measurement band answer different questions and are never overlaid.
+    // Family baseline: with three or more captures that have data and the
+    // setting on, every capture but the experiment is a member of the
+    // baseline, drawn as ONE statistic band (mean ± k·sd or min..max) plus
+    // its mean, and the experiment as the only line over it. Members are
+    // already rebased, so the band is on the first member's relative grid.
+    // The measurement band (acquisition uncertainty) stays off this chart:
+    // a spread band and a measurement band answer different questions and
+    // are never overlaid. Entries are paired with their capture here because
+    // `seriesList` has dropped captures with no data for this chart, so an
+    // index into `captures` would name the wrong one.
     if (family && seriesList.length >= 3) {
-        const expIdx = captures.findIndex((c) => c.id === CAPTURE_EXPERIMENT);
-        const experiment = expIdx >= 0 ? seriesList[expIdx] : null;
-        const members = seriesList
-            .filter((s, i) => i !== expIdx)
-            .map((s) => ({ t: s.timeData, v: s.valueData }));
-        const band = familyBand(members, { kind: family.kind, k: family.k });
-        if (band && experiment) {
+        const entries = captures
+            .map((cap) => ({ cap, entry: entryFor(cap, cap.alias || labelFor(captureLabels, cap.id), colors.get(cap.id)) }))
+            .filter((e) => e.entry);
+        const exp = entries.find((e) => e.cap.id === CAPTURE_EXPERIMENT);
+        const memberEntries = entries.filter((e) => e.cap.id !== CAPTURE_EXPERIMENT);
+        const band = familyBand(
+            memberEntries.map((e) => ({ t: e.entry.timeData, v: e.entry.valueData })),
+            { kind: family.kind, k: family.k },
+        );
+        if (band && exp && memberEntries.length >= 2) {
             const meanEntry = {
                 name: familyBandLabel(band),
                 color: FAMILY_COLOR,
@@ -374,6 +378,8 @@ const overlayLine = ({ spec, captures, anchors, captureLabels, family }) => {
                 valueData: band.mean,
                 fill: false,
             };
+            const origin = memberEntries[0].cap;
+            const originGrid = origin.boxplot?.t?.length ? Array.from(origin.boxplot.t) : origin.timeData;
             return {
                 kind: 'spec',
                 spec: {
@@ -381,13 +387,10 @@ const overlayLine = ({ spec, captures, anchors, captureLabels, family }) => {
                     // The experiment keeps its own min/max envelope (what
                     // happened in that run); only the measurement band is
                     // dropped, since spread and measurement never share a chart.
-                    multiSeries: [meanEntry, { ...experiment, intervals: undefined }],
+                    multiSeries: [meanEntry, { ...exp.entry, intervals: undefined }],
                     familyBand: band,
                     xAxisFormatter: relativeTimeFormatter,
-                    eventTimeOriginSec: anchorSecondsFor(anchors, captures[expIdx === 0 ? 1 : 0].id,
-                        captures[expIdx === 0 ? 1 : 0].boxplot?.t?.length
-                            ? Array.from(captures[expIdx === 0 ? 1 : 0].boxplot.t)
-                            : captures[expIdx === 0 ? 1 : 0].timeData),
+                    eventTimeOriginSec: anchorSecondsFor(anchors, origin.id, originGrid),
                 },
             };
         }

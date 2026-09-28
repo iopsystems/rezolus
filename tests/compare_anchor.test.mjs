@@ -118,6 +118,21 @@ test('a family baseline draws one band plus its mean, and the experiment over it
     assert.deepEqual(out.spec.familyBand.upper, [3, 4, 5, 6]);
     assert.deepEqual(ms[0].valueData, [2, 3, 4, 5]);
     assert.equal(out.spec.divergenceBand, undefined);
+    // A capture with no data for this chart is not a member and cannot
+    // displace the experiment: the experiment is found by id, not index.
+    const four = [{ id: CAPTURE_BASELINE, timeData: [], valueData: [] }, ...three.slice(1), { ...cap('fourth', S + 30), valueData: [5, 6, 7, 8] }];
+    const gap = renderCompareChart({
+        spec: { opts: { style: 'line' } },
+        captures: four,
+        anchors: {},
+        family: { kind: 'envelope' },
+        captureContext: ctx,
+        captureLabels: {},
+    });
+    assert.equal(gap.spec.multiSeries[1].name, 'experiment');
+    assert.equal(gap.spec.multiSeries[0].name, 'family min..max (2 members)');
+    assert.deepEqual(gap.spec.familyBand.lower, [3, 4, 5, 6]);
+    assert.deepEqual(gap.spec.familyBand.upper, [5, 6, 7, 8]);
     // Two captures: the setting is ignored and the plain overlay stands.
     const two = renderCompareChart({
         spec: { opts: { style: 'line' } },
