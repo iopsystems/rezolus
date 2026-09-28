@@ -367,9 +367,15 @@ impl StreamSubscriber {
 
 /// Names a frame for an error message.
 ///
-/// Deliberately exhaustive, with no catch-all arm: a variant added to dendro's
-/// `Frame` should stop this compiling, so somebody decides what a subscriber
-/// does with it rather than it being reported as "unknown" and moved past.
+/// It needs a catch-all arm: dendro 0.3.0 made `Frame` `#[non_exhaustive]`, so
+/// a variant added to it no longer stops this compiling. Nothing is moved past
+/// silently because of that. The subscriber refuses every frame it was not
+/// written for, at runtime ("unexpected frame on an agent stream"), and
+/// `FrameDecoder` decodes with `decode_payload`, which refuses a kind the
+/// linked dendro does not know rather than skipping it as dendro's own
+/// `FrameReader` does. A new kind is therefore still a decision someone has to
+/// make on the recorder's side; it is found when a stream carries one rather
+/// than when this is compiled.
 fn frame_kind(frame: &Frame) -> &'static str {
     match frame {
         Frame::Handshake { .. } => "handshake",
@@ -377,6 +383,7 @@ fn frame_kind(frame: &Frame) -> &'static str {
         Frame::Rows { .. } => "rows",
         Frame::Segment { .. } => "segment",
         Frame::ClockOffset { .. } => "clock offset",
+        _ => "kind this recorder was not written for",
     }
 }
 

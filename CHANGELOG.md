@@ -23,6 +23,10 @@
   needs `sum without (id)`. Measured on a 32-CPU host: refresh p50 43 µs and
   p90 96 µs, against 45 µs and 85 µs before.
 
+- dendro 0.2.2 → 0.3.0: `Frame` is `#[non_exhaustive]`, so the recorder's
+  frame naming has a catch-all arm. Behaviour is unchanged: the recorder still
+  refuses any frame kind it was not written for.
+
 - Hindsight logs the address its HTTP endpoint actually bound, not the
   configured one, so `listen = "127.0.0.1:0"` reports the port it got.
 
