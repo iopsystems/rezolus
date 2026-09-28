@@ -582,19 +582,37 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 
 - ~~**Long layout: confirm by measurement**~~ — Done 2026-09-27. Long won
   for every group table with slots measured (task, cgroup, per-CPU, drive),
-  and the entry now writes all of them long. Still unmeasured: a synthetic
-  thread-per-request spike, 100 ms sampling, histogram slot tables, and
-  query-engine reads of a long table.
+  and the entry now writes all of them long. A synthetic thread and cgroup
+  spike at 1 s and 100 ms (2026-09-28) confirmed it. Still unmeasured:
+  query-engine reads of a long table, and mount, interface and GPU tables.
 - **The occupant index's encoding** — Open. `IndexEntry` has the right shape
   but `SlotEntry::slot` is `u32` (`crates/rez/src/index.rs`); occupant
-  numbers are `u64` because a rolling buffer can mint more than 2^32.
+  numbers are `u64` because a rolling buffer can mint more than 2^32. It must
+  be compressed: plain msgpack entries were 62.3 MB for the busy host's
+  396,117 occupants, against 8.1 MB as one zstd blob per seal and 7.6–8.6 MB
+  as parquet.
 - **A sort key in dendro's `CompactSpec`** — Open. Sorting a task table by
-  `(occupant, timestamp)` made it a third smaller and a single-thread read
-  about 50 times smaller than arrival order. Compaction already re-encodes,
+  `(occupant, timestamp)` made a single-thread read 50 to 110 times smaller
+  than arrival order. On disk it can go either way: a third smaller on the
+  existing recordings, up to 50% larger on the spike's short-lived
+  occupants. Compaction already re-encodes,
   so a caller-named sort key sorts off the tick path; segments declare it in
   parquet `sorting_columns`.
 - **Sort at seal** — Open, for the 6.0 writer (#1224). Measured upper bound
-  16–19 ms per task segment; decide on the writer's own seal path.
+  32 ms for the largest segment (about 526,000 rows); decide on the writer's
+  own seal path.
+- **A wide `.rez` segment with tens of thousands of columns cannot be
+  read** — Open, a defect of the `.rez` layout today. A 1 s recording of the
+  synthetic spike wrote task segments of up to 90,227 columns (the age bound
+  seals them; at 100 ms the 8 MiB cap seals near 11,000). arrow-rs fails on
+  the 52,109-column one with `TooManyTables` from the `ARROW:schema`
+  flatbuffer verifier (`VerifierOptions::default()`, `max_tables`
+  1,000,000, arrow-ipc 58 `src/convert.rs:990`), and `RezReader` reports the
+  table as evicted (`crates/rez/src/reader.rs:1289`) because
+  `TableReader::reader` returns `None` for a read failure and for eviction
+  alike. The busy host's largest segment, 38,388 columns, reads. Two fixes:
+  report a read failure as one; and until the long layout, seal a segment
+  on column count as well as bytes, rows and age.
 - **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
   slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
 - **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Occupant
@@ -617,7 +635,7 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 repo's `docs/signal-gaps.md`, where per-task `task_cpu_usage` missed CPU the
 cgroup counters saw.
 
-**Measured on delta, 2026-09-25/26.** rezolus 5.20.0 agent (its BPF accounting
+**Measured on a 32-CPU x86_64 host, kernel 6.12, 2026-09-25/26.** rezolus 5.20.0 agent (its BPF accounting
 is identical to `main`'s; only #1244 and #1266 touched this sampler since),
 recorded with the current recorder at 1 s, against the kernel's `cpu.stat` per
 workload sampled every 0.5 s. Four workloads for 120 s: A, two long-lived CPU
@@ -638,7 +656,7 @@ In every run the cgroup total equalled the per-task totals moved to the
 exited counter, so the loss is not between rezolus's own counters. Three
 separate mechanisms account for the rest:
 
-- **Fix 1 — accounting must not depend on metadata delivery** — In review,
+- **Fix 1 — accounting must not depend on metadata delivery** — Done,
   #1303. That PR also fixes a second cause found while measuring it: every
   task's first observation was skipped, which drops all the CPU of a thread
   that lives about one tick. Under 60 s of `stress-ng --pthread` (about 18,000
@@ -690,6 +708,15 @@ separate mechanisms account for the rest:
   shorter than one scrape interval (workload B) is visible only there, by
   design (`mod.bpf.c:402-408`). The insights-model analyses and the
   `measure-performance` skill should add it to per-task attribution.
+- **Threads under one tick of CPU mostly get no series** — By design (the
+  kernel's tick accounting). Measured 2026-09-28 on a 32-CPU host at 250 Hz: 180,000 threads
+  that each ran 0.5 ms produced 24,976 task series, about 14%, where 12.5% is
+  0.5 ms over a 4 ms tick at 250 Hz. `cpuacct_account_field` is charged per
+  tick, so a short thread is charged a whole tick or nothing, and totals are
+  right on average. Threads of 10 ms nearly all appeared
+  (177,854 of 180,000 at 1 s). Where
+  `VIRT_CPU_ACCOUNTING_GEN` is active (`nohz_full` CPUs) this may differ; not
+  measured. Source: the layout entry's "A synthetic spike".
 - **Revisit condition:** if per-task data is still not useful after fixes 1–4,
   because analyses do not use it or cannot trust it, make it opt-in rather than
   removing it. Fix 1 comes first either way: until it lands, per-task
