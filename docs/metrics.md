@@ -22,6 +22,8 @@ This guide walks you through all the available metrics, organized by category.
   - [cpu_usage](#cpu_usage)
 - [Drive](#drive)
   - [drivehealth](#drivehealth)
+- [ext4](#ext4)
+  - [ext4_journal](#ext4_journal)
 - [Filesystem](#filesystem)
   - [filesystem](#filesystem-1)
 - [GPU](#gpu)
@@ -303,6 +305,51 @@ counters are always maintained by the controller.
 | `drive_temperature_critical_time` | Cumulative seconds at/above the NVMe critical temperature threshold (CCTEMP) | `device`, `type=nvme`, `model`, `serial` |
 | `drive_thermal_throttle_time` | Cumulative seconds in NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
 | `drive_thermal_throttle_transitions` | Count of transitions into NVMe host thermal-management state | `level={1,2}`, `device`, `type=nvme`, … |
+
+## ext4
+
+Metrics from inside the ext4 filesystem and its journal, between the syscall
+and the block device.
+
+### ext4_journal
+
+BPF sampler on the jbd2 and ext4 tracepoints. Reports every phase of each
+journal commit, checkpoint cost, lock-buffer stalls, fsync counts and errors,
+and filesystem errors. **Host-wide**: one set of series for every ext4
+filesystem on the host (per-filesystem attribution is a later phase). jbd2 is
+also ocfs2's journal, so an ocfs2 mount's commits are counted here too.
+
+jbd2 reports commit and checkpoint phases in **jiffies**, so those histograms
+have one-jiffy resolution (1–10 ms depending on `CONFIG_HZ`); the sampler
+measures the tick with `clock_getres(CLOCK_MONOTONIC_COARSE)` and converts to
+nanoseconds. Lock-buffer stalls are reported by jbd2 in whole milliseconds.
+
+Reading the jbd2 statistics needs their types in BTF: vmlinux when ext4 is
+built in, module BTF (`/sys/kernel/btf/jbd2`, kernels 5.11+) when it is a
+module. A 5.8–5.10 kernel with `CONFIG_EXT4_FS=m` has neither, and the sampler
+reports failed there. `ext4_errors` needs the `ext4_error` tracepoint, which
+is younger than the 5.8 floor; on a kernel without it the sampler reports
+degraded and the rest of the metrics are unaffected.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `ext4_journal_commit_latency` | Distribution of each phase of a journal commit, in nanoseconds at one-jiffy resolution. `wait`: longest a handle waited to join the transaction; `request_delay`: commit requested to commit started; `running`: how long the transaction was open (bounded by the commit interval, cut short by fsync); `locked`: waiting for outstanding handles; `flushing`: data blocks to disk (ordered mode, where fsync waits on the device); `logging`: metadata and commit record to the journal | `phase={wait,request_delay,running,locked,flushing,logging}` |
+| `ext4_journal_commits` | The number of journal transaction commits | |
+| `ext4_journal_commit_handles` | Handles (metadata operations) committed, summed over commits | |
+| `ext4_journal_commit_blocks` | Blocks per commit, summed: `dirtied` is metadata blocks in the transaction, `logged` is blocks written to the journal including descriptor and commit blocks | `kind={dirtied,logged}` |
+| `ext4_journal_checkpoint_latency` | Distribution of the time each checkpoint took, in nanoseconds at one-jiffy resolution | |
+| `ext4_journal_checkpoints` | The number of journal checkpoints | |
+| `ext4_journal_checkpoint_buffers` | Buffers a checkpoint wrote to their final location, or found already written and dropped | `outcome={written,dropped}` |
+| `ext4_journal_checkpoint_forced_to_close` | Transactions a checkpoint forced closed to free journal space; a rising rate means the journal is too small for the write rate | |
+| `ext4_journal_lock_buffer_stall_latency` | Distribution of time the journal stalled on a locked buffer, in nanoseconds (jbd2 reports whole milliseconds) | |
+| `ext4_journal_lock_buffer_stalls` | The number of lock-buffer stalls | |
+| `ext4_sync_file` | fsync and fdatasync calls that reached ext4 | `op={fsync,fdatasync}` |
+| `ext4_sync_file_errors` | fsync and fdatasync calls ext4 completed with an error | |
+| `ext4_errors` | Errors ext4 reported, counted as they occur and before any `errors=remount-ro` takes effect | |
+| `ext4_shutdowns` | Forced ext4 filesystem shutdowns | |
+
+Host-wide fsync *latency* is not here: it is the `sync` class of
+`syscall_latency`, which already holds the per-thread start timestamp.
 
 ## Filesystem
 

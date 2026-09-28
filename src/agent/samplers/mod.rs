@@ -8,6 +8,7 @@ use std::sync::Arc;
 mod blockio;
 mod cpu;
 mod drivehealth;
+mod ext4;
 mod filesystem;
 mod gpu;
 mod hw_sensors;

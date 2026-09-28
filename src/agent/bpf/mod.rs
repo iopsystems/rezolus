@@ -69,6 +69,167 @@ pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
     all
 }
 
+/// Returns true if the running kernel's BTF — vmlinux **or any loaded
+/// module's** — describes every one of `names` as a tracepoint, i.e. carries
+/// its `btf_trace_<name>` typedef, so a `tp_btf` program may name it as an
+/// attach target.
+///
+/// [`kernel_btf_has_funcs`] answers the same question for `fentry`/`fexit`
+/// targets but consults vmlinux BTF alone, which is right for kernel functions
+/// and wrong for a tracepoint that lives in a module: on a kernel with
+/// `CONFIG_EXT4_FS=m` (stock Debian amd64, for one), `btf_trace_jbd2_run_stats`
+/// is in `/sys/kernel/btf/jbd2`, not in vmlinux, and libbpf does resolve
+/// `tp_btf` targets against module BTF (kernels 5.11+). Selecting the `tp_btf`
+/// twin on [`kernel_has_btf`] alone would make that kernel a load failure,
+/// fatal for the whole skeleton (see [`kernel_btf_has_funcs`] for why load-time
+/// misses matter more than attach-time ones). Selecting on this function falls
+/// back to the `raw_tp` twin, whose attach failure on a kernel without the
+/// tracepoint at all is an ENOENT the builder tolerates.
+///
+/// Not cached: callers ask once per hook at sampler init. Returns false when
+/// there is no kernel BTF to consult.
+pub fn kernel_btf_has_tracepoints(names: &[&str]) -> bool {
+    if !kernel_has_btf() {
+        return false;
+    }
+
+    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
+        return false;
+    };
+
+    // Declared after `vmlinux` so it drops first: a split BTF refers to its
+    // base for the whole of its life.
+    let modules: Vec<RawBtf> = module_btf_paths(Path::new("/sys/kernel/btf"))
+        .iter()
+        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
+        .collect();
+
+    let mut all = true;
+
+    for name in names {
+        let typedef = format!("btf_trace_{name}");
+
+        if !vmlinux.has_typedef(&typedef) && !modules.iter().any(|m| m.has_typedef(&typedef)) {
+            debug!("kernel BTF (vmlinux and modules) has no tracepoint `{name}`");
+            all = false;
+        }
+    }
+
+    all
+}
+
+/// The module BTF files under `dir` (`/sys/kernel/btf/<module>`, one per
+/// loaded module with BTF), `vmlinux` excluded. A directory that does not
+/// exist yields nothing rather than an error: no module BTF is the normal
+/// state on a kernel without `CONFIG_DEBUG_INFO_BTF_MODULES`.
+fn module_btf_paths(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name() != "vmlinux")
+        .map(|entry| entry.path())
+        .collect()
+}
+
+/// An owned libbpf BTF object. Exists because `libbpf_rs::btf::Btf::from_path`
+/// parses standalone BTF only: a module's BTF is *split* BTF whose type ids
+/// continue vmlinux's, and libbpf refuses it without the base
+/// (`btf__parse_split`), which libbpf-rs 0.26 does not expose.
+struct RawBtf(std::ptr::NonNull<libbpf_sys::btf>);
+
+impl RawBtf {
+    /// Parse the BTF at `path`; `base` is the vmlinux BTF for a module's split
+    /// BTF, `None` for vmlinux itself. `None` on any parse failure — libbpf 1.x
+    /// returns a null pointer and sets errno.
+    fn parse(path: &Path, base: Option<&RawBtf>) -> Option<Self> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+
+        // SAFETY: `cpath` is a valid NUL-terminated string for the call, and
+        // `base`, when given, is a live BTF object this function does not free.
+        let ptr = unsafe {
+            match base {
+                Some(base) => libbpf_sys::btf__parse_split(cpath.as_ptr(), base.0.as_ptr()),
+                None => libbpf_sys::btf__parse(cpath.as_ptr(), std::ptr::null_mut()),
+            }
+        };
+
+        std::ptr::NonNull::new(ptr).map(Self)
+    }
+
+    /// Whether this BTF — its own types only, not its base's — declares a
+    /// typedef of that name.
+    fn has_typedef(&self, name: &str) -> bool {
+        let Ok(cname) = std::ffi::CString::new(name) else {
+            return false;
+        };
+
+        // SAFETY: `self.0` is a live BTF object and `cname` a valid C string.
+        let id = unsafe {
+            libbpf_sys::btf__find_by_name_kind(
+                self.0.as_ptr(),
+                cname.as_ptr(),
+                libbpf_sys::BTF_KIND_TYPEDEF,
+            )
+        };
+
+        id >= 0
+    }
+}
+
+impl Drop for RawBtf {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` came from `btf__parse`/`btf__parse_split` and is
+        // freed exactly once, here.
+        unsafe { libbpf_sys::btf__free(self.0.as_ptr()) }
+    }
+}
+
+#[cfg(test)]
+mod btf_tests {
+    use super::{module_btf_paths, RawBtf};
+    use std::path::Path;
+
+    /// A kernel without module BTF has no `/sys/kernel/btf/<module>` files;
+    /// the scan must then contribute nothing, not fail.
+    #[test]
+    fn a_missing_module_btf_dir_yields_no_paths() {
+        assert!(module_btf_paths(Path::new("/nonexistent/rezolus/btf")).is_empty());
+    }
+
+    /// A file that is not BTF parses to nothing rather than aborting.
+    #[test]
+    fn a_non_btf_file_does_not_parse() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(RawBtf::parse(&manifest, None).is_none());
+    }
+
+    /// On a kernel with its own BTF, vmlinux declares the scheduler's
+    /// tracepoints, and a module's split BTF parses against it. Skipped
+    /// where there is no kernel BTF.
+    #[test]
+    fn vmlinux_btf_has_sched_switch_and_modules_parse_against_it() {
+        let vmlinux_path = Path::new("/sys/kernel/btf/vmlinux");
+        if !vmlinux_path.exists() {
+            return;
+        }
+        let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
+        assert!(vmlinux.has_typedef("btf_trace_sched_switch"));
+        assert!(!vmlinux.has_typedef("btf_trace_no_such_tracepoint"));
+        for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
+            assert!(
+                RawBtf::parse(&path, Some(&vmlinux)).is_some(),
+                "{} did not parse as split BTF",
+                path.display()
+            );
+        }
+    }
+}
+
 pub trait OpenSkelExt {
     /// When called, the SkelBuilder should log instruction counts for each of
     /// the programs within the skeleton. Log level should be debug.

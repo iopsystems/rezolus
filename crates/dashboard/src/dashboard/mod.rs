@@ -7,6 +7,7 @@ mod category;
 mod cgroups;
 mod cpu;
 mod exceptions;
+mod ext4;
 mod filesystem;
 mod gpu;
 mod hw_sensors;
@@ -37,6 +38,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("Softirq", "/softirq", softirq::generate),
     ("BlockIO", "/blockio", blockio::generate),
     ("Filesystem", "/filesystem", filesystem::generate),
+    ("ext4", "/ext4", ext4::generate),
     ("cgroups", "/cgroups", cgroups::generate),
     ("Rezolus", "/rezolus", rezolus::generate),
 ];

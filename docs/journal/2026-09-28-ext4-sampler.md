@@ -1,13 +1,17 @@
 # ext4 telemetry through eBPF — journal first, allocator second
 
 - **Opened:** 2026-09-28
-- **Status:** **OPEN — design, pre-build, nothing built.** Two BPF samplers are
-  specified: `ext4_journal` (jbd2 commit and checkpoint phases, fsync counts,
-  filesystem errors) and `ext4_alloc` (block allocator effort, writeback
-  results, inode churn). Host-wide first; per-filesystem attribution is a
-  third phase gated on infrastructure that does not exist yet. Three probes
-  must run on fleet kernels before the first line of BPF is written — see
-  *Go/no-go*.
+- **Status:** **OPEN — phase 1 (`ext4_journal`) implemented and measured on
+  a module-ext4 kernel; probe-cost bench on bare metal still to do.** Two BPF
+  samplers are specified: `ext4_journal` (jbd2 commit and checkpoint phases,
+  fsync counts, filesystem errors) and `ext4_alloc` (block allocator effort,
+  writeback results, inode churn). Host-wide first; per-filesystem
+  attribution is a third phase gated on infrastructure that does not exist
+  yet. Probes 1 to 3 passed on aarch64 Debian 13 (built-in ext4) and x86_64
+  Debian 13 (module ext4). Phase 1 refreshes in **190–295 µs** on a 56-vCPU
+  guest and its counts reconcile with fio and the jbd2 procfs oracle; see
+  *Results — phase 1*. Four defects were found by running it, all recorded
+  there.
 - **Driver:** Rezolus observes ext4 only from outside. `blockio` sees the
   request the filesystem eventually issues, `syscall_latency` folds `fsync`
   into a class shared with `open`, `stat` and `getdents`
@@ -357,6 +361,47 @@ of Rust in a test; if it does not, the jiffies decision above is wrong and
   ops on the same device. If they do not, the phase semantics are
   misunderstood and the descriptions are wrong.
 
+**Probe results, 2026-09-28, pi10** (Raspberry Pi 4B, aarch64, Debian 13,
+kernel `6.12.75+rpt-rpi-v8`, `CONFIG_HZ=250`; systemslab job
+`01a0e919-f3f8-7161-6274-d7ec8d4fd402`):
+
+- Probe 1: `CONFIG_EXT4_FS=y`, `CONFIG_JBD2=y`, `CONFIG_DEBUG_INFO_BTF=y`,
+  `CONFIG_DEBUG_INFO_BTF_MODULES=y`; `/sys/kernel/btf/vmlinux` present and no
+  `ext4`/`jbd2` module BTF, as expected for a built-in ext4. tracefs lists 115
+  ext4 events and 23 jbd2 events; every hook this entry names is present,
+  including `ext4_error` and `ext4_shutdown`. `bpftool` was not installed on
+  the host, so the `btf_trace_*` typedef check moved to the x86_64 build job.
+- Probe 2: the tracefs `format` files agree with the aarch64 header field for
+  field for `jbd2_run_stats` (`dev`, `tid`, six `unsigned long` phases,
+  `handle_count`, `blocks`, `blocks_logged`), `jbd2_checkpoint_stats`
+  (`chp_time`, `forced_to_close`, `written`, `dropped`),
+  `jbd2_lock_buffer_stall` (`stall_ms`), both `ext4_sync_file_*`,
+  `ext4_error` (`function`, `line`), `ext4_shutdown` (`flags`),
+  `ext4_mballoc_alloc` and `ext4_writepages_result`.
+- Probe 3: `clock_getres(CLOCK_MONOTONIC_COARSE)` = 4,000,000 ns on the 250 Hz
+  kernel, and `CLOCK_MONOTONIC` = 1 ns. `getconf CLK_TCK` = 100 on the same
+  host, which is the `USER_HZ` trap the tick decision avoids.
+- Oracle: `/proc/fs/jbd2/mmcblk0p2-8/info` reports 63,650 transactions with
+  average phases in ms (running 2944, logging 4, commit time 4408 µs), 8
+  handles and 5 logged blocks per transaction. `/sys/fs/ext4/mmcblk0p2/`
+  carries `errors_count`, `lifetime_write_kbytes`, `session_write_kbytes`,
+  `first_error_time` and `last_error_time`, confirming the sysfs follow-up.
+
+**Probe results, 2026-09-28, hv01 guest** (x86_64, Debian 13 `debian-13-ci`
+image, kernel `6.12.63+deb13-amd64`, `CONFIG_HZ=250`; systemslab job
+`01a0e923-d21c-7120-9690-ed12235fbffc`):
+
+- Probe 1: **`CONFIG_EXT4_FS=m`, `CONFIG_JBD2=m`**, `CONFIG_DEBUG_INFO_BTF=y`,
+  `CONFIG_DEBUG_INFO_BTF_MODULES=y`; `/sys/kernel/btf/` holds `vmlinux`,
+  `ext4` and `jbd2`. The stock Debian amd64 kernel is the module case, while
+  the Raspberry Pi kernel above builds ext4 in. So the same distribution
+  release lands on both sides of the twin-selection decision depending on
+  architecture, and `kernel_btf_has_tracepoints` consulting module BTF is
+  required on the most ordinary x86_64 Debian host, not an edge case.
+  `vmlinux` BTF carries none of the nine `btf_trace_*` typedefs checked.
+- Probe 3: `clock_getres(CLOCK_MONOTONIC_COARSE)` = 4,000,000 ns, matching
+  `CONFIG_HZ=250`.
+
 **NO-GO conditions.** Probe 1 shows the fleet is predominantly module-ext4
 without module BTF: the sampler as designed cannot read commit phases there,
 and the entry closes as NO-GO with the sysfs `errors_count`/`lifetime_write_kbytes`
@@ -367,27 +412,153 @@ rate is bounded by the commit rate.
 
 ## Plan
 
-1. **Probes 1 to 3** on fleet kernels; record results here.
+1. **Probes 1 to 3** on fleet kernels; record results here. *Done for
+   aarch64 Debian 13 (above); x86_64 with the build job.*
 2. **`kernel_btf_has_tracepoints`** in `src/agent/bpf/mod.rs`, vmlinux plus
-   module BTF, unit-tested against a fixture listing.
+   every `/sys/kernel/btf/<module>`. *Done.* The module scan is factored as
+   `module_btfs(dir)` so the two failure modes that matter — no module BTF
+   directory, files that are not BTF — are unit-tested without a kernel.
 3. **Syscall class split**: a `sync` class in
    `src/agent/samplers/syscall/linux/mod.rs` and its histogram in
    `syscall/linux/latency/{stats.rs,mod.bpf.c}`. Independent of the rest;
-   lands on its own.
+   lands on its own. Note for whoever does it: sixteen classes fill the
+   16-wide per-CPU counter bank exactly, so a seventeenth widens
+   `COUNTER_GROUP_WIDTH` to 24 in both syscall BPF programs (the bank is a
+   whole number of cachelines, `bpf/counters.rs`) and adds a
+   `cgroup_syscall_sync` map to `syscall_counts`.
 4. **`ext4_journal`**: `src/agent/samplers/ext4/linux/journal/{mod.rs,
    mod.bpf.c,stats.rs}`, `tp_btf`/`raw_tp` twins per hook, the local struct
    declarations, the tick config map, registration in
-   `src/agent/samplers/mod.rs`, `config/agent.toml`, `docs/metrics.md`. Bench
-   and close-out numbers in this entry.
-5. **Dashboard**: an ext4 section in `crates/dashboard/src/dashboard/`
-   (commit phase percentiles, checkpoint latency, fsync rate and errors,
-   filesystem errors), built once per the `viewer-parity` skill for both
-   backends.
+   `src/agent/samplers/mod.rs`, `build.rs`, `config/agent.toml`,
+   `docs/metrics.md`, the analysis crate's sampler universe
+   (`src/analysis/extract/{context,golden}.rs`). *Implemented; the jbd2
+   structs are declared as CO-RE flavors `transaction_run_stats_s___rz` and
+   `transaction_chp_stats_s___rz`, a fourteenth counter
+   (`ext4_journal_lock_buffer_stalls`) was added beside the stall histogram,
+   and the tick is 0 when `clock_getres` fails, which keeps the counters and
+   empties the jiffy histograms rather than publishing wrong latencies.*
+   Bench and close-out numbers below when the Linux job reports.
+5. **Dashboard**: an ext4 section in `crates/dashboard/src/dashboard/ext4.rs`
+   (commit rate and phase percentiles, checkpoint latency and forced closes,
+   fsync rate by op and errors, filesystem errors), gated on
+   `ext4_journal_commits` being in the recording. *Done*, in the shared
+   `dashboard` crate so both viewer backends get it.
 6. **`ext4_alloc`** as phase 2, same shape, its own bench on a write-heavy
    fio run since `ext4_mballoc_alloc` tracks write throughput.
 7. **Phase 3** per-filesystem counters, after the lookup-map measurement.
 
+## Results — phase 1
+
+All on the hv01 guest described under the x86_64 probe (Debian 13,
+`6.12.63+deb13-amd64`, `CONFIG_EXT4_FS=m` with module BTF, 56 vCPU, root on
+ext4 over virtio `/dev/vda1`), release build, the agent run with only
+`ext4_journal` enabled and `[log] level = "debug"`. Final run: systemslab
+`01a0e94e-26b9-718e-0865-57164e71bb6a`; branch `ext4-journal-sampler` at
+`d678ce84`.
+
+**Build, lint, tests.** `cargo build --release --locked` 388 s cold;
+`cargo clippy --all-targets --all-features -- -D warnings` clean;
+`cargo test --workspace --exclude viewer --tests --bins --locked`: 1,331
+tests pass. One unrelated test failed in this run only —
+`agent::exposition::http::stream_tests::a_dropped_stream_is_reconnected_and_both_ends_are_reported`,
+a 20 s event deadline that timed out under the full-workspace test load; it
+passed in the two previous runs on the same guest and is not touched by this
+change.
+
+**Twin selection on a module kernel.** `kernel_btf_has_tracepoints` found all
+seven `btf_trace_*` typedefs in `/sys/kernel/btf/ext4` and `/sys/kernel/btf/jbd2`,
+so every hook loaded its `tp_btf` twin; libbpf resolved the attach targets and
+CO-RE-relocated `transaction_run_stats_s___rz` and `transaction_chp_stats_s___rz`
+against the module BTF ("found target candidate ... in [jbd2]"). `rezolus status`:
+`ext4_journal active healthy`, seven programs attached, verdict `ok` each.
+
+**Refresh cost** (`ext4_journal sampling latency`, the number principle 16
+asks for): **295 µs on the first refresh, then 190–211 µs** per refresh at a
+300 ms scrape interval. The read is eight 496-bucket histograms and one
+counter map of `MAX_CPUS` × 16 banks (128 KiB) summed in userspace; the
+counter sweep walks all 1,024 possible banks regardless of the guest's 56
+CPUs, which is the same `Counters` shape `blockio_requests` uses and is the
+obvious place to look if this number matters. Not measured: a host with
+several ext4 filesystems (host-wide maps, so no scaling expected) and the
+worst-case CPU count (the sweep is fixed at `MAX_CPUS`).
+
+**Counts reconcile.** Under `fio --rw=randwrite --bs=4k --numjobs=4 --fsync=1
+--ioengine=psync` for 30 s at 616 IOPS, the snapshot after the run read:
+
+| metric | value | check |
+|---|---|---|
+| `ext4_sync_file{op="fsync"}` | 18,498 | 616 IOPS × 30 s = 18,480; one fsync per write |
+| `ext4_sync_file{op="fdatasync"}`, `ext4_sync_file_errors` | 0, 0 | fio calls fsync; none failed |
+| `ext4_journal_commits` | 6,339 | 2.9 fsyncs per commit: the four jobs' fsyncs batch into shared commits |
+| `ext4_journal_commit_handles` | 15,237 | 2.4 per commit |
+| `ext4_journal_commit_blocks{kind="dirtied"}` / `{kind="logged"}` | 6,353 / 19,031 | 1.0 and 3.0 per commit; procfs lifetime averages read 2 and 4 |
+| `ext4_journal_checkpoints`; buffers `written` / `dropped` | 6,544; 278 / 6,749 | in-place overwrites leave little to write at checkpoint |
+| `ext4_journal_checkpoint_forced_to_close`, `ext4_journal_lock_buffer_stalls`, `ext4_errors`, `ext4_shutdowns` | 0 | expected on a healthy guest |
+| every `ext4_journal_commit_latency{phase}` histogram total | 6,339 | one sample per commit in every phase |
+
+`/proc/fs/jbd2/vda1-8/info` went from 600 to 23,652 transactions across the
+100 s of fio (prefill, A, B, C); the sampler's 6,339 over its 30 s window is
+the right share for the slower B run. The oracle's per-phase averages are
+integer jiffies rounded to ms over the journal's lifetime, so they cannot be
+compared to a 30 s distribution more finely than "logging is the non-zero
+phase", which both agree on.
+
+**Phase distributions, decoded from the h2 buckets** (grouping power 3:
+index 159 is one 4 ms tick, 167 two, 171 three, 175 four):
+
+| phase | 0 ticks | 4 ms | 8 ms | 12 ms | 16 ms+ |
+|---|---|---|---|---|---|
+| logging | 1,721 | 2,912 | 1,552 | 121 | 33 |
+| running | 2,202 | 2,661 | 1,373 | 77 | 26 |
+| request_delay | 2,457 | 2,591 | 1,204 | 75 | 12 |
+| wait | 6,311 | 0 | 4 | 10 | 14 (tail to ~100 ms) |
+| flushing, locked | 6,339 | | | | |
+| checkpoint | 6,538 | 6 | | | |
+
+Logging carries the commit time on this workload, mean 1.03 ticks (about
+4 ms), which matches the oracle's 5.9 ms average commit time within one
+tick. Flushing is zero because fio overwrites blocks it already allocated,
+so ordered mode has no unwritten data to flush; the design's "flushing and
+logging account for most of the commit" holds with flushing's share being
+zero here. The jiffy resolution the design accepted is visible: a 4 ms tick
+puts most of a 6 ms commit into two buckets. Whether that is enough for the
+questions people ask of it is a matter for use; if not, `jbd2_start_commit`
+to `jbd2_end_commit` pairing with our own clock is the alternative, at the
+price of a per-journal side map.
+
+**Probe cost: not measured to the gate.** The A/B/A fio sequence on the
+guest's virtio disk read OFF 851, ON 616, OFF 510 IOPS (p99 163, 5,866, 161 µs):
+the two OFF runs differ by 40%, so nothing under that noise floor is
+attributable to the sampler. The `fsync` hooks are two `array_incr`s per
+call; the measurement the gate asks for needs bare metal, isolated cores,
+`null_blk` and `perf stat`, per `2026-09-03-blockio-latency-rq-fields.md`.
+That is the remaining GO item and is in *Deferred*.
+
+**Defects found by running it**, none by reading it:
+
+1. `config` as a map name collides with `typedef struct config_s config` in
+   the x86_64 `vmlinux.h`; renamed `jiffy_ns`.
+2. `BpfBuilder::map` loads userspace values through mmap, so the map needs
+   `BPF_F_MMAPABLE`; without it the sampler thread panicked with EINVAL.
+3. `libbpf_rs::btf::Btf::from_path` parses standalone BTF only; a module's
+   BTF is split BTF and failed to parse, so the scan found nothing and every
+   hook fell back to `raw_tp`. Fixed with `btf__parse_split` through
+   libbpf-sys (`RawBtf` in `src/agent/bpf/mod.rs`).
+4. The verifier refused `jbd2_run_stats_btf`: a `tp_btf` pointer argument is
+   `trusted_ptr_or_null`, and `BPF_CORE_READ`'s offset arithmetic on it is
+   prohibited until it is null-checked. `blockio`'s `struct request*` never
+   hit this because `block_rq_complete`'s argument is not nullable in BTF.
+
 ## Deferred / reopen
+
+- **Probe-cost bench on bare metal** — Open, the remaining GO gate for
+  phase 1. `delta` (x86_64, Debian 13) with `null_blk`, isolated cores,
+  `perf stat -C`, sampler off versus on, four repetitions, the method of
+  `2026-09-03-blockio-latency-rq-fields.md`. GO at under 1% throughput at
+  saturation.
+- **Counter sweep at `MAX_CPUS`** — Idea. The refresh walks 1,024 banks on a
+  56-CPU guest; bounding the `Counters` sweep to possible CPUs is a
+  `bpf/counters.rs` change that every `Counters` sampler would share.
 
 - **Per-filesystem sync latency** — Roadmap. Needs histogram groups with
   slots (backlog, after 6.0) and a per-thread start map: the `MAX_PID` array
