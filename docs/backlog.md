@@ -602,7 +602,9 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   existing recordings, up to 50% larger on the spike's short-lived
   occupants. Compaction already re-encodes,
   so a caller-named sort key sorts off the tick path; segments declare it in
-  parquet `sorting_columns`.
+  parquet `sorting_columns`. It is also the reopen condition for the
+  changes-only stream (NO-GO in arrival order, "Agent — changes-only
+  stream" below).
 - ~~**Sort at seal**~~ — Decided 2026-09-28: no. The writer seals long
   segments in arrival order (metriken#184); sorting made the 100 ms
   replays 6–20% larger and did not improve the tick path. Sorting is the
@@ -1447,6 +1449,24 @@ Related ideas with no entry yet:
   and each documented in a different journal entry or in `CLAUDE.md`. A
   single page under `docs/` that states the rules, plus an `llms.txt` index,
   so an agent or a new reader gets them without the archaeology.
+
+## Agent — changes-only stream
+
+Source: [Sending only what changed](journal/2026-09-28-changes-only-stream.md).
+NO-GO on size, measured 2026-09-29: on arrival-ordered long tables under
+zstd-3, removing unchanged readings saved 25.0% on the busy host and cost
+16.5% on the quiet host (rows dropped), or 12.4% and −10.6% (values nulled).
+
+- ~~**Measure unchanged readings per long table**~~ — Done 2026-09-29, in the
+  entry's "Measured" section.
+- **Agent: send only changed members; long layout v2** — NO-GO. Reopen when
+  the `CompactSpec` sort key (below, "dendro archives (6.0)") lands and
+  segments sorted by occupant still carry long runs of repeated values that
+  their encoding does not already collapse.
+- **Liveness without a lost event** — Open, useful without the rest. A
+  dropped `task_exit` leaves a phantom member at 0 until PID reuse
+  (`account__sched_process_exit`). Detect it at read time from
+  `task_start_times`. Cgroups have no removal event at all.
 
 ## Tooling / skills
 
