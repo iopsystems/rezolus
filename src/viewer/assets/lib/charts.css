@@ -1123,6 +1123,44 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* "Align on" control: which instant every capture draws at +0s. In the A/B
+ * card it is a row under the two captures; in the N-way strip a trailing
+ * chip. The select matches the topnav's node select; the note names the
+ * captures that lack the chosen event and so sit on their first sample. */
+.compare-align {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 8px;
+}
+.compare-badge-nway .compare-align {
+    padding-left: 8px;
+    border-left: 1px solid var(--border-subtle);
+}
+.compare-align-label {
+    color: var(--fg-secondary);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+}
+.compare-align-select {
+    font: inherit;
+    font-size: 12px;
+    color: var(--fg);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 2px 6px;
+    max-width: 220px;
+}
+.compare-align-note {
+    color: var(--fg-secondary);
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 320px;
+}
 
 .compare-badge .compare-capture-list {
     position: absolute;

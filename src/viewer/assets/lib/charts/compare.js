@@ -45,6 +45,7 @@ import { resolvedStyle } from './metric_types.js';
 import { visibleLabels } from '../labels.js';
 import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { captureContext, resolveAnchor } from '../events/capture_events.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -189,6 +190,9 @@ const stripDisplay = (spec) => ({ ...spec, boxplot: undefined, boxplotDecimated:
  * the four kinds.
  */
 export const renderCompareChart = (opts) => {
+    // The context every strategy's anchors resolve against for this render:
+    // the caller's (tests pass their own), else the app-wide singleton.
+    activeCaptureContext = opts.captureContext || captureContext;
     const style = resolvedStyle(opts.spec);
     switch (style) {
         case 'line':              return overlayLine(opts);
@@ -225,18 +229,18 @@ const rebase = (timeDataSec, anchorSec) => timeDataSec.map((t) => t - anchorSec)
 // the UI stays readable when no alias is set.
 const labelFor = (captureLabels, id) => (captureLabels && captureLabels[id]) || id;
 
-// The per-capture anchor in seconds. Each capture's effective anchor is
-// the capture's natural start (first sample) plus a user-configured
-// offset. `anchors[id]` is stored as a signed ms offset from that start
-// (0 = "no user shift"). This keeps `rebase` producing small relative
-// offsets even when the raw timestamps are absolute-epoch seconds.
-const anchorSecondsFor = (anchors, id, timeDataSec) => {
-    const naturalStart = Array.isArray(timeDataSec) && timeDataSec.length > 0
-        ? timeDataSec[0]
-        : 0;
-    const userOffsetMs = (anchors && anchors[id]) || 0;
-    return naturalStart + userOffsetMs / 1000;
-};
+// The per-capture anchor in seconds: the absolute instant drawn at +0s.
+// `anchors[id]` is a signed ms offset from the capture's recording start,
+// or `{ kind }` for the first event of that kind in that capture; both
+// resolve through events/capture_events.js against the context the app
+// fills per capture. Without a context entry the offset is measured from
+// the first fetched sample, the rule this always had. Measuring from the
+// recording start rather than the first fetched sample is what keeps an
+// anchor meaning the same instant when the baseline is zoomed and refetched
+// from later.
+let activeCaptureContext = captureContext;
+const anchorSecondsFor = (anchors, id, timeDataSec) =>
+    resolveAnchor(anchors ? anchors[id] : undefined, id, timeDataSec, activeCaptureContext).sec;
 
 // ── Strategies ───────────────────────────────────────────────────────
 

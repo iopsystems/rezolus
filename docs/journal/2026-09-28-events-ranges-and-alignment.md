@@ -1,8 +1,8 @@
 # Events as ranges, phases, and alignment anchors
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — range rendering BUILT (#1322); recorder run events
-  BUILT (this PR); event-anchored alignment not yet started.
+- **Status:** BUILT — range rendering (#1322), recorder run events (#1323),
+  event-anchored alignment (this PR). Two premises corrected below.
 
 ## Problem
 
@@ -41,13 +41,20 @@ marker for where the command began or ended.
 
 **3. Compare-mode alignment is manual.** In compare mode each capture's
 anchor is a signed millisecond offset from that capture's first sample
-(`anchorSecondsFor` in `src/viewer/assets/lib/charts/compare.js`). The user
-drags the experiment's offset until the traces look aligned; the baseline
-anchor is stored and never written by any UI (see the A/B compare entry,
-"Dead baseline anchor plumbing"). There is no way to say "align both arms on
-their `run_start` event", which is the alignment every benchmark comparison
-actually wants, and the one a person cannot eyeball to better than a few
-seconds.
+(`anchorSecondsFor` in `src/viewer/assets/lib/charts/compare.js`). There is
+no way to say "align both arms on their `run_start` event", which is the
+alignment every benchmark comparison actually wants, and the one a person
+cannot eyeball to better than a few seconds.
+
+*Correction, found while building:* this paragraph first said the user
+"drags the experiment's offset until the traces look aligned". No such UI
+existed for either arm: the only writer of `anchors.*` was a clamp in
+`attachExperiment`, so both anchors were inert and the alignment control
+below is the first anchor UI the viewer has had. Also wrong was the recorder
+paragraph's "the viewer needs no change to show them": only the baseline's
+events were ever loaded (`script.js` seeds the events store from one
+`file_metadata`; the experiment's was fetched and its events dropped; N-way
+captures never fetched theirs), so per-capture events were new plumbing.
 
 ## Goal
 
@@ -181,6 +188,44 @@ state, and rides in the link once
 
 This also gives the baseline anchor its first writer, closing the inert
 `anchors.baseline` plumbing the A/B entry left standing.
+
+*Built (this PR).* An anchor is `number | { kind }`, still schema v3: an
+older viewer coerces the object with `Number(v) || 0` and lands on the
+capture's start, which is this form's own fallback, where a v4 would make
+it refuse the whole payload (`normalizeAnchor` in
+`selection/selection_migration.js`; every key is kept, so a multi-recording
+archive's named arms have anchors too, and `setAnchor` accepts any
+registry id). The numeric form changed base: it is now measured from the
+capture's **recording start** (`minTime` from `/api/v1/metadata` per
+capture), not the first fetched sample, which moved whenever the baseline
+was zoomed and refetched from later; without a context entry the old rule
+holds. Per-capture events and starts live in a new pure module,
+`events/capture_events.js` (`CaptureContext`, `resolveAnchor`), separate
+from the editable events store because that list is the baseline's and a
+persisted notebook overrides it; `refreshCompareCaptures` in `app.js`
+fills it from every capture's `file_metadata` and `metadata` (both
+backends serve them per capture id) and `detachExperiment` clears it.
+`resolveAnchor` returns `{sec, resolved, reason}`; `compare.js` resolves
+through it at every anchor site, and `renderCompareChart` takes an
+optional `captureContext` so the node tests pass their own. The UI is an
+"Align on" select in the compare badge (both the A/B card and the N-way
+strip): `first sample` plus every kind present in all captures, kinds
+some captures lack listed disabled and naming them, and a note for any
+capture whose stored anchor names an event its file lacks. Choosing a
+kind writes `{ kind }` to every capture through `setAlignmentKind`, one
+persist, one link write (`anchor.<id>=kind:<event kind>`), one redraw. The
+plan said no cache invalidation would be needed because `rebase` allocates
+fresh arrays and the compare wrapper re-renders on every view; the first
+headless run showed the overlay not moving at all. `Chart` decides whether
+a compare spec needs a reconfigure with `multiSeriesDiffers`
+(`charts/chart.js`), which compared only `valueData`, and an anchor change
+alters `timeData` alone. It now compares both. The defect was latent for
+numeric anchors too, since nothing ever wrote one. Alignment reads the file's
+events only; an event added in the Notebook counts once it is saved into
+the recording. `annotate --recording k=v` targeting, so a hand-written
+`run_start` on a combined archive can differ per recording, is deferred
+to the backlog: the benchmark case is covered by recorder-emitted events,
+which already differ per run.
 
 ## Not in scope
 

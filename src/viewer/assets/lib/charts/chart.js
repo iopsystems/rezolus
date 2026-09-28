@@ -303,9 +303,12 @@ function sameHead(a, b) {
 // Each entry has its own `timeData` / `valueData`; a refetch produces
 // fresh arrays. Reference equality on the entry pair is enough for the
 // happy "no change" case; otherwise probe length + head/tail of each
-// series's valueData (timeData heads are usually rebased so changes
-// there mirror valueData changes one-for-one). Returns `true` when
-// reconfigure is warranted.
+// series's valueData AND timeData. Both matter: a refetch changes the
+// values, while an anchor change (the "Align on" control, a linked
+// anchor) rebases the timestamps and leaves every value as it was, and
+// a comparison on values alone let the overlay sit where it was after
+// the user picked an event to align on. Returns `true` when reconfigure
+// is warranted.
 function multiSeriesDiffers(a, b) {
     if (a === b) return false;
     if (!Array.isArray(a) || !Array.isArray(b)) return Array.isArray(a) !== Array.isArray(b);
@@ -317,6 +320,8 @@ function multiSeriesDiffers(a, b) {
         if (!ai || !bi) return true;
         if (ai.valueData !== bi.valueData
             && !shallowSameShape([ai.valueData], [bi.valueData])) return true;
+        if (ai.timeData !== bi.timeData
+            && !shallowSameShape([ai.timeData], [bi.timeData])) return true;
     }
     return false;
 }

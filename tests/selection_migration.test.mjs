@@ -62,6 +62,29 @@ test('malformed anchors are coerced to numeric on v3', () => {
     assert.deepEqual(s.anchors, { baseline: 0, experiment: 5 });
 });
 
+test('a { kind } anchor is kept on v3, for the two slots and a named capture', () => {
+    const s = migrateSelection({
+        version: 3,
+        entries: [],
+        anchors: { baseline: { kind: ' run_start ' }, experiment: -1500, redis: { kind: 'deploy' } },
+    });
+    assert.deepEqual(s.anchors, {
+        baseline: { kind: 'run_start' },
+        experiment: -1500,
+        redis: { kind: 'deploy' },
+    });
+    // Malformed objects are "no shift".
+    const m = migrateSelection({
+        version: 3,
+        entries: [],
+        anchors: { baseline: { kind: '' }, experiment: { kind: 3 }, x: {}, '': 5 },
+    });
+    assert.deepEqual(m.anchors, { baseline: 0, experiment: 0, x: 0 });
+    // Identity round trip.
+    const once = migrateSelection(s);
+    assert.deepEqual(migrateSelection(once).anchors, s.anchors);
+});
+
 test('missing chartToggles becomes empty object on v3', () => {
     const s = migrateSelection({ version: 3, entries: [] });
     assert.deepEqual(s.chartToggles, {});
