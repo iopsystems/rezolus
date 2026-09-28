@@ -87,7 +87,7 @@ struct {
     __type(key, u32);
     __type(value, u64);
     __uint(max_entries, 1);
-} config SEC(".maps");
+} jiffy_ns SEC(".maps");
 
 // Commit phases: six LIKE ENTITIES of one family (the `phase` label), read as
 // one acquisition group on the userspace side (see stats.rs).
@@ -157,7 +157,7 @@ struct {
 
 static __always_inline u64 tick_ns(void) {
     u32 idx = 0;
-    u64* v = bpf_map_lookup_elem(&config, &idx);
+    u64* v = bpf_map_lookup_elem(&jiffy_ns, &idx);
 
     return v ? *v : 0;
 }

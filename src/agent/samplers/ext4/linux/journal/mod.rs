@@ -23,7 +23,7 @@
 //! jbd2 reports commit and checkpoint phases in jiffies. The BPF program
 //! converts them to nanoseconds with a tick length this module measures with
 //! `clock_getres(CLOCK_MONOTONIC_COARSE)` — which the kernel answers with
-//! `TICK_NSEC` — and hands over through the `config` map. `sysconf(_SC_CLK_TCK)`
+//! `TICK_NSEC` — and hands over through the `jiffy_ns` map. `sysconf(_SC_CLK_TCK)`
 //! would be wrong here: that is `USER_HZ`, a constant 100.
 //!
 //! Kernel support: reading the jbd2 stats structs needs their BTF, which is in
@@ -224,7 +224,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY,
         &STALL_LATENCIES_ACQ,
     )
-    .map("config", vec![tick])
+    .map("jiffy_ns", vec![tick])
     .disabled_programs(&disabled)
     .required_programs(&required)
     .build()?;
@@ -243,7 +243,7 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "counters" => &self.maps.counters,
-            "config" => &self.maps.config,
+            "jiffy_ns" => &self.maps.jiffy_ns,
             "commit_wait" => &self.maps.commit_wait,
             "commit_request_delay" => &self.maps.commit_request_delay,
             "commit_running" => &self.maps.commit_running,

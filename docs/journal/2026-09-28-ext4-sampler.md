@@ -384,6 +384,21 @@ kernel `6.12.75+rpt-rpi-v8`, `CONFIG_HZ=250`; systemslab job
   carries `errors_count`, `lifetime_write_kbytes`, `session_write_kbytes`,
   `first_error_time` and `last_error_time`, confirming the sysfs follow-up.
 
+**Probe results, 2026-09-28, hv01 guest** (x86_64, Debian 13 `debian-13-ci`
+image, kernel `6.12.63+deb13-amd64`, `CONFIG_HZ=250`; systemslab job
+`01a0e923-d21c-7120-9690-ed12235fbffc`):
+
+- Probe 1: **`CONFIG_EXT4_FS=m`, `CONFIG_JBD2=m`**, `CONFIG_DEBUG_INFO_BTF=y`,
+  `CONFIG_DEBUG_INFO_BTF_MODULES=y`; `/sys/kernel/btf/` holds `vmlinux`,
+  `ext4` and `jbd2`. The stock Debian amd64 kernel is the module case, while
+  the Raspberry Pi kernel above builds ext4 in. So the same distribution
+  release lands on both sides of the twin-selection decision depending on
+  architecture, and `kernel_btf_has_tracepoints` consulting module BTF is
+  required on the most ordinary x86_64 Debian host, not an edge case.
+  `vmlinux` BTF carries none of the nine `btf_trace_*` typedefs checked.
+- Probe 3: `clock_getres(CLOCK_MONOTONIC_COARSE)` = 4,000,000 ns, matching
+  `CONFIG_HZ=250`.
+
 **NO-GO conditions.** Probe 1 shows the fleet is predominantly module-ext4
 without module BTF: the sampler as designed cannot read commit phases there,
 and the entry closes as NO-GO with the sysfs `errors_count`/`lifetime_write_kbytes`
