@@ -38,14 +38,14 @@ const alignControl = (attrs) => {
         m('select.compare-align-select', {
             id: 'compare-align-select',
             value: current,
-            title: 'The instant drawn at +0s in every capture: its first sample, or the first event of a kind its file carries',
+            title: 'The instant drawn at +0s in every capture: its recording start, or the earliest event of a kind its file carries',
             onchange: (e) => {
                 const v = e.target.value;
                 if (v === '__custom') return;
                 setAlignmentKind(v || null, ids);
             },
         }, [
-            m('option', { value: '' }, 'first sample'),
+            m('option', { value: '' }, 'recording start'),
             ...kinds.map((k) => m('option', {
                 value: k.kind,
                 disabled: k.missing.length > 0,
@@ -56,8 +56,8 @@ const alignControl = (attrs) => {
         ]),
         unresolved.length > 0
             ? m('span.compare-align-note', {
-                title: unresolved.map((id) => `${label(id)} has no ${anchors[id].kind} event; drawn from its first sample`).join('\n'),
-            }, `${unresolved.map(label).join(', ')}: no ${anchors[unresolved[0]].kind} event, using first sample`)
+                title: unresolved.map((id) => `${label(id)} has no ${anchors[id].kind} event; drawn from its recording start`).join('\n'),
+            }, unresolved.map((id) => `${label(id)}: no ${anchors[id].kind} event, using recording start`).join('; '))
             : null,
     ]);
 };

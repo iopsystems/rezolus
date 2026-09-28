@@ -1161,6 +1161,13 @@
     text-overflow: ellipsis;
     max-width: 320px;
 }
+/* A diff view that had to fall back to side by side says why, above the
+ * pair, in the secondary tier: it is meant to be read once. */
+.compare-diff-note {
+    color: var(--fg-secondary);
+    font-size: 12px;
+    padding: 4px 0 6px;
+}
 
 .compare-badge .compare-capture-list {
     position: absolute;

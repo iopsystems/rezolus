@@ -123,7 +123,12 @@ export const getExperimentAlias = () => experimentAlias;
 // N (not just baseline + experiment). Populated from `/api/v1/captures`
 // whenever compare mode is (re)established; empty otherwise.
 let compareCaptures = [];
+// Each call takes a generation so a slow fill from an earlier compare
+// session (attach A, detach, attach B) cannot land on top of the current
+// one and hand B's anchors A's events.
+let refreshGen = 0;
 const refreshCompareCaptures = async () => {
+    const gen = ++refreshGen;
     captureContext.clear();
     if (!compareMode) {
         compareCaptures = [];
@@ -131,6 +136,7 @@ const refreshCompareCaptures = async () => {
     }
     try {
         const caps = await ViewerApi.getCaptures();
+        if (gen !== refreshGen) return;
         compareCaptures = Array.isArray(caps) ? caps : [];
     } catch (e) {
         // Falling back leaves the badge on its A/B rendering, which looks
@@ -153,6 +159,7 @@ const refreshCompareCaptures = async () => {
             ViewerApi.getFileMetadata(id).catch(() => null),
             ViewerApi.getMetadata(id).catch(() => null),
         ]);
+        if (gen !== refreshGen) return;
         if (!fm && !meta) return;
         const data = meta?.data ?? meta;
         const startSec = Number(data?.minTime ?? data?.min_time);
@@ -161,8 +168,24 @@ const refreshCompareCaptures = async () => {
             startSec: Number.isFinite(startSec) ? startSec : null,
         });
     }));
+    if (gen !== refreshGen) return;
+    // Link anchors for named arms wait for the registry: a link naming an
+    // arm this archive does not have must not leave a key in the notebook
+    // (and, from there, in every later link).
+    if (pendingLinkAnchors) {
+        const known = new Set([...ids]);
+        for (const [id, v] of Object.entries(pendingLinkAnchors)) {
+            if (known.has(id)) setAnchor(id, v);
+            else console.warn(`[anchor] "${id}" is not a capture of this archive; ignoring anchor.${id}`);
+        }
+        pendingLinkAnchors = null;
+        writeViewState({ anchors: notebookStore.anchors || {} });
+    }
     m.redraw();
 };
+// Anchors a link named for captures other than the two A/B slots, applied
+// once the registry has listed the archive's arms.
+let pendingLinkAnchors = null;
 
 // Compare-mode per-chart toggles + anchors live in `notebookStore` so
 // they persist across page reloads. See selection_migration.js for the
@@ -1265,7 +1288,14 @@ const initDashboard = (config = {}) => {
     // attach-time clamp (attachExperiment) does not run on this path, so a
     // numeric experiment anchor is capped here as it would be there.
     if (compareMode) {
+        pendingLinkAnchors = null;
         for (const [id, v] of Object.entries(linkState.anchors)) {
+            if (id !== CAPTURE_BASELINE && id !== CAPTURE_EXPERIMENT) {
+                // A named arm: applied by refreshCompareCaptures once the
+                // registry says the arm exists, dropped otherwise.
+                (pendingLinkAnchors ||= {})[id] = v;
+                continue;
+            }
             // Only the experiment is capped to its own duration, as the
             // attach-time clamp does; the baseline's duration is not known
             // here and its anchor was never clamped.

@@ -195,7 +195,8 @@ capture's start, which is this form's own fallback, where a v4 would make
 it refuse the whole payload (`normalizeAnchor` in
 `selection/selection_migration.js`; every key is kept, so a multi-recording
 archive's named arms have anchors too, and `setAnchor` accepts any
-registry id). The numeric form changed base: it is now measured from the
+non-empty id; the registry, through the compare badge and the link path,
+decides which ids get written). The numeric form changed base: it is now measured from the
 capture's **recording start** (`minTime` from `/api/v1/metadata` per
 capture), not the first fetched sample, which moved whenever the baseline
 was zoomed and refetched from later; without a context entry the old rule
@@ -220,7 +221,23 @@ headless run showed the overlay not moving at all. `Chart` decides whether
 a compare spec needs a reconfigure with `multiSeriesDiffers`
 (`charts/chart.js`), which compared only `valueData`, and an anchor change
 alters `timeData` alone. It now compares both. The defect was latent for
-numeric anchors too, since nothing ever wrote one. Alignment reads the file's
+numeric anchors too, since nothing ever wrote one. An adversarial review
+then found the same defect one layer down: heatmap slots and the diff
+heatmaps carry the rebased axis in `time_data` with the same cell `data`,
+and `Chart` compared `data` only, so `Chart.onupdate` gained a
+`timeDataChanged` term. The review also found that both diff views pair
+cells by time index and ignored the anchors entirely, which was harmless
+while every anchor was the first sample and wrong once the two anchors
+could differ: `diffTimeShift` now offsets the experiment's index by the
+anchor difference in steps, and when that difference is not a whole
+number of steps the diff shows the captures side by side with the reason
+above them. Smaller review items: events are sorted by time when the
+context is filled (only rezolus's own writers sort); a generation token
+stops a slow fill from an earlier compare session landing on a later one;
+a link's anchors for named arms are applied once the registry has listed
+the arms and dropped with a warning otherwise, so an unknown arm never
+lands in the notebook; and the default is named "recording start"
+throughout, which is what it is. Alignment reads the file's
 events only; an event added in the Notebook counts once it is saved into
 the recording. `annotate --recording k=v` targeting, so a hand-written
 `run_start` on a combined archive can differ per recording, is deferred

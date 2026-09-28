@@ -86,3 +86,8 @@ test('events without a finite timestamp are dropped on set', () => {
     const ctx = ctxWith({ x: { events: [{ kind: 'a' }, ev('a', S)] } });
     assert.equal(ctx.get('x').events.length, 1);
 });
+
+test('the first event of a kind is the earliest, whatever the file order', () => {
+    const ctx = ctxWith({ x: { startSec: S, events: [ev('run_start', S + 9), ev('run_start', S + 2)] } });
+    assert.equal(resolveAnchor({ kind: 'run_start' }, 'x', null, ctx).sec, S + 2);
+});

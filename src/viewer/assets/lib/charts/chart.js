@@ -386,6 +386,13 @@ export class Chart {
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
         const dataChanged = oldSpec.data !== this.spec.data
             && !shallowSameShape(oldSpec.data, this.spec.data);
+        // Compare-mode heatmap slots and diff heatmaps carry the rebased
+        // axis in `time_data` and hand in the same cell `data`, so an
+        // anchor change alters `time_data` alone; without this term the
+        // slot kept its old axis after the user picked an event to
+        // align on.
+        const timeDataChanged = oldSpec.time_data !== this.spec.time_data
+            && !shallowSameShape([oldSpec.time_data], [this.spec.time_data]);
         // Compare-mode line/scatter sub-charts carry their per-capture
         // series in `spec.multiSeries`, not `spec.data`. An experiment
         // refetch (granularity change) only swaps the multiSeries
@@ -405,7 +412,7 @@ export class Chart {
         // chart types either don't set series_names or keep the same
         // ref across renders, so this is a no-op for them.)
         const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
-        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
+        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
             this._applyEventMarkers({ reconfigured: true });

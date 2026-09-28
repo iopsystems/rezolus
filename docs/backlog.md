@@ -1178,7 +1178,9 @@ Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-
   window should be `[from − Δ, to − Δ]` with Δ the anchor difference; lands
   with event-anchored alignment.
 - **`anchor.<named id>` for N-way** — **DONE** with event-anchored
-  alignment; `setAnchor` accepts any registry id.
+  alignment; `setAnchor` accepts any id, and a link's named anchors are
+  applied once the registry lists the arm (unknown arms are dropped with a
+  warning).
 - **`step` in the URL** — Open, one key. Already restored from localStorage.
 - **Time bar ignores the range override** — Open (bug, pre-existing).
   `applyDisplayWindow` clears `globalZoom` and `TimeRangeBar`

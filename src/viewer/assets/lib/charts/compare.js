@@ -242,6 +242,43 @@ let activeCaptureContext = captureContext;
 const anchorSecondsFor = (anchors, id, timeDataSec) =>
     resolveAnchor(anchors ? anchors[id] : undefined, id, timeDataSec, activeCaptureContext).sec;
 
+// Both diff views pair the two captures' cells by time index: baseline
+// column c against experiment column c. On the relative axis those two
+// coincide only when both captures sit at the same offset into their
+// recordings. An anchor that resolves to different offsets (an event that
+// fell at different moments in the two runs) needs the experiment index
+// shifted by that difference in steps; `k` is that shift (experiment
+// column = baseline column + k). A difference that is not a whole number
+// of steps has no honest cell pairing, so `ok` is false and the caller
+// shows the captures side by side and says why.
+export const diffTimeShift = (aId, bId, anchors, aTime, bTime) => {
+    const hasA = Array.isArray(aTime) && aTime.length > 0;
+    const hasB = Array.isArray(bTime) && bTime.length > 0;
+    if (!hasA || !hasB) return { k: 0, ok: true };
+    const relA = aTime[0] - anchorSecondsFor(anchors, aId, aTime);
+    const relB = bTime[0] - anchorSecondsFor(anchors, bId, bTime);
+    const diff = relA - relB;
+    if (Math.abs(diff) < 1e-9) return { k: 0, ok: true };
+    const stepOf = (t) => (t.length > 1 && t[1] - t[0] > 0 ? t[1] - t[0] : null);
+    const step = stepOf(aTime) ?? stepOf(bTime);
+    if (!step) return { k: 0, ok: false };
+    const exact = diff / step;
+    const k = Math.round(exact);
+    return { k, ok: Math.abs(exact - k) <= 0.25 };
+};
+
+// The side-by-side rendering a diff view falls back to when the two
+// anchors do not pair by cell, with the reason above the pair.
+const diffUnavailable = (pair) => ({
+    kind: 'vnode',
+    vnode: m('div.compare-diff-unavailable', [
+        m('div.compare-diff-note',
+            'Diff needs both captures anchored at the same offset into their recordings; '
+            + 'the chosen alignment puts them at different offsets, so they are shown side by side.'),
+        pair.vnode,
+    ]),
+});
+
 // ── Strategies ───────────────────────────────────────────────────────
 
 /**
@@ -471,11 +508,18 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     const bMatrix = ensureHeatmapMatrix(b);
 
     const rows = Math.min(aMatrix.length, bMatrix.length);
-    const bins = Math.min(
-        (aMatrix[0] || []).length,
-        (bMatrix[0] || []).length,
-    );
+    const aBins = (aMatrix[0] || []).length;
+    const bBins = (bMatrix[0] || []).length;
+    const bins = Math.min(aBins, bBins);
     if (rows === 0 || bins === 0) return FALLBACK;
+
+    // The experiment column that sits at the same relative time as
+    // baseline column c is c + k; a column with no partner is a null cell.
+    const shift = diffTimeShift(a.id, b.id, anchors, a.timeData, b.timeData);
+    if (!shift.ok) {
+        return diffUnavailable(sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }));
+    }
+    const k = shift.k;
 
     const triples = [];
     let dMin = Infinity;
@@ -483,7 +527,8 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     for (let r = 0; r < rows; r++) {
         for (let c = 0; c < bins; c++) {
             const av = aMatrix[r][c];
-            const bv = bMatrix[r][c];
+            const cb = c + k;
+            const bv = cb >= 0 && cb < bBins ? bMatrix[r][cb] : null;
             const d = nullDiff(bv, av); // experiment − baseline
             if (d != null) {
                 if (d < dMin) dMin = d;
@@ -738,21 +783,37 @@ function rebaseSpectrumData(data, anchorSec) {
  * Returns FALLBACK when either capture is missing spectrum data or
  * when no non-null deltas exist.
  */
-const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+const renderDiffQuantileHeatmap = (opts) => {
+    const { spec, captures, anchors, chartsState, interval, Chart, captureLabels } = opts;
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
 
-    const baseFetch = {
+    // Pair by relative time: drop the leading columns of whichever
+    // capture's event fell later, so column t of each is the same offset
+    // from its anchor. buildDeltaSpectrum then truncates to the common
+    // length. A fractional shift has no cell pairing; show the pair.
+    const shift = diffTimeShift(
+        CAPTURE_BASELINE, CAPTURE_EXPERIMENT, anchors,
+        baseline.spectrumTimeData, experiment.spectrumTimeData,
+    );
+    if (!shift.ok) return diffUnavailable(sideBySideQuantileHeatmap(opts));
+    const drop = (fetch, n) => (n > 0 ? {
+        ...fetch,
+        time_data: fetch.time_data.slice(n),
+        data: fetch.data.map((col) => col.slice(n)),
+    } : fetch);
+
+    const baseFetch = drop({
         time_data: baseline.spectrumTimeData,
         data: baseline.spectrumData,
         series_names: baseline.spectrumSeriesNames,
-    };
-    const expFetch = {
+    }, -shift.k);
+    const expFetch = drop({
         time_data: experiment.spectrumTimeData,
         data: experiment.spectrumData,
         series_names: experiment.spectrumSeriesNames,
-    };
+    }, shift.k);
 
     const delta = buildDeltaSpectrum(baseFetch, expFetch);
     if (!delta) return FALLBACK;

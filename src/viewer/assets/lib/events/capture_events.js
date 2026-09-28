@@ -4,7 +4,7 @@
 // persisted to localStorage, and a restored working set wins over the
 // file's. Alignment needs something different: each capture's events as
 // the file carries them, keyed by capture id, never overridden by a
-// notebook. That is this store. It is filled by app.js whenever compare
+// notebook, which is what this store holds. It is filled by app.js whenever compare
 // mode is (re)established, from every capture's `file_metadata` and
 // `metadata` (`/api/v1/captures` names the ids; both backends serve the
 // two endpoints per capture id), and cleared when compare mode ends.
@@ -34,8 +34,14 @@ export class CaptureContext {
     /** Record a capture's events and recording start (seconds), from its metadata. */
     set(id, { events = [], startSec = null } = {}) {
         if (!id) return;
+        // Sorted by time here rather than trusted: rezolus's writers sort
+        // (`Events::normalize`), but a footer written by another tool need
+        // not be, and "the first event of a kind" must mean the earliest.
+        const kept = (Array.isArray(events) ? events : [])
+            .filter((e) => e && Number.isFinite(e.timestamp))
+            .sort((a, b) => a.timestamp - b.timestamp);
         this._byId.set(String(id), {
-            events: Array.isArray(events) ? events.filter((e) => e && Number.isFinite(e.timestamp)) : [],
+            events: kept,
             startSec: Number.isFinite(startSec) ? startSec : null,
         });
     }

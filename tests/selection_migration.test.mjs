@@ -83,6 +83,13 @@ test('a { kind } anchor is kept on v3, for the two slots and a named capture', (
     // Identity round trip.
     const once = migrateSelection(s);
     assert.deepEqual(migrateSelection(once).anchors, s.anchors);
+    // Numeric strings parse (a hand-edited payload); extra object fields drop.
+    const n = migrateSelection({
+        version: 3,
+        entries: [],
+        anchors: { baseline: '1e3', experiment: { kind: 'x', extra: 1 } },
+    });
+    assert.deepEqual(n.anchors, { baseline: 1000, experiment: { kind: 'x' } });
 });
 
 test('missing chartToggles becomes empty object on v3', () => {
