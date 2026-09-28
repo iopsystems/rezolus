@@ -263,6 +263,11 @@ re-exports them under the paths call sites use:
   snapshot values to borrow. `push_entries`, the snapshot form, is the
   `rez::rez::PushEntries` extension trait, since the builder is no longer
   rezolus's type.
+- `rez::wal::{WalGroupRow, WalCell, WalValue, materialize_wal_tail}` — the WAL
+  row format and turning a live tail into a segment (metriken-segment's `wal`;
+  `rez_sqlite::WalRow` implements its `WalRowSource`). Building a row from a
+  `GroupSnapshot` (`wal_group_row`, `group_approx_bytes`) is
+  metriken-exposition's, behind `write`.
 
 `cargo check -p rez --no-default-features --target wasm32-unknown-unknown` is a
 CI step for exactly this reason; nothing else catches a metriken type creeping
