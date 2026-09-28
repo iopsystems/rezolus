@@ -93,9 +93,19 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "sum by (reason) (irate(writeback_runs[5m]))".to_string(),
         );
         flusher.plot_promql(
-            PlotOpts::counter("Pages Written", "writeback-pages", Unit::Count),
+            PlotOpts::counter("Pages Written (flusher)", "writeback-pages", Unit::Count),
             "sum(irate(writeback_pages_written[5m]))".to_string(),
         );
+        if has_metric(data, "memory_pages_written") {
+            flusher.plot_promql(
+                PlotOpts::counter("Pages Written (all)", "pages-written", Unit::Count),
+                "sum(irate(memory_pages_written[5m]))".to_string(),
+            );
+            flusher.plot_promql(
+                PlotOpts::counter("Pages Dirtied", "pages-dirtied", Unit::Count),
+                "sum(irate(memory_pages_dirtied[5m]))".to_string(),
+            );
+        }
     }
 
     if has_metric(data, "memory_active") {

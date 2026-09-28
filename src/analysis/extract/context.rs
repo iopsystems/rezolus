@@ -231,6 +231,8 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("memory_numa_miss", "memory_vmstat"),
     ("memory_numa_other", "memory_vmstat"),
     ("memory_page_tables", "memory_meminfo"),
+    ("memory_pages_dirtied", "memory_vmstat"),
+    ("memory_pages_written", "memory_vmstat"),
     ("memory_percpu", "memory_meminfo"),
     ("memory_shmem", "memory_meminfo"),
     ("memory_slab", "memory_meminfo"),

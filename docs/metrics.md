@@ -605,6 +605,8 @@ systems.
 | `memory_numa_interleave` | The number of interleave policy allocations that succeeded on the intended node | |
 | `memory_numa_local` | The number of allocations that succeeded on the local node | |
 | `memory_numa_other` | The number of allocations that on this node that were allocated by a process on another node | |
+| `memory_pages_dirtied` | Page-cache pages dirtied by writes (`nr_dirtied`); a page dirtied again before writeback counts once | |
+| `memory_pages_written` | Page-cache pages written back by any path (`nr_written`): flushers, reclaim and integrity syncs alike. The complete count; `writeback_pages_written` below is only what the flusher's own accounting saw | |
 
 ### memory_writeback
 
