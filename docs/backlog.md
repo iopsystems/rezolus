@@ -923,11 +923,17 @@ Scoping only. Ordered as the entry's plan; each sampler carries the ext4
 entry's gates (measured refresh µs, a rate probe before hot hooks, the
 bare-metal probe-cost bench for anything at request rate).
 
-- **`memory_meminfo` dirty/writeback fields** — Open. `Dirty`, `Writeback`
-  and the dirty thresholds from a file the sampler already parses.
-- **`writeback` sampler** — Open. `balance_dirty_pages` pause histogram and
-  throttle counts; `writeback_start`/`writeback_written` runs and pages by
-  reason. Rate probe on a write-heavy fio run first. Filesystem-agnostic.
+- **`memory_meminfo` dirty/writeback fields** — DONE (#1325), with 28 more
+  of the file's lines. The dirty thresholds come from `/proc/vmstat` and are
+  the vmstat follow-up's.
+- **`writeback` sampler** — DONE as `memory_writeback`. Verified exact
+  against tracefs on every counter; `writeback_pages_written` is the
+  flusher's accounting only (an integrity sync's pages are not in it), so
+  `memory_vmstat` carries the complete `memory_pages_written`. Refresh
+  126–261 µs on a 56-vCPU guest.
+- **`balance_dirty_pages` arity** — By design. 12 arguments on every kernel
+  seen; the 8-argument form is written but untested until a kernel with it
+  is on the rack. `kernel_btf_tracepoint_arg_count` picks; unknown disables.
 - **`ext4_alloc` with metadata reads** — Roadmap (was phase 2 of the ext4
   entry). Adds an allocated-extent-length histogram, preallocation discard
   counts, and `ext4_load_inode` / bitmap-load counters for synchronous

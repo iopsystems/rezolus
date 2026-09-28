@@ -184,9 +184,11 @@ are attached, and the bare-metal probe-cost bench for anything at request
 rate.
 
 1. **`memory_meminfo` dirty/writeback fields** (C9). Parse-only; lands alone.
+   *Done in #1325*, with 28 more of the file's lines while there.
 2. **`writeback` sampler** (C1): `balance_dirty_pages` pause histogram and
    counts, writeback runs and pages by reason. Rate probe first on a
    write-heavy fio run. Filesystem-agnostic, so it serves the XFS arm too.
+   *Done as `memory_writeback`; measured below.*
 3. **`ext4_alloc` with metadata reads** (C2, C3). The allocator signals and
    `ext4_load_inode` together are what the two largest findings needed.
 4. **Slab gauges** (C9) beside `filesystem`'s sweep, so C3's inode-read rate
@@ -196,6 +198,82 @@ rate.
 6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
    amplification dashboard (C6) once its four terms exist.
 7. **XFS** (C8), then page cache (C7).
+
+## Results — C1, the `memory_writeback` sampler
+
+Built on the hv01 `debian-13-ci` guest (Debian 13, `6.12.63+deb13-amd64`,
+`CONFIG_HZ=250`, 56 vCPU, root on ext4 over virtio); final run systemslab
+`01a0ea5e-86d2-718c-92e3-1adb6bf25a7f`. Three hooks, all `tp_btf`:
+`balance_dirty_pages`, `writeback_start`, `writeback_pages_written`.
+
+**Three things the kernel source corrected before the numbers meant
+anything.** (1) The `pause` a `tp_btf`/`raw_tp` program receives is the raw
+argument, in **jiffies**; the millisecond value exists only in the
+tracepoint's formatted record (`__entry->pause = pause * 1000 / HZ`). The
+first build multiplied by a millisecond. The jiffy-length helper the ext4
+entry built for jbd2 moved to `bpf/mod.rs` as `jiffy_ns()` and both samplers
+use it. (2) `balance_dirty_pages()` returns before its tracepoint while dirty
+pages are under the free-run ceiling (midway between the background and hard
+limits), so the "checks" counter is evaluations of tasks already in the
+throttle zone, not one per ratelimit of pages dirtied; it reads zero on a
+host whose dirty pages never approach the limit, which is the correct
+reading. (3) `writeback_start` fires once per pass of `wb_writeback`'s loop,
+not per work item, so `writeback_runs` counts passes.
+
+**The tracepoint's argument list is a hazard, and the sampler guards it.**
+`balance_dirty_pages` has 12 arguments on every kernel seen so far (both
+vendored headers, the 6.12 guest); a later rework passes the
+`dirty_throttle_control` instead of its fields and has 8. A positional read
+on the wrong arity is silently wrong, so the sampler carries one program per
+arity and selects on `kernel_btf_tracepoint_arg_count`, a new helper that
+walks `btf_trace_<name>` → pointer → function prototype in vmlinux or module
+BTF; neither arity, or no BTF, disables the hook and reports degraded.
+
+**Verification, sampler against tracefs over the same window** (the same
+three tracepoints read through `trace_pipe`, plus `/proc/vmstat`), with
+`dirty_bytes` = 1 GiB and `dirty_background_bytes` = 256 MiB so 16 GiB of
+buffered 1 MiB writes had to throttle:
+
+| metric | sampler | tracefs / vmstat |
+|---|---|---|
+| `writeback_throttle_checks` | 4,710 | 4,710 events |
+| `writeback_throttle_events` | 1,847 | 1,847 with `pause > 0` |
+| `writeback_throttled_time` | 207.352 s | the pause histogram sums to the same |
+| `writeback_throttle_latency` | buckets 167/171/175/177/… = 115/29/105/126/… | pause 8/12/16/20 ms = 115/29/105/126/… |
+| `writeback_runs` background / periodic / sync / foreign_flush | 235 / 8 / 3 / 6 | identical |
+| `writeback_pages_written` | 2,625,503 | tracefs 2,625,503; `nr_written` +2,625,509 |
+
+An earlier run (`01a0ea27-dc82-71e2-f2bb-81d068b8fd9e`, cancelled for a
+payload fault, results in its console) agreed the same way: 9,033 / 2,753 /
+191.520 s / 2,659 background passes, all exact. fio under the throttle went
+from 567 µs mean and 717 µs p99 per 1 MiB write to 21.8 ms and 55.8 ms,
+which is the throttle doing what the histogram says: 884 of 1,847 sleeps
+were the 200 ms maximum.
+
+**`writeback_pages_written` is the flusher's own accounting, not the total.**
+In the first run, with the default 20% dirty ratio on a 220 GiB guest, 16
+GiB of writes never reached the throttle and sat dirty until the final
+`sync`; `nr_written` grew by 4.20 M pages and the tracepoint reported
+238,774. Pages written by an integrity sync did not appear in it, while
+flusher-driven writeback matched `nr_written` to six pages in the runs
+above. So `memory_vmstat` now also exports `memory_pages_written` and
+`memory_pages_dirtied` (`nr_written`, `nr_dirtied`), the complete counts,
+and the dashboard shows both.
+
+**Refresh cost**: 126–261 µs per refresh, median 167 µs, on the 56-vCPU
+guest (one counter map of `MAX_CPUS` banks plus one histogram).
+**Probe cost**: not benched separately. `balance_dirty_pages` fired 4,710
+times in 40 s under a throttle chosen to be as busy as a 1 GiB limit
+allows, and `writeback_start` 252 times; at those rates the per-event cost
+does not register, and the hooks are two counter increments and a
+histogram increment. The rate to watch is `balance_dirty_pages` on a host
+that lives near its dirty limit: the kernel evaluates once per
+`ratelimit_pages` dirtied per task, so it is bounded by write throughput
+divided by tens of pages.
+
+**Test flake, recorded.** `stream_tests::a_dropped_stream_is_reconnected_and_both_ends_are_reported`
+timed out on its 20 s deadline in three of four full-workspace test runs on
+this 56-vCPU guest today and passes in CI; not touched by this work.
 
 ## Deferred / reopen
 
