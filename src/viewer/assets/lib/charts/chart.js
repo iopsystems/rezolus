@@ -327,7 +327,8 @@ function multiSeriesDiffers(a, b) {
 }
 
 // Compare two family bands for a change worth a reconfigure: presence,
-// shape (kind, k, member count) or the bounds themselves (head/tail).
+// shape (kind, k, member count) or the bounds themselves, compared
+// element-wise (a redraw rebuilds equal arrays, which must read as same).
 function familyBandDiffers(a, b) {
     if (a === b) return false;
     if (!a || !b) return true;
