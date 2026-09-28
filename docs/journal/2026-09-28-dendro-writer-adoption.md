@@ -66,6 +66,11 @@ are in the metriken entry's "Gate results".
 - User-facing text names the format the run chose: the start, open and save
   messages, the help's format list, OVERWRITING, `--separate` and `--label`.
 
+Segments are sealed with zstd level 3 (metriken-archive 0.2.5): on the
+replayed recordings, 55–57% smaller than LZ4 for 3–4% more encode time,
+with the same tick latency and query time (metriken's writer entry).
+Every rezolus reader already decodes zstd.
+
 Found while building it: metriken-archive ingested only V3 snapshots, so a
 `.dendro` recording of an agent serving V2 would have been empty with no
 error. The recorder's own test fixture is a V2 snapshot, which is how it
