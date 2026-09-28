@@ -15,10 +15,21 @@ import {
 const T0 = 1778373348.25; // 2026-05-10T00:35:48.250Z
 const T1 = 1778373529;
 
+test('family: sigma with k, envelope, malformed dropped, round trip', () => {
+    assert.deepEqual(parseViewState('?family=sigma:3').family, { kind: 'sigma', k: 3 });
+    assert.deepEqual(parseViewState('?family=sigma').family, { kind: 'sigma', k: 2 });
+    assert.deepEqual(parseViewState('?family=envelope').family, { kind: 'envelope', k: 2 });
+    assert.equal(parseViewState('?family=median').family, null);
+    assert.equal(parseViewState('?family=sigma:0').family.k, 2);
+    assert.equal(applyViewState('', { family: { kind: 'sigma', k: 1.5 } }), '?family=sigma%3A1.5');
+    assert.equal(applyViewState('', { family: { kind: 'envelope' } }), '?family=envelope');
+    assert.equal(applyViewState('?family=envelope', { family: null }), '');
+});
+
 test('empty search parses to the empty state', () => {
     assert.deepEqual(parseViewState(''), {
         from: null, to: null, time: null, node: null,
-        cgroup: [], gpu: [], instance: null, anchors: {},
+        cgroup: [], gpu: [], instance: null, family: null, anchors: {},
     });
     assert.deepEqual(parseViewState('?'), parseViewState(''));
     assert.deepEqual(parseViewState(undefined), parseViewState(''));

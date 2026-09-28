@@ -46,6 +46,7 @@ import { visibleLabels } from '../labels.js';
 import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { captureContext, resolveAnchor } from '../events/capture_events.js';
+import { familyBand, familyBandLabel, FAMILY_COLOR } from './util/family_math.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -287,7 +288,7 @@ const diffUnavailable = (pair) => (pair && pair.kind === 'vnode' ? {
  * already understands. Falls back to returning `false` when either
  * capture is unusable — the caller can then render baseline-only.
  */
-const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
+const overlayLine = ({ spec, captures, anchors, captureLabels, family }) => {
     // Overlay needs at least two captures; with only the anchor, the caller
     // renders the baseline single-chart instead.
     if (!captures || captures.length < 2) return false;
@@ -348,6 +349,49 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
         .map((cap) => entryFor(cap, cap.alias || labelFor(captureLabels, cap.id), colors.get(cap.id)))
         .filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
+
+    // Family baseline: with three or more captures and the setting on, every
+    // capture but the experiment is a member of the baseline, drawn as ONE
+    // statistic band (mean ± k·sd or min..max) plus its mean, and the
+    // experiment as the only line over it. Twenty lines are not a baseline;
+    // a regression one sigma outside twenty prior runs is invisible in them
+    // and is exactly what the band shows. Members are already rebased, so
+    // the band is on the first member's relative grid. The measurement band
+    // (acquisition uncertainty) stays off this chart: a spread band and a
+    // measurement band answer different questions and are never overlaid.
+    if (family && seriesList.length >= 3) {
+        const expIdx = captures.findIndex((c) => c.id === CAPTURE_EXPERIMENT);
+        const experiment = expIdx >= 0 ? seriesList[expIdx] : null;
+        const members = seriesList
+            .filter((s, i) => i !== expIdx)
+            .map((s) => ({ t: s.timeData, v: s.valueData }));
+        const band = familyBand(members, { kind: family.kind, k: family.k });
+        if (band && experiment) {
+            const meanEntry = {
+                name: familyBandLabel(band),
+                color: FAMILY_COLOR,
+                timeData: band.t,
+                valueData: band.mean,
+                fill: false,
+            };
+            return {
+                kind: 'spec',
+                spec: {
+                    ...stripDisplay(spec),
+                    // The experiment keeps its own min/max envelope (what
+                    // happened in that run); only the measurement band is
+                    // dropped, since spread and measurement never share a chart.
+                    multiSeries: [meanEntry, { ...experiment, intervals: undefined }],
+                    familyBand: band,
+                    xAxisFormatter: relativeTimeFormatter,
+                    eventTimeOriginSec: anchorSecondsFor(anchors, captures[expIdx === 0 ? 1 : 0].id,
+                        captures[expIdx === 0 ? 1 : 0].boxplot?.t?.length
+                            ? Array.from(captures[expIdx === 0 ? 1 : 0].boxplot.t)
+                            : captures[expIdx === 0 ? 1 : 0].timeData),
+                },
+            };
+        }
+    }
 
     // The axis is relative to the first capture's anchor. Event markers
     // are absolute instants, so the chart needs that origin to place them;

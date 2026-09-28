@@ -3,7 +3,7 @@ import { notebookStore, reportStore, loadedSelectionStore, importSelection } fro
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
 import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
-import { setAlignmentKind } from '../selection/selection.js';
+import { setAlignmentKind, setFamily } from '../selection/selection.js';
 import { captureContext, resolveAnchor, isKindAnchor } from '../events/capture_events.js';
 
 // The "Align on" control in the compare badge: the first anchor UI the
@@ -14,6 +14,42 @@ import { captureContext, resolveAnchor, isKindAnchor } from '../events/capture_e
 // capture's file has no event for) so the fall-back to its start is not
 // silent. Ids come from the registry (`attrs.captures`), which is what
 // makes an N-way archive's arms alignable too.
+// The "Baseline" control, shown only with three or more captures: a single
+// baseline (the plain A/B and N-way overlay), or a family, every capture
+// but the experiment drawn as one statistic band with its mean, the
+// experiment as the one line over it. The band's shape is chosen here too.
+const FAMILY_OPTIONS = [
+    { value: '', label: 'single capture' },
+    { value: 'sigma:1', label: 'family, mean ± 1σ' },
+    { value: 'sigma:2', label: 'family, mean ± 2σ' },
+    { value: 'sigma:3', label: 'family, mean ± 3σ' },
+    { value: 'envelope', label: 'family, min..max' },
+];
+const familyControl = (attrs) => {
+    const caps = attrs.captures || [];
+    if (caps.length < 3) return null;
+    const f = notebookStore.family;
+    const current = !f ? '' : (f.kind === 'envelope' ? 'envelope' : `sigma:${f.k}`);
+    const known = FAMILY_OPTIONS.some((o) => o.value === current);
+    return m('div.compare-align', [
+        m('label.compare-align-label', { for: 'compare-family-select' }, 'Baseline'),
+        m('select.compare-align-select', {
+            id: 'compare-family-select',
+            value: current,
+            title: `Single: each capture is its own line. Family: the ${caps.length - 1} captures other than the experiment form one band; the experiment is drawn over it`,
+            onchange: (e) => {
+                const v = e.target.value;
+                if (v === '') setFamily(null);
+                else if (v === 'envelope') setFamily({ kind: 'envelope' });
+                else setFamily({ kind: 'sigma', k: Number(v.slice('sigma:'.length)) });
+            },
+        }, [
+            ...FAMILY_OPTIONS.map((o) => m('option', { value: o.value }, o.label)),
+            known ? null : m('option', { value: current, disabled: true }, `family, mean ± ${f.k}σ`),
+        ]),
+    ]);
+};
+
 const alignControl = (attrs) => {
     const caps = (attrs.captures || []).length > 0
         ? attrs.captures
@@ -147,7 +183,16 @@ const TopNav = {
                     }
                     return m('div.compare-badge.compare-badge-nway', {
                         title: `Comparing ${rows.length} captures: ${rows.map((r) => r.label).join(', ')}`,
-                    }, [...chips, alignControl(attrs)]);
+                    }, [
+                        ...chips,
+                        // The chips are keyed, and mithril refuses a fragment
+                        // that mixes keyed and unkeyed children (the whole page
+                        // fails to render), so the controls ride one keyed span.
+                        m('span.compare-badge-controls', { key: '__controls' }, [
+                            familyControl(attrs),
+                            alignControl(attrs),
+                        ]),
+                    ]);
                 }
 
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [

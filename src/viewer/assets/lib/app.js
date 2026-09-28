@@ -14,7 +14,7 @@ import { executePromQLRangeQuery, applyResultToPlot, fetchHeatmapsForGroups, sub
 // Opt line-ish charts into display (boxplot decimation) mode: they fetch the
 // decimated boxplot binary instead of the full native-resolution JSON matrix.
 setDisplayMode(true);
-import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor } from './selection/selection.js';
+import { reportStore, notebookStore, loadedSelectionStore, persistNotebook, setStorageScope, loadPayloadIntoStore, NotebookView, ReportView, LoadedSelectionView, setChartToggle as setChartToggleInStore, setAnchor, setFamily } from './selection/selection.js';
 import { SaveModal } from './ui/overlays.js';
 import { ViewerApi } from './viewer_api.js';
 import { createSystemInfoView, createMetadataView, renderCgroupSection } from './sections/section_views.js';
@@ -215,6 +215,7 @@ const initComponents = () => {
         toggles: notebookStore.chartToggles || {},
         setChartToggle,
         anchors: notebookStore.anchors || { baseline: 0, experiment: 0 },
+        family: notebookStore.family || null,
         experimentQueryRange,
         baselineAlias,
         experimentAlias,
@@ -1311,10 +1312,11 @@ const initDashboard = (config = {}) => {
                 : v;
             setAnchor(id, capped);
         }
-        // Anchors restored from localStorage that the link did not name are
-        // in effect too; put them in the URL so the address bar describes
-        // the view a copied link will reproduce.
-        writeViewState({ anchors: notebookStore.anchors || {} });
+        // The family-baseline setting from the link, then whatever is in
+        // effect (linked or remembered) written back so the address bar
+        // describes the view a copied link will reproduce.
+        if (linkState.family) setFamily(linkState.family);
+        writeViewState({ anchors: notebookStore.anchors || {}, family: notebookStore.family || null });
     }
 
     // When the capture carries a service extension, default to that
