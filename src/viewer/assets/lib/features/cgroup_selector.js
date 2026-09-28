@@ -229,6 +229,11 @@ export const CgroupSelector = {
         for (let i = 0; i < plotsToUpdate.length; i += BATCH_SIZE) {
             if (vnode.state.cancelUpdate || vnode.state.updateGeneration !== generation) {
                 vnode.state.updateInProgress = false;
+                // The selection changed under this run (a transfer, or the
+                // availability check pruning a link-seeded name). Run once
+                // more so the newer selection is what the charts show;
+                // without this the cancelling change was silently lost.
+                if (vnode.state.cancelUpdate) this.debouncedUpdateQueries(vnode);
                 return;
             }
 
@@ -252,6 +257,9 @@ export const CgroupSelector = {
         }
 
         vnode.state.updateInProgress = false;
+        // A change that arrived during the last batch was not seen by the
+        // loop's check; pick it up now.
+        if (vnode.state.cancelUpdate) this.debouncedUpdateQueries(vnode);
     },
 
     debouncedUpdateQueries(vnode) {

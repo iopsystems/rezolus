@@ -300,16 +300,21 @@ http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgro
 | `gpu` | `vendor:id`, repeatable (`gpu=nvidia:0&gpu=nvidia:1`) | Filters the GPU section; a bare id when the sampler set no vendor |
 | `cgroup` | cgroup name, repeatable | Selected cgroups on the cgroups section, one key per name |
 | `instance` | instance id | A service's instance, scoped by the `#/service/<name>` in the hash |
-| `anchor.baseline`, `anchor.experiment` | signed integer milliseconds, or `kind:<event kind>` | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. The `kind:` form uses the first event of that kind in the capture instead |
+| `anchor.baseline`, `anchor.experiment` | signed integer milliseconds | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. A `kind:<event kind>` value is reserved for aligning on an event and is not applied yet |
 
 Values are ordinary query-string values: a `/` may be written as is, and
 anything else (`&`, `=`, spaces) percent-encoded as a browser would. A
 parameter in the URL wins over what the browser remembered for that key;
-keys the URL does not name keep their remembered values. A value the
-recording cannot satisfy (a node it does not have, a range outside it) is
-dropped with a warning in the browser console and the link is rewritten
-without it. Loading a different file clears these keys. Everything else in
-the query string (`capture=`, `compare=`) is left alone.
+keys the URL does not name keep their remembered values, and the address
+bar is then rewritten to include them (a remembered compare anchor, for
+one), so a copied link carries the effective view. Granularity, pinned
+percentiles and the heatmap toggle are not carried. A value the recording
+cannot satisfy (a node it does not have, a range outside it, `time=raw` in
+compare mode, `from`/`to` in live mode) is dropped with a warning in the
+browser console and the link is rewritten without it. A granularity change
+resets the window and drops `from`/`to`. Loading a different file resets
+the view and clears these keys. Everything else in the query string
+(`capture=`, `compare=`) is kept, re-encoded as a browser would.
 
 ## Recording tools
 

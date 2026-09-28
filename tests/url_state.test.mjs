@@ -62,6 +62,27 @@ test('from/to accept Unix seconds and reject ns, a lone bound, or to <= from', (
     assert.equal(parseViewState('?from=yesterday&to=today').from, null);
 });
 
+test('an RFC 3339 offset survives the + that URLSearchParams turns into a space', () => {
+    // As typed into an address bar (unencoded +), and as a browser encodes it.
+    const typed = parseViewState('?from=2026-09-28T14:03:11+02:00&to=2026-09-28T14:05:40+02:00');
+    const encoded = parseViewState('?from=2026-09-28T14%3A03%3A11%2B02%3A00&to=2026-09-28T14%3A05%3A40%2B02%3A00');
+    const utc = parseViewState('?from=2026-09-28T12:03:11Z&to=2026-09-28T12:05:40Z');
+    assert.equal(typed.from, utc.from);
+    assert.equal(encoded.from, utc.from);
+    assert.equal(parseViewState('?from=2026-09-28T14:03:11+00:00&to=2026-09-28T14:05:40+00:00').from,
+        parseViewState('?from=2026-09-28T14:03:11Z&to=2026-09-28T14:05:40Z').from);
+});
+
+test('duplicate keys: the first from/to wins; a stray empty anchor id is removable', () => {
+    const st = parseViewState(`?from=${T0}&from=1&to=${T1}`);
+    assert.equal(st.from, T0);
+    // `anchor.=1` is never written but a link may carry it; it is ours to clear.
+    const s = applyViewState('?anchor.=1&capture=x', { anchors: { '': null } });
+    assert.equal(s, '?capture=x');
+    // Sub-ms apart instants would be written equal; refused at write time.
+    assert.equal(applyViewState('', { from: 1.0001, to: 1.0002 }), '');
+});
+
 test('time accepts raw, grid and the Aligned label; writes raw only', () => {
     assert.equal(parseViewState('?time=raw').time, 'raw');
     assert.equal(parseViewState('?time=grid').time, 'grid');

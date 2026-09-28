@@ -45,7 +45,10 @@ const isOwnedKey = (k) => VIEW_KEYS.includes(k) || k.startsWith(ANCHOR_PREFIX);
 // ~1.7e18, past 2^53, and would not survive a JS Number.
 const parseInstantSec = (s) => {
     if (typeof s !== 'string' || s.trim() === '') return null;
-    const t = s.trim();
+    // URLSearchParams decodes `+` as a space, so an RFC 3339 offset typed
+    // into the address bar (`...T14:03:11+02:00`) arrives as `... 02:00`.
+    // Put the sign back; a real space cannot occur there.
+    const t = s.trim().replace(/ (\d{2}:\d{2})$/, '+$1');
     if (/^-?\d+(\.\d+)?$/.test(t)) {
         const n = Number(t);
         // Anything above 1e12 is ms or finer, not seconds.
@@ -177,7 +180,11 @@ export function applyViewState(search, patch = {}) {
     if ('from' in patch || 'to' in patch) {
         const from = Number.isFinite(patch.from) ? patch.from : null;
         const to = Number.isFinite(patch.to) ? patch.to : null;
-        const ok = from != null && to != null && to > from;
+        // Compared at the precision written (ms), or two instants that
+        // differ by less than a millisecond would be written equal and
+        // rejected on read.
+        const ok = from != null && to != null
+            && Math.round(to * 1000) > Math.round(from * 1000);
         setOrDelete('from', ok ? formatInstantSec(from) : null);
         setOrDelete('to', ok ? formatInstantSec(to) : null);
     }
@@ -194,8 +201,9 @@ export function applyViewState(search, patch = {}) {
     }
     if (patch.anchors && typeof patch.anchors === 'object') {
         for (const [id, v] of Object.entries(patch.anchors)) {
-            if (!id) continue;
-            setOrDelete(`${ANCHOR_PREFIX}${id}`, formatAnchor(v));
+            // An empty id is never written, but a stray `anchor.=` in a
+            // link is still ours to remove.
+            setOrDelete(`${ANCHOR_PREFIX}${id}`, id ? formatAnchor(v) : null);
         }
     }
 
@@ -248,12 +256,9 @@ export function writeViewState(patch) {
 
 export function clearViewState() {
     if (!hasWindow()) return;
-    const p = toParams(window.location.search);
     const anchors = {};
     for (const k of ownedKeysIn(window.location.search)) {
         if (k.startsWith(ANCHOR_PREFIX)) anchors[k.slice(ANCHOR_PREFIX.length)] = null;
     }
     writeViewState({ ...CLEAR_PATCH, anchors: { ...CLEAR_PATCH.anchors, ...anchors } });
-    // Unowned keys stay; nothing else to do.
-    void p;
 }

@@ -1154,9 +1154,9 @@ Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-
 - **About link prefix** — Open (bug, trivial). `#!/overview` in `app.js` with
   `m.route.prefix = '#'` matches nothing and lands on the default route by
   fallback.
-- **`uploadParquet` keeps `_rangeOverride` across a file swap** — Open (bug,
-  pre-existing). The server shell clears the URL keys now but leaves the
-  override; a previous file's window applies to the next until reset.
+- **`uploadParquet` keeps `_rangeOverride` across a file swap** — **DONE**
+  (found pre-existing, fixed in the same PR): both shells call
+  `resetLinkedViewState()` before a new file is read.
 
 Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-events-ranges-and-alignment.md).
 

@@ -167,9 +167,46 @@ and `tests/viewer_smoke.sh` pass.
 - **The About link uses the wrong prefix**: `#!/overview` (`app.js`) with
   `m.route.prefix = '#'` matches nothing and lands on the default route by
   fallback.
-- **The server shell's `uploadParquet` does not reset `_rangeOverride`**, so
-  a window persists across a file swap. This PR clears the URL keys there
-  and leaves the override alone.
+
+## Second pass (adversarial review before merge)
+
+The review found the file-swap handling wrong in both shells and the
+docs ahead of the code. Fixed in the same PR:
+
+- **File swap.** The site shell cleared the URL keys *after* `loadParquet`,
+  which re-runs `initDashboard`, so the previous file's `from/to` and
+  `time=raw` were read and applied to the new file and then the keys were
+  removed: the view said one thing and the address bar another. The server
+  shell cleared the keys but kept the in-memory time mode, selections and
+  range override, so the address bar stopped describing the view. Both now
+  call one `resetLinkedViewState()` in `app.js` before the new file is
+  read, which forgets the override and its cached extent, the time mode,
+  the GPU and cgroup selections, and the URL keys. This also closes the
+  "`uploadParquet` keeps `_rangeOverride`" bug the first pass had recorded.
+- **Clamp before the first load.** The async clamp raced the router's
+  first `loadSection` (`refetchCurrentSectionInPlace` with no cached
+  section falls back to a second concurrent load). Both shells now pass
+  the recording's extent as `config.queryRange`, so the clamp is
+  synchronous; when it is absent the clamp is deferred to the end of the
+  first `loadSection` instead of running under it.
+- **The address bar mirrors state the link did not name.** A compare anchor
+  restored from localStorage is written back to the URL after the read, so
+  a copied link reproduces the effective view. Granularity, pins and the
+  heatmap toggle stay out, and the doc says so.
+- **`kind:` anchors** were documented as working; they are parsed and not
+  applied until the alignment work. The doc now says reserved.
+- **GPU vendor.** A link's `nvidia:0` against a recording whose sampler set
+  no vendor was kept with the vendor and filtered every chart to nothing;
+  the selection is now resolved to the recording's own entry.
+- **RFC 3339 offsets.** `URLSearchParams` decodes `+` as a space, so
+  `...T14:03:11+02:00` typed into the address bar parsed to nothing; the
+  sign is restored before `Date.parse`.
+- Ignored keys (`time=raw` in compare mode, `from/to` in live mode) now
+  warn and are removed from the link, as the doc promised; the baseline
+  anchor is no longer capped to the experiment's duration; a cgroup
+  update cancelled by a newer selection re-runs once instead of dropping
+  the change; `scripts/viewer_render.mjs` collecting `console.warn` is
+  noted in the `viewer-render` skill.
 
 ## Deferred / Reopen
 

@@ -7,7 +7,7 @@ import { FileUpload, splitAlias } from './ui/landing.js';
 import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
 import { initDashboard, bootstrapSharedSections, sectionResponseCache, loadSection } from './app.js';
 import { clearMetadataCache } from './data.js';
-import { clearViewState } from './ui/url_state.js';
+import { resetLinkedViewState } from './app.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -93,16 +93,30 @@ const initWasmViewer = async (data, filename) => {
     });
 };
 
+// The recording's [minTime, maxTime] in seconds from a /api/v1/metadata
+// response, or null. initDashboard clamps a link's from/to against it
+// before the first section loads.
+const queryRangeOf = (meta) => {
+    const data = meta?.data ?? meta;
+    const start = Number(data?.minTime ?? data?.min_time);
+    const end = Number(data?.maxTime ?? data?.max_time);
+    return (Number.isFinite(start) && Number.isFinite(end) && end > start)
+        ? { start, end }
+        : null;
+};
+
 const fetchInitialState = async () => {
-    const [sysResult, fmResult, selResult] = await Promise.allSettled([
+    const [sysResult, fmResult, selResult, metaResult] = await Promise.allSettled([
         ViewerApi.getSystemInfo(),
         ViewerApi.getFileMetadata(),
         ViewerApi.getSelection(),
+        ViewerApi.getMetadata(),
     ]);
     return {
         systemInfo: sysResult.status === 'fulfilled' ? sysResult.value : null,
         fileMetadata: fmResult.status === 'fulfilled' ? fmResult.value : null,
         selectionPayload: selResult.status === 'fulfilled' ? selResult.value : null,
+        queryRange: metaResult.status === 'fulfilled' ? queryRangeOf(metaResult.value) : null,
     };
 };
 
@@ -145,6 +159,7 @@ async function loadParquet(data, filename) {
         systemInfo: state.systemInfo,
         fileMetadata: state.fileMetadata,
         selectionPayload: state.selectionPayload,
+        queryRange: state.queryRange,
         reportMode,
         // Wire the topnav "Load Parquet" button to the same handler the
         // landing-page dropzone uses. The server viewer uploads via
@@ -181,6 +196,10 @@ async function loadFile(file) {
         splashLabel = 'Initializing';
         splashProgress = -1;
         m.redraw();
+        // Before the new file is read: loadParquet re-runs initDashboard,
+        // which reads the URL, so the previous file's window, time mode
+        // and selections (and the keys carrying them) must be gone first.
+        resetLinkedViewState();
         await loadParquet(data, display);
         // Drop any URL params that pinned the previous capture so a
         // refresh doesn't fight the just-uploaded file.
@@ -190,9 +209,6 @@ async function loadFile(file) {
         url.searchParams.delete('demoB');
         url.searchParams.delete('capture');
         window.history.replaceState(null, '', url);
-        // And the view-state keys (from/to, selectors, anchors) of the
-        // previous file; they mean nothing for this one.
-        clearViewState();
     } catch (e) {
         splashLabel = null;
         landingError = `Failed to load ${display}: ${e?.message ?? e ?? 'unknown error'}`;
@@ -387,6 +403,7 @@ async function initCompareDashboard({ experimentFallbackName, legends = null, ca
         experimentFileMetadata,
         experimentFilename,
         experimentQueryRange,
+        queryRange: queryRangeOf(baseMeta),
         reportMode,
     });
 }

@@ -7,8 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
-import { clearViewState } from './ui/url_state.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -37,6 +36,9 @@ let fileMetadata = null;
 let selectionPayload = null;
 let liveMode = false;
 let baselineAlias = null;
+// The baseline's [minTime, maxTime] in seconds, so a link's from/to can be
+// clamped before the first section loads.
+let baselineQueryRange = null;
 
 const fetchBackendState = async () => {
     const [metaResult, sysResult, selResult, fmResult] = await Promise.allSettled([
@@ -54,6 +56,14 @@ const fetchBackendState = async () => {
         // CLI was launched with `alias=path`. Absent field = no alias.
         if (r.status === 'success' && r.data?.alias) {
             baselineAlias = r.data.alias;
+        }
+        baselineQueryRange = null;
+        if (r.status === 'success') {
+            const start = Number(r.data?.minTime);
+            const end = Number(r.data?.maxTime);
+            if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+                baselineQueryRange = { start, end };
+            }
         }
     }
     if (sysResult.status === 'fulfilled') {
@@ -100,9 +110,9 @@ const uploadParquet = async (file) => {
         await ViewerApi.uploadParquet(file);
         clearViewerCaches();
         clearMetadataCache();
-        // A window or selector from the previous file must not be applied
-        // to this one on the next reload.
-        clearViewState();
+        // The previous file's window, time mode and selections, and the URL
+        // keys that carried them, mean nothing for this file.
+        resetLinkedViewState();
         chartsState.resetAll();
         await fetchBackendState();
         if (fileChecksum) {
@@ -410,6 +420,7 @@ const bootstrap = async () => {
         experimentFilename,
         experimentAlias,
         experimentQueryRange,
+        queryRange: baselineQueryRange,
         recording: true,
         onStartRecording: startRecording,
         onStopRecording: stopRecording,
