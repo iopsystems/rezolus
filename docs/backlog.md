@@ -130,8 +130,10 @@ Source: [viewer chart & heatmap UX](journal/2026-04-19-viewer-chart-ux.md).
   (e.g. exclude `GPU=0`) or auto-hide flat/inactive series, so aggregates silently
   include dead series. *Reopen:* when working the chart toolbar, or after further
   "misleading average" reports.
-- **Edit / delete existing event annotations** — Open. Event markers are read-only
-  after creation in v1; changes go through `parquet annotate --add-events` /
+- **Edit existing event annotations** — Open. Notebook bubbles offer Delete
+  (`chart.js::_renderEventBubbles` → `openEventInfo` with `onDelete`), so the
+  earlier "read-only after creation" wording was stale; Edit does not exist.
+  Changes other than delete go through `recording annotate --add-events` /
   `--clear-events` outside the viewer. *Reopen:* if a `/events` management UI is
   requested.
 
@@ -1135,11 +1137,16 @@ Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-
 
 Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-events-ranges-and-alignment.md).
 
-- **Render `duration_ns` events as bands** — Open, smallest piece, lands
-  first. The field exists on `Event` (`crates/dashboard/src/events.rs`) and
-  nothing under `src/viewer/assets/lib/` reads it; `buildMarkLine`
-  (`charts/event_markers.js`) uses only `timestamp`. Add `markArea`, an end
-  field on the add-event form, and `duration=` on `annotate --event`.
+- **Render `duration_ns` events as bands** — **DONE.** `buildRangeSpans`
+  beside `buildMarkLine` (`charts/event_markers.js`) and an HTML
+  `div.event-range-band` drawn by `_renderEventBubbles`, not an echarts
+  `markArea`: the custom-series heatmaps never laid one out (see the
+  entry). An End field on the add-event form; Duration/End/Details in the
+  info popover. The CLI already accepted `duration=`/`duration_ns=` (the item
+  was wrong about that); it gained a test and help text. Fell out of it:
+  compare-mode charts now place events on their relative axis through
+  `spec.eventTimeOriginSec` (every marker used to land off-grid there).
+  Per-capture event lists remain with event-anchored alignment below.
 - **Recorder-emitted `run_start`/`run_end` events for `record -- cmd`** —
   Open. Two questions to settle in the PR: `argv[0]` only by default (the
   full command line can carry paths and tokens), and the event instant comes

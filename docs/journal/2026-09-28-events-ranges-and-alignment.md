@@ -1,7 +1,8 @@
 # Events as ranges, phases, and alignment anchors
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — design, nothing built.
+- **Status:** OPEN — range rendering BUILT (this PR); recorder run events
+  and event-anchored alignment not yet started.
 
 ## Problem
 
@@ -19,6 +20,17 @@ description, kind, source, node, instance, and never a duration. So the
 field is a promise the storage makes and the viewer does not keep. A
 benchmark's warm-up phase, a deploy that took forty seconds, or an incident
 window all have to be two point events today.
+
+*Correction, found while building:* the CLI half of this gap did not exist.
+`parse_inline_event` (`src/parquet_tools/events.rs`) already accepted
+`duration=<humantime>` and `duration_ns=<int>`, and JSON input accepted
+both spellings; what was missing was a test and a mention in the `--event`
+help. The original text below says the CLI "gains `duration=`"; it gained a
+test and help text. Also found: compare-mode charts draw a relative axis
+(`compare.js::rebase`) but `_applyEventMarkers` placed events at absolute
+epoch ms, so every marker landed off-grid in compare mode; and Notebook
+bubbles already offer Delete (`chart.js::_renderEventBubbles` →
+`openEventInfo`), so the backlog's "read-only after creation" was stale.
 
 **2. The recorder knows the run boundaries and records nothing.**
 `rezolus record -- ./benchmark` records for exactly the wrapped command's
@@ -53,6 +65,36 @@ an optional end timestamp; the CLI's `--event` inline syntax gains
 `duration=` alongside `timestamp=`/`kind=`/`description=` (parsed in
 `src/parquet_tools/annotate.rs`). No schema change: the field exists and is
 already optional and serde-defaulted, so older readers keep working.
+
+*Built (this PR), not as designed.* The design said an echarts `markArea`.
+That was built first and it never rendered on the viewer's heatmaps: they
+are `custom` series (`heatmap.js`, `histogram_heatmap.js`,
+`quantile_heatmap.js`), and on those echarts collapsed the area to the axis
+line in every configuration tried in a headless browser (`z`, `zlevel`,
+explicit `yAxis` bounds on a category axis, an `encode` declaring the x/y
+dimensions), while the same option drew correctly on a `line` series. The
+band is an HTML overlay instead: `buildRangeSpans(events, toAxisMs)` in
+`charts/event_markers.js` is the pure part (one `{startMs, endMs, name}` per
+event with a positive `duration_ns`), and `chart.js::_renderEventBubbles`
+draws each span as a `div.event-range-band` sized to the plot grid through
+`convertToPixel`, clipped to the grid, in the same layer as the description
+tags and on the same zoom/resize/store re-render path. It works on every
+chart type identically, which the markArea route never would have. A range
+event keeps its start hairline from `buildMarkLine` (the bubble's anchor),
+and the tag carries the humanized duration (`formatDuration`, e.g.
+`warm-up (1m30s)`).
+
+Both builders take a `toAxisMs` conversion, and the chart supplies
+`_eventAxisMs`, which subtracts `spec.eventTimeOriginSec` when present:
+`compare.js` sets that field on every relative-axis spec it builds
+(overlay, side-by-side per slot, diff heatmap, split lines) to the capture
+anchor the axis was rebased on, so events land where they belong in
+compare mode instead of at absolute epoch ms. The add-event form gained an
+optional End (RFC 3339, must be after Timestamp; `duration_ns` is derived),
+and the info popover shows End, Duration and Details. Events remain one
+baseline-scoped list; the overlay and split charts place them by the first
+capture's anchor, which is right for that capture's events and is what the
+per-capture context in the alignment work refines.
 
 **Phase events are a kind convention, not a type.** `kind` is documented as a
 free-form tag. `run_start`, `run_end`, `warmup`, `steady` join the documented

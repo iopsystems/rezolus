@@ -308,6 +308,11 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
         .filter(Boolean);
     if (seriesList.length === 0) return FALLBACK;
 
+    // The axis is relative to the first capture's anchor. Event markers
+    // are absolute instants, so the chart needs that origin to place them;
+    // see chart.js::_eventAxisMs.
+    const origin = captures.find((c) => c.boxplot?.t?.length || c.timeData?.length) || captures[0];
+    const originGrid = origin.boxplot?.t?.length ? Array.from(origin.boxplot.t) : origin.timeData;
     return {
         kind: 'spec',
         spec: {
@@ -315,6 +320,7 @@ const overlayLine = ({ spec, captures, anchors, captureLabels }) => {
             multiSeries: seriesList,
             divergenceBand: divergenceBandFor(seriesList),
             xAxisFormatter: relativeTimeFormatter,
+            eventTimeOriginSec: anchorSecondsFor(anchors, origin.id, originGrid),
         },
     };
 };
@@ -388,6 +394,8 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
             min_value: sharedMin,
             max_value: sharedMax,
             xAxisFormatter: relativeTimeFormatter,
+            // Each slot places absolute event instants by its own anchor.
+            eventTimeOriginSec: anchorSec,
         };
     };
 
@@ -532,6 +540,7 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
         diffMatrices: { baseline: aMatrix, experiment: bMatrix },
         diffCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
         xAxisFormatter: relativeTimeFormatter,
+        eventTimeOriginSec: baselineAnchorSec,
     };
 
     return {
@@ -574,11 +583,15 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFo
     const shared = [...allLabels].sort();
 
     const specs = shared.map((label) => {
+        // The first capture that carries this label sets the axis origin
+        // for event markers, matching the overlay's first-capture rule.
+        let eventTimeOriginSec;
         const multiSeries = captures
             .map((cap) => {
                 const r = (cap.seriesMap || new Map()).get(label);
                 if (!r) return null;
                 const sec = anchorSecondsFor(anchors, cap.id, r.timeData);
+                if (eventTimeOriginSec === undefined) eventTimeOriginSec = sec;
                 return {
                     name: cap.alias || labelFor(captureLabels, cap.id),
                     color: colors.get(cap.id),
@@ -606,6 +619,7 @@ const splitIntoOverlayLines = ({ spec, captures, anchors, captureLabels, labelFo
             // the difference between this quantile's baseline and experiment.
             divergenceBand: divergenceBandFor(multiSeries),
             xAxisFormatter: relativeTimeFormatter,
+            eventTimeOriginSec,
         };
     });
 
