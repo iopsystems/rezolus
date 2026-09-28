@@ -2,6 +2,15 @@
 
 ### Changed
 
+- The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with
+  no change in behaviour: every reader test passes unchanged. `RezReader`
+  is now a wrapper that recognizes the container (a `.rez` v1/v2/v3 or a
+  dendro archive) and derefs to `ArchiveReader`, so call sites are
+  unchanged. `RezDb` implements `metriken_archive::Catalog`, and the
+  identity index is read through `reader::IdentityIndex`, an
+  `metriken_archive::IndexRelabel`. `catalog::Container::of_path` returns
+  `None` for a file that is not a catalog container.
+
 - The WAL row format (`WalGroupRow`, `WalCell`, `WalValue`) and WAL-tail
   materialization moved from `crates/rez/src/wal.rs` to metriken-segment
   0.1.2, and `wal_group_row`/`group_approx_bytes` to metriken-exposition
