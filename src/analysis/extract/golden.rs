@@ -465,6 +465,7 @@ mod tests {
         "cpu_tlb_flush",
         "cpu_usage",
         "drivehealth",
+        "ext4_journal",
         "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",

@@ -66,6 +66,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "cpu_tlb_flush",
     "cpu_usage",
     "drivehealth",
+    "ext4_journal",
     "filesystem",
     "gpu_amd_pmu",
     "gpu_amd_smi",
@@ -175,6 +176,12 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("drive_temperature_warning_time", "drivehealth"),
     ("drive_thermal_throttle_time", "drivehealth"),
     ("drive_thermal_throttle_transitions", "drivehealth"),
+    // `ext4_journal_*` resolves by prefix; these four are the sampler's
+    // ext4-level (non-journal) counters.
+    ("ext4_errors", "ext4_journal"),
+    ("ext4_shutdowns", "ext4_journal"),
+    ("ext4_sync_file", "ext4_journal"),
+    ("ext4_sync_file_errors", "ext4_journal"),
     ("gpmu_active_clock", "gpu_amd_pmu"),
     ("gpmu_busy_cycles", "gpu_amd_pmu"),
     ("gpmu_clock", "gpu_amd_pmu"),

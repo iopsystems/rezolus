@@ -69,6 +69,93 @@ pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
     all
 }
 
+/// Returns true if the running kernel's BTF — vmlinux **or any loaded
+/// module's** — describes every one of `names` as a tracepoint, i.e. carries
+/// its `btf_trace_<name>` typedef, so a `tp_btf` program may name it as an
+/// attach target.
+///
+/// [`kernel_btf_has_funcs`] answers the same question for `fentry`/`fexit`
+/// targets but consults vmlinux BTF alone, which is right for kernel functions
+/// and wrong for a tracepoint that lives in a module: on a kernel with
+/// `CONFIG_EXT4_FS=m`, `btf_trace_jbd2_run_stats` is in `/sys/kernel/btf/jbd2`,
+/// not in vmlinux, and libbpf does resolve `tp_btf` targets against module BTF
+/// (kernels 5.11+). Selecting the `tp_btf` twin on [`kernel_has_btf`] alone
+/// would make that kernel a load failure, fatal for the whole skeleton (see
+/// [`kernel_btf_has_funcs`] for why load-time misses matter more than attach-
+/// time ones). Selecting on this function falls back to the `raw_tp` twin,
+/// whose attach failure on a kernel without the tracepoint at all is an
+/// ENOENT the builder tolerates.
+///
+/// Not cached: callers ask once per hook at sampler init. Returns false when
+/// there is no kernel BTF to consult.
+pub fn kernel_btf_has_tracepoints(names: &[&str]) -> bool {
+    if !kernel_has_btf() {
+        return false;
+    }
+
+    let mut btfs = Vec::new();
+
+    match libbpf_rs::btf::Btf::from_vmlinux() {
+        Ok(btf) => btfs.push(btf),
+        Err(_) => return false,
+    }
+
+    btfs.extend(module_btfs(Path::new("/sys/kernel/btf")));
+
+    let mut all = true;
+
+    for name in names {
+        let typedef = format!("btf_trace_{name}");
+
+        if !btfs.iter().any(|btf| {
+            btf.type_by_name::<libbpf_rs::btf::types::Typedef<'_>>(&typedef)
+                .is_some()
+        }) {
+            debug!("kernel BTF (vmlinux and modules) has no tracepoint `{name}`");
+            all = false;
+        }
+    }
+
+    all
+}
+
+/// Every parseable module BTF under `dir` (`/sys/kernel/btf/<module>`, one
+/// file per loaded module with BTF). `vmlinux` is skipped: the caller already
+/// holds it. A directory that does not exist, or a file that does not parse,
+/// contributes nothing rather than an error — an absent module BTF is the
+/// normal state on a kernel without `CONFIG_DEBUG_INFO_BTF_MODULES`.
+fn module_btfs(dir: &Path) -> Vec<libbpf_rs::btf::Btf<'static>> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name() != "vmlinux")
+        .filter_map(|entry| libbpf_rs::btf::Btf::from_path(entry.path()).ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod btf_tests {
+    use super::module_btfs;
+    use std::path::Path;
+
+    /// A kernel without module BTF has no `/sys/kernel/btf/<module>` files;
+    /// the scan must then contribute nothing, not fail.
+    #[test]
+    fn a_missing_module_btf_dir_yields_no_btfs() {
+        assert!(module_btfs(Path::new("/nonexistent/rezolus/btf")).is_empty());
+    }
+
+    /// A directory of files that are not BTF (here, the repo's own sources)
+    /// must be skipped file by file rather than abort the scan.
+    #[test]
+    fn unparseable_files_are_skipped() {
+        assert!(module_btfs(Path::new(env!("CARGO_MANIFEST_DIR"))).is_empty());
+    }
+}
+
 pub trait OpenSkelExt {
     /// When called, the SkelBuilder should log instruction counts for each of
     /// the programs within the skeleton. Log level should be debug.

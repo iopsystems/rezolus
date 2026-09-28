@@ -228,6 +228,11 @@ enabled = true
 [samplers.drivehealth]
 # interval = "60s"
 
+# BPF sampler on the ext4 journal (jbd2) and ext4 tracepoints: every phase of
+# each journal commit, checkpoint cost, lock-buffer stalls, fsync counts and
+# errors, and filesystem errors. Host-wide. See docs/metrics.md#ext4_journal.
+[samplers.ext4_journal]
+
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems.

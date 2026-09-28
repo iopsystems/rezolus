@@ -21,6 +21,17 @@
 
 ### Added
 
+- `ext4_journal` sampler: BPF on the jbd2 and ext4 tracepoints. Every phase
+  of each journal commit (`ext4_journal_commit_latency{phase}`), commit,
+  handle and block counts, checkpoint latency and counts, lock-buffer stalls,
+  fsync/fdatasync counts and errors (`ext4_sync_file`,
+  `ext4_sync_file_errors`), and `ext4_errors`/`ext4_shutdowns`. Host-wide.
+  jbd2 reports its phases in jiffies; the sampler converts with a tick
+  measured by `clock_getres(CLOCK_MONOTONIC_COARSE)`. The `tp_btf`/`raw_tp`
+  twin is chosen per hook by `kernel_btf_has_tracepoints`, which consults
+  module BTF as well as vmlinux, since ext4 is a module on some kernels.
+  Viewer gains an ext4 section. Design: `docs/journal/2026-09-28-ext4-sampler.md`.
+
 - The reader reads long tables in dendro archives, the 6.0 layout: one row
   per tick and occupant, with each occupant's labels in a parquet stream
   beside the table (`<table>/occupants`; the format is metriken-segment
