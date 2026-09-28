@@ -134,10 +134,12 @@ const refreshCompareCaptures = async () => {
         compareCaptures = [];
         return;
     }
+    let capturesListed = false;
     try {
         const caps = await ViewerApi.getCaptures();
         if (gen !== refreshGen) return;
         compareCaptures = Array.isArray(caps) ? caps : [];
+        capturesListed = true;
     } catch (e) {
         // Falling back leaves the badge on its A/B rendering, which looks
         // deliberate rather than degraded — so say what happened. An N-way
@@ -176,6 +178,7 @@ const refreshCompareCaptures = async () => {
         const known = new Set([...ids]);
         for (const [id, v] of Object.entries(pendingLinkAnchors)) {
             if (known.has(id)) setAnchor(id, v);
+            else if (!capturesListed) console.warn(`[anchor] the captures list is unavailable; ignoring anchor.${id}`);
             else console.warn(`[anchor] "${id}" is not a capture of this archive; ignoring anchor.${id}`);
         }
         pendingLinkAnchors = null;
@@ -314,6 +317,9 @@ const detachExperiment = async () => {
     experimentAttached = false;
     compareMode = false;
     compareCaptures = [];
+    // A fill still in flight from the compare session that just ended must
+    // not repopulate the context or write anchors after this clear.
+    refreshGen++;
     captureContext.clear();
 
     applyMultiNodeInfo(null);

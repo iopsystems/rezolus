@@ -269,15 +269,15 @@ export const diffTimeShift = (aId, bId, anchors, aTime, bTime) => {
 
 // The side-by-side rendering a diff view falls back to when the two
 // anchors do not pair by cell, with the reason above the pair.
-const diffUnavailable = (pair) => ({
+const diffUnavailable = (pair) => (pair && pair.kind === 'vnode' ? {
     kind: 'vnode',
     vnode: m('div.compare-diff-unavailable', [
         m('div.compare-diff-note',
-            'Diff needs both captures anchored at the same offset into their recordings; '
-            + 'the chosen alignment puts them at different offsets, so they are shown side by side.'),
+            'Diff pairs cells by sample step; the two anchors differ by a fraction of a step, '
+            + 'so no cells line up and the captures are shown side by side.'),
         pair.vnode,
     ]),
-});
+} : pair);
 
 // ── Strategies ───────────────────────────────────────────────────────
 
@@ -862,7 +862,10 @@ const renderDiffQuantileHeatmap = (opts) => {
     const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
     const resampled = resampleDivergingForRange(basePalette, dMin, dMax);
 
-    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, delta.time_data);
+    // Against the UNSLICED baseline grid: without a context entry the anchor
+    // is measured from the first sample, and `drop` may have removed the
+    // leading columns of this side.
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.spectrumTimeData);
     const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
     const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
 

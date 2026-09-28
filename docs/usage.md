@@ -287,10 +287,10 @@ drawn from its recording start, and the badge says so. The anchor rides in
 the link as `anchor.<capture>=kind:<event kind>` (see below). Alignment
 reads the events in each recording's file; an event added in the Notebook
 counts only after it is saved into the recording. The diff views (the diff
-heatmap, and the quantile diff) pair the two captures' rows by position and
-need both anchors at the same offset into their recordings; when the
-chosen event falls at different offsets, those views show the two captures
-side by side instead and say why.
+heatmap, and the quantile diff) pair the two captures' cells by sample
+step, shifting one capture by the whole number of steps between the two
+anchors; when the anchors differ by a fraction of a step, no cells line up
+and those views show the two captures side by side instead and say why.
 
 ### Linking to a view
 
