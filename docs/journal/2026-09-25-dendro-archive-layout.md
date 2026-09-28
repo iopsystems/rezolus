@@ -128,7 +128,7 @@ over time belongs in `caller_rows` … never in field metadata."
   `grouping_power`, `max_value_power`; `docs/labels.md`), `sampler`, and
   labels that are fixed per metric column (`op` on `syscall_counts_cgroup`,
   `kind` on softirq).
-- **Moved to the occupant index:** the slot `id`, and a slot's identity
+- **Moved to the occupant stream:** the slot `id`, and a slot's identity
   labels, the ones `SlotIdentity::set` writes (`src/agent/identity.rs:311`):
   `comm`, `pid`, `tgid`, `cgroup`, `name`, `device`, `mount`, the
   hardware-sensor keys, and `__uid__`. A long table has no column per slot,
@@ -185,31 +185,72 @@ drive tables, on a busy and a quiet host.
 - **Tables with no slots:** one row per tick, unchanged apart from the
   dropped provenance keys.
 
-### The occupant index
+### The occupant stream
 
 With no slot columns in any stream, no stream needs the `.rez` time-keyed
 index that resolves `(slot, time)` to an occupant. What a long stream needs
 is its occupant table: which labels each occupant number stands for.
 
-- One entry per occupant, at the time it was first seen, mapping its number
-  to its labels, including `id` and, when the recording is `"uid"`, its
-  `__uid__`. Written to `caller_rows` under the stream's name.
-- An occupant is added once and never relabeled, since a label change is a
-  new occupant. An occupant that has no further rows is removed, so the live
-  set stays bounded by what the stream is currently observing.
-- A restating entry every `RESTATE_EVERY` (300 s, `src/recorder/stream.rs:156`)
-  of row time lists the live occupants, so a reader starts its replay at most
-  one period before the rows it needs, and retention can evict entries older
-  than the oldest surviving restatement.
-- **Encoding: open.** `IndexEntry` (`crates/rez/src/index.rs:104`) has the
-  right shape, a `Full` restatement and `Delta` additions and removals, but
-  `SlotEntry::slot` is `u32`. The occupant number is `u64` because a
-  rolling buffer runs indefinitely: at 100,000 new threads a second, `u32`
-  wraps in about 12 hours. The encoding is settled with the writer.
-- **It must be compressed.** Stored as plain msgpack entries, the busy
-  host's occupant table was 62.3 MB, more than twice its 26.3 MB of long
-  data. As one zstd blob per seal it was 8.1 MB, and as parquet 7.6–8.6 MB
-  (Gate results). Either is acceptable. Plain per-entry blobs are not.
+**Decided (2026-09-28): the occupant table is a parquet stream beside its
+data stream,** named `<stream>/occupants`, written, sealed, compacted,
+retained and replicated like any other stream.
+
+- **Columns:** `timestamp`, `occupant: UInt64`, and one column per label key:
+  `UInt64` where every value is an integer (`pid`, `tgid`, `id`, and
+  `__uid__` from its hex form), `Utf8` otherwise (`comm`, `cgroup`, `name`).
+  Absent labels are null.
+- **Rows:** one per occupant at the tick it is first seen, and one per live
+  occupant at every restatement, every `RESTATE_EVERY` (300 s,
+  `src/recorder/stream.rs:156`) of row time. An occupant is written once and
+  never relabeled, since a label change is a new occupant. The restatement
+  is what keeps a live occupant's labels inside the retention window after
+  the segment that first held them is evicted.
+- **Writer settings:** the ones every `.rez` segment uses (LZ4_RAW,
+  dictionary off). Measured below; nothing about this stream needs others.
+- **The reader** reads the occupant segments covering the query's span,
+  builds the map from occupant number to labels, and supplies it through
+  metriken-query's `ColumnRelabel` (0.31.0 reads long segments labelled
+  `__occupant__`).
+- `u64` occupant numbers are a column type, so the `u32` of
+  `IndexEntry`'s `SlotEntry::slot` (`crates/rez/src/index.rs:104`) does not
+  constrain them; a rolling buffer at 100,000 new threads a second would
+  wrap a `u32` in about 12 hours.
+
+Why a stream, and not blobs in `caller_rows`: labels never change for an
+occupant, so they are a fact about it rather than a timestamped change,
+and dendro's `FORMAT.md` §8 sends only the second to `caller_rows`. As a
+stream the table is ordinary parquet, read by the same code as the data,
+and it needs no encoding of its own.
+
+**Measured (2026-09-28)** with the gate harness: first-sight rows plus a
+restatement of the live occupants every 300 s, sealed at the data table's
+segment boundaries.
+
+| table | occupants | restatement rows | `.rez` settings | LZ4, dictionary on | zstd, dictionary on | long data |
+|---|---|---|---|---|---|---|
+| per-thread, busy host | 396,117 | 43,420 | **9.15 MB** | 12.04 MB | 8.50 MB | 26.3 MB |
+| per-thread, quiet host | 6,644 | 253,540 | **4.03 MB** | 5.12 MB | 2.82 MB | 348.7 MB |
+| per-thread, 100 ms spike | 184,332 | 3,836 | **4.02 MB** | 5.27 MB | 3.55 MB | 19.1 MB |
+| cgroup, 1 s spike | 3,079 | 504 | **0.09 MB** | 0.10 MB | 0.08 MB | 0.9 MB |
+
+- The stream costs what compressed blobs would. Plain msgpack entries were
+  62.3 MB on the busy host; a zstd blob of each seal's new occupants,
+  8.1 MB before restatements.
+- Dictionary encoding makes it larger under LZ4: the high-cardinality
+  columns (`__uid__`, `pid`) pay for a dictionary page and fall back to
+  plain encoding, and LZ4 already compresses repeated cgroup paths.
+- zstd saves 7-30% here. That is a question for the segment writer as a
+  whole, not for this stream.
+- Relative to the data it describes, the stream is about 1% on the quiet
+  host and 35% on the busy one, where each thread has few rows: churn pays
+  for its labels somewhere.
+
+**Considered and not chosen:** the occupant table as `IndexEntry`-shaped
+blobs in `caller_rows`, zstd-compressed per seal. It would reuse the
+identity index's path end to end (writer, retention floors, replication
+frames, replay) for the same size, but it is an encoding of its own beside
+the parquet everything else is, and a per-tick entry on the stream is too
+small for either compression to do well.
 
 How the converter finds occupants:
 
@@ -402,7 +443,7 @@ sees only its hash. A dense number increases monotonically, repeats in runs
 once sorted, and works the same for `--stream`, scrape and 5.18–5.20
 recordings (where it is an internal key and claims nothing a label would).
 Pyroscope's `uint32 SeriesIndex` is the same shape (Prior art); rezolus uses
-`u64` because a rolling buffer can outlive `u32` (see "The occupant index").
+`u64` because a rolling buffer can outlive `u32` (see "The occupant stream").
 
 **Row order: arrival order at seal, sorted by `(occupant, timestamp)` where
 a re-encode already happens.** A tick's values arrive in ascending slot
@@ -650,9 +691,10 @@ was found.
 1. ~~Run the gate~~ — done 2026-09-27, with a synthetic spike at 1 s and
    100 ms on 2026-09-28; every group with slots is long.
 2. Fix `docs/labels.md`'s identity list (`name`).
-3. Settle the occupant index's encoding: `u64` occupant numbers, compressed.
+3. ~~Settle the occupant table's encoding~~ — decided 2026-09-28: a parquet
+   stream beside its data stream ("The occupant stream").
 4. The rezolus reader for dendro archives, on dendro's API, reading this
-   layout: occupant labels from `caller_rows`, rows grouped into series by
+   layout: occupant labels from the occupant stream, rows grouped into series by
    occupant, one schema read per stream.
 5. The reshaping converter, with the `--stream` recordings as its oracle:
    occupants derived from a recording's columns must match those its

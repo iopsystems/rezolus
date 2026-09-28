@@ -585,12 +585,12 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   and the entry now writes all of them long. A synthetic thread and cgroup
   spike at 1 s and 100 ms (2026-09-28) confirmed it. Still unmeasured:
   query-engine reads of a long table, and mount, interface and GPU tables.
-- **The occupant index's encoding** — Open. `IndexEntry` has the right shape
-  but `SlotEntry::slot` is `u32` (`crates/rez/src/index.rs`); occupant
-  numbers are `u64` because a rolling buffer can mint more than 2^32. It must
-  be compressed: plain msgpack entries were 62.3 MB for the busy host's
-  396,117 occupants, against 8.1 MB as one zstd blob per seal and 7.6–8.6 MB
-  as parquet.
+- ~~**The occupant table's encoding**~~ — Decided 2026-09-28: a parquet
+  stream `<stream>/occupants` beside its data stream, first-sight rows plus
+  a restatement of live occupants every 300 s, with the `.rez` writer
+  settings. 9.15 MB for the busy host's 396,117 occupants, about what
+  compressed `caller_rows` blobs would cost. See the layout entry, "The
+  occupant stream".
 - **A sort key in dendro's `CompactSpec`** — Open. Sorting a task table by
   `(occupant, timestamp)` made a single-thread read 50 to 110 times smaller
   than arrival order. On disk it can go either way: a third smaller on the
@@ -616,7 +616,7 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 - **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
   slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
 - **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Occupant
-  labels from `caller_rows`, rows grouped into series by occupant, one schema
+  labels from the occupant stream, rows grouped into series by occupant, one schema
   read per stream. Any on-demand segment loading
   it needs is added to dendro, not built in rezolus.
 - **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte

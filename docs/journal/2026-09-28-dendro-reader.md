@@ -3,8 +3,8 @@
 - **Opened:** 2026-09-28
 - **Status:** **OPEN — 2a built, 2b next.** Step 2 of the 6.0 plan (#1224):
   a reader for dendro archives, before the writer produces them. 2a (the
-  `.rez` layout in a dendro container) reads; 2b (the long layout) waits on
-  the occupant table's encoding.
+  `.rez` layout in a dendro container) reads; 2b (the long layout and its
+  occupant stream) is next.
 - **Owner:** Brian Martin
 
 ## Goal
@@ -22,9 +22,9 @@ Two archive shapes have to read:
    encoding, and the identity index keeps its `IndexEntry` blobs in
    `caller_rows`. This is the `.rez` v3 layout in a different container.
 2. **The 6.0 layout** ([the layout entry](2026-09-25-dendro-archive-layout.md)):
-   every group with slots long, keyed by occupant, with an occupant table in
-   `caller_rows`. metriken-query reads long segments from 0.31.0
-   (iopsystems/metriken#165); occupant labels reach it through
+   every group with slots long, keyed by occupant, with its occupant table
+   in a parquet stream beside it. metriken-query reads long segments from
+   0.31.0 (iopsystems/metriken#165); occupant labels reach it through
    `ColumnRelabel`, as slot labels do today.
 
 ## Design
@@ -54,9 +54,10 @@ reader.
 detection, reading shape 1. The oracle is exact: a `.rez` converted with
 #1301 must answer every query the same as the original.
 
-**Step 2b, next:** shape 2. It needs the occupant table's encoding settled
-(the layout entry, "The occupant index": `u64` occupant numbers,
-compressed) and a writer or fixture that produces long segments.
+**Step 2b, next:** shape 2. The occupant table's encoding is settled (the
+layout entry, "The occupant stream": a parquet stream beside its data
+stream); it needs a writer or fixture that produces long segments and their
+occupant stream.
 
 ## 2a: what was built
 
