@@ -803,12 +803,14 @@ fn assert_run_events(events: &[dashboard::Event]) -> (dashboard::Event, dashboar
     assert_eq!(end_id, format!("run:{uuid}:end"));
     assert_eq!(uuid.len(), 36, "a canonical v4 uuid: {uuid}");
 
-    // The child slept 500ms. Its exit wakes the loop, so the end stamp
-    // trails the exit by less than an interval, and the start stamp was
-    // taken as the spawn returned; 2 intervals is the allowance.
+    // The child slept 500ms. The lower bound is exact: the start stamp was
+    // taken as the spawn returned and the end stamp when the exit was seen.
+    // The upper bound is loose on purpose: a loaded CI host can delay the
+    // shell's start and the exit's delivery, and a tight window here was a
+    // flake waiting to happen.
     let span = Duration::from_nanos(end.timestamp - start.timestamp);
     assert!(
-        span >= Duration::from_millis(500) && span <= Duration::from_millis(700),
+        span >= Duration::from_millis(500) && span <= Duration::from_millis(2500),
         "run_end - run_start must be the command's runtime, got {span:?}"
     );
     (start, end)
@@ -903,4 +905,112 @@ fn a_wrapped_raw_run_writes_the_file_and_exits_zero() {
         .expect("the raw recording exists")
         .len();
     assert!(size > 0, "the raw recording holds the scraped snapshots");
+}
+
+/// Run `rezolus record` wrapping `sh -c <script>` against a fake agent at
+/// `interval`, writing to `output`.
+fn record_wrapped_script(
+    output: &std::path::Path,
+    interval: &str,
+    script: &str,
+) -> std::process::Output {
+    let port = spawn_fake_agent();
+    Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--url")
+        .arg(format!("http://127.0.0.1:{port}"))
+        .arg("--interval")
+        .arg(interval)
+        .arg("-o")
+        .arg(output)
+        .arg("--")
+        .arg("sh")
+        .arg("-c")
+        .arg(script)
+        .output()
+        .expect("failed to run rezolus record")
+}
+
+/// A command that exits at once is still recorded: the exit is followed by
+/// one scrape, so the archive has a row and both events, and the run exits 0.
+///
+/// Regression: the exit arm went straight back to the loop top, which broke
+/// out before the scrape, so `-- true` produced "command exited before any
+/// metrics were recorded", no file, and exit 1.
+#[test]
+fn a_command_that_exits_at_once_still_gets_one_scrape() {
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.rez");
+    let out = record_wrapped_script(&output, "200ms", "exit 0");
+    assert!(
+        out.status.success(),
+        "an instant exit is a recorded run, exit 0\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = rez::rez_sqlite::RezDb::open(&output).expect("the archive opens");
+    let recordings = db.read_recordings().expect("the catalog reads");
+    assert_eq!(recordings.len(), 1);
+    let rows = db
+        .total_rows(recordings[0].id, "fake")
+        .expect("the sampler's rows count");
+    assert!(rows >= 1, "the final scrape wrote a row, got {rows}");
+
+    let raw = recordings[0]
+        .meta
+        .metadata
+        .get("events")
+        .expect("both run events are written");
+    let payload: dashboard::Events = serde_json::from_str(raw).expect("the payload parses");
+    let kinds: Vec<&str> = payload
+        .events
+        .iter()
+        .filter_map(|e| e.kind.as_deref())
+        .collect();
+    assert_eq!(kinds, vec!["run_start", "run_end"]);
+}
+
+/// The interval the command exited in is sampled: the last row is no older
+/// than one interval before `run_end`.
+///
+/// Regression: the exit wake ended the recording without the scrape that
+/// follows the tick, losing the tail of the run (`-- sleep 2.4` at 1s wrote
+/// 2 rows where 3 were due).
+#[test]
+fn the_interval_the_command_exited_in_is_sampled() {
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.rez");
+    let out = record_wrapped_script(&output, "200ms", "sleep 0.5");
+    assert!(
+        out.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let db = rez::rez_sqlite::RezDb::open(&output).expect("the archive opens");
+    let recordings = db.read_recordings().expect("the catalog reads");
+    assert_eq!(recordings.len(), 1);
+    let rid = recordings[0].id;
+    // A finalized recording is segments only; the last segment's `last_ts`
+    // is the last row.
+    let segments = db.read_segment_meta(rid, "fake").expect("segment meta");
+    let last_ts = segments
+        .iter()
+        .map(|(_, meta)| meta.last_ts)
+        .max()
+        .expect("at least one segment");
+
+    let raw = recordings[0].meta.metadata.get("events").expect("events");
+    let payload: dashboard::Events = serde_json::from_str(raw).expect("the payload parses");
+    let run_end = payload
+        .events
+        .iter()
+        .find(|e| e.kind.as_deref() == Some("run_end"))
+        .expect("run_end");
+    let interval_ns = Duration::from_millis(200).as_nanos() as u64;
+    assert!(
+        last_ts + interval_ns >= run_end.timestamp,
+        "the last row ({last_ts}) must be within one interval of run_end ({})",
+        run_end.timestamp
+    );
 }

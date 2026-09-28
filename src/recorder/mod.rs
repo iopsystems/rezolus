@@ -293,13 +293,13 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("RECORD_COMMAND_LINE")
                 .long("record-command-line")
-                .help("With `-- <command>`, store the full command line in the recording. The recorder marks a wrapped run with two events: `run_start` (kind run_start, description = the program name, e.g. bench.sh) at the instant the command spawns, and `run_end` (kind run_end, description = the program name plus how it ended: `exited <code>`, `capped`, or `interrupted`) at the instant its exit is observed. By default only the program name is recorded, since arguments can carry paths and tokens; this flag adds the arguments, joined by spaces, as the run_start event's `details`. Events go into .rez and parquet output; raw output has no metadata and cannot carry them, and a run that captured no samples writes no file at all")
+                .help("With `-- <command>`, also store the full command line (arguments joined by spaces) in the run_start event's details. Off by default because arguments can carry paths and tokens; only the program name is recorded then. See COMMAND for the run_start/run_end events")
                 .action(clap::ArgAction::SetTrue)
                 .requires("COMMAND"),
         )
         .arg(
             clap::Arg::new("COMMAND")
-                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by run_start/run_end events; see --record-command-line")
+                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. .rez and parquet output carry the events; raw output has no metadata and cannot, and a run that captured no samples writes no file at all")
                 .action(clap::ArgAction::Set)
                 .index(3)
                 .num_args(1..)
@@ -886,6 +886,11 @@ fn build_parquet_converter(
     }
 
     for (key, value) in &config.metadata {
+        // A user `--metadata events=...` is merged with the run events below
+        // rather than written here, where the run events would replace it.
+        if key == KEY_EVENTS {
+            continue;
+        }
         converter = converter.metadata(key.clone(), value.clone());
     }
 
@@ -925,25 +930,38 @@ fn build_parquet_converter(
     }
 
     // The wrapped run's `run_start`/`run_end` events, under the key `annotate`
-    // uses. Every endpoint's file gets the same two: they are global (no
-    // source/node/instance), and a multi-endpoint parquet run goes through
-    // `combine_files`, which concatenates the key and dedups by event id.
-    if let Some(json) = events_json(run_events) {
+    // uses, merged with any `--metadata events=...` the user gave, the same
+    // rule `build_rez_metadata` applies. Every endpoint's file gets the same
+    // two: they are global (no source/node/instance), and a multi-endpoint
+    // parquet run goes through `combine_files`, which concatenates the key
+    // and dedups by event id.
+    let user_events = config
+        .metadata
+        .iter()
+        .rev()
+        .find(|(k, _)| k == KEY_EVENTS)
+        .map(|(_, v)| v.as_str());
+    if let Some(json) = events_payload(user_events, run_events) {
         converter = converter.metadata(KEY_EVENTS.to_string(), json);
     }
 
     converter
 }
 
-/// The `KEY_EVENTS` payload for `events`, or `None` for none: an empty list
-/// drops the key rather than storing `{"events":[]}`, as `annotate` does.
-fn events_json(events: &[Event]) -> Option<String> {
-    if events.is_empty() {
-        return None;
+/// The `KEY_EVENTS` payload for a parquet footer: `run_events` merged into
+/// the user's own `--metadata events=...` value, or `None` when there is
+/// neither. A user value that does not parse is kept verbatim, with a
+/// warning, and the run events are the ones dropped; an empty result drops
+/// the key rather than storing `{"events":[]}`, as `annotate` does.
+fn events_payload(user_events: Option<&str>, run_events: &[Event]) -> Option<String> {
+    let mut m = BTreeMap::new();
+    if let Some(raw) = user_events {
+        m.insert(KEY_EVENTS.to_string(), raw.to_string());
     }
-    let mut payload = Events::new(events.to_vec());
-    payload.normalize();
-    serde_json::to_string(&payload).ok()
+    if let Err(e) = merge_events_into(&mut m, run_events) {
+        warn!("not adding the run events to the parquet footer: {e}");
+    }
+    m.remove(KEY_EVENTS)
 }
 
 /// Append `events` to the `KEY_EVENTS` payload in `metadata`, in place.
@@ -1047,10 +1065,22 @@ impl RunMarker {
             ),
             RunEnding::Interrupted(code) => (
                 format!("{} interrupted", self.program),
-                format!(
-                    "The recording was interrupted while the command was still running; \
-                     the command was terminated and finished with exit code {code}."
-                ),
+                // `map_exit_code` gives 128 + signal for a signal death, which
+                // is what a terminated command normally reports; a command
+                // that caught SIGTERM and exited reports its own code.
+                if code > 128 {
+                    format!(
+                        "The recording was interrupted while the command was still running; \
+                         the command was terminated and ended with status {code} \
+                         (128 + signal {}).",
+                        code - 128
+                    )
+                } else {
+                    format!(
+                        "The recording was interrupted while the command was still running; \
+                         the command was asked to stop and exited with code {code}."
+                    )
+                },
             ),
         };
         Event {
@@ -2041,6 +2071,16 @@ pub fn run(mut config: RecordingConfig) {
         // The `run_end` event, built at whichever site observes the exit so
         // its stamp is that instant, and merged after the loop.
         let mut run_end: Option<Event> = None;
+        // The instant the select arm below saw the child exit, if it did;
+        // the loop top's poll stamps `run_end` with it rather than with its
+        // own, later, reading.
+        let mut child_exit_seen: Option<u64> = None;
+        // The exit arm fires once. After that the tick governs, whether the
+        // wait succeeded (the loop top takes it from here) or failed (a
+        // failed wait would fire every iteration and spin the loop).
+        let mut exit_arm_armed = true;
+        // Set once the body has run its one pass after the child exited.
+        let mut final_scrape_done = false;
 
         let start = Instant::now() + interval_dur;
         // In wrapped mode the cap is intentionally measured from command spawn
@@ -2104,19 +2144,23 @@ pub fn run(mut config: RecordingConfig) {
                             info!("command exited (code {code}), finalizing recording");
                             outcome = Some(child::Outcome::Exited(code));
                             if let Some(marker) = &run_marker {
-                                let observed_at =
-                                    anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
+                                // The instant the exit arm saw it, when it
+                                // did; this poll's reading otherwise.
+                                let observed_at = child_exit_seen.unwrap_or_else(|| {
+                                    anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())
+                                });
                                 run_end =
                                     Some(marker.end_event(observed_at, RunEnding::Exited(code)));
                             }
                             child = None;
-                            break;
                         }
                         Ok(None) => {}
                         Err(e) => {
                             warn!("failed to poll command: {e}");
                         }
                     }
+                }
+                if child.is_some() {
                     if let Some(deadline) = cap_deadline {
                         if Instant::now() >= deadline {
                             info!("--duration reached, stopping command");
@@ -2132,6 +2176,17 @@ pub fn run(mut config: RecordingConfig) {
                             break;
                         }
                     }
+                } else {
+                    // The command has exited. The body runs once more, without
+                    // waiting for the tick, so the interval the command exited
+                    // in is sampled; the pass after that stops. Without this
+                    // an exit noticed here ended the recording with the last
+                    // partial interval unsampled, and a command that exited
+                    // before the first tick was recorded as nothing at all.
+                    if final_scrape_done {
+                        break;
+                    }
+                    final_scrape_done = true;
                 }
             } else if let Some(duration) = config.duration.map(Into::<Duration>::into) {
                 if start.elapsed() >= duration {
@@ -2156,29 +2211,42 @@ pub fn run(mut config: RecordingConfig) {
             //
             // The wrapped command's exit wakes the loop too, so `run_end` is
             // stamped when the exit happened rather than up to one interval
-            // later. The arm only wakes; the loop top's `try_wait` still takes
-            // the decision (tokio's `Child` caches the status once `wait` has
-            // completed, so `try_wait` then returns it). `Child::wait` is
+            // later. The arm only records the instant and goes back to the
+            // top, where `try_wait` takes the decision (tokio's `Child` caches
+            // the status once `wait` has completed, so `try_wait` then returns
+            // it) and schedules the final scrape. `Child::wait` is
             // cancel-safe, so dropping it on every tick loses nothing. The
             // async block borrows `child` mutably only for the duration of
             // the select, which is why the arm can sit beside the others.
-            tokio::select! {
-                biased;
-                _ = shutdown.notified() => continue,
-                _ = async {
-                    match child.as_mut() {
-                        Some(c) => {
-                            let _ = c.wait().await;
+            //
+            // No wait at all on the pass after the exit: that pass exists to
+            // sample the interval the command exited in, now.
+            if !(wrapped && child.is_none()) {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.notified() => continue,
+                    exited = async {
+                        match child.as_mut() {
+                            Some(c) => c.wait().await.is_ok(),
+                            None => std::future::pending::<bool>().await,
                         }
-                        None => std::future::pending::<()>().await,
+                    }, if wrapped && exit_arm_armed => {
+                        exit_arm_armed = false;
+                        if exited {
+                            child_exit_seen = Some(anchored_at(
+                                clock_anchor_wall_ns,
+                                clock_anchor_mono.elapsed(),
+                            ));
+                        }
+                        continue;
                     }
-                }, if wrapped => continue,
-                _ = interval.tick() => {}
-                _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
-                    // Latched so a deadline already in the past cannot spin the
-                    // loop if the top declines to stop for some reason.
-                    deadline_fired = true;
-                    continue;
+                    _ = interval.tick() => {}
+                    _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
+                        // Latched so a deadline already in the past cannot spin the
+                        // loop if the top declines to stop for some reason.
+                        deadline_fired = true;
+                        continue;
+                    }
                 }
             }
             // Both clocks, every tick. `wall_ns` is the raw reading every
@@ -2606,14 +2674,23 @@ pub fn run(mut config: RecordingConfig) {
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
         // is still alive, terminate and reap it so we never orphan the child.
         if let Some(mut c) = child.take() {
-            let status = child::terminate(&mut c, child::TERM_GRACE).await;
+            // A command that ended in the same instant as the stop signal
+            // exited on its own: one poll before the terminate keeps it from
+            // being labelled interrupted.
+            let (status, ending) = match c.try_wait() {
+                Ok(Some(status)) => (status, RunEnding::Exited(child::map_exit_code(status))),
+                _ => {
+                    let status = child::terminate(&mut c, child::TERM_GRACE).await;
+                    (status, RunEnding::Interrupted(child::map_exit_code(status)))
+                }
+            };
             let code = child::map_exit_code(status);
             if outcome.is_none() {
                 outcome = Some(child::Outcome::Exited(code));
             }
             if let Some(marker) = &run_marker {
                 let observed_at = anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
-                run_end = Some(marker.end_event(observed_at, RunEnding::Interrupted(code)));
+                run_end = Some(marker.end_event(observed_at, ending));
             }
         }
         // Every exit path of a wrapped run has produced its `run_end` by now.
@@ -3255,6 +3332,40 @@ mod tests {
             Some(format!("run:{}:end", marker.id).as_str())
         );
         assert!(end.details.is_some());
+    }
+
+    /// The parquet footer merges the run events into a user `--metadata
+    /// events=...` value, as the `.rez` seed does, rather than replacing it.
+    #[test]
+    fn parquet_events_payload_merges_into_the_users_events() {
+        let marker = RunMarker::new(&["bench".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR + TEST_SECOND, None);
+        let user =
+            r#"{"events":[{"timestamp":1700000000000000000,"description":"deploy","id":"d1"}]}"#;
+
+        let json = events_payload(Some(user), std::slice::from_ref(&start)).unwrap();
+        let payload: Events = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload.events.len(), 2);
+        assert_eq!(payload.events[0].description, "deploy");
+        assert_eq!(payload.events[1], start);
+
+        // Without run events the user's value is carried as given.
+        assert_eq!(events_payload(Some(user), &[]).as_deref(), Some(user));
+        // Without either there is no key.
+        assert!(events_payload(None, &[]).is_none());
+    }
+
+    /// A user value that does not parse is kept verbatim; the run events are
+    /// the ones dropped.
+    #[test]
+    fn parquet_events_payload_keeps_an_unparseable_user_value() {
+        let marker = RunMarker::new(&["bench".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR, None);
+        let garbage = "not json";
+        assert_eq!(
+            events_payload(Some(garbage), std::slice::from_ref(&start)).as_deref(),
+            Some(garbage)
+        );
     }
 
     /// The other two endings name the run the same way and say what happened.

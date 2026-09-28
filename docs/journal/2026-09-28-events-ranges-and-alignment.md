@@ -122,19 +122,36 @@ settle before building:
 *Built (this PR).* Both questions were answered as proposed. `description`
 is the basename of `argv[0]` (`bench.sh`), and the full argument list,
 joined by spaces, goes into `run_start`'s `details` only with
-`--record-command-line`. Both instants come from the recorder's own clock,
-`anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())`, the same
-function that stamps the rows. The `.rez` writer needed a new message for
-this: metadata was set once in the `ManifestSeed` at `add_recording`, and
-`finalize` never touched it, so `Msg::UpdateMetadata` and
-`RecordingWriter::update_metadata` (`crates/rez/src/rez_v3_writer.rs`) now
-replace a recording's whole map through the writer thread, which owns the
-only writing connection; `RezStream` keeps each recording's last map so it
-can send it back with an event merged in. The recording loop gained a
+`--record-command-line`. Both instants are on the recorder's timeline,
+`anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())`. That is
+not the timeline a rezolus agent's rows are on: those carry the agent's
+producer stamp (`snapshot_producer_stamp`), and the recording's anchor is
+the agent's, so for a remote agent the marker sits off its rows by the
+wall-clock skew between the two hosts, the same as an `annotate --event
+time=` marker does. Converting at merge time was considered and not done.
+The obvious conversion, the recorder's wall reading at the event minus the
+recording's last `wall_offset`, does not remove the skew: a rezolus agent's
+`wall_offset` is the agent's own wall clock against its own timeline, so the
+result is still the agent's timeline plus the wall skew, measured at the
+last tick instead of at the anchors. Removing it needs the agent's stamp
+paired with the recorder's instant at every tick, threaded through `stage`
+and `stage_stream`, and the stream path receives a frame up to an interval
+after the agent produced it, so that pairing is off by more than the skew it
+removes on an NTP-synced fleet. A per-tick pairing stored with the rows is
+the way to do it if a viewer ever needs sub-skew placement. The `.rez`
+writer needed a new message: metadata was set once in the `ManifestSeed` at
+`add_recording`, and `finalize` never touched it, so `Msg::UpdateMetadata`
+and `RecordingWriter::update_metadata` (`crates/rez/src/rez_v3_writer.rs`)
+now replace a recording's whole map through the writer thread, which owns
+the only writing connection; `RezStream` keeps each recording's last map so
+it can send it back with an event merged in. The recording loop gained a
 `select!` arm on `child.wait()` so the child's exit wakes the loop and
-`run_end` is stamped when the exit happened rather than at the next tick;
-the loop top's `try_wait` still takes the decision, since tokio caches the
-status once `wait` has completed. Ids are `run:<uuid>:start` and
+`run_end` is stamped when the exit happened rather than at the next tick.
+The arm only records the instant; the loop top's `try_wait` takes the
+decision (tokio caches the status once `wait` has completed), and the exit
+is followed by one final scrape before the loop stops, so the interval the
+command exited in is sampled, as it was before the arm existed. Ids are
+`run:<uuid>:start` and
 `run:<uuid>:end` with one v4 uuid per `record` invocation (minted by the
 same `epoch::mint` the producer epoch uses), so `combine`'s dedup by id
 keeps one pair per run. Parquet output gets the same payload from
