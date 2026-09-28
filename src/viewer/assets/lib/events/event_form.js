@@ -9,6 +9,8 @@
 // description; chart_id is set when "Show only on this chart" stays
 // checked (defaulted ON per spec).
 
+import { formatDuration, isRangeEvent } from '../charts/event_markers.js';
+
 const formatNsAsRfc3339 = (ns) => {
     if (!Number.isFinite(ns)) return '';
     return new Date(Math.round(ns / 1_000_000)).toISOString();
@@ -38,6 +40,9 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
     if (left < 8) left = 8;
 
     let timestampStr = formatNsAsRfc3339(prefill.timestamp_ns);
+    // Optional. When set, the event is a range from Timestamp to End and
+    // the viewer shades it; `duration_ns` is derived at submit.
+    let endStr = '';
     let description = '';
     let kind = '';
     let source = prefill.source || '';
@@ -77,10 +82,26 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
             m.redraw();
             return;
         }
+        let durationNs = null;
+        if (endStr.trim()) {
+            const endNs = parseRfc3339AsNs(endStr);
+            if (endNs == null) {
+                formError = 'End is not a valid RFC3339 / ISO-8601 string';
+                m.redraw();
+                return;
+            }
+            if (endNs <= ts) {
+                formError = 'End must be after Timestamp';
+                m.redraw();
+                return;
+            }
+            durationNs = endNs - ts;
+        }
         const event = {
             timestamp: ts,
             description: description.trim(),
         };
+        if (durationNs != null) event.duration_ns = durationNs;
         if (kind.trim()) event.kind = kind.trim();
         if (source.trim()) event.source = source.trim();
         if (node.trim()) event.node = node.trim();
@@ -111,6 +132,15 @@ export function openEventForm({ anchorEl, prefill, onSubmit }) {
                     type: 'text',
                     value: timestampStr,
                     oninput: (e) => { timestampStr = e.target.value; formError = ''; },
+                }),
+            ]),
+            m('div.event-form-row', [
+                m('label', 'End'),
+                m('input', {
+                    type: 'text',
+                    value: endStr,
+                    placeholder: 'optional; makes a range',
+                    oninput: (e) => { endStr = e.target.value; formError = ''; },
                 }),
             ]),
             m('div.event-form-row', [
@@ -198,10 +228,14 @@ export function openEventInfo({ anchorPoint, event, onDelete }) {
 
     // [label, value] pairs; blank values are dropped so the popover only
     // shows what the event actually carries.
+    const isRange = isRangeEvent(event);
     const rows = [
         ['Timestamp', formatNsAsRfc3339(event.timestamp)],
+        ['End', isRange ? formatNsAsRfc3339(event.timestamp + event.duration_ns) : null],
+        ['Duration', isRange ? formatDuration(event.duration_ns) : null],
         ['Description', event.description],
         ['Kind', event.kind],
+        ['Details', event.details],
         ['Source', event.source],
         ['Node', event.node],
         ['Instance', event.instance],

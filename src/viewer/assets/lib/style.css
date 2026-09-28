@@ -2946,6 +2946,19 @@ main {
 .event-bubble-tag:hover {
     opacity: 1;
 }
+/* A range event's span, shaded over the plot grid between its start and
+ * end; chart.js sizes it to the grid's height. An overlay rather than an
+ * echarts markArea because the custom-series heatmaps never lay one out.
+ * Left edge coincides with the start hairline; the outline marks the
+ * extent on saturated heatmap cells where the fill alone would vanish. */
+.event-range-band {
+    position: absolute;
+    box-sizing: border-box;
+    background: rgba(168, 93, 35, 0.16);
+    border-left: 1px solid rgba(168, 93, 35, 0.7);
+    border-right: 1px solid rgba(168, 93, 35, 0.7);
+    pointer-events: none;
+}
 
 /* Read-only "more info" popover. */
 .event-info {

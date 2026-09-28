@@ -292,6 +292,8 @@ and flags differ by format; check `rezolus recording <subcommand> --help`.
 ```bash
 rezolus recording metadata -i rezolus.parquet
 rezolus recording annotate rezolus.parquet --queries ext.json
+rezolus recording annotate run.rez --event 'time=2026-09-28T14:03:11Z,kind=deploy,description=rollout'
+rezolus recording annotate run.rez --event 'time=2026-09-28T14:00Z,duration=90s,kind=warmup,description=warm-up'
 rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
 rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
 rezolus recording filter rezolus.parquet -o slim.parquet

@@ -21,7 +21,7 @@ import globalColorMapper, { COLORS } from './util/colormap.js';
 import { themeVersion } from '../ui/theme.js';
 import { resolveStyle, resolvedStyle } from './metric_types.js';
 import { eventsStore } from '../events/events_store.js';
-import { buildMarkLine } from './event_markers.js';
+import { buildMarkLine, buildRangeSpans, formatDuration, isRangeEvent } from './event_markers.js';
 import { openEventForm, openEventInfo } from '../events/event_form.js';
 import { buildFreezeFooterContent, isEventEditingAllowed, isEventDisplayAllowed } from './base.js';
 
@@ -957,6 +957,15 @@ export class Chart {
         return { source: o.source, node: o.node, instance: o.instance };
     }
 
+    // Map an event's absolute timestamp (ns) onto this chart's x axis (ms).
+    // Compare-mode specs draw a relative axis and carry the capture anchor
+    // as `eventTimeOriginSec` (compare.js); everything else is absolute.
+    _eventAxisMs(ns) {
+        const originSec = this.spec?.eventTimeOriginSec;
+        const ms = ns / 1_000_000;
+        return Number.isFinite(originSec) ? ms - originSec * 1000 : ms;
+    }
+
     _applyEventMarkers({ reconfigured = false } = {}) {
         if (!this.echart) return;
 
@@ -980,7 +989,9 @@ export class Chart {
                 scope: this._chartScope(),
             })
             : [];
-        const eventMarkLine = buildMarkLine(visible);
+        // Range bands are drawn as HTML by _renderEventBubbles, not here:
+        // see event_markers.js::buildRangeSpans for why not a markArea.
+        const eventMarkLine = buildMarkLine(visible, (ns) => this._eventAxisMs(ns));
         const opt = this.echart.getOption();
         const seriesArr = Array.isArray(opt?.series) ? opt.series : [];
         if (seriesArr.length === 0) return;
@@ -1038,9 +1049,32 @@ export class Chart {
         const left = rect.x;
         const right = rect.x + rect.width;
 
+        // Range bands first, so the tags stack above them in the layer.
+        // Each spans the plot grid's full height between its two axis
+        // positions, clipped to the grid; a band wholly outside the zoom
+        // window is skipped like a tag would be.
+        const spans = buildRangeSpans(visible, (ns) => this._eventAxisMs(ns)) || [];
+        for (const s of spans) {
+            const x0 = this.echart.convertToPixel({ xAxisIndex: 0 }, s.startMs);
+            const x1 = this.echart.convertToPixel({ xAxisIndex: 0 }, s.endMs);
+            if (!Number.isFinite(x0) || !Number.isFinite(x1)) continue;
+            const bx0 = Math.max(left, Math.min(x0, x1));
+            const bx1 = Math.min(right, Math.max(x0, x1));
+            if (bx1 <= bx0) continue;
+            const band = document.createElement('div');
+            band.className = 'event-range-band';
+            band.style.left = bx0 + 'px';
+            band.style.width = (bx1 - bx0) + 'px';
+            band.style.top = rect.y + 'px';
+            band.style.height = rect.height + 'px';
+            // No title: the band is pointer-events:none so the data tooltip
+            // works through it; the tag carries the description.
+            layer.appendChild(band);
+        }
+
         for (const e of visible) {
             if (!Number.isFinite(e.timestamp)) continue;
-            const tsMs = e.timestamp / 1_000_000;
+            const tsMs = this._eventAxisMs(e.timestamp);
             const px = this.echart.convertToPixel({ xAxisIndex: 0 }, tsMs);
             // Hide tags whose event is scrolled out of the zoom window.
             if (!Number.isFinite(px) || px < left - 1 || px > right + 1) continue;
@@ -1051,7 +1085,10 @@ export class Chart {
             // Sit just above the hairline's top (the plot-grid top);
             // the CSS translateY(-100%) grows the tag upward + a 4px gap.
             tag.style.top = (rect.y - 4) + 'px';
-            tag.textContent = e.description || '(no description)';
+            // A range event's tag carries its length so the band it
+            // anchors is readable without hovering.
+            const label = e.description || '(no description)';
+            tag.textContent = isRangeEvent(e) ? `${label} (${formatDuration(e.duration_ns)})` : label;
             tag.title = e.description || '';
             tag.addEventListener('click', (ev) => {
                 ev.stopPropagation();

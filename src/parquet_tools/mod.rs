@@ -155,7 +155,9 @@ pub fn command() -> Command {
                     clap::Arg::new("event")
                         .long("event")
                         .value_name("KV")
-                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. Repeatable.")
+                        .help("Add a single event inline, e.g. 'time=2026-05-12T15:23Z,kind=restart,description=\"...\"'. \
+                               Add duration=30s (or duration_ns=N) for a range that the viewer shades from time to \
+                               time+duration. Repeatable.")
                         .value_parser(value_parser!(String))
                         .action(clap::ArgAction::Append)
                         .conflicts_with("undo"),
