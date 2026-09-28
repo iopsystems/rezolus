@@ -62,10 +62,11 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     if has_metric(data, "writeback_runs") {
         let throttle = usage.subgroup("Writeback Throttle");
         throttle.describe(
-            "When dirty pages near their limit the kernel makes the writer sleep in \
-             balance_dirty_pages. The sleep lands on the writer's own thread, so this is \
-             where a write path's tail comes from when writeback cannot keep up; zero events \
-             means dirty pages never reached the limit.",
+            "Once dirty pages pass the free-run ceiling (midway between the background and hard \
+             limits) the kernel evaluates each writer in balance_dirty_pages and may make it \
+             sleep. The sleep lands on the writer's own thread, so this is where a write \
+             path's tail comes from when writeback cannot keep up; zero checks means dirty \
+             pages never came near the limit.",
         );
         throttle.plot_promql(
             PlotOpts::counter("Throttle Events", "throttle-events", Unit::Count),
@@ -76,15 +77,16 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             "writeback_throttle_latency".to_string(),
         );
         throttle.plot_promql(
-            PlotOpts::counter("Dirty-limit Checks", "throttle-checks", Unit::Count),
+            PlotOpts::counter("Throttle Evaluations", "throttle-checks", Unit::Count),
             "sum(irate(writeback_throttle_checks[5m]))".to_string(),
         );
 
         let flusher = usage.subgroup("Flusher");
         flusher.describe(
-            "Writeback work items by why they ran: periodic is the dirty_writeback_centisecs \
+            "Flusher passes by why their work ran: periodic is the dirty_writeback_centisecs \
              cadence, background is dirty pages over the background threshold, sync is an \
-             explicit sync, vmscan is memory reclaim. Pages written is what reached storage.",
+             explicit sync, vmscan is memory reclaim. Pages written is what the flushers \
+             reported writing.",
         );
         flusher.plot_promql(
             PlotOpts::counter("Runs by Reason", "writeback-runs", Unit::Count),

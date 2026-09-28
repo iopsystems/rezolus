@@ -313,6 +313,50 @@ mod btf_tests {
     }
 }
 
+/// The length of one jiffy in nanoseconds, or `None` if the kernel would not
+/// say. `CLOCK_MONOTONIC_COARSE` is the tick-granular clock and its resolution
+/// is `TICK_NSEC`: 4,000,000 ns on a `CONFIG_HZ=250` kernel, 1,000,000 on
+/// `HZ=1000`. Measured, not configured, so it needs no `/proc/config.gz`; and
+/// not `sysconf(_SC_CLK_TCK)`, which is `USER_HZ`, a constant 100.
+///
+/// For BPF programs whose tracepoint arguments are in jiffies (jbd2's commit
+/// phases, the writeback throttle's `pause`): hand this to the program through
+/// a one-entry `BPF_F_MMAPABLE` map and multiply there.
+pub fn jiffy_ns() -> Option<u64> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+
+    // SAFETY: `ts` is a valid, writable timespec for the duration of the call.
+    let rc = unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &mut ts) };
+
+    if rc != 0 || ts.tv_sec < 0 || ts.tv_nsec < 0 {
+        return None;
+    }
+
+    let ns = (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64);
+
+    (ns > 0).then_some(ns)
+}
+
+#[cfg(test)]
+mod jiffy_tests {
+    /// The tick is a real kernel constant: between 1 ms (HZ=1000) and 10 ms
+    /// (HZ=100) on every Linux the agent supports. A value outside that range
+    /// means the clock being asked is not the tick-granular one.
+    #[test]
+    fn jiffy_is_between_one_and_ten_milliseconds() {
+        let tick = super::jiffy_ns().expect("clock_getres(CLOCK_MONOTONIC_COARSE)");
+        assert!(
+            (1_000_000..=10_000_000).contains(&tick),
+            "tick {tick} ns is not a jiffy"
+        );
+    }
+}
+
 pub trait OpenSkelExt {
     /// When called, the SkelBuilder should log instruction counts for each of
     /// the programs within the skeleton. Log level should be debug.

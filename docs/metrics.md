@@ -614,10 +614,13 @@ the reason they ran, and the pages written back. Filesystem-agnostic: these
 are the `mm` layer's tracepoints, and `memory_dirty` / `memory_writeback` in
 `memory_meminfo` are the gauges these rates act on.
 
-The throttle (`balance_dirty_pages`) runs once per ratelimit's worth of pages
-a task dirties, so `writeback_throttle_checks` rises with write throughput;
-`writeback_throttle_events` counts the checks that made the writer sleep, and
-the kernel reports each sleep in whole milliseconds. That tracepoint has had
+The throttle tracepoint (`balance_dirty_pages`) fires only once dirty pages are
+over the free-run ceiling, midway between the background and hard limits, so
+`writeback_throttle_checks` is zero while dirty pages stay comfortably under
+the limit and rises only when the throttle is being considered;
+`writeback_throttle_events` counts the evaluations that made the writer sleep.
+The sleep is a raw argument in jiffies, converted with the measured tick, so
+the histogram has one-jiffy resolution. That tracepoint has had
 two argument lists across kernel versions, and the sampler picks the program
 written for the one BTF reports; a kernel with neither, or without BTF, runs
 without the throttle metrics and reports degraded rather than reading the
@@ -625,12 +628,12 @@ wrong argument.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `writeback_throttle_latency` | Distribution of the time a writer was made to sleep by the dirty-page throttle, in nanoseconds at millisecond resolution; sleeps only | |
-| `writeback_throttle_checks` | Dirty-limit checks (one per ratelimit's worth of pages dirtied) | |
-| `writeback_throttle_events` | Checks that made the writer sleep | |
+| `writeback_throttle_latency` | Distribution of the time a writer was made to sleep by the dirty-page throttle, in nanoseconds at one-jiffy resolution; sleeps only | |
+| `writeback_throttle_checks` | Throttle evaluations of tasks whose dirty pages were over the free-run ceiling | |
+| `writeback_throttle_events` | Evaluations that made the writer sleep | |
 | `writeback_throttled_time` | Total writer sleep in the throttle, in nanoseconds | |
-| `writeback_runs` | Flusher work items started, by why: `background` (dirty pages over the background threshold), `periodic` (the `dirty_writeback_centisecs` flusher), `sync`, `vmscan` (memory reclaim), `laptop_timer`, `fs_free_space`, `forker_thread`, `foreign_flush` (cgroup writeback) | `reason={background,vmscan,sync,periodic,laptop_timer,fs_free_space,forker_thread,foreign_flush}` |
-| `writeback_pages_written` | Pages the flushers wrote back, summed over passes | |
+| `writeback_runs` | Flusher passes (one work item covering many inodes makes several), by why the work ran: `background` (dirty pages over the background threshold), `periodic` (the `dirty_writeback_centisecs` flusher), `sync`, `vmscan` (memory reclaim), `laptop_timer`, `fs_free_space`, `forker_thread`, `foreign_flush` (cgroup writeback) | `reason={background,vmscan,sync,periodic,laptop_timer,fs_free_space,forker_thread,foreign_flush}` |
+| `writeback_pages_written` | Pages the flushers reported written back, summed over flusher wakeups | |
 
 ## Network
 

@@ -34,8 +34,6 @@
 #define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 
-#define NS_PER_MS 1000000ULL
-
 // counters: one bank of COUNTER_GROUP_WIDTH per CPU. The order MUST match the
 // `counters` vec in mod.rs.
 #define C_THROTTLE_CHECKS 0
@@ -64,6 +62,26 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS);
 } throttle_latency SEC(".maps");
 
+// [0] = nanoseconds per jiffy, written by userspace before attach (see
+// jiffy_ns() in bpf/mod.rs). The `pause` a tp_btf/raw_tp program receives is
+// the raw argument, in jiffies; the millisecond value exists only in the
+// tracepoint's formatted record. Zero (userspace could not measure the tick)
+// disables the sleep histogram and total; the counts still land.
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, 1);
+} jiffy_ns SEC(".maps");
+
+static __always_inline u64 tick_ns(void) {
+    u32 idx = 0;
+    u64* v = bpf_map_lookup_elem(&jiffy_ns, &idx);
+
+    return v ? *v : 0;
+}
+
 static __always_inline void counter_add(u32 counter, u64 value) {
     u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + counter;
 
@@ -74,16 +92,26 @@ static __always_inline void counter_incr(u32 counter) {
     counter_add(counter, 1);
 }
 
-// `pause` is the sleep the throttle imposes on the caller, in milliseconds;
-// zero or negative means the check did not throttle (negative encodes the
-// "think time" credit the kernel carries between calls).
+// balance_dirty_pages() returns before this tracepoint while dirty pages are
+// under the free-run ceiling (midway between the background and hard
+// limits), so every event here is a task that was in the throttle zone.
+// `pause` is the sleep about to be imposed on it, in jiffies; zero or
+// negative means no sleep this time (negative is the "think time" credit the
+// kernel carries between calls, traced as min(pause, 0)).
 static int __always_inline handle_balance_dirty_pages(long pause) {
     counter_incr(C_THROTTLE_CHECKS);
 
     if (pause > 0) {
-        u64 ns = (u64)pause * NS_PER_MS;
+        u64 tick = tick_ns();
+        u64 ns;
 
         counter_incr(C_THROTTLE_EVENTS);
+
+        if (tick == 0) {
+            return 0;
+        }
+
+        ns = (u64)pause * tick;
         counter_add(C_THROTTLED_TIME, ns);
         histogram_incr(&throttle_latency, HISTOGRAM_POWER, ns);
     }
@@ -115,8 +143,9 @@ static __always_inline int reason_slot(int reason) {
     return -1;
 }
 
-// writeback_start fires once per writeback work item, on the flusher thread,
-// before the pages are written.
+// writeback_start fires on the flusher thread once per pass of wb_writeback's
+// loop -- a work item covering many inodes makes several passes -- before the
+// pass's pages are written.
 static int __always_inline handle_writeback_start(struct wb_writeback_work* work) {
     int slot;
 

@@ -1,6 +1,8 @@
 //! Collects page-cache writeback stats using BPF and traces:
-//! * `balance_dirty_pages` — every dirty-limit check, and the sleep it imposed
-//! * `writeback_start` — every flusher work item, by reason
+//! * `balance_dirty_pages` — every throttle evaluation of a task whose dirty
+//!   pages were over the free-run ceiling, and the sleep it imposed (a raw
+//!   argument in jiffies, converted with the measured tick; see `jiffy_ns`)
+//! * `writeback_start` — every flusher pass, by the reason its work ran
 //! * `writeback_pages_written` — pages each flusher pass wrote
 //!
 //! And produces these stats:
@@ -133,6 +135,18 @@ fn init(config: Arc<Config>) -> SamplerResult {
         ),
     }
 
+    let tick = match jiffy_ns() {
+        Some(ns) => ns,
+        None => {
+            warn!(
+                "{NAME}: clock_getres(CLOCK_MONOTONIC_COARSE) gave no tick length; the throttle \
+                 sleep histogram and writeback_throttled_time will stay empty"
+            );
+            0
+        }
+    };
+    debug!("{NAME} jiffy = {tick} ns");
+
     let bpf = BpfBuilder::new(
         &config,
         NAME,
@@ -148,6 +162,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &WRITEBACK_THROTTLE_LATENCY,
         &THROTTLE_LATENCIES_ACQ,
     )
+    .map("jiffy_ns", vec![tick])
     .disabled_programs(&disabled)
     .required_programs(&required)
     .build()?;
@@ -167,6 +182,7 @@ impl SkelExt for ModSkel<'_> {
         match name {
             "counters" => &self.maps.counters,
             "throttle_latency" => &self.maps.throttle_latency,
+            "jiffy_ns" => &self.maps.jiffy_ns,
             _ => unimplemented!(),
         }
     }
