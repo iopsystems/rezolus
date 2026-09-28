@@ -1,7 +1,8 @@
 # Events as ranges, phases, and alignment anchors
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — design, nothing built.
+- **Status:** OPEN — range rendering BUILT (#1322); recorder run events
+  BUILT (this PR); event-anchored alignment not yet started.
 
 ## Problem
 
@@ -19,6 +20,17 @@ description, kind, source, node, instance, and never a duration. So the
 field is a promise the storage makes and the viewer does not keep. A
 benchmark's warm-up phase, a deploy that took forty seconds, or an incident
 window all have to be two point events today.
+
+*Correction, found while building:* the CLI half of this gap did not exist.
+`parse_inline_event` (`src/parquet_tools/events.rs`) already accepted
+`duration=<humantime>` and `duration_ns=<int>`, and JSON input accepted
+both spellings; what was missing was a test and a mention in the `--event`
+help. The original text below says the CLI "gains `duration=`"; it gained a
+test and help text. Also found: compare-mode charts draw a relative axis
+(`compare.js::rebase`) but `_applyEventMarkers` placed events at absolute
+epoch ms, so every marker landed off-grid in compare mode; and Notebook
+bubbles already offer Delete (`chart.js::_renderEventBubbles` →
+`openEventInfo`), so the backlog's "read-only after creation" was stale.
 
 **2. The recorder knows the run boundaries and records nothing.**
 `rezolus record -- ./benchmark` records for exactly the wrapped command's
@@ -54,6 +66,39 @@ an optional end timestamp; the CLI's `--event` inline syntax gains
 `src/parquet_tools/annotate.rs`). No schema change: the field exists and is
 already optional and serde-defaulted, so older readers keep working.
 
+*Built (this PR), with one change from the design.* The design called for
+an echarts `markArea`. That was built first and it never rendered on the
+viewer's heatmaps: they
+are `custom` series (`heatmap.js`, `histogram_heatmap.js`,
+`quantile_heatmap.js`), and on those echarts collapsed the area to the axis
+line in every configuration tried in a headless browser (`z`, `zlevel`,
+explicit `yAxis` bounds on a category axis, an `encode` declaring the x/y
+dimensions), while the same option drew correctly on a `line` series. The
+band is an HTML overlay instead: `buildRangeSpans(events, toAxisMs)` in
+`charts/event_markers.js` is the pure part (one `{startMs, endMs, name}` per
+event with a positive `duration_ns`), and `chart.js::_renderEventBubbles`
+draws each span as a `div.event-range-band` sized to the plot grid through
+`convertToPixel`, clipped to the grid, in the same layer as the description
+tags and on the same zoom/resize/store re-render path. It works on every
+chart type identically, which the markArea route never would have. A range
+event keeps its start hairline from `buildMarkLine` (the bubble's anchor),
+and the tag carries the humanized duration (`formatDuration`, e.g.
+`warm-up (1m30s)`).
+
+Both builders take a `toAxisMs` conversion, and the chart supplies
+`_eventAxisMs`, which subtracts `spec.eventTimeOriginSec` when present:
+`compare.js` sets that field on every relative-axis spec it builds
+(overlay, side-by-side per slot for both the plain and the quantile
+heatmap pairs, both diff heatmaps, split lines) to the capture anchor the
+axis was rebased on, so events land where they belong in compare mode
+instead of at absolute epoch ms. The first build missed the two quantile
+builders. The add-event form gained an
+optional End (RFC 3339, must be after Timestamp; `duration_ns` is derived),
+and the info popover shows End, Duration and Details. Events remain one
+baseline-scoped list; the overlay and split charts place them by the first
+capture's anchor, which is right for that capture's events and is what the
+per-capture context in the alignment work refines.
+
 **Phase events are a kind convention, not a type.** `kind` is documented as a
 free-form tag. `run_start`, `run_end`, `warmup`, `steady` join the documented
 examples in the `Event` doc comment. No validation is added; the value of a
@@ -73,6 +118,57 @@ settle before building:
 - Clock: the event instant must come from the same clock as the row
   timestamps, which is the recorder's wall clock at the tick that observed
   the spawn, not the child's own start time.
+
+*Built (this PR).* Both questions were answered as proposed. `description`
+is the basename of `argv[0]` (`bench.sh`), and the full argument list,
+joined by spaces, goes into `run_start`'s `details` only with
+`--record-command-line`. Both instants are on the recorder's timeline,
+`anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())`. That is
+not the timeline a rezolus agent's rows are on: those carry the agent's
+producer stamp (`snapshot_producer_stamp`), and the recording's anchor is
+the agent's, so for a remote agent the marker sits off its rows by the
+wall-clock skew between the two hosts, the same as an `annotate --event
+time=` marker does. Converting at merge time was considered and not done.
+The obvious conversion, the recorder's wall reading at the event minus the
+recording's last `wall_offset`, does not remove the skew: a rezolus agent's
+`wall_offset` is the agent's own wall clock against its own timeline, so the
+result is still the agent's timeline plus the wall skew, measured at the
+last tick instead of at the anchors. Removing it needs the agent's stamp
+paired with the recorder's instant at the same moment. On the scrape path
+that pairing exists and was not used: the agent's `ts` is read inside the
+request/response window the recorder measures on its own clock, so
+`snapshot_producer_stamp` and the tick's `anchored_ns` are both in hand
+where the tick is staged (`src/recorder/mod.rs`, the `rec.stage` call), and
+a conversion through them would place the event to within one round trip.
+On the stream path it does not: a frame arrives up to an interval after the
+agent produced it, so pairing its stamp with the receipt instant is off by
+more than the skew it would remove on an NTP-synced fleet. So the events
+stay on the recorder's clock for now; converting per recording is possible
+with round-trip precision for scraped recordings and not for streamed ones,
+and is deferred to the backlog ("Run events on each recording's own
+timeline"). The `.rez`
+writer needed a new message: metadata was set once in the `ManifestSeed` at
+`add_recording`, and `finalize` never touched it, so `Msg::UpdateMetadata`
+and `RecordingWriter::update_metadata` (`crates/rez/src/rez_v3_writer.rs`)
+now replace a recording's whole map through the writer thread, which owns
+the only writing connection; `RezStream` keeps each recording's last map so
+it can send it back with an event merged in. The recording loop gained a
+`select!` arm on `child.wait()` so the child's exit wakes the loop and
+`run_end` is stamped when the exit happened rather than at the next tick.
+The arm only records the instant; the loop top's `try_wait` takes the
+decision (tokio caches the status once `wait` has completed), and the exit
+is followed by one final scrape before the loop stops, so the interval the
+command exited in is sampled, as it was before the arm existed. Ids are
+`run:<uuid>:start` and
+`run:<uuid>:end` with one v4 uuid per `record` invocation (minted by the
+same `epoch::mint` the producer epoch uses), so `combine`'s dedup by id
+keeps one pair per run. Parquet output gets the same payload from
+`build_parquet_converter` under `KEY_EVENTS`; raw output has no metadata and
+cannot carry them, and the help says so. An endpoint that joins after the
+spawn gets `run_start` in its seed through `build_rez_metadata`'s new
+`run_events` argument. The path that discards a `.rez` when the command
+exits before any sample is unchanged: `run_end` is merged only in the
+finalize block, after that check.
 
 **Event-anchored alignment.** Alongside the numeric offset, an anchor may be
 `{ kind: "run_start" }`. At render time `anchorSecondsFor` resolves it per

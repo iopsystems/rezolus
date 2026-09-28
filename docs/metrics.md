@@ -558,6 +558,35 @@ utilized across the system.
 | `memory_available` | The amount of system memory that is available for allocation | |
 | `memory_buffers` | The amount of system memory used for buffers | |
 | `memory_cached` | The amount of system memory used by the page cache | |
+| `memory_dirty` | Page-cache memory dirtied and not yet written back (`Dirty`); what the writeback throttle acts on | |
+| `memory_writeback` | Page-cache memory currently being written back (`Writeback`) | |
+| `memory_active` | Memory on the active LRU list, reclaimed last (`Active(file)`, `Active(anon)`) | `kind={file,anon}` |
+| `memory_inactive` | Memory on the inactive LRU list, reclaimed first (`Inactive(file)`, `Inactive(anon)`) | `kind={file,anon}` |
+| `memory_unevictable` | Memory the kernel cannot reclaim (`Unevictable`) | |
+| `memory_mlocked` | Memory locked with mlock (`Mlocked`) | |
+| `memory_shmem` | tmpfs, shm and shared anonymous memory (`Shmem`); counted inside Cached | |
+| `memory_mapped` | Page cache mapped into process address spaces (`Mapped`) | |
+| `memory_anon` | Anonymous process memory (`AnonPages`) | |
+| `memory_slab` | Slab allocator memory, reclaimable (`SReclaimable`) or not (`SUnreclaim`) | `kind={reclaimable,unreclaimable}` |
+| `memory_kernel_reclaimable` | Kernel allocations reclaimable under pressure (`KReclaimable`) | |
+| `memory_kernel_stack` | Kernel stacks (`KernelStack`) | |
+| `memory_page_tables` | Process page tables (`PageTables`) | |
+| `memory_percpu` | Per-CPU allocator memory (`Percpu`) | |
+| `memory_swap_total` | Total swap (`SwapTotal`) | |
+| `memory_swap_free` | Unused swap (`SwapFree`) | |
+| `memory_swap_cached` | Swapped-out memory that is back in RAM with its swap slot still held (`SwapCached`) | |
+| `memory_commit_limit` | Memory the overcommit policy allows to be committed (`CommitLimit`); enforced only with `vm.overcommit_memory=2` | |
+| `memory_committed` | Memory committed to processes whether touched or not (`Committed_AS`) | |
+| `memory_hugepages_anon` | Anonymous memory in transparent huge pages (`AnonHugePages`) | |
+| `memory_hugepages_shmem` | Shared memory in transparent huge pages (`ShmemHugePages`) | |
+| `memory_hugepages_file` | Page cache in transparent huge pages (`FileHugePages`) | |
+| `memory_hugetlb` | Memory reserved for hugetlbfs pages of every size (`Hugetlb`); not in MemAvailable | |
+| `memory_hugetlb_pages` | hugetlbfs pages of the default size (`HugePages_Total/Free/Rsvd/Surp`), in pages | `state={total,free,reserved,surplus}` |
+| `memory_hardware_corrupted` | Memory retired after a hardware error (`HardwareCorrupted`); non-zero is a failing DIMM | |
+
+A line the running kernel does not print (`HardwareCorrupted` without
+`CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
+config) leaves its gauge absent from the snapshot rather than at 0.
 
 ### memory_vmstat
 

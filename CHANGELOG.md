@@ -1,5 +1,21 @@
 ## [Unreleased]
 
+### Added
+
+- `memory_meminfo` exports 30 more gauges from the `/proc/meminfo` it
+  already reads: `memory_dirty` and `memory_writeback`; the LRU lists
+  (`memory_active`/`memory_inactive` by `kind`, `memory_unevictable`,
+  `memory_mlocked`, `memory_shmem`, `memory_mapped`, `memory_anon`); kernel
+  memory (`memory_slab` by `kind`, `memory_kernel_reclaimable`,
+  `memory_kernel_stack`, `memory_page_tables`, `memory_percpu`); swap
+  (`memory_swap_total`/`_free`/`_cached`); overcommit (`memory_commit_limit`,
+  `memory_committed`); huge pages (`memory_hugepages_anon`/`_shmem`/`_file`,
+  `memory_hugetlb`, `memory_hugetlb_pages` by `state`); and
+  `memory_hardware_corrupted`. A line the kernel does not print leaves its
+  gauge absent rather than 0. The viewer's Memory section gains Writeback,
+  Page Cache, Anonymous, Kernel, Swap and Huge Pages subgroups, shown when
+  the recording has the metrics.
+
 ### Changed
 
 - The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with

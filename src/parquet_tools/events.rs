@@ -769,6 +769,19 @@ mod tests {
     }
 
     #[test]
+    fn inline_event_accepts_duration_in_both_spellings() {
+        // Humantime form, the one the help text advertises.
+        let e = parse_inline_event("time=1,description=warmup,duration=30s").unwrap();
+        assert_eq!(e.duration_ns, Some(30_000_000_000));
+        // Raw nanoseconds, the JSON field name.
+        let e = parse_inline_event("time=1,description=warmup,duration_ns=1500").unwrap();
+        assert_eq!(e.duration_ns, Some(1500));
+        // A point event carries no duration at all.
+        let e = parse_inline_event("time=1,description=point").unwrap();
+        assert_eq!(e.duration_ns, None);
+    }
+
+    #[test]
     fn run_returns_false_when_no_event_args() {
         let parquet = make_minimal_parquet(vec![("source", "rezolus")]);
         let changed = run(parquet.path(), &[], &[], false).unwrap();

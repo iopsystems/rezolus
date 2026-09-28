@@ -137,7 +137,7 @@ pub fn anchored_now() -> (i64, i64) {
 ///
 /// Same shape dendro mints for a source, so the two are comparable by eye in a
 /// manifest even though neither generates the other's.
-fn mint() -> String {
+pub(crate) fn mint() -> String {
     let mut b = [0u8; 16];
     if getrandom::fill(&mut b).is_err() {
         // The OS refused to give us 16 random bytes, which on a running system
