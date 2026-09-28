@@ -9,6 +9,10 @@
 //! Nothing here knows about samplers, endpoints, or the CLI — it speaks in
 //! recordings, tables, segments, and bytes.
 
+/// What a group's slots mean, and when that changed — the blob dendro's
+/// `caller_rows` holds. Not behind `write`: a reader has to decode identity to
+/// make sense of an archive's values, so this is read-path code.
+pub mod catalog;
 /// Where `rez` ends and `dendro` begins, asserted rather than assumed.
 /// Tests only; no production code depends on dendro yet. See #1224.
 mod dendro_compat;
@@ -17,9 +21,6 @@ mod dendro_compat;
 /// is what tells us a dendro release still fits before #1224 Phase 2 leans on
 /// it.
 mod dendro_replicate_contract;
-/// What a group's slots mean, and when that changed — the blob dendro's
-/// `caller_rows` holds. Not behind `write`: a reader has to decode identity to
-/// make sense of an archive's values, so this is read-path code.
 pub mod index;
 /// A group table split by occupant through that index, for the reader. Not
 /// behind `write` for the same reason.

@@ -51,6 +51,7 @@ use metriken_query::{
     QueryResult, RateMode, SegmentedParquetReader, UnionChild, UnionError, UnionMetricsSource,
 };
 
+use crate::catalog::{Catalog, Container};
 use crate::rez::{self, RecordingBytes};
 use crate::rez_sqlite::RezDb;
 use crate::wal::materialize_wal_tail;
@@ -160,6 +161,8 @@ enum SegmentSource {
     Bytes(Vec<Vec<u8>>),
     Db {
         path: std::path::PathBuf,
+        /// Which container the file is, so a lazy reopen reads it as one.
+        container: Container,
         recording_id: i64,
         sampler: String,
     },
@@ -173,7 +176,7 @@ enum SegmentSource {
     /// `rusqlite::Connection` is `Send` but not `Sync`, and a `SamplerReader`
     /// is read from several threads on the native probe path.
     SharedDb {
-        db: Arc<std::sync::Mutex<RezDb>>,
+        db: Arc<std::sync::Mutex<Box<dyn Catalog>>>,
         recording_id: i64,
         sampler: String,
     },
@@ -185,30 +188,35 @@ enum SegmentSource {
 enum DbHandle {
     Path {
         path: std::path::PathBuf,
-        conn: std::sync::Mutex<Option<RezDb>>,
+        container: Container,
+        conn: std::sync::Mutex<Option<Box<dyn Catalog>>>,
     },
-    Shared(Arc<std::sync::Mutex<RezDb>>),
+    Shared(Arc<std::sync::Mutex<Box<dyn Catalog>>>),
 }
 
 impl DbHandle {
     fn with<T>(
         &self,
-        f: impl FnOnce(&RezDb) -> Result<T, String>,
+        f: impl FnOnce(&dyn Catalog) -> Result<T, String>,
     ) -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
         match self {
-            DbHandle::Path { path, conn } => {
+            DbHandle::Path {
+                path,
+                container,
+                conn,
+            } => {
                 let mut conn = conn.lock().unwrap_or_else(|e| e.into_inner());
                 if conn.is_none() {
-                    *conn = Some(RezDb::open(path)?);
+                    *conn = Some(container.open(path)?);
                 }
-                Ok(f(conn.as_ref().expect("opened above"))?)
+                Ok(f(conn.as_deref().expect("opened above"))?)
             }
             DbHandle::Shared(db) => {
                 // A poisoned lock means another thread panicked mid-read. The
                 // catalog is read-only here, so nothing is half-written and
                 // the data is still good.
                 let db = db.lock().unwrap_or_else(|e| e.into_inner());
-                Ok(f(&db)?)
+                Ok(f(db.as_ref())?)
             }
         }
     }
@@ -292,11 +300,13 @@ impl SegmentSource {
             SegmentSource::Bytes(b) => Arc::new(metriken_query::InMemorySegments::new(b.clone())),
             SegmentSource::Db {
                 path,
+                container,
                 recording_id,
                 sampler,
             } => Arc::new(DbSegmentStore::build(
                 DbHandle::Path {
                     path: path.clone(),
+                    container: *container,
                     conn: std::sync::Mutex::new(None),
                 },
                 *recording_id,
@@ -324,13 +334,13 @@ impl SegmentSource {
     /// Empty for a byte-backed tar archive: v2 has no index.
     fn index_entries(&self, first_row_ts: u64) -> Result<IndexRows, Box<dyn std::error::Error>> {
         fn from_last_full(
-            db: &RezDb,
+            db: &dyn Catalog,
             recording_id: i64,
             stream: &str,
             first_row_ts: u64,
         ) -> Result<IndexRows, Box<dyn std::error::Error>> {
             let from = db
-                .last_caller_row_at_or_before(recording_id, stream, first_row_ts, |blob| {
+                .last_caller_row_at_or_before(recording_id, stream, first_row_ts, &mut |blob| {
                     crate::index::IndexEntry::decode(blob)
                         .is_ok_and(|e| e.kind == crate::index::EntryKind::Full)
                 })?
@@ -341,16 +351,22 @@ impl SegmentSource {
             SegmentSource::Bytes(_) => Ok(Vec::new()),
             SegmentSource::Db {
                 path,
+                container,
                 recording_id,
                 sampler,
-            } => from_last_full(&RezDb::open(path)?, *recording_id, sampler, first_row_ts),
+            } => from_last_full(
+                container.open(path)?.as_ref(),
+                *recording_id,
+                sampler,
+                first_row_ts,
+            ),
             SegmentSource::SharedDb {
                 db,
                 recording_id,
                 sampler,
             } => {
                 let db = db.lock().unwrap_or_else(|e| e.into_inner());
-                from_last_full(&db, *recording_id, sampler, first_row_ts)
+                from_last_full(db.as_ref(), *recording_id, sampler, first_row_ts)
             }
         }
     }
@@ -913,14 +929,14 @@ impl RezReader {
         pool: Arc<BufferPool>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let filename = path.file_name().map(|s| s.to_string_lossy().into_owned());
-        if rez::detect_rez_format(path)? == rez::RezFormat::V3Sqlite {
+        if let Some(opened) = Self::from_catalog_path(path, Arc::clone(&pool))? {
             // Flatten every recording's tables, as the tar path does — this
             // entry point is the single-source view.
             let mut tables = Vec::new();
             let mut metadata = BTreeMap::new();
             let mut complete = true;
             let mut recordings = 0usize;
-            for (i, (_, reader)) in Self::from_v3(path, pool)?.into_iter().enumerate() {
+            for (i, (_, reader)) in opened.into_iter().enumerate() {
                 recordings += 1;
                 if i == 0 {
                     metadata = reader.metadata;
@@ -952,8 +968,11 @@ impl RezReader {
         bytes: Vec<u8>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
+        if Container::of_bytes(&bytes) == Container::Dendro {
+            return Self::from_v3_db(Container::Dendro.open_bytes(bytes)?, None, pool);
+        }
         if rez::looks_like_v3(&bytes) {
-            return Self::from_v3_db(crate::rez_sqlite::RezDb::open_bytes(bytes)?, None, pool);
+            return Self::from_v3_db(Container::Rez.open_bytes(bytes)?, None, pool);
         }
         let recordings = rez::read_archive_reader(std::io::Cursor::new(bytes))?.1;
         let mut out = Vec::with_capacity(recordings.len());
@@ -973,8 +992,8 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        if rez::detect_rez_format(path)? == rez::RezFormat::V3Sqlite {
-            return Self::from_v3(path, pool);
+        if let Some(opened) = Self::from_catalog_path(path, Arc::clone(&pool))? {
+            return Ok(opened);
         }
         let recordings = read_recordings(path)?;
         let mut out = Vec::with_capacity(recordings.len());
@@ -985,6 +1004,26 @@ impl RezReader {
             out.push((labels, reader));
         }
         Ok(out)
+    }
+
+    /// Open `path` as one reader per recording when it is one of the SQLite
+    /// containers (a dendro archive or a `.rez` v3), decided by content;
+    /// `None` for a v1/v2 tar `.rez`, which the callers read eagerly.
+    fn from_catalog_path(
+        path: &Path,
+        pool: Arc<BufferPool>,
+    ) -> Result<Option<LabeledRecordings>, Box<dyn std::error::Error>> {
+        if Container::of_path(path)? == Container::Dendro {
+            return Ok(Some(Self::from_v3_db(
+                Container::Dendro.open(path)?,
+                Some((path.to_path_buf(), Container::Dendro)),
+                pool,
+            )?));
+        }
+        if rez::detect_rez_format(path)? == rez::RezFormat::V3Sqlite {
+            return Ok(Some(Self::from_v3(path, pool)?));
+        }
+        Ok(None)
     }
 
     /// Build from a v3 (SQLite) archive without materializing it.
@@ -998,7 +1037,11 @@ impl RezReader {
         path: &Path,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
-        Self::from_v3_db(RezDb::open(path)?, Some(path.to_path_buf()), pool)
+        Self::from_v3_db(
+            Container::Rez.open(path)?,
+            Some((path.to_path_buf(), Container::Rez)),
+            pool,
+        )
     }
 
     /// [`from_v3`](Self::from_v3) over an already-open catalog, so a caller
@@ -1010,8 +1053,8 @@ impl RezReader {
     /// from this one shared in-memory catalog. Everything else — the probe,
     /// the spans, the WAL tail — is identical, which is the point.
     fn from_v3_db(
-        db: RezDb,
-        path: Option<std::path::PathBuf>,
+        db: Box<dyn Catalog>,
+        path: Option<(std::path::PathBuf, Container)>,
         pool: Arc<BufferPool>,
     ) -> Result<LabeledRecordings, Box<dyn std::error::Error>> {
         let shared = Arc::new(std::sync::Mutex::new(db));
@@ -1114,8 +1157,9 @@ impl RezReader {
                     interval,
                     indexed: indexed.contains(&sampler),
                     segments: match &path {
-                        Some(path) => SegmentSource::Db {
+                        Some((path, container)) => SegmentSource::Db {
                             path: path.clone(),
+                            container: *container,
                             recording_id: rec.id,
                             sampler,
                         },
@@ -1796,6 +1840,64 @@ mod tests {
             .collect(),
         )
         .with_window(w.map(Into::into))
+    }
+
+    /// Two readers of one recording answer alike: names, labels, span,
+    /// sample timestamps, metadata, and every query in `queries` over the
+    /// whole span at a 1 s step (compared as JSON, whose maps are ordered).
+    /// What a dendro archive converted from a `.rez` must satisfy against it.
+    pub(super) fn assert_same_answers(a: &RezReader, b: &RezReader, queries: &[&str]) {
+        assert_eq!(a.counter_names(), b.counter_names());
+        assert_eq!(a.gauge_names(), b.gauge_names());
+        assert_eq!(a.histogram_names(), b.histogram_names());
+        for name in a
+            .counter_names()
+            .iter()
+            .chain(&a.gauge_names())
+            .chain(&a.histogram_names())
+        {
+            let sorted = |mut v: Vec<BTreeMap<String, String>>| {
+                v.sort();
+                v
+            };
+            assert_eq!(
+                sorted(a.counter_labels(name)),
+                sorted(b.counter_labels(name)),
+                "{name}"
+            );
+            assert_eq!(
+                sorted(a.gauge_labels(name)),
+                sorted(b.gauge_labels(name)),
+                "{name}"
+            );
+            assert_eq!(
+                sorted(a.histogram_labels(name)),
+                sorted(b.histogram_labels(name)),
+                "{name}"
+            );
+        }
+        assert_eq!(a.time_range_ns(), b.time_range_ns());
+        assert_eq!(a.sample_timestamps(), b.sample_timestamps());
+        assert_eq!(a.interval(), b.interval());
+        let (start, end) = a.time_range().unwrap();
+        // Series as JSON strings, sorted: an aggregation's output order is
+        // not defined, and JSON objects' keys are.
+        let canonical = |r: &RezReader, q: &str| -> Result<Vec<String>, String> {
+            let v = serde_json::to_value(
+                r.query_range(q, start, end, 1.0)
+                    .map_err(|e| format!("{e:?}"))?,
+            )
+            .unwrap();
+            let mut series: Vec<String> = match v.get("result") {
+                Some(serde_json::Value::Array(a)) => a.iter().map(|s| s.to_string()).collect(),
+                _ => vec![v.to_string()],
+            };
+            series.sort();
+            Ok(series)
+        };
+        for q in queries {
+            assert_eq!(canonical(a, q), canonical(b, q), "{q}");
+        }
     }
 
     fn gauge(name: &str, sampler: &str, v: i64, w: Option<Window>) -> Gauge {
@@ -3549,6 +3651,44 @@ mod tests {
                 .collect()
         }
 
+        /// A dendro archive converted from a `.rez` (#1301) reads as the
+        /// `.rez` did, for every kind and across tables, from a path and
+        /// from bytes.
+        #[test]
+        fn a_dendro_conversion_answers_every_kind_the_same() {
+            let dir = tempfile::tempdir().unwrap();
+            let rez = dir.path().join("mixed.rez");
+            let dendro = dir.path().join("mixed.dendro");
+            write_mixed_kinds(&rez);
+            crate::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
+            assert_eq!(
+                crate::catalog::Container::of_path(&dendro).unwrap(),
+                crate::catalog::Container::Dendro
+            );
+            let queries = [
+                "rate(cpu_cycles[2s])",
+                "frequency",
+                "histogram_mean(latency)",
+                "histogram_count(latency)",
+                "sum(rate(cpu_cycles[2s])) + sum(frequency)",
+            ];
+            assert_same_answers(&open(&rez), &open(&dendro), &queries);
+
+            let from_bytes = |p: &std::path::Path| {
+                let mut r = RezReader::open_recordings_from_bytes(
+                    std::fs::read(p).unwrap(),
+                    BufferPool::new(64 * 1024 * 1024),
+                )
+                .unwrap();
+                assert_eq!(r.len(), 1);
+                r.pop().unwrap()
+            };
+            let (la, a) = from_bytes(&rez);
+            let (lb, b) = from_bytes(&dendro);
+            assert_eq!(la, lb, "recording labels");
+            assert_same_answers(&a, &b, &queries);
+        }
+
         #[test]
         fn a_native_v3_group_table_answers_rate_with_uncertainty_bands() {
             let rows = group_fixture_rows(6);
@@ -3762,16 +3902,16 @@ mod tests {
         /// disturbed by an unreferenced histogram sibling), and the
         /// histogram itself resolves correctly — real value, real band —
         /// through the very same reader.
-        #[test]
-        fn cross_group_query_spans_counter_gauge_and_histogram() {
+        /// Six ticks of one sampler split into three group tables: a counter
+        /// (`cpu_usage/percpu`), a gauge (`cpu_usage/freq`) and a histogram
+        /// (`cpu_usage/sched`), sealed every two rows and finalized.
+        fn write_mixed_kinds(path: &std::path::Path) {
             let percpu_schema = std::sync::Arc::new(group_schema(&["cpu_cycles"], "cpu_usage"));
             let freq_schema = std::sync::Arc::new(gauge_group_schema(&["frequency"], "cpu_usage"));
             let sched_schema =
                 std::sync::Arc::new(histogram_group_schema(&["latency"], "cpu_usage"));
             let n = 6u64;
-            let dir = tempfile::tempdir().unwrap();
-            let path = dir.path().join("mixed_kinds.rez");
-            let (_archive, mut rec) = recorder(&path, 2); // force multiple segments per table
+            let (_archive, mut rec) = recorder(path, 2); // force multiple segments per table
             for i in 0..n {
                 let ts = 1_000_000_000 * (i + 1);
                 let w = Some(Window::new(ts - 50_000_000, ts));
@@ -3818,6 +3958,13 @@ mod tests {
             _archive
                 .finalize_single_rec(rec, (1_000_000_000 * n, 0))
                 .unwrap();
+        }
+
+        #[test]
+        fn cross_group_query_spans_counter_gauge_and_histogram() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("mixed_kinds.rez");
+            write_mixed_kinds(&path);
 
             let counts = sealed_counts(&path);
             assert!(
@@ -4918,6 +5065,36 @@ mod tests {
                 vec![&want("nginx", "1"), &want("valkey", "0")],
                 "redis's rows are gone with the head; the rest are still named: {got:?}"
             );
+        }
+
+        /// Converted to dendro, an archive whose occupants come from the
+        /// identity index reads as the `.rez` did: with labels in the
+        /// columns and the index, with the index alone, and with the index
+        /// cut back to its restatement, where replay has to start at the
+        /// `Full` found by `last_caller_row_at_or_before`.
+        #[test]
+        fn a_dendro_conversion_attributes_occupants_as_the_rez_did() {
+            let queries = ["rate(fake_ops[2s])", "sum by (comm) (rate(fake_ops[2s]))"];
+            for (case, labelled, retained) in [
+                ("dual", true, false),
+                ("index only", false, false),
+                ("retained tail", false, true),
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let rez = dir.path().join("in.rez");
+                let dendro = dir.path().join("out.dendro");
+                write(&rez, labelled, true);
+                if retained {
+                    let mut db = RezDb::open(&rez).unwrap();
+                    db.evict_before(1, ts(RESTATED)).unwrap();
+                    db.evict_caller_rows_before(1, STREAM, ts(RESTATED))
+                        .unwrap();
+                }
+                crate::to_dendro::convert_v3_to_dendro(&rez, &dendro).unwrap();
+                let (a, b) = (open(&rez), open(&dendro));
+                assert_eq!(series(&a), series(&b), "{case}");
+                assert_same_answers(&a, &b, &queries);
+            }
         }
 
         /// The browser opens an archive from bytes and reads it through the
