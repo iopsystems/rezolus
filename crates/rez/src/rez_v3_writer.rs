@@ -31,7 +31,7 @@ use super::rez_sqlite::{IndexEntries, RecordingMeta, RezDb, SegmentMeta, TickBat
 use super::seal_policy::{SealPolicy, SegmentAccount};
 use super::wal::{
     decode_wal_group_row, encode_wal_group_row, encode_wal_row, materialize_wal_tail,
-    wal_group_row, WalCell, WalValue,
+    wal_group_row, WalCell,
 };
 use super::wire::AgentRows;
 
@@ -1275,7 +1275,7 @@ impl StreamRecorderV3 {
                     WalCell {
                         name,
                         metadata,
-                        value: WalValue::of(e),
+                        value: crate::wal::wal_value(e),
                         window: e.window().map(|w| (w.begin_ns, w.end_ns)),
                     }
                 })
@@ -1861,6 +1861,7 @@ mod tests {
     use crate::rez::write_table_parquet;
     use crate::rez::{detect_rez_format, Entry, RezFormat, TableBuilder};
     use crate::rez_sqlite::IndexRow;
+    use crate::wal::WalValue;
     use crate::wal::{decode_wal_group_row, decode_wal_row};
     use crate::window::Window;
 

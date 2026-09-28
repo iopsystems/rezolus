@@ -220,12 +220,8 @@ impl FrameProducer {
     }
 }
 
-/// The `Content-Type` of a replication stream.
-///
-/// Distinct from `wire::STREAM_CONTENT_TYPE`, which names a sequence of
-/// msgpack `StreamFrame`s. This body is dendro's own framing — a preamble and
-/// then length-prefixed frames — and a consumer that decoded one as the other
-/// would read dendro's magic as msgpack.
+/// The `Content-Type` of a replication stream: dendro's own framing, a
+/// preamble and then length-prefixed frames.
 pub(crate) const CONTENT_TYPE: &str = crate::agent::REPLICATION_CONTENT_TYPE;
 
 /// Put `schema` into an encoded `WalGroupRow`, leaving everything else alone.

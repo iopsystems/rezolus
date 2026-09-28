@@ -2,6 +2,16 @@
 
 ### Changed
 
+- The WAL row format (`WalGroupRow`, `WalCell`, `WalValue`) and WAL-tail
+  materialization moved from `crates/rez/src/wal.rs` to metriken-segment
+  0.1.2, and `wal_group_row`/`group_approx_bytes` to metriken-exposition
+  0.21.1, with no change in behaviour; `rez::wal` and `rez::rez` re-export
+  them. `WalValue::of` is now `rez::wal::wal_value`. The unused pre-dendro
+  stream framing in `crates/rez/src/wire.rs` (`StreamFrame`,
+  `encode_frame`, `decode_frame`, `encode_frame_filtered`,
+  `STREAM_CONTENT_TYPE`) is deleted: `/metrics/stream` has sent dendro's
+  replication frames since it shipped.
+
 - The wide segment format, meaning the table model, its parquet encoding
   and decoding, `TableBuilder`/`GroupTableBuilder`, `Window` and the
   `GroupSchema` mirror, moved from `crates/rez` to metriken-segment 0.1.1,
