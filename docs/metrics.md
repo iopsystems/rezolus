@@ -32,6 +32,7 @@ This guide walks you through all the available metrics, organized by category.
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
   - [memory_vmstat](#memory_vmstat)
+  - [memory_writeback](#memory_writeback)
 - [Network](#network)
   - [network_interfaces](#network_interfaces)
   - [network_traffic](#network_traffic)
@@ -604,6 +605,32 @@ systems.
 | `memory_numa_interleave` | The number of interleave policy allocations that succeeded on the intended node | |
 | `memory_numa_local` | The number of allocations that succeeded on the local node | |
 | `memory_numa_other` | The number of allocations that on this node that were allocated by a process on another node | |
+
+### memory_writeback
+
+BPF sampler on the kernel's page-cache writeback tracepoints. Reports the
+sleeps the dirty-page throttle imposes on writers, the flusher work items by
+the reason they ran, and the pages written back. Filesystem-agnostic: these
+are the `mm` layer's tracepoints, and `memory_dirty` / `memory_writeback` in
+`memory_meminfo` are the gauges these rates act on.
+
+The throttle (`balance_dirty_pages`) runs once per ratelimit's worth of pages
+a task dirties, so `writeback_throttle_checks` rises with write throughput;
+`writeback_throttle_events` counts the checks that made the writer sleep, and
+the kernel reports each sleep in whole milliseconds. That tracepoint has had
+two argument lists across kernel versions, and the sampler picks the program
+written for the one BTF reports; a kernel with neither, or without BTF, runs
+without the throttle metrics and reports degraded rather than reading the
+wrong argument.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `writeback_throttle_latency` | Distribution of the time a writer was made to sleep by the dirty-page throttle, in nanoseconds at millisecond resolution; sleeps only | |
+| `writeback_throttle_checks` | Dirty-limit checks (one per ratelimit's worth of pages dirtied) | |
+| `writeback_throttle_events` | Checks that made the writer sleep | |
+| `writeback_throttled_time` | Total writer sleep in the throttle, in nanoseconds | |
+| `writeback_runs` | Flusher work items started, by why: `background` (dirty pages over the background threshold), `periodic` (the `dirty_writeback_centisecs` flusher), `sync`, `vmscan` (memory reclaim), `laptop_timer`, `fs_free_space`, `forker_thread`, `foreign_flush` (cgroup writeback) | `reason={background,vmscan,sync,periodic,laptop_timer,fs_free_space,forker_thread,foreign_flush}` |
+| `writeback_pages_written` | Pages the flushers wrote back, summed over passes | |
 
 ## Network
 

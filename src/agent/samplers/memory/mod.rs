@@ -10,4 +10,8 @@ mod stats {
     mod vmstat {
         include!("./linux/vmstat/stats.rs");
     }
+
+    mod writeback {
+        include!("./linux/writeback/stats.rs");
+    }
 }

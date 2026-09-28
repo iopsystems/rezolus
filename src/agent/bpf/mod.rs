@@ -179,6 +179,82 @@ impl RawBtf {
 
         id >= 0
     }
+
+    /// The number of arguments the tracepoint `name` passes to a `tp_btf` or
+    /// `raw_tp` program, from its `btf_trace_<name>` typedef: the typedef
+    /// names a pointer to a function prototype whose first parameter is the
+    /// tracepoint's `void *` context and whose remaining parameters are the
+    /// `TP_PROTO` arguments, in order. `None` if this BTF has no such
+    /// typedef or it is not shaped that way.
+    fn tracepoint_arg_count(&self, name: &str) -> Option<u32> {
+        let Ok(cname) = std::ffi::CString::new(format!("btf_trace_{name}")) else {
+            return None;
+        };
+
+        // SAFETY: `self.0` is a live BTF object; every id passed to
+        // `btf__type_by_id` came from that object, and the returned pointer is
+        // read before the object is freed.
+        unsafe {
+            let id = libbpf_sys::btf__find_by_name_kind(
+                self.0.as_ptr(),
+                cname.as_ptr(),
+                libbpf_sys::BTF_KIND_TYPEDEF,
+            );
+            if id < 0 {
+                return None;
+            }
+
+            // typedef -> ptr -> func_proto; `type` on the first two is the
+            // referenced type id, and vlen on the last is the parameter count.
+            let mut ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id as u32);
+            for expected in [libbpf_sys::BTF_KIND_TYPEDEF, libbpf_sys::BTF_KIND_PTR] {
+                if ty.is_null() || btf_kind(&*ty) != expected {
+                    return None;
+                }
+                ty = libbpf_sys::btf__type_by_id(self.0.as_ptr(), (*ty).__bindgen_anon_1.type_);
+            }
+            if ty.is_null() || btf_kind(&*ty) != libbpf_sys::BTF_KIND_FUNC_PROTO {
+                return None;
+            }
+
+            let params = (*ty).info & 0xffff;
+            params.checked_sub(1)
+        }
+    }
+}
+
+/// The kind bits of a BTF type's `info` word (bits 24..29), as
+/// `BTF_INFO_KIND` computes them.
+fn btf_kind(ty: &libbpf_sys::btf_type) -> u32 {
+    (ty.info >> 24) & 0x1f
+}
+
+/// The number of arguments tracepoint `name` passes to a `tp_btf`/`raw_tp`
+/// program on the running kernel, from vmlinux or module BTF, or `None` when
+/// no BTF describes it.
+///
+/// A tracepoint's `TP_PROTO` can change between kernel versions, and a
+/// `tp_btf`/`raw_tp` program reads its arguments by position, so a program
+/// written for one arity reads the wrong argument on a kernel with the other
+/// without any error. A sampler that hooks such a tracepoint keeps one program
+/// per known arity and selects on this at init; an unknown arity disables the
+/// hook rather than guessing. `kernel_btf_has_tracepoints` is the existence
+/// check this refines.
+pub fn kernel_btf_tracepoint_arg_count(name: &str) -> Option<u32> {
+    if !kernel_has_btf() {
+        return None;
+    }
+
+    let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
+
+    if let Some(n) = vmlinux.tracepoint_arg_count(name) {
+        return Some(n);
+    }
+
+    module_btf_paths(Path::new("/sys/kernel/btf"))
+        .iter()
+        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
+        .find_map(|btf| btf.tracepoint_arg_count(name))
 }
 
 impl Drop for RawBtf {
@@ -220,6 +296,13 @@ mod btf_tests {
         let vmlinux = RawBtf::parse(vmlinux_path, None).expect("vmlinux BTF parses");
         assert!(vmlinux.has_typedef("btf_trace_sched_switch"));
         assert!(!vmlinux.has_typedef("btf_trace_no_such_tracepoint"));
+        // sched_switch has passed 3 (through 5.13) or 4 arguments (5.14+,
+        // `prev_state` added); any other count means the walk is wrong.
+        let n = vmlinux
+            .tracepoint_arg_count("sched_switch")
+            .expect("sched_switch is a tracepoint");
+        assert!((3..=4).contains(&n), "sched_switch has {n} arguments");
+        assert_eq!(vmlinux.tracepoint_arg_count("no_such_tracepoint"), None);
         for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
             assert!(
                 RawBtf::parse(&path, Some(&vmlinux)).is_some(),

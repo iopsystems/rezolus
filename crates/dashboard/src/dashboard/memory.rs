@@ -59,6 +59,43 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         );
     }
 
+    if has_metric(data, "writeback_runs") {
+        let throttle = usage.subgroup("Writeback Throttle");
+        throttle.describe(
+            "When dirty pages near their limit the kernel makes the writer sleep in \
+             balance_dirty_pages. The sleep lands on the writer's own thread, so this is \
+             where a write path's tail comes from when writeback cannot keep up; zero events \
+             means dirty pages never reached the limit.",
+        );
+        throttle.plot_promql(
+            PlotOpts::counter("Throttle Events", "throttle-events", Unit::Count),
+            "sum(irate(writeback_throttle_events[5m]))".to_string(),
+        );
+        throttle.plot_promql(
+            PlotOpts::histogram_latency("Throttle Sleep", "throttle-latency"),
+            "writeback_throttle_latency".to_string(),
+        );
+        throttle.plot_promql(
+            PlotOpts::counter("Dirty-limit Checks", "throttle-checks", Unit::Count),
+            "sum(irate(writeback_throttle_checks[5m]))".to_string(),
+        );
+
+        let flusher = usage.subgroup("Flusher");
+        flusher.describe(
+            "Writeback work items by why they ran: periodic is the dirty_writeback_centisecs \
+             cadence, background is dirty pages over the background threshold, sync is an \
+             explicit sync, vmscan is memory reclaim. Pages written is what reached storage.",
+        );
+        flusher.plot_promql(
+            PlotOpts::counter("Runs by Reason", "writeback-runs", Unit::Count),
+            "sum by (reason) (irate(writeback_runs[5m]))".to_string(),
+        );
+        flusher.plot_promql(
+            PlotOpts::counter("Pages Written", "writeback-pages", Unit::Count),
+            "sum(irate(writeback_pages_written[5m]))".to_string(),
+        );
+    }
+
     if has_metric(data, "memory_active") {
         let cache = usage.subgroup("Page Cache");
         cache.describe(
@@ -264,5 +301,20 @@ mod tests {
         assert!(j.contains("memory_slab{kind=\"reclaimable\"}"));
         assert!(j.contains("memory_swap_total - memory_swap_free"));
         assert!(j.contains("sum by (state) (memory_hugetlb_pages)"));
+        // No writeback sampler in this recording: its subgroups stay out.
+        assert!(!j.contains("writeback_throttle"));
+    }
+
+    #[test]
+    fn the_writeback_sampler_adds_throttle_and_flusher_subgroups() {
+        let view = generate(
+            &store_with(&["memory_total", "memory_dirty", "writeback_runs"]),
+            vec![],
+        );
+        let j = json(&view);
+        assert!(j.contains("sum(irate(writeback_throttle_events[5m]))"));
+        assert!(j.contains("\"writeback_throttle_latency\""));
+        assert!(j.contains("sum by (reason) (irate(writeback_runs[5m]))"));
+        assert!(j.contains("sum(irate(writeback_pages_written[5m]))"));
     }
 }

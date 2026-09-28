@@ -2,6 +2,18 @@
 
 ### Added
 
+- `memory_writeback` sampler: BPF on the page-cache writeback tracepoints.
+  `writeback_throttle_latency`, `writeback_throttle_checks`,
+  `writeback_throttle_events` and `writeback_throttled_time` from
+  `balance_dirty_pages` (the sleep the dirty-page throttle imposes on
+  writers); `writeback_runs{reason}` from `writeback_start`;
+  `writeback_pages_written`. `balance_dirty_pages` has had two argument
+  lists, so the sampler reads the tracepoint's argument count from BTF
+  (`kernel_btf_tracepoint_arg_count`) and loads the matching program, or
+  disables the hook and reports degraded when neither matches. The viewer's
+  Memory section shows throttle latency, throttle rate, runs by reason and
+  pages written when the recording has them.
+
 - `memory_meminfo` exports 30 more gauges from the `/proc/meminfo` it
   already reads: `memory_dirty` and `memory_writeback`; the LRU lists
   (`memory_active`/`memory_inactive` by `kind`, `memory_unevictable`,
