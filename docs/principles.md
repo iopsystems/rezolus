@@ -795,7 +795,7 @@ can sum downstream via the Rezolus Exporter):
 - `network/traffic`, `network/interfaces`.
 - `tcp/traffic`, `tcp/retransmit`.
 - `blockio/requests`.
-- `syscall/counts`.
+- ~~`syscall/counts`~~ — migrated: `syscall{op}` is per-CPU.
 
 ### Centralize `MAX_CPUS = 1024` (principles 6, 12)
 

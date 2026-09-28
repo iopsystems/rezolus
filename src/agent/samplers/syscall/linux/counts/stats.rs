@@ -1,7 +1,7 @@
 use metriken::*;
 
 use crate::agent::timing::AcquisitionGroup;
-use crate::agent::MAX_CGROUPS;
+use crate::agent::{MAX_CGROUPS, MAX_CPUS};
 use linkme::distributed_slice;
 
 // Registered here (not in mod.rs) because this file is also `include!`d
@@ -11,7 +11,8 @@ use linkme::distributed_slice;
 // Linux-only.
 //
 /// Brackets the `counters` map's refresh (single writer: this sampler's
-/// own BPF refresh path).
+/// own BPF refresh path). The map holds one bank of the 16 op counters per
+/// CPU, read with `cpu_counters`, so each `syscall{op}` is a per-CPU group.
 pub static COUNTERS_ACQ: AcquisitionGroup = AcquisitionGroup::new(
     crate::agent::samplers::bpf_sampler_name("syscall_counts"),
     "syscall_counts_counters",
@@ -55,7 +56,8 @@ pub static BPF_RUN_COUNT: LazyCounter = LazyCounter::new(Counter::default);
 pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
 
 /*
- * system-wide
+ * per-CPU: one `CounterGroup` per op, one entry per CPU. The totals the
+ * dashboards show are `sum(...)` over CPUs (docs/principles.md principle 9).
  */
 
 #[metric(
@@ -63,112 +65,112 @@ pub static BPF_RUN_TIME: LazyCounter = LazyCounter::new(Counter::default);
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "other", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_OTHER: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_OTHER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "read", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_READ: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_READ: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "write", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_WRITE: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_WRITE: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "poll", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_POLL: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_POLL: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "lock", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_LOCK: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_LOCK: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "time", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_TIME: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_TIME: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "sleep", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_SLEEP: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_SLEEP: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "socket", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_SOCKET: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_SOCKET: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "yield", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_YIELD: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_YIELD: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "filesystem", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_FILESYSTEM: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_FILESYSTEM: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "memory", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_MEMORY: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_MEMORY: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "process", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_PROCESS: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_PROCESS: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "query", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_QUERY: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_QUERY: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "ipc", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_IPC: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_IPC: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "timer", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_TIMER: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_TIMER: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 #[metric(
     name = "syscall",
     description = "The number of syscalls",
     metadata = { unit = "syscalls", op = "event", acq_group = "syscall_counts_counters" }
 )]
-pub static SYSCALL_EVENT: LazyCounter = LazyCounter::new(Counter::default);
+pub static SYSCALL_EVENT: CounterGroup = CounterGroup::new(MAX_CPUS);
 
 /*
  * per-cgroup

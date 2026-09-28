@@ -15,6 +15,14 @@
 
 ### Changed
 
+- Agent: `syscall{op}` is now per-CPU, one series per op per CPU with an
+  `id` label, as `cpu_usage` is (docs/principles.md principle 9). The BPF
+  map already kept a bank per CPU; the sampler summed them before export.
+  Dashboards sum over CPUs and are unchanged. A Prometheus scrape of the
+  exporter now gets per-CPU series, so a query that read the host total
+  needs `sum without (id)`. Measured on a 32-CPU host: refresh p50 43 µs and
+  p90 96 µs, against 45 µs and 85 µs before.
+
 - Hindsight logs the address its HTTP endpoint actually bound, not the
   configured one, so `listen = "127.0.0.1:0"` reports the port it got.
 
