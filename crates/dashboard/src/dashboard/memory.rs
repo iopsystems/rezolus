@@ -57,6 +57,12 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Writeback", "writeback", Unit::Bytes),
             "memory_writeback".to_string(),
         );
+        if has_metric(data, "memory_dirty_threshold") {
+            writeback.plot_promql(
+                PlotOpts::gauge("Dirty Limits", "dirty-thresholds", Unit::Bytes),
+                "sum by (kind) (memory_dirty_threshold)".to_string(),
+            );
+        }
     }
 
     if has_metric(data, "writeback_runs") {
@@ -202,6 +208,63 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("Commit Limit", "commit-limit", Unit::Bytes),
             "memory_commit_limit".to_string(),
         );
+        if has_metric(data, "memory_swap_in") {
+            swap.plot_promql(
+                PlotOpts::counter("Swap In", "swap-in", Unit::Count),
+                "sum(irate(memory_swap_in[5m]))".to_string(),
+            );
+            swap.plot_promql(
+                PlotOpts::counter("Swap Out", "swap-out", Unit::Count),
+                "sum(irate(memory_swap_out[5m]))".to_string(),
+            );
+        }
+    }
+
+    if has_metric(data, "memory_reclaim_scanned") {
+        let reclaim = usage.subgroup("Reclaim");
+        reclaim.describe(
+            "kswapd reclaims in the background; direct reclaim and allocation stalls run on the \
+             allocating thread and are a latency source on the request path. Major faults are \
+             synchronous reads from storage.",
+        );
+        reclaim.plot_promql(
+            PlotOpts::counter("Scanned", "reclaim-scanned", Unit::Count),
+            "sum by (kind) (irate(memory_reclaim_scanned[5m]))".to_string(),
+        );
+        reclaim.plot_promql(
+            PlotOpts::counter("Reclaimed", "reclaim-reclaimed", Unit::Count),
+            "sum by (kind) (irate(memory_reclaim_reclaimed[5m]))".to_string(),
+        );
+        reclaim.plot_promql(
+            PlotOpts::counter("Allocation Stalls", "allocation-stalls", Unit::Count),
+            "sum(irate(memory_allocation_stalls[5m]))".to_string(),
+        );
+        reclaim.plot_promql(
+            PlotOpts::counter("Major Faults", "major-faults", Unit::Count),
+            "sum(irate(memory_major_page_faults[5m]))".to_string(),
+        );
+        reclaim.plot_promql(
+            PlotOpts::counter("OOM Kills", "oom-kills", Unit::Count),
+            "sum(irate(memory_oom_kills[5m]))".to_string(),
+        );
+    }
+
+    if has_metric(data, "memory_workingset_refaults") {
+        let workingset = usage.subgroup("Working Set");
+        workingset.describe(
+            "A refault is a page that was evicted and then needed again soon enough that the \
+             kernel still remembered it: the direct sign of a page cache or anonymous working \
+             set that does not fit in memory. Activations are refaults the kernel promoted \
+             straight to the active list.",
+        );
+        workingset.plot_promql(
+            PlotOpts::counter("Refaults", "workingset-refaults", Unit::Count),
+            "sum by (kind) (irate(memory_workingset_refaults[5m]))".to_string(),
+        );
+        workingset.plot_promql(
+            PlotOpts::counter("Activations", "workingset-activations", Unit::Count),
+            "sum by (kind) (irate(memory_workingset_activations[5m]))".to_string(),
+        );
     }
 
     if has_metric(data, "memory_hugepages_anon") || has_metric(data, "memory_hugetlb") {
@@ -230,6 +293,20 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
             PlotOpts::gauge("hugetlb Pages", "hugetlb-pages", Unit::Count),
             "sum by (state) (memory_hugetlb_pages)".to_string(),
         );
+        if has_metric(data, "memory_thp_faults") {
+            huge.plot_promql(
+                PlotOpts::counter("THP Faults", "thp-faults", Unit::Count),
+                "sum by (outcome) (irate(memory_thp_faults[5m]))".to_string(),
+            );
+            huge.plot_promql(
+                PlotOpts::counter("THP Splits", "thp-splits", Unit::Count),
+                "sum(irate(memory_thp_splits[5m]))".to_string(),
+            );
+            huge.plot_promql(
+                PlotOpts::counter("Compaction Stalls", "compaction-stalls", Unit::Count),
+                "sum(irate(memory_compaction_stalls[5m]))".to_string(),
+            );
+        }
     }
 
     view.group(usage);
@@ -315,6 +392,35 @@ mod tests {
         assert!(j.contains("sum by (state) (memory_hugetlb_pages)"));
         // No writeback sampler in this recording: its subgroups stay out.
         assert!(!j.contains("writeback_throttle"));
+    }
+
+    #[test]
+    fn the_vmstat_pressure_counters_add_reclaim_and_working_set_subgroups() {
+        let view = generate(
+            &store_with(&[
+                "memory_total",
+                "memory_dirty",
+                "memory_dirty_threshold",
+                "memory_swap_total",
+                "memory_swap_in",
+                "memory_hugetlb",
+                "memory_thp_faults",
+                "memory_reclaim_scanned",
+                "memory_workingset_refaults",
+            ]),
+            vec![],
+        );
+        let j = json(&view);
+        assert!(j.contains("sum by (kind) (memory_dirty_threshold)"));
+        assert!(j.contains("sum(irate(memory_swap_in[5m]))"));
+        assert!(j.contains("sum by (kind) (irate(memory_reclaim_scanned[5m]))"));
+        assert!(j.contains("sum(irate(memory_allocation_stalls[5m]))"));
+        assert!(j.contains("sum by (kind) (irate(memory_workingset_refaults[5m]))"));
+        assert!(j.contains("sum by (outcome) (irate(memory_thp_faults[5m]))"));
+        // Without them, none of these plots appear.
+        let without = generate(&store_with(&["memory_total", "memory_dirty"]), vec![]);
+        assert!(!json(&without).contains("memory_reclaim"));
+        assert!(!json(&without).contains("memory_dirty_threshold"));
     }
 
     #[test]

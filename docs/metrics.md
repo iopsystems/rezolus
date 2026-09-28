@@ -607,6 +607,31 @@ systems.
 | `memory_numa_other` | The number of allocations that on this node that were allocated by a process on another node | |
 | `memory_pages_dirtied` | Page-cache pages dirtied by writes (`nr_dirtied`); a page dirtied again before writeback counts once | |
 | `memory_pages_written` | Page-cache pages written back by any path (`nr_written`): flushers, reclaim and integrity syncs alike. The complete count; `writeback_pages_written` below is only what the flusher's own accounting saw | |
+| `memory_dirty_threshold` | The dirty-page limits the writeback throttle compares `Dirty` against, in bytes: `hard` throttles writers, `background` starts the flusher (`nr_dirty_threshold`, `nr_dirty_background_threshold`) | `kind={hard,background}` |
+| `memory_reclaim_scanned` | Pages scanned by kswapd or by direct reclaim on the allocating thread (`pgscan_kswapd`, `pgscan_direct`) | `kind={kswapd,direct}` |
+| `memory_reclaim_reclaimed` | Pages reclaimed by kswapd or by direct reclaim (`pgsteal_kswapd`, `pgsteal_direct`) | `kind={kswapd,direct}` |
+| `memory_allocation_stalls` | Allocations that stalled to run direct reclaim, summed over zones (`allocstall_*`) | |
+| `memory_page_faults` | Page faults of every kind (`pgfault`) | |
+| `memory_major_page_faults` | Page faults that read the page from storage (`pgmajfault`); a synchronous I/O each | |
+| `memory_swap_in` | Pages read back from swap (`pswpin`) | |
+| `memory_swap_out` | Pages written to swap (`pswpout`) | |
+| `memory_workingset_refaults` | Pages evicted and then needed again while their shadow entry survived (`workingset_refault_file`, `_anon`): a working set that does not fit. Kernel 5.9+ | `kind={file,anon}` |
+| `memory_workingset_activations` | Refaulted pages placed straight on the active list (`workingset_activate_file`, `_anon`). Kernel 5.9+ | `kind={file,anon}` |
+| `memory_workingset_restores` | Refaulted pages restored to the active list they were evicted from (`workingset_restore_file`, `_anon`). Kernel 5.9+ | `kind={file,anon}` |
+| `memory_oom_kills` | Processes killed by the OOM killer (`oom_kill`) | |
+| `memory_thp_faults` | Faults served with a transparent huge page, or that fell back to small pages because none could be allocated (`thp_fault_alloc`, `thp_fault_fallback`) | `outcome={allocated,fallback}` |
+| `memory_thp_collapses` | Ranges khugepaged collapsed into a huge page (`thp_collapse_alloc`) | |
+| `memory_thp_splits` | Huge pages split back into small pages (`thp_split_page`) | |
+| `memory_compaction_stalls` | Allocations that stalled to compact memory on the allocating thread (`compact_stall`) | |
+| `memory_compactions` | Direct compaction runs by outcome (`compact_success`, `compact_fail`) | `outcome={success,fail}` |
+| `memory_numa_balancing_pte_updates` | Page-table entries the NUMA balancer marked to sample locality (`numa_pte_updates`) | |
+| `memory_numa_balancing_hint_faults` | NUMA hinting faults on those entries (`numa_hint_faults`) | |
+| `memory_numa_balancing_pages_migrated` | Pages the NUMA balancer moved to the accessing node (`numa_pages_migrated`) | |
+
+Counters are in pages or events; the two thresholds are gauges in bytes. A
+line the running kernel does not print (NUMA counters without NUMA, THP
+counters without `CONFIG_TRANSPARENT_HUGEPAGE`, the working-set split before
+5.9) leaves its metric absent rather than 0.
 
 ### memory_writeback
 

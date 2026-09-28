@@ -19,6 +19,19 @@
   including pages written by integrity syncs, which the flusher's
   `writeback_pages_written` tracepoint does not account for.
 
+- `memory_vmstat` exports the rest of what `/proc/vmstat` says about memory
+  pressure, from the file it already reads: the dirty limits the writeback
+  throttle uses (`memory_dirty_threshold{kind}`, gauges in bytes); reclaim
+  scanned and reclaimed by kswapd versus direct (`memory_reclaim_scanned`,
+  `memory_reclaim_reclaimed`), `memory_allocation_stalls` summed over
+  zones; `memory_page_faults` and `memory_major_page_faults`; swap in and
+  out; working-set refaults, activations and restores by file/anon (5.9+);
+  `memory_oom_kills`; THP faults by outcome, collapses and splits;
+  compaction stalls and outcomes; and the NUMA balancer's PTE updates, hint
+  faults and migrations. Absent lines leave their metric absent. The viewer's
+  Memory section gains Reclaim, Working Set and dirty-limit plots, gated on
+  the recording.
+
 - `memory_meminfo` exports 30 more gauges from the `/proc/meminfo` it
   already reads: `memory_dirty` and `memory_writeback`; the LRU lists
   (`memory_active`/`memory_inactive` by `kind`, `memory_unevictable`,
