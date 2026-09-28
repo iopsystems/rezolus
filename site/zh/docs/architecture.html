@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-Hans"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>架构 - Rezolus 文档</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/zh/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">文档</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/architecture.html">English</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="打开菜单"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="architecture.html">架构</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/architecture.html">English</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.19.0</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">入门</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">核心概念</h4>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="architecture.html">架构</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">采样器</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">类型</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">参考</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI 与配置</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-4">架构</h1>
+<p class="text-xl text-slate-500 dark:text-slate-400 mb-12">Rezolus 的结构，以及各部分如何组合在一起。</p>
+
+<!-- What you can do with Rezolus. The SVG is a symlink to docs/architecture.svg,
+     the same diagram the README uses; regenerate both with
+     `dot -Tsvg docs/architecture.dot -o docs/architecture.svg`. The light panel
+     is deliberate: the graph is drawn with pastel fills on white, so in dark
+     mode it reads as a lit plate rather than as a diagram that forgot to
+     invert. -->
+<figure class="mb-12 lg:-mx-16">
+<div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white p-4 overflow-x-auto">
+<img src="architecture.svg" width="839" height="598"
+     class="w-full h-auto min-w-[560px]"
+     alt="Rezolus 能做什么：rezolus agent 从你的系统（CPU、GPU、内核、容器、服务）采集数据。之后可以用 rezolus exporter 暴露 Prometheus 度量，用 rezolus view 查看实时仪表盘，或用 rezolus record、rezolus hindsight 捕获记录。记录是 .parquet 文件或 .rez 归档，可在 Viewer 中浏览，通过 rezolus mcp 交给 AI 助手分析，或用 rezolus recording 管理。" />
+</div>
+<figcaption class="text-base text-slate-500 dark:text-slate-400 mt-3 leading-relaxed">实线框都是同一个 <code class="text-sm px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800">rezolus</code> 二进制——只需为手头的任务选择相应的子命令。虚线框是它所指向的对象：被测量的系统与服务，它们并不属于 Rezolus。</figcaption>
+</figure>
+
+<!-- Operating Modes -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">运行模式</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-8 leading-relaxed">Rezolus 是一个二进制，包含六个子命令。每种模式负责可观测性工作流中的不同阶段。</p>
+
+<div class="space-y-6">
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-blue-600" data-icon="monitoring">monitoring</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Agent</h3>
+<code class="text-sm text-slate-400">sudo rezolus &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">核心采集引擎。把 eBPF 程序挂载到内核 tracepoint 与 kprobe 上，采集 CPU、调度器、块 I/O、网络、内存、TCP 与系统调用的度量，并通过 4241 端口以 JSON 和 msgpack 格式对外提供数据。</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-green-600" data-icon="upload">upload</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Exporter</h3>
+<code class="text-sm text-slate-400">rezolus exporter &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">从 agent 的 msgpack 端点拉取度量，并在 4242 端口以 Prometheus 格式提供。可把直方图转换为可配置的 summary 分位数，专为 Prometheus 抓取而设计。</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-purple-100 dark:bg-purple-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-purple-600" data-icon="fiber_smart_record">fiber_smart_record</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Recorder</h3>
+<code class="text-sm text-slate-400">rezolus record [-o out.rez]</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">按需把度量采集到 <code>.rez</code> 归档文件（或 Parquet）。连接到运行中的 agent，按可配置的间隔与时长写入高保真快照。非常适合基准测试与性能工程。</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-amber-600" data-icon="history">history</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Hindsight</h3>
+<code class="text-sm text-slate-400">rezolus hindsight &lt;config.toml&gt;</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">在磁盘上维护高分辨率度量的滚动环形缓冲区。可通过 SIGHUP 或 HTTP API 触发快照，并支持按时间范围查询，提取故障前后的时间窗口。</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-rose-100 dark:bg-rose-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-rose-600" data-icon="dashboard">dashboard</span>
+</div>
+<div>
+<h3 class="text-base font-bold">Viewer</h3>
+<code class="text-sm text-slate-400">rezolus view &lt;input&gt; [listen]</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">基于 Web 的交互式仪表盘，可浏览 Parquet 记录，也可从运行中的 agent 实时读取。内置 TSDB 并支持 PromQL 查询，为每个度量类别预置了仪表盘。</p>
+</div>
+
+<div class="p-6 rounded-xl border border-slate-200 dark:border-slate-800">
+<div class="flex items-center gap-3 mb-3">
+<div class="w-10 h-10 rounded-lg bg-cyan-100 dark:bg-cyan-900/40 flex items-center justify-center">
+<span class="material-symbols-outlined text-cyan-600" data-icon="smart_toy">smart_toy</span>
+</div>
+<div>
+<h3 class="text-base font-bold">MCP Server</h3>
+<code class="text-sm text-slate-400">rezolus mcp [subcommand]</code>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed">AI 引导的分析服务器。提供用 PromQL 查询记录、检测异常、分析度量之间的相关性，以及描述记录元数据的工具。</p>
+</div>
+
+</div>
+</section>
+
+<!-- eBPF -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">eBPF 集成</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed mb-4">Rezolus 使用 <strong class="text-slate-700 dark:text-slate-300">libbpf-rs</strong> 管理 eBPF 程序。BPF 程序用 C 编写（<code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">.bpf.c</code> 文件），与对应的 Rust 模块放在一起，并在构建时通过 <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">build.rs</code>.</p>
+<p class="text-base text-slate-500 dark:text-slate-400 leading-relaxed mb-4">运行时，agent 把这些程序挂载到内核 tracepoint 与 kprobe 上，以接近于零的开销获得内核级可见性——被插桩的度量无需轮询 <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">/proc</code> 或 <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">/sys</code> 。</p>
+<div class="p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+<p class="text-base text-amber-800 dark:text-amber-300"><strong>要求：</strong> Linux 内核 5.8 及以上，并需要 root 权限。macOS 构建不含 eBPF 采样器。</p>
+</div>
+</section>
+
+<!-- Key Technical Details -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-6">关键技术细节</h2>
+<ul class="space-y-3 text-sm text-slate-600 dark:text-slate-400">
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">异步运行时：</strong> Tokio，线程数极少</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">HTTP 框架：</strong> Axum</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">度量库：</strong> metriken crate</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">采样器注册：</strong> <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">linkme</code> 以 distributed slice 做静态注册</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">数据格式：</strong> Parquet via metriken-exposition</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">硬件拓扑：</strong> systeminfo crate</li>
+<li class="flex gap-3"><span class="text-blue-500 font-bold">&#8226;</span> <strong class="text-slate-700 dark:text-slate-300">架构：</strong> x86_64 与 ARM64</li>
+</ul>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
+<a href="installation.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">← 安装</a>
+<a href="telemetry.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">度量 →</a>
+</div>
+
+</main>
+</div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
+</body></html>

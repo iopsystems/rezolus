@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-Hans"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>CLI 与配置 - Rezolus 文档</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/zh/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">文档</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/cli.html">English</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="打开菜单"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/zh/">首页</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="cli.html">CLI 与配置</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/docs/cli.html">English</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.19.0</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">入门</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">安装</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">使用</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">核心概念</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">架构</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">度量</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">采样器</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">类型</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">参考</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API 参考</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="cli.html">CLI 与配置</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-4">CLI 与配置</h1>
+<p class="text-xl text-slate-500 dark:text-slate-400 mb-12">命令、参数与 TOML 配置参考。</p>
+
+<!-- CLI Commands -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-8">命令</h2>
+
+<div class="space-y-10">
+
+<!-- Agent -->
+<div>
+<h3 class="text-base font-bold mb-3">Agent <span class="text-sm font-normal text-slate-400 ml-1">默认模式</span></h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">sudo rezolus &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">通过 eBPF 采集度量。需要 root 权限。监听 0.0.0.0:4241。</p>
+</div>
+
+<!-- Exporter -->
+<div>
+<h3 class="text-base font-bold mb-3">Exporter</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus exporter &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">从 agent 拉取数据，并在 :4242 暴露 Prometheus 度量。</p>
+</div>
+
+<!-- Recorder -->
+<div>
+<h3 class="text-base font-bold mb-3">Recorder</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record [OPTIONS] [-- &lt;COMMAND&gt;...]</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">不带任何参数时，它会记录本机 agent（<code>http://localhost:4241</code>）到 <code>rezolus.rez</code> ，直到 ctrl-c。输出文件的扩展名决定格式，因此 <code>--format</code> 通常不需要。</p>
+<div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">    --url</span> &lt;URL&gt;               <span class="text-slate-600">要记录的端点 [默认：http://localhost:4241]</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;           <span class="text-slate-600">输出路径；.rez | .parquet | .raw 决定格式 [默认：rezolus.rez]</span></div>
+<div><span class="text-slate-400">-i, --interval</span> &lt;INTERVAL&gt;     <span class="text-slate-600">采集间隔 [默认：1s]</span></div>
+<div><span class="text-slate-400">-d, --duration</span> &lt;DURATION&gt;     <span class="text-slate-600">记录固定时长后停止</span></div>
+<div><span class="text-slate-400">-f, --format</span> &lt;FORMAT&gt;         <span class="text-slate-600">rez|parquet|raw —— 仅当路径无法表明格式时才需要</span></div>
+<div><span class="text-slate-400">-l, --label</span> &lt;KEY=VALUE&gt;       <span class="text-slate-600">为 .rez 记录打标签（可重复）；source/host 自动填充</span></div>
+<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;    <span class="text-slate-600">文件级元数据，适用于所有格式（可重复）</span></div>
+<div><span class="text-slate-400">    --config</span> &lt;FILE&gt;           <span class="text-slate-600">多端点记录的 TOML 配置</span></div>
+<div><span class="text-slate-400">    --endpoint</span> &lt;URL&gt;          <span class="text-slate-600">带选项的端点（可重复），url[,source=][,role=][,protocol=]</span></div>
+<div><span class="text-slate-400">    --separate</span>                <span class="text-slate-600">为每个端点分别写文件，而不是合并成一个</span></div>
+<div><span class="text-slate-400">-v, --verbose</span>                 <span class="text-slate-600">提高日志详细程度（可叠加）</span></div>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-600 text-sm"># 记录本机 agent 直到 ctrl-c → rezolus.rez</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record</code></div>
+<div class="text-slate-600 text-sm mt-3"># 以 100ms 间隔记录 30 秒</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o run.rez -i 100ms -d 30s</code></div>
+<div class="text-slate-600 text-sm mt-3"># 仅在基准测试运行期间记录（类似 perf record）</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record -o bench.rez -- ./bench.sh --iters 100</code></div>
+<div class="text-slate-600 text-sm mt-3"># Prometheus 数据源需要用 parquet</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus record --url http://host:9090/metrics -o svc.parquet -d 5m</code></div>
+</div>
+</div>
+</div>
+
+<!-- Hindsight -->
+<div>
+<h3 class="text-base font-bold mb-3">Hindsight</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus hindsight &lt;CONFIG&gt;</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">滚动环形缓冲区。发送 SIGHUP 触发快照。</p>
+</div>
+
+<!-- Status -->
+<div>
+<h3 class="text-base font-bold mb-3">状态</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status [OPTIONS] [ENDPOINT]</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">询问运行中的 agent 的状况：版本、运行时长，以及按采样器汇总的健康情况。不带参数时询问本机的 agent。</p>
+<div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">ENDPOINT</span>                       <span class="text-slate-600">要询问的 agent [默认：http://localhost:4241]；直接写 host 或 host:port 也可以</span></div>
+<div><span class="text-slate-400">    --json</span>                    <span class="text-slate-600">输出原始的 /status JSON</span></div>
+</div>
+<p class="text-sm text-slate-400 mt-3"><span class="font-semibold">退出码：</span> 一切正常时为 0；只要有采样器处于 degraded、failed 或 pmu-limited 状态即为 1——因此可以直接用作健康检查或就绪探针。</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># 本机的 agent 健康吗？</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status</code></div>
+<div class="text-slate-600 text-sm mt-3"># 另一台主机，用简写形式</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status web-01</code></div>
+<div class="text-slate-600 text-sm mt-3"># 在脚本中用它作为判断条件</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus status || echo "agent is unhealthy"</code></div>
+</div>
+</div>
+</div>
+
+<!-- Viewer -->
+<div>
+<h3 class="text-base font-bold mb-3">Viewer</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view [OPTIONS] [INPUT] [EXPERIMENT]</code></div>
+</div>
+</div>
+<div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">INPUT</span>                          <span class="text-slate-600">第一份采集：parquet、.rez 归档、agent URL，或 alias=parquet</span></div>
+<div><span class="text-slate-400">EXPERIMENT</span>                     <span class="text-slate-600">可选的第二份采集，用于 A/B 对比</span></div>
+<div><span class="text-slate-400">-l, --listen</span> &lt;ADDR&gt;           <span class="text-slate-600">Viewer 监听地址（例如 127.0.0.1:8080）</span></div>
+<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;         <span class="text-slate-600">service-extension 模板 JSON 所在目录</span></div>
+<div><span class="text-slate-400">    --category</span> &lt;NAME&gt;         <span class="text-slate-600">启用类别模式（例如 inference-library）</span></div>
+<div><span class="text-slate-400">    --proxy-allow</span> &lt;PATTERN&gt;  <span class="text-slate-600">为 URL 代理放行的主机模式（可重复）</span></div>
+<div><span class="text-slate-400">    --proxy-allow-any</span>         <span class="text-slate-600">完全关闭代理白名单（信任所有来源）</span></div>
+<div><span class="text-slate-400">    --tui</span>                     <span class="text-slate-600">使用终端界面而非浏览器（需要文件或 agent URL）</span></div>
+<div><span class="text-slate-400">    --cache-size-mb</span> &lt;MB&gt;     <span class="text-slate-600">row group 缓冲缓存大小 [默认：500]</span></div>
+<div><span class="text-slate-400">-v, --verbose</span>                  <span class="text-slate-600">提高日志详细程度</span></div>
+</div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-base">
+<div class="text-slate-600 text-sm mb-2"># 查看一份记录</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view output.parquet</code></div>
+<div class="text-slate-600 text-sm mt-3 mb-2"># 查看 .rez 归档（含两份记录的 .rez 会渲染为 A/B）</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view out.rez</code></div>
+<div class="text-slate-600 text-sm mt-3 mb-2"># 查看实时 agent</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view http://localhost:4241</code></div>
+<div class="text-slate-600 text-sm mt-3 mb-2"># 在终端中浏览，无需浏览器</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus view --tui out.rez</code></div>
+</div>
+</div>
+</div>
+
+<!-- MCP -->
+<div>
+<h3 class="text-base font-bold mb-3">MCP Server</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp [SUBCOMMAND]</code></div>
+</div>
+</div>
+<div class="mt-3 space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">analyze-correlation</span> &lt;FILE&gt; &lt;Q1&gt; &lt;Q2&gt;</div>
+<div><span class="text-slate-400">describe-recording</span> &lt;FILE&gt;</div>
+<div><span class="text-slate-400">describe-metrics</span> &lt;FILE&gt;</div>
+<div><span class="text-slate-400">detect-anomalies</span> &lt;FILE&gt; [QUERY]</div>
+<div><span class="text-slate-400">query</span> &lt;FILE&gt; &lt;QUERY&gt;</div>
+<div><span class="text-slate-400">extract-features</span> &lt;FILE&gt;</div>
+</div>
+<p class="text-sm text-slate-400 mt-3">每个 &lt;FILE&gt; 都可以是 <code>.parquet</code> or a <code>.rez</code>；格式由内容自动判断。不带子命令时， <code>rezolus mcp</code> 会作为 stdio MCP 服务器运行，供 LLM 客户端连接。</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># 对一份记录执行一次性 PromQL 查询</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'</code></div>
+<div class="text-slate-600 text-sm mt-3"># 扫描所有度量以发现异常</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp detect-anomalies out.rez</code></div>
+</div>
+</div>
+</div>
+
+<!-- Parquet Tools -->
+<div>
+<h3 class="text-base font-bold mb-3">记录工具</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base">
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording &lt;SUBCOMMAND&gt; [OPTIONS]</code></div>
+</div>
+</div>
+<p class="text-sm text-slate-400 mt-2">对记录的离线操作—— <code>.parquet</code> 文件与 <code>.rez</code> 归档都支持。查看元数据、裁掉不需要的部分、嵌入服务 KPI 定义、合并多来源采集，或转换旧格式。 <code>rezolus parquet &hellip;</code> 仍可作为别名使用。</p>
+
+<div class="mt-6 space-y-6">
+
+<!-- metadata -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>metadata</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">显示一份记录的文件级与列级元数据。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">-i, --input</span> &lt;FILE&gt;          <span class="text-slate-600">要查看的记录（.parquet，或 .rez 的 manifest）</span></div>
+<div><span class="text-slate-400">    --schema</span>               <span class="text-slate-600">仅显示列级元数据</span></div>
+<div><span class="text-slate-400">    --file</span>                 <span class="text-slate-600">仅显示文件级元数据</span></div>
+<div><span class="text-slate-400">    --geometry</span>             <span class="text-slate-600">仅显示表结构与 row group 布局</span></div>
+<div><span class="text-slate-400">    --field</span> &lt;KEY&gt;          <span class="text-slate-600">打印某个文件级元数据键</span></div>
+<div><span class="text-slate-400">    --json</span>                 <span class="text-slate-600">输出 JSON（便于脚本处理）</span></div>
+</div>
+</div>
+
+<!-- annotate -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>annotate</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">把 service-extension 的 KPI 查询（及相关元数据）嵌入记录，使 Viewer 能把它们渲染成图表。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">要注解的 parquet（除非指定 &dash;&dash;output，否则就地覆盖）</span></div>
+<div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">自定义 service-extension JSON（覆盖模板）</span></div>
+<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">用于解析 KPI 的模板目录</span></div>
+<div><span class="text-slate-400">    --source</span> &lt;NAME&gt;         <span class="text-slate-600">用于匹配模板的 source 标签 <code>members</code></span></div>
+<div><span class="text-slate-400">    --node</span> &lt;NAME&gt;           <span class="text-slate-600">节点名，读取方为 <code>combine</code> 用于多节点合并</span></div>
+<div><span class="text-slate-400">    --filter</span>                <span class="text-slate-600">仅保留 KPI 引用到的列</span></div>
+<div><span class="text-slate-400">    --systeminfo</span> &lt;JSON&gt;     <span class="text-slate-600">嵌入或覆盖记录中的 systeminfo</span></div>
+<div><span class="text-slate-400">    --add-events</span> &lt;JSON&gt;     <span class="text-slate-600">向文件追加事件</span></div>
+<div><span class="text-slate-400">    --event</span> &lt;SPEC&gt;          <span class="text-slate-600">单条事件定义（可重复）</span></div>
+<div><span class="text-slate-400">    --clear-events</span>          <span class="text-slate-600">删除所有已有事件</span></div>
+<div><span class="text-slate-400">    --overwrite</span>             <span class="text-slate-600">允许覆盖已有注解</span></div>
+<div><span class="text-slate-400">    --undo</span>                  <span class="text-slate-600">移除此前添加的注解</span></div>
+</div>
+</div>
+
+<!-- combine -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>combine</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">把多个 parquet 文件合并成一个——多节点 rezolus、多实例服务，或对比模式的 A/B 包。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILES...</span>                      <span class="text-slate-600">要合并的输入（parquet，或单记录 .rez）</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">输出 parquet 路径</span></div>
+<div><span class="text-slate-400">    --pinned</span> &lt;NAME&gt;         <span class="text-slate-600">默认显示的 rezolus 节点</span></div>
+<div><span class="text-slate-400">    --ab</span> &lt;B=SRC&gt; &lt;E=SRC&gt;   <span class="text-slate-600">打包为 A/B 对比 tarball——一个参数，两个值： <code>--ab baseline=…&nbsp;experiment=…</code></span></div>
+<div><span class="text-slate-400">    --category</span> &lt;NAME&gt;       <span class="text-slate-600">为该包标注类别模板</span></div>
+<div><span class="text-slate-400">    --bypass-time-check</span>     <span class="text-slate-600">跳过时间戳对齐校验</span></div>
+</div>
+</div>
+
+<!-- filter -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>filter</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">把记录缩减到真正需要的部分——parquet 中被 service-extension KPI 引用的列，或 <code>.rez</code>中的整个采样器。在分享聚焦报告之前很有用。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">要过滤的记录（.parquet，或配合 --samplers 的 .rez）</span></div>
+<div><span class="text-slate-400">    --samplers</span> &lt;A,B,...&gt;    <span class="text-slate-600">用于 .rez：要保留的采样器（.rez 必填，parquet 忽略）</span></div>
+<div><span class="text-slate-400">    --queries</span> &lt;JSON&gt;        <span class="text-slate-600">自定义 KPI JSON（覆盖已嵌入的或模板中的）</span></div>
+<div><span class="text-slate-400">    --templates</span> &lt;DIR&gt;       <span class="text-slate-600">用于解析 KPI 的模板目录</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;FILE&gt;         <span class="text-slate-600">输出路径（默认就地覆盖）</span></div>
+</div>
+</div>
+
+<!-- convert -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>convert</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">把原始 msgpack 记录（来自 <code>record -o out.raw</code>）转换为 parquet。输入可以是未压缩或 zstd 压缩，由内容自动判断。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">要转换的原始记录</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;PATH&gt;         <span class="text-slate-600">输出 parquet 路径（默认：把输入的扩展名换成 .parquet）</span></div>
+<div><span class="text-slate-400">    --interval</span> &lt;DURATION&gt;   <span class="text-slate-600">覆盖推断出的采样间隔</span></div>
+<div><span class="text-slate-400">    --systeminfo</span> &lt;PATH&gt;     <span class="text-slate-600">补写原始流中不含的 systeminfo</span></div>
+<div><span class="text-slate-400">    --descriptions</span> &lt;PATH&gt;   <span class="text-slate-600">补写度量的帮助文本（只能在这里设置）</span></div>
+<div><span class="text-slate-400">-m, --metadata</span> &lt;KEY=VALUE&gt;  <span class="text-slate-600">为输出打标签（可重复）</span></div>
+<div><span class="text-slate-400">    --force</span>                 <span class="text-slate-600">覆盖已存在的输出</span></div>
+</div>
+</div>
+
+<!-- upgrade -->
+<div>
+<h4 class="text-sm font-bold mb-2"><code>upgrade</code></h4>
+<p class="text-sm text-slate-500 dark:text-slate-400 mb-2">把 v1/v2（tar）的 <code>.rez</code> 重写为当前的 v3（SQLite）容器。分段数据逐字节原样搬运。若输入已经是 v3，会被拒绝而不是复制。</p>
+<div class="space-y-1 text-sm text-slate-500 font-mono">
+<div><span class="text-slate-400">FILE</span>                          <span class="text-slate-600">要升级的 .rez 归档</span></div>
+<div><span class="text-slate-400">-o, --output</span> &lt;REZ&gt;          <span class="text-slate-600">写入此处，而不是就地替换</span></div>
+</div>
+</div>
+
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mt-4">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># 查看</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording metadata -i out.rez</code></div>
+<div class="text-slate-600 text-sm mt-3"># 用模板目录中的 KPI 进行注解</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording annotate recording.parquet --templates ./templates</code></div>
+<div class="text-slate-600 text-sm mt-3"># 把两份采集合并为 A/B 包</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine before.parquet after.parquet \</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    --ab baseline=before experiment=after \</code></div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">&nbsp;</span><code class="text-green-400">    -o compare.parquet.ab.tar</code></div>
+<div class="text-slate-600 text-sm mt-3"># 把两个单记录 .rez 组装成一个 A/B 归档</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus recording combine baseline.rez experiment.rez -o ab.rez</code></div>
+</div>
+</div>
+</div>
+</div>
+
+</div>
+</section>
+
+<!-- Configuration -->
+<section class="mb-16">
+<h2 class="text-xl font-bold mb-4">配置</h2>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-8">每种模式都使用一个 TOML 配置文件。示例位于 <code class="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-sm">config/</code> directory.</p>
+
+<!-- Agent Config -->
+<h3 class="text-base font-bold mb-3">Agent</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-8">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-xs font-mono opacity-50 uppercase tracking-widest">config/agent.toml</span>
+</div>
+<div class="p-5 font-mono text-base leading-7">
+<div class="text-slate-500"># 通用设置</div>
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4241"</span></div>
+<div class="mt-3 text-slate-500"># 日志</div>
+<div><span class="text-purple-400">[log]</span></div>
+<div><span class="text-blue-400">level</span> = <span class="text-green-400">"info"</span>  <span class="text-slate-600"># error | warn | info | debug | trace</span></div>
+<div class="mt-3 text-slate-500"># 调度器调优</div>
+<div><span class="text-purple-400">[scheduler]</span></div>
+<div><span class="text-blue-400">policy</span> = <span class="text-green-400">"normal"</span>  <span class="text-slate-600"># normal | round_robin | fifo</span></div>
+<div class="mt-3 text-slate-500"># 所有采样器的默认值</div>
+<div><span class="text-purple-400">[defaults]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+<div class="mt-3 text-slate-500"># 针对单个采样器的覆盖</div>
+<div><span class="text-purple-400">[samplers.cpu_usage]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+<div class="mt-1"><span class="text-purple-400">[samplers.scheduler_runqueue]</span></div>
+<div><span class="text-blue-400">enabled</span> = <span class="text-amber-400">true</span></div>
+</div>
+</div>
+
+<!-- Exporter Config -->
+<h3 class="text-base font-bold mb-3">Exporter</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden mb-8">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-xs font-mono opacity-50 uppercase tracking-widest">config/exporter.toml</span>
+</div>
+<div class="p-5 font-mono text-base leading-7">
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4242"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
+<div class="mt-3"><span class="text-purple-400">[prometheus]</span></div>
+<div><span class="text-blue-400">histogram</span> = <span class="text-green-400">"summary"</span>  <span class="text-slate-600"># summary | histogram</span></div>
+</div>
+</div>
+
+<!-- Hindsight Config -->
+<h3 class="text-base font-bold mb-3">Hindsight</h3>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="flex items-center px-4 py-2 bg-slate-800">
+<span class="text-xs font-mono opacity-50 uppercase tracking-widest">config/hindsight.toml</span>
+</div>
+<div class="p-5 font-mono text-base leading-7">
+<div><span class="text-purple-400">[general]</span></div>
+<div><span class="text-blue-400">interval</span> = <span class="text-green-400">"1s"</span></div>
+<div><span class="text-blue-400">duration</span> = <span class="text-green-400">"1h"</span></div>
+<div><span class="text-blue-400">source</span> = <span class="text-green-400">"http://127.0.0.1:4241"</span></div>
+<div><span class="text-blue-400">output</span> = <span class="text-green-400">"/var/lib/rezolus/hindsight.parquet"</span></div>
+<div><span class="text-blue-400">listen</span> = <span class="text-green-400">"0.0.0.0:4242"</span>  <span class="text-slate-600"># 可选的 HTTP API</span></div>
+</div>
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
+<a href="api.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">← API 参考</a>
+<span></span>
+</div>
+
+</main>
+</div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? '关闭菜单' : '打开菜单');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
+</body></html>
