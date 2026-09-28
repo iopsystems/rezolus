@@ -554,8 +554,8 @@ pub fn command() -> Command {
                      become sources and tables become streams; segment, WAL and caller-row\n\
                      bytes are copied unchanged, and WAL rows a segment already holds are\n\
                      dropped. `-o` is required and must not exist, and the input is never\n\
-                     replaced, because no rezolus release reads a dendro archive yet: the\n\
-                     viewer, MCP and `recording` tools will refuse the output.\n\n\
+                     replaced: `view` and `mcp` read a dendro archive, but the `recording`\n\
+                     tools and releases before this one refuse it.\n\n\
                      EXAMPLES:\n    \
                      # Upgrade in place\n    \
                      rezolus recording upgrade old.rez\n\n    \
@@ -713,9 +713,9 @@ fn upgrade_rez(
 
 /// Convert a `.rez` (any version) into a new dendro archive at `output`.
 ///
-/// Never in place and never over an existing file: no rezolus release reads
-/// the result, so replacing an archive with it would lose the only copy a
-/// viewer can open.
+/// Never in place and never over an existing file: `view` and `mcp` read the
+/// result, but the `recording` tools and earlier releases do not, so
+/// replacing an archive with it would lose the only copy they can open.
 fn upgrade_to_dendro(
     path: &std::path::Path,
     output: &std::path::Path,

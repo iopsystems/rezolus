@@ -17,7 +17,7 @@ libloading = "0.8"
 log = "0.4.29"
 metriken = "0.11.1"
 metriken-exposition = "0.20.0"
-metriken-query = { version = "0.30.0", default-features = false }
+metriken-query = { version = "0.31.0", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
@@ -41,8 +41,10 @@ dashboard = { path = "crates/dashboard" }
 # rezolus send the subscription's interval index. 0.2.2 adds retention floors
 # for `caller_rows` (a `Full` that surviving rows depend on is kept). 0.3.0
 # makes `Frame` `#[non_exhaustive]` (a match needs a wildcard arm) and has
-# `FrameReader` skip frame kinds it does not know.
-dendro = { version = "0.3.0", default-features = false }
+# `FrameReader` skip frame kinds it does not know. 0.3.1 adds
+# `last_caller_row_at_or_before`, which the reader for dendro archives uses
+# to find the identity index's `Full` to replay from.
+dendro = { version = "0.3.1", default-features = false }
 rez = { path = "crates/rez" }
 report-save = { path = "crates/report-save" }
 include_dir = "0.7.4"
@@ -51,7 +53,7 @@ wasm-bindgen = "0.2.120"
 
 [package]
 name = "rezolus"
-version = "5.22.2-alpha.14"
+version = "5.22.2-alpha.15"
 description = "High resolution systems performance telemetry agent"
 edition = "2021"
 license.workspace = true

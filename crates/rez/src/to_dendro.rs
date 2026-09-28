@@ -25,8 +25,10 @@
 //! recording recovered from a crash still reads as recovered. Each source gets
 //! a fresh dendro UUID: a `.rez` recording has no identity to carry over.
 //!
-//! No rezolus release reads the result yet; this exists to measure dendro's
-//! read path on real recordings and as the migration path #1224 asks about.
+//! `RezReader` reads the result through `crate::catalog` (`view`, `mcp` and
+//! the static-site viewer); the `recording` tools do not yet. This is the
+//! migration path #1224 asks about, and the oracle for the dendro reader: a
+//! converted archive must answer every query the `.rez` did.
 
 use std::path::Path;
 

@@ -2,6 +2,15 @@
 
 ### Added
 
+- `rezolus view`, `rezolus mcp` and the static-site viewer open dendro
+  archives, recognized by content like a `.rez`. `RezReader` reads its
+  container through a `Catalog` trait (`crates/rez/src/catalog.rs`) that
+  `.rez` v3 and dendro both implement, so an archive written by
+  `recording upgrade --to dendro` reads as the `.rez` it came from. Checked on
+  two real recordings (581 MB and 1.28 GB): the same `mcp query` answers from
+  the original and the conversion, per-thread and per-cgroup queries
+  included. The `recording` subcommands still take `.rez` only.
+
 - `recording upgrade --to dendro in.rez -o out.dendro` writes a copy of a
   `.rez` (v1, v2 or v3) as a dendro archive, the container #1224 plans for
   6.0. Recordings become sources and tables become streams; segment, WAL and
