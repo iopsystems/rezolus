@@ -50,6 +50,8 @@ write = [
     # own as of dendro 0.2.0 — it is always compiled in, and the parts of it
     # that need a writer are gated on `write` inside dendro.
     "dendro/write",
+    # `From` between `metriken::Window` and the segment format's `Window`.
+    "metriken-segment/metriken",
 ]
 # Fixture builders used by the binary crate's tests. Not `#[cfg(test)]`,
 # because a `#[cfg(test)]` module in THIS crate is invisible to the crate

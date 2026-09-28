@@ -3546,6 +3546,7 @@ mod tests {
     // while every individual value still matches.
     #[test]
     fn a_wal_sourced_segment_is_byte_identical_to_a_buffered_one() {
+        use crate::rez::PushEntries;
         let sampler = "cpu_usage";
         let ts = [1_000u64, 2_000, 3_000];
 
