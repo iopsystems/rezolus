@@ -3,8 +3,9 @@
 - **Opened:** 2026-09-28
 - **Status:** **OPEN — 2a built, 2b next.** Step 2 of the 6.0 plan (#1224):
   a reader for dendro archives, before the writer produces them. 2a (the
-  `.rez` layout in a dendro container) reads; 2b (the long layout and its
-  occupant stream) is next.
+  `.rez` layout in a dendro container) reads, and so does 2b (the long
+  layout and its occupant stream). Materializing a long table's WAL tail
+  belongs to the writer (step 3).
 - **Owner:** Brian Martin
 
 ## Goal
@@ -81,6 +82,37 @@ back to its restatement. On two real recordings (581 MB, 2.3 h; 1.28 GB,
 (cpu, syscall, syscall latency, per-cgroup and per-thread) gave the same
 output from both, once `sum by` output was sorted: its series order is not
 defined.
+
+## 2b: what was built
+
+- The occupant stream's format, for the reader and the writer:
+  `encode_segment`/`decode_segment` (label columns are `UInt64` when every
+  value converts exactly, decimal or the agent's 16-digit `__uid__` hex,
+  marked in field metadata so the text comes back byte for byte; `Utf8`
+  otherwise) and the WAL row (`encode_wal_row`, msgpack of the tick's
+  occupants). Written here first, it lives in metriken-segment 0.1.0
+  (`metriken_segment::occupants`), per metriken's
+  `docs/journal/2026-09-28-high-cardinality-stack.md`.
+- `OccupantLabels`, the `ColumnRelabel` that adds an occupant's labels to
+  its series and keeps `__occupant__` on them, is in metriken-query 0.32.0
+  (`metriken_query::long`). `crates/rez/src/occupants.rs` re-exports both.
+- `RezReader`: a stream named `<table>/occupants` is not a table; the table
+  it names reads through `OccupantLabels`, built from the stream's sealed
+  segments and live WAL. A filter on an occupant label (`comm`, `pid`)
+  comes off the segment filter and applies to the relabelled series.
+
+**Checked.** A long table with its occupant stream and the wide table with
+labels in its columns are written from the same observations (two segments,
+a TID reused by a second occupant with its own `__uid__`, a restatement),
+and every query agrees once `__occupant__` is set aside: rates per series,
+`sum`, `sum by (comm)`, `sum by (tgid)`, filters on `comm` and `pid`; the
+reused TID reads as two series. Also from bytes, and with an occupant's
+labels only in the occupant stream's WAL. With the relabel disabled, all
+three tests fail.
+
+**Not yet:** the WAL tail of a long table. `materialize_wal_tail` builds a
+wide table from `WalGroupRow`s; a long table's tail waits for the writer,
+which decides what its WAL rows are.
 
 ## What stays out
 

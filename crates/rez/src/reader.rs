@@ -325,6 +325,52 @@ impl SegmentSource {
         Ok((!store.is_empty()).then_some(store))
     }
 
+    /// Every row of an occupant stream, sealed segments first and then the
+    /// live WAL: the labels of every occupant the table's rows can name.
+    /// Empty for a tar archive, which has no long tables.
+    fn occupants(
+        &self,
+        stream: &str,
+    ) -> Result<Vec<crate::occupants::Occupant>, Box<dyn std::error::Error>> {
+        fn read(
+            db: &dyn Catalog,
+            recording_id: i64,
+            stream: &str,
+        ) -> Result<Vec<crate::occupants::Occupant>, Box<dyn std::error::Error>> {
+            let mut out = Vec::new();
+            for (seq, _) in db.read_segment_meta(recording_id, stream)? {
+                // A segment retention took since the catalog read is gone,
+                // and so are the rows that named its occupants.
+                if let Some(bytes) = db.read_segment_bytes(recording_id, stream, seq)? {
+                    out.extend(
+                        crate::occupants::decode_segment(&bytes)?
+                            .into_iter()
+                            .map(|(_, o)| o),
+                    );
+                }
+            }
+            for row in db.live_wal(recording_id, stream)? {
+                out.extend(crate::occupants::decode_wal_row(&row.row)?);
+            }
+            Ok(out)
+        }
+        match self {
+            SegmentSource::Bytes(_) => Ok(Vec::new()),
+            SegmentSource::Db {
+                path,
+                container,
+                recording_id,
+                ..
+            } => read(container.open(path)?.as_ref(), *recording_id, stream),
+            SegmentSource::SharedDb {
+                db, recording_id, ..
+            } => {
+                let db = db.lock().unwrap_or_else(|e| e.into_inner());
+                read(db.as_ref(), *recording_id, stream)
+            }
+        }
+    }
+
     /// This table's identity index entries, oldest first, from the last
     /// `Full` at or before `first_row_ts` — a slot's occupant at any row can
     /// depend on an entry from long before it, and a `Full` is where that
@@ -470,6 +516,10 @@ struct SamplerReader {
     /// holds `caller_rows` for its stream — in which case the table is read
     /// through [`crate::indexed`] rather than straight off its parquet.
     indexed: bool,
+    /// The table's occupant stream, when it is a long table: its series
+    /// carry only an occupant number, and this stream says which labels each
+    /// number stands for. See [`crate::occupants`].
+    occupants: Option<String>,
     pool: Arc<BufferPool>,
     /// Built on first access, never at open.
     reader: std::sync::OnceLock<Option<TableReader>>,
@@ -615,6 +665,15 @@ impl SamplerReader {
     /// the plain path, which would file every reused slot's rows under its
     /// first occupant.
     fn relabel(&self) -> Option<Result<Arc<dyn metriken_query::ColumnRelabel>, ()>> {
+        if let Some(stream) = &self.occupants {
+            return Some(match self.segments.occupants(stream) {
+                Ok(rows) => Ok(Arc::new(crate::occupants::OccupantLabels::new(rows))),
+                Err(e) => {
+                    tracing::warn!("reading the occupant stream {stream}: {e}");
+                    Err(())
+                }
+            });
+        }
         if !self.indexed {
             return None;
         }
@@ -1081,7 +1140,14 @@ impl RezReader {
             // recording; a table named here is read through the index.
             let indexed: HashSet<String> = db.caller_row_streams(rec.id)?.into_iter().collect();
 
-            for sampler in db.all_samplers(rec.id)? {
+            // A long table's occupant stream is its labels, not a table of
+            // its own: set aside, and named on the table it belongs to.
+            let (occupant_streams, samplers): (Vec<String>, Vec<String>) = db
+                .all_samplers(rec.id)?
+                .into_iter()
+                .partition(|s| crate::occupants::table_of(s).is_some());
+            let occupant_streams: HashSet<String> = occupant_streams.into_iter().collect();
+            for sampler in samplers {
                 let metas = db.read_segment_meta(rec.id, &sampler)?;
 
                 // The probe segment is the first SEALED one — or, when a table
@@ -1156,6 +1222,9 @@ impl RezReader {
                     span,
                     interval,
                     indexed: indexed.contains(&sampler),
+                    occupants: occupant_streams
+                        .contains(&crate::occupants::stream_of(&sampler))
+                        .then(|| crate::occupants::stream_of(&sampler)),
                     segments: match &path {
                         Some((path, container)) => SegmentSource::Db {
                             path: path.clone(),
@@ -1265,6 +1334,7 @@ impl RezReader {
                     span,
                     interval,
                     indexed: false,
+                    occupants: None,
                     segments: SegmentSource::Bytes(segments),
                     pool: Arc::clone(&pool),
                     reader: std::sync::OnceLock::new(),
@@ -5151,6 +5221,416 @@ mod tests {
                 "the fixture's windows must produce a band on the parquet path: {expected:?}"
             );
             assert_eq!(bands(&indexed), expected);
+        }
+    }
+
+    /// A long table and its occupant stream (the 6.0 layout) read as the
+    /// wide table with labels in its columns that they replace.
+    mod long {
+        use super::*;
+        use crate::occupants::{self, Occupant};
+        use arrow::array::{ArrayRef, Int64Array, UInt64Array};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use arrow::record_batch::RecordBatch;
+        use dendro::archive::{
+            ArchiveMut, SegmentMeta as DSegmentMeta, SourceMeta, WalRow as DWalRow,
+        };
+        use std::collections::{BTreeSet, HashMap as Map};
+
+        const TABLE: &str = "cpu_usage/cpu_usage_task";
+        const TICKS: u64 = 8;
+
+        fn ts(tick: u64) -> u64 {
+            1_700_000_000_000_000_000 + tick * 1_000_000_000
+        }
+
+        fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        }
+
+        /// Four occupants: redis all along, a worker in TID 11 that exits after
+        /// tick 4, a second worker that reuses TID 11 from tick 5 with its own
+        /// `__uid__` (the slot is reassigned; everything else is the same), and
+        /// nginx all along. Occupant numbers are dense, in order of first sight.
+        fn occupant_set() -> Vec<(Occupant, std::ops::RangeInclusive<u64>)> {
+            let o = |n, uid: &str, comm: &str, pid: &str| Occupant {
+                occupant: n,
+                labels: labels(&[
+                    ("__uid__", uid),
+                    ("comm", comm),
+                    ("pid", pid),
+                    ("tgid", "10"),
+                    ("id", pid),
+                ]),
+            };
+            vec![
+                (o(0, "00000000000000a0", "redis", "10"), 1..=TICKS),
+                (o(1, "00000000000000a1", "worker", "11"), 1..=4),
+                (o(2, "00000000000000a3", "nginx", "30"), 1..=TICKS),
+                (o(3, "00000000000000a2", "worker", "11"), 5..=TICKS),
+            ]
+        }
+
+        fn value(occ: u64, tick: u64) -> u64 {
+            (occ + 1) * 100 * tick
+        }
+
+        fn window(tick: u64) -> (i64, u64) {
+            (-5_000_000, 5_000_000 + tick)
+        }
+
+        fn metric_meta(extra: &[(&str, &str)]) -> Map<String, String> {
+            let mut m: Map<String, String> = [
+                ("metric", "task_cpu_usage"),
+                ("metric_type", "counter"),
+                ("unit", "nanoseconds"),
+                ("sampler", "cpu_usage"),
+                ("state", "user"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+            for (k, v) in extra {
+                m.insert(k.to_string(), v.to_string());
+            }
+            m
+        }
+
+        fn parquet(fields: Vec<Field>, cols: Vec<ArrayRef>, kv: Vec<(String, String)>) -> Vec<u8> {
+            let schema = Arc::new(Schema::new(fields));
+            let kv = kv
+                .into_iter()
+                .map(|(k, v)| parquet::file::metadata::KeyValue::new(k, v))
+                .collect();
+            let props = parquet::file::properties::WriterProperties::builder()
+                .set_key_value_metadata(Some(kv))
+                .build();
+            let mut buf = Vec::new();
+            let mut w =
+                parquet::arrow::ArrowWriter::try_new(&mut buf, Arc::clone(&schema), Some(props))
+                    .unwrap();
+            w.write(&RecordBatch::try_new(schema, cols).unwrap())
+                .unwrap();
+            w.close().unwrap();
+            buf
+        }
+
+        /// Ticks `range` of the table, long: one row per tick and live occupant.
+        fn long_segment(range: std::ops::RangeInclusive<u64>) -> Vec<u8> {
+            let set = occupant_set();
+            let mut rows = Vec::new();
+            for tick in range {
+                for (o, live) in &set {
+                    if live.contains(&tick) {
+                        rows.push((tick, o.occupant));
+                    }
+                }
+            }
+            let occupants = metriken_query::long::encode_occupant_ranges(rows.iter().map(|r| r.1));
+            parquet(
+                vec![
+                    Field::new("timestamp", DataType::UInt64, false),
+                    Field::new(":window_begin", DataType::Int64, true),
+                    Field::new(":window_width", DataType::UInt64, true),
+                    Field::new("occupant", DataType::UInt64, false),
+                    Field::new("7", DataType::UInt64, true).with_metadata(metric_meta(&[])),
+                ],
+                vec![
+                    Arc::new(UInt64Array::from_iter_values(rows.iter().map(|r| ts(r.0)))),
+                    Arc::new(Int64Array::from_iter_values(
+                        rows.iter().map(|r| window(r.0).0),
+                    )),
+                    Arc::new(UInt64Array::from_iter_values(
+                        rows.iter().map(|r| window(r.0).1),
+                    )),
+                    Arc::new(UInt64Array::from_iter_values(rows.iter().map(|r| r.1))),
+                    Arc::new(UInt64Array::from_iter_values(
+                        rows.iter().map(|r| value(r.1, r.0)),
+                    )),
+                ],
+                vec![
+                    (
+                        metriken_query::long::LAYOUT_KEY.into(),
+                        metriken_query::long::LAYOUT_LONG.into(),
+                    ),
+                    (metriken_query::long::OCCUPANTS_KEY.into(), occupants),
+                ],
+            )
+        }
+
+        /// The same ticks, wide: a column per slot, labels in its metadata,
+        /// the reused TID in a `#1` column as the agent writes it.
+        fn wide_segment(range: std::ops::RangeInclusive<u64>) -> Vec<u8> {
+            let ticks: Vec<u64> = range.collect();
+            let mut fields = vec![
+                Field::new("timestamp", DataType::UInt64, false),
+                Field::new(":window_begin", DataType::Int64, true),
+                Field::new(":window_width", DataType::UInt64, true),
+            ];
+            let mut cols: Vec<ArrayRef> = vec![
+                Arc::new(UInt64Array::from_iter_values(ticks.iter().map(|t| ts(*t)))),
+                Arc::new(Int64Array::from_iter_values(
+                    ticks.iter().map(|t| window(*t).0),
+                )),
+                Arc::new(UInt64Array::from_iter_values(
+                    ticks.iter().map(|t| window(*t).1),
+                )),
+            ];
+            for (o, live) in occupant_set() {
+                if !ticks.iter().any(|t| live.contains(t)) {
+                    continue;
+                }
+                let pairs: Vec<(&str, &str)> = o
+                    .labels
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
+                let name = if o.occupant == 3 {
+                    "7x11#1".to_string()
+                } else {
+                    format!("7x{}", o.labels["pid"])
+                };
+                fields.push(
+                    Field::new(name, DataType::UInt64, true).with_metadata(metric_meta(&pairs)),
+                );
+                cols.push(Arc::new(UInt64Array::from_iter(
+                    ticks
+                        .iter()
+                        .map(|t| live.contains(t).then(|| value(o.occupant, *t))),
+                )));
+            }
+            parquet(fields, cols, Vec::new())
+        }
+
+        fn source(db: &mut ArchiveMut) -> i64 {
+            db.insert_source(&SourceMeta {
+                labels: labels(&[("source", "rezolus")]),
+                metadata: labels(&[("version", "6.0.0")]),
+                clock_anchor_wall_ns: ts(0) as i64,
+            })
+            .unwrap()
+        }
+
+        fn meta(range: &std::ops::RangeInclusive<u64>, rows: u64) -> DSegmentMeta {
+            DSegmentMeta {
+                rows,
+                first_ts: ts(*range.start()) as i64,
+                last_ts: ts(*range.end()) as i64,
+            }
+        }
+
+        const HALVES: [std::ops::RangeInclusive<u64>; 2] = [1..=4, 5..=TICKS];
+
+        fn write_wide(path: &Path) {
+            let mut db = ArchiveMut::create(path).unwrap();
+            let id = source(&mut db);
+            for (seq, r) in HALVES.iter().enumerate() {
+                let n = r.clone().count() as u64;
+                db.insert_segment(id, TABLE, seq as u64, &meta(r, n), &wide_segment(r.clone()))
+                    .unwrap();
+            }
+            db.mark_complete(id).unwrap();
+        }
+
+        /// The long table, and its occupant stream: first sightings in the
+        /// segment of the tick they happened, a restatement of the live
+        /// occupants at tick 5, and one more restatement at tick 8 left in
+        /// the WAL so the reader has to find labels there too.
+        fn write_long(path: &Path) {
+            write_long_with(path, false)
+        }
+
+        /// [`write_long`]; with `sealed_first_only`, the second batch of
+        /// occupant rows is never sealed, so occupant 3's labels exist only
+        /// in the WAL.
+        fn write_long_with(path: &Path, sealed_first_only: bool) {
+            let mut db = ArchiveMut::create(path).unwrap();
+            let id = source(&mut db);
+            let set = occupant_set();
+            for (seq, r) in HALVES.iter().enumerate() {
+                let bytes = long_segment(r.clone());
+                let rows = r
+                    .clone()
+                    .map(|t| set.iter().filter(|(_, l)| l.contains(&t)).count() as u64)
+                    .sum();
+                db.insert_segment(id, TABLE, seq as u64, &meta(r, rows), &bytes)
+                    .unwrap();
+            }
+            let props = crate::rez::segment_writer_props;
+            let first: Vec<(u64, &Occupant)> = set
+                .iter()
+                .filter(|(_, l)| *l.start() <= 4)
+                .map(|(o, l)| (ts(*l.start()), o))
+                .collect();
+            let mut second: Vec<(u64, &Occupant)> = set
+                .iter()
+                .filter(|(_, l)| l.contains(&5))
+                .map(|(o, _)| (ts(5), o))
+                .collect();
+            second.sort_by_key(|(_, o)| o.occupant);
+            let stream = occupants::stream_of(TABLE);
+            let batches = if sealed_first_only {
+                vec![first]
+            } else {
+                vec![first, second]
+            };
+            for (seq, rows) in batches.iter().enumerate() {
+                let bytes = occupants::encode_segment(rows, props()).unwrap();
+                let m = DSegmentMeta {
+                    rows: rows.len() as u64,
+                    first_ts: rows[0].0 as i64,
+                    last_ts: rows[rows.len() - 1].0 as i64,
+                };
+                db.insert_segment(id, &stream, seq as u64, &m, &bytes)
+                    .unwrap();
+            }
+            let live: Vec<Occupant> = set
+                .iter()
+                .filter(|(_, l)| l.contains(&TICKS))
+                .map(|(o, _)| o.clone())
+                .collect();
+            db.insert_wal_rows(
+                id,
+                &[DWalRow {
+                    stream,
+                    ts: ts(TICKS) as i64,
+                    wall_offset: 0,
+                    row: occupants::encode_wal_row(&live),
+                }],
+            )
+            .unwrap();
+            db.mark_complete(id).unwrap();
+        }
+
+        fn open(path: &Path) -> RezReader {
+            RezReader::open_with_pool(path, BufferPool::new(64 * 1024 * 1024)).unwrap()
+        }
+
+        /// A result with `__occupant__` taken off every series and the series
+        /// sorted: the long table's series carry their occupant number, the
+        /// wide table's do not, and nothing else may differ.
+        fn without_occupant(r: &RezReader, q: &str) -> Vec<String> {
+            let (start, end) = r.time_range().unwrap();
+            let mut v = serde_json::to_value(r.query_range(q, start, end, 1.0).unwrap()).unwrap();
+            let mut out = Vec::new();
+            if let Some(serde_json::Value::Array(series)) = v.get_mut("result") {
+                for s in series {
+                    if let Some(serde_json::Value::Object(m)) = s.get_mut("metric") {
+                        m.remove(occupants::OCCUPANT_LABEL);
+                    }
+                    out.push(s.to_string());
+                }
+            }
+            out.sort();
+            out
+        }
+
+        #[test]
+        fn a_long_table_reads_as_the_wide_table_it_replaces() {
+            let dir = tempfile::tempdir().unwrap();
+            let (wide, long) = (
+                dir.path().join("wide.dendro"),
+                dir.path().join("long.dendro"),
+            );
+            write_wide(&wide);
+            write_long(&long);
+            let (w, l) = (open(&wide), open(&long));
+
+            // The occupant stream is the long table's labels, not a table.
+            assert_eq!(w.counter_names(), l.counter_names());
+            assert_eq!(l.counter_names(), vec!["task_cpu_usage".to_string()]);
+
+            let strip = |v: Vec<BTreeMap<String, String>>| {
+                let mut v: Vec<_> = v
+                    .into_iter()
+                    .map(|mut m| {
+                        m.remove(occupants::OCCUPANT_LABEL);
+                        m
+                    })
+                    .collect();
+                v.sort();
+                v
+            };
+            assert_eq!(
+                strip(w.counter_labels("task_cpu_usage")),
+                strip(l.counter_labels("task_cpu_usage"))
+            );
+            assert_eq!(
+                l.counter_labels("task_cpu_usage").len(),
+                4,
+                "one series per occupant"
+            );
+            assert_eq!(w.time_range_ns(), l.time_range_ns());
+            assert_eq!(w.sample_timestamps(), l.sample_timestamps());
+
+            for q in [
+                "rate(task_cpu_usage[2s])",
+                "sum(rate(task_cpu_usage[2s]))",
+                "sum by (comm) (rate(task_cpu_usage[2s]))",
+                "rate(task_cpu_usage{comm=\"worker\"}[2s])",
+                "rate(task_cpu_usage{pid=\"11\"}[2s])",
+                "sum by (tgid) (rate(task_cpu_usage[2s]))",
+            ] {
+                assert_eq!(without_occupant(&w, q), without_occupant(&l, q), "{q}");
+            }
+            // The two workers in TID 11 are two series, told apart by uid.
+            assert_eq!(
+                without_occupant(&l, "rate(task_cpu_usage{pid=\"11\"}[2s])").len(),
+                2
+            );
+        }
+
+        #[test]
+        fn occupant_labels_are_found_in_the_wal() {
+            let dir = tempfile::tempdir().unwrap();
+            let (sealed, wal) = (
+                dir.path().join("sealed.dendro"),
+                dir.path().join("wal.dendro"),
+            );
+            write_long_with(&sealed, false);
+            write_long_with(&wal, true);
+            let q = "sum by (comm, pid) (rate(task_cpu_usage[2s]))";
+            assert_eq!(
+                without_occupant(&open(&sealed), q),
+                without_occupant(&open(&wal), q)
+            );
+            // And occupant 3 is named, not a bare number.
+            let named = open(&wal)
+                .counter_labels("task_cpu_usage")
+                .into_iter()
+                .filter(|l| l.get(occupants::OCCUPANT_LABEL).map(String::as_str) == Some("3"))
+                .all(|l| l.get("comm").map(String::as_str) == Some("worker"));
+            assert!(named);
+        }
+
+        #[test]
+        fn a_long_table_reads_from_bytes_too() {
+            let dir = tempfile::tempdir().unwrap();
+            let long = dir.path().join("long.dendro");
+            write_long(&long);
+            let mut r = RezReader::open_recordings_from_bytes(
+                std::fs::read(&long).unwrap(),
+                BufferPool::new(64 * 1024 * 1024),
+            )
+            .unwrap();
+            let (_, r) = r.pop().unwrap();
+            let q = "sum by (comm) (rate(task_cpu_usage[2s]))";
+            assert_eq!(without_occupant(&r, q), without_occupant(&open(&long), q));
+            let comms: BTreeSet<String> = r
+                .counter_labels("task_cpu_usage")
+                .into_iter()
+                .filter_map(|l| l.get("comm").cloned())
+                .collect();
+            assert_eq!(
+                comms,
+                ["nginx", "redis", "worker"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            );
         }
     }
 }

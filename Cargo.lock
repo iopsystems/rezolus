@@ -2291,21 +2291,35 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.31.0"
+version = "0.32.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f8dc9a2681cca91a464ac921133b8129e5d9f4b300b376e71b2e0d38093a2c4"
+checksum = "c79db305511816fd7b9623efe6370acc99761c03c36011ff9a3ee13efdabfb78"
 dependencies = [
  "arrow",
  "bytes",
  "histogram",
  "lru",
  "metriken-exposition",
+ "metriken-segment",
  "parquet",
  "promql-parser",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+]
+
+[[package]]
+name = "metriken-segment"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0fcf661fce6b7b0c599e27ed1b372769dc391311b4efedd6e087c0d083106f7"
+dependencies = [
+ "arrow",
+ "bytes",
+ "parquet",
+ "rmp-serde",
+ "serde",
 ]
 
 [[package]]
@@ -3011,6 +3025,7 @@ dependencies = [
  "metriken",
  "metriken-exposition",
  "metriken-query",
+ "metriken-segment",
  "parquet",
  "rmp-serde",
  "rusqlite",
@@ -3023,7 +3038,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.22.2-alpha.16"
+version = "5.22.2-alpha.17"
 dependencies = [
  "allan",
  "anyhow",

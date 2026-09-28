@@ -27,6 +27,7 @@ pub mod index;
 pub mod indexed;
 /// Reshape a plain parquet into `.rez` recordings (metriken-free). Not behind
 /// `write` — the browser assembles `.rez` reports from uploaded parquet bytes.
+pub mod occupants;
 pub mod parquet_ingest;
 pub mod reader;
 pub mod rez;
