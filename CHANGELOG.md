@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### Changed
+
+- The wide segment format, meaning the table model, its parquet encoding
+  and decoding, `TableBuilder`/`GroupTableBuilder`, `Window` and the
+  `GroupSchema` mirror, moved from `crates/rez` to metriken-segment 0.1.1,
+  with no change in behaviour. `crates/rez` re-exports it under the old
+  names. `TableBuilder::push_entries` is now the `rez::rez::PushEntries`
+  trait. Dependencies: metriken-exposition 0.21.0, metriken-query 0.33.0.
+
 ### Added
 
 - The reader reads long tables in dendro archives, the 6.0 layout: one row

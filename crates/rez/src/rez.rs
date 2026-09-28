@@ -20,18 +20,8 @@ pub const REZ_SCHEMA_VERSION: u32 = 2;
 pub const REZ_MAX_SUPPORTED_VERSION: u32 = 2;
 /// Manifest filename inside the tar.
 pub const REZ_MANIFEST_NAME: &str = "manifest.json";
-/// Table-level wall-clock sidecar column. Reserved: the query engine skips a
-/// column with exactly this name rather than surfacing it as a metric.
-pub const WALL_OFFSET_COLUMN: &str = ":wall_offset";
-/// Table-level acquisition-window sidecar columns: a BARE `:window_begin`/
-/// `:window_width` pair (no metric-id prefix), applying to every metric in
-/// the table. metriken-query's `parse_schema` resolves a metric's window
-/// from its own `<m>:window_begin`/`<m>:window_width` sidecar first, falling
-/// back to this table-level pair when present, and to no window otherwise.
-/// Only a group table (`RezTable::table_window` is `Some`) emits these; a
-/// V2-sourced table keeps the per-metric sidecar shape instead.
-pub const WINDOW_BEGIN_COLUMN: &str = ":window_begin";
-pub const WINDOW_WIDTH_COLUMN: &str = ":window_width";
+/// The segment format's sidecar column names (`metriken_segment::table`).
+pub use metriken_segment::table::{WALL_OFFSET_COLUMN, WINDOW_BEGIN_COLUMN, WINDOW_WIDTH_COLUMN};
 
 /// Top-level `.rez` manifest (`manifest.json`): a bag of label-tagged recordings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -110,481 +100,20 @@ impl RezTableIndex {
     }
 }
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+// The wide table, its parquet encoding and decoding are the segment
+// format's (`metriken_segment::table`, see metriken's
+// docs/journal/2026-09-28-high-cardinality-stack.md); re-exported under the
+// names rezolus uses.
+pub use metriken_segment::table::{
+    cadence_hint, read_table_parquet, segment_writer_props, table_to_batch, write_table_parquet,
+    Column as RezColumn, Table as RezTable, Values as RezValues,
+};
+
+use std::collections::HashMap;
 
 use crate::window::Window;
-use arrow::array::{Array, ArrayRef, Int64Array, ListBuilder, UInt64Array, UInt64Builder};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-use parquet::arrow::ArrowWriter;
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
-// The eager reader (`read_table_parquet`) needs these.
-use arrow::array::ListArray;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-
-/// Per-metric column values for a table (row-aligned with the table's timestamps).
-#[derive(Debug, Clone, PartialEq)]
-pub enum RezValues {
-    Counter(Vec<Option<u64>>),
-    Gauge(Vec<Option<i64>>),
-    Histogram(Vec<Option<histogram::Histogram>>),
-}
-
-/// One metric column plus its per-row acquisition windows.
-#[derive(Debug, Clone)]
-pub struct RezColumn {
-    /// Column key (the snapshot entry's numeric-id name, e.g. `"5"` / `"5x3"`).
-    pub name: String,
-    /// Metric identity + annotations (`metric`, `sampler`, labels, `metric_type`).
-    pub metadata: HashMap<String, String>,
-    pub values: RezValues,
-    pub windows: Vec<Option<Window>>,
-}
-
-/// One sampler's table: a timestamp column plus its metric/window columns.
-#[derive(Debug, Clone)]
-pub struct RezTable {
-    /// Read by the atomic writer only — the streaming writer names segments
-    /// from `SealJob::sampler`. See the note on `RezRecorder`.
-    #[allow(dead_code)]
-    pub sampler: String,
-    pub timestamps: Vec<u64>,
-    /// Per-row wall-clock observation: the raw `SystemTime` reading minus the
-    /// row's (monotonically anchored) timestamp, in nanoseconds. Row-aligned
-    /// with `timestamps`, or empty when the table carries no observations (a
-    /// table decoded from an archive written before the sidecar existed).
-    /// Serialized as the table-level `:wall_offset` column, which the query
-    /// engine skips the same way it skips the `:window_*` sidecars.
-    pub wall_offsets: Vec<i64>,
-    pub columns: Vec<RezColumn>,
-    /// Table-level acquisition window, one per row — set for a V3
-    /// acquisition-group table, whose members all share ONE window per tick
-    /// (`docs/principles.md` principle 18). `None` for a V2-sourced (plain
-    /// per-sampler) table, which instead carries a window per (metric, row)
-    /// in each column's own `RezColumn::windows`.
-    ///
-    /// This is what makes `table_to_batch`'s group-table layout a property
-    /// of the table/data rather than a global flag: `Some` selects the
-    /// single bare `:window_begin`/`:window_width` pair (no per-metric
-    /// sidecars); `None` selects the legacy per-metric sidecar layout.
-    /// `write_table_parquet` errors if this is `Some` and any column still
-    /// carries its own non-empty `windows` — the two shapes are mutually
-    /// exclusive by construction, and mixing them would silently drop one.
-    pub table_window: Option<Vec<Option<Window>>>,
-}
 
 type RezError = Box<dyn std::error::Error>;
-
-/// Mean row interval hint; `None` when fewer than 2 rows.
-///
-/// Atomic-writer only: the streaming writer keeps the equivalent running totals
-/// per table because its segments are long gone by manifest time. See the note
-/// on `RezRecorder`.
-#[allow(dead_code)]
-pub fn cadence_hint(timestamps: &[u64]) -> Option<u64> {
-    if timestamps.len() < 2 {
-        return None;
-    }
-    let span = timestamps.last().unwrap().saturating_sub(timestamps[0]);
-    Some(span / (timestamps.len() as u64 - 1))
-}
-
-fn window_offset_columns(
-    windows: &[Option<Window>],
-    ts: &[u64],
-) -> (Vec<Option<i64>>, Vec<Option<u64>>) {
-    let mut begin = Vec::with_capacity(windows.len());
-    let mut width = Vec::with_capacity(windows.len());
-    for (w, &t) in windows.iter().zip(ts.iter()) {
-        match w {
-            Some(win) => {
-                begin.push(Some(win.begin_ns as i64 - t as i64));
-                width.push(Some(win.width_ns()));
-            }
-            None => {
-                begin.push(None);
-                width.push(None);
-            }
-        }
-    }
-    (begin, width)
-}
-
-fn build_histogram_list(values: &[Option<histogram::Histogram>]) -> ArrayRef {
-    let mut b = ListBuilder::new(UInt64Builder::new());
-    for v in values {
-        match v {
-            Some(h) => {
-                for &c in h.as_slice() {
-                    b.values().append_value(c);
-                }
-                b.append(true);
-            }
-            None => b.append(false),
-        }
-    }
-    Arc::new(b.finish())
-}
-
-/// Push one metric's value column (counter/gauge/histogram) onto `fields`/
-/// `arrays`. Shared by both `table_to_batch` branches — the window sidecar
-/// placement differs between them (table-level vs per-metric), but the value
-/// column itself never does.
-fn push_value_column(fields: &mut Vec<Field>, arrays: &mut Vec<ArrayRef>, col: &RezColumn) {
-    match &col.values {
-        RezValues::Counter(v) => {
-            fields.push(
-                Field::new(&col.name, DataType::UInt64, true).with_metadata(col.metadata.clone()),
-            );
-            arrays.push(Arc::new(UInt64Array::from(v.clone())));
-        }
-        RezValues::Gauge(v) => {
-            fields.push(
-                Field::new(&col.name, DataType::Int64, true).with_metadata(col.metadata.clone()),
-            );
-            arrays.push(Arc::new(Int64Array::from(v.clone())));
-        }
-        RezValues::Histogram(v) => {
-            let arr = build_histogram_list(v);
-            fields.push(
-                Field::new(
-                    format!("{}:buckets", col.name),
-                    arr.data_type().clone(),
-                    true,
-                )
-                .with_metadata(col.metadata.clone()),
-            );
-            arrays.push(arr);
-        }
-    }
-}
-
-fn table_to_batch(table: &RezTable) -> Result<(Arc<Schema>, RecordBatch), RezError> {
-    let mut fields: Vec<Field> = Vec::new();
-    let mut arrays: Vec<ArrayRef> = Vec::new();
-
-    fields.push(
-        Field::new("timestamp", DataType::UInt64, false).with_metadata(HashMap::from([
-            ("metric_type".to_string(), "timestamp".to_string()),
-            ("unit".to_string(), "nanoseconds".to_string()),
-        ])),
-    );
-    arrays.push(Arc::new(UInt64Array::from(table.timestamps.clone())));
-
-    // Table-level (not per-metric) sidecar: one wall-clock observation per row.
-    // Null where the table carries no observation for that row; a length
-    // mismatch against `timestamps` surfaces as a `RecordBatch` error.
-    fields.push(Field::new(WALL_OFFSET_COLUMN, DataType::Int64, true));
-    arrays.push(Arc::new(if table.wall_offsets.is_empty() {
-        Int64Array::from(vec![None; table.timestamps.len()])
-    } else {
-        Int64Array::from(table.wall_offsets.clone())
-    }));
-
-    // Group-table mode (`table.table_window` is `Some`) emits ONE bare
-    // `:window_begin`/`:window_width` pair for the whole table, right after
-    // `:wall_offset` and before any member column — the shape
-    // metriken-query's `parse_schema` treats as a table-level window applying
-    // to every metric in the table (Part A). V2-sourced tables (`None`) keep
-    // today's exact per-metric sidecar layout, read-old/write-new.
-    if let Some(windows) = &table.table_window {
-        if table.columns.iter().any(|c| !c.windows.is_empty()) {
-            return Err("a group table's columns must not carry their own \
-                         per-metric windows; the table-level window and a \
-                         column's windows are mutually exclusive"
-                .into());
-        }
-        let (begin, width) = window_offset_columns(windows, &table.timestamps);
-        fields.push(Field::new(WINDOW_BEGIN_COLUMN, DataType::Int64, true));
-        arrays.push(Arc::new(Int64Array::from(begin)));
-        fields.push(Field::new(WINDOW_WIDTH_COLUMN, DataType::UInt64, true));
-        arrays.push(Arc::new(UInt64Array::from(width)));
-
-        for col in &table.columns {
-            push_value_column(&mut fields, &mut arrays, col);
-        }
-    } else {
-        for col in &table.columns {
-            push_value_column(&mut fields, &mut arrays, col);
-
-            let (begin, width) = window_offset_columns(&col.windows, &table.timestamps);
-            fields.push(Field::new(
-                format!("{}:window_begin", col.name),
-                DataType::Int64,
-                true,
-            ));
-            arrays.push(Arc::new(Int64Array::from(begin)));
-            fields.push(Field::new(
-                format!("{}:window_width", col.name),
-                DataType::UInt64,
-                true,
-            ));
-            arrays.push(Arc::new(UInt64Array::from(width)));
-        }
-    }
-
-    let schema = Arc::new(Schema::new(fields));
-    let batch = RecordBatch::try_new(schema.clone(), arrays)?;
-    Ok((schema, batch))
-}
-
-/// Parquet writer settings for a `.rez` segment.
-///
-/// **Passing `None` here would not select parquet-rs's defaults — it selects
-/// `Compression::UNCOMPRESSED`.** That is the trap this function exists to
-/// close, so it must always be `Some(..)`.
-///
-/// **Compression: LZ4.** These columns are already RLE- and bit-packed by the
-/// parquet encoders, so an entropy coder has little left to find; LZ4 is where
-/// the ratio curve flattens, and it pays for its own encode by shrinking the
-/// BLOB the segment insert then writes. Stronger codecs are rejected on
-/// *memory*, not ratio or CPU: zstd's compression contexts are per column
-/// writer, and this writer instantiates thousands of those at once (below).
-/// `LZ4_RAW` rather than legacy `LZ4` because the legacy variant is a
-/// Hadoop-framed encoding parquet-rs writes only for pre-2.9.0 readers.
-///
-/// Note that the codec has no bearing on read speed even though it halves the
-/// archive; query time tracks segment *count*, which is `SealPolicy`'s
-/// business, not this function's.
-///
-/// **Dictionary encoding: off, and this is the recorder's largest memory
-/// decision.** `ArrowWriter` instantiates a column writer for every column of
-/// a row group simultaneously, each carrying its own `DictEncoder` buffer and
-/// interner. Rezolus tables are wide in a way that makes this dominant — a
-/// per-CPU table runs to thousands of columns, since every metric also carries
-/// `:window_begin`/`:window_width` sidecars — so dictionary state, not row
-/// data, sets peak RSS during a seal.
-///
-/// It costs nothing to disable because the data is the worst possible
-/// dictionary input: u64 counters and gauges, where a monotonic counter makes
-/// every value distinct and the dictionary as large as the column it encodes.
-/// There are no string columns; metric names and labels live in the parquet
-/// schema, not the data.
-///
-/// **Deliberately left at parquet-rs defaults:** `write_batch_size`,
-/// statistics granularity, and the page-size limits. Each looks like it should
-/// bound per-column-writer memory and none of them measurably does, while
-/// chunk-level statistics costs finalize latency and read pruning. The
-/// dictionary is the whole effect.
-pub fn segment_writer_props() -> WriterProperties {
-    WriterProperties::builder()
-        .set_compression(Compression::LZ4_RAW)
-        .set_dictionary_enabled(false)
-        .build()
-}
-
-/// Serialize one table to parquet bytes.
-pub fn write_table_parquet(table: &RezTable) -> Result<Vec<u8>, RezError> {
-    let (schema, batch) = table_to_batch(table)?;
-    let mut buf: Vec<u8> = Vec::new();
-    let mut writer = ArrowWriter::try_new(&mut buf, schema, Some(segment_writer_props()))?;
-    writer.write(&batch)?;
-    writer.close()?;
-    Ok(buf)
-}
-
-fn u64_col(a: &ArrayRef) -> &UInt64Array {
-    a.as_any()
-        .downcast_ref::<UInt64Array>()
-        .expect("UInt64 column")
-}
-
-/// Deserialize one table from parquet bytes.
-///
-/// The production read path decodes most tables lazily via metriken-query's
-/// `ParquetReader` (`read_archive_bytes` → `RezReader`). This eager decoder
-/// was written to verify the write path independently, and is now also the
-/// decoder behind [`crate::indexed`]: a table whose slots are described by
-/// the identity index is split by occupant before the query engine sees it,
-/// and that split needs every row in hand rather than a footer.
-pub fn read_table_parquet(sampler: String, bytes: Vec<u8>) -> Result<RezTable, RezError> {
-    let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))?.build()?;
-
-    let mut timestamps: Vec<u64> = Vec::new();
-    let mut wall_offsets: Vec<i64> = Vec::new();
-    let mut order: Vec<String> = Vec::new();
-    let mut values: HashMap<String, RezValues> = HashMap::new();
-    let mut metas: HashMap<String, HashMap<String, String>> = HashMap::new();
-    let mut begins: HashMap<String, Vec<Option<i64>>> = HashMap::new();
-    let mut widths: HashMap<String, Vec<Option<u64>>> = HashMap::new();
-    // Table-level (bare, no metric-id prefix) window sidecar — a group
-    // table only. Checked by exact name BEFORE the per-metric
-    // `strip_suffix` branches below, which would otherwise treat the bare
-    // name as a per-metric column with an empty-string base.
-    let mut table_begin: Vec<Option<i64>> = Vec::new();
-    let mut table_width: Vec<Option<u64>> = Vec::new();
-    let mut is_group_table = false;
-
-    for batch in reader {
-        let batch = batch?;
-        let schema = batch.schema();
-        for i in 0..batch.num_columns() {
-            let field = schema.field(i);
-            let name = field.name();
-            let col = batch.column(i);
-            if name == "timestamp" {
-                let a = u64_col(col);
-                timestamps.extend((0..a.len()).map(|r| a.value(r)));
-            } else if name == WALL_OFFSET_COLUMN {
-                let a = col
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("i64 wall_offset");
-                // An all-null column means the table carried no observations;
-                // leave `wall_offsets` empty so a write→read→write round trip
-                // does not fabricate zeros.
-                if a.null_count() < a.len() {
-                    wall_offsets.extend((0..a.len()).map(|r| a.value(r)));
-                }
-            } else if name == WINDOW_BEGIN_COLUMN {
-                is_group_table = true;
-                let a = col
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("i64 table-level window_begin");
-                table_begin.extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-            } else if name == WINDOW_WIDTH_COLUMN {
-                is_group_table = true;
-                let a = u64_col(col);
-                table_width.extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-            } else if let Some(base) = name.strip_suffix(":window_begin") {
-                let a = col
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
-                    .expect("i64 window_begin");
-                begins
-                    .entry(base.to_string())
-                    .or_default()
-                    .extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-            } else if let Some(base) = name.strip_suffix(":window_width") {
-                let a = u64_col(col);
-                widths
-                    .entry(base.to_string())
-                    .or_default()
-                    .extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-            } else if let Some(base) = name.strip_suffix(":buckets") {
-                let meta = field.metadata().clone();
-                let gp: u8 = meta
-                    .get("grouping_power")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let mvp: u8 = meta
-                    .get("max_value_power")
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-                let list = col
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .expect("list histogram");
-                let entry = match values.entry(base.to_string()) {
-                    std::collections::hash_map::Entry::Vacant(v) => {
-                        order.push(base.to_string());
-                        metas.insert(base.to_string(), meta);
-                        v.insert(RezValues::Histogram(Vec::new()))
-                    }
-                    std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-                };
-                if let RezValues::Histogram(hs) = entry {
-                    for r in 0..list.len() {
-                        if list.is_null(r) {
-                            hs.push(None);
-                        } else {
-                            let vals = list.value(r);
-                            let a = u64_col(&vals);
-                            let buckets: Vec<u64> = (0..a.len()).map(|k| a.value(k)).collect();
-                            hs.push(Some(histogram::Histogram::from_buckets(gp, mvp, buckets)?));
-                        }
-                    }
-                }
-            } else {
-                // A metric value column: counter (UInt64) or gauge (Int64).
-                let meta = field.metadata().clone();
-                let is_gauge = meta.get("metric_type").map(String::as_str) == Some("gauge");
-                let entry = match values.entry(name.to_string()) {
-                    std::collections::hash_map::Entry::Vacant(v) => {
-                        order.push(name.to_string());
-                        metas.insert(name.to_string(), meta);
-                        v.insert(if is_gauge {
-                            RezValues::Gauge(Vec::new())
-                        } else {
-                            RezValues::Counter(Vec::new())
-                        })
-                    }
-                    std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
-                };
-                match entry {
-                    RezValues::Counter(vs) => {
-                        let a = u64_col(col);
-                        vs.extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-                    }
-                    RezValues::Gauge(vs) => {
-                        let a = col
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .expect("i64 gauge");
-                        vs.extend((0..a.len()).map(|r| (!a.is_null(r)).then(|| a.value(r))));
-                    }
-                    RezValues::Histogram(_) => {}
-                }
-            }
-        }
-    }
-
-    let columns = order
-        .into_iter()
-        .map(|base| {
-            let begin = begins.remove(&base).unwrap_or_default();
-            let width = widths.remove(&base).unwrap_or_default();
-            let windows = (0..timestamps.len())
-                .map(|r| {
-                    match (
-                        begin.get(r).copied().flatten(),
-                        width.get(r).copied().flatten(),
-                    ) {
-                        (Some(b), Some(w)) => {
-                            let begin_ns = (timestamps[r] as i64 + b) as u64;
-                            Some(Window::new(begin_ns, begin_ns + w))
-                        }
-                        _ => None,
-                    }
-                })
-                .collect();
-            RezColumn {
-                metadata: metas.remove(&base).unwrap_or_default(),
-                values: values.remove(&base).unwrap(),
-                windows,
-                name: base,
-            }
-        })
-        .collect();
-
-    let table_window = is_group_table.then(|| {
-        (0..timestamps.len())
-            .map(|r| {
-                match (
-                    table_begin.get(r).copied().flatten(),
-                    table_width.get(r).copied().flatten(),
-                ) {
-                    (Some(b), Some(w)) => {
-                        let begin_ns = (timestamps[r] as i64 + b) as u64;
-                        Some(Window::new(begin_ns, begin_ns + w))
-                    }
-                    _ => None,
-                }
-            })
-            .collect()
-    });
-
-    Ok(RezTable {
-        sampler,
-        timestamps,
-        wall_offsets,
-        columns,
-        table_window,
-    })
-}
 
 use std::io::Read;
 use std::path::Path;
@@ -1081,49 +610,12 @@ pub enum Entry<'a> {
     Histogram(&'a Histogram),
 }
 
-/// One reading's value, in the three shapes a `.rez` column can hold.
-///
-/// The histogram variant borrows an H2 histogram rather than bare buckets: a
-/// column stores the whole thing, and the `histogram` crate is pure Rust, so
-/// carrying it costs the read path nothing.
-#[derive(Debug)]
-pub enum CellValue<'a> {
-    Counter(u64),
-    Gauge(i64),
-    Histogram(&'a histogram::Histogram),
-}
-
-/// One reading in one row, as the archive stores it: a name, the producer's
-/// metadata, an optional acquisition window, and a value.
-///
-/// **The builder's input type, deliberately separate from [`Entry`].** Rows
-/// reach a table from two directions — an agent snapshot at ingest, and this
-/// archive's own WAL when a live tail is materialized into a segment — and
-/// only the first has `metriken-exposition` values behind it. Making the
-/// builder speak `Entry` forced the second to rebuild `Counter`/`Gauge`/
-/// `Histogram` values it had just decoded, purely to have something to borrow,
-/// which put a metrics-registry dependency (and with it `linkme`, which has no
-/// wasm32 implementation) on the READ path of the archive format.
-pub struct Cell<'a> {
-    pub name: &'a str,
-    pub metadata: &'a HashMap<String, String>,
-    pub window: Option<Window>,
-    pub value: CellValue<'a>,
-}
-
-impl Cell<'_> {
-    /// The `metric_type` string the parquet reader keys on to reconstruct the
-    /// column's value shape (counter vs gauge; histograms carry a `:buckets`
-    /// suffix, so their `metric_type` is informational).
-    fn metric_type(&self) -> &'static str {
-        match self.value {
-            CellValue::Counter(_) => "counter",
-            CellValue::Gauge(_) => "gauge",
-            CellValue::Histogram(_) => "histogram",
-        }
-    }
-}
-
+// The table builders and their input are the segment format's
+// (`metriken_segment::builder`); re-exported under the names rezolus uses.
+pub use metriken_segment::builder::{
+    cells_approx_bytes, Cell, CellValue, GroupTableBuilder, TableBuilder, CELL_OVERHEAD_BYTES,
+    HISTOGRAM_BUCKET_BYTES, VALUE_SLOT_BYTES, WINDOW_SLOT_BYTES,
+};
 #[cfg(feature = "write")]
 impl Entry<'_> {
     pub fn name(&self) -> &str {
@@ -1166,53 +658,6 @@ impl Entry<'_> {
     }
 }
 
-/// In-memory cost of a cell's value slot: `Option<u64>` / `Option<i64>` /
-/// `Option<Box<[u64]>>` are all 16 B (the histogram's buckets are counted
-/// separately below).
-const VALUE_SLOT_BYTES: usize = 16;
-/// In-memory cost of the `Option<Window>` that `push_row` pushes alongside
-/// every counted cell: 24 B, because `Window` is two `u64`s with no niche, so
-/// the option tag costs a whole word of padding.
-const WINDOW_SLOT_BYTES: usize = 24;
-/// Per-cell overhead: value slot + window slot.
-///
-/// **Both slots, and that is the point.** This is a bound on resident memory,
-/// so it has to charge what a cell actually costs — a window is pushed for
-/// every counted cell, so counting only the value slot understates a scalar
-/// cell by more than half and lets a scalar-heavy table run well past the byte
-/// cap that is supposed to bound it. `push_row_accumulates_approx_bytes` and
-/// `approx_bytes_counts_the_window_slot` pin both halves against the layout.
-const CELL_OVERHEAD_BYTES: usize = VALUE_SLOT_BYTES + WINDOW_SLOT_BYTES;
-/// Bytes per histogram bucket: `push_row` clones the histogram's bucket
-/// `Box<[u64]>` into the column.
-const HISTOGRAM_BUCKET_BYTES: usize = 8;
-
-/// What one row of `entries` adds to a table's `approx_bytes`.
-///
-/// **Split out so the byte cap binds identically whether or not a container
-/// keeps the rows.** The v2 writer buffers into a `TableBuilder` and gets this
-/// figure as a side effect of `push_row`; the v3 writer keeps only the WAL and
-/// rebuilds the table at seal time, so it has no builder to ask and must arrive
-/// at the same number to seal at the same row. Two spellings of "what a row
-/// costs" would drift, and the symptom — two containers producing differently
-/// sized segments from identical input — is invisible until someone compares
-/// them.
-///
-/// A cell whose shape does not match its column's established type is skipped
-/// by `push_row` and charged nothing here, for the same reason: it is not
-/// stored.
-pub fn cells_approx_bytes(cells: &[Cell<'_>]) -> usize {
-    cells
-        .iter()
-        .map(|c| match c.value {
-            CellValue::Counter(_) | CellValue::Gauge(_) => CELL_OVERHEAD_BYTES,
-            CellValue::Histogram(h) => {
-                CELL_OVERHEAD_BYTES + h.as_slice().len() * HISTOGRAM_BUCKET_BYTES
-            }
-        })
-        .sum()
-}
-
 #[cfg(feature = "write")]
 /// [`cells_approx_bytes`] for a row still in snapshot form. One rule, borrowed
 /// rather than restated: a second spelling of "what a row costs" is exactly
@@ -1222,219 +667,20 @@ pub fn entries_approx_bytes(entries: &[Entry<'_>]) -> usize {
     cells_approx_bytes(&cells)
 }
 
-/// A growing per-sampler table. Columns are sparse: shorter than the row count
-/// until padded (a metric absent in some rows gets `None` there).
-pub struct TableBuilder {
-    sampler: String,
-    timestamps: Vec<u64>,
-    wall_offsets: Vec<i64>,
-    order: Vec<String>,
-    columns: HashMap<String, RezColumn>,
-    /// Atomic-writer dedup state. `StreamRecorder` keeps its keys outside the
-    /// builder instead, so they survive a segment rotation.
-    #[allow(dead_code)]
-    last_key: Option<u64>,
-    approx_bytes: usize,
+/// Feeding a [`TableBuilder`] from a snapshot. The builder speaks [`Cell`];
+/// this is the ingest path's spelling for a row still in snapshot form.
+#[cfg(feature = "write")]
+pub trait PushEntries {
+    fn push_entries(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]);
 }
 
-impl TableBuilder {
-    pub fn new(sampler: String) -> Self {
-        Self {
-            sampler,
-            timestamps: Vec::new(),
-            wall_offsets: Vec::new(),
-            order: Vec::new(),
-            columns: HashMap::new(),
-            last_key: None,
-            approx_bytes: 0,
-        }
-    }
-
-    /// Approximate in-memory bytes accumulated by the cells pushed so far.
-    ///
-    /// This is what the streaming writer's seal threshold is measured in.
-    /// Serialized parquet size cannot be estimated cheaply — a dry-run encode
-    /// is exactly the cost that gets moved off the scrape thread, and static
-    /// per-row guesses are off by orders of magnitude for histogram tables — so
-    /// the cap bounds the two things it can measure exactly and in O(1) per
-    /// entry: the builder's memory footprint and the encoder's input size.
-    /// Counts only pushed cells — null back-padding of a late-appearing column
-    /// is not accounted, so the number slightly under-reports a sparse table.
-    /// Resets with the builder: a fresh builder (a post-rotation segment)
-    /// starts at zero.
-    /// Test-only: the seal decision reads `SegmentAccount`, not the builder,
-    /// so both containers reach it identically. This is what
-    /// `entries_approx_bytes_matches_what_push_row_accounts` pins that against.
-    #[cfg(test)]
-    pub fn approx_bytes(&self) -> usize {
-        self.approx_bytes
-    }
-
-    /// Rows appended so far (the row-count seal threshold, and the
-    /// "never seal an empty builder" test).
-    /// Rows appended so far.
-    ///
-    /// Gated because its only caller is the tar writer, which is itself a
-    /// fixture-only path now — the v3 writer rebuilds a table from the WAL at
-    /// seal time and never asks a builder how full it is.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn rows(&self) -> usize {
-        self.timestamps.len()
-    }
-
-    fn col_len(col: &RezColumn) -> usize {
-        match &col.values {
-            RezValues::Counter(v) => v.len(),
-            RezValues::Gauge(v) => v.len(),
-            RezValues::Histogram(v) => v.len(),
-        }
-    }
-
-    fn pad(col: &mut RezColumn, to: usize) {
-        while Self::col_len(col) < to {
-            match &mut col.values {
-                RezValues::Counter(v) => v.push(None),
-                RezValues::Gauge(v) => v.push(None),
-                RezValues::Histogram(v) => v.push(None),
-            }
-            col.windows.push(None);
-        }
-    }
-
-    /// Append one row: `snapshot_ts` is the row's timestamp and
-    /// `wall_offset_ns` the wall-clock observation for that tick (raw
-    /// `SystemTime` reading minus `snapshot_ts`), stored once per row in the
-    /// table-level `:wall_offset` sidecar.
-    /// [`push_row`](Self::push_row) for a row still in snapshot form.
-    ///
-    /// The ingest path's spelling. Rows from this archive's own WAL take
-    /// `push_row` directly — they have no snapshot values to borrow, which is
-    /// the whole reason the builder speaks [`Cell`].
-    #[cfg(feature = "write")]
-    pub fn push_entries(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
+#[cfg(feature = "write")]
+impl PushEntries for TableBuilder {
+    fn push_entries(&mut self, snapshot_ts: u64, wall_offset_ns: i64, entries: &[Entry<'_>]) {
         let cells: Vec<Cell<'_>> = entries.iter().map(Entry::as_cell).collect();
         self.push_row(snapshot_ts, wall_offset_ns, &cells);
     }
-
-    pub fn push_row(&mut self, snapshot_ts: u64, wall_offset_ns: i64, cells: &[Cell<'_>]) {
-        let row = self.timestamps.len();
-        self.timestamps.push(snapshot_ts);
-        self.wall_offsets.push(wall_offset_ns);
-        let mut added_bytes = 0usize;
-        for e in cells {
-            let name = e.name.to_string();
-            let order = &mut self.order;
-            let col = self.columns.entry(name.clone()).or_insert_with(|| {
-                order.push(name.clone());
-                let values = match e.value {
-                    CellValue::Counter(_) => RezValues::Counter(Vec::new()),
-                    CellValue::Gauge(_) => RezValues::Gauge(Vec::new()),
-                    CellValue::Histogram(_) => RezValues::Histogram(Vec::new()),
-                };
-                let mut metadata = e.metadata.clone();
-                metadata
-                    .entry("metric_type".to_string())
-                    .or_insert_with(|| e.metric_type().to_string());
-                RezColumn {
-                    name,
-                    metadata,
-                    values,
-                    windows: Vec::new(),
-                }
-            });
-            Self::pad(col, row);
-            // The window is pushed only where the value was: an entry whose
-            // shape does not match the column's established type is skipped
-            // entirely (an agent restart can remap a numeric id and flip a
-            // column from counter to gauge mid-recording). Pushing the window
-            // regardless would leave `windows` one longer than `values` and
-            // shift every later row's window onto the wrong value.
-            let cell_bytes = match (&e.value, &mut col.values) {
-                (CellValue::Counter(c), RezValues::Counter(v)) => {
-                    v.push(Some(*c));
-                    Some(CELL_OVERHEAD_BYTES)
-                }
-                (CellValue::Gauge(g), RezValues::Gauge(v)) => {
-                    v.push(Some(*g));
-                    Some(CELL_OVERHEAD_BYTES)
-                }
-                (CellValue::Histogram(h), RezValues::Histogram(v)) => {
-                    // The clone below copies the whole bucket `Box<[u64]>` —
-                    // 496 buckets ≈ 4 KB at the `HISTOGRAM_GROUPING_POWER` = 3
-                    // that `docs/principles.md` standardizes on. One histogram
-                    // cell is ~100x a scalar one, which is why the seal cap
-                    // counts bytes rather than rows.
-                    let buckets = h.as_slice().len();
-                    v.push(Some((*h).clone()));
-                    Some(CELL_OVERHEAD_BYTES + buckets * HISTOGRAM_BUCKET_BYTES)
-                }
-                _ => None,
-            };
-            if let Some(bytes) = cell_bytes {
-                col.windows.push(e.window);
-                added_bytes += bytes;
-            }
-        }
-        self.approx_bytes += added_bytes;
-    }
-
-    /// Return a finished column's growth slack to the allocator.
-    ///
-    /// Every column here was built by repeated `push`, so its capacity is a
-    /// power-of-two ceiling over its length. `approx_bytes` counts *pushed
-    /// cells*, so the seal cap is honest about the data and silent about the
-    /// slack, and a table can hand the writer up to twice what the cap allowed.
-    /// Padding is already done by the time this runs, so the length is final
-    /// and the shrink is exact.
-    ///
-    /// Pre-sizing the columns instead is worse: `Vec::with_capacity(max_rows)`
-    /// over-allocates badly for exactly the wide tables that seal on the byte
-    /// cap long before they reach the row cap.
-    fn shrink(col: &mut RezColumn) {
-        match &mut col.values {
-            RezValues::Counter(v) => v.shrink_to_fit(),
-            RezValues::Gauge(v) => v.shrink_to_fit(),
-            RezValues::Histogram(v) => v.shrink_to_fit(),
-        }
-        col.windows.shrink_to_fit();
-    }
-
-    /// Consume the builder into the table the writer will encode.
-    ///
-    /// **Shrinking here targets the seal-time peak, not the accumulation
-    /// footprint.** An open builder keeps its slack for as long as it is open —
-    /// that is what makes the pushes amortized-O(1) — and what this reclaims is
-    /// the slack on a table about to sit in the writer's channel and then be
-    /// encoded, the moment when the batch, the arrow copy and the parquet
-    /// output buffer are all resident together.
-    ///
-    /// This runs on the scrape thread, so its cost is bounded deliberately: one
-    /// realloc-and-copy per column, and the transient double-allocation a
-    /// shrink needs is one column's worth, never the whole table's.
-    pub fn finish(mut self) -> RezTable {
-        let rows = self.timestamps.len();
-        let columns = self
-            .order
-            .iter()
-            .map(|name| {
-                let mut col = self.columns.remove(name).unwrap();
-                Self::pad(&mut col, rows);
-                Self::shrink(&mut col);
-                col
-            })
-            .collect();
-        self.timestamps.shrink_to_fit();
-        self.wall_offsets.shrink_to_fit();
-        RezTable {
-            sampler: self.sampler,
-            timestamps: self.timestamps,
-            wall_offsets: self.wall_offsets,
-            columns,
-            table_window: None,
-        }
-    }
 }
-
 #[cfg(feature = "write")]
 /// One V3 acquisition-group tick's contribution to its table's approx-bytes
 /// seal budget (see `entries_approx_bytes`, which this mirrors for the
@@ -1476,297 +722,6 @@ pub fn wal_group_row_approx_bytes(row: &crate::wal::WalGroupRow) -> usize {
         bytes += VALUE_SLOT_BYTES + buckets.len() * HISTOGRAM_BUCKET_BYTES;
     }
     bytes
-}
-
-/// A growing V3 acquisition-group table: like [`TableBuilder`], but rows
-/// carry ONE table-level acquisition window (`RezTable::table_window`)
-/// instead of a window per metric, and membership per row comes from a
-/// [`GroupSchema`] rather than from an `Entry` list. Columns are still
-/// sparse and keyed by name — a schema-hash change mid-table (a cgroup
-/// added/removed) is handled the same lazy-padding way `TableBuilder`
-/// handles a metric appearing or vanishing.
-pub struct GroupTableBuilder {
-    name: String,
-    timestamps: Vec<u64>,
-    wall_offsets: Vec<i64>,
-    windows: Vec<Option<Window>>,
-    order: Vec<String>,
-    columns: HashMap<String, RezColumn>,
-    /// Descriptor name -> the key in `columns` its CURRENT generation writes
-    /// to. A relabeled slot keeps its descriptor name and gets a new key here,
-    /// so later rows for that slot find the new column rather than the old
-    /// one. See `get_or_create`.
-    live: HashMap<String, String>,
-    /// Members whose histogram failed to rebuild and have already been
-    /// reported. A malformed cell usually repeats every tick, so without this
-    /// one bad member would log per row for the life of the segment.
-    reported_bad_histograms: HashSet<String>,
-}
-
-impl GroupTableBuilder {
-    pub fn new(name: String) -> Self {
-        Self {
-            name,
-            live: HashMap::new(),
-            reported_bad_histograms: HashSet::new(),
-            timestamps: Vec::new(),
-            wall_offsets: Vec::new(),
-            windows: Vec::new(),
-            order: Vec::new(),
-            columns: HashMap::new(),
-        }
-    }
-
-    /// Rows pushed so far — lets a caller that skipped some input rows (an
-    /// un-anchored WAL tail) tell "nothing pushed at all" from "pushed a
-    /// partial table" without inspecting the finished `RezTable`.
-    pub fn rows(&self) -> usize {
-        self.timestamps.len()
-    }
-
-    fn col_len(col: &RezColumn) -> usize {
-        match &col.values {
-            RezValues::Counter(v) => v.len(),
-            RezValues::Gauge(v) => v.len(),
-            RezValues::Histogram(v) => v.len(),
-        }
-    }
-
-    /// Pad a column up to `to` rows. Unlike `TableBuilder::pad`, this never
-    /// touches `col.windows` — a group table's per-column `windows` stays
-    /// empty for its whole life; the window lives on the table, not the
-    /// column (see `RezTable::table_window`).
-    fn pad(col: &mut RezColumn, to: usize) {
-        while Self::col_len(col) < to {
-            match &mut col.values {
-                RezValues::Counter(v) => v.push(None),
-                RezValues::Gauge(v) => v.push(None),
-                RezValues::Histogram(v) => v.push(None),
-            }
-        }
-    }
-
-    /// The column a descriptor writes into, creating it on first sight — and
-    /// creating a NEW one when the descriptor's labels have changed.
-    ///
-    /// A group slot's descriptor name is `{metric_id}x{slot}` whatever its
-    /// labels are, so a slot that is relabeled or reused keeps the same name.
-    /// Keying on the name alone meant the second identity wrote into the first
-    /// one's column, and the column kept the first one's metadata: a
-    /// filesystem remounted elsewhere, or a reused PID, had its values filed
-    /// under the previous occupant's labels, with nothing at the seam and no
-    /// way for any later read to recover the split (issue #1205).
-    ///
-    /// So identity here is `(name, labels)`, not `name`. A changed label set
-    /// opens a fresh column whose physical name carries a generation suffix,
-    /// because parquet field names must be unique within a schema.
-    ///
-    /// **The suffix is invisible to queries.** `metriken_query`'s
-    /// `parse_schema` takes a column's series name from its `metric` metadata
-    /// and only falls back to the field name when that is absent, and
-    /// `SeriesIdentity` keys on `(name, labels)` — so the two generations
-    /// present as two series distinguished by their labels, which is what they
-    /// are. Nothing downstream needs to learn about generations.
-    ///
-    /// `#` as the separator, deliberately: every sidecar suffix this format
-    /// uses is `:`-prefixed (`:window_begin`, `:window_width`, `:buckets`), and
-    /// `rez::read_table_parquet` strips those by suffix match. A `:`-prefixed
-    /// generation marker would be mistaken for a sidecar.
-    fn get_or_create(
-        &mut self,
-        desc: &crate::schema::MetricDesc,
-        metric_type: &'static str,
-        empty: RezValues,
-    ) -> &mut RezColumn {
-        let mut metadata: HashMap<String, String> = desc
-            .metadata
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        metadata
-            .entry("metric_type".to_string())
-            .or_insert_with(|| metric_type.to_string());
-
-        // The live column for this descriptor name, if its labels still match.
-        // Compared on the FULL metadata map, `metric_type` included: the map is
-        // what becomes the column's parquet field metadata, so anything that
-        // differs in it is a different column.
-        let key = match self.live.get(desc.name.as_str()) {
-            Some(key)
-                if self
-                    .columns
-                    .get(key)
-                    .is_some_and(|c| c.metadata == metadata) =>
-            {
-                key.clone()
-            }
-            _ => {
-                // First sight, or a relabel. Either way this descriptor needs a
-                // column of its own; find a field name nothing else has taken.
-                let mut key = desc.name.clone();
-                let mut generation = 1usize;
-                while self.columns.contains_key(&key) {
-                    generation += 1;
-                    key = format!("{}#{generation}", desc.name);
-                }
-                self.live.insert(desc.name.clone(), key.clone());
-                self.order.push(key.clone());
-                self.columns.insert(
-                    key.clone(),
-                    RezColumn {
-                        name: key.clone(),
-                        metadata,
-                        values: empty,
-                        windows: Vec::new(),
-                    },
-                );
-                key
-            }
-        };
-
-        self.columns
-            .get_mut(&key)
-            .expect("the key was just resolved against `columns`")
-    }
-
-    /// Append one row: `ts`/`wall_offset_ns` as in `TableBuilder::push_row`,
-    /// `window` the group's single shared acquisition window for this tick,
-    /// and `schema` the [`GroupSchema`] the three value slices align with
-    /// (counters, then gauges, then histograms, matching `GroupSnapshot`'s
-    /// own field order). A member's `None` slot ("registered, no reading
-    /// this tick") is pushed as `None` in its column — it stays a member,
-    /// it just has no value this row, per V3's membership-from-registration
-    /// design.
-    ///
-    /// Fallible for the same reason `materialize_wal_tail` is: a histogram
-    /// cell's `(grouping_power, max_value_power, buckets)` came off the WAL
-    /// (msgpack, not re-validated by `GroupSnapshot::validate` — that only
-    /// checks arity/hash), so rebuilding it through
-    /// `histogram::Histogram::from_buckets` can fail on a malformed payload.
-    /// Errors rather than panics, matching the v2 writer's WAL-recovery path.
-    #[allow(clippy::too_many_arguments)]
-    pub fn push_row(
-        &mut self,
-        ts: u64,
-        wall_offset_ns: i64,
-        window: Option<Window>,
-        schema: &crate::schema::GroupSchema,
-        counters: &[Option<u64>],
-        gauges: &[Option<i64>],
-        // `(grouping_power, max_value_power, buckets)` per histogram slot —
-        // the same shape `WalValue::Histogram` carries, kept as a bare tuple
-        // here (rather than importing `rez_v3_writer`'s WAL-row type) so this
-        // lower-level format module does not depend on the writer module.
-        histograms: &[Option<(u8, u8, Vec<u64>)>],
-    ) {
-        let row = self.timestamps.len();
-        self.timestamps.push(ts);
-        self.wall_offsets.push(wall_offset_ns);
-        self.windows.push(window);
-
-        for (desc, v) in schema.counters.iter().zip(counters) {
-            let col = self.get_or_create(desc, "counter", RezValues::Counter(Vec::new()));
-            Self::pad(col, row);
-            if let RezValues::Counter(vs) = &mut col.values {
-                vs.push(*v);
-            }
-        }
-        for (desc, v) in schema.gauges.iter().zip(gauges) {
-            let col = self.get_or_create(desc, "gauge", RezValues::Gauge(Vec::new()));
-            Self::pad(col, row);
-            if let RezValues::Gauge(vs) = &mut col.values {
-                vs.push(*v);
-            }
-        }
-        let table_name = self.name.clone();
-        for (desc, v) in schema.histograms.iter().zip(histograms) {
-            let member_name = desc.name.clone();
-
-            // Decoded BEFORE `get_or_create` borrows the column, because
-            // reporting a bad cell needs `&mut self` too.
-            let decoded = match v {
-                Some((gp, mvp, buckets)) => {
-                    let rebuilt =
-                        match histogram::Histogram::from_buckets(*gp, *mvp, buckets.clone()) {
-                            Ok(h) => Some(h),
-                            Err(e) => {
-                                // Missing beats wrong, and beats stuck: the
-                                // CELL is dropped, not the row and not the
-                                // table. Reported once per member per segment
-                                // — a malformed cell usually repeats every
-                                // tick, and logging per row would bury it.
-                                if self.reported_bad_histograms.insert(member_name.clone()) {
-                                    warn!(
-                                        "dropping malformed histogram cells for {member_name} \
-                                         in {table_name}: {e}. That metric reads as absent for \
-                                         affected rows; every other metric in the group is \
-                                         unaffected."
-                                    );
-                                }
-                                None
-                            }
-                        };
-                    // Stamped even when the rebuild failed, and that is
-                    // deliberate. Both `read_table_parquet` and
-                    // `metriken_query::ParquetReader` need
-                    // `grouping_power`/`max_value_power` in the parquet FIELD
-                    // metadata to reconstruct a histogram column at all —
-                    // without them the column silently drops out of
-                    // `histogram_names()` once resealed and reopened. If the
-                    // first row a column ever sees is malformed, dropping the
-                    // config with it would lose the whole column's identity,
-                    // not just one cell.
-                    Some((rebuilt, *gp, *mvp))
-                }
-                None => None,
-            };
-
-            let col = self.get_or_create(desc, "histogram", RezValues::Histogram(Vec::new()));
-            Self::pad(col, row);
-            if let Some((_, gp, mvp)) = &decoded {
-                col.metadata
-                    .entry("grouping_power".to_string())
-                    .or_insert_with(|| gp.to_string());
-                col.metadata
-                    .entry("max_value_power".to_string())
-                    .or_insert_with(|| mvp.to_string());
-            }
-            if let RezValues::Histogram(vs) = &mut col.values {
-                vs.push(decoded.and_then(|(h, _, _)| h));
-            }
-        }
-    }
-
-    /// Consume the builder into the table the writer will encode. Mirrors
-    /// `TableBuilder::finish`, but stamps `table_window` (`Some`) instead of
-    /// leaving each column's `windows` populated.
-    pub fn finish(mut self) -> RezTable {
-        let rows = self.timestamps.len();
-        let columns = self
-            .order
-            .iter()
-            .map(|name| {
-                let mut col = self.columns.remove(name).unwrap();
-                Self::pad(&mut col, rows);
-                match &mut col.values {
-                    RezValues::Counter(v) => v.shrink_to_fit(),
-                    RezValues::Gauge(v) => v.shrink_to_fit(),
-                    RezValues::Histogram(v) => v.shrink_to_fit(),
-                }
-                col
-            })
-            .collect();
-        self.timestamps.shrink_to_fit();
-        self.wall_offsets.shrink_to_fit();
-        self.windows.shrink_to_fit();
-        RezTable {
-            sampler: self.name,
-            timestamps: self.timestamps,
-            wall_offsets: self.wall_offsets,
-            columns,
-            table_window: Some(self.windows),
-        }
-    }
 }
 
 /// The sampler a `.rez` table key belongs to. V3 acquisition-group tables are
@@ -1960,12 +915,12 @@ impl RezRecorder {
                 .tables
                 .entry(sampler.to_string())
                 .or_insert_with(|| TableBuilder::new(sampler.to_string()));
-            if let Some(last) = table.last_key {
+            if let Some(last) = table.last_key() {
                 if key <= last {
                     continue; // window unchanged → same observation → skip
                 }
             }
-            table.last_key = Some(key);
+            table.set_last_key(key);
             // `snapshot_ts` is today's raw `SystemTime` reading, so the wall
             // observation is exactly zero. It becomes meaningful when the
             // recorder loop switches to monotonic-anchored row stamps and
@@ -2135,53 +1090,6 @@ mod builder_tests {
         );
     }
 
-    // `approx_bytes` bounds the DATA, and a `Vec` grown by push carries up to
-    // 2x that in capacity, which the writer would then hold across the channel
-    // and the encode. `finish` returns the slack. 100 rows is chosen to land
-    // between powers of two, so a build that stops shrinking fails here instead
-    // of coincidentally passing.
-    #[test]
-    fn finish_returns_the_growth_slack() {
-        let mut b = TableBuilder::new("s".to_string());
-        let c = Counter::new("0".to_string(), 1, cmeta("s"));
-        let g = Gauge::new("1".to_string(), 1, cmeta("s"));
-        for row in 0..100u64 {
-            b.push_entries(row * 1_000, 0, &[Entry::Counter(&c), Entry::Gauge(&g)]);
-        }
-        // Pre-condition: without it a shrink that does nothing still passes.
-        assert!(
-            b.timestamps.capacity() > b.timestamps.len(),
-            "the fixture must actually have slack to return"
-        );
-
-        let t = b.finish();
-        assert_eq!(t.timestamps.capacity(), t.timestamps.len(), "timestamps");
-        assert_eq!(
-            t.wall_offsets.capacity(),
-            t.wall_offsets.len(),
-            "wall_offsets"
-        );
-        assert_eq!(
-            t.columns.len(),
-            2,
-            "one counter column and one gauge column"
-        );
-        for col in &t.columns {
-            let (len, cap) = match &col.values {
-                RezValues::Counter(v) => (v.len(), v.capacity()),
-                RezValues::Gauge(v) => (v.len(), v.capacity()),
-                RezValues::Histogram(v) => (v.len(), v.capacity()),
-            };
-            assert_eq!(cap, len, "{} values", col.name);
-            assert_eq!(
-                col.windows.capacity(),
-                col.windows.len(),
-                "{} windows",
-                col.name
-            );
-        }
-    }
-
     // `entries_approx_bytes` is what lets a container with no builder seal at
     // the same row a buffering one does, which is only true if it returns
     // exactly what `push_row` charges. Asserted against the builder itself over
@@ -2342,7 +1250,7 @@ mod builder_tests {
         let field = schema
             .field_with_name(":wall_offset")
             .expect(":wall_offset field present");
-        assert_eq!(field.data_type(), &DataType::Int64);
+        assert_eq!(field.data_type(), &arrow::datatypes::DataType::Int64);
 
         let bytes = write_table_parquet(&table).unwrap();
         let back = read_table_parquet("cpu_usage".to_string(), bytes).unwrap();
@@ -2552,7 +1460,7 @@ mod recorder_tests {
             r.ingest(&snap(ts, vec![counter("0", "cpu_perf", i, None)]), ts);
         }
         let t = r.table("cpu_perf").unwrap();
-        assert_eq!(t.timestamps.len(), 3);
+        assert_eq!(t.rows(), 3);
     }
 
     #[test]
@@ -2565,7 +1473,7 @@ mod recorder_tests {
                 1_000 + i,
             );
         }
-        assert_eq!(r.table("drivehealth").unwrap().timestamps.len(), 1);
+        assert_eq!(r.table("drivehealth").unwrap().rows(), 1);
     }
 
     #[test]
@@ -2586,7 +1494,7 @@ mod recorder_tests {
                 2_000 + i,
             );
         }
-        assert_eq!(r.table("cpu_usage").unwrap().timestamps.len(), 3);
+        assert_eq!(r.table("cpu_usage").unwrap().rows(), 3);
     }
 
     #[test]
@@ -2607,10 +1515,9 @@ mod recorder_tests {
             );
         }
         let t = r.table("cpu_usage").unwrap();
-        assert_eq!(t.timestamps.len(), 2);
+        assert_eq!(t.rows(), 2);
         let packed = t
-            .columns
-            .values()
+            .columns()
             .find(|c| c.name == "1")
             .expect("packed column present");
         match &packed.values {

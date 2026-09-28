@@ -46,8 +46,8 @@ use super::seal_policy::{SealPolicy, SegmentAccount};
 
 use super::rez::{
     append_tar_entry, dedup_key, entries_approx_bytes, group_by_sampler, write_table_parquet,
-    Entry, RezManifest, RezRecording, RezTable, RezTableIndex, TableBuilder, REZ_MANIFEST_NAME,
-    REZ_SCHEMA_VERSION,
+    Entry, PushEntries, RezManifest, RezRecording, RezTable, RezTableIndex, TableBuilder,
+    REZ_MANIFEST_NAME, REZ_SCHEMA_VERSION,
 };
 
 /// The fixed parts of the recording's manifest entry, known at recording start.
@@ -787,7 +787,7 @@ pub fn write_segmented_rez(
 mod tests {
     use super::*;
     use crate::rez::recorder_tests_support::{counter, snap};
-    use crate::rez::{Entry, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
+    use crate::rez::{Entry, PushEntries, RezManifest, TableBuilder, REZ_MANIFEST_NAME};
     use crate::window::Window;
     use std::io::Read;
 

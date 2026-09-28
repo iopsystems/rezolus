@@ -245,17 +245,24 @@ off, `crates/rez` is a *reader*: container, catalog, WAL-tail materialization,
 `wasm32-unknown-unknown`, and the reason it has to exist is narrow — `metriken`'s
 registry (`metriken-core`) declares a `linkme` distributed slice, and `linkme`
 gates on a fixed `target_os` list that `unknown` is not in. So the read path
-must not name a `metriken`/`metriken-exposition` type at all, which is why the
-archive owns:
+must not name a `metriken`/`metriken-exposition` type at all. These types
+belong to the segment format, `metriken-segment` (wasm-safe; the wide table,
+its builders and parquet codec moved there too, per metriken's
+`docs/journal/2026-09-28-high-cardinality-stack.md`), and `crates/rez`
+re-exports them under the paths call sites use:
 
 - `rez::window::Window` — the acquisition window a segment stores. Converted
-  from `metriken::Window` once, at ingest.
+  from `metriken::Window` once, at ingest (metriken-segment's `metriken`
+  feature, which `rez`'s `write` feature turns on).
 - `rez::schema::{GroupSchema, MetricDesc}` — a group's membership as carried in
   a WAL row. Its serde field order is the on-disk msgpack, so it is pinned
-  byte-for-byte against the producer's type by a test.
+  byte-for-byte against the producer's type by tests in metriken-exposition,
+  which also holds the conversion (its `segment` feature).
 - `rez::rez::{Cell, CellValue}` — the builder's input. Rows reach a table from
   an agent snapshot *and* from this archive's own WAL, and only the first has
-  snapshot values to borrow.
+  snapshot values to borrow. `push_entries`, the snapshot form, is the
+  `rez::rez::PushEntries` extension trait, since the builder is no longer
+  rezolus's type.
 
 `cargo check -p rez --no-default-features --target wasm32-unknown-unknown` is a
 CI step for exactly this reason; nothing else catches a metriken type creeping
