@@ -738,7 +738,7 @@ excessive system calls or unexpected patterns of system call usage.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `syscall` | The number of syscalls by operation type | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}` |
+| `syscall` | The number of syscalls by operation type on a per-CPU basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}`, `id`: the CPU the syscall entered on |
 | `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}`, `name`: the name of the cgroup | |
 
 ### syscall_latency

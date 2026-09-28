@@ -94,7 +94,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters, &COUNTERS_ACQ)
+    .cpu_counters("counters", counters, &COUNTERS_ACQ)
     .map("syscall_lut", syscall_lut())
     .packed_counters(
         "cgroup_syscall_other",
