@@ -132,6 +132,13 @@ with the command's own status, so `rezolus record -o bench.rez -- ./bench.sh &&
 analyze bench.rez` gates on the benchmark; the exception is the `--duration`
 cap, which exits 124 if it has to kill the command.
 
+A wrapped run is also marked in the recording: a `run_start` event when the
+command spawns and a `run_end` event when its exit is observed (both in `.rez`
+and parquet output; raw output has no metadata to carry them), named by the
+program alone. Pass `--record-command-line` to store the full argument list in
+the `run_start` event's details, since arguments can carry paths or tokens you
+may not want in a file you share.
+
 ### Tagging a recording
 
 `-m/--metadata k=v` writes file-level metadata and applies to every format.

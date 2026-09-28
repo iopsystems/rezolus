@@ -60,6 +60,8 @@ target/release/rezolus record --url http://localhost:4241 -o out.rez --label arm
 target/release/rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez  # one recording per endpoint
 target/release/rezolus record --url http://host:9090/metrics -o out.parquet --metadata source=llm-perf
 target/release/rezolus record --stream --url http://localhost:4241 -o out.rez   # subscribe to /metrics/stream instead of scraping
+target/release/rezolus record -o bench.rez -- ./bench.sh   # record for the command's lifetime; writes run_start/run_end events
+#   (program name only; --record-command-line adds the full argument list; .rez and parquet carry them, raw cannot)
 # Auto-detects Rezolus agent vs Prometheus endpoints. The -o extension picks the format
 # (.rez | .parquet | .raw); --format {rez|parquet|raw} is rarely needed and conflicting with
 # the extension is an error. With no -o, the output is rezolus.<ext> for the format in play.

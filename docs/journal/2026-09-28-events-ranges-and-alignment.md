@@ -1,8 +1,8 @@
 # Events as ranges, phases, and alignment anchors
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — range rendering BUILT (this PR); recorder run events
-  and event-anchored alignment not yet started.
+- **Status:** OPEN — range rendering BUILT (#1322); recorder run events
+  BUILT (this PR); event-anchored alignment not yet started.
 
 ## Problem
 
@@ -118,6 +118,57 @@ settle before building:
 - Clock: the event instant must come from the same clock as the row
   timestamps, which is the recorder's wall clock at the tick that observed
   the spawn, not the child's own start time.
+
+*Built (this PR).* Both questions were answered as proposed. `description`
+is the basename of `argv[0]` (`bench.sh`), and the full argument list,
+joined by spaces, goes into `run_start`'s `details` only with
+`--record-command-line`. Both instants are on the recorder's timeline,
+`anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())`. That is
+not the timeline a rezolus agent's rows are on: those carry the agent's
+producer stamp (`snapshot_producer_stamp`), and the recording's anchor is
+the agent's, so for a remote agent the marker sits off its rows by the
+wall-clock skew between the two hosts, the same as an `annotate --event
+time=` marker does. Converting at merge time was considered and not done.
+The obvious conversion, the recorder's wall reading at the event minus the
+recording's last `wall_offset`, does not remove the skew: a rezolus agent's
+`wall_offset` is the agent's own wall clock against its own timeline, so the
+result is still the agent's timeline plus the wall skew, measured at the
+last tick instead of at the anchors. Removing it needs the agent's stamp
+paired with the recorder's instant at the same moment. On the scrape path
+that pairing exists and was not used: the agent's `ts` is read inside the
+request/response window the recorder measures on its own clock, so
+`snapshot_producer_stamp` and the tick's `anchored_ns` are both in hand
+where the tick is staged (`src/recorder/mod.rs`, the `rec.stage` call), and
+a conversion through them would place the event to within one round trip.
+On the stream path it does not: a frame arrives up to an interval after the
+agent produced it, so pairing its stamp with the receipt instant is off by
+more than the skew it would remove on an NTP-synced fleet. So the events
+stay on the recorder's clock for now; converting per recording is possible
+with round-trip precision for scraped recordings and not for streamed ones,
+and is deferred to the backlog ("Run events on each recording's own
+timeline"). The `.rez`
+writer needed a new message: metadata was set once in the `ManifestSeed` at
+`add_recording`, and `finalize` never touched it, so `Msg::UpdateMetadata`
+and `RecordingWriter::update_metadata` (`crates/rez/src/rez_v3_writer.rs`)
+now replace a recording's whole map through the writer thread, which owns
+the only writing connection; `RezStream` keeps each recording's last map so
+it can send it back with an event merged in. The recording loop gained a
+`select!` arm on `child.wait()` so the child's exit wakes the loop and
+`run_end` is stamped when the exit happened rather than at the next tick.
+The arm only records the instant; the loop top's `try_wait` takes the
+decision (tokio caches the status once `wait` has completed), and the exit
+is followed by one final scrape before the loop stops, so the interval the
+command exited in is sampled, as it was before the arm existed. Ids are
+`run:<uuid>:start` and
+`run:<uuid>:end` with one v4 uuid per `record` invocation (minted by the
+same `epoch::mint` the producer epoch uses), so `combine`'s dedup by id
+keeps one pair per run. Parquet output gets the same payload from
+`build_parquet_converter` under `KEY_EVENTS`; raw output has no metadata and
+cannot carry them, and the help says so. An endpoint that joins after the
+spawn gets `run_start` in its seed through `build_rez_metadata`'s new
+`run_events` argument. The path that discards a `.rez` when the command
+exits before any sample is unchanged: `run_end` is merged only in the
+finalize block, after that check.
 
 **Event-anchored alignment.** Alongside the numeric offset, an anchor may be
 `{ kind: "run_start" }`. At render time `anchorSecondsFor` resolves it per

@@ -13,7 +13,10 @@ use std::collections::BTreeMap;
 /// - `description` is a short title rendered inline next to the marker.
 /// - `kind` is a free-form tag (`restart`, `config_change`, `deploy`,
 ///   `incident`, `anomaly`, `marker`, `note`, ...). Conventions only, not
-///   validated, so users may invent their own without a release.
+///   validated, so users may invent their own without a release. Two are
+///   written by the recorder itself for `rezolus record -- <command>`:
+///   `run_start` (the command spawned) and `run_end` (its exit was observed),
+///   paired by `id` as `run:<uuid>:start` / `run:<uuid>:end`.
 /// - `details` is longer optional text (e.g. a paragraph of context).
 /// - `source` / `node` / `instance` scope the event to a specific
 ///   recording stream within a (possibly combined) file. When all three are

@@ -34,6 +34,8 @@ fn wants_rez(format: crate::Format) -> bool {
 }
 
 use crate::parquet_metadata;
+use crate::parquet_metadata::KEY_EVENTS;
+use crate::viewer::{Event, Events};
 pub use config::RecordingConfig;
 use endpoint::{infer_source_name, AgentMetadata, EndpointState, EndpointStatus, Protocol};
 use std::collections::BTreeMap;
@@ -67,6 +69,11 @@ pub fn command() -> Command {
              `rezolus record -o bench.rez -- ./bench.sh && analyze bench.rez` gates on the\n\
              benchmark exactly as it would without the wrapper. The one substitution is the\n\
              --duration cap: if it fires and the command is killed, rezolus exits 124.\n\n\
+             A wrapped run is also marked in the recording: a `run_start` event when the\n\
+             command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
+             run's edges and align two recordings on them. Only the program name is stored\n\
+             unless --record-command-line is given. .rez and parquet output carry the events;\n\
+             raw output has no metadata to carry them in.\n\n\
              WHAT IT WRITES: the output path is -o/--output, and its extension picks the\n\
              format, so --format is rarely needed. With no -o at all the recording goes to\n\
              rezolus.<ext> for the format in play — by default rezolus.rez. (A \"sampler\" below\n\
@@ -284,8 +291,15 @@ pub fn command() -> Command {
                 .conflicts_with("OUTPUT"),
         )
         .arg(
+            clap::Arg::new("RECORD_COMMAND_LINE")
+                .long("record-command-line")
+                .help("With `-- <command>`, also store the full command line (arguments joined by spaces) in the run_start event's details. Off by default because arguments can carry paths and tokens; only the program name is recorded then. See COMMAND for the run_start/run_end events")
+                .action(clap::ArgAction::SetTrue)
+                .requires("COMMAND"),
+        )
+        .arg(
             clap::Arg::new("COMMAND")
-                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100")
+                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. .rez and parquet output carry the events; raw output has no metadata and cannot, and a run that captured no samples writes no file at all")
                 .action(clap::ArgAction::Set)
                 .index(3)
                 .num_args(1..)
@@ -841,6 +855,7 @@ fn build_parquet_converter(
     config: &RecordingConfig,
     ep: &EndpointState,
     prom_converter: &Option<prometheus::PrometheusConverter>,
+    run_events: &[Event],
 ) -> MsgpackToParquet {
     let mut converter = MsgpackToParquet::with_options(
         ParquetOptions::new().max_batch_size(parquet_metadata::MAX_ROW_GROUP_SIZE),
@@ -871,6 +886,11 @@ fn build_parquet_converter(
     }
 
     for (key, value) in &config.metadata {
+        // A user `--metadata events=...` is merged with the run events below
+        // rather than written here, where the run events would replace it.
+        if key == KEY_EVENTS {
+            continue;
+        }
         converter = converter.metadata(key.clone(), value.clone());
     }
 
@@ -909,15 +929,188 @@ fn build_parquet_converter(
         converter = converter.metadata("per_source_metadata".to_string(), json);
     }
 
+    // The wrapped run's `run_start`/`run_end` events, under the key `annotate`
+    // uses, merged with any `--metadata events=...` the user gave, the same
+    // rule `build_rez_metadata` applies. Every endpoint's file gets the same
+    // two: they are global (no source/node/instance), and a multi-endpoint
+    // parquet run goes through `combine_files`, which concatenates the key
+    // and dedups by event id.
+    let user_events = config
+        .metadata
+        .iter()
+        .rev()
+        .find(|(k, _)| k == KEY_EVENTS)
+        .map(|(_, v)| v.as_str());
+    if let Some(json) = events_payload(user_events, run_events) {
+        converter = converter.metadata(KEY_EVENTS.to_string(), json);
+    }
+
     converter
+}
+
+/// The `KEY_EVENTS` payload for a parquet footer: `run_events` merged into
+/// the user's own `--metadata events=...` value, or `None` when there is
+/// neither. A user value that does not parse is kept verbatim, with a
+/// warning, and the run events are the ones dropped; an empty result drops
+/// the key rather than storing `{"events":[]}`, as `annotate` does.
+fn events_payload(user_events: Option<&str>, run_events: &[Event]) -> Option<String> {
+    let mut m = BTreeMap::new();
+    if let Some(raw) = user_events {
+        m.insert(KEY_EVENTS.to_string(), raw.to_string());
+    }
+    if let Err(e) = merge_events_into(&mut m, run_events) {
+        warn!("not adding the run events to the parquet footer: {e}");
+    }
+    m.remove(KEY_EVENTS)
+}
+
+/// Append `events` to the `KEY_EVENTS` payload in `metadata`, in place.
+///
+/// The existing payload is parsed and the result normalized, so an event
+/// already present by id is not duplicated. Shared by the seed (a recording
+/// opened after the run started already carries `run_start`) and by the
+/// live update that adds an event after the seed was written.
+fn merge_events_into(
+    metadata: &mut BTreeMap<String, String>,
+    events: &[Event],
+) -> Result<(), String> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut payload = match metadata.get(KEY_EVENTS) {
+        Some(raw) => serde_json::from_str::<Events>(raw)
+            .map_err(|e| format!("the recording's events payload is invalid: {e}"))?,
+        None => Events::default(),
+    };
+    payload.events.extend_from_slice(events);
+    payload.normalize();
+    let encoded = serde_json::to_string(&payload)
+        .map_err(|e| format!("failed to encode the recording's events: {e}"))?;
+    metadata.insert(KEY_EVENTS.to_string(), encoded);
+    Ok(())
+}
+
+/// How a wrapped command's run ended, for its `run_end` event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunEnding {
+    /// The command exited on its own with this mapped exit code.
+    Exited(i32),
+    /// The command outlived `--duration` and was killed.
+    Capped,
+    /// The recording was stopped (ctrl-c, SIGTERM) while the command was
+    /// still running, and the command was terminated with it. Carries the
+    /// mapped exit code the termination produced.
+    Interrupted(i32),
+}
+
+/// One wrapped run: the identity its `run_start` and `run_end` events share.
+///
+/// The id is minted once per `record` invocation, the same v4 uuid shape as
+/// the agent's producer epoch, so the two events of one run pair up by id
+/// (`run:<uuid>:start` / `run:<uuid>:end`) and a merge of recordings from
+/// different runs keeps each run's pair distinct.
+struct RunMarker {
+    id: String,
+    /// Basename of argv[0]: what the events name the run by. The full
+    /// argument list is only stored on request (`--record-command-line`).
+    program: String,
+}
+
+impl RunMarker {
+    fn new(command: &[String]) -> Self {
+        let program = command
+            .first()
+            .map(|argv0| {
+                Path::new(argv0)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| argv0.clone())
+            })
+            .unwrap_or_default();
+        Self {
+            id: crate::agent::epoch::mint(),
+            program,
+        }
+    }
+
+    /// The `run_start` event. `timestamp` is the recorder-clock stamp taken
+    /// when the spawn returned; `command_line` is the full argument list,
+    /// present only when the user asked for it.
+    fn start_event(&self, timestamp: u64, command_line: Option<String>) -> Event {
+        Event {
+            timestamp,
+            description: self.program.clone(),
+            kind: Some("run_start".to_string()),
+            details: command_line,
+            id: Some(format!("run:{}:start", self.id)),
+            source: None,
+            node: None,
+            instance: None,
+            labels: BTreeMap::new(),
+            duration_ns: None,
+            chart_id: None,
+        }
+    }
+
+    /// The `run_end` event, stamped with the instant the exit was observed.
+    fn end_event(&self, timestamp: u64, ending: RunEnding) -> Event {
+        let (description, details) = match ending {
+            RunEnding::Exited(code) => (
+                format!("{} exited {code}", self.program),
+                format!("The command exited on its own with exit code {code}."),
+            ),
+            RunEnding::Capped => (
+                format!("{} capped", self.program),
+                "The command outlived the --duration cap and was terminated.".to_string(),
+            ),
+            RunEnding::Interrupted(code) => (
+                format!("{} interrupted", self.program),
+                // `map_exit_code` gives 128 + signal for a signal death, which
+                // is what a terminated command normally reports; a command
+                // that caught SIGTERM and exited reports its own code.
+                if code > 128 {
+                    format!(
+                        "The recording was interrupted while the command was still running; \
+                         the command was terminated and ended with status {code} \
+                         (128 + signal {}).",
+                        code - 128
+                    )
+                } else {
+                    format!(
+                        "The recording was interrupted while the command was still running; \
+                         the command was asked to stop and exited with code {code}."
+                    )
+                },
+            ),
+        };
+        Event {
+            timestamp,
+            description,
+            kind: Some("run_end".to_string()),
+            details: Some(details),
+            id: Some(format!("run:{}:end", self.id)),
+            source: None,
+            node: None,
+            instance: None,
+            labels: BTreeMap::new(),
+            duration_ns: None,
+            chart_id: None,
+        }
+    }
 }
 
 /// File-level metadata for a `.rez` archive manifest, mirroring the keys
 /// `build_parquet_converter` writes (`sampling_interval_ms`, `source`,
 /// `version`, user `--metadata`, `systeminfo`, `descriptions`).
+///
+/// `run_events` are the wrapped run's events known so far, so a recording
+/// opened after the command spawned (a late-joining endpoint) carries
+/// `run_start` from its seed rather than waiting for an update that already
+/// happened.
 fn build_rez_metadata(
     config: &RecordingConfig,
     ep: &EndpointState,
+    run_events: &[Event],
 ) -> std::collections::BTreeMap<String, String> {
     let mut m = std::collections::BTreeMap::new();
     m.insert(
@@ -946,6 +1139,12 @@ fn build_rez_metadata(
     }
     if let Some(ref json) = ep.agent.descriptions {
         m.insert("descriptions".to_string(), json.clone());
+    }
+    // Cannot fail on a map with no `events` key yet, and a user `--metadata
+    // events=...` that does not parse is the user's to fix: their value is
+    // kept and the run events are the ones dropped, with a warning.
+    if let Err(e) = merge_events_into(&mut m, run_events) {
+        warn!("not adding the run events to the recording's metadata: {e}");
     }
     m
 }
@@ -981,6 +1180,12 @@ struct RezStream {
     /// msgpack endpoints get a recording: a sparse map says which endpoints
     /// are being archived without a `None` per endpoint that is not.
     recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
+    /// Each recording's metadata map as last written, keyed like `recs`.
+    ///
+    /// Kept because `RecordingWriter::update_metadata` replaces the whole
+    /// map: adding a run event means sending the seed back with the event
+    /// merged in, and the writer does not hand the seed back.
+    metadata: BTreeMap<usize, BTreeMap<String, String>>,
     /// This tick's rows, per recording, waiting for one commit.
     ///
     /// Cleared by `commit_tick`. Rows sitting here have already advanced each
@@ -1119,18 +1324,23 @@ impl RezStream {
     /// endpoint's `systeminfo` must already be fetched — that is what supplies
     /// the `host` label — which is why the caller does this after the metadata
     /// fetch rather than at probe time.
+    ///
+    /// `run_events` are the wrapped run's events so far; a recording opened
+    /// after the command spawned gets `run_start` in its seed.
     fn add_endpoint(
         &mut self,
         idx: usize,
         config: &RecordingConfig,
         ep: &EndpointState,
         clock_anchor_wall_ns: u64,
+        run_events: &[Event],
     ) -> Result<(), String> {
         let labels = build_rez_labels(config, ep);
         warn_if_indistinguishable(&mut self.seen_labels, &labels, &ep.config.url);
+        let metadata = build_rez_metadata(config, ep, run_events);
         let seed = rez_v3_writer::ManifestSeed {
             labels,
-            metadata: build_rez_metadata(config, ep),
+            metadata: metadata.clone(),
             // The SOURCE's anchor where there is one. This recording's rows
             // carry the agent's timestamps, so anchoring it on the recorder's
             // clock instead would make `ts + wall_offset` resolve against a
@@ -1150,7 +1360,41 @@ impl RezStream {
         let writer = self.archive.add_recording(seed)?;
         self.recs
             .insert(idx, rez_v3_writer::StreamRecorderV3::new(writer));
+        self.metadata.insert(idx, metadata);
         Ok(())
+    }
+
+    /// Add `events` to every open recording's `KEY_EVENTS` payload.
+    ///
+    /// Each recording's stored map is cloned, the events merged in
+    /// (`merge_events_into`, which parses what is there and dedups by id),
+    /// and the result sent through the writer as a whole-map replacement.
+    /// The stored copy is updated only once the writer confirms, so a failed
+    /// update can be retried with the same input. Every recording is
+    /// attempted even if an earlier one failed; the first error is reported.
+    fn merge_events(&mut self, events: &[Event]) -> Result<(), String> {
+        let mut first_err = None;
+        for (idx, rec) in &self.recs {
+            let Some(current) = self.metadata.get(idx) else {
+                first_err.get_or_insert(format!(
+                    "recording {} has no metadata to add events to",
+                    rec.recording_id()
+                ));
+                continue;
+            };
+            let mut merged = current.clone();
+            let result = merge_events_into(&mut merged, events)
+                .and_then(|()| rec.update_metadata(merged.clone()));
+            match result {
+                Ok(()) => {
+                    self.metadata.insert(*idx, merged);
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        first_err.map_or(Ok(()), Err)
     }
 
     /// Run every recording's seal check.
@@ -1188,6 +1432,7 @@ impl RezStream {
             mut archive,
             seen_labels: _,
             staged: _,
+            metadata: _,
             last_stamp,
         } = self;
         // Every recording is finalized, even if an earlier one failed: they
@@ -1269,6 +1514,7 @@ fn start_rez_recorder(
     let archive = rez_v3_writer::RezArchive::create(&config.output)?;
     let mut stream = RezStream {
         recs: BTreeMap::new(),
+        metadata: BTreeMap::new(),
         last_stamp: BTreeMap::new(),
         seen_labels: BTreeMap::new(),
         staged: Vec::new(),
@@ -1276,7 +1522,9 @@ fn start_rez_recorder(
     };
 
     for (idx, ep) in eps {
-        if let Err(e) = stream.add_endpoint(*idx, config, ep, clock_anchor_wall_ns) {
+        // No run events yet: the archive is opened before the wrapped command
+        // is spawned, so `run_start` reaches these recordings by update.
+        if let Err(e) = stream.add_endpoint(*idx, config, ep, clock_anchor_wall_ns, &[]) {
             // `RezArchive::create` claimed the path with O_EXCL moments ago, so
             // the half-built archive is unambiguously ours to remove. Leaving
             // it would both look like a recording and block the retry, since
@@ -1800,6 +2048,45 @@ pub fn run(mut config: RecordingConfig) {
         };
         let mut outcome: Option<child::Outcome> = None;
 
+        // The wrapped run's marker events. `run_start` is stamped now, on the
+        // recorder's clock (the same `anchored_at` the rows use), not from
+        // the child's own start time; it goes to the open `.rez` recordings
+        // at once and rides in the seed of any recording opened later. The
+        // parquet footer takes the whole list after the loop.
+        let run_marker = config.command.as_deref().map(RunMarker::new);
+        let mut run_events: Vec<Event> = Vec::new();
+        if let (Some(marker), Some(cmd)) = (&run_marker, config.command.as_deref()) {
+            let command_line = config.record_command_line.then(|| cmd.join(" "));
+            let spawned_at = anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
+            run_events.push(marker.start_event(spawned_at, command_line));
+            if let Some(rec) = rez_recorder.as_mut() {
+                // Not fatal: the samples are the product and they are
+                // unaffected. A writer that has died surfaces on the next
+                // tick's commit with the writer's own error.
+                if let Err(e) = rec.merge_events(&run_events) {
+                    warn!("failed to add the run_start event to the recording: {e}");
+                }
+            }
+        }
+        // The `run_end` event, built at whichever site observes the exit so
+        // its stamp is that instant, and merged after the loop.
+        let mut run_end: Option<Event> = None;
+        // The instant the select arm below saw the child exit, if it did;
+        // the loop top's poll stamps `run_end` with it rather than with its
+        // own, later, reading.
+        let mut child_exit_seen: Option<u64> = None;
+        // The exit arm fires once. After that the tick governs, whether the
+        // wait succeeded (the loop top takes it from here) or failed (a
+        // failed wait would fire every iteration and spin the loop).
+        let mut exit_arm_armed = true;
+        // Set once the body has run its one pass after the child exited.
+        let mut final_scrape_done = false;
+        // True when the previous pass ran the body to its end, so the loop
+        // top can tell an exit that landed during that scrape (already
+        // sampled) from one that landed while waiting for the tick (not).
+        // Cleared on every `continue`, since those passes scrape nothing.
+        let mut scraped_last_pass = false;
+
         let start = Instant::now() + interval_dur;
         // In wrapped mode the cap is intentionally measured from command spawn
         // (`Instant::now()`), which differs from the non-wrapped path's `start`
@@ -1861,14 +2148,24 @@ pub fn run(mut config: RecordingConfig) {
                             let code = child::map_exit_code(status);
                             info!("command exited (code {code}), finalizing recording");
                             outcome = Some(child::Outcome::Exited(code));
+                            if let Some(marker) = &run_marker {
+                                // The instant the exit arm saw it, when it
+                                // did; this poll's reading otherwise.
+                                let observed_at = child_exit_seen.unwrap_or_else(|| {
+                                    anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed())
+                                });
+                                run_end =
+                                    Some(marker.end_event(observed_at, RunEnding::Exited(code)));
+                            }
                             child = None;
-                            break;
                         }
                         Ok(None) => {}
                         Err(e) => {
                             warn!("failed to poll command: {e}");
                         }
                     }
+                }
+                if child.is_some() {
                     if let Some(deadline) = cap_deadline {
                         if Instant::now() >= deadline {
                             info!("--duration reached, stopping command");
@@ -1876,9 +2173,33 @@ pub fn run(mut config: RecordingConfig) {
                                 child::terminate(&mut c, child::TERM_GRACE).await;
                             }
                             outcome = Some(child::Outcome::Capped);
+                            if let Some(marker) = &run_marker {
+                                let observed_at =
+                                    anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
+                                run_end = Some(marker.end_event(observed_at, RunEnding::Capped));
+                            }
                             break;
                         }
                     }
+                } else {
+                    // The command has exited. The body runs once more, without
+                    // waiting for the tick, so the interval the command exited
+                    // in is sampled; the pass after that stops. Without this
+                    // an exit noticed here ended the recording with the last
+                    // partial interval unsampled, and a command that exited
+                    // before the first tick was recorded as nothing at all.
+                    //
+                    // Not when the exit landed during the scrape that just
+                    // ran: the tick fired, the child exited while the body
+                    // was scraping, and the exit arm never got to fire. That
+                    // interval was sampled a few milliseconds ago, and a
+                    // second pass would only add a redundant row right after
+                    // it. An exit seen on the very first pass, before any
+                    // scrape, still gets its one scrape.
+                    if final_scrape_done || scraped_last_pass {
+                        break;
+                    }
+                    final_scrape_done = true;
                 }
             } else if let Some(duration) = config.duration.map(Into::<Duration>::into) {
                 if start.elapsed() >= duration {
@@ -1900,15 +2221,52 @@ pub fn run(mut config: RecordingConfig) {
             // common case, a whole number of intervals — still takes that final
             // sample, exactly as the loop-top check did before. The deadline
             // only ever cuts a PARTIAL interval short.
-            tokio::select! {
-                biased;
-                _ = shutdown.notified() => continue,
-                _ = interval.tick() => {}
-                _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
-                    // Latched so a deadline already in the past cannot spin the
-                    // loop if the top declines to stop for some reason.
-                    deadline_fired = true;
-                    continue;
+            //
+            // The wrapped command's exit wakes the loop too, so `run_end` is
+            // stamped when the exit happened rather than up to one interval
+            // later. The arm only records the instant and goes back to the
+            // top, where `try_wait` takes the decision (tokio's `Child` caches
+            // the status once `wait` has completed, so `try_wait` then returns
+            // it) and schedules the final scrape. `Child::wait` is
+            // cancel-safe, so dropping it on every tick loses nothing. The
+            // async block borrows `child` mutably only for the duration of
+            // the select, which is why the arm can sit beside the others.
+            //
+            // No wait at all on the pass after the exit: that pass exists to
+            // sample the interval the command exited in, now.
+            if !(wrapped && child.is_none()) {
+                tokio::select! {
+                    biased;
+                    _ = shutdown.notified() => {
+                        scraped_last_pass = false;
+                        continue;
+                    }
+                    exited = async {
+                        match child.as_mut() {
+                            Some(c) => c.wait().await.is_ok(),
+                            None => std::future::pending::<bool>().await,
+                        }
+                    }, if wrapped && exit_arm_armed => {
+                        exit_arm_armed = false;
+                        if exited {
+                            child_exit_seen = Some(anchored_at(
+                                clock_anchor_wall_ns,
+                                clock_anchor_mono.elapsed(),
+                            ));
+                        }
+                        // The exit came while waiting, after the last scrape,
+                        // so the loop top must schedule the final one.
+                        scraped_last_pass = false;
+                        continue;
+                    }
+                    _ = interval.tick() => {}
+                    _ = sleep_until_opt(loop_deadline), if !deadline_fired => {
+                        // Latched so a deadline already in the past cannot spin the
+                        // loop if the top declines to stop for some reason.
+                        deadline_fired = true;
+                        scraped_last_pass = false;
+                        continue;
+                    }
                 }
             }
             // Both clocks, every tick. `wall_ns` is the raw reading every
@@ -2177,6 +2535,7 @@ pub fn run(mut config: RecordingConfig) {
                                     &config,
                                     &endpoints[idx],
                                     clock_anchor_wall_ns,
+                                    &run_events,
                                 ) {
                                     Ok(()) => {
                                         spawn_pump(idx, sub, endpoints[idx].config.url.clone())
@@ -2269,6 +2628,7 @@ pub fn run(mut config: RecordingConfig) {
                                 &config,
                                 &endpoints[idx],
                                 clock_anchor_wall_ns,
+                                &run_events,
                             ) {
                                 // First failure wins, as `ingest_failed` does:
                                 // two endpoints can activate in one tick.
@@ -2329,15 +2689,36 @@ pub fn run(mut config: RecordingConfig) {
                 }
                 break;
             }
+            scraped_last_pass = true;
         }
 
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
         // is still alive, terminate and reap it so we never orphan the child.
         if let Some(mut c) = child.take() {
-            let status = child::terminate(&mut c, child::TERM_GRACE).await;
+            // A command that ended in the same instant as the stop signal
+            // exited on its own: one poll before the terminate keeps it from
+            // being labelled interrupted.
+            let (status, ending) = match c.try_wait() {
+                Ok(Some(status)) => (status, RunEnding::Exited(child::map_exit_code(status))),
+                _ => {
+                    let status = child::terminate(&mut c, child::TERM_GRACE).await;
+                    (status, RunEnding::Interrupted(child::map_exit_code(status)))
+                }
+            };
+            let code = child::map_exit_code(status);
             if outcome.is_none() {
-                outcome = Some(child::Outcome::Exited(child::map_exit_code(status)));
+                outcome = Some(child::Outcome::Exited(code));
             }
+            if let Some(marker) = &run_marker {
+                let observed_at = anchored_at(clock_anchor_wall_ns, clock_anchor_mono.elapsed());
+                run_end = Some(marker.end_event(observed_at, ending));
+            }
+        }
+        // Every exit path of a wrapped run has produced its `run_end` by now.
+        // The parquet path reads `run_events` after the loop; the `.rez`
+        // path merges it into each recording right before finalizing.
+        if let Some(event) = run_end.take() {
+            run_events.push(event);
         }
 
         // ── Finalization ──────────────────────────────────────────────────
@@ -2415,7 +2796,18 @@ pub fn run(mut config: RecordingConfig) {
             // `None` means the recording already failed mid-run and reported it
             // (what was on disk was left in place there, and its path printed);
             // nothing to add here.
-            if let Some(rec) = rez_recorder.take() {
+            if let Some(mut rec) = rez_recorder.take() {
+                // `run_end` before finalize: `update_metadata` needs a live
+                // writer, and finalize is what stops it. Not fatal for the
+                // same reason the `run_start` merge is not.
+                if let Some(event) = run_events
+                    .iter()
+                    .find(|e| e.kind.as_deref() == Some("run_end"))
+                {
+                    if let Err(e) = rec.merge_events(std::slice::from_ref(event)) {
+                        warn!("failed to add the run_end event to the recording: {e}");
+                    }
+                }
                 if let Err(e) = rec.finalize(last_clock) {
                     // Must flip `recording_failed`: without it a failed tail
                     // seal / manifest write / rename (ENOSPC at the end of a
@@ -2489,6 +2881,7 @@ pub fn run(mut config: RecordingConfig) {
                                     &config,
                                     &endpoints[idx],
                                     &prom_converters[idx],
+                                    &run_events,
                                 );
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
@@ -2524,6 +2917,7 @@ pub fn run(mut config: RecordingConfig) {
                                     &config,
                                     &endpoints[idx],
                                     &prom_converters[idx],
+                                    &run_events,
                                 );
                                 if let Err(e) = converter
                                     .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
@@ -2562,6 +2956,7 @@ pub fn run(mut config: RecordingConfig) {
                                         &config,
                                         &endpoints[idx],
                                         &prom_converters[idx],
+                                        &run_events,
                                     );
                                     if let Err(e) = converter
                                         .convert_file_handle(ew.writer.try_clone().unwrap(), dest)
@@ -2847,7 +3242,7 @@ mod tests {
         let mut ep = rez_endpoint();
         ep.agent.version = Some("5.19.2".to_string());
 
-        let m = build_rez_metadata(&config, &ep);
+        let m = build_rez_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
             Some("5.19.2")
@@ -2880,7 +3275,7 @@ mod tests {
         let mut ep = rez_endpoint();
         ep.agent.producer_epoch = Some("11111111-2222-4333-8444-555555555555".to_string());
 
-        let m = build_rez_metadata(&config, &ep);
+        let m = build_rez_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_PRODUCER_EPOCH)
                 .map(String::as_str),
@@ -2895,8 +3290,117 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = rez_config(&dir.path().join("out.rez"));
         let ep = rez_endpoint();
-        let m = build_rez_metadata(&config, &ep);
+        let m = build_rez_metadata(&config, &ep, &[]);
         assert!(!m.contains_key(parquet_metadata::KEY_PRODUCER_EPOCH));
+    }
+
+    // ── run events ──────────────────────────────────────────────────────────
+
+    /// The seed carries the run events it is given under `KEY_EVENTS`, so a
+    /// recording opened after the wrapped command spawned starts with
+    /// `run_start` rather than waiting for an update that already happened.
+    #[test]
+    fn rez_metadata_carries_the_run_events_when_there_are_any() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let ep = rez_endpoint();
+        let marker = RunMarker::new(&["/usr/local/bin/bench.sh".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR, None);
+
+        let m = build_rez_metadata(&config, &ep, std::slice::from_ref(&start));
+        let payload: Events = serde_json::from_str(m.get(KEY_EVENTS).expect("events key")).unwrap();
+        assert_eq!(payload.events, vec![start]);
+        assert_eq!(payload.events[0].description, "bench.sh");
+        assert_eq!(payload.events[0].kind.as_deref(), Some("run_start"));
+        assert_eq!(
+            payload.events[0].id.as_deref(),
+            Some(format!("run:{}:start", marker.id).as_str())
+        );
+        assert!(payload.events[0].details.is_none());
+    }
+
+    /// No key at all without run events: an unwrapped run must not write
+    /// `{"events":[]}`, which `annotate` treats as a payload to keep.
+    #[test]
+    fn rez_metadata_omits_the_events_key_without_run_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = rez_config(&dir.path().join("out.rez"));
+        let ep = rez_endpoint();
+        let m = build_rez_metadata(&config, &ep, &[]);
+        assert!(!m.contains_key(KEY_EVENTS));
+    }
+
+    /// Merging into a map that already holds events keeps them, appends the
+    /// new one, and dedups by id, so merging the same event twice is a no-op.
+    #[test]
+    fn merging_run_events_appends_and_dedups_by_id() {
+        let marker = RunMarker::new(&["sh".to_string(), "-c".to_string(), "sleep 1".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR, Some("sh -c sleep 1".to_string()));
+        let end = marker.end_event(TEST_ANCHOR + TEST_SECOND, RunEnding::Exited(0));
+
+        let mut m = BTreeMap::new();
+        merge_events_into(&mut m, std::slice::from_ref(&start)).unwrap();
+        merge_events_into(&mut m, std::slice::from_ref(&start)).unwrap();
+        merge_events_into(&mut m, std::slice::from_ref(&end)).unwrap();
+
+        let payload: Events = serde_json::from_str(m.get(KEY_EVENTS).unwrap()).unwrap();
+        assert_eq!(payload.events, vec![start.clone(), end.clone()]);
+        assert_eq!(start.details.as_deref(), Some("sh -c sleep 1"));
+        assert_eq!(end.description, "sh exited 0");
+        assert_eq!(end.kind.as_deref(), Some("run_end"));
+        assert_eq!(
+            end.id.as_deref(),
+            Some(format!("run:{}:end", marker.id).as_str())
+        );
+        assert!(end.details.is_some());
+    }
+
+    /// The parquet footer merges the run events into a user `--metadata
+    /// events=...` value, as the `.rez` seed does, rather than replacing it.
+    #[test]
+    fn parquet_events_payload_merges_into_the_users_events() {
+        let marker = RunMarker::new(&["bench".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR + TEST_SECOND, None);
+        let user =
+            r#"{"events":[{"timestamp":1700000000000000000,"description":"deploy","id":"d1"}]}"#;
+
+        let json = events_payload(Some(user), std::slice::from_ref(&start)).unwrap();
+        let payload: Events = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload.events.len(), 2);
+        assert_eq!(payload.events[0].description, "deploy");
+        assert_eq!(payload.events[1], start);
+
+        // Without run events the user's value is carried as given.
+        assert_eq!(events_payload(Some(user), &[]).as_deref(), Some(user));
+        // Without either there is no key.
+        assert!(events_payload(None, &[]).is_none());
+    }
+
+    /// A user value that does not parse is kept verbatim; the run events are
+    /// the ones dropped.
+    #[test]
+    fn parquet_events_payload_keeps_an_unparseable_user_value() {
+        let marker = RunMarker::new(&["bench".to_string()]);
+        let start = marker.start_event(TEST_ANCHOR, None);
+        let garbage = "not json";
+        assert_eq!(
+            events_payload(Some(garbage), std::slice::from_ref(&start)).as_deref(),
+            Some(garbage)
+        );
+    }
+
+    /// The other two endings name the run the same way and say what happened.
+    #[test]
+    fn run_end_descriptions_name_the_ending() {
+        let marker = RunMarker::new(&["./bench".to_string()]);
+        assert_eq!(
+            marker.end_event(1, RunEnding::Capped).description,
+            "bench capped"
+        );
+        assert_eq!(
+            marker.end_event(1, RunEnding::Interrupted(143)).description,
+            "bench interrupted"
+        );
     }
 
     /// An endpoint whose `/status` carried no epoch adopts the first one a
@@ -2953,7 +3457,7 @@ mod tests {
         let mut ep = rez_endpoint();
         ep.agent.version = Some("5.19.2".to_string());
 
-        let m = build_rez_metadata(&config, &ep);
+        let m = build_rez_metadata(&config, &ep, &[]);
         assert_eq!(
             m.get(parquet_metadata::KEY_VERSION).map(String::as_str),
             Some("custom")
@@ -2969,7 +3473,7 @@ mod tests {
         let config = rez_config(&dir.path().join("out.rez"));
         let ep = rez_endpoint();
 
-        let m = build_rez_metadata(&config, &ep);
+        let m = build_rez_metadata(&config, &ep, &[]);
         assert!(!m.contains_key(parquet_metadata::KEY_VERSION));
     }
 
@@ -2990,6 +3494,7 @@ mod tests {
             command: None,
             format_defaulted: false,
             stream: false,
+            record_command_line: false,
         }
     }
 
@@ -3262,7 +3767,7 @@ mod tests {
 
         tick(&mut rec, 0, 0).expect("the endpoint up at startup records");
         // ... endpoint 1 comes up mid-run.
-        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR)
+        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR, &[])
             .expect("a recording can join an open archive");
         for i in 1..3 {
             tick(&mut rec, 0, i).expect("ingest a");
