@@ -79,7 +79,7 @@ only its keys and leaves every other parameter in place.
 | `gpu` | repeated `gpu=vendor:id` | split at the first `:` | `selectedGpus`, validated when the GPU section's list arrives |
 | `cgroup` | repeated `cgroup=<name>` | `getAll` | `seedSelectedCgroups`, validated when the cgroup list arrives |
 | `instance` | id, scoped by `#/service/<name>` | string | `selectedInstances[svc]` |
-| `anchor.<id>` | signed integer ms (`0` removed), or `kind:<event kind>` | both | `setAnchor` for the numeric form; `kind:` is parsed and left for the alignment work to apply |
+| `anchor.<id>` | signed integer ms (`0` removed), or `kind:<event kind>` | both | `setAnchor`, any capture id the registry names (the `kind:` form and named ids landed with event-anchored alignment) |
 
 Integer nanoseconds were rejected for `from`/`to`: an ns-since-epoch is
 ~1.7e18, past 2^53, and does not survive a JS `Number`. Capture ids are the
@@ -224,9 +224,8 @@ docs ahead of the code. Fixed in the same PR:
   `experimentQueryRange` (`viewer_core.js`) and ignore it. The experiment
   window should be `[from − Δ, to − Δ]` with Δ the anchor difference, which
   is the alignment work's concern.
-- **Named N-way anchors** (`anchor.<named id>`). The parser accepts any id;
-  `setAnchor` still takes only the two slots until the alignment work
-  widens it.
+- **Named N-way anchors** (`anchor.<named id>`): done with event-anchored
+  alignment, which made `setAnchor` accept any registry id.
 - **`step` in the URL.** Already restored from localStorage; a one-key
   extension when someone needs it in a link.
 - **The time-bar assertion**, blocked on the time-bar bug above.

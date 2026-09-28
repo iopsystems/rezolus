@@ -5,6 +5,8 @@
 //
 // Pure module — no DOM, no mithril import — so it stays testable under
 // node:test the same way compare_math.js and selection_migration.js do.
+import { eventsFromFileMetadata } from './capture_events.js';
+
 export class EventsStore {
     constructor() {
         this._events = [];
@@ -12,15 +14,9 @@ export class EventsStore {
     }
 
     seedFromMetadata(fileMetadata) {
-        const slot = fileMetadata?.events;
-        let arr = [];
-        if (Array.isArray(slot)) {
-            arr = slot;
-        } else if (slot && Array.isArray(slot.events)) {
-            // Actual parquet wire shape: {"events":[...]} wrapper object
-            arr = slot.events;
-        }
-        this._events = arr.slice();
+        // Both wire shapes (a bare array, or the parquet's {"events":[...]}
+        // wrapper) are handled by the shared helper.
+        this._events = eventsFromFileMetadata(fileMetadata);
         this._notify();
     }
 

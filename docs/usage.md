@@ -271,6 +271,27 @@ The same web dashboard is also available as a browser-only static site under
 [`crates/viewer`](../crates/viewer) WASM module. It runs the PromQL query engine
 client-side, so uploaded `.parquet` and `.rez` recordings never leave the browser.
 
+### Aligning captures in a comparison
+
+Two recordings rarely start at the same instant, so a comparison draws each
+capture on a relative axis: `+0s` is that capture's anchor. By default the
+anchor is the capture's recording start. The compare badge's **Align on**
+menu lists every event kind any capture carries (a `run_start` written by
+`rezolus record -- <command>`, or any kind added with `recording annotate
+--event`); choosing one makes each capture's earliest event of that kind
+its `+0s`, so two benchmark runs line up on the moment the benchmark
+started rather than on when the recorder happened to start. A kind that
+some captures lack is listed but not selectable, naming which ones lack it.
+A capture whose saved anchor names an event its file does not carry is
+drawn from its recording start, and the badge says so. The anchor rides in
+the link as `anchor.<capture>=kind:<event kind>` (see below). Alignment
+reads the events in each recording's file; an event added in the Notebook
+counts only after it is saved into the recording. The diff views (the diff
+heatmap, and the quantile diff) pair the two captures' cells by sample
+step, shifting one capture by the whole number of steps between the two
+anchors; when the anchors differ by a fraction of a step, no cells line up
+and those views show the two captures side by side instead and say why.
+
 ### Linking to a view
 
 A viewer URL reproduces the view it was copied from. The section lives in
@@ -300,7 +321,7 @@ http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgro
 | `gpu` | `vendor:id`, repeatable (`gpu=nvidia:0&gpu=nvidia:1`) | Filters the GPU section; a bare id when the sampler set no vendor |
 | `cgroup` | cgroup name, repeatable | Selected cgroups on the cgroups section, one key per name |
 | `instance` | instance id | A service's instance, scoped by the `#/service/<name>` in the hash |
-| `anchor.baseline`, `anchor.experiment` | signed integer milliseconds | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. A `kind:<event kind>` value is reserved for aligning on an event and is not applied yet |
+| `anchor.<capture>` (`baseline`, `experiment`, or a named arm of a multi-recording `.rez`) | signed integer milliseconds, or `kind:<event kind>` | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. `anchor.experiment=kind:run_start` uses the earliest `run_start` event in that capture's file instead; a capture with no such event is drawn from its recording start and the compare badge says so |
 
 Values are ordinary query-string values: a `/` may be written as is, and
 anything else (`&`, `=`, spaces) percent-encoded as a browser would. A

@@ -303,9 +303,12 @@ function sameHead(a, b) {
 // Each entry has its own `timeData` / `valueData`; a refetch produces
 // fresh arrays. Reference equality on the entry pair is enough for the
 // happy "no change" case; otherwise probe length + head/tail of each
-// series's valueData (timeData heads are usually rebased so changes
-// there mirror valueData changes one-for-one). Returns `true` when
-// reconfigure is warranted.
+// series's valueData AND timeData. Both matter: a refetch changes the
+// values, while an anchor change (the "Align on" control, a linked
+// anchor) rebases the timestamps and leaves every value as it was, and
+// a comparison on values alone let the overlay sit where it was after
+// the user picked an event to align on. Returns `true` when reconfigure
+// is warranted.
 function multiSeriesDiffers(a, b) {
     if (a === b) return false;
     if (!Array.isArray(a) || !Array.isArray(b)) return Array.isArray(a) !== Array.isArray(b);
@@ -317,6 +320,8 @@ function multiSeriesDiffers(a, b) {
         if (!ai || !bi) return true;
         if (ai.valueData !== bi.valueData
             && !shallowSameShape([ai.valueData], [bi.valueData])) return true;
+        if (ai.timeData !== bi.timeData
+            && !shallowSameShape([ai.timeData], [bi.timeData])) return true;
     }
     return false;
 }
@@ -381,6 +386,13 @@ export class Chart {
         const formatChanged = oldSpec.opts?.format !== this.spec.opts?.format;
         const dataChanged = oldSpec.data !== this.spec.data
             && !shallowSameShape(oldSpec.data, this.spec.data);
+        // Compare-mode heatmap slots and diff heatmaps carry the rebased
+        // axis in `time_data` and hand in the same cell `data`, so an
+        // anchor change alters `time_data` alone; without this term the
+        // slot kept its old axis after the user picked an event to
+        // align on.
+        const timeDataChanged = oldSpec.time_data !== this.spec.time_data
+            && !shallowSameShape([oldSpec.time_data], [this.spec.time_data]);
         // Compare-mode line/scatter sub-charts carry their per-capture
         // series in `spec.multiSeries`, not `spec.data`. An experiment
         // refetch (granularity change) only swaps the multiSeries
@@ -400,7 +412,7 @@ export class Chart {
         // chart types either don't set series_names or keep the same
         // ref across renders, so this is a no-op for them.)
         const seriesNamesChanged = oldSpec.series_names !== this.spec.series_names;
-        if (this.echart && (dataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
+        if (this.echart && (dataChanged || timeDataChanged || multiSeriesChanged || formatChanged || themeChanged || seriesNamesChanged)) {
             this._themeVersion = themeVersion;
             this.configureChartByType();
             this._applyEventMarkers({ reconfigured: true });
