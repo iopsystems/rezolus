@@ -27,8 +27,8 @@ export const isRangeEvent = (e) =>
 // sub-second part, which the bubble has no room for.
 export function formatDuration(ns) {
     if (!Number.isFinite(ns) || ns <= 0) return '';
-    const ms = ns / 1_000_000;
-    if (ms < 1000) return `${Math.round(ms)}ms`;
+    const ms = Math.round(ns / 1_000_000);
+    if (ms < 1000) return `${ms}ms`;
     const totalSec = Math.round(ms / 1000);
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);

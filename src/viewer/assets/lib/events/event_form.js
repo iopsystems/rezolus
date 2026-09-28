@@ -9,7 +9,7 @@
 // description; chart_id is set when "Show only on this chart" stays
 // checked (defaulted ON per spec).
 
-import { formatDuration } from '../charts/event_markers.js';
+import { formatDuration, isRangeEvent } from '../charts/event_markers.js';
 
 const formatNsAsRfc3339 = (ns) => {
     if (!Number.isFinite(ns)) return '';
@@ -228,7 +228,7 @@ export function openEventInfo({ anchorPoint, event, onDelete }) {
 
     // [label, value] pairs; blank values are dropped so the popover only
     // shows what the event actually carries.
-    const isRange = Number.isFinite(event.duration_ns) && event.duration_ns > 0;
+    const isRange = isRangeEvent(event);
     const rows = [
         ['Timestamp', formatNsAsRfc3339(event.timestamp)],
         ['End', isRange ? formatNsAsRfc3339(event.timestamp + event.duration_ns) : null],

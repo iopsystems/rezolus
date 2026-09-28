@@ -92,7 +92,15 @@ test('isRangeEvent and formatDuration', () => {
     assert.equal(isRangeEvent({ duration_ns: 0 }), false);
     assert.equal(isRangeEvent({}), false);
     assert.equal(isRangeEvent(null), false);
+    // A hand-edited localStorage entry can carry anything; only a finite
+    // positive number is a range, everything else renders as a point.
+    assert.equal(isRangeEvent({ duration_ns: -5 }), false);
+    assert.equal(isRangeEvent({ duration_ns: NaN }), false);
+    assert.equal(isRangeEvent({ duration_ns: '5000000000' }), false);
+    assert.equal(buildRangeSpans([{ timestamp: 1_000_000_000, duration_ns: '5000000000' }]), null);
     assert.equal(formatDuration(250_000_000), '250ms');
+    // Round before choosing the unit, or 999.6 ms prints as "1000ms".
+    assert.equal(formatDuration(999_600_000), '1s');
     assert.equal(formatDuration(40_000_000_000), '40s');
     assert.equal(formatDuration(150_000_000_000), '2m30s');
     assert.equal(formatDuration(120_000_000_000), '2m');

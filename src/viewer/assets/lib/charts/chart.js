@@ -1067,7 +1067,8 @@ export class Chart {
             band.style.width = (bx1 - bx0) + 'px';
             band.style.top = rect.y + 'px';
             band.style.height = rect.height + 'px';
-            band.title = s.name;
+            // No title: the band is pointer-events:none so the data tooltip
+            // works through it; the tag carries the description.
             layer.appendChild(band);
         }
 

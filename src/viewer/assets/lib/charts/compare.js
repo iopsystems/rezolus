@@ -394,7 +394,11 @@ const sideBySidePair = ({ spec, captures, anchors, chartsState, interval, Chart,
             min_value: sharedMin,
             max_value: sharedMax,
             xAxisFormatter: relativeTimeFormatter,
-            // Each slot places absolute event instants by its own anchor.
+            // Each slot places absolute event instants by its own anchor. The
+            // events list is the baseline's, so on the experiment slot a
+            // baseline event lands where that wall-clock instant falls in the
+            // experiment's window, and is absent when the two recordings do
+            // not overlap in time. Per-capture lists come with alignment.
             eventTimeOriginSec: anchorSec,
         };
     };
@@ -695,6 +699,7 @@ const sideBySideQuantileHeatmap = ({ spec, captures, anchors, chartsState, inter
             compareCaptureLabels: { baseline: baselineLabel, experiment: experimentLabel },
             compareSelfRole: role,
             xAxisFormatter: relativeTimeFormatter,
+            eventTimeOriginSec: anchorSec,
         };
     };
 
@@ -818,6 +823,7 @@ const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, inter
             right: `${experimentLabel} is higher`,
         },
         xAxisFormatter: relativeTimeFormatter,
+        eventTimeOriginSec: baselineAnchorSec,
     };
 
     return {

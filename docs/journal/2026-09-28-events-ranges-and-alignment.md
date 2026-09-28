@@ -66,8 +66,9 @@ an optional end timestamp; the CLI's `--event` inline syntax gains
 `src/parquet_tools/annotate.rs`). No schema change: the field exists and is
 already optional and serde-defaulted, so older readers keep working.
 
-*Built (this PR), not as designed.* The design said an echarts `markArea`.
-That was built first and it never rendered on the viewer's heatmaps: they
+*Built (this PR), with one change from the design.* The design called for
+an echarts `markArea`. That was built first and it never rendered on the
+viewer's heatmaps: they
 are `custom` series (`heatmap.js`, `histogram_heatmap.js`,
 `quantile_heatmap.js`), and on those echarts collapsed the area to the axis
 line in every configuration tried in a headless browser (`z`, `zlevel`,
@@ -87,9 +88,11 @@ and the tag carries the humanized duration (`formatDuration`, e.g.
 Both builders take a `toAxisMs` conversion, and the chart supplies
 `_eventAxisMs`, which subtracts `spec.eventTimeOriginSec` when present:
 `compare.js` sets that field on every relative-axis spec it builds
-(overlay, side-by-side per slot, diff heatmap, split lines) to the capture
-anchor the axis was rebased on, so events land where they belong in
-compare mode instead of at absolute epoch ms. The add-event form gained an
+(overlay, side-by-side per slot for both the plain and the quantile
+heatmap pairs, both diff heatmaps, split lines) to the capture anchor the
+axis was rebased on, so events land where they belong in compare mode
+instead of at absolute epoch ms. The first build missed the two quantile
+builders; an adversarial review caught it before merge. The add-event form gained an
 optional End (RFC 3339, must be after Timestamp; `duration_ns` is derived),
 and the info popover shows End, Duration and Details. Events remain one
 baseline-scoped list; the overlay and split charts place them by the first
