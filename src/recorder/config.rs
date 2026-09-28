@@ -46,6 +46,11 @@ pub struct RecordingConfig {
     /// scraping it. Opt-in, never detected — see `reject_stream_without_rez`
     /// and the recorder's startup for what it refuses.
     pub stream: bool,
+    /// `--record-command-line`: put the wrapped command's full argument list
+    /// in the `run_start` event's `details`. Off by default because an
+    /// argument list can carry paths and tokens the recording's reader should
+    /// not see; the event's `description` is only the program name.
+    pub record_command_line: bool,
 }
 
 /// Default endpoint used when neither `--url` nor a positional URL is given.
@@ -251,6 +256,7 @@ impl RecordingConfig {
         let explicit_format = args.get_one::<Format>("FORMAT").copied();
         let separate = args.get_flag("SEPARATE");
         let stream = args.get_flag("STREAM");
+        let record_command_line = args.get_flag("RECORD_COMMAND_LINE");
         let metadata: Vec<(String, String)> = args
             .get_many::<String>("METADATA")
             .unwrap_or_default()
@@ -351,6 +357,7 @@ impl RecordingConfig {
                 command: command.clone(),
                 format_defaulted: plan.defaulted,
                 stream,
+                record_command_line,
             });
         }
 
@@ -379,6 +386,7 @@ impl RecordingConfig {
                 command: command.clone(),
                 format_defaulted: plan.defaulted,
                 stream,
+                record_command_line,
             });
         }
 
@@ -422,6 +430,7 @@ impl RecordingConfig {
             command,
             format_defaulted: plan.defaulted,
             stream,
+            record_command_line,
         })
     }
 }

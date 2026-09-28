@@ -74,6 +74,19 @@ enum Msg {
         seed: Box<ManifestSeed>,
         reply: SyncSender<Result<i64, String>>,
     },
+    /// Replace one recording's metadata map while the recording is open.
+    ///
+    /// Through the channel for the reason `AddRecording` is: the writer
+    /// thread owns the only writing connection, and a second one would stall
+    /// on SQLite's write lock. The map REPLACES the stored one, the same as
+    /// `RezDb::update_recording_metadata`; a caller that wants to add a key
+    /// sends the whole map with the key added. Answered, not fire-and-forget,
+    /// so the caller knows the row was written before it finalizes.
+    UpdateMetadata {
+        recording_id: i64,
+        metadata: BTreeMap<String, String>,
+        reply: SyncSender<Result<(), String>>,
+    },
     /// One tick's WAL rows for EVERY recording in the archive, across all
     /// their samplers — one transaction, and therefore one fsync at
     /// `synchronous=FULL`.
@@ -534,6 +547,38 @@ impl RecordingWriter {
         })
     }
 
+    /// Replace this recording's metadata map with `metadata`.
+    ///
+    /// The whole map, not a patch: `RezDb::update_recording_metadata` stores
+    /// one JSON string per recording, so the caller keeps the seed map it
+    /// opened the recording with and sends it back with its additions. The
+    /// recorder uses this for the run events it learns after the seed was
+    /// written (`run_start` once the wrapped command has spawned, `run_end`
+    /// when it exits).
+    ///
+    /// Waits for the writer's reply, so a returned `Ok` means the row is
+    /// written. Error handling matches `RezArchive::add_recording`: a failed
+    /// send or a dropped reply means the writer exited, and its stored error
+    /// is what is reported.
+    pub fn update_metadata(&self, metadata: BTreeMap<String, String>) -> Result<(), String> {
+        let (reply_tx, reply_rx) = sync_channel(0);
+        if self
+            .tx
+            .send(Msg::UpdateMetadata {
+                recording_id: self.recording_id,
+                metadata,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err(take_writer_error(&self.err));
+        }
+        match reply_rx.recv() {
+            Ok(written) => written,
+            Err(_) => Err(take_writer_error(&self.err)),
+        }
+    }
+
     /// Ask the writer to apply retention at `cutoff_ts`.
     ///
     /// It goes through the writer thread rather than a second connection for
@@ -763,6 +808,16 @@ fn writer_loop(
                     added += 1;
                 }
                 let _ = reply.send(inserted);
+            }
+            Ok(Msg::UpdateMetadata {
+                recording_id,
+                metadata,
+                reply,
+            }) => {
+                // Reported to the caller and not fatal to the writer, as a
+                // failed `AddRecording` is: the rows already committed for
+                // this and every other recording are still valid.
+                let _ = reply.send(db.update_recording_metadata(recording_id, &metadata));
             }
             Ok(Msg::Wal { ticks }) => {
                 db.insert_wal_rows_batch(&ticks)?;
@@ -1801,6 +1856,12 @@ impl StreamRecorderV3 {
             batch.push(sampler.clone());
         }
         self.handle.seal(batch)
+    }
+
+    /// Replace this recording's metadata map; see
+    /// [`RecordingWriter::update_metadata`].
+    pub fn update_metadata(&self, metadata: BTreeMap<String, String>) -> Result<(), String> {
+        self.handle.update_metadata(metadata)
     }
 
     /// Apply retention: everything wholly older than `cutoff_ts` goes.
@@ -2918,6 +2979,30 @@ mod tests {
              covers a span no sealed row does, so it joins the series"
         );
         assert_eq!(db.total_rows(rid, "cpu_usage").unwrap(), 1);
+    }
+
+    /// `update_metadata` replaces the seed map on the live recording, through
+    /// the writer thread, and the replacement is what a reopen shows.
+    #[test]
+    fn update_metadata_replaces_the_map_on_an_open_recording() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.rez");
+        let (_archive, mut writer) = RezArchive::single(&path, seed()).unwrap();
+
+        writer.wal(vec![wal_row("cpu_usage", 1_000)]).unwrap();
+        let mut metadata = seed().metadata;
+        metadata.insert("events".to_string(), "{\"events\":[]}".to_string());
+        writer.update_metadata(metadata.clone()).unwrap();
+        _archive.finalize_single(writer, (2_000, 0)).unwrap();
+
+        let db = RezDb::open(&path).unwrap();
+        let recordings = db.read_recordings().unwrap();
+        assert_eq!(recordings.len(), 1);
+        assert_eq!(
+            recordings[0].meta.metadata, metadata,
+            "the stored map is the one sent, seed keys included"
+        );
+        assert!(recordings[0].complete);
     }
 
     #[test]
