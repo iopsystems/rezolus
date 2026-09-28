@@ -580,26 +580,31 @@ Source: [`.rez` v3 versus parquet on the read path](journal/2026-08-27-rez-vs-pa
 
 Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md).
 
-- **The per-task table's long layout: confirm by measurement** — Open. Convert
-  `cpu_usage_task` wide-bare and long, from the busy (10.6% non-null) and quiet
-  (98%) recordings and a synthetic thread-per-request spike at 1 s and 100 ms.
-  Measure bytes on disk, bytes read at open, all-thread and single-thread query
-  cost on sorted and arrival-order segments, seal time with and without the
-  sort, and compression. Per-thread stays: thread pools per kind of work are
-  the reason the table exists.
-- **A sort key in dendro's `CompactSpec`** — Open, only if the gate shows
-  arrival order costs a single-thread query too much. Compaction already
-  re-encodes, so a caller-named sort key sorts off the tick path; segments
-  declare it in parquet `sorting_columns`.
+- ~~**Long layout: confirm by measurement**~~ — Done 2026-09-27. Long won
+  for every group table with slots measured (task, cgroup, per-CPU, drive),
+  and the entry now writes all of them long. Still unmeasured: a synthetic
+  thread-per-request spike, 100 ms sampling, histogram slot tables, and
+  query-engine reads of a long table.
+- **The occupant index's encoding** — Open. `IndexEntry` has the right shape
+  but `SlotEntry::slot` is `u32` (`crates/rez/src/index.rs`); occupant
+  numbers are `u64` because a rolling buffer can mint more than 2^32.
+- **A sort key in dendro's `CompactSpec`** — Open. Sorting a task table by
+  `(occupant, timestamp)` made it a third smaller and a single-thread read
+  about 50 times smaller than arrival order. Compaction already re-encodes,
+  so a caller-named sort key sorts off the tick path; segments declare it in
+  parquet `sorting_columns`.
+- **Sort at seal** — Open, for the 6.0 writer (#1224). Measured upper bound
+  16–19 ms per task segment; decide on the writer's own seal path.
 - **`docs/labels.md` omits `name` from the identity labels** — Open. cgroup
   slots set it through `SlotIdentity` (`src/agent/bpf/mod.rs:339`).
-- **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Identity
-  from `caller_rows`, one schema read per stream. Any on-demand segment loading
+- **A rezolus reader for dendro archives, on dendro's API** — Roadmap. Occupant
+  labels from `caller_rows`, rows grouped into series by occupant, one schema
+  read per stream. Any on-demand segment loading
   it needs is added to dendro, not built in rezolus.
 - **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
-  copy. Oracle: on `--stream` recordings the derived index must equal the
-  recorded one, and every series must read back the same as through the `.rez`
-  reader.
+  copy. Oracle: on `--stream` recordings the occupants derived from the columns
+  must equal those the recorded index gives, and every series must read back
+  the same as through the `.rez` reader.
 - **5.18–5.20 mid-segment occupant changes** — By design. The file does not
   record the new occupant's labels (#1232), so a conversion keeps what the file
   records. Reopen only if a recording from that range needs per-task
@@ -709,7 +714,7 @@ Also found on these runs, separate from the sampler:
 
 ## Agent — cgroup slots
 
-Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: considered, and wide is better".
+Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archive-layout.md), "Cgroups: long, reversed by the gate".
 
 - **Cgroups past `MAX_CGROUPS` are dropped silently** — Open. `MAX_CGROUPS =
   4096` (`src/agent/bpf/cgroup.h:10`) is rezolus's BPF map size, not a kernel

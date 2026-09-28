@@ -3,8 +3,11 @@
 - **Opened:** 2026-09-25
 - **Status:** **OPEN — design, nothing built.** Intent-first: this is what the
   reshaping `recording upgrade --to dendro` will write, and what the 6.0 writer
-  (#1224) must then write identically. The per-task table's long layout is
-  proposed and gated on a measurement (below).
+  (#1224) must then write identically. Revised 2026-09-27 after the gate
+  (below): every group table with slots is written long, keyed by occupant.
+  The first version made only the per-task table long and kept cgroup,
+  per-CPU and device tables wide; measurement showed long smaller for all of
+  them.
 - **Driver:** #1301 converts a `.rez` into a dendro archive by copying segment
   bytes unchanged, which carries the `.rez` layout's costs across with them.
   Measured on the converted archives (below), segment footers were 42% and 73%
@@ -119,15 +122,17 @@ the stream, which is what dendro's `FORMAT.md` §8 asks: "a fact that changes
 over time belongs in `caller_rows` … never in field metadata."
 
 - **Kept:** the storage keys (`metric`, `metric_type`, `unit`,
-  `grouping_power`, `max_value_power`; `docs/labels.md`), `sampler`, labels
-  that are fixed per column (`op` on `syscall_counts_cgroup`, `kind` on
-  softirq, `cpu`), and `id`, the slot. `id` stays because the indexed reader
-  finds a column's slot from it (`crates/rez/src/indexed.rs:237`).
-- **Moved to the index:** a slot's identity labels, the ones
-  `SlotIdentity::set` writes (`src/agent/identity.rs:311`): `comm`, `pid`,
-  `tgid`, `cgroup`, `name`, `device`, `mount`, the hardware-sensor keys, and
-  `__uid__`. `docs/labels.md`'s identity list omits `name`, which cgroup slots
-  set (`src/agent/bpf/mod.rs:339`); that document needs the fix.
+  `grouping_power`, `max_value_power`; `docs/labels.md`), `sampler`, and
+  labels that are fixed per metric column (`op` on `syscall_counts_cgroup`,
+  `kind` on softirq).
+- **Moved to the occupant index:** the slot `id`, and a slot's identity
+  labels, the ones `SlotIdentity::set` writes (`src/agent/identity.rs:311`):
+  `comm`, `pid`, `tgid`, `cgroup`, `name`, `device`, `mount`, the
+  hardware-sensor keys, and `__uid__`. A long table has no column per slot,
+  so `id` has no column to sit on; the `.rez` indexed reader's use of it
+  (`crates/rez/src/indexed.rs:237`) does not carry over. `docs/labels.md`'s
+  identity list omits `name`, which cgroup slots set
+  (`src/agent/bpf/mod.rs:339`); that document needs the fix.
 - **Dropped:** `source` and `endpoint`, the per-column provenance older
   recorders wrote. Provenance is the source's (#1258, #1259).
 
@@ -136,46 +141,81 @@ list, which is already incomplete. Where the recording carries an index
 (`--stream`), the identity keys are exactly the keys its index entries hold.
 Otherwise, for each metric in a group table, a label is identity if its value
 differs between that metric's slot columns anywhere in the stream; a label
-constant across all of them is fixed. A group with one slot has nothing to
-compare, and its labels stay in field metadata. The `--stream` recordings
+constant across all of them is fixed. A group with one slot has no other
+column to compare with; its labels are identity if they change between
+segments, and fixed otherwise. The `--stream` recordings
 are the test: the derived split must equal the index's.
 
-### Slot columns
+### Group tables with slots: long
 
-- **Bounded-slot tables** (cgroup, device, mount, interface, GPU, per-CPU;
-  see "Per-stream considerations" for why each is wide): one column per
-  metric and slot, named
-  `{metric_id}x{slot}` as today, with no `#N` suffix. In a 5.21+ recording,
-  a slot's `#N` columns hold disjoint rows (the builder pads each with nulls
-  outside its occupancy), and the converter merges them into the one slot
-  column. It refuses a table where two of them overlap, which would mean the
-  premise is wrong. Who occupied the slot when is the index's.
-- **Tables with no slots:** unchanged, apart from the dropped provenance keys.
-- **The unbounded-slot table (`cpu_usage_task`):** long, keyed by occupant;
-  see "The per-task table".
+Every group table with slots is written long, keyed by occupant: task,
+cgroup, per-CPU, drive, mount, interface and GPU groups alike. The gate
+(below) measured long smaller than wide for per-task, cgroup, per-CPU and
+drive tables, on a busy and a quiet host.
 
-### The identity index
+- **Columns:** `timestamp`, the tick's `:wall_offset`, `:window_begin` and
+  `:window_width`, `occupant: UInt64`, and one column per metric in the
+  group. One row per tick and occupant that has a value, so a table has no
+  null cells except where an occupant lacks one of the group's metrics at
+  that tick.
+- **An occupant is one immutable label set:** `SlotIdentity::set`
+  (`src/agent/identity.rs:311`) mints a new generation and `__uid__`
+  whenever a slot's labels change. A row names its own series, the reader
+  groups rows into series through a plain map, and no row depends on the
+  index putting a handover on the right side of a tick. The slot, as `id`,
+  is an ordinary label of the occupant.
+- **Occupants are numbered per stream,** 0, 1, 2… in order of first sight.
+  Per stream rather than per source because each sampler has its own cgroup
+  `SlotIdentity` (seven of them), so one cgroup has a different `__uid__` in
+  each sampler's table; a numbering shared across tables would have to match
+  occupants by labels. The reasons for a dense number rather than a UUID are
+  under "The per-task table".
+- **5.21+ `#N` columns** (#1232) are already one occupant each and become
+  that occupant's rows. The converter refuses a table in which two
+  occupants of one slot both have a value at the same tick, which would mean
+  the premise that `#N` columns are disjoint is wrong.
+- **The write rule:** a group with slots is written long, and a group with
+  none is one row per tick. The agent knows which a group is when it
+  declares it, so the writer never has to see the data to choose. The
+  converter applies the same rule by whether a table has `{metric}x{slot}`
+  columns.
+- **Tables with no slots:** one row per tick, unchanged apart from the
+  dropped provenance keys.
 
-Written to `caller_rows` under the stream's name, as `IndexEntry` blobs
-(`crates/rez/src/index.rs:104`), the encoding the indexed reader already
-replays.
+### The occupant index
 
-- A **`--stream` recording** has one; the converter copies it unchanged.
-- A **scrape recording** gets one derived from its columns:
-  - a `Full` at the stream's first row, listing every slot then live with its
-    identity labels;
-  - a `Delta` wherever a slot's occupant changes: at a `#N` column's first
-    non-null row in a 5.21+ recording, and at a segment start where a slot's
-    labels differ from the previous segment's in a 5.18–5.20 one;
-  - a slot's removal where it has no further values;
-  - a restating `Full` every `RESTATE_EVERY` (300 s,
-    `src/recorder/stream.rs:156`) of row time, so a reader's replay starts
-    at most one period before the rows it needs, as for a recording made over
-    the stream.
-- `state` is computed with `SourceIndex` (`crates/rez/src/index.rs:378`), as
-  the subscriber computes it.
-- `__uid__` goes into a slot's index labels when the recording is `"uid"`.
-  A `"labels"` recording has none, and none is minted: a minted uid would
+With no slot columns in any stream, no stream needs the `.rez` time-keyed
+index that resolves `(slot, time)` to an occupant. What a long stream needs
+is its occupant table: which labels each occupant number stands for.
+
+- One entry per occupant, at the time it was first seen, mapping its number
+  to its labels, including `id` and, when the recording is `"uid"`, its
+  `__uid__`. Written to `caller_rows` under the stream's name.
+- An occupant is added once and never relabeled, since a label change is a
+  new occupant. An occupant that has no further rows is removed, so the live
+  set stays bounded by what the stream is currently observing.
+- A restating entry every `RESTATE_EVERY` (300 s, `src/recorder/stream.rs:156`)
+  of row time lists the live occupants, so a reader starts its replay at most
+  one period before the rows it needs, and retention can evict entries older
+  than the oldest surviving restatement.
+- **Encoding: open.** `IndexEntry` (`crates/rez/src/index.rs:104`) has the
+  right shape, a `Full` restatement and `Delta` additions and removals, but
+  `SlotEntry::slot` is `u32`. The occupant number is `u64` because a
+  rolling buffer runs indefinitely: at 100,000 new threads a second, `u32`
+  wraps in about 12 hours. The encoding is settled with the writer.
+
+How the converter finds occupants:
+
+- **A `--stream` recording** carries a time-keyed index. The converter
+  replays it with `SourceIndex` (`crates/rez/src/index.rs:378`) to assign
+  each row's slot to its occupant at that tick, then writes the occupant
+  table. The recorded index is not copied.
+- **A scrape recording:** each slot column's label set, with its `__uid__`
+  where present, is an occupant. In a 5.18–5.20 recording, a slot whose
+  labels differ from the previous segment's is a new occupant from that
+  segment's first row.
+- `__uid__` goes into an occupant's labels when the recording is `"uid"`. A
+  `"labels"` recording has none, and none is minted: a minted uid would
   assert sameness or difference that a 5.18–5.20 file does not record.
 
 ### Stream summaries
@@ -193,20 +233,21 @@ rarely, and a reader learns it from one segment.
 Every group with slots that can change hands has a `SlotIdentity`
 (`git grep "SlotIdentity::new" src/agent`). Tasks and cgroups are the only
 ones that churn; the rest hold a handful of slots that change rarely. Each
-kind was considered on its own, because the layout is decided by how wide a
-table can get, not by whether its slots can be reassigned: the time-keyed
-index already handles reassignment.
+kind was considered on its own. The first version of this entry decided
+layout by how wide a table can get, made the unbounded task table long and
+kept the bounded ones wide. The gate showed that rule wrong for bounded
+tables too ("Cgroups" below), and every kind with slots is now long.
 
 | identity | samplers | slot key | how many slots | churn | layout |
 |---|---|---|---|---|---|
 | task | `cpu_usage` (`cpu_usage_task`) | TID | unbounded up to `PID_MAX_LIMIT`; measured 14,011 per segment at the median, 38,388 max, 396,117 in 2.3 h | high: every thread that lives about a sample interval | **long, keyed by occupant** |
-| cgroup | `cpu_usage`, `cpu_bandwidth`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall_counts` | CPU-controller `css.id` | the host's live cgroups, capped by rezolus at 4,096; measured 31–57 | low to moderate: pod and job churn on a busy node | **wide by slot, time-keyed index** |
-| drive | `drivehealth` (sweep, NVMe) | drive index | 2 measured | rare | wide by slot, index |
-| mount | `filesystem` | mount index | 3 measured | rare (remount) | wide by slot, index |
-| interface | `network_ethtool` | interface index | a few | rare | wide by slot, index |
-| GPU engine, device, memory | `gpu` (Intel) | device index | a few | rare | wide by slot, index |
-| CPU | per-CPU groups | CPU id | CPUs (16 measured) | none; the slot is the identity | wide by slot, one `Full` |
-| none | plain groups | — | — | — | unchanged |
+| cgroup | `cpu_usage`, `cpu_bandwidth`, `cpu_migrations`, `cpu_perf`, `cpu_tlb_flush`, `scheduler_runqueue`, `syscall_counts` | CPU-controller `css.id` | the host's live cgroups, capped by rezolus at 4,096; measured 31–57 | low to moderate: pod and job churn on a busy node | **long** (measured: 8x smaller than wide) |
+| drive | `drivehealth` (sweep, NVMe) | drive index | 2 measured | rare | long (measured: 2.5x smaller) |
+| mount | `filesystem` | mount index | 3 measured | rare (remount) | long (not measured) |
+| interface | `network_ethtool` | interface index | a few | rare | long (not measured) |
+| GPU engine, device, memory | `gpu` (Intel) | device index | a few | rare | long (not measured) |
+| CPU | per-CPU groups | CPU id | CPUs (16 measured) | none; the slot is the identity | long, one occupant per CPU (measured: 25% smaller) |
+| none | plain groups | — | — | — | one row per tick, unchanged |
 
 ### Tasks: why long
 
@@ -217,54 +258,48 @@ give out and cannot overflow. A wide table's width is the number of distinct
 threads a segment saw, which a thread-per-request workload drives up without
 limit. The reasoning is in "The per-task table" below.
 
-### Cgroups: considered, and wide is better
+### Cgroups: long, reversed by the gate
 
-A cgroup slot can be reassigned exactly as a task slot can, so the same
-occupant-keyed long layout was considered for it. It is not used, because
-size, not reassignment, is what rules out wide, and a cgroup table's width is
-bounded by the host's live cgroups:
+The first version of this entry kept cgroup tables wide. Its argument: size,
+not reassignment, rules out wide, and a cgroup table's width is bounded.
+Those facts still hold, and they now bound the number of occupants rather
+than columns:
 
 - **The slot is the CPU controller's css id** (`task->sched_task_group->css.id`,
   `src/agent/bpf/cgroup.h:38`). The kernel allocates it with
   `cgroup_idr_alloc(&ss->css_idr, NULL, 2, 0, …)` (`kernel/cgroup/cgroup.c:5936`
   on current master): `idr_alloc` with no upper bound, returning the lowest
   free id. Ids are dense and a freed one is reused at once, so the largest id
-  in use tracks the number of live CPU-controller cgroups. Churn reuses slots;
-  only a larger live set widens the table.
-- **Reassignment is detected and indexed.** A reused id comes with a new
+  in use tracks the number of live CPU-controller cgroups.
+- **Reassignment is detected.** A reused id comes with a new
   `css.serial_nr`, which `handle_new_cgroup` compares (`cgroup.h:37-53`), and
-  `SlotIdentity::set` then mints a new occupant. The time-keyed index and the
-  indexed reader (#1280) attribute the rows; identity is captured with the
-  values since #1249.
-- **The tables are dense.** Cgroups live long next to threads, and the
-  measured tables were 98–100% full, which is where wide is cheapest.
-- **At rezolus's cap the cost is bounded.** At 4,096 slots a table's footer
-  would be about 4,096 × ~700 bytes, near 3 MB per table per segment, from
-  InfluxData's per-column figure with statistics off (Prior art), so an
-  estimate, somewhat higher with statistics. A typical Kubernetes node is far
-  below the cap: 110 pods by default at a few cgroups each, plus systemd
-  units, is about 300–1,000.
+  `SlotIdentity::set` then mints a new occupant. Identity is captured with
+  the values since #1249.
+- **The tables are dense:** 98–100% full in both recordings.
 
-What long would buy for cgroups is one reader path and identity recorded once
-per occupant. That is a simplification, not a fix for a measured cost, and
-the wide path already exists and is tested.
+The argument assumed that a dense column costs about what its values cost.
+At the segment sizes the seal policy produces, about 290–300 rows, it does
+not: each column costs about 520 bytes of footer per segment (measured:
+9.69 MB of footer for 18,544 column-segments on the busy host, 41.93 MB for
+80,272 on the quiet one), and 300 values of a slowly changing counter
+compress to less than that. Long pays that cost once per metric instead of
+once per metric and slot. Measured on `syscall_counts_cgroup`: 12.5 MB wide
+against 1.5 MB long on the busy host, 54.5 MB against 6.8 MB on the quiet
+one. Long also gives every group with slots one reader path.
+
+Compaction into longer segments would spread wide's per-column cost over
+more rows. It does not change the decision: under cgroup churn a merged
+segment's columns are the union of its inputs', and long is smaller at the
+segment size the writer produces, which is what a rolling buffer holds.
 
 **4,096 is rezolus's cap, not the kernel's.** `MAX_CGROUPS`
 (`src/agent/bpf/cgroup.h:10`, from #582) sizes rezolus's BPF maps, and a
 cgroup whose id is 4,096 or more is dropped in BPF with no count and no
-status (`cgroup.h:42`, and `:126` in `handle_new_cgroup_from_css`; the same bound at `mod.bpf.c:361`, `:421`). That is a
-silent gap on a host with more than about 4,094 live CPU-controller cgroups,
-counting dying ones that still hold their ids. Tracked in the backlog.
-
-**A detail for any future move to long:** each sampler has its own cgroup
-`SlotIdentity` (seven of them), so one cgroup gets a different `__uid__` in
-each sampler. An occupant key shared across cgroup tables would have to be
-matched by labels, not by uid.
-
-**Reopen** if a recording from a host with thousands of live cgroups and
-heavy pod or job churn shows cgroup-table footers or the index join as a
-measurable cost. No such recording exists yet; cgroup tables at that scale
-are unmeasured.
+status (`cgroup.h:42`, and `:126` in `handle_new_cgroup_from_css`; the same
+bound at `mod.bpf.c:361`, `:421`). That is a silent gap on a host with more
+than about 4,094 live CPU-controller cgroups, counting dying ones that still
+hold their ids. Tracked in the backlog. The layout does not depend on the
+cap.
 
 ## The per-task table: long
 
@@ -317,106 +352,129 @@ observations instead: one row per tick at which a task had a value, and a
 column set that never changes. The data stored is the same; wide adds a
 per-task overhead on top.
 
-**The layout.**
+**The layout** is the one every group with slots uses ("Group tables with
+slots: long"). For the task table, `pid` (the TID), `tgid` and `comm` are
+occupant labels, and a thread renaming itself (`pthread_setname_np`) is a new
+occupant.
 
-- Columns: `timestamp`, the tick's `:wall_offset`, `:window_begin` and
-  `:window_width`, `occupant: UInt64`, and one column per metric in the
-  group. No null cells.
-- **Rows are keyed by occupant, not by TID.** An occupant is one immutable
-  label set: `SlotIdentity::set` (`src/agent/identity.rs:311`) mints a new
-  generation and `__uid__` whenever a slot's labels change, including a
-  thread renaming itself (`pthread_setname_np`). So a row names its own
-  series, the reader groups rows by key into series through a plain map, and
-  no row depends on the index putting a TID's handover on the right side of
-  a tick. The TID is an ordinary label, `pid`, beside `tgid` and `comm`.
-- **The key is a dense number the writer assigns per source**, 0, 1, 2… in
-  order of first sight, not a UUID. A time-based UUID (v7) was considered: it
-  is 16 bytes per row where an observation is otherwise one 8-byte value, and
-  uniqueness across hosts is not needed inside a source, whose `__uid__`
-  labels already carry the producer epoch. The agent's own generation
-  counter is not available to a scrape recording, which sees only its hash.
-  A dense number increases monotonically, repeats in runs once sorted, and
-  works the same for `--stream`, scrape and 5.18–5.20 recordings (where it is
-  an internal key and claims nothing a label would). `u64`, since the busy
-  host minted about 396,000 occupants in 2.3 hours. Pyroscope's `uint32
-  SeriesIndex` is the same shape (Prior art).
-- **The index for a long table** is the occupant table: one `caller_rows`
-  entry per occupant, at the time it was first seen, mapping its number to
-  its labels (with the real `__uid__` where the recording has one). It is
-  kept under one name per identity, `identity/task`, which `caller_rows`
-  allows for a name no stream uses, and it is restated and evicted as the
-  time-keyed index is. The writer keeps the map from `__uid__` (or label set)
-  to number beside its `SourceIndex`.
-- **The write rule:** a group whose slot space is the PID space is written
-  long; bounded groups (per-CPU, cgroup, device) stay wide. The agent knows
-  which a group is when it declares it, so the writer never has to see the
-  data to choose. A converter applies the same rule by group name.
+**Why a dense number, not a UUID.** A time-based UUID (v7) was considered
+for the occupant key: it is 16 bytes per row where an observation is
+otherwise one 8-byte value, and uniqueness across hosts is not needed inside
+a stream, whose `__uid__` labels already carry the producer epoch. The
+agent's own generation counter is not available to a scrape recording, which
+sees only its hash. A dense number increases monotonically, repeats in runs
+once sorted, and works the same for `--stream`, scrape and 5.18–5.20
+recordings (where it is an internal key and claims nothing a label would).
+Pyroscope's `uint32 SeriesIndex` is the same shape (Prior art); rezolus uses
+`u64` because a rolling buffer can outlive `u32` (see "The occupant index").
 
-**Row order: arrival order at seal by default, sorted where a re-encode
-already happens; whether to sort at seal is measured, not assumed.** A tick's values arrive in ascending slot order (a row's values are
-the live slots by rank, `crates/rez/src/index.rs`), so a segment written as it
-arrives is ordered by `(timestamp, slot)` at no cost. Sorting it by
-`(occupant, timestamp)` would make each thread's samples contiguous, let a
-single-thread query skip pages on the page index's `occupant` bounds, and make
-timestamp deltas small within a thread. But on the busy host's worst segment that is about
-1.2M rows (10.6% of 301 ticks × 37,644 slots) to sort and permute at seal, on
-the path that already showed a 73 ms p99.9 stall at 50 ms sampling when the
-buffer ran in-process (#1224). So:
+**Row order: arrival order at seal, sorted by `(occupant, timestamp)` where
+a re-encode already happens.** A tick's values arrive in ascending slot
+order (a row's values are the live slots by rank, `crates/rez/src/index.rs`),
+so a segment written as it arrives is ordered by `(timestamp, slot)` at no
+cost. Sorting by `(occupant, timestamp)` makes each thread's samples
+contiguous and lets a single-thread query skip pages on the page index's
+`occupant` bounds. The gate measured what that buys (below): a third off the
+task table, and a single-thread read about 50 times smaller on the busy host
+and 110 times smaller on the quiet one.
 
-- the writer seals in arrival order;
-- the converter sorts, since it runs offline;
-- dendro's compaction, which already decodes and re-encodes a run of segments
-  (`concat_parquet`, iopsystems/dendro `src/rewrite.rs:254`), sorts when given
-  a sort key: a `CompactSpec` field naming columns, which keeps dendro from
-  interpreting values;
-- a sorted segment declares its order in parquet's `sorting_columns`, which is
-  per row group, so every row group carries it. A reader uses the page index
-  on `occupant` whether or not a segment declares a sort: pruning on page min/max
-  is correct on unsorted data, only less selective, and `sorting_columns` lets
-  it binary-search the bounds instead of scanning them.
-
-In arrival order a single-thread query decodes every page of the segment's
-`occupant` column, since every page spans every thread. Occupant numbers are
-assigned in order of first sight, so within a tick they are close together;
-how well that compresses is part of the gate.
+- The converter sorts, since it runs offline.
+- dendro's compaction, which already decodes and re-encodes a run of
+  segments (`concat_parquet`, iopsystems/dendro `src/rewrite.rs:254`), sorts
+  when given a sort key: a `CompactSpec` field naming columns, which keeps
+  dendro from interpreting values.
+- The writer seals in arrival order for now. The sort cost is at most 16–19
+  ms per task segment (below), on the seal path that showed a 73 ms p99.9
+  stall at 50 ms sampling when the buffer ran in-process (#1224). Whether to
+  sort at seal is decided with the 6.0 writer, measured on its own seal path.
+- A sorted segment declares its order in parquet's `sorting_columns`, which
+  is per row group, so every row group carries it. A reader uses the page
+  index on `occupant` whether or not a segment declares a sort: pruning on
+  page min/max is correct on unsorted data, only less selective.
 
 Deferring the sort has precedent and so does not deferring it (see Prior
 art): TimescaleDB, Iceberg and Delta sort when they compress or rewrite, off
 the insert path, while InfluxDB 3.0 sorts at persist and ClickHouse sorts
-every insert part, both because sorted files compress much better. So the
-gate measures what sorting at seal would cost against what it saves, and the
-default stays arrival order only if the saving is small.
+every insert part.
 
 **The reader cost.** Neither the `.rez` reader nor metriken-query reads a long
 table: both expect a column per series. The new reader on dendro's API has to
-group rows into series by slot and occupant. It is being written anyway; this
-adds to it rather than adding a component.
+group rows into series by occupant. It is being written anyway, and with
+every group with slots long it has one path for all of them.
 
-**Gate (confirms long; does not choose between candidates).** Convert
-`cpu_usage_task` from the busy recording (10.6% non-null), the quiet one
-(98%), and a synthetic thread-per-request spike at 1 s and 100 ms sampling,
-both wide-bare (identity removed, column per slot) and long. Measure:
+## Gate results (2026-09-27)
 
-- bytes on disk;
-- bytes read to open the stream;
-- time and peak RSS for `sum(rate(task_cpu_usage[1m]))` and for a
-  single-thread selector, on long segments in arrival order and sorted;
-- seal time for the worst busy-host segment, arrival order against sorted,
-  next to the parquet encode it is added to;
-- the compression difference between arrival order and sorted. Short-lived
-  threads give short runs per slot, and TimescaleDB's guidance is that a
-  segment-by group needs on the order of 100 rows to compress well, so the
-  saving from sorting may be smaller here than the prior art's figures;
-- the derived index's size: one `Delta` per thread arrival, about 396,000 over
-  the busy recording's 2.3 hours, which retention has to bound alongside the
-  segments.
+A scratch harness (not committed) read each table's segments from two
+recordings in `~/Downloads` and re-encoded every segment three ways, with the
+`.rez` segment writer's settings (LZ4_RAW, dictionary off,
+`crates/rez/src/rez.rs:373`):
 
-Long stands if it is no larger on disk, reads less at open, and does not lose
-the single-thread query badly enough that the dashboard's common case
-regresses. Sorting moves to seal if it saves substantially on disk for a seal
-cost well inside the tick budget. Losing narrowly on the quiet host is acceptable, as long as the
-rule never produces a pathological case. If arrival order is cheap enough on
-the read side, the compaction sort is left out.
+- **wide-bare:** the `.rez` layout with identity labels removed from field
+  metadata;
+- **long, arrival:** one row per tick and occupant, in the order the rows
+  arrive;
+- **long, sorted:** the same rows sorted by `(occupant, timestamp)`.
+
+"All" is a full decode of every segment. "One" reads the timestamp and the
+single occupant with the most observations, using the page index on long
+tables. Times are wall-clock totals over all segments of the table.
+
+The busy host is the 5.22.0 recording (2.3 h, 10.6% of task cells non-null);
+the quiet one is the 5.18–5.20 recording (9.6 h, 98%).
+
+| table | host | segments | wide-bare MB | long arrival MB | long sorted MB | one: wide → arrival → sorted, MB read |
+|---|---|---|---|---|---|---|
+| `cpu_usage_task` | busy | 32 | 273.3 | 39.2 | **26.3** | 219.4 → 37.6 → 0.76 |
+| `cpu_usage_task` | quiet | 159 | 524.0 | 505.4 | **348.7** | 181.2 → 496.0 → 4.35 |
+| `syscall_counts_cgroup` | busy | 28 | 12.5 | 1.7 | **1.5** | 9.75 → 0.22 → 0.26 |
+| `syscall_counts_cgroup` | quiet | 116 | 54.5 | 7.6 | **6.8** | 42.2 → 0.92 → 1.07 |
+| `cpu_usage_cpu` | busy | 28 | 2.8 | 2.2 | **2.1** | 0.82 → 0.86 → 0.84 |
+| `cpu_usage_cpu` | quiet | 116 | 11.9 | 9.3 | **8.9** | 3.44 → 4.46 → 4.39 |
+| `drivehealth_sweep` | quiet | 116 | 1.0 | 0.4 | **0.4** | 0.88 → 0.29 → 0.35 |
+
+Footers, the main cost being removed: `cpu_usage_task` busy 219.3 MB wide
+against 0.05 MB long; `syscall_counts_cgroup` busy 9.69 MB against 0.11 MB.
+
+Time, in ms:
+
+| table | host | encode: wide / long sorted | all: wide / arrival / sorted | one: wide / arrival / sorted | sort |
+|---|---|---|---|---|---|
+| `cpu_usage_task` | busy | 1,620 / 299 | 1,224 / 189 / 145 | 598 / 85 / 5.4 | 502 |
+| `cpu_usage_task` | quiet | 1,918 / 2,051 | 1,133 / 1,162 / 914 | 491 / 501 / 28 | 2,987 |
+| `syscall_counts_cgroup` | busy | 75 / 25 | 79 / 13 / 25 | 28 / 2.5 / 3.6 | 27 |
+| `syscall_counts_cgroup` | quiet | 304 / 113 | 321 / 53 / 104 | 116 / 11 / 15 | 111 |
+| `cpu_usage_cpu` | busy | 9.8 / 7.5 | 5.0 / 2.7 / 2.8 | 2.2 / 1.1 / 1.3 | 4.4 |
+| `cpu_usage_cpu` | quiet | 35.0 / 29.4 | 19.5 / 11.5 / 11.3 | 9.1 / 4.7 / 5.4 | 17.8 |
+
+What the results show:
+
+- **Long is smaller than wide for every table measured**, including the
+  dense ones. Per-CPU (16 slots, always full) is the closest, 25% smaller.
+  The mechanism is the per-column footer cost ("Cgroups" above).
+- **Sorting matters for the task table and little elsewhere.** Sorted is a
+  third smaller than arrival order on both hosts, and turns a single-thread
+  read from 37.6 MB into 0.76 MB on the busy host and from 496 MB into 4.35
+  MB on the quiet one. On the quiet host, arrival order read more than wide
+  for one thread, because every page spans every thread.
+- **The sort costs 16–19 ms per task segment** (502 ms over 32 segments,
+  2,987 ms over 159), about 1 ms per cgroup segment. The harness sorts by
+  rebuilding the arrays, so this is an upper bound.
+- A full decode of the cgroup table was slower sorted than in arrival order
+  (13 against 25 ms busy, 53 against 104 ms quiet) for the same bytes. I
+  don't know why; it is small in absolute terms.
+
+Not measured:
+
+- a synthetic thread-per-request spike, and 100 ms sampling;
+- peak RSS per query, and reads through a query engine: the harness reads
+  parquet directly and prunes on the page index by hand, since no reader for
+  long tables exists yet;
+- the occupant index's size (about 396,000 entries over the busy
+  recording's 2.3 hours);
+- the drive table on the busy host, and tables whose metrics are histograms
+  (`blockio_latency_device_latencies`): the harness handles only integer
+  columns;
+- mount, interface and GPU tables, which neither recording has with slots.
 
 ## Prior art
 
@@ -438,10 +496,9 @@ Collected 2026-09-25; each claim is from the linked page.
   (https://grafana.com/docs/pyroscope/latest/reference-pyroscope-architecture/block-format/),
   and the Cortex parquet proposal splits a labels file from a chunks file
   (https://cortexmetrics.io/docs/proposals/parquet-storage/). Neither handles a
-  key the OS reuses, as it reuses TIDs. The long task table avoids the
-  question by keying rows on an occupant number, never a TID; the wide tables
-  resolve `(slot, time)` to an occupant through the index; 5.21+ recordings
-  carry `__uid__` as the fingerprint across recordings.
+  key the OS reuses, as it reuses TIDs. The long tables avoid the question by
+  keying rows on an occupant number, never a slot; 5.21+ recordings carry
+  `__uid__` as the fingerprint across recordings.
 - **Sort at rewrite:** TimescaleDB applies `orderby` when it compresses an aged
   chunk
   (https://github.com/timescale/docs.timescale.com-content/blob/master/using-timescaledb/compression.md);
@@ -459,7 +516,7 @@ Collected 2026-09-25; each claim is from the linked page.
   (https://docs.victoriametrics.com/victoriametrics/faq/).
 - **Dropping `ARROW:schema`:** arrow-rs has
   `ArrowWriterOptions::with_skip_arrow_metadata`. Field metadata is where
-  `metric` and `id` live, so this layout keeps the entry, made small by holding
+  `metric` and the other storage keys live, so this layout keeps the entry, made small by holding
   fixed facts only.
 
 No published on-disk layout for per-thread metrics from an eBPF telemetry tool
@@ -467,14 +524,19 @@ was found.
 
 ## Next
 
-1. Run the gate above, including a synthetic thread spike.
+1. ~~Run the gate~~ — done 2026-09-27; every group with slots is long. A
+   synthetic thread spike and 100 ms sampling are still unmeasured.
 2. Fix `docs/labels.md`'s identity list (`name`).
-3. The rezolus reader for dendro archives, on dendro's API, reading this
-   layout: identity from `caller_rows`, one schema read per stream.
-4. The reshaping converter, with the `--stream` recordings as its oracle: a
-   derived index must match a recorded one, and every series must read back
-   the same through the new reader as through today's `.rez` reader.
-5. The 6.0 writer writes this layout (#1224).
+3. Settle the occupant index's encoding (`u64` occupant numbers).
+4. The rezolus reader for dendro archives, on dendro's API, reading this
+   layout: occupant labels from `caller_rows`, rows grouped into series by
+   occupant, one schema read per stream.
+5. The reshaping converter, with the `--stream` recordings as its oracle:
+   occupants derived from a recording's columns must match those its
+   recorded index gives, and every series must read back the same through
+   the new reader as through today's `.rez` reader.
+6. A sort key in dendro's `CompactSpec`.
+7. The 6.0 writer writes this layout (#1224), and measures sorting at seal.
 
 ## Related
 
