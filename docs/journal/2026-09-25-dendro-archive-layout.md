@@ -7,7 +7,10 @@
   (below): every group table with slots is written long, keyed by occupant.
   The first version made only the per-task table long and kept cgroup,
   per-CPU and device tables wide; measurement showed long smaller for all of
-  them.
+  them. A synthetic thread and cgroup spike at 1 s and 100 ms (2026-09-28)
+  confirmed it and found two things the design must handle: the occupant
+  table needs a compressed encoding, and sorting helps reads but does not
+  always shrink a table.
 - **Driver:** #1301 converts a `.rez` into a dendro archive by copying segment
   bytes unchanged, which carries the `.rez` layout's costs across with them.
   Measured on the converted archives (below), segment footers were 42% and 73%
@@ -203,6 +206,10 @@ is its occupant table: which labels each occupant number stands for.
   `SlotEntry::slot` is `u32`. The occupant number is `u64` because a
   rolling buffer runs indefinitely: at 100,000 new threads a second, `u32`
   wraps in about 12 hours. The encoding is settled with the writer.
+- **It must be compressed.** Stored as plain msgpack entries, the busy
+  host's occupant table was 62.3 MB, more than twice its 26.3 MB of long
+  data. As one zstd blob per seal it was 8.1 MB, and as parquet 7.6–8.6 MB
+  (Gate results). Either is acceptable. Plain per-entry blobs are not.
 
 How the converter finds occupants:
 
@@ -320,7 +327,7 @@ reads it: no dashboard section, MCP tool or feature extraction queries it.
 It is used through queries: the insights-model evaluations attribute CPU to
 threads by `comm` and `tgid` with it, and the `measure-performance` skill
 reads server threads' CPU from it. Those evaluations also record it missing
-CPU that the cgroup counters saw. Measured on delta (2026-09-25/26, against the
+CPU that the cgroup counters saw. Measured on a 32-CPU x86_64 host on kernel 6.12 (2026-09-25/26, against the
 kernel's `cpu.stat`): long-lived threads are within 1%, but under heavy thread
 churn the task event ring buffer overflows, and because per-task accounting is
 tied to metadata delivery the loss reaches the host and cgroup totals (system
@@ -374,17 +381,20 @@ order (a row's values are the live slots by rank, `crates/rez/src/index.rs`),
 so a segment written as it arrives is ordered by `(timestamp, slot)` at no
 cost. Sorting by `(occupant, timestamp)` makes each thread's samples
 contiguous and lets a single-thread query skip pages on the page index's
-`occupant` bounds. The gate measured what that buys (below): a third off the
-task table, and a single-thread read about 50 times smaller on the busy host
-and 110 times smaller on the quiet one.
+`occupant` bounds. The gate measured what that buys (below): a single-thread
+read about 50 times smaller on the busy host and 110 times smaller on the
+quiet one. The disk size moves either way: sorting took a third off the
+task table on both existing recordings, but made the spike's churning
+tables up to 50% larger, because a thread that lives a few ticks has no run
+for sorting to compress.
 
 - The converter sorts, since it runs offline.
 - dendro's compaction, which already decodes and re-encodes a run of
   segments (`concat_parquet`, iopsystems/dendro `src/rewrite.rs:254`), sorts
   when given a sort key: a `CompactSpec` field naming columns, which keeps
   dendro from interpreting values.
-- The writer seals in arrival order for now. The sort cost is at most 16–19
-  ms per task segment (below), on the seal path that showed a 73 ms p99.9
+- The writer seals in arrival order for now. The sort cost is at most 32 ms
+  for the largest segment measured (below), on the seal path that showed a 73 ms p99.9
   stall at 50 ms sampling when the buffer ran in-process (#1224). Whether to
   sort at seal is decided with the 6.0 writer, measured on its own seal path.
 - A sorted segment declares its order in parquet's `sorting_columns`, which
@@ -402,12 +412,11 @@ table: both expect a column per series. The new reader on dendro's API has to
 group rows into series by occupant. It is being written anyway, and with
 every group with slots long it has one path for all of them.
 
-## Gate results (2026-09-27)
+## Gate results (2026-09-27, spike added 2026-09-28)
 
-A scratch harness (not committed) read each table's segments from two
-recordings in `~/Downloads` and re-encoded every segment three ways, with the
-`.rez` segment writer's settings (LZ4_RAW, dictionary off,
-`crates/rez/src/rez.rs:373`):
+A scratch harness (not committed) reads a table's segments from a v3 `.rez`
+and re-encodes every segment three ways, with the `.rez` segment writer's
+settings (LZ4_RAW, dictionary off, `crates/rez/src/rez.rs:373`):
 
 - **wide-bare:** the `.rez` layout with identity labels removed from field
   metadata;
@@ -415,66 +424,151 @@ recordings in `~/Downloads` and re-encoded every segment three ways, with the
   arrive;
 - **long, sorted:** the same rows sorted by `(occupant, timestamp)`.
 
+Long metric columns keep the fixed field metadata a metric column carries.
+Each long segment holds the rows of one source segment, so it inherits the
+wide writer's segmentation. A long writer would seal on its own byte cap
+and write fewer, longer segments, so the long figures here are conservative.
+
 "All" is a full decode of every segment. "One" reads the timestamp and the
-single occupant with the most observations, using the page index on long
-tables. Times are wall-clock totals over all segments of the table.
+single occupant with the most observations, pruning pages on the page
+index's `occupant` bounds. Times are wall-clock totals over all segments of
+the table. The occupant table is sized as one msgpack entry per occupant
+(its number and labels) plus a restatement of the live set every 300 s.
+
+### Two existing recordings
 
 The busy host is the 5.22.0 recording (2.3 h, 10.6% of task cells non-null);
-the quiet one is the 5.18–5.20 recording (9.6 h, 98%).
+the quiet one is the 5.18–5.20 recording (9.6 h, 98%). These figures are
+from the second harness version (2026-09-28). The first left field metadata
+off long columns; they changed by 0.2 MB or less, except the drive table,
+which went from 0.4 to 0.6 MB.
 
 | table | host | segments | wide-bare MB | long arrival MB | long sorted MB | one: wide → arrival → sorted, MB read |
 |---|---|---|---|---|---|---|
-| `cpu_usage_task` | busy | 32 | 273.3 | 39.2 | **26.3** | 219.4 → 37.6 → 0.76 |
-| `cpu_usage_task` | quiet | 159 | 524.0 | 505.4 | **348.7** | 181.2 → 496.0 → 4.35 |
-| `syscall_counts_cgroup` | busy | 28 | 12.5 | 1.7 | **1.5** | 9.75 → 0.22 → 0.26 |
-| `syscall_counts_cgroup` | quiet | 116 | 54.5 | 7.6 | **6.8** | 42.2 → 0.92 → 1.07 |
-| `cpu_usage_cpu` | busy | 28 | 2.8 | 2.2 | **2.1** | 0.82 → 0.86 → 0.84 |
-| `cpu_usage_cpu` | quiet | 116 | 11.9 | 9.3 | **8.9** | 3.44 → 4.46 → 4.39 |
-| `drivehealth_sweep` | quiet | 116 | 1.0 | 0.4 | **0.4** | 0.88 → 0.29 → 0.35 |
+| `cpu_usage_task` | busy | 32 | 273.3 | 39.2 | **26.3** | 219.4 → 37.8 → 0.77 |
+| `cpu_usage_task` | quiet | 159 | 524.0 | 505.4 | **348.7** | 181.3 → 496.8 → 4.39 |
+| `syscall_counts_cgroup` | busy | 28 | 12.5 | 1.8 | **1.7** | 9.75 → 0.39 → 0.39 |
+| `syscall_counts_cgroup` | quiet | 116 | 54.5 | 8.1 | **7.4** | 42.2 → 1.61 → 1.64 |
+| `cpu_usage_cpu` | busy | 28 | 2.8 | 2.2 | **2.1** | 0.82 → 0.90 → 0.86 |
+| `cpu_usage_cpu` | quiet | 116 | 11.9 | 9.4 | **9.0** | 3.44 → 4.60 → 4.50 |
+| `drivehealth_sweep` | quiet | 116 | 1.0 | 0.6 | **0.6** | 0.88 → 0.56 → 0.56 |
+
+On the busy host the drive table has 2 occupants and 137 rows, and all three
+layouts are 0.1 MB.
 
 Footers, the main cost being removed: `cpu_usage_task` busy 219.3 MB wide
-against 0.05 MB long; `syscall_counts_cgroup` busy 9.69 MB against 0.11 MB.
+against 0.06 MB long; `syscall_counts_cgroup` busy 9.69 MB against 0.25 MB.
 
 Time, in ms:
 
 | table | host | encode: wide / long sorted | all: wide / arrival / sorted | one: wide / arrival / sorted | sort |
 |---|---|---|---|---|---|
-| `cpu_usage_task` | busy | 1,620 / 299 | 1,224 / 189 / 145 | 598 / 85 / 5.4 | 502 |
-| `cpu_usage_task` | quiet | 1,918 / 2,051 | 1,133 / 1,162 / 914 | 491 / 501 / 28 | 2,987 |
-| `syscall_counts_cgroup` | busy | 75 / 25 | 79 / 13 / 25 | 28 / 2.5 / 3.6 | 27 |
-| `syscall_counts_cgroup` | quiet | 304 / 113 | 321 / 53 / 104 | 116 / 11 / 15 | 111 |
-| `cpu_usage_cpu` | busy | 9.8 / 7.5 | 5.0 / 2.7 / 2.8 | 2.2 / 1.1 / 1.3 | 4.4 |
-| `cpu_usage_cpu` | quiet | 35.0 / 29.4 | 19.5 / 11.5 / 11.3 | 9.1 / 4.7 / 5.4 | 17.8 |
+| `cpu_usage_task` | busy | 1,720 / 353 | 1,340 / 205 / 159 | 637 / 93 / 6.2 | 537 |
+| `cpu_usage_task` | quiet | 2,020 / 2,241 | 1,173 / 1,210 / 959 | 497 / 517 / 29 | 2,688 |
+| `syscall_counts_cgroup` | busy | 78 / 35 | 83 / 14 / 26 | 28 / 3.2 / 3.9 | 29 |
+| `syscall_counts_cgroup` | quiet | 320 / 144 | 325 / 54 / 106 | 116 / 13 / 16 | 113 |
+| `cpu_usage_cpu` | busy | 10.0 / 8.5 | 5.3 / 3.0 / 3.0 | 2.4 / 1.3 / 1.5 | 4.1 |
+| `cpu_usage_cpu` | quiet | 34.1 / 30.5 | 19.2 / 11.6 / 11.4 | 9.0 / 5.1 / 5.6 | 15.8 |
 
-What the results show:
+### A synthetic spike
 
-- **Long is smaller than wide for every table measured**, including the
-  dense ones. Per-CPU (16 slots, always full) is the closest, 25% smaller.
-  The mechanism is the per-column footer cost ("Cgroups" above).
-- **Sorting matters for the task table and little elsewhere.** Sorted is a
-  third smaller than arrival order on both hosts, and turns a single-thread
-  read from 37.6 MB into 0.76 MB on the busy host and from 496 MB into 4.35
-  MB on the quiet one. On the quiet host, arrival order read more than wide
-  for one thread, because every page spans every thread.
-- **The sort costs 16–19 ms per task segment** (502 ms over 32 segments,
-  2,987 ms over 159), about 1 ms per cgroup segment. The harness sorts by
-  rebuilding the arrays, so this is an upper bound.
-- A full decode of the cgroup table was slower sorted than in arrival order
-  (13 against 25 ms busy, 53 against 104 ms quiet) for the same bytes. I
-  don't know why; it is small in absolute terms.
+Recorded on a 32-CPU x86_64 host running kernel 6.12 at 250 Hz. 16 of its
+CPUs are isolated by `isolcpus` and `nohz_full`, so the load ran on the
+other 16. A `main` build (5.22.2-alpha.11) was both agent and recorder. Each recording is
+700 s: 30 s quiet, then 600 s of:
 
-Not measured:
+- **thread-per-request:** 300 threads a second (180,000 in all), each named
+  into one of four pools, living 0.5–5 s, burning a fixed amount of CPU at
+  start and sleeping out the rest;
+- **cgroup churn:** 5 jobs a second (2,990 in all), each in its own cgroup
+  with the CPU controller on, burning 50 ms and living 10–60 s.
 
-- a synthetic thread-per-request spike, and 100 ms sampling;
-- peak RSS per query, and reads through a query engine: the harness reads
-  parquet directly and prunes on the page index by hand, since no reader for
-  long tables exists yet;
-- the occupant index's size (about 396,000 entries over the busy
-  recording's 2.3 hours);
-- the drive table on the busy host, and tables whose metrics are histograms
-  (`blockio_latency_device_latencies`): the harness handles only integer
-  columns;
+Four recordings: the thread CPU was 0.5 ms ("light") or 10 ms ("heavy"), each
+at 1 s and 100 ms.
+
+| table | run | segments | occupants | wide-bare MB | long arrival MB | long sorted MB | one: wide → arrival → sorted, MB read |
+|---|---|---|---|---|---|---|---|
+| `cpu_usage_task` | light, 1 s | 3 | 24,976 | 16.4 | **1.6** | 1.9 | 13.2 → 1.53 → 0.18 |
+| `cpu_usage_task` | light, 100 ms | 17 | 26,917 | 29.0 | **9.6** | 11.2 | 22.9 → 8.65 → 0.23 |
+| `cpu_usage_task` | heavy, 1 s | 3 | 177,854 | 99.4 | **3.4** | 5.1 | not measured |
+| `cpu_usage_task` | heavy, 100 ms | 23 | 184,332 | 133.5 | 24.1 | **19.1** | 110.2 → 22.8 → 0.43 |
+| `syscall_counts_cgroup` | light, 1 s | 6 | 3,079 | 43.6 | **0.9** | **0.9** | 36.9 → 0.14 → 0.12 |
+| `syscall_counts_cgroup` | light, 100 ms | 53 | 3,292 | 167.3 | **4.7** | 6.1 | 141.2 → 1.02 → 0.87 |
+| `syscall_counts_cgroup` | heavy, 100 ms | 53 | 3,291 | 168.8 | **4.4** | 5.0 | 142.7 → 1.01 → 0.87 |
+| `cpu_tlb_flush_cgroup` | light, 1 s | 3 | 3,074 | 9.5 | 0.6 | **0.5** | 7.79 → 0.30 → 0.09 |
+| `cpu_tlb_flush_cgroup` | light, 100 ms | 17 | 3,289 | 20.1 | **2.3** | 3.5 | 16.1 → 1.15 → 0.33 |
+| `cpu_usage_cpu` | light, 1 s | 3 | 32 | 0.5 | 0.3 | 0.3 | 0.16 → 0.12 → 0.12 |
+| `cpu_usage_cpu` | heavy, 100 ms | 8 | 32 | 2.4 | 2.1 | 2.1 | 0.48 → 0.75 → 0.61 |
+
+The heavy 1 s cgroup and per-CPU tables match the light 1 s ones to within
+0.1 MB. The heavy 1 s task table is the one arrow-rs cannot open (below), so
+its row is from a pyarrow version of the harness. On the light 1 s task
+table, which both can read, pyarrow gave 15.4 / 1.4 / 1.8 MB against the Rust
+harness's 16.4 / 1.6 / 1.9, so its figures run about 10% lower.
+
+What the spike adds:
+
+- **Long is smaller for every table and run.** Cgroup churn is where wide
+  does worst: `syscall_counts_cgroup` is 48 times smaller long at 1 s and 36
+  times at 100 ms, because every short-lived cgroup is a column in every
+  segment it touched.
+- **Sorting does not always shrink a table.** With short-lived occupants
+  a sorted segment is often larger than arrival order: the light task table
+  at 100 ms is 11.2 MB sorted against 9.6 MB, the cgroup table 6.1 against
+  4.7. A long-lived occupant gives a long run of close timestamps and slowly
+  changing values when sorted; a thread that lives a few ticks does not, and
+  arrival order keeps each tick's timestamps together instead. Sorted was
+  smaller where occupants have many rows each: the heavy task table at 100 ms
+  (threads of 0.5–5 s give 5–50 rows; 19.1 against 24.1 MB) and both existing
+  recordings. The same threads at 1 s give 1–5 rows, and sorted was larger
+  (5.1 against 3.4 MB). A
+  single-occupant read is always far smaller sorted (0.23 against 8.65 MB),
+  which is what sorting is for; the disk size is a side effect, in either
+  direction.
+- **Sort cost at seal:** the worst segment of any table measured took 32 ms,
+  about 526,000 rows, on both the busy host's task table and the heavy 100 ms
+  spike's. The harness sorts by rebuilding the arrays, so this is an upper
+  bound.
+- **The occupant table is large unless compressed.** As plain msgpack it
+  is 62.3 MB for the busy host's 396,117 occupants, more than twice the
+  26.3 MB of long data, and 24.4 MB for the heavy 100 ms spike's 184,332
+  against 19.1 MB. The cgroup path is about half of each entry (61 of
+  roughly 131 label bytes), and one busy segment's 2,600 occupants share 22
+  cgroups and 227 `tgid`s. Measured on the busy host's occupants:
+  compressing each seal's new entries as one zstd blob gives 8.1 MB; the
+  same table as parquet (zstd, dictionary on) gives 7.6 MB as one file and
+  8.6 MB as 32. The floor is the `__uid__` values, which are random: 396,117
+  × 8 bytes is 3.2 MB. Restatements add little on a busy host (6.3 MB) and
+  most of the size on a quiet one: 26.0 MB there, against 0.7 MB of first
+  sightings, from 116 restatements of about 2,500 live threads.
+- **Threads under one tick of CPU mostly get no series.** The light runs
+  started 180,000 threads and the task table saw 24,976, about 14%. The
+  load's CPUs use tick accounting at 250 Hz, and `cpuacct_account_field` is
+  charged per tick, so a thread that runs 0.5 ms is charged only if a tick
+  lands while it runs: 0.5 / 4 ms is 12.5%. Totals are right on average, since
+  the thread that is charged gets a full tick. The heavy runs (10 ms, over
+  two ticks) saw nearly every thread: 177,854 occupants at 1 s. Recorded in the backlog under per-task
+  completeness.
+- **A wide task segment can become unreadable.** At 1 s the heavy spike's
+  task segments reached 90,227 columns, sealed by the 5-minute age bound (at
+  100 ms the 8 MiB byte cap seals them near 11,000). arrow-rs could not open
+  the segment of 52,109 columns (a 36.4 MB `ARROW:schema`): it fails with
+  `TooManyTables`, because it verifies that flatbuffer with
+  `VerifierOptions::default()` (arrow-ipc 58, `src/convert.rs:990`), whose
+  `max_tables` is 1,000,000. rezolus's reader
+  then reports the table as evicted (`crates/rez/src/reader.rs:1289`), which
+  is not what happened. The busy host's largest segment, 38,388 columns,
+  opens; the exact threshold between the two was not found. This is a defect of the `.rez` layout today, independent of the
+  dendro work; the long layout removes it. Tracked in the backlog.
+
+### Not measured
+
+- reads through a query engine: the harness reads parquet directly and
+  prunes on the page index by hand, since no reader for long tables exists;
+- peak memory per query;
 - mount, interface and GPU tables, which neither recording has with slots.
+  No sampler produces a slotted histogram group, so there is no histogram
+  case.
 
 ## Prior art
 
@@ -524,10 +618,10 @@ was found.
 
 ## Next
 
-1. ~~Run the gate~~ — done 2026-09-27; every group with slots is long. A
-   synthetic thread spike and 100 ms sampling are still unmeasured.
+1. ~~Run the gate~~ — done 2026-09-27, with a synthetic spike at 1 s and
+   100 ms on 2026-09-28; every group with slots is long.
 2. Fix `docs/labels.md`'s identity list (`name`).
-3. Settle the occupant index's encoding (`u64` occupant numbers).
+3. Settle the occupant index's encoding: `u64` occupant numbers, compressed.
 4. The rezolus reader for dendro archives, on dendro's API, reading this
    layout: occupant labels from `caller_rows`, rows grouped into series by
    occupant, one schema read per stream.
