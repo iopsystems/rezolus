@@ -366,9 +366,15 @@ const loadSection = async (section) => {
             // vendor; keeping `nvidia` would filter every chart to nothing).
             const resolve = (g) => {
                 if (gpuEntries.length > 0) {
-                    const e = gpuEntries.find((x) => String(x.id) === String(g.id)
+                    const matches = gpuEntries.filter((x) => String(x.id) === String(g.id)
                         && (g.vendor == null || x.vendor == null || String(x.vendor) === String(g.vendor)));
-                    return e ? { vendor: e.vendor != null ? String(e.vendor) : null, id: String(e.id) } : null;
+                    if (matches.length === 0) return null;
+                    // A bare id that matches several vendors stays id-only
+                    // (the filter handles that form) rather than picking one
+                    // vendor by array order.
+                    if (matches.length > 1) return { vendor: null, id: String(g.id) };
+                    const e = matches[0];
+                    return { vendor: e.vendor != null ? String(e.vendor) : null, id: String(e.id) };
                 }
                 return gpuList.some((id) => String(id) === String(g.id))
                     ? { vendor: null, id: String(g.id) }
@@ -555,6 +561,16 @@ const resetLinkedViewState = () => {
     setSelectedGpus([]);
     seedSelectedCgroups([]);
     clearViewState();
+};
+
+// Re-derive the node and service-instance state from a newly loaded file's
+// metadata. The site shell gets this through initDashboard; the server
+// shell's upload path replaces the file without re-running initDashboard
+// and used to keep the previous file's node selection, so its queries
+// carried a node the new file never had.
+const reapplyFileMetadata = (fm) => {
+    fileMetadata = fm || null;
+    applyMultiNodeInfo(null);
 };
 
 const applyDisplayWindow = async (win) => {
@@ -1546,4 +1562,4 @@ const getActiveCgroupPattern = () => activeCgroupPattern;
 const getRecording = () => recording;
 const setRecording = (value) => { recording = value; };
 
-export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };
+export { initDashboard, sectionResponseCache, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, loadSection, preloadSections, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, attachExperiment, detachExperiment, durationFromFileMetadata, setChartToggle };

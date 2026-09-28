@@ -7,7 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
-import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
+import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, resetLinkedViewState, reapplyFileMetadata, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
 // never shows a blank document while we fetch state. Replaced by the
@@ -115,6 +115,9 @@ const uploadParquet = async (file) => {
         resetLinkedViewState();
         chartsState.resetAll();
         await fetchBackendState();
+        // Node and instance selections come from the new file, as they do
+        // on the initial load.
+        reapplyFileMetadata(fileMetadata);
         if (fileChecksum) {
             setStorageScope({ filename: fileChecksum });
         }

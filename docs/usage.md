@@ -313,8 +313,10 @@ cannot satisfy (a node it does not have, a range outside it, `time=raw` in
 compare mode, `from`/`to` in live mode) is dropped with a warning in the
 browser console and the link is rewritten without it. A granularity change
 resets the window and drops `from`/`to`. Loading a different file resets
-the view and clears these keys. Everything else in the query string
-(`capture=`, `compare=`) is kept, re-encoded as a browser would.
+the view and clears these keys; on the static site a link therefore needs
+its `capture=`, since a file dropped onto the page starts fresh. Everything
+else in the query string (`capture=`, `compare=`) is kept, re-encoded as a
+browser would.
 
 ## Recording tools
 
