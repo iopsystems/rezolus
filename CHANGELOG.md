@@ -2,6 +2,14 @@
 
 ### Added
 
+- The reader reads long tables in dendro archives, the 6.0 layout: one row
+  per tick and occupant, with each occupant's labels in a parquet stream
+  beside the table (`<table>/occupants`; the format is metriken-segment
+  0.1.0's, the relabel metriken-query 0.32.0's).
+  Series carry the occupant's labels plus an internal `__occupant__`, and
+  filters on those labels work. Checked against the same data written one
+  column per slot: every query agrees. Nothing writes this layout yet.
+
 - `rezolus view`, `rezolus mcp` and the static-site viewer open dendro
   archives, recognized by content like a `.rez`. `RezReader` reads its
   container through a `Catalog` trait (`crates/rez/src/catalog.rs`) that
