@@ -1154,6 +1154,14 @@ Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-eve
   `select!` arm on the child's exit so `run_end` is stamped when the exit
   happens rather than at the next tick. Events name the program by
   `argv[0]`'s basename; `--record-command-line` adds the full argument list.
+- **Run events on each recording's own timeline** — Open. The events are
+  stamped on the recorder's clock while a rezolus agent's rows are on the
+  agent's, so a remote agent's markers sit off its rows by the host skew. On
+  the scrape path the agent's `ts` and the tick's `anchored_ns` are both in
+  hand where the tick is staged, so a per-recording conversion with
+  round-trip precision is possible there; on the stream path a frame arrives
+  up to an interval late, so no comparable pairing exists and the recorder's
+  clock is the honest choice.
 - **Event-anchored compare alignment** — Open. An anchor may name an event
   kind and resolve per capture; falls back to first sample with a notice.
   Gives `anchors.baseline` its first writer, closing the inert plumbing the

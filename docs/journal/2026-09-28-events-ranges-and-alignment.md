@@ -134,11 +134,19 @@ recording's last `wall_offset`, does not remove the skew: a rezolus agent's
 `wall_offset` is the agent's own wall clock against its own timeline, so the
 result is still the agent's timeline plus the wall skew, measured at the
 last tick instead of at the anchors. Removing it needs the agent's stamp
-paired with the recorder's instant at every tick, threaded through `stage`
-and `stage_stream`, and the stream path receives a frame up to an interval
-after the agent produced it, so that pairing is off by more than the skew it
-removes on an NTP-synced fleet. A per-tick pairing stored with the rows is
-the way to do it if a viewer ever needs sub-skew placement. The `.rez`
+paired with the recorder's instant at the same moment. On the scrape path
+that pairing exists and was not used: the agent's `ts` is read inside the
+request/response window the recorder measures on its own clock, so
+`snapshot_producer_stamp` and the tick's `anchored_ns` are both in hand
+where the tick is staged (`src/recorder/mod.rs`, the `rec.stage` call), and
+a conversion through them would place the event to within one round trip.
+On the stream path it does not: a frame arrives up to an interval after the
+agent produced it, so pairing its stamp with the receipt instant is off by
+more than the skew it would remove on an NTP-synced fleet. So the events
+stay on the recorder's clock for now; converting per recording is possible
+with round-trip precision for scraped recordings and not for streamed ones,
+and is deferred to the backlog ("Run events on each recording's own
+timeline"). The `.rez`
 writer needed a new message: metadata was set once in the `ManifestSeed` at
 `add_recording`, and `finalize` never touched it, so `Msg::UpdateMetadata`
 and `RecordingWriter::update_metadata` (`crates/rez/src/rez_v3_writer.rs`)

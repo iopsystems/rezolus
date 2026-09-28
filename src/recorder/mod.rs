@@ -2081,6 +2081,11 @@ pub fn run(mut config: RecordingConfig) {
         let mut exit_arm_armed = true;
         // Set once the body has run its one pass after the child exited.
         let mut final_scrape_done = false;
+        // True when the previous pass ran the body to its end, so the loop
+        // top can tell an exit that landed during that scrape (already
+        // sampled) from one that landed while waiting for the tick (not).
+        // Cleared on every `continue`, since those passes scrape nothing.
+        let mut scraped_last_pass = false;
 
         let start = Instant::now() + interval_dur;
         // In wrapped mode the cap is intentionally measured from command spawn
@@ -2183,7 +2188,15 @@ pub fn run(mut config: RecordingConfig) {
                     // an exit noticed here ended the recording with the last
                     // partial interval unsampled, and a command that exited
                     // before the first tick was recorded as nothing at all.
-                    if final_scrape_done {
+                    //
+                    // Not when the exit landed during the scrape that just
+                    // ran: the tick fired, the child exited while the body
+                    // was scraping, and the exit arm never got to fire. That
+                    // interval was sampled a few milliseconds ago, and a
+                    // second pass would only add a redundant row right after
+                    // it. An exit seen on the very first pass, before any
+                    // scrape, still gets its one scrape.
+                    if final_scrape_done || scraped_last_pass {
                         break;
                     }
                     final_scrape_done = true;
@@ -2224,7 +2237,10 @@ pub fn run(mut config: RecordingConfig) {
             if !(wrapped && child.is_none()) {
                 tokio::select! {
                     biased;
-                    _ = shutdown.notified() => continue,
+                    _ = shutdown.notified() => {
+                        scraped_last_pass = false;
+                        continue;
+                    }
                     exited = async {
                         match child.as_mut() {
                             Some(c) => c.wait().await.is_ok(),
@@ -2238,6 +2254,9 @@ pub fn run(mut config: RecordingConfig) {
                                 clock_anchor_mono.elapsed(),
                             ));
                         }
+                        // The exit came while waiting, after the last scrape,
+                        // so the loop top must schedule the final one.
+                        scraped_last_pass = false;
                         continue;
                     }
                     _ = interval.tick() => {}
@@ -2245,6 +2264,7 @@ pub fn run(mut config: RecordingConfig) {
                         // Latched so a deadline already in the past cannot spin the
                         // loop if the top declines to stop for some reason.
                         deadline_fired = true;
+                        scraped_last_pass = false;
                         continue;
                     }
                 }
@@ -2669,6 +2689,7 @@ pub fn run(mut config: RecordingConfig) {
                 }
                 break;
             }
+            scraped_last_pass = true;
         }
 
         // If the loop ended via ctrl-c (STATE flip) while the wrapped command
