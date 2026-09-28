@@ -12,6 +12,10 @@ source = "127.0.0.1:4241"
 
 # Specify the path for the snapshot output file. Snapshots are `.rez` archives
 # (readable by `rezolus view`, `rezolus mcp` and `rezolus recording metadata`).
+# A `.dendro` path keeps the buffer and its snapshots as dendro archives
+# instead: several times smaller, readable by `rezolus view` and `rezolus mcp`
+# but not yet by the `rezolus recording` subcommands. Opt-in until it becomes
+# the default.
 output = "/var/lib/rezolus/rezolus.rez"
 
 # Specify the directory the rolling buffer is kept in. It needs room for the
@@ -27,11 +31,12 @@ output = "/var/lib/rezolus/rezolus.rez"
 # than memory holds.
 # buffer_dir = "/var/lib/rezolus"
 
-# Optional: rows per sealed segment. Defaults to 4096, which at the 1s interval
-# above is one segment per ~68 minutes. Retention and ranged snapshots both work
-# in WHOLE segments, so this also sets the granularity at which the buffer trims
-# — lower it if you scrape much faster than once a second.
-# segment_rows = 4096
+# Optional: rows per sealed segment. Defaults to 900, which at the 1s interval
+# above is one segment per ~15 minutes (a segment is also sealed after 5
+# minutes, or at about 8 MiB, whichever comes first). Retention and ranged
+# snapshots both work in WHOLE segments, so this also sets the granularity at
+# which the buffer trims — lower it if you scrape much faster than once a second.
+# segment_rows = 900
 
 # Optional: enable HTTP endpoint for remote dump triggering
 # Supports endpoints:

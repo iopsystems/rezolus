@@ -55,6 +55,11 @@ so you can open it with `rezolus view` or the MCP tools _while it is being
 written_, and a snapshot is a consistent point-in-time copy taken without
 pausing the recording — however it is triggered, by signal or over HTTP.
 
+An `output` ending in `.dendro` keeps the buffer and its snapshots as dendro
+archives instead (opt-in): several times smaller where threads and cgroups
+come and go, and readable by `rezolus view` and the MCP tools, but not yet by
+the `rezolus recording` subcommands.
+
 Hindsight is **disabled by default**. Review the config before enabling it.
 
 ```bash

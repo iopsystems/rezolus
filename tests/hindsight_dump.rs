@@ -195,9 +195,15 @@ impl Hindsight {
     /// and `ready` reached the fake agent instead: CI saw its empty 404 fail
     /// to parse as a `/status` body. With nothing reserved there is no gap.
     fn try_start(agent: u16, segment_rows: usize) -> Result<Self, String> {
+        Self::try_start_as(agent, segment_rows, "rez")
+    }
+
+    /// [`try_start`](Self::try_start) with the output's extension, which
+    /// picks the buffer's container: `rez` or `dendro`.
+    fn try_start_as(agent: u16, segment_rows: usize, ext: &str) -> Result<Self, String> {
         let dir = tempfile::tempdir().expect("failed to create a temp dir");
         let config = dir.path().join("hindsight.toml");
-        let output = dir.path().join("snapshot.rez");
+        let output = dir.path().join(format!("snapshot.{ext}"));
         std::fs::write(
             &config,
             format!(
@@ -1468,5 +1474,48 @@ fn a_dump_holds_the_wal_sidecar_open_and_it_plateaus_again_after() {
          still climbing after {:?}, against {during} B when the last mark was \
          released and {grew} B of growth under the marks",
         SETTLE_TIMEOUT
+    );
+}
+
+/// A `.dendro` output keeps the buffer as a dendro archive, and its dumps
+/// are dendro archives that the ordinary readers open, finished and
+/// queryable, while the buffer runs on.
+#[test]
+fn a_dendro_buffer_dumps_a_dendro_archive() {
+    use metriken_archive::Catalog;
+
+    let agent = spawn_fake_agent(1);
+    let h = Hindsight::try_start_as(agent, 2, "dendro")
+        .unwrap_or_else(|why| panic!("rezolus hindsight failed to come up: {why}"));
+    assert_eq!(
+        h.buffer.extension().and_then(|e| e.to_str()),
+        Some("dendro"),
+        "the buffer is a dendro archive: {}",
+        h.buffer.display()
+    );
+    h.wait_until("more than a second of buffered rows", |s| {
+        s.segments("fake") >= 3 && s.rows >= 25
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("dump.dendro");
+    h.dump_to(&dest);
+
+    let catalog =
+        metriken_archive::DendroCatalog::open(&dest).expect("the dump is a dendro archive");
+    let sources = catalog.sources().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert!(sources[0].complete, "a dump is a finished artifact");
+
+    let queried = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .args(["mcp", "query"])
+        .arg(&dest)
+        .arg("rate(fake_ops_0[1s])")
+        .output()
+        .expect("failed to run rezolus mcp query");
+    let stdout = String::from_utf8_lossy(&queried.stdout);
+    assert!(
+        queried.status.success() && stdout.contains("fake_ops_0"),
+        "a dump must be queryable\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&queried.stderr)
     );
 }
