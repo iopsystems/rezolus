@@ -1119,21 +1119,44 @@ Measured: an fentry probe is ~61 ns/call (56%) cheaper than kprobe on a clean
 
 ## Viewer — investigation workflow (links, events, baselines, checks, MCP)
 
-Five design entries opened 2026-09-28, none built. They share one data model
-(events in the manifest, capture ids, the decimated wire) and are ordered by
-dependency: links and range events first, then event-anchored alignment, then
-the family baseline, then checks, then the MCP tools that expose them.
+Five design entries opened 2026-09-28. They share one data model (events in
+the manifest, capture ids, the decimated wire) and are ordered by dependency:
+links and range events first, then event-anchored alignment, then the family
+baseline, then checks, then the MCP tools that expose them.
 
 Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-state.md).
 
-- **Encode view state in the hash route** — Open. `from`/`to`,
-  `anchor.<capture id>`, `time`, and the cgroup/GPU/node selectors as query
-  parameters on the hash route; `replaceState` on change; URL wins over
-  `localStorage` per key. Today only section and chart id are in the URL
-  (`src/viewer/assets/lib/app.js`). Document the parameters in `docs/usage.md`
-  as an interface.
-- **Live-mode relative ranges** (`?last=5m`) — Open. *Reopen:* when
-  live-agent links are requested.
+- **Encode view state in the URL** — **DONE.** `ui/url_state.js` (both
+  shells) carries `from`/`to`, `time`, `node`, `gpu`, `cgroup`, `instance`
+  and `anchor.<id>` in `location.search`, NOT the hash as first designed:
+  `m.route.get()` includes a hash query and five places parse that path by
+  hand, while mithril's fragment-only `pushState` keeps the search across
+  every navigation. Written by `replaceState` on change, read on load with
+  the URL winning over `localStorage` per key; unsatisfiable values are
+  dropped with a warning and the link rewritten. Documented in
+  `docs/usage.md` ("Linking to a view").
+- **Live-mode relative ranges** (`?last=5m`) — Open. Absolute `from`/`to`
+  are ignored in live mode. *Reopen:* when live-agent links are requested.
+- **`from`/`to` on the experiment side** — Open. The link sets the baseline's
+  range override, as a drill-down does; experiment fetches use
+  `experimentQueryRange` (`viewer_core.js`) and ignore it. The experiment
+  window should be `[from − Δ, to − Δ]` with Δ the anchor difference; lands
+  with event-anchored alignment.
+- **`anchor.<named id>` for N-way** — Open. The parser accepts any id;
+  `setAnchor` takes only the two slots until alignment widens it.
+- **`step` in the URL** — Open, one key. Already restored from localStorage.
+- **Time bar ignores the range override** — Open (bug, pre-existing).
+  `applyDisplayWindow` clears `globalZoom` and `TimeRangeBar`
+  (`ui/controls.js`) labels from the full recording's `start_time`/`end_time`,
+  so after any drill-down (and on every `from/to` link) the bar shows 0–100%
+  while the charts show the window. The time-bar render assertion for links
+  waits on this.
+- **About link prefix** — Open (bug, trivial). `#!/overview` in `app.js` with
+  `m.route.prefix = '#'` matches nothing and lands on the default route by
+  fallback.
+- **`uploadParquet` keeps `_rangeOverride` across a file swap** — Open (bug,
+  pre-existing). The server shell clears the URL keys now but leaves the
+  override; a previous file's window applies to the next until reset.
 
 Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-events-ranges-and-alignment.md).
 

@@ -7,6 +7,7 @@ import { FileUpload, splitAlias } from './ui/landing.js';
 import { setStorageScope, seedEventsFromMetadata } from './selection/selection.js';
 import { initDashboard, bootstrapSharedSections, sectionResponseCache, loadSection } from './app.js';
 import { clearMetadataCache } from './data.js';
+import { clearViewState } from './ui/url_state.js';
 
 // ── UI state ────────────────────────────────────────────────────────
 
@@ -189,6 +190,9 @@ async function loadFile(file) {
         url.searchParams.delete('demoB');
         url.searchParams.delete('capture');
         window.history.replaceState(null, '', url);
+        // And the view-state keys (from/to, selectors, anchors) of the
+        // previous file; they mean nothing for this one.
+        clearViewState();
     } catch (e) {
         splashLabel = null;
         landingError = `Failed to load ${display}: ${e?.message ?? e ?? 'unknown error'}`;

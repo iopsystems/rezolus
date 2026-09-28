@@ -7,6 +7,7 @@
 
 import globalColorMapper from '../charts/util/colormap.js';
 import { collectGroupPlots } from './group_utils.js';
+import { writeViewState } from '../ui/url_state.js';
 
 /** Extract cgroup names from a PromQL query result's metric labels. */
 const extractCgroupNames = (result) => {
@@ -76,6 +77,16 @@ const transferBtn = (lrLabel, udLabel, title, disabled, onclick) =>
 let persistedSelectedCgroups = new Set();
 let persistedOriginalQueries = null; // Map<string, string>
 
+// Seed the selection before the component first mounts, from the link's
+// `cgroup=` keys. Names are validated against the recording once the
+// available list arrives (fetchAvailableCgroups); unknown ones are dropped
+// there with a warning rather than left to render empty charts.
+export const seedSelectedCgroups = (names) => {
+    persistedSelectedCgroups = new Set(
+        (Array.isArray(names) ? names : []).filter((n) => typeof n === 'string' && n !== ''),
+    );
+};
+
 export const CgroupSelector = {
     oninit(vnode) {
         vnode.state.selectedCgroups = new Set(persistedSelectedCgroups);
@@ -103,10 +114,12 @@ export const CgroupSelector = {
 
         this.fetchAvailableCgroups(vnode);
 
-        // When re-initialized with persisted selections (e.g. after granularity
-        // or node change unmounts/remounts the component tree), re-run queries
-        // so the individual cgroup charts get populated.
-        if (persistedSelectedCgroups.size > 0 && persistedOriginalQueries) {
+        // When initialized with persisted selections (after a granularity or
+        // node change remounts the component tree, or seeded from the link
+        // before the first mount), re-run queries so the individual cgroup
+        // charts get populated. updateQueries snapshots the original queries
+        // itself on its first run, so a missing snapshot is no reason to skip.
+        if (persistedSelectedCgroups.size > 0) {
             this.debouncedUpdateQueries(vnode);
         }
     },
@@ -138,6 +151,21 @@ export const CgroupSelector = {
             }
 
             vnode.state.availableCgroups = cgroups;
+
+            // A selection that names cgroups this recording does not have
+            // (a link from another host, a stale persisted set) would render
+            // every individual chart empty with nothing to say why. Drop the
+            // unknown names, say so once, and rewrite the link to match.
+            if (cgroups.size > 0 && vnode.state.selectedCgroups.size > 0) {
+                const unknown = [...vnode.state.selectedCgroups].filter((cg) => !cgroups.has(cg));
+                if (unknown.length > 0) {
+                    console.warn(`[cgroups] dropping selection not in this recording: ${unknown.join(', ')}`);
+                    for (const cg of unknown) vnode.state.selectedCgroups.delete(cg);
+                    persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
+                    writeViewState({ cgroup: [...persistedSelectedCgroups] });
+                    this.debouncedUpdateQueries(vnode);
+                }
+            }
         } catch (error) {
             console.error('Failed to fetch available cgroups:', error);
             vnode.state.error = 'Failed to load cgroups: ' + error.message;
@@ -238,6 +266,7 @@ export const CgroupSelector = {
             vnode.state.selectedCgroups[op](cg);
         }
         persistedSelectedCgroups = new Set(vnode.state.selectedCgroups);
+        writeViewState({ cgroup: [...persistedSelectedCgroups] });
         vnode.state.leftSelected.clear();
         vnode.state.rightSelected.clear();
         this.debouncedUpdateQueries(vnode);

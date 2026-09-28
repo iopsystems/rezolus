@@ -7,6 +7,7 @@ import { FileUpload, CompareLanding, splitAlias } from './ui/landing.js';
 import { notify, showSaveModal } from './ui/overlays.js';
 import { setStorageScope, loadPayloadIntoStore, reportStore, clearStore, seedEventsFromMetadata } from './selection/selection.js';
 import { clearMetadataCache, processDashboardData, nativeInterval, stepAtLeast, CAPTURE_EXPERIMENT } from './data.js';
+import { clearViewState } from './ui/url_state.js';
 import { initDashboard, cacheSectionResponse, bootstrapSharedSections, clearViewerCaches, chartsState, getHeatmapEnabled, heatmapDataCache, fetchSectionHeatmapData, getActiveCgroupPattern, getRecording, setRecording, preloadSections } from './app.js';
 
 // Splash: mounted on body before any async bootstrap step so the page
@@ -99,6 +100,9 @@ const uploadParquet = async (file) => {
         await ViewerApi.uploadParquet(file);
         clearViewerCaches();
         clearMetadataCache();
+        // A window or selector from the previous file must not be applied
+        // to this one on the next reload.
+        clearViewState();
         chartsState.resetAll();
         await fetchBackendState();
         if (fileChecksum) {

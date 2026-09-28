@@ -43,6 +43,8 @@ Usage: node scripts/viewer_render.mjs --url <url> [options]
   --theme <name>       Force 'light' or 'dark' via the data-theme attribute
   --wait <css>         Extra selector to await before measuring
   --timeout <ms>       Navigation/selector timeout (default 30000)
+  --requests <substr>  Also report every request URL containing <substr>
+                       (as "requests" in the JSON), e.g. /api/v1/query_range
 
 Requires puppeteer-core and a Chrome/Chromium binary. Neither is a repo
 dependency — this repo carries no JS toolchain on purpose. Install into a
@@ -90,6 +92,7 @@ const height = Number(arg('height', 900));
 const theme = arg('theme');
 const waitFor = arg('wait');
 const timeout = Number(arg('timeout', 30000));
+const requestsFilter = arg('requests');
 
 // ── Locate puppeteer-core ────────────────────────────────────────────────────
 // Not a repo dependency, so resolve it from the environment first and fall back
@@ -155,14 +158,26 @@ try {
     const consoleProblems = [];
     const failedRequests = [];
     page.on('console', (m) => {
-        if (m.type() === 'error' || m.type() === 'warning') {
-            consoleProblems.push(`${m.type()}: ${m.text()}`);
+        // puppeteer reports console.warn as 'warn' (older releases said
+        // 'warning'); accept both or warnings are never collected.
+        const t = m.type();
+        if (t === 'error' || t === 'warn' || t === 'warning') {
+            consoleProblems.push(`${t}: ${m.text()}`);
         }
     });
     page.on('pageerror', (e) => consoleProblems.push(`pageerror: ${e.message}`));
     page.on('response', (r) => {
         if (r.status() >= 400) failedRequests.push(`${r.status()} ${r.url()}`);
     });
+    // Every request whose URL contains --requests, so a check can assert on
+    // the query parameters the page actually sent (e.g. that a `?from=&to=`
+    // link produced range queries with that window).
+    const requests = [];
+    if (requestsFilter) {
+        page.on('request', (r) => {
+            if (r.url().includes(requestsFilter)) requests.push(r.url());
+        });
+    }
 
     await page.goto(url, { waitUntil: 'networkidle2', timeout });
     if (waitFor) await page.waitForSelector(waitFor, { timeout });
@@ -220,6 +235,7 @@ try {
     facts.wrapped = facts.rowTops.length > 1;
     facts.consoleProblems = consoleProblems;
     facts.failedRequests = failedRequests;
+    if (requestsFilter) facts.requests = requests;
 
     console.log(JSON.stringify(facts, null, 2));
 
