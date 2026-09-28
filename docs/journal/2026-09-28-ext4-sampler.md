@@ -1,13 +1,14 @@
 # ext4 telemetry through eBPF — journal first, allocator second
 
 - **Opened:** 2026-09-28
-- **Status:** **OPEN — design, pre-build, nothing built.** Two BPF samplers are
+- **Status:** **OPEN — phase 1 (`ext4_journal`) implemented, Linux
+  verification and overhead measurement in progress.** Two BPF samplers are
   specified: `ext4_journal` (jbd2 commit and checkpoint phases, fsync counts,
   filesystem errors) and `ext4_alloc` (block allocator effort, writeback
   results, inode churn). Host-wide first; per-filesystem attribution is a
-  third phase gated on infrastructure that does not exist yet. Three probes
-  must run on fleet kernels before the first line of BPF is written — see
-  *Go/no-go*.
+  third phase gated on infrastructure that does not exist yet. Probes 1 to 3
+  passed on the first fleet kernel tried (aarch64 Debian 13, below); the
+  x86_64 probe runs with the build job.
 - **Driver:** Rezolus observes ext4 only from outside. `blockio` sees the
   request the filesystem eventually issues, `syscall_latency` folds `fsync`
   into a class shared with `open`, `stat` and `getdents`
@@ -357,6 +358,32 @@ of Rust in a test; if it does not, the jiffies decision above is wrong and
   ops on the same device. If they do not, the phase semantics are
   misunderstood and the descriptions are wrong.
 
+**Probe results, 2026-09-28, pi10** (Raspberry Pi 4B, aarch64, Debian 13,
+kernel `6.12.75+rpt-rpi-v8`, `CONFIG_HZ=250`; systemslab job
+`01a0e919-f3f8-7161-6274-d7ec8d4fd402`):
+
+- Probe 1: `CONFIG_EXT4_FS=y`, `CONFIG_JBD2=y`, `CONFIG_DEBUG_INFO_BTF=y`,
+  `CONFIG_DEBUG_INFO_BTF_MODULES=y`; `/sys/kernel/btf/vmlinux` present and no
+  `ext4`/`jbd2` module BTF, as expected for a built-in ext4. tracefs lists 115
+  ext4 events and 23 jbd2 events; every hook this entry names is present,
+  including `ext4_error` and `ext4_shutdown`. `bpftool` was not installed on
+  the host, so the `btf_trace_*` typedef check moved to the x86_64 build job.
+- Probe 2: the tracefs `format` files agree with the aarch64 header field for
+  field for `jbd2_run_stats` (`dev`, `tid`, six `unsigned long` phases,
+  `handle_count`, `blocks`, `blocks_logged`), `jbd2_checkpoint_stats`
+  (`chp_time`, `forced_to_close`, `written`, `dropped`),
+  `jbd2_lock_buffer_stall` (`stall_ms`), both `ext4_sync_file_*`,
+  `ext4_error` (`function`, `line`), `ext4_shutdown` (`flags`),
+  `ext4_mballoc_alloc` and `ext4_writepages_result`.
+- Probe 3: `clock_getres(CLOCK_MONOTONIC_COARSE)` = 4,000,000 ns on the 250 Hz
+  kernel, and `CLOCK_MONOTONIC` = 1 ns. `getconf CLK_TCK` = 100 on the same
+  host, which is the `USER_HZ` trap the tick decision avoids.
+- Oracle: `/proc/fs/jbd2/mmcblk0p2-8/info` reports 63,650 transactions with
+  average phases in ms (running 2944, logging 4, commit time 4408 µs), 8
+  handles and 5 logged blocks per transaction. `/sys/fs/ext4/mmcblk0p2/`
+  carries `errors_count`, `lifetime_write_kbytes`, `session_write_kbytes`,
+  `first_error_time` and `last_error_time`, confirming the sysfs follow-up.
+
 **NO-GO conditions.** Probe 1 shows the fleet is predominantly module-ext4
 without module BTF: the sampler as designed cannot read commit phases there,
 and the entry closes as NO-GO with the sysfs `errors_count`/`lifetime_write_kbytes`
@@ -367,22 +394,37 @@ rate is bounded by the commit rate.
 
 ## Plan
 
-1. **Probes 1 to 3** on fleet kernels; record results here.
+1. **Probes 1 to 3** on fleet kernels; record results here. *Done for
+   aarch64 Debian 13 (above); x86_64 with the build job.*
 2. **`kernel_btf_has_tracepoints`** in `src/agent/bpf/mod.rs`, vmlinux plus
-   module BTF, unit-tested against a fixture listing.
+   every `/sys/kernel/btf/<module>`. *Done.* The module scan is factored as
+   `module_btfs(dir)` so the two failure modes that matter — no module BTF
+   directory, files that are not BTF — are unit-tested without a kernel.
 3. **Syscall class split**: a `sync` class in
    `src/agent/samplers/syscall/linux/mod.rs` and its histogram in
    `syscall/linux/latency/{stats.rs,mod.bpf.c}`. Independent of the rest;
-   lands on its own.
+   lands on its own. Note for whoever does it: sixteen classes fill the
+   16-wide per-CPU counter bank exactly, so a seventeenth widens
+   `COUNTER_GROUP_WIDTH` to 24 in both syscall BPF programs (the bank is a
+   whole number of cachelines, `bpf/counters.rs`) and adds a
+   `cgroup_syscall_sync` map to `syscall_counts`.
 4. **`ext4_journal`**: `src/agent/samplers/ext4/linux/journal/{mod.rs,
    mod.bpf.c,stats.rs}`, `tp_btf`/`raw_tp` twins per hook, the local struct
    declarations, the tick config map, registration in
-   `src/agent/samplers/mod.rs`, `config/agent.toml`, `docs/metrics.md`. Bench
-   and close-out numbers in this entry.
-5. **Dashboard**: an ext4 section in `crates/dashboard/src/dashboard/`
-   (commit phase percentiles, checkpoint latency, fsync rate and errors,
-   filesystem errors), built once per the `viewer-parity` skill for both
-   backends.
+   `src/agent/samplers/mod.rs`, `build.rs`, `config/agent.toml`,
+   `docs/metrics.md`, the analysis crate's sampler universe
+   (`src/analysis/extract/{context,golden}.rs`). *Implemented; the jbd2
+   structs are declared as CO-RE flavors `transaction_run_stats_s___rz` and
+   `transaction_chp_stats_s___rz`, a fourteenth counter
+   (`ext4_journal_lock_buffer_stalls`) was added beside the stall histogram,
+   and the tick is 0 when `clock_getres` fails, which keeps the counters and
+   empties the jiffy histograms rather than publishing wrong latencies.*
+   Bench and close-out numbers below when the Linux job reports.
+5. **Dashboard**: an ext4 section in `crates/dashboard/src/dashboard/ext4.rs`
+   (commit rate and phase percentiles, checkpoint latency and forced closes,
+   fsync rate by op and errors, filesystem errors), gated on
+   `ext4_journal_commits` being in the recording. *Done*, in the shared
+   `dashboard` crate so both viewer backends get it.
 6. **`ext4_alloc`** as phase 2, same shape, its own bench on a write-heavy
    fio run since `ext4_mballoc_alloc` tracks write throughput.
 7. **Phase 3** per-filesystem counters, after the lookup-map measurement.

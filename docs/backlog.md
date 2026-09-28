@@ -861,19 +861,17 @@ Source: [Filesystem occupancy sampler — local mounts only](journal/2026-09-12-
 ## Agent — ext4 samplers
 
 Source: [ext4 telemetry through eBPF](journal/2026-09-28-ext4-sampler.md).
-Design only; nothing built. The entry specifies `ext4_journal` (phase 1),
-`ext4_alloc` (phase 2) and per-filesystem counters (phase 3), and gates the
-build on three fleet probes.
+The entry specifies `ext4_journal` (phase 1, implemented), `ext4_alloc`
+(phase 2) and per-filesystem counters (phase 3).
 
-- **Fleet probes before build** — Open. Where ext4/jbd2 BTF lives on each
-  fleet kernel (`CONFIG_EXT4_FS`, `/sys/kernel/btf/{ext4,jbd2}`), the
-  tracepoint argument signatures on the oldest and newest kernel, and
-  `clock_getres(CLOCK_MONOTONIC_COARSE)` as the jiffy length. Results go in
-  the entry's *Go/no-go*.
-- **`kernel_btf_has_tracepoints`** — Open. `kernel_has_btf()` cannot select a
-  `tp_btf` twin for a tracepoint whose `btf_trace_*` typedef is in module BTF;
-  the helper checks vmlinux and every `/sys/kernel/btf/<module>`
-  (`src/agent/bpf/mod.rs`, beside `kernel_btf_has_funcs`).
+- **Fleet probes on more kernels** — Open. Probes 1–3 passed on aarch64
+  Debian 13 (`6.12.75`, built-in ext4, 250 Hz) and are recorded in the entry;
+  x86_64 Debian 13 runs with the build job. Still unprobed: a
+  `CONFIG_EXT4_FS=m` kernel (the case the x86_64 `vmlinux.h` proves exists),
+  RHEL-family (Rocky 10), and anything at the 5.8 floor.
+- **`ext4_alloc` (phase 2)** — Roadmap. `ext4_mballoc_alloc`,
+  `ext4_writepages_result`, inode and free-block counters, trim; its own
+  bench on a write-heavy fio run since allocations track write throughput.
 - **`sync` class in `syscall_latency`** — Open. `fsync`, `fdatasync`, `sync`,
   `syncfs`, `msync` leave class 9 (`src/agent/samplers/syscall/linux/mod.rs`)
   for their own histogram. Independent of the ext4 samplers and delivers
