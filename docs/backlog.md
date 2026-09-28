@@ -31,11 +31,11 @@ Source: [A/B compare mode](journal/2026-04-21-ab-compare-mode.md).
 - **Live-agent compare** (file+live or live+live) — Roadmap. Explicitly excluded;
   requires a capture slot backed by a running-agent `Tsdb` rather than a
   loaded-once parquet. No near-term demand.
-- **Baseline-anchor drag UI** — Open. Selection state already carries
-  `anchors.baseline`; anchoring the baseline to a non-first sample has no UI yet.
-  Superseded in shape by event-anchored alignment
-  ([events as ranges](journal/2026-09-28-events-ranges-and-alignment.md)),
-  which writes both anchors from an event kind.
+- **Baseline-anchor drag UI** — **Closed.** There was never a drag UI for
+  either arm; the only anchor writer was a clamp. Event-anchored alignment
+  ([events as ranges](journal/2026-09-28-events-ranges-and-alignment.md))
+  is the first anchor UI and writes every capture's anchor from an event
+  kind. A numeric offset editor has no demand yet (see that section).
 - **Alias collision in saved A/B tarballs** — By design. When both sides share a
   filename basename, the compare badge shows two identical labels;
   `synthesize_ab_manifest` does not dedupe. Decided to let the user rename
@@ -1177,8 +1177,10 @@ Source: [Viewer links that carry the whole view](journal/2026-09-28-viewer-link-
   `experimentQueryRange` (`viewer_core.js`) and ignore it. The experiment
   window should be `[from − Δ, to − Δ]` with Δ the anchor difference; lands
   with event-anchored alignment.
-- **`anchor.<named id>` for N-way** — Open. The parser accepts any id;
-  `setAnchor` takes only the two slots until alignment widens it.
+- **`anchor.<named id>` for N-way** — **DONE** with event-anchored
+  alignment; `setAnchor` accepts any id, and a link's named anchors are
+  applied once the registry lists the arm (unknown arms are dropped with a
+  warning).
 - **`step` in the URL** — Open, one key. Already restored from localStorage.
 - **Time bar ignores the range override** — Open (bug, pre-existing).
   `applyDisplayWindow` clears `globalZoom` and `TimeRangeBar`
@@ -1220,11 +1222,27 @@ Source: [Events as ranges, phases, and alignment anchors](journal/2026-09-28-eve
   round-trip precision is possible there; on the stream path a frame arrives
   up to an interval late, so no comparable pairing exists and the recorder's
   clock is the honest choice.
-- **Event-anchored compare alignment** — Open. An anchor may name an event
-  kind and resolve per capture; falls back to first sample with a notice.
-  Gives `anchors.baseline` its first writer, closing the inert plumbing the
-  A/B entry left standing (the "Baseline-anchor drag UI" item above becomes
-  this).
+- **Event-anchored compare alignment** — **DONE.** `anchors[id]` is a
+  number or `{ kind }` (still v3), resolved per capture by
+  `events/capture_events.js` against each capture's file events and
+  recording start; the "Align on" select in the compare badge is the first
+  anchor UI; numeric anchors are now measured from the recording start, not
+  the first fetched sample.
+- **Numeric anchor editor** — Open, no demand. The `{ kind }` form covers
+  the benchmark case; a typed ms offset has a stable base now (the
+  recording start) but no control writes one.
+- **`annotate --recording k=v`** — Open. `annotate` writes the same events
+  into every recording of a multi-recording `.rez`, so a hand-written
+  `run_start` on a combined archive lands at one instant in both and
+  alignment is a no-op. Parse with `RecordingSelector::parse(pairs,
+  "--recording")` (`src/mcp/recording_selector.rs`), resolve against the
+  `(labels, reader)` pairs the loop in `src/parquet_tools/annotate.rs`
+  already has, skip non-matching recordings. Recorder-emitted run events
+  differ per run already, which is why this waits.
+- **Compare-mode event markers per capture** — Open. The overlay and split
+  charts place the baseline's events by the first capture's anchor; with
+  per-capture event lists now in `captureContext`, each capture's events
+  could be drawn by its own anchor through `resolveAnchor`.
 - **Events from the agent's own status transitions** — Idea. *Reopen:* when
   `/status` carries a transition log rather than current state.
 

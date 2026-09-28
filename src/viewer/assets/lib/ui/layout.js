@@ -3,6 +3,64 @@ import { notebookStore, reportStore, loadedSelectionStore, importSelection } fro
 import { toggleTheme, currentTheme } from './theme.js';
 import { collectGroupPlots } from '../features/group_utils.js';
 import { compareBadgeRows, splitBadgeRows } from '../charts/compare.js';
+import { setAlignmentKind } from '../selection/selection.js';
+import { captureContext, resolveAnchor, isKindAnchor } from '../events/capture_events.js';
+
+// The "Align on" control in the compare badge: the first anchor UI the
+// viewer has had. It offers `first sample` plus every event kind present in
+// ALL captures (a kind some captures lack is listed disabled, naming who
+// lacks it), writes `{ kind }` to every capture's anchor, and flags any
+// capture whose anchor did not resolve (a persisted or linked kind this
+// capture's file has no event for) so the fall-back to its start is not
+// silent. Ids come from the registry (`attrs.captures`), which is what
+// makes an N-way archive's arms alignable too.
+const alignControl = (attrs) => {
+    const caps = (attrs.captures || []).length > 0
+        ? attrs.captures
+        : [{ id: 'baseline', alias: attrs.baselineAlias }, { id: 'experiment', alias: attrs.experimentAlias }];
+    const ids = caps.map((c) => c.id).filter(Boolean);
+    const label = (id) => {
+        const c = caps.find((x) => x.id === id);
+        return (c && c.alias) || id;
+    };
+    const anchors = notebookStore.anchors || {};
+    const kinds = captureContext.kindsAcross(ids);
+    // Current selection: one kind shared by every capture, else "custom"
+    // (a numeric offset or a mix), else first sample.
+    const kindValues = ids.map((id) => (isKindAnchor(anchors[id]) ? anchors[id].kind : null));
+    const numeric = ids.some((id) => typeof anchors[id] === 'number' && anchors[id] !== 0);
+    const allSame = kindValues.every((k) => k !== null && k === kindValues[0]);
+    const current = allSame ? kindValues[0] : (numeric || kindValues.some((k) => k !== null) ? '__custom' : '');
+    const unresolved = ids.filter((id) => isKindAnchor(anchors[id])
+        && !resolveAnchor(anchors[id], id, null, captureContext).resolved);
+    return m('div.compare-align', [
+        m('label.compare-align-label', { for: 'compare-align-select' }, 'Align on'),
+        m('select.compare-align-select', {
+            id: 'compare-align-select',
+            value: current,
+            title: 'The instant drawn at +0s in every capture: its recording start, or the earliest event of a kind its file carries',
+            onchange: (e) => {
+                const v = e.target.value;
+                if (v === '__custom') return;
+                setAlignmentKind(v || null, ids);
+            },
+        }, [
+            m('option', { value: '' }, 'recording start'),
+            ...kinds.map((k) => m('option', {
+                value: k.kind,
+                disabled: k.missing.length > 0,
+            }, k.missing.length > 0
+                ? `${k.kind} (missing in ${k.missing.map(label).join(', ')})`
+                : k.kind)),
+            current === '__custom' ? m('option', { value: '__custom', disabled: true }, 'custom offset') : null,
+        ]),
+        unresolved.length > 0
+            ? m('span.compare-align-note', {
+                title: unresolved.map((id) => `${label(id)} has no ${anchors[id].kind} event; drawn from its recording start`).join('\n'),
+            }, unresolved.map((id) => `${label(id)}: no ${anchors[id].kind} event, using recording start`).join('; '))
+            : null,
+    ]);
+};
 
 const formatSize = (bytes) => {
     if (!bytes) return '';
@@ -89,7 +147,7 @@ const TopNav = {
                     }
                     return m('div.compare-badge.compare-badge-nway', {
                         title: `Comparing ${rows.length} captures: ${rows.map((r) => r.label).join(', ')}`,
-                    }, chips);
+                    }, [...chips, alignControl(attrs)]);
                 }
 
                 const row = (cls, label, fname, onLoad) => m('div.compare-capture', [
@@ -126,6 +184,7 @@ const TopNav = {
                     m('div.compare-capture-list', [
                         row('compare-baseline-dot', baselineLabel, attrs.filename, attrs.onLoadBaseline),
                         row('compare-experiment-dot', experimentLabel, attrs.experimentFilename, attrs.onLoadExperiment),
+                        alignControl(attrs),
                     ]),
                 ]);
             })(),

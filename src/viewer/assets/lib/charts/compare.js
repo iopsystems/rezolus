@@ -45,6 +45,7 @@ import { resolvedStyle } from './metric_types.js';
 import { visibleLabels } from '../labels.js';
 import { isDarkTheme } from './base.js';
 import { CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
+import { captureContext, resolveAnchor } from '../events/capture_events.js';
 
 // Colors sourced from --compare-baseline / --compare-experiment in
 // style.css. The getter reads CSS custom properties lazily so a theme
@@ -189,6 +190,9 @@ const stripDisplay = (spec) => ({ ...spec, boxplot: undefined, boxplotDecimated:
  * the four kinds.
  */
 export const renderCompareChart = (opts) => {
+    // The context every strategy's anchors resolve against for this render:
+    // the caller's (tests pass their own), else the app-wide singleton.
+    activeCaptureContext = opts.captureContext || captureContext;
     const style = resolvedStyle(opts.spec);
     switch (style) {
         case 'line':              return overlayLine(opts);
@@ -225,18 +229,55 @@ const rebase = (timeDataSec, anchorSec) => timeDataSec.map((t) => t - anchorSec)
 // the UI stays readable when no alias is set.
 const labelFor = (captureLabels, id) => (captureLabels && captureLabels[id]) || id;
 
-// The per-capture anchor in seconds. Each capture's effective anchor is
-// the capture's natural start (first sample) plus a user-configured
-// offset. `anchors[id]` is stored as a signed ms offset from that start
-// (0 = "no user shift"). This keeps `rebase` producing small relative
-// offsets even when the raw timestamps are absolute-epoch seconds.
-const anchorSecondsFor = (anchors, id, timeDataSec) => {
-    const naturalStart = Array.isArray(timeDataSec) && timeDataSec.length > 0
-        ? timeDataSec[0]
-        : 0;
-    const userOffsetMs = (anchors && anchors[id]) || 0;
-    return naturalStart + userOffsetMs / 1000;
+// The per-capture anchor in seconds: the absolute instant drawn at +0s.
+// `anchors[id]` is a signed ms offset from the capture's recording start,
+// or `{ kind }` for the first event of that kind in that capture; both
+// resolve through events/capture_events.js against the context the app
+// fills per capture. Without a context entry the offset is measured from
+// the first fetched sample, the rule this always had. Measuring from the
+// recording start rather than the first fetched sample is what keeps an
+// anchor meaning the same instant when the baseline is zoomed and refetched
+// from later.
+let activeCaptureContext = captureContext;
+const anchorSecondsFor = (anchors, id, timeDataSec) =>
+    resolveAnchor(anchors ? anchors[id] : undefined, id, timeDataSec, activeCaptureContext).sec;
+
+// Both diff views pair the two captures' cells by time index: baseline
+// column c against experiment column c. On the relative axis those two
+// coincide only when both captures sit at the same offset into their
+// recordings. An anchor that resolves to different offsets (an event that
+// fell at different moments in the two runs) needs the experiment index
+// shifted by that difference in steps; `k` is that shift (experiment
+// column = baseline column + k). A difference that is not a whole number
+// of steps has no honest cell pairing, so `ok` is false and the caller
+// shows the captures side by side and says why.
+export const diffTimeShift = (aId, bId, anchors, aTime, bTime) => {
+    const hasA = Array.isArray(aTime) && aTime.length > 0;
+    const hasB = Array.isArray(bTime) && bTime.length > 0;
+    if (!hasA || !hasB) return { k: 0, ok: true };
+    const relA = aTime[0] - anchorSecondsFor(anchors, aId, aTime);
+    const relB = bTime[0] - anchorSecondsFor(anchors, bId, bTime);
+    const diff = relA - relB;
+    if (Math.abs(diff) < 1e-9) return { k: 0, ok: true };
+    const stepOf = (t) => (t.length > 1 && t[1] - t[0] > 0 ? t[1] - t[0] : null);
+    const step = stepOf(aTime) ?? stepOf(bTime);
+    if (!step) return { k: 0, ok: false };
+    const exact = diff / step;
+    const k = Math.round(exact);
+    return { k, ok: Math.abs(exact - k) <= 0.25 };
 };
+
+// The side-by-side rendering a diff view falls back to when the two
+// anchors do not pair by cell, with the reason above the pair.
+const diffUnavailable = (pair) => (pair && pair.kind === 'vnode' ? {
+    kind: 'vnode',
+    vnode: m('div.compare-diff-unavailable', [
+        m('div.compare-diff-note',
+            'Diff pairs cells by sample step; the two anchors differ by a fraction of a step, '
+            + 'so no cells line up and the captures are shown side by side.'),
+        pair.vnode,
+    ]),
+} : pair);
 
 // ── Strategies ───────────────────────────────────────────────────────
 
@@ -467,11 +508,18 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     const bMatrix = ensureHeatmapMatrix(b);
 
     const rows = Math.min(aMatrix.length, bMatrix.length);
-    const bins = Math.min(
-        (aMatrix[0] || []).length,
-        (bMatrix[0] || []).length,
-    );
+    const aBins = (aMatrix[0] || []).length;
+    const bBins = (bMatrix[0] || []).length;
+    const bins = Math.min(aBins, bBins);
     if (rows === 0 || bins === 0) return FALLBACK;
+
+    // The experiment column that sits at the same relative time as
+    // baseline column c is c + k; a column with no partner is a null cell.
+    const shift = diffTimeShift(a.id, b.id, anchors, a.timeData, b.timeData);
+    if (!shift.ok) {
+        return diffUnavailable(sideBySidePair({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }));
+    }
+    const k = shift.k;
 
     const triples = [];
     let dMin = Infinity;
@@ -479,7 +527,8 @@ const renderDiffHeatmap = ({ spec, captures, anchors, chartsState, interval, Cha
     for (let r = 0; r < rows; r++) {
         for (let c = 0; c < bins; c++) {
             const av = aMatrix[r][c];
-            const bv = bMatrix[r][c];
+            const cb = c + k;
+            const bv = cb >= 0 && cb < bBins ? bMatrix[r][cb] : null;
             const d = nullDiff(bv, av); // experiment − baseline
             if (d != null) {
                 if (d < dMin) dMin = d;
@@ -734,21 +783,37 @@ function rebaseSpectrumData(data, anchorSec) {
  * Returns FALLBACK when either capture is missing spectrum data or
  * when no non-null deltas exist.
  */
-const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, interval, Chart, captureLabels }) => {
+const renderDiffQuantileHeatmap = (opts) => {
+    const { spec, captures, anchors, chartsState, interval, Chart, captureLabels } = opts;
     const baseline = captures.find((c) => c.id === CAPTURE_BASELINE);
     const experiment = captures.find((c) => c.id === CAPTURE_EXPERIMENT);
     if (!baseline?.spectrumData || !experiment?.spectrumData) return FALLBACK;
 
-    const baseFetch = {
+    // Pair by relative time: drop the leading columns of whichever
+    // capture's event fell later, so column t of each is the same offset
+    // from its anchor. buildDeltaSpectrum then truncates to the common
+    // length. A fractional shift has no cell pairing; show the pair.
+    const shift = diffTimeShift(
+        CAPTURE_BASELINE, CAPTURE_EXPERIMENT, anchors,
+        baseline.spectrumTimeData, experiment.spectrumTimeData,
+    );
+    if (!shift.ok) return diffUnavailable(sideBySideQuantileHeatmap(opts));
+    const drop = (fetch, n) => (n > 0 ? {
+        ...fetch,
+        time_data: fetch.time_data.slice(n),
+        data: fetch.data.map((col) => col.slice(n)),
+    } : fetch);
+
+    const baseFetch = drop({
         time_data: baseline.spectrumTimeData,
         data: baseline.spectrumData,
         series_names: baseline.spectrumSeriesNames,
-    };
-    const expFetch = {
+    }, -shift.k);
+    const expFetch = drop({
         time_data: experiment.spectrumTimeData,
         data: experiment.spectrumData,
         series_names: experiment.spectrumSeriesNames,
-    };
+    }, shift.k);
 
     const delta = buildDeltaSpectrum(baseFetch, expFetch);
     if (!delta) return FALLBACK;
@@ -797,7 +862,10 @@ const renderDiffQuantileHeatmap = ({ spec, captures, anchors, chartsState, inter
     const basePalette = isDark ? DIVERGING_BLUE_GREEN_DARK : DIVERGING_BLUE_GREEN;
     const resampled = resampleDivergingForRange(basePalette, dMin, dMax);
 
-    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, delta.time_data);
+    // Against the UNSLICED baseline grid: without a context entry the anchor
+    // is measured from the first sample, and `drop` may have removed the
+    // leading columns of this side.
+    const baselineAnchorSec = anchorSecondsFor(anchors, CAPTURE_BASELINE, baseline.spectrumTimeData);
     const baselineLabel = labelFor(captureLabels, CAPTURE_BASELINE);
     const experimentLabel = labelFor(captureLabels, CAPTURE_EXPERIMENT);
 

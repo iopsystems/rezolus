@@ -21,6 +21,7 @@ import { createSystemInfoView, createMetadataView, renderCgroupSection } from '.
 import { buildTopNavAttrs, createMainComponent } from './ui/navigation.js';
 import { initTheme } from './ui/theme.js';
 import { readViewState, writeViewState, clearViewState } from './ui/url_state.js';
+import { captureContext, eventsFromFileMetadata } from './events/capture_events.js';
 import { isHistogramPlot } from './charts/metric_types.js';
 import { renderServiceSection, createServiceRoutes } from './features/service.js';
 import { MetricBrowserView } from './features/metric_browser.js';
@@ -122,14 +123,23 @@ export const getExperimentAlias = () => experimentAlias;
 // N (not just baseline + experiment). Populated from `/api/v1/captures`
 // whenever compare mode is (re)established; empty otherwise.
 let compareCaptures = [];
+// Each call takes a generation so a slow fill from an earlier compare
+// session (attach A, detach, attach B) cannot land on top of the current
+// one and hand B's anchors A's events.
+let refreshGen = 0;
 const refreshCompareCaptures = async () => {
+    const gen = ++refreshGen;
+    captureContext.clear();
     if (!compareMode) {
         compareCaptures = [];
         return;
     }
+    let capturesListed = false;
     try {
         const caps = await ViewerApi.getCaptures();
+        if (gen !== refreshGen) return;
         compareCaptures = Array.isArray(caps) ? caps : [];
+        capturesListed = true;
     } catch (e) {
         // Falling back leaves the badge on its A/B rendering, which looks
         // deliberate rather than degraded — so say what happened. An N-way
@@ -137,8 +147,48 @@ const refreshCompareCaptures = async () => {
         console.warn('compare badge: could not list captures', e);
         compareCaptures = [];
     }
+    // Each capture's file events and recording start, for anchors that
+    // name an event kind (events/capture_events.js). Read from the FILE
+    // (`file_metadata`), not the editable events store, which is the
+    // baseline's list and may be overridden by a persisted notebook. Both
+    // backends answer these per capture id. The two A/B slots are always
+    // covered even when the captures list could not be fetched.
+    const ids = new Set(compareCaptures.map((c) => c.id).filter(Boolean));
+    ids.add(CAPTURE_BASELINE);
+    ids.add(CAPTURE_EXPERIMENT);
+    await Promise.all([...ids].map(async (id) => {
+        const [fm, meta] = await Promise.all([
+            ViewerApi.getFileMetadata(id).catch(() => null),
+            ViewerApi.getMetadata(id).catch(() => null),
+        ]);
+        if (gen !== refreshGen) return;
+        if (!fm && !meta) return;
+        const data = meta?.data ?? meta;
+        const startSec = Number(data?.minTime ?? data?.min_time);
+        captureContext.set(id, {
+            events: eventsFromFileMetadata(fm),
+            startSec: Number.isFinite(startSec) ? startSec : null,
+        });
+    }));
+    if (gen !== refreshGen) return;
+    // Link anchors for named arms wait for the registry: a link naming an
+    // arm this archive does not have must not leave a key in the notebook
+    // (and, from there, in every later link).
+    if (pendingLinkAnchors) {
+        const known = new Set([...ids]);
+        for (const [id, v] of Object.entries(pendingLinkAnchors)) {
+            if (known.has(id)) setAnchor(id, v);
+            else if (!capturesListed) console.warn(`[anchor] the captures list is unavailable; ignoring anchor.${id}`);
+            else console.warn(`[anchor] "${id}" is not a capture of this archive; ignoring anchor.${id}`);
+        }
+        pendingLinkAnchors = null;
+        writeViewState({ anchors: notebookStore.anchors || {} });
+    }
     m.redraw();
 };
+// Anchors a link named for captures other than the two A/B slots, applied
+// once the registry has listed the archive's arms.
+let pendingLinkAnchors = null;
 
 // Compare-mode per-chart toggles + anchors live in `notebookStore` so
 // they persist across page reloads. See selection_migration.js for the
@@ -242,7 +292,11 @@ const attachExperiment = async (file) => {
     // shorter than the previously-saved offset. Avoids a chart starting
     // past the end of its data.
     const anchors = notebookStore.anchors || { baseline: 0, experiment: 0 };
-    if (experimentDurationMs != null && anchors.experiment > experimentDurationMs) {
+    // An anchor that names an event kind is resolved per capture and is
+    // never clamped; only a numeric offset can point past the data.
+    if (experimentDurationMs != null
+        && typeof anchors.experiment === 'number'
+        && anchors.experiment > experimentDurationMs) {
         setAnchor(CAPTURE_EXPERIMENT, experimentDurationMs);
         console.info(
             `[compare] experiment anchor clamped to ${experimentDurationMs}ms to fit capture duration`,
@@ -263,6 +317,10 @@ const detachExperiment = async () => {
     experimentAttached = false;
     compareMode = false;
     compareCaptures = [];
+    // A fill still in flight from the compare session that just ended must
+    // not repopulate the context or write anchors after this clear.
+    refreshGen++;
+    captureContext.clear();
 
     applyMultiNodeInfo(null);
     clearViewerCaches();
@@ -1229,20 +1287,25 @@ const initDashboard = (config = {}) => {
         liveRefreshInterval = setInterval(onRefresh, 5000);
     }
 
-    // Compare anchors from the link, once the compare state is known. Only
-    // the numeric form is applied here: `kind:` anchors resolve against each
-    // capture's events and are the alignment work's to apply; passing one
-    // to setAnchor would store 0 and strip it from the link. The
+    // Compare anchors from the link, once the compare state is known: a
+    // signed ms offset, or `kind:<event kind>` (resolved per capture from
+    // its own events, see events/capture_events.js). Any capture id the
+    // link names is applied; the registry decides which ids exist. The
     // attach-time clamp (attachExperiment) does not run on this path, so a
-    // link cannot start a chart past the end of the experiment's data.
+    // numeric experiment anchor is capped here as it would be there.
     if (compareMode) {
-        for (const id of [CAPTURE_BASELINE, CAPTURE_EXPERIMENT]) {
-            const v = linkState.anchors[id];
-            if (typeof v !== 'number') continue;
+        pendingLinkAnchors = null;
+        for (const [id, v] of Object.entries(linkState.anchors)) {
+            if (id !== CAPTURE_BASELINE && id !== CAPTURE_EXPERIMENT) {
+                // A named arm: applied by refreshCompareCaptures once the
+                // registry says the arm exists, dropped otherwise.
+                (pendingLinkAnchors ||= {})[id] = v;
+                continue;
+            }
             // Only the experiment is capped to its own duration, as the
             // attach-time clamp does; the baseline's duration is not known
             // here and its anchor was never clamped.
-            const capped = (id === CAPTURE_EXPERIMENT
+            const capped = (typeof v === 'number' && id === CAPTURE_EXPERIMENT
                 && experimentDurationMs != null && v > experimentDurationMs)
                 ? experimentDurationMs
                 : v;

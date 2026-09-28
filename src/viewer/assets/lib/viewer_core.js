@@ -5,6 +5,7 @@ import { Chart } from './charts/chart.js';
 import { expandLink, selectButton, compareToggle } from './ui/chart_controls.js';
 import { isHistogramPlot, buildHistogramHeatmapSpec, resolvedStyle } from './charts/metric_types.js';
 import { renderCompareChart } from './charts/compare.js';
+import { captureContext } from './events/capture_events.js';
 import {
     queryRangeForCapture, queryRangeDisplayForCapture, buildEffectiveQuery,
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
@@ -611,6 +612,9 @@ export const CompareChartWrapper = {
             spec,
             captures: [baselineCap, experimentCap, ...extraCaps],
             anchors: anchors || { baseline: 0, experiment: 0 },
+            // Per-capture events and recording starts, for anchors that name
+            // an event kind. Filled by app.js when compare mode starts.
+            captureContext,
             toggles: toggles || {},
             setChartToggle,
             chartsState,

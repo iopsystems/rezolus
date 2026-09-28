@@ -8,7 +8,7 @@ import { compareToggle } from '../ui/chart_controls.js';
 import { executePromQLRangeQuery, applyResultToPlot, buildEffectiveQuery, CAPTURE_BASELINE, CAPTURE_EXPERIMENT } from '../data.js';
 import { notify, showSaveModal } from '../ui/overlays.js';
 import { isHistogramPlot } from '../charts/metric_types.js';
-import { migrateSelection, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
+import { migrateSelection, normalizeAnchor, SELECTION_SCHEMA_VERSION } from './selection_migration.js';
 import { composeAbReportPrefix } from './ab_filename.js';
 import { writeViewState } from '../ui/url_state.js';
 import { ViewerApi } from '../viewer_api.js';
@@ -319,16 +319,39 @@ const persistNotebook = () => persistStore(NOTEBOOK_STORAGE_KEY, notebookStore);
 // ── Anchors + per-chart toggles (compare-mode state) ─────────────
 
 /**
- * Set a compare-mode anchor in milliseconds. Only the `baseline` and
- * `experiment` keys are recognized. Persists + triggers a redraw.
+ * Set a compare-mode anchor: a signed ms offset from the capture's
+ * recording start, or `{ kind }` to align on the first event of that kind
+ * in the capture (see events/capture_events.js). Any capture id the
+ * registry names is accepted, so an N-way archive's arms align too.
+ * Persists + triggers a redraw.
  */
-const setAnchor = (captureId, ms) => {
-    if (captureId !== CAPTURE_BASELINE && captureId !== CAPTURE_EXPERIMENT) return;
+const setAnchor = (captureId, value) => {
+    if (typeof captureId !== 'string' || captureId === '') return;
     if (!notebookStore.anchors) notebookStore.anchors = { baseline: 0, experiment: 0 };
-    notebookStore.anchors[captureId] = Number(ms) || 0;
+    notebookStore.anchors[captureId] = normalizeAnchor(value);
     persistNotebook();
     // The anchor also rides in the link; a zero is "no shift" and drops the key.
     writeViewState({ anchors: { [captureId]: notebookStore.anchors[captureId] } });
+    if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
+};
+
+/**
+ * Align every listed capture on an event kind (`{ kind }` for each), or
+ * back on its start (`kind` null: every anchor becomes 0). One persist,
+ * one link write, one redraw.
+ */
+const setAlignmentKind = (kind, captureIds) => {
+    const ids = (Array.isArray(captureIds) ? captureIds : []).filter((id) => typeof id === 'string' && id);
+    if (ids.length === 0) return;
+    if (!notebookStore.anchors) notebookStore.anchors = { baseline: 0, experiment: 0 };
+    const value = normalizeAnchor(kind ? { kind } : 0);
+    const patch = {};
+    for (const id of ids) {
+        notebookStore.anchors[id] = value;
+        patch[id] = value;
+    }
+    persistNotebook();
+    writeViewState({ anchors: patch });
     if (typeof m !== 'undefined' && typeof m.redraw === 'function') m.redraw();
 };
 
@@ -1326,6 +1349,7 @@ export {
     loadPayloadIntoStore,
     loadJsonIntoSelection,
     setAnchor,
+    setAlignmentKind,
     setChartToggle,
     NotebookView,
     ReportView,
