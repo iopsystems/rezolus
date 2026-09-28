@@ -273,13 +273,18 @@ client-side, so uploaded `.parquet` and `.rez` recordings never leave the browse
 
 ### Linking to a view
 
-A viewer URL reproduces the view it was copied from. The section and chart
-live in the hash (`#/cpu`, `#/cpu/chart/<id>`); the time range, time mode,
-selectors and compare anchors live in the query string, so a link pasted to
-a colleague opens at the same window with the same filters. The viewer
-rewrites the query string as you zoom or change a selector, so the address
-bar is always a link to what you see. Both the server viewer and the static
-site read the same parameters; the static site adds `capture=` for the file.
+A viewer URL reproduces the view it was copied from. The section lives in
+the hash (`#/overview`, `#/cpu`, `#/cgroups`, `#/service/<name>`; a chart
+expanded from its toolbar is `#/<section>/chart/<id>`); the time range, time
+mode, selectors and compare anchors live in the query string, **before** the
+hash, so a link pasted to a colleague opens at the same window with the same
+filters. Parameters placed after the hash (`#/cpu?from=...`) are not read.
+The viewer rewrites the query string as you zoom or change a selector, so
+the address bar is always a link to what you see. Both the server viewer and
+the static site read the same parameters; the static site adds `capture=`
+for the file. Compare mode is not a parameter: it comes from what was
+opened (two files, or a two-recording `.rez`), and the `anchor.*` keys only
+apply then.
 
 ```text
 http://127.0.0.1:4200/?from=2026-09-28T14:03:11.250Z&to=2026-09-28T14:05:40Z#/cpu
@@ -289,15 +294,17 @@ http://127.0.0.1:4200/?node=web-01&cgroup=/system.slice&cgroup=/user.slice#/cgro
 
 | Parameter | Value | Notes |
 | --- | --- | --- |
-| `from`, `to` | RFC 3339 UTC (`2026-09-28T14:03:11.250Z`) or Unix seconds | Both required, `to` after `from`; clamped to the recording; ignored in live mode |
+| `from`, `to` | RFC 3339 UTC (`2026-09-28T14:03:11.250Z`) or Unix seconds (`1759068191.25`, fractions allowed) | Both required, `to` after `from`; clamped to the recording; ignored in live mode |
 | `time` | `raw` | Rate points at their real sample timestamps. Absent means Aligned (grid). Ignored in compare mode |
 | `node` | node name | Multi-node recordings; must exist in the recording |
 | `gpu` | `vendor:id`, repeatable (`gpu=nvidia:0&gpu=nvidia:1`) | Filters the GPU section; a bare id when the sampler set no vendor |
 | `cgroup` | cgroup name, repeatable | Selected cgroups on the cgroups section, one key per name |
 | `instance` | instance id | A service's instance, scoped by the `#/service/<name>` in the hash |
-| `anchor.baseline`, `anchor.experiment` | signed integer milliseconds, or `kind:<event kind>` | Compare-mode alignment offset from each capture's start; `0` is absent. The `kind:` form aligns on an event of that kind in each capture |
+| `anchor.baseline`, `anchor.experiment` | signed integer milliseconds, or `kind:<event kind>` | Compare mode only; each key is independent and `0` (no shift) is absent. The value names the instant, measured from that capture's start, that is drawn at `+0s`: `anchor.experiment=1500` puts the experiment's 1.5 s mark at the axis origin, shifting its trace 1.5 s to the left. The `kind:` form uses the first event of that kind in the capture instead |
 
-A parameter in the URL wins over what the browser remembered for that key;
+Values are ordinary query-string values: a `/` may be written as is, and
+anything else (`&`, `=`, spaces) percent-encoded as a browser would. A
+parameter in the URL wins over what the browser remembered for that key;
 keys the URL does not name keep their remembered values. A value the
 recording cannot satisfy (a node it does not have, a range outside it) is
 dropped with a warning in the browser console and the link is rewritten
