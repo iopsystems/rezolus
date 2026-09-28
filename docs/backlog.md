@@ -864,11 +864,11 @@ Source: [ext4 telemetry through eBPF](journal/2026-09-28-ext4-sampler.md).
 The entry specifies `ext4_journal` (phase 1, implemented and measured),
 `ext4_alloc` (phase 2) and per-filesystem counters (phase 3).
 
-- **Probe-cost bench on bare metal** — Open, the remaining GO gate for
-  phase 1. Refresh cost is measured (190–295 µs on a 56-vCPU guest); the
-  per-event cost of the fsync hooks is not, because the guest's virtio disk
-  varied 40% between two sampler-off runs. `delta` with `null_blk`, isolated
-  cores and `perf stat`, per the 2026-09-03 blockio method.
+- **Probe-cost bench** — DONE, GO. `null_blk` in a guest at 450 K fsync/s:
+  +225 ± 130 instructions per fsync (+0.68%), cycles +0.8% to +2.1%
+  depending on baseline, throughput −1.8% to +0.1%; the two baselines
+  disagree by 2%, recorded in the entry. Reopen only for a bench needing
+  tighter than ±2%.
 - **Fleet probes on more kernels** — Open. Probes 1–3 passed on aarch64
   Debian 13 (`6.12.75`, built-in ext4) and x86_64 Debian 13 (`6.12.63`,
   `CONFIG_EXT4_FS=m` with module BTF, where the sampler runs healthy with
