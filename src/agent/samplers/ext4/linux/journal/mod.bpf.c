@@ -179,6 +179,14 @@ static int __always_inline handle_run_stats(void* stats) {
     struct transaction_run_stats_s___rz* s = stats;
     u64 tick = tick_ns();
 
+    // A tp_btf pointer argument is trusted_ptr_or_null to the verifier, and
+    // BPF_CORE_READ's field-offset arithmetic on it is refused until it has
+    // been null-checked ("pointer arithmetic on trusted_ptr_or_null_
+    // prohibited"). jbd2 never passes NULL here; the check is for the verifier.
+    if (!s) {
+        return 0;
+    }
+
     counter_incr(C_COMMITS);
     counter_add(C_COMMIT_HANDLES, BPF_CORE_READ(s, rs_handle_count));
     counter_add(C_COMMIT_BLOCKS_DIRTIED, BPF_CORE_READ(s, rs_blocks));
@@ -203,6 +211,10 @@ static int __always_inline handle_run_stats(void* stats) {
 static int __always_inline handle_checkpoint_stats(void* stats) {
     struct transaction_chp_stats_s___rz* s = stats;
     u64 tick = tick_ns();
+
+    if (!s) {
+        return 0;
+    }
 
     counter_incr(C_CHECKPOINTS);
     counter_add(C_CHECKPOINT_WRITTEN, BPF_CORE_READ(s, cs_written));
