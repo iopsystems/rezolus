@@ -53,7 +53,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{debug, info, warn};
@@ -149,12 +149,9 @@ struct Registry {
 }
 
 impl Registry {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
-            assignment: Arc::new(Assignment {
-                generation: 0,
-                slots: Vec::new(),
-            }),
+            assignment: Arc::new(Assignment::default()),
             by_dev: HashMap::new(),
             last_scan: None,
             rescan_requested: false,
@@ -163,16 +160,13 @@ impl Registry {
     }
 }
 
-static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
+static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Registry::new()));
 
 /// The current assignment, rescanning the mount table first when one is due:
 /// [`RESCAN_INTERVAL`] has passed, [`request_rescan`] was called, or this is
 /// the first call.
 pub fn current() -> Arc<Assignment> {
     let mut registry = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    if registry.assignment.slots.is_empty() {
-        registry.assignment = Arc::new(Assignment::default());
-    }
     let due = registry.rescan_requested
         || registry
             .last_scan
@@ -341,9 +335,7 @@ mod tests {
 ";
 
     fn fresh() -> Registry {
-        let mut r = Registry::new();
-        r.assignment = Arc::new(Assignment::default());
-        r
+        Registry::new()
     }
 
     fn names(devnum: &str) -> Option<String> {
