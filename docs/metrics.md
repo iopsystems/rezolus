@@ -420,13 +420,20 @@ write and rename have no tracepoints and are `fentry`/`fexit` on
 local storage, one slot per operation, so an O_SYNC write's inner fsync does
 not lose the outer write's timing.
 
-**Off by default.** Both probes of a pair run on the request path once per
-call, so this is the most expensive of the ext4 samplers: measured at
-+4,070 instructions and +2.3 µs per write-plus-fsync pair (four probes) on a
+**Opt-in.** Both probes of a pair run on the request path once per call, so
+this is the most expensive of the ext4 samplers: measured at +4,070
+instructions and +2.3 µs per write-plus-fsync pair (four probes) on a
 `null_blk` fsync bench, 12% of the CPU at a saturating 450 K operations per
-second, about 4.5% of one core at 20 K fsync/s. Enable it with
-`[samplers.ext4_ops] enabled = true` when that cost is acceptable for the
-workload; the journal entry has the bench.
+second, about 4.5% of one core at 20 K fsync/s. It is one of the samplers the
+`[defaults]` section never turns on (with `gpu_amd_pmu` and `hw_sensors`):
+enable it with `[samplers.ext4_ops] enabled = true` when that cost is
+acceptable for the workload; the journal entry has the bench.
+
+An asynchronous direct write (io_uring, libaio with `O_DIRECT`) returns from
+`ext4_file_write_iter` as queued, so for it the write latency is the
+submission time, it is not an error, and its bytes are reported at completion
+where this sampler does not see them: `ext4_write_bytes` undercounts such
+workloads by exactly their direct-IO bytes.
 
 Counters are per filesystem exactly as `ext4_journal`'s are (`mount`,
 `fstype`, `devnum`, `block_device`, plus `mount="other"`); the latency
@@ -437,12 +444,13 @@ the ext4 dashboard's Write Path group draws against `ext4_writepages_pages`,
 The per-cgroup series answer "how long are this service's request threads held
 inside the filesystem", the mechanism a slow disk reaches a request through.
 
-Kernel support: task local storage and `fentry` on a module's functions are
-both 5.11, so the sampler needs 5.11 or later (module BTF where ext4 is a
-module). `ext4_rename2` gained a namespace argument in 5.12; the sampler
-carries a program per arity and selects from BTF. If BTF lacks
-`ext4_file_write_iter` or `ext4_rename2`, that operation's series are absent
-and the rest run.
+Kernel support: task local storage became usable from tracing programs in
+5.12, and `fentry` on a module's functions needs module BTF (5.11), so the
+sampler needs 5.12 or later; on an older kernel `rezolus status` shows it
+unsupported. `ext4_rename2` has taken six arguments since 5.12; the sampler
+confirms that from BTF and disables the rename pair on any other count. If
+BTF lacks `ext4_file_write_iter` or `ext4_rename2`, that operation's
+histogram stays empty and its counters read 0 while the rest run.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

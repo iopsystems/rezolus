@@ -323,9 +323,11 @@ blocking-pool time.
 Same guest (`6.12.63+deb13-amd64`, `CONFIG_EXT4_FS=m` with module BTF,
 56 vCPU); systemslab `01a0ebeb-6ca9-71cd-5439-b7eef2574e83`. Eight programs,
 all attached: the fsync and unlink tracepoint pairs as `tp_btf`, write and
-rename as `fentry`/`fexit` on the module's functions, the rename pair the
-6-argument variant (`kernel_btf_func_arg_count("ext4_rename2")` = 6 on this
-kernel; 5.12 added the namespace argument).
+rename as `fentry`/`fexit` on the module's functions, the rename pair after
+`kernel_btf_func_arg_count("ext4_rename2")` confirmed the six arguments the
+program reads (the run carried a five-argument twin for pre-5.12 kernels;
+review pointed out no such kernel can load the skeleton, task storage being
+5.12 for tracing programs, and the twin was removed).
 
 **Counts are exact.** A driver in its own cgroup wrote 200 files of 8 KiB,
 fsynced each, renamed 100 and unlinked all 200. Its cgroup's series read
@@ -365,7 +367,13 @@ instruction count's share.
 characterization's 20 K fsync/s a 2.3 µs pair cost is 4.5% of one core spread
 over the request threads, which is affordable for the finding it serves
 (request threads held inside the filesystem, per cgroup) but not a fleetwide
-always-on cost. `config/agent.toml` ships it `enabled = false`. Refresh cost
+always-on cost. It is in `OPT_IN_SAMPLERS` (`src/agent/config/mod.rs`), so
+`[defaults] enabled = true` never turns it on; `config/agent.toml` ships it
+`enabled = false`. Two things review caught after the run: an asynchronous
+direct write returns `-EIOCBQUEUED`, which the program now excludes from the
+error count (its bytes are unknowable at submission and are documented as
+missing from `ext4_write_bytes`), and an operation whose function BTF lacks
+reads 0 rather than absent, which the docs now say. Refresh cost
 315–488 µs on the 56-vCPU guest (one 16-wide slotted counter map, four
 histograms, eight cgroup maps).
 
@@ -394,10 +402,10 @@ plot.
   inode-keyed lookup is a `bpf/cgroup.h` change. Host-wide first.
 - **Per-thread start state for paired hooks** — Decided by C5: task local
   storage (`BPF_MAP_TYPE_TASK_STORAGE`), one slot per operation in one value.
-  `fentry` on a module's functions is itself 5.11, so the floor cost nothing
-  `ext4_ops` did not already pay, and a write to an O_SYNC file nests fsync
-  inside it on one thread, which a single shared slot would lose and separate
-  32 MB arrays would pay 128 MB for.
+  Tracing programs can use it from 5.12, one release above the module-BTF
+  `fentry` (5.11) `ext4_ops` needs anyway, so the floor is 5.12; a write to
+  an O_SYNC file nests fsync inside it on one thread, which a single shared
+  slot would lose and separate 32 MB arrays would pay 128 MB for.
 - **Page-cache hits** — Idea. Needs `fentry` at read rate; C7.
 - **Free-space fragmentation as a gauge** — By design, not eBPF. The state
   `e2freefrag` reports is the on-disk bitmap; the allocator signals in C2

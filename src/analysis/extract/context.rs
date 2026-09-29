@@ -196,12 +196,11 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("ext4_freed_blocks", "ext4_alloc"),
     ("ext4_inode_loads", "ext4_alloc"),
     ("ext4_inodes", "ext4_alloc"),
-    // `ext4_ops`'s metrics: `ext4_op_*` misses the `_` boundary and
-    // `ext4_ops` itself has no suffix to match.
+    // `ext4_ops`'s metrics: `ext4_op_*` misses the `_` boundary the prefix
+    // rule needs (`ext4_ops` itself resolves by exact name).
     ("ext4_op_errors", "ext4_ops"),
     ("ext4_op_latency", "ext4_ops"),
     ("ext4_op_time", "ext4_ops"),
-    ("ext4_ops", "ext4_ops"),
     ("ext4_preallocation_discarded_blocks", "ext4_alloc"),
     ("ext4_preallocation_discards", "ext4_alloc"),
     ("ext4_shutdowns", "ext4_journal"),
@@ -383,6 +382,10 @@ const BPF_SAMPLERS: &[&str] = &[
     "cpu_perf",
     "cpu_tlb_flush",
     "cpu_usage",
+    "ext4_alloc",
+    "ext4_journal",
+    "ext4_ops",
+    "memory_writeback",
     "network_interfaces",
     "network_traffic",
     "scheduler_runqueue",

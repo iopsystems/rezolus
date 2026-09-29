@@ -12,8 +12,9 @@
 // The start timestamp lives in task local storage, one slot per operation,
 // because a write to an O_SYNC file runs fsync inside it on the same thread
 // and a single per-thread slot would lose the outer timing. Task local
-// storage is a 5.11 map type, the same floor as fentry on a module function,
-// so it costs no kernel support the sampler did not already need.
+// storage reached tracing programs in 5.12 (5.11 had it for LSM programs
+// only), so 5.12 is this sampler's floor: one release above the module-BTF
+// fentry it also needs.
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/cgroup.h"
@@ -25,6 +26,10 @@
 
 #define COUNTER_GROUP_WIDTH 16
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
+// What ext4_file_write_iter returns for an asynchronous direct write
+// (io_uring, libaio): the request is queued, not failed, and its bytes are
+// reported at completion, out of this sampler's sight.
+#define EIOCBQUEUED 529
 #define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
 
@@ -269,7 +274,9 @@ static __always_inline void cgroup_account(struct task_struct* task, u32 op, u64
 // Close operation `op` on the current thread: latency into the op's
 // histogram, count and time into the filesystem's slot and the cgroup's.
 // `ret` is the call's return value (negative errno on failure; for a write,
-// the bytes written).
+// the bytes written). An async direct write returns -EIOCBQUEUED: not an
+// error, and its bytes are not known here, so it counts as a call whose
+// latency is the submission time and adds nothing to write bytes.
 static __always_inline void op_end(u32 op, long ret) {
     struct task_struct* task = bpf_get_current_task_btf();
     struct op_start* s;
@@ -312,7 +319,7 @@ static __always_inline void op_end(u32 op, long ret) {
 
     counter_add(slot, C_OPS + op, 1);
     counter_add(slot, C_TIME + op, lat);
-    if (ret < 0) {
+    if (ret < 0 && ret != -EIOCBQUEUED) {
         counter_add(slot, C_ERRORS + op, 1);
     }
     if (op == OP_WRITE && ret > 0) {
@@ -366,34 +373,23 @@ int BPF_PROG(ext4_file_write_iter_fexit, struct kiocb* iocb, struct iov_iter* fr
     return 0;
 }
 
-// rename: ext4_rename2 took (old_dir, old_dentry, new_dir, new_dentry, flags)
-// until 5.12 put a namespace argument first (struct user_namespace *, then
-// struct mnt_idmap * from 6.3). A trampoline program reads by position, so
-// mod.rs selects the arity from BTF and disables the other pair.
+// rename: ext4_rename2(ns, old_dir, old_dentry, new_dir, new_dentry, flags)
+// -> int. The first argument is struct user_namespace * from 5.12 and struct
+// mnt_idmap * from 6.3; it is not read, so one program serves both. Before
+// 5.12 there was no namespace argument, but no kernel that old can load this
+// skeleton (task storage, above), so there is no five-argument twin. A
+// trampoline program reads by position, so mod.rs still confirms the arity
+// from BTF and disables the pair on any other count rather than misreading.
 
 SEC("fentry/ext4_rename2")
-int BPF_PROG(ext4_rename2_fentry_6, void* ns, struct inode* old_dir, struct dentry* old_dentry,
+int BPF_PROG(ext4_rename2_fentry, void* ns, struct inode* old_dir, struct dentry* old_dentry,
              struct inode* new_dir, struct dentry* new_dentry, unsigned int flags) {
     op_begin(OP_RENAME, inode_dev(old_dir));
     return 0;
 }
 
 SEC("fexit/ext4_rename2")
-int BPF_PROG(ext4_rename2_fexit_6, void* ns, struct inode* old_dir, struct dentry* old_dentry,
-             struct inode* new_dir, struct dentry* new_dentry, unsigned int flags, int ret) {
-    op_end(OP_RENAME, ret);
-    return 0;
-}
-
-SEC("fentry/ext4_rename2")
-int BPF_PROG(ext4_rename2_fentry_5, struct inode* old_dir, struct dentry* old_dentry,
-             struct inode* new_dir, struct dentry* new_dentry, unsigned int flags) {
-    op_begin(OP_RENAME, inode_dev(old_dir));
-    return 0;
-}
-
-SEC("fexit/ext4_rename2")
-int BPF_PROG(ext4_rename2_fexit_5, struct inode* old_dir, struct dentry* old_dentry,
+int BPF_PROG(ext4_rename2_fexit, void* ns, struct inode* old_dir, struct dentry* old_dentry,
              struct inode* new_dir, struct dentry* new_dentry, unsigned int flags, int ret) {
     op_end(OP_RENAME, ret);
     return 0;
