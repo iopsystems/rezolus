@@ -7,6 +7,10 @@ mod stats {
         include!("./linux/meminfo/stats.rs");
     }
 
+    mod pagecache {
+        include!("./linux/pagecache/stats.rs");
+    }
+
     mod slabinfo {
         include!("./linux/slabinfo/stats.rs");
     }

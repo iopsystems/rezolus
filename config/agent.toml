@@ -340,6 +340,16 @@ enabled = false
 [samplers.memory_slabinfo]
 # interval = "60s"
 
+# BPF sampler on the page cache: buffered read calls and bytes (one fentry on
+# filemap_read), pages filled by reason (read, write, fault, other), pages
+# evicted, mmap faults, per mount. Pages filled during reads over bytes read
+# is the read miss ratio. Opt-in: the read hook runs once per read call.
+# `cgroup_attribution = true` adds per-cgroup reads, bytes and fills. Needs
+# vmlinux BTF; 5.15+ to classify fills. See docs/metrics.md#memory_pagecache.
+[samplers.memory_pagecache]
+enabled = false
+# cgroup_attribution = true
+
 # BPF sampler on the page-cache writeback tracepoints: how long writers were
 # made to sleep by the dirty-page throttle, flusher runs by reason, and pages
 # written back. Filesystem-agnostic. See docs/metrics.md#memory_writeback.
