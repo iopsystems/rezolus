@@ -10,7 +10,15 @@
 //! Files land only under the directory `rezolus mcp --export-dir` names,
 //! under a bare file name, and never over an existing file: the agent
 //! chooses a name or gets one derived from the query, and a path with
-//! separators or `..` is refused rather than resolved.
+//! separators or `..` is refused rather than resolved. The file is opened
+//! with `create_new`, so a symlink planted in the directory (dangling or
+//! not) cannot redirect the write elsewhere, and there is no window between
+//! the existence check and the create.
+//!
+//! An export is bounded by [`MAX_ROWS`]: past it the call is refused with
+//! the count and a hint to raise `step`, since a run that materializes
+//! millions of rows in a process the client cannot see would end as an OOM
+//! kill with nothing telling the agent why.
 
 use std::path::{Path, PathBuf};
 
@@ -64,6 +72,34 @@ impl Format {
 }
 
 pub(crate) const COLUMNS: [&str; 5] = ["series", "timestamp", "value", "lo", "hi"];
+
+/// The most rows one export may hold. Measured at roughly 730 bytes per row
+/// in flight for the parquet path (debug build), so this is on the order of
+/// 700 MB at the cap, and a 64-CPU day at a 1 s step (5.5 M rows) is
+/// refused rather than attempted.
+pub(crate) const MAX_ROWS: usize = 1_000_000;
+
+/// How many rows `rows_of` would produce, before producing any.
+pub(crate) fn row_count(result: &QueryResult) -> usize {
+    match result {
+        QueryResult::Matrix { result } => result.iter().map(|s| s.values.len()).sum(),
+        QueryResult::Vector { result } => result.len(),
+        QueryResult::Scalar { .. } => 1,
+        QueryResult::HistogramHeatmap { .. } => 0,
+    }
+}
+
+/// Refuse a result over the cap, naming the count and the lever.
+pub(crate) fn check_row_cap(result: &QueryResult, step: f64) -> Result<(), String> {
+    let n = row_count(result);
+    if n > MAX_ROWS {
+        return Err(format!(
+            "the query produces {n} rows at step {step} s, over the export cap of {MAX_ROWS}; \
+             raise `step`, aggregate the series (sum(), avg()), or add label matchers"
+        ));
+    }
+    Ok(())
+}
 
 /// Flatten a query result into rows. A heatmap has no scalar value per
 /// point and is refused: the caller wants `histogram_quantile(...)`.
@@ -149,7 +185,9 @@ pub(crate) fn file_name(
             use sha2::{Digest, Sha256};
             let digest = Sha256::digest(query.as_bytes());
             let hex: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
-            let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+            // Millisecond resolution: two exports of one query in the same
+            // second must not collide on the derived name.
+            let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ");
             format!("query-{hex}-{stamp}")
         }
     };
@@ -174,19 +212,35 @@ pub(crate) fn write(
         ));
     }
     let path = dir.join(name);
-    if path.exists() {
-        return Err(format!(
-            "{} already exists; choose another filename (exports never overwrite)",
-            path.display()
-        ));
-    }
-    match format {
+    // `create_new`: refuses an existing file AND a symlink at this name,
+    // dangling or not (O_EXCL does not follow it), so nothing in the
+    // directory can redirect the write outside it.
+    let file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "{} already exists; choose another filename (exports never overwrite)",
+                path.display()
+            ));
+        }
+        Err(e) => return Err(format!("creating {}: {e}", path.display())),
+    };
+    let written = match format {
         Format::Csv => {
-            write_csv(&path, rows).map_err(|e| format!("writing {}: {e}", path.display()))?
+            write_csv(file, rows).map_err(|e| format!("writing {}: {e}", path.display()))
         }
         Format::Parquet => {
-            write_parquet(&path, rows).map_err(|e| format!("writing {}: {e}", path.display()))?
+            write_parquet(file, rows).map_err(|e| format!("writing {}: {e}", path.display()))
         }
+    };
+    if let Err(e) = written {
+        // A half-written file under a name the agent may retry with.
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
     }
     let mut names: Vec<&str> = rows.iter().map(|r| r.series.as_str()).collect();
     names.sort_unstable();
@@ -208,9 +262,9 @@ fn csv_field(s: &str) -> String {
     }
 }
 
-fn write_csv(path: &Path, rows: &[Row]) -> std::io::Result<()> {
+fn write_csv(file: std::fs::File, rows: &[Row]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
+    let mut out = std::io::BufWriter::new(file);
     writeln!(out, "{}", COLUMNS.join(","))?;
     let num = |v: Option<f64>| v.map(|x| format!("{x}")).unwrap_or_default();
     for r in rows {
@@ -227,7 +281,7 @@ fn write_csv(path: &Path, rows: &[Row]) -> std::io::Result<()> {
     out.flush()
 }
 
-fn write_parquet(path: &Path, rows: &[Row]) -> Result<(), Box<dyn std::error::Error>> {
+fn write_parquet(file: std::fs::File, rows: &[Row]) -> Result<(), Box<dyn std::error::Error>> {
     use arrow::array::{ArrayRef, Float64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -260,7 +314,6 @@ fn write_parquet(path: &Path, rows: &[Row]) -> Result<(), Box<dyn std::error::Er
         )),
     ];
     let batch = RecordBatch::try_new(schema.clone(), arrays)?;
-    let file = std::fs::File::create(path)?;
     let props = WriterProperties::builder().build();
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))?;
     writer.write(&batch)?;
@@ -370,6 +423,53 @@ mod tests {
                 .err()
                 .unwrap()
                 .contains("does not exist")
+        );
+    }
+
+    /// A dangling symlink planted under the export dir must not become a
+    /// write outside it: `exists()` says false for it, `File::create` would
+    /// follow it. `create_new` refuses it.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_in_the_export_dir_cannot_redirect_the_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let victim = elsewhere.path().join("victim.csv");
+        std::os::unix::fs::symlink(&victim, dir.path().join("dangle.csv")).unwrap();
+        let rows = rows_of(&matrix()).unwrap();
+        let err = write(dir.path(), "dangle.csv", Format::Csv, &rows)
+            .err()
+            .unwrap();
+        assert!(err.contains("already exists"), "{err}");
+        assert!(!victim.exists(), "nothing may land at the link's target");
+        // The same for parquet.
+        std::os::unix::fs::symlink(&victim, dir.path().join("dangle.parquet")).unwrap();
+        assert!(write(dir.path(), "dangle.parquet", Format::Parquet, &rows).is_err());
+        assert!(!victim.exists());
+    }
+
+    #[test]
+    fn the_row_cap_is_checked_before_any_row_is_built() {
+        assert_eq!(row_count(&matrix()), 3);
+        assert!(check_row_cap(&matrix(), 1.0).is_ok());
+        let m = |k: &str, v: &str| HashMap::from([(k.to_string(), v.to_string())]);
+        let big = QueryResult::Matrix {
+            result: vec![MatrixSample::new(
+                m("id", "0"),
+                vec![(0.0, 0.0); MAX_ROWS + 1],
+            )],
+        };
+        let err = check_row_cap(&big, 0.01).err().unwrap();
+        assert!(
+            err.contains("1000001 rows")
+                && err.contains("step 0.01")
+                && err.contains("raise `step`"),
+            "{err}"
+        );
+        let d1 = file_name(None, "q", Format::Csv).unwrap();
+        assert!(
+            d1.len() > "query-xxxxxxxx-20260929T000000000Z.csv".len() - 4,
+            "{d1}"
         );
     }
 }

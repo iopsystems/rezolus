@@ -290,7 +290,7 @@ fn additive_tools() -> Vec<Value> {
         }),
         json!({
             "name": "export_query",
-            "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, and the filename must be bare.",
+            "description": "Run a PromQL range query over the whole recording and write the result as a CSV or parquet file under the server's export directory (`rezolus mcp --export-dir`), for analysis outside PromQL. Long form: one row per series and timestamp with columns series, timestamp (Unix seconds), value, lo, hi (the rate() uncertainty band, else empty). Returns the path. Refused without an export directory, never overwrites, the filename must be bare, and a result over 1,000,000 rows is refused with a hint to raise step or aggregate.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -310,7 +310,7 @@ fn additive_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "section": {"type": "string", "description": "Dashboard section, e.g. overview, cpu, memory, scheduler, blockio, network, syscall, cgroups, or a service name."},
+                    "section": {"type": "string", "description": "Dashboard section, e.g. overview, cpu, memory, scheduler, blockio, network, syscall, cgroups; a service section is service/<name>."},
                     "chart_id": {"type": "string", "description": "One chart's id within the section, to open that chart expanded."},
                     "from": {"type": ["string", "number"], "description": "Range start: RFC 3339 or Unix seconds as a number. Give from and to together."},
                     "to": {"type": ["string", "number"], "description": "Range end, after from."},
@@ -321,7 +321,7 @@ fn additive_tools() -> Vec<Value> {
                     "instance": {"type": "string", "description": "Service instance id, for a service section."},
                     "family": {"type": "string", "description": "Family baseline in compare mode: envelope, or sigma:<k> (e.g. sigma:2)."},
                     "anchors": {"type": "object", "additionalProperties": {"type": ["integer", "string"]}, "description": "Compare alignment per capture id (baseline, experiment, ...): signed milliseconds, or kind:<event kind> to align on that event."},
-                    "viewer_url": {"type": "string", "description": "The viewer's address, e.g. http://127.0.0.1:4200, to get a full URL. Overrides --viewer-url."}
+                    "viewer_url": {"type": "string", "description": "The viewer's address (http:// or https://, no fragment), e.g. http://127.0.0.1:4200, to get a full URL. Overrides --viewer-url."}
                 },
                 "required": ["section"]
             }
@@ -1341,6 +1341,7 @@ impl Server {
             Some(_) => return Err("step must be a number of seconds".into()),
         };
         let result = reader.query_range(query, start, end, step)?;
+        crate::mcp::export::check_row_cap(&result, step)?;
         let rows = crate::mcp::export::rows_of(&result)?;
         let exported = crate::mcp::export::write(dir, &name, format, &rows)?;
         Ok(serde_json::to_string_pretty(&json!({
@@ -1358,7 +1359,10 @@ impl Server {
     /// `viewer_link`: pure formatting; no recording is opened.
     fn viewer_link(&self, arguments: &Value) -> Result<String, Box<dyn std::error::Error>> {
         let spec = crate::mcp::link::LinkSpec::from_args(arguments)?;
-        let base = opt_str(arguments, "viewer_url")?.or_else(|| self.options.viewer_url.clone());
+        let base = match opt_str(arguments, "viewer_url")? {
+            Some(b) => Some(crate::mcp::link::validate_base(&b)?),
+            None => self.options.viewer_url.clone(),
+        };
         let link = spec.link(base.as_deref());
         Ok(serde_json::to_string_pretty(&json!({
             "fragment": link.fragment,
@@ -2416,5 +2420,11 @@ mod tests {
             .unwrap()
             .to_string();
         assert!(err.contains("section"), "{err}");
+        let err = plain
+            .viewer_link(&json!({"section": "cpu", "viewer_url": "127.0.0.1:4200"}))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("http://"), "{err}");
     }
 }

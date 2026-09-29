@@ -172,9 +172,16 @@ result is refused with a pointer at `histogram_quantile`. Files land only
 under `rezolus mcp --export-dir DIR`, which must exist at startup; without
 the flag the tool is listed and refuses every call naming it. The
 filename must be one path component (no separators, no `..`, no leading
-dot) or is derived from a hash of the query and the time; an existing file
-is never overwritten. The reply carries the path, the counts, the columns
-and the evaluated range.
+dot) or is derived from a hash of the query and the time (to the
+millisecond); the file is opened with `create_new`, so an existing file is
+never overwritten and a symlink planted in the directory, dangling or not,
+cannot redirect the write (review found `exists()` saying false for a
+dangling link and `File::create` following it). A result over
+`export::MAX_ROWS` (1 M) is refused with the count and a hint to raise
+`step`: review measured about 730 bytes per row in flight on the parquet
+path, so a 64-CPU day at a 1 s step (5.5 M rows) would have ended as an
+OOM kill the agent could not see. The reply carries the path, the counts,
+the columns and the evaluated range.
 
 **`viewer_link`** (`src/mcp/link.rs`). Pure formatting of the
 [viewer link](2026-09-28-viewer-link-state.md) wire form: the section and
@@ -184,7 +191,15 @@ together (RFC 3339 or seconds as a number, digit-only strings refused as in
 `add_event`), `time=raw` only, a zero anchor is not written. The decision
 the entry left open is made both ways: the reply always carries the
 fragment and query on their own, and a full URL when the call passes
-`viewer_url` or the server was started with `--viewer-url`. The Rust tests
+`viewer_url` or the server was started with `--viewer-url`. The base must
+be `http(s)://` with no fragment (validated at startup and per call), and
+is joined by its shape: a base with a query (the static site's
+`?capture=demo`) gets the view keys with `&`, a document (`index.html`)
+gets them directly, a directory gets `/` first (review found the naive
+`base/query` join putting a `/` inside the static site's query value). A
+service section is `section: "service/<name>"`, the one `/` accepted,
+since the viewer routes services under `/service/:serviceName` and a bare
+name would fall through to the generic route and find nothing. The Rust tests
 pin one full fixture string, and `tests/viewer_link_parity.test.mjs` parses
 that same string with the viewer's `parseViewState` and checks the Rust
 source still declares it, so the two sides cannot drift apart without a

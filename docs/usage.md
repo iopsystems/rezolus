@@ -621,8 +621,9 @@ an event.
   `lo`, `hi` (the `rate()` uncertainty band, else empty). It is the way out
   of PromQL: the agent gets rows it can load into whatever it has. Files
   land only under the directory the server was started with, under a bare
-  `filename` (or one derived from the query), and never over an existing
-  file:
+  `filename` (or one derived from the query), never over an existing file,
+  and never through a symlink planted there. A result over a million rows is
+  refused with the count and a hint to raise `step` or aggregate:
 
   ```bash
   rezolus mcp --export-dir /tmp/rezolus-exports
@@ -632,10 +633,13 @@ an event.
 - `viewer_link` builds a link that opens a running viewer at a `section` (or
   one `chart_id`) with the view state set: `from`/`to`, `time`, `node`,
   `gpu`, `cgroup`, `instance`, `family` and compare `anchors`, the same keys
-  as "Linking to a view". It opens nothing and reads no recording. The reply
-  carries the hash fragment and the query string; with `viewer_url` in the
-  call, or `rezolus mcp --viewer-url http://127.0.0.1:4200`, it carries a full
-  URL to hand to the person.
+  as "Linking to a view". A service section is `service/<name>`. It opens
+  nothing and reads no recording. The reply carries the hash fragment and
+  the query string; with `viewer_url` in the call, or `rezolus mcp
+  --viewer-url http://127.0.0.1:4200`, it carries a full URL to hand to the
+  person. The address must be `http://` or `https://` with no fragment; one
+  that already has a query (the static site's `?capture=demo`) gets the view
+  keys appended to it.
 
 The mutating tools can take another person's events out of a shared
 recording, so they are off unless the operator starting the server says

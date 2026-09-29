@@ -1295,6 +1295,9 @@ impl TryFrom<ArgMatches> for Config {
                 ));
             }
         }
+        if let Some(url) = &server.viewer_url {
+            link::validate_base(url)?;
+        }
         if let Some(dir) = &server.export_dir {
             if !dir.is_dir() {
                 return Err(format!(

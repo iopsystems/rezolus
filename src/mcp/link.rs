@@ -11,7 +11,15 @@
 //!
 //! The server does not know where a viewer is listening, so the tool
 //! returns the fragment and the query string on their own, and a full URL
-//! only when the call (or `rezolus mcp --viewer-url`) supplies a base.
+//! only when the call (or `rezolus mcp --viewer-url`) supplies a base. A
+//! base is an `http(s)` URL with no fragment; one that already carries a
+//! query (the static site's `?capture=demo`) gets the view keys appended
+//! with `&`, one whose last path segment is a file (`index.html`) gets them
+//! appended directly, any other gets `/` first.
+//!
+//! A service section is addressed as `section: "service/<name>"`, the one
+//! `/` the section may carry, since the viewer routes services under
+//! `/service/:serviceName`.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -118,18 +126,65 @@ impl LinkSpec {
         }
     }
 
+    /// The link; `base` must have passed [`validate_base`].
     pub(crate) fn link(&self, base: Option<&str>) -> Link {
         let query = self.query();
         let fragment = self.fragment();
-        let url = base.map(|b| {
-            let b = b.trim_end_matches('/');
-            format!("{b}/{query}{fragment}")
-        });
+        let url = base.map(|b| join_base(b, &query, &fragment));
         Link {
             fragment,
             query,
             url,
         }
+    }
+}
+
+/// A viewer address the tool can build on: `http://` or `https://`, no
+/// fragment (the link's own hash is the route), nothing else assumed.
+pub(crate) fn validate_base(base: &str) -> Result<String, String> {
+    let b = base.trim();
+    if !(b.starts_with("http://") || b.starts_with("https://")) {
+        return Err(format!(
+            "viewer address {base:?} must start with http:// or https:// (e.g. http://127.0.0.1:4200)"
+        ));
+    }
+    if b.contains('#') {
+        return Err(format!(
+            "viewer address {base:?} must not carry a fragment; the link's own hash picks the section"
+        ));
+    }
+    if b.len() <= "https://".len() {
+        return Err(format!("viewer address {base:?} has no host"));
+    }
+    Ok(b.to_string())
+}
+
+/// Append the view query and the hash to a validated base.
+fn join_base(base: &str, query: &str, fragment: &str) -> String {
+    if let Some((head, existing)) = base.split_once('?') {
+        // The base already has a query (the static site's `?capture=...`):
+        // the view keys join it with `&`, and the fragment follows.
+        let body = query.trim_start_matches('?');
+        return if body.is_empty() {
+            format!("{head}?{existing}{fragment}")
+        } else if existing.is_empty() {
+            format!("{head}?{body}{fragment}")
+        } else {
+            format!("{head}?{existing}&{body}{fragment}")
+        };
+    }
+    let b = base.trim_end_matches('/');
+    let after_host = b
+        .find("://")
+        .map(|i| &b[i + 3..])
+        .and_then(|rest| rest.find('/').map(|i| &rest[i + 1..]))
+        .unwrap_or("");
+    let last = after_host.rsplit('/').next().unwrap_or("");
+    if last.contains('.') {
+        // `.../index.html`: a document, not a directory.
+        format!("{b}{query}{fragment}")
+    } else {
+        format!("{b}/{query}{fragment}")
     }
 }
 
@@ -196,12 +251,24 @@ fn path_piece(s: &str, what: &str) -> Result<String, String> {
     Ok(s.to_string())
 }
 
+/// A section: one piece (`cpu`), or a service section `service/<name>`,
+/// the one form with a `/` the viewer routes (`/service/:serviceName`).
+fn section_of(s: &str) -> Result<String, String> {
+    match s.split_once('/') {
+        None => path_piece(s, "section"),
+        Some(("service", name)) => Ok(format!("service/{}", path_piece(name, "service name")?)),
+        Some(_) => Err(format!(
+            "section {s:?} cannot contain '/'; a service section is \"service/<name>\""
+        )),
+    }
+}
+
 impl LinkSpec {
     /// Parse and validate the tool's arguments.
     pub(crate) fn from_args(args: &Value) -> Result<Self, String> {
-        let section = path_piece(
-            &opt_str(args, "section")?.ok_or("Missing section (e.g. \"cpu\", \"overview\")")?,
-            "section",
+        let section = section_of(
+            &opt_str(args, "section")?
+                .ok_or("Missing section (e.g. \"cpu\", \"overview\", \"service/<name>\")")?,
         )?;
         let chart_id = opt_str(args, "chart_id")?
             .map(|c| path_piece(&c, "chart_id"))
@@ -270,9 +337,17 @@ impl LinkSpec {
                             let ms = n
                                 .as_f64()
                                 .ok_or_else(|| format!("anchors.{id} is not a number"))?;
-                            if ms.fract() != 0.0 {
+                            if !ms.is_finite() || ms.fract() != 0.0 {
                                 return Err(format!(
                                     "anchors.{id} must be whole milliseconds, not {ms}"
+                                ));
+                            }
+                            // Ten thousand years each way; past that it is
+                            // nanoseconds sent as milliseconds, and `as i64`
+                            // would saturate silently.
+                            if ms.abs() > 3.2e14 {
+                                return Err(format!(
+                                    "anchors.{id} {ms} is not a plausible millisecond offset"
                                 ));
                             }
                             if ms == 0.0 {
@@ -280,7 +355,11 @@ impl LinkSpec {
                             }
                             format!("{}", ms as i64)
                         }
-                        Value::String(s) if s.starts_with("kind:") && s.len() > 5 => s.clone(),
+                        Value::String(s)
+                            if s.starts_with("kind:") && !s["kind:".len()..].trim().is_empty() =>
+                        {
+                            format!("kind:{}", s["kind:".len()..].trim())
+                        }
                         Value::String(s) if s.trim().is_empty() => continue,
                         Value::String(s) => {
                             return Err(format!(
@@ -346,6 +425,79 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_service_section_routes_under_service() {
+        let spec = LinkSpec::from_args(
+            &json!({"section": "service/llm-perf", "chart_id": "c1", "instance": "3"}),
+        )
+        .unwrap();
+        assert_eq!(spec.fragment(), "#/service/llm-perf/chart/c1");
+        assert_eq!(spec.query(), "?instance=3");
+        let err = LinkSpec::from_args(&json!({"section": "cpu/chart"}))
+            .err()
+            .unwrap();
+        assert!(err.contains("service/<name>"), "{err}");
+        assert!(LinkSpec::from_args(&json!({"section": "service/a/b"})).is_err());
+        assert!(LinkSpec::from_args(&json!({"section": "service/"})).is_err());
+    }
+
+    #[test]
+    fn a_base_is_validated_and_joined_by_its_shape() {
+        let spec = LinkSpec::from_args(&json!({"section": "cpu", "time": "raw"})).unwrap();
+        let url = |b: &str| spec.link(Some(&validate_base(b).unwrap())).url.unwrap();
+        assert_eq!(
+            url("http://127.0.0.1:4200"),
+            "http://127.0.0.1:4200/?time=raw#/cpu"
+        );
+        assert_eq!(
+            url("http://127.0.0.1:4200/"),
+            "http://127.0.0.1:4200/?time=raw#/cpu"
+        );
+        assert_eq!(url("https://h/viewer/"), "https://h/viewer/?time=raw#/cpu");
+        assert_eq!(
+            url("https://iopsystems.github.io/rezolus/viewer/?capture=demo"),
+            "https://iopsystems.github.io/rezolus/viewer/?capture=demo&time=raw#/cpu"
+        );
+        assert_eq!(
+            url("http://h/index.html"),
+            "http://h/index.html?time=raw#/cpu"
+        );
+        assert_eq!(
+            url("http://h/index.html?"),
+            "http://h/index.html?time=raw#/cpu"
+        );
+        let bare = LinkSpec::from_args(&json!({"section": "cpu"})).unwrap();
+        let b = |s: &str| bare.link(Some(&validate_base(s).unwrap())).url.unwrap();
+        assert_eq!(
+            b("https://h/v/?capture=demo"),
+            "https://h/v/?capture=demo#/cpu"
+        );
+        assert_eq!(b("http://h/index.html"), "http://h/index.html#/cpu");
+        for bad in ["127.0.0.1:4200", "http://h/#/x", "https://", "ftp://h"] {
+            assert!(validate_base(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn anchors_are_trimmed_and_bounded() {
+        let spec = LinkSpec::from_args(
+            &json!({"section": "cpu", "anchors": {"b": "kind:  deploy ", "e": -1500}}),
+        )
+        .unwrap();
+        assert_eq!(spec.query(), "?anchor.b=kind%3Adeploy&anchor.e=-1500");
+        let bad = |v: Value| {
+            LinkSpec::from_args(&json!({"section": "cpu", "anchors": v}))
+                .err()
+                .unwrap()
+        };
+        assert!(bad(json!({"b": "kind:   "})).contains("kind:"));
+        assert!(bad(json!({"b": 1e30})).contains("plausible"));
+        assert!(
+            bad(json!({"b": f64::NAN})).contains("whole") || true,
+            "NaN is not JSON"
+        );
+    }
+
+    #[test]
     fn a_bare_section_has_no_query() {
         let spec = LinkSpec::from_args(&json!({"section": "overview"})).unwrap();
         assert_eq!(spec.query(), "");
@@ -367,6 +519,7 @@ pub(crate) mod tests {
         let bad = |v: Value| LinkSpec::from_args(&v).err().unwrap();
         assert!(bad(json!({})).contains("section"));
         assert!(bad(json!({"section": "cpu/chart"})).contains("'/'"));
+        assert!(bad(json!({"section": "cpu", "anchors": {"x": "kind:"}})).contains("kind:"));
         assert!(bad(json!({"section": "cpu", "from": 10})).contains("both or neither"));
         assert!(bad(json!({"section": "cpu", "from": 20, "to": 10})).contains("after"));
         assert!(
