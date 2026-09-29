@@ -978,13 +978,25 @@ bare-metal probe-cost bench for anything at request rate).
   an unmount reads absent, which a V3 snapshot carries as a null-valued
   column until the slot is reused; a host churning loop or dm minors
   accumulates them, the same trade the `filesystem` sampler makes.
-- **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
-  enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
-  Forces the per-thread start-state decision (`MAX_PID` arrays vs task
-  local storage at a 5.11 floor). Bench before default-on.
-- **Write-amplification decomposition dashboard** — Roadmap. VFS bytes,
-  writeback pages, journal blocks logged, device bytes on one axis; no new
-  hooks once `ext4_ops` and `ext4_alloc` exist.
+- **`ext4_ops` sampler** — DONE, off by default. fsync and unlink from the
+  enter/exit tracepoints, write and rename via `fentry`/`fexit`, per
+  filesystem and per cgroup; task local storage for the start state (floor
+  5.12). See the gaps entry's "Results — C5 and C6" for the measured probe
+  cost.
+- **`ext4_ops` async direct-IO bytes** — By design. `ext4_file_write_iter`
+  returns queued for an io_uring/libaio `O_DIRECT` write; its bytes land at
+  completion, which the sampler does not hook, so `ext4_write_bytes` misses
+  them and the write latency is submission time. Reopen with an
+  `iomap_dio_complete`-side hook if a direct-IO workload needs the term.
+- **`ext4_ops` on by default** — Open, NO-GO as measured: +4,070 instructions
+  and +2.26 µs per write+fsync pair (four probes) on the phase 1 `null_blk`
+  bench, 12% at 450 K ops/s. Profile per program (`bpftool prog profile`), the
+  per-cgroup atomics and the two task-storage lookups first; reopen when a
+  probe is under ~300 instructions. Gaps entry, "Results — C5 and C6".
+- **Write-amplification decomposition dashboard** — DONE as the ext4
+  dashboard's Write Path group: application bytes (`ext4_write_bytes`),
+  writeback bytes, journal bytes, device bytes on one axis, each term drawn
+  when the recording has it.
 - **XFS journal and allocator samplers** — Idea. Module tracepoints; the
   module-BTF twin selection applies.
 - **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;
