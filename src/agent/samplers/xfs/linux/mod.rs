@@ -1,1 +1,2 @@
+mod log;
 mod stats;
