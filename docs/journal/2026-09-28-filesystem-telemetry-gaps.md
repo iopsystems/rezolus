@@ -154,7 +154,10 @@ becomes a question of which term moved, answerable from the recording.
 evictions; hits have no tracepoint and would need `fentry` on
 `filemap_get_folio` at every read. Rate is the read rate. Deferred until C1
 through C5 exist; the read path was not where this characterization lost its
-SLO.
+SLO. *Probed and decided in `2026-09-29-pagecache-hit-ratio.md`: hits are
+countable per read call (`filemap_read`, `mm_filemap_get_pages`), not per
+page, and `filemap_get_folio` is not on the read path; NO-GO for now on
+cost at the read rate against no read-path finding.*
 
 **C8. XFS parity** — an `xfs_log` sampler on XFS's log-grant, AIL-push and
 CIL tracepoints, and an `xfs_alloc` on its allocator, so the tuned-XFS
@@ -211,8 +214,10 @@ rate.
 7. **XFS** (C8), then page cache (C7). *Designed and probed in its own
    entry, `2026-09-29-xfs-samplers.md`: per-mount sysfs stats first, BPF for
    the latencies the stats file cannot carry; the page cache is deferred
-   there. `xfs_stats` shipped in #1351 and `xfs_log` (opt-in) in #1352;
-   the page cache (C7) stays open.*
+   there. `xfs_stats` shipped in #1351 and `xfs_log` (opt-in) in #1352.
+   The page cache (C7) is probed and designed in
+   `2026-09-29-pagecache-hit-ratio.md` and not built: NO-GO for now, with
+   the reopen condition there.*
 
 ## Results — C1, the `memory_writeback` sampler
 
@@ -410,7 +415,9 @@ plot.
   `fentry` (5.11) `ext4_ops` needs anyway, so the floor is 5.12; a write to
   an O_SYNC file nests fsync inside it on one thread, which a single shared
   slot would lose and separate 32 MB arrays would pay 128 MB for.
-- **Page-cache hits** — Idea. Needs `fentry` at read rate; C7.
+- **Page-cache hits** — Decided, not built: `2026-09-29-pagecache-hit-ratio.md`.
+  Two crossings per read call (`filemap_read`), not per page; NO-GO for now,
+  reopen on a read-path finding.
 - **Free-space fragmentation as a gauge** — By design, not eBPF. The state
   `e2freefrag` reports is the on-disk bitmap; the allocator signals in C2
   are its rate-of-change and the honest always-on proxy. Reopen if a cheap

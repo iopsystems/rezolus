@@ -454,10 +454,8 @@ if it is ever wanted.
   Reopen when the band width matters to a consumer.
 - **`xstrat` and the other stats lines** — By design, not published; a
   `FIELDS` row each. Reopen with a question that needs one.
-- **Page-cache hit ratio (C7)** — Idea, the other half of step 7. Misses
-  from `mm_filemap_add_to_page_cache`; hits need `fentry` at read rate.
-  Deferred behind the XFS steps above; reopen when a read-path finding
-  needs it.
+- **Page-cache hit ratio (C7)** — Moved to its own entry,
+  `2026-09-29-pagecache-hit-ratio.md`: probed, designed, NO-GO for now.
 - **Log space gauge** — By design, not built. The grant-head decode differs
   before and after 6.11; the sleep counts and the sleep latency say when
   the log is the limit without a gauge.
