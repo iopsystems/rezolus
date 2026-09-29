@@ -153,7 +153,11 @@ pub(crate) fn validate_base(base: &str) -> Result<String, String> {
             "viewer address {base:?} must not carry a fragment; the link's own hash picks the section"
         ));
     }
-    if b.len() <= "https://".len() {
+    let host = b
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?']).next().unwrap_or(""))
+        .unwrap_or("");
+    if host.is_empty() {
         return Err(format!("viewer address {base:?} has no host"));
     }
     Ok(b.to_string())
@@ -166,13 +170,21 @@ fn join_base(base: &str, query: &str, fragment: &str) -> String {
         // the view keys join it with `&`, and the fragment follows.
         let body = query.trim_start_matches('?');
         return if body.is_empty() {
-            format!("{head}?{existing}{fragment}")
+            if existing.is_empty() {
+                // A bare trailing `?` with nothing to put after it.
+                format!("{head}{fragment}")
+            } else {
+                format!("{head}?{existing}{fragment}")
+            }
         } else if existing.is_empty() {
             format!("{head}?{body}{fragment}")
         } else {
             format!("{head}?{existing}&{body}{fragment}")
         };
     }
+    // A trailing slash says directory outright (`https://h/v1.2/`); only
+    // without one does a dotted last segment mean a document.
+    let was_dir = base.ends_with('/');
     let b = base.trim_end_matches('/');
     let after_host = b
         .find("://")
@@ -180,7 +192,7 @@ fn join_base(base: &str, query: &str, fragment: &str) -> String {
         .and_then(|rest| rest.find('/').map(|i| &rest[i + 1..]))
         .unwrap_or("");
     let last = after_host.rsplit('/').next().unwrap_or("");
-    if last.contains('.') {
+    if !was_dir && last.contains('.') {
         // `.../index.html`: a document, not a directory.
         format!("{b}{query}{fragment}")
     } else {
@@ -465,6 +477,8 @@ pub(crate) mod tests {
             url("http://h/index.html?"),
             "http://h/index.html?time=raw#/cpu"
         );
+        assert_eq!(url("https://h/v1.2/"), "https://h/v1.2/?time=raw#/cpu");
+        assert_eq!(url("http://x"), "http://x/?time=raw#/cpu");
         let bare = LinkSpec::from_args(&json!({"section": "cpu"})).unwrap();
         let b = |s: &str| bare.link(Some(&validate_base(s).unwrap())).url.unwrap();
         assert_eq!(
@@ -472,6 +486,7 @@ pub(crate) mod tests {
             "https://h/v/?capture=demo#/cpu"
         );
         assert_eq!(b("http://h/index.html"), "http://h/index.html#/cpu");
+        assert_eq!(b("http://h/index.html?"), "http://h/index.html#/cpu");
         for bad in ["127.0.0.1:4200", "http://h/#/x", "https://", "ftp://h"] {
             assert!(validate_base(bad).is_err(), "{bad}");
         }
@@ -491,10 +506,6 @@ pub(crate) mod tests {
         };
         assert!(bad(json!({"b": "kind:   "})).contains("kind:"));
         assert!(bad(json!({"b": 1e30})).contains("plausible"));
-        assert!(
-            bad(json!({"b": f64::NAN})).contains("whole") || true,
-            "NaN is not JSON"
-        );
     }
 
     #[test]

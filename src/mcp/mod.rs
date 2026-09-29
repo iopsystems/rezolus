@@ -1278,7 +1278,7 @@ impl TryFrom<ArgMatches> for Config {
             _ => Mode::Server,
         };
 
-        let server = server::ServerOptions {
+        let mut server = server::ServerOptions {
             allow_mutating: args.get_flag("ALLOW_MUTATING"),
             export_dir: args.get_one::<PathBuf>("EXPORT_DIR").cloned(),
             viewer_url: args.get_one::<String>("VIEWER_URL").cloned(),
@@ -1296,7 +1296,7 @@ impl TryFrom<ArgMatches> for Config {
             }
         }
         if let Some(url) = &server.viewer_url {
-            link::validate_base(url)?;
+            server.viewer_url = Some(link::validate_base(url)?);
         }
         if let Some(dir) = &server.export_dir {
             if !dir.is_dir() {
