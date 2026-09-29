@@ -43,6 +43,9 @@ enum Format {
     Parquet,
     Raw,
     Rez,
+    /// A dendro archive, written through metriken-archive. Opt-in until the
+    /// `recording` tools accept it.
+    Dendro,
 }
 
 fn main() {

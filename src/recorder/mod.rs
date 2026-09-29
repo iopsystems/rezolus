@@ -24,13 +24,13 @@ pub(crate) use ::rez::{
     wal, wire,
 };
 
-/// True when the recording should be written as a `.rez` archive: either the
-/// output path ends in `.rez` or `--format rez` was given.
+/// True when the recording should be written as an archive of recordings: a
+/// `.rez`, or a dendro archive (`.dendro`).
 ///
 /// Lives here rather than in the `rez` crate because `Format` is this binary's
 /// CLI vocabulary — the archive format has no opinion about how a run chose it.
 fn wants_rez(format: crate::Format) -> bool {
-    format == crate::Format::Rez
+    config::is_archive(format)
 }
 
 use crate::parquet_metadata;
@@ -72,8 +72,8 @@ pub fn command() -> Command {
              A wrapped run is also marked in the recording: a `run_start` event when the\n\
              command spawns and a `run_end` event when it exits, so the viewer can draw the\n\
              run's edges and align two recordings on them. Only the program name is stored\n\
-             unless --record-command-line is given. .rez and parquet output carry the events;\n\
-             raw output has no metadata to carry them in.\n\n\
+             unless --record-command-line is given. .rez, .dendro and parquet output carry\n\
+             the events; raw output has no metadata to carry them in.\n\n\
              WHAT IT WRITES: the output path is -o/--output, and its extension picks the\n\
              format, so --format is rarely needed. With no -o at all the recording goes to\n\
              rezolus.<ext> for the format in play — by default rezolus.rez. (A \"sampler\" below\n\
@@ -86,6 +86,11 @@ pub fn command() -> Command {
              \x20         are supported; several of them become one archive holding a\n    \
              \x20         recording each, which is what `rezolus view` reads as an A/B or\n    \
              \x20         multi-host comparison. Prefer it.\n    \
+             .dendro   The same recordings in a dendro archive (opt-in until it becomes\n    \
+             \x20         the default). Groups whose members come and go (threads,\n    \
+             \x20         cgroups, CPUs) are stored one row per member, so it is several\n    \
+             \x20         times smaller than a .rez. `rezolus view` and `rezolus mcp` read\n    \
+             \x20         it; the other `recording` subcommands and --stream do not yet.\n    \
              .parquet  One columnar table on a single uniform clock. Use it for a uniform\n    \
              \x20         tabular export or other parquet tooling.\n    \
              \x20         (Multiple endpoints, including Prometheus, do NOT need\n    \
@@ -99,15 +104,15 @@ pub fn command() -> Command {
              not .rez: it means parquet, unless --format says otherwise. A --format that\n\
              contradicts the extension (say --format parquet with -o out.rez) IS an error,\n\
              rather than a silent choice between them.\n\n\
-             A Prometheus endpoint records into a .rez like any other. One scrape is one\n\
-             request and one response, so it becomes one acquisition group per target,\n\
-             windowed by the real HTTP round trip. Neither the source nor the endpoint\n\
-             count demotes the format any more; only --separate does, since one archive\n\
-             cannot be one file per endpoint.\n\n\
-             OVERWRITING: a .rez output path must NOT already exist — the recorder refuses\n\
-             rather than truncate, because the archive is committed as it goes and has no\n\
-             staging file. A parquet or raw output IS overwritten. There is no --force; remove\n\
-             the old file or pick a new path.\n\n\
+             A Prometheus endpoint records into a .rez or .dendro like any other. One\n\
+             scrape is one request and one response, so it becomes one acquisition group\n\
+             per target, windowed by the real HTTP round trip. Neither the source nor the\n\
+             endpoint count demotes the format any more; only --separate does, since one\n\
+             archive cannot be one file per endpoint.\n\n\
+             OVERWRITING: a .rez or .dendro output path must NOT already exist — the\n\
+             recorder refuses rather than truncate, because the archive is committed as it\n\
+             goes and has no staging file. A parquet or raw output IS overwritten. There is\n\
+             no --force; remove the old file or pick a new path.\n\n\
              EXAMPLES:\n    \
              # Record the local agent until ctrl-c (defaults: localhost:4241 -> rezolus.rez)\n    \
              rezolus record\n\n    \
@@ -218,7 +223,7 @@ pub fn command() -> Command {
         .arg(
             clap::Arg::new("SEPARATE")
                 .long("separate")
-                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port plus any distinguishing path (e.g. svc-9090, or svc-9090-federate — the conventional /metrics is left off). For parquet or raw output only: a .rez already keeps each endpoint as its own recording inside the one archive, so --separate does not apply to it")
+                .help("Write one file per endpoint instead of combining; each is named <OUTPUT-stem>_<source>.<ext> alongside the output path. Without an explicit source=, a rezolus agent endpoint is named \"rezolus\" and a Prometheus one falls back to its host-port plus any distinguishing path (e.g. svc-9090, or svc-9090-federate — the conventional /metrics is left off). For parquet or raw output only: a .rez or .dendro archive already keeps each endpoint as its own recording, so --separate does not apply to it")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -264,7 +269,7 @@ pub fn command() -> Command {
             clap::Arg::new("LABEL")
                 .long("label")
                 .short('l')
-                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that. .rez output ONLY — dropped for parquet and raw, where --metadata is the equivalent")
+                .help("Tag the recording with a label as key=value (e.g. arm=redis, role=server); repeat for multiple. A value without `=` is ignored. `source` and `host` are auto-populated. Applies to EVERY recording in the run, so it cannot tell two endpoints apart — use --endpoint url,source=name for that. .rez and .dendro output only — dropped for parquet and raw, where --metadata is the equivalent")
                 .action(clap::ArgAction::Append),
         )
         .arg(
@@ -285,7 +290,7 @@ pub fn command() -> Command {
             clap::Arg::new("OUTPUT_FLAG")
                 .long("output")
                 .short('o')
-                .help("Path to the output file; its extension picks the format (.rez, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.rez")
+                .help("Path to the output file; its extension picks the format (.rez, .dendro, .parquet, .raw). Defaults to rezolus.<format>, i.e. rezolus.rez")
                 .action(clap::ArgAction::Set)
                 .value_parser(value_parser!(PathBuf))
                 .conflicts_with("OUTPUT"),
@@ -299,7 +304,7 @@ pub fn command() -> Command {
         )
         .arg(
             clap::Arg::new("COMMAND")
-                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. .rez and parquet output carry the events; raw output has no metadata and cannot, and a run that captured no samples writes no file at all")
+                .help("Wrap a command: record only while it runs, then stop when it exits. Give it after `--`, e.g. rezolus record -o out.parquet -- ./bench.sh --iters 100. The run is marked in the recording by two events: run_start (kind run_start, description = the program name, e.g. bench.sh) when the command spawns, and run_end (kind run_end, description = the program name plus `exited <code>`, `capped` or `interrupted`) when its exit is observed. Only the program name is recorded unless --record-command-line is given. .rez, .dendro and parquet output carry the events; raw output has no metadata and cannot, and a run that captured no samples writes no file at all")
                 .action(clap::ArgAction::Set)
                 .index(3)
                 .num_args(1..)
@@ -1163,36 +1168,22 @@ fn build_rez_labels(
     )
 }
 
-/// The streaming `.rez` recorder the loop feeds.
+/// The recorder the loop feeds in archive mode (`.rez` or `.dendro`).
 ///
-/// A newtype rather than a bare [`rez_v3_writer::StreamRecorderV3`] because
-/// the recording loop needs two things the writer has no opinion about: what
-/// to tell the user after a mid-recording failure, and how to leave nothing
-/// behind when a run captured no samples at all.
-///
-/// This was an enum over containers while the tar writer existed. It is not
-/// one any more — v3 is the only container this binary writes, and old
-/// archives are upgraded by `parquet upgrade` rather than produced.
+/// A newtype rather than a bare writer because the recording loop needs two
+/// things the writers have no opinion about: what to tell the user after a
+/// mid-recording failure, and how to leave nothing behind when a run captured
+/// no samples at all.
 struct RezStream {
-    /// One recorder per recording, keyed by the endpoint index it serves.
+    /// The container being written, and its per-recording state.
+    sink: Sink,
+    /// Each recording's metadata map as last written, keyed by endpoint
+    /// index like the recorders.
     ///
-    /// Keyed rather than a `Vec` parallel to `endpoints` because only the
-    /// msgpack endpoints get a recording: a sparse map says which endpoints
-    /// are being archived without a `None` per endpoint that is not.
-    recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
-    /// Each recording's metadata map as last written, keyed like `recs`.
-    ///
-    /// Kept because `RecordingWriter::update_metadata` replaces the whole
+    /// Kept because the `.rez` writer's `update_metadata` replaces the whole
     /// map: adding a run event means sending the seed back with the event
     /// merged in, and the writer does not hand the seed back.
     metadata: BTreeMap<usize, BTreeMap<String, String>>,
-    /// This tick's rows, per recording, waiting for one commit.
-    ///
-    /// Cleared by `commit_tick`. Rows sitting here have already advanced each
-    /// recorder's dedup and seal accounting — the same as the moment between
-    /// `StreamRecorderV3::ingest` building its rows and its send returning, so
-    /// a failure to commit loses the tick exactly as a failed send always did.
-    staged: Vec<rez_sqlite::TickBatch>,
     /// The last stamp each recording ingested, for its closing clock
     /// observation.
     ///
@@ -1208,13 +1199,47 @@ struct RezStream {
     /// endpoint that was down at startup opens its recording later, and it
     /// has to be checked against the recordings already open.
     seen_labels: BTreeMap<String, String>,
-    /// **Declared after `recs` deliberately.** Fields drop in declaration
-    /// order, and `RezArchive::drop` joins the writer thread. Dropping the
-    /// archive first would not block — `join` sends `Msg::Shutdown` before
-    /// releasing its own sender, and the writer honours it whoever still holds
-    /// a clone — but it would stop the writer while the recordings could still
-    /// queue their final seals, silently losing them.
-    archive: rez_v3_writer::RezArchive,
+}
+
+/// The two archive writers. Each keeps one recorder per recording, keyed by
+/// the endpoint index it serves: sparse rather than a `Vec` parallel to
+/// `endpoints`, because only the endpoints being archived get one.
+///
+/// In both, the writer is **declared after the recorders deliberately.**
+/// Fields drop in declaration order, and dropping the writer joins its
+/// thread. Dropping it first would not block (`join` sends a shutdown before
+/// releasing its own sender, and the writer honours it whoever still holds a
+/// clone), but it would stop the writer while the recordings could still
+/// queue their final seals, silently losing them.
+enum Sink {
+    /// The `.rez` v3 container.
+    Rez {
+        recs: BTreeMap<usize, rez_v3_writer::StreamRecorderV3>,
+        /// This tick's rows, per recording, waiting for one commit.
+        ///
+        /// Cleared by `commit_tick`. Rows sitting here have already advanced
+        /// each recorder's dedup and seal accounting — the same as the moment
+        /// between `StreamRecorderV3::ingest` building its rows and its send
+        /// returning, so a failure to commit loses the tick exactly as a
+        /// failed send always did.
+        staged: Vec<rez_sqlite::TickBatch>,
+        archive: rez_v3_writer::RezArchive,
+    },
+    /// A dendro archive through metriken-archive's writer: groups with slots
+    /// are written long, with their occupants in a stream beside each.
+    Dendro {
+        recs: BTreeMap<usize, metriken_archive::SourceRecorder>,
+        /// This tick's rows, as for `Rez`.
+        staged: Vec<metriken_archive::writer::Staged>,
+        writer: metriken_archive::ArchiveWriter,
+        /// The archive's path; the writer does not report it.
+        path: std::path::PathBuf,
+    },
+}
+
+/// A metriken-archive error as the recorder reports errors.
+fn archive_err(e: Box<dyn std::error::Error + Send + Sync>) -> String {
+    e.to_string()
 }
 
 impl RezStream {
@@ -1248,22 +1273,31 @@ impl RezStream {
     ) -> Result<(), String> {
         self.last_stamp
             .insert(endpoint, (anchored_ts, wall_offset_ns));
-        let rows = match self.recs.get_mut(&endpoint) {
-            Some(rec) => rec.stage(snapshot, anchored_ts, wall_offset_ns)?,
-            None => {
-                return Err(format!(
-                    "{url} was scraped with no .rez recording open for it; its samples \
-                     would be discarded"
-                ))
-            }
+        let missing = || {
+            format!(
+                "{url} was scraped with no recording open for it; its samples would be \
+                 discarded"
+            )
         };
-        // Keyed by recording id, which is what the writer commits against.
-        if let Some(rec) = self.recs.get(&endpoint) {
-            self.staged.push(rez_sqlite::TickBatch {
-                recording_id: rec.recording_id(),
-                rows,
-                index_entries: Vec::new(),
-            });
+        match &mut self.sink {
+            Sink::Rez { recs, staged, .. } => {
+                let rec = recs.get_mut(&endpoint).ok_or_else(missing)?;
+                let rows = rec.stage(snapshot, anchored_ts, wall_offset_ns)?;
+                // Keyed by recording id, which is what the writer commits
+                // against.
+                staged.push(rez_sqlite::TickBatch {
+                    recording_id: rec.recording_id(),
+                    rows,
+                    index_entries: Vec::new(),
+                });
+            }
+            Sink::Dendro { recs, staged, .. } => {
+                let rec = recs.get_mut(&endpoint).ok_or_else(missing)?;
+                staged.push(
+                    rec.stage(snapshot, anchored_ts, wall_offset_ns)
+                        .map_err(archive_err)?,
+                );
+            }
         }
         Ok(())
     }
@@ -1285,7 +1319,14 @@ impl RezStream {
         applied: stream::Applied,
     ) -> Result<(), String> {
         let interval = applied.for_writer()?;
-        let Some(rec) = self.recs.get_mut(&endpoint) else {
+        let Sink::Rez { recs, staged, .. } = &mut self.sink else {
+            // `reject_stream_without_rez` refuses `--stream` with any other
+            // container before a recording opens.
+            return Err(format!(
+                "{url} streamed an interval into a non-.rez archive"
+            ));
+        };
+        let Some(rec) = recs.get_mut(&endpoint) else {
             return Err(format!(
                 "{url} streamed an interval with no .rez recording open for it; its rows \
                  would be discarded"
@@ -1298,7 +1339,7 @@ impl RezStream {
             self.last_stamp.insert(endpoint, (ts, pass.wall_offset));
             rows.extend(rec.stage_rows(pass, ts, pass.wall_offset)?);
         }
-        self.staged.push(rez_sqlite::TickBatch {
+        staged.push(rez_sqlite::TickBatch {
             recording_id: rec.recording_id(),
             rows,
             index_entries: interval.index_entries,
@@ -1312,8 +1353,14 @@ impl RezStream {
     /// does not write, but it does check the writer is still alive, so a run
     /// whose endpoints all went quiet cannot sit on a dead writer unnoticed.
     fn commit_tick(&mut self) -> Result<(), String> {
-        let staged = std::mem::take(&mut self.staged);
-        self.archive.wal_tick(staged)
+        match &mut self.sink {
+            Sink::Rez {
+                staged, archive, ..
+            } => archive.wal_tick(std::mem::take(staged)),
+            Sink::Dendro { staged, writer, .. } => {
+                writer.commit(std::mem::take(staged)).map_err(archive_err)
+            }
+        }
     }
 
     /// Open a recording for an endpoint that became reachable after the
@@ -1357,9 +1404,18 @@ impl RezStream {
                 .and_then(|a| u64::try_from(a).ok())
                 .unwrap_or(clock_anchor_wall_ns),
         };
-        let writer = self.archive.add_recording(seed)?;
-        self.recs
-            .insert(idx, rez_v3_writer::StreamRecorderV3::new(writer));
+        match &mut self.sink {
+            Sink::Rez { recs, archive, .. } => {
+                let writer = archive.add_recording(seed)?;
+                recs.insert(idx, rez_v3_writer::StreamRecorderV3::new(writer));
+            }
+            Sink::Dendro { recs, writer, .. } => {
+                let rec = writer
+                    .add_source(seed.labels, seed.metadata, seed.clock_anchor_wall_ns)
+                    .map_err(archive_err)?;
+                recs.insert(idx, rec);
+            }
+        }
         self.metadata.insert(idx, metadata);
         Ok(())
     }
@@ -1368,26 +1424,44 @@ impl RezStream {
     ///
     /// Each recording's stored map is cloned, the events merged in
     /// (`merge_events_into`, which parses what is there and dedups by id),
-    /// and the result sent through the writer as a whole-map replacement.
-    /// The stored copy is updated only once the writer confirms, so a failed
-    /// update can be retried with the same input. Every recording is
-    /// attempted even if an earlier one failed; the first error is reported.
+    /// and the result sent through the writer: to a `.rez` as a whole-map
+    /// replacement, and to a dendro archive as a patch of the one key, since
+    /// dendro merges a patch key by key. The stored copy is updated only once
+    /// the writer accepts it, so a failed update can be retried with the same
+    /// input. Every recording is attempted even if an earlier one failed; the
+    /// first error is reported.
     fn merge_events(&mut self, events: &[Event]) -> Result<(), String> {
         let mut first_err = None;
-        for (idx, rec) in &self.recs {
-            let Some(current) = self.metadata.get(idx) else {
+        let indices: Vec<usize> = match &self.sink {
+            Sink::Rez { recs, .. } => recs.keys().copied().collect(),
+            Sink::Dendro { recs, .. } => recs.keys().copied().collect(),
+        };
+        for idx in indices {
+            let Some(current) = self.metadata.get(&idx) else {
                 first_err.get_or_insert(format!(
-                    "recording {} has no metadata to add events to",
-                    rec.recording_id()
+                    "the recording for endpoint {idx} has no metadata to add events to"
                 ));
                 continue;
             };
             let mut merged = current.clone();
-            let result = merge_events_into(&mut merged, events)
-                .and_then(|()| rec.update_metadata(merged.clone()));
+            let result =
+                merge_events_into(&mut merged, events).and_then(|()| match &mut self.sink {
+                    Sink::Rez { recs, .. } => recs[&idx].update_metadata(merged.clone()),
+                    Sink::Dendro { recs, .. } => {
+                        let patch = merged
+                            .get(crate::parquet_metadata::KEY_EVENTS)
+                            .map(|v| (crate::parquet_metadata::KEY_EVENTS.to_string(), v.clone()))
+                            .into_iter()
+                            .collect();
+                        recs.get_mut(&idx)
+                            .expect("the index came from this map")
+                            .update_metadata(patch)
+                            .map_err(archive_err)
+                    }
+                });
             match result {
                 Ok(()) => {
-                    self.metadata.insert(*idx, merged);
+                    self.metadata.insert(idx, merged);
                 }
                 Err(e) => {
                     first_err.get_or_insert(e);
@@ -1409,9 +1483,20 @@ impl RezStream {
     /// failure in any of its arms tears that writer down for all of them.
     fn maybe_seal(&mut self) -> Result<(), String> {
         let mut first_err = None;
-        for rec in self.recs.values_mut() {
-            if let Err(e) = rec.maybe_seal() {
-                first_err.get_or_insert(e);
+        match &mut self.sink {
+            Sink::Rez { recs, .. } => {
+                for rec in recs.values_mut() {
+                    if let Err(e) = rec.maybe_seal() {
+                        first_err.get_or_insert(e);
+                    }
+                }
+            }
+            Sink::Dendro { recs, .. } => {
+                for rec in recs.values_mut() {
+                    if let Err(e) = rec.maybe_seal() {
+                        first_err.get_or_insert(archive_err(e));
+                    }
+                }
             }
         }
         first_err.map_or(Ok(()), Err)
@@ -1428,30 +1513,45 @@ impl RezStream {
     /// only as a `Drop` warning and the recording would report success.
     fn finalize(self, clock_offset: (u64, i64)) -> Result<(), String> {
         let RezStream {
-            recs,
-            mut archive,
+            sink,
             seen_labels: _,
-            staged: _,
             metadata: _,
             last_stamp,
         } = self;
+        // This recording's own last observation. The argument is the fallback
+        // for one that ingested nothing, which has no clock of its own to
+        // close on.
+        let close = |idx: usize| last_stamp.get(&idx).copied().unwrap_or(clock_offset);
         // Every recording is finalized, even if an earlier one failed: they
         // are independent rows in one archive, and stopping at the first
         // failure would leave the rest marked incomplete for a fault that was
-        // not theirs.
+        // not theirs. The join is unconditional, and after every handle has
+        // been consumed: it can only complete once they have all released
+        // their senders.
         let mut first_err = None;
-        for (idx, rec) in recs {
-            // This recording's own last observation. The argument is the
-            // fallback for one that ingested nothing, which has no clock of
-            // its own to close on.
-            let clock_offset = last_stamp.get(&idx).copied().unwrap_or(clock_offset);
-            if let Err(e) = rec.finalize(clock_offset) {
-                first_err.get_or_insert(e);
+        let joined = match sink {
+            Sink::Rez {
+                recs, mut archive, ..
+            } => {
+                for (idx, rec) in recs {
+                    if let Err(e) = rec.finalize(close(idx)) {
+                        first_err.get_or_insert(e);
+                    }
+                }
+                archive.join()
             }
-        }
-        // Unconditional, and after every handle has been consumed: the join can
-        // only complete once they have all released their senders.
-        let joined = archive.join();
+            Sink::Dendro {
+                recs, mut writer, ..
+            } => {
+                for (idx, rec) in recs {
+                    let (ts, wall_offset) = close(idx);
+                    if let Err(e) = rec.finalize((ts, wall_offset)) {
+                        first_err.get_or_insert(archive_err(e));
+                    }
+                }
+                writer.join().map_err(archive_err)
+            }
+        };
         first_err.map_or(joined, Err)
     }
 
@@ -1462,7 +1562,7 @@ impl RezStream {
     fn recovery_note(&self) -> String {
         format!(
             "note: the recording so far is readable at {}",
-            self.archive.path().display()
+            self.sink.path().display()
         )
     }
 
@@ -1471,16 +1571,17 @@ impl RezStream {
     /// artifact, and the writer refuses to overwrite, so leaving one behind
     /// would also block the retry.
     fn discard(self) {
-        let path = self.archive.path().to_path_buf();
+        let path = self.sink.path().to_path_buf();
         // Drop first: joining the writer thread is what guarantees nothing is
         // still appending to the file we are about to unlink. There is no
         // abort — a dropped writer leaves a valid recording, which is exactly
         // why this path has to remove it explicitly rather than rely on a
-        // staging convention.
-        drop(self.recs);
-        drop(self.archive);
-        // Safe to remove: `RezDb::create` claimed this path with O_EXCL during
-        // THIS run, so it cannot be a file that was already there.
+        // staging convention. The recorders drop before the writer (see
+        // `Sink`).
+        drop(self.sink);
+        // Safe to remove: both writers claimed this path with O_EXCL during
+        // THIS run, so it cannot be a file that was already there. Both
+        // containers are SQLite, with the same sidecars.
         //
         // Sidecars included. A `.rez` is three files while it is open, and
         // SQLite only cleans `-wal`/`-shm` up on a CLEAN close — so removing
@@ -1489,6 +1590,15 @@ impl RezStream {
         // catches the main file and says so, while a stray sidecar is adopted
         // silently by the newly created database.
         rez_sqlite::RezDb::remove_archive(&path);
+    }
+}
+
+impl Sink {
+    fn path(&self) -> &Path {
+        match self {
+            Sink::Rez { archive, .. } => archive.path(),
+            Sink::Dendro { path, .. } => path,
+        }
     }
 }
 
@@ -1511,14 +1621,29 @@ fn start_rez_recorder(
     eps: &[(usize, &EndpointState)],
     clock_anchor_wall_ns: u64,
 ) -> Result<RezStream, String> {
-    let archive = rez_v3_writer::RezArchive::create(&config.output)?;
+    let sink = if config.format == Format::Dendro {
+        Sink::Dendro {
+            recs: BTreeMap::new(),
+            staged: Vec::new(),
+            writer: metriken_archive::ArchiveWriter::create(
+                &config.output,
+                metriken_archive::WriterConfig::default(),
+            )
+            .map_err(|e| format!("failed to create {}: {e}", config.output.display()))?,
+            path: config.output.clone(),
+        }
+    } else {
+        Sink::Rez {
+            recs: BTreeMap::new(),
+            staged: Vec::new(),
+            archive: rez_v3_writer::RezArchive::create(&config.output)?,
+        }
+    };
     let mut stream = RezStream {
-        recs: BTreeMap::new(),
+        sink,
         metadata: BTreeMap::new(),
         last_stamp: BTreeMap::new(),
         seen_labels: BTreeMap::new(),
-        staged: Vec::new(),
-        archive,
     };
 
     for (idx, ep) in eps {
@@ -1969,7 +2094,10 @@ pub fn run(mut config: RecordingConfig) {
                 match start_rez_recorder(&config, &active, clock_anchor_wall_ns) {
                     Ok(rec) => rez_recorder = Some(rec),
                     Err(e) => {
-                        eprintln!("error: failed to start the .rez recording: {e}");
+                        eprintln!(
+                            "error: failed to start the .{} recording: {e}",
+                            config::format_name(config.format)
+                        );
                         std::process::exit(1);
                     }
                 }
@@ -2542,7 +2670,8 @@ pub fn run(mut config: RecordingConfig) {
                                     }
                                     Err(e) => {
                                         late_endpoint_failure.get_or_insert(format!(
-                                            "failed to open a .rez recording for {}: {e}",
+                                            "failed to open a .{} recording for {}: {e}",
+                                            config::format_name(config.format),
                                             endpoints[idx].config.url
                                         ));
                                     }
@@ -2633,7 +2762,8 @@ pub fn run(mut config: RecordingConfig) {
                                 // First failure wins, as `ingest_failed` does:
                                 // two endpoints can activate in one tick.
                                 late_endpoint_failure.get_or_insert(format!(
-                                    "failed to open a .rez recording for {}: {e}",
+                                    "failed to open a .{} recording for {}: {e}",
+                                    config::format_name(config.format),
                                     endpoints[idx].config.url
                                 ));
                             }
@@ -2817,10 +2947,17 @@ pub fn run(mut config: RecordingConfig) {
                     // existing file — so the PREVIOUS run's `out.rez` is still
                     // sitting there for the next command in the pipeline to
                     // analyze.
-                    eprintln!("error saving .rez archive: {e}");
+                    eprintln!(
+                        "error saving .{} archive: {e}",
+                        config::format_name(config.format)
+                    );
                     recording_failed.store(true, Ordering::SeqCst);
                 } else {
-                    info!("wrote .rez archive to {}", config.output.display());
+                    info!(
+                        "wrote .{} archive to {}",
+                        config::format_name(config.format),
+                        config.output.display()
+                    );
                 }
             }
             return outcome;
@@ -3002,7 +3139,7 @@ pub fn run(mut config: RecordingConfig) {
                     // temp files cleaned up on drop
                 }
             }
-            Format::Rez => {
+            Format::Rez | Format::Dendro => {
                 // `.rez` output is finalized above via the `rez_mode` short-circuit,
                 // so this arm is never reached (Format::Rez always sets rez_mode).
                 unreachable!("rez output is finalized before the format match");
@@ -4111,6 +4248,91 @@ mod tests {
         adopt_source(&mut ep, &source(None, 0));
         assert_eq!(ep.agent.clock_anchor_wall_ns, Some(43));
         assert_eq!(ep.agent.producer_epoch.as_deref(), Some("after-restart"));
+    }
+
+    fn dendro_config(output: &Path) -> RecordingConfig {
+        RecordingConfig {
+            format: Format::Dendro,
+            ..rez_config(output)
+        }
+    }
+
+    #[test]
+    fn a_dendro_recording_round_trips_through_rezreader() {
+        // `-o out.dendro` writes through metriken-archive's writer, and the
+        // recording must come back out through the reader every consumer
+        // uses, with each endpoint its own recording: one opened at startup,
+        // one that activated mid-run.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.dendro");
+        let config = dendro_config(&path);
+        let mut rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        assert!(path.exists(), "the archive is created at the output path");
+
+        record_ticks(&mut rec, 2);
+        rec.add_endpoint(1, &config, &rez_endpoint_b(), TEST_ANCHOR, &[])
+            .unwrap();
+        for i in 2..5 {
+            tick(&mut rec, 0, i).unwrap();
+            tick(&mut rec, 1, i).unwrap();
+            rec.maybe_seal().unwrap();
+        }
+        rec.finalize((TEST_ANCHOR + 5 * TEST_SECOND, 0)).unwrap();
+
+        assert!(
+            metriken_archive::DendroCatalog::is_archive(&path).unwrap(),
+            "a .dendro output is a dendro archive"
+        );
+        let readers = crate::rez_reader::RezReader::open_recordings(
+            &path,
+            metriken_query::BufferPool::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        let mut sources: Vec<&str> = readers
+            .iter()
+            .filter_map(|(labels, _)| labels.get("source").map(String::as_str))
+            .collect();
+        sources.sort_unstable();
+        assert_eq!(sources, vec!["rezolus", "valkey"]);
+        for (labels, reader) in &readers {
+            use metriken_query::MetricsSource;
+            assert_eq!(labels.get("arm").map(String::as_str), Some("redis"));
+            assert!(reader.complete(), "{labels:?} was finalized");
+            let (start, end) = reader.time_range().unwrap();
+            let r = reader.query_range("rate(fake_ops[5s])", start, end + 1.0, 1.0);
+            let metriken_query::QueryResult::Matrix { result } = r.expect("the query must resolve")
+            else {
+                panic!("a range query over a counter is a matrix");
+            };
+            let points: Vec<f64> = result
+                .iter()
+                .flat_map(|s| s.values.iter().map(|(_, v)| *v))
+                .collect();
+            assert!(
+                !points.is_empty(),
+                "{labels:?}: the rows must come back out"
+            );
+            assert!(
+                points.iter().all(|v| (*v - 1.0).abs() < 1e-6),
+                "{labels:?}: a counter rising 1/s must read back as 1/s: {points:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn discarding_a_dendro_recording_leaves_no_file_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.dendro");
+        let config = dendro_config(&path);
+        let rec = start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR).unwrap();
+        rec.discard();
+        for suffix in ["", "-wal", "-shm"] {
+            let p = dir.path().join(format!("out.dendro{suffix}"));
+            assert!(!p.exists(), "discard left {} behind", p.display());
+        }
+        start_rez_recorder(&config, &[(0, &rez_endpoint())], TEST_ANCHOR)
+            .unwrap_or_else(|e| panic!("the output path is still claimed: {e}"))
+            .discard();
     }
 
     #[test]

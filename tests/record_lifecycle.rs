@@ -198,6 +198,56 @@ fn a_prometheus_endpoint_records_into_a_rez() {
     );
 }
 
+/// `-o out.dendro` writes a dendro archive through metriken-archive's writer,
+/// end to end through the binary: a Prometheus endpoint, converted to one
+/// acquisition group per scrape, read back by the same reader `view` and
+/// `mcp` use.
+#[test]
+fn a_prometheus_endpoint_records_into_a_dendro() {
+    let port = spawn_fake_exporter();
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("prom.dendro");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("record")
+        .arg("--endpoint")
+        .arg(format!("http://127.0.0.1:{port}/metrics,source=svc"))
+        .arg("-o")
+        .arg(&output)
+        .arg("--interval")
+        .arg("100ms")
+        .arg("--duration")
+        .arg("1s")
+        .output()
+        .expect("failed to run rezolus record");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "recording to .dendro must exit 0 (status {:?})\nstderr:\n{stderr}",
+        out.status.code()
+    );
+    assert_eq!(
+        metriken_archive::DendroCatalog::is_archive(&output),
+        Ok(true),
+        "a .dendro output is a dendro archive"
+    );
+
+    let described = Command::new(env!("CARGO_BIN_EXE_rezolus"))
+        .arg("mcp")
+        .arg("describe-metrics")
+        .arg(&output)
+        .output()
+        .expect("failed to run rezolus mcp describe-metrics");
+    let stdout = String::from_utf8_lossy(&described.stdout);
+    assert!(described.status.success(), "{stdout}");
+    for metric in ["http_requests_total", "queue_depth"] {
+        assert!(
+            stdout.contains(metric),
+            "{metric} must be readable back out: {stdout}"
+        );
+    }
+}
+
 /// A scrape's acquisition window is on the same clock as the row that holds
 /// it.
 ///
@@ -837,6 +887,34 @@ fn a_wrapped_rez_run_writes_run_start_and_run_end_events() {
         "the argument list is not recorded by default: {:?}",
         start.details
     );
+    assert!(end.details.is_some(), "run_end says how the command ended");
+}
+
+/// A wrapped `.dendro` run writes the same two events, into the source's
+/// metadata through the dendro writer (`SourceRecorder::update_metadata`).
+#[test]
+fn a_wrapped_dendro_run_writes_run_start_and_run_end_events() {
+    use metriken_archive::Catalog;
+
+    let dir = tempfile::tempdir().expect("failed to create a temp dir");
+    let output = dir.path().join("out.dendro");
+    let out = record_wrapped(&output, &[]);
+    assert!(
+        out.status.success(),
+        "the wrapped run exits with the command's status (0)\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let catalog = metriken_archive::DendroCatalog::open(&output).expect("the archive opens");
+    let sources = catalog.sources().expect("the catalog reads");
+    assert_eq!(sources.len(), 1, "one endpoint, one source");
+    let raw = sources[0]
+        .metadata
+        .get("events")
+        .expect("a wrapped run writes the events key");
+    let payload: dashboard::Events = serde_json::from_str(raw).expect("the payload parses");
+    let (start, end) = assert_run_events(&payload.events);
+    assert!(start.details.is_none());
     assert!(end.details.is_some(), "run_end says how the command ended");
 }
 
