@@ -1,6 +1,7 @@
 mod builder;
 mod counters;
 pub mod drivers;
+pub mod filesystems;
 mod histogram;
 mod sync_primitive;
 
@@ -416,7 +417,7 @@ fn whole_pages<T>(count: usize) -> usize {
     (count * std::mem::size_of::<T>()).div_ceil(PAGE_SIZE)
 }
 
-use counters::{Counters, CpuCounters, PackedCounters};
+use counters::{Counters, CpuCounters, FilesystemCounters, PackedCounters};
 use histogram::{Histogram, HistogramBatch};
 pub use sync_primitive::SyncPrimitive;
 

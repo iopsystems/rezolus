@@ -1,11 +1,18 @@
-//! The ext4 journal, allocator, inodes, writeback and metadata reads.
-//! Host-wide, from the `ext4_journal` and `ext4_alloc` samplers; each
-//! sampler's groups render only when the recording carries its metrics.
+//! The ext4 journal, allocator, inodes, writeback and metadata reads, one
+//! line per filesystem (its `mount` label; `other` is a device the agent's
+//! mount table did not know), from the `ext4_journal` and `ext4_alloc`
+//! samplers; each sampler's groups render only when the recording carries
+//! its metrics. Plots that already split by another label sum over mounts.
 
 use crate::MetricsSource;
 use crate::plot::*;
 
 fn rate(metric: &str) -> String {
+    format!("sum by (mount) (irate({metric}[5m]))")
+}
+
+/// A ratio of two host totals; per-mount ratios of sparse counters are noise.
+fn total_rate(metric: &str) -> String {
     format!("sum(irate({metric}[5m]))")
 }
 
@@ -165,8 +172,8 @@ fn allocator(view: &mut View) {
         ),
         format!(
             "{} / {}",
-            rate("ext4_allocation_groups_scanned"),
-            rate("ext4_allocations")
+            total_rate("ext4_allocation_groups_scanned"),
+            total_rate("ext4_allocations")
         ),
     );
     effort.plot_promql(
@@ -327,8 +334,8 @@ mod tests {
                 "missing phase {phase}"
             );
         }
-        assert!(j.contains("sum(irate(ext4_journal_commits[5m]))"));
-        assert!(j.contains("sum(irate(ext4_journal_checkpoint_forced_to_close[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_journal_commits[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_journal_checkpoint_forced_to_close[5m]))"));
         // No allocator sampler in this recording: its groups stay out.
         assert!(!j.contains("ext4_allocations"));
     }
@@ -338,8 +345,8 @@ mod tests {
         let view = generate(&store_with(&["ext4_journal_commits"]), vec![]);
         let j = json(&view);
         assert!(j.contains("sum by (op) (irate(ext4_sync_file[5m]))"));
-        assert!(j.contains("sum(irate(ext4_sync_file_errors[5m]))"));
-        assert!(j.contains("sum(irate(ext4_errors[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_sync_file_errors[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_errors[5m]))"));
     }
 
     #[test]
@@ -354,7 +361,7 @@ mod tests {
         assert!(j.contains("\"ext4_allocation_size\""));
         assert!(j.contains("sum by (op) (irate(ext4_inodes[5m]))"));
         assert!(j.contains("sum by (outcome) (irate(ext4_writepages_pages[5m]))"));
-        assert!(j.contains("sum(irate(ext4_inode_loads[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_inode_loads[5m]))"));
         assert!(j.contains("sum by (kind) (irate(ext4_bitmap_loads[5m]))"));
         assert!(!j.contains("ext4_journal_commits"));
     }

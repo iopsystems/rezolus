@@ -202,7 +202,8 @@ rate.
    sampler rather than a field on `filesystem`'s sweep: the file is
    host-wide, not per mount. Measured below.*
 5. **Per-filesystem counters** (C4), the lookup-map decision measured on the
-   `ext4_alloc` bench.
+   `ext4_alloc` bench. *Done; the ext4 entry's "Results — phase 3" has the
+   design as built and the measured lookup cost.*
 6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
    amplification dashboard (C6) once its four terms exist.
 7. **XFS** (C8), then page cache (C7).

@@ -16,9 +16,14 @@
 //! * `ext4_sync_file` (labeled by `op`), `ext4_sync_file_errors`
 //! * `ext4_errors`, `ext4_shutdowns`
 //!
-//! Host-wide: per-filesystem attribution is a later phase (see the journal
-//! entry). jbd2 is also ocfs2's journal, so on a host running ocfs2 its commits
-//! are counted here too.
+//! Counters are per filesystem: each is a `CounterGroup` with one slot per
+//! mounted ext4 (or ocfs2, since jbd2 is its journal too) filesystem, labeled
+//! `mount`, `fstype`, `devnum` and `block_device` as the `filesystem` sampler
+//! labels the same mount, plus slot 0 `mount="other"` for a device the mount
+//! table does not know yet. The slot comes from a `dev_t` lookup the BPF
+//! program does on each event (`bpf/filesystem.h`); userspace keeps that map
+//! in step with the mount table (`bpf/filesystems.rs`). Histograms stay
+//! host-wide until histogram groups have slots.
 //!
 //! jbd2 reports commit and checkpoint phases in jiffies. The BPF program
 //! converts them to nanoseconds with a tick length this module measures with
@@ -96,6 +101,33 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+/// What a filesystem slot means, published when the mount table changes.
+static FS_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
+
+static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &COUNTERS_ACQ,
+    &[
+        &EXT4_JOURNAL_COMMITS,
+        &EXT4_JOURNAL_COMMIT_HANDLES,
+        &EXT4_JOURNAL_COMMIT_BLOCKS_DIRTIED,
+        &EXT4_JOURNAL_COMMIT_BLOCKS_LOGGED,
+        &EXT4_JOURNAL_CHECKPOINTS,
+        &EXT4_JOURNAL_CHECKPOINT_BUFFERS_WRITTEN,
+        &EXT4_JOURNAL_CHECKPOINT_BUFFERS_DROPPED,
+        &EXT4_JOURNAL_CHECKPOINT_FORCED_TO_CLOSE,
+        &EXT4_SYNC_FILE_FSYNC,
+        &EXT4_SYNC_FILE_FDATASYNC,
+        &EXT4_SYNC_FILE_ERRORS,
+        &EXT4_ERRORS,
+        &EXT4_SHUTDOWNS,
+        &EXT4_JOURNAL_LOCK_BUFFER_STALLS,
+    ],
+)];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -157,7 +189,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters, &COUNTERS_ACQ)
+    .filesystem_counters(
+        "counters",
+        "fs_slots",
+        counters,
+        &COUNTERS_ACQ,
+        &FS_IDENTITY,
+    )
     // The six commit phases share ONE group: like entities of one family,
     // distinguished by `phase` — see stats.rs.
     .histogram(
@@ -219,6 +257,7 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "counters" => &self.maps.counters,
+            "fs_slots" => &self.maps.fs_slots,
             "jiffy_ns" => &self.maps.jiffy_ns,
             "commit_wait" => &self.maps.commit_wait,
             "commit_request_delay" => &self.maps.commit_request_delay,

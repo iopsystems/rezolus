@@ -9,7 +9,7 @@ mod blockio;
 mod cpu;
 mod drivehealth;
 mod ext4;
-mod filesystem;
+pub(crate) mod filesystem;
 mod gpu;
 mod hw_sensors;
 mod memory;

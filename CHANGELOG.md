@@ -2,6 +2,17 @@
 
 ### Added
 
+- `ext4_journal` and `ext4_alloc` counters are per filesystem: every counter
+  carries `mount`, `fstype`, `devnum` and `block_device`, the labels the
+  `filesystem` sampler gives the same mount, with `mount="other"` for a
+  device the agent's mount table does not know yet. The BPF programs look the
+  device up in a `dev_t → slot` map the agent keeps in step with
+  `/proc/self/mountinfo` (rescanned every 10 s, and sooner when `other`
+  moves); counter banks are per CPU and per slot, 8 MiB and 12 MiB of
+  eagerly allocated map for the two samplers. jbd2 events from an ocfs2
+  mount get their own slot rather than being folded into the ext4 totals.
+  Histograms stay host-wide. The ext4 dashboard draws one line per mount.
+
 - `memory_slabinfo` sampler: sizes of the dentry, VFS/ext4/XFS inode,
   ext4 extent-status, jbd2 journal-head, buffer-head and page-cache-index
   slab caches from `/proc/slabinfo` (`memory_slab_cache_objects{cache,state}`,
