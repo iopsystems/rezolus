@@ -17,6 +17,13 @@ pub struct Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     #[serde(default)]
     interval: Option<String>,
+    /// Whether a sampler that can attribute its events to the calling
+    /// thread's cgroup does so (`ext4_ops`, `xfs_log`). Off by default: the
+    /// serial check and two atomics it adds to a request-path hook were
+    /// measured at half the hook's cost. `None` means the default.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[serde(default)]
+    cgroup_attribution: Option<bool>,
 }
 
 impl Sampler {
@@ -32,6 +39,11 @@ impl Sampler {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn interval(&self) -> Option<&str> {
         self.interval.as_deref()
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn cgroup_attribution(&self) -> Option<bool> {
+        self.cgroup_attribution
     }
 
     pub fn check(&self, name: &str) {

@@ -11,7 +11,9 @@
 //!   `ext4_write_bytes` — per filesystem (`mount`, `fstype`, `devnum`,
 //!   `block_device`, plus `mount="other"`), as `ext4_journal`'s counters are
 //! * `cgroup_ext4_ops{op}`, `cgroup_ext4_op_time{op}` — per cgroup of the
-//!   calling thread: the time request threads are held inside the filesystem
+//!   calling thread: the time request threads are held inside the filesystem.
+//!   Only with `cgroup_attribution = true`: the per-cgroup path is half the
+//!   end hook's cost (265 of 535 ns), so it is off by default
 //!
 //! `ext4_op_time / ext4_ops` is the mean latency per filesystem, and
 //! `ext4_write_bytes` is the first term of the write-amplification chain the
@@ -212,7 +214,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &EXT4_WRITE_BYTES,
     ];
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution(NAME);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -234,26 +238,39 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("unlink_latency", &EXT4_OP_LATENCY_UNLINK, &LATENCIES_ACQ)
     .histogram("write_latency", &EXT4_OP_LATENCY_WRITE, &LATENCIES_ACQ)
     .histogram("rename_latency", &EXT4_OP_LATENCY_RENAME, &LATENCIES_ACQ)
-    .packed_counters("cgroup_ops_fsync", &CGROUP_EXT4_OPS_FSYNC, &CGROUP_ACQ)
-    .packed_counters("cgroup_ops_unlink", &CGROUP_EXT4_OPS_UNLINK, &CGROUP_ACQ)
-    .packed_counters("cgroup_ops_write", &CGROUP_EXT4_OPS_WRITE, &CGROUP_ACQ)
-    .packed_counters("cgroup_ops_rename", &CGROUP_EXT4_OPS_RENAME, &CGROUP_ACQ)
-    .packed_counters("cgroup_time_fsync", &CGROUP_EXT4_OP_TIME_FSYNC, &CGROUP_ACQ)
-    .packed_counters(
-        "cgroup_time_unlink",
-        &CGROUP_EXT4_OP_TIME_UNLINK,
-        &CGROUP_ACQ,
-    )
-    .packed_counters("cgroup_time_write", &CGROUP_EXT4_OP_TIME_WRITE, &CGROUP_ACQ)
-    .packed_counters(
-        "cgroup_time_rename",
-        &CGROUP_EXT4_OP_TIME_RENAME,
-        &CGROUP_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(&disabled)
     .required_programs(&required)
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        if let Some(rodata) = open.maps.rodata_data.as_mut() {
+            rodata.cgroup_attribution = cgroup_attribution as u8;
+        }
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters("cgroup_ops_fsync", &CGROUP_EXT4_OPS_FSYNC, &CGROUP_ACQ)
+            .packed_counters("cgroup_ops_unlink", &CGROUP_EXT4_OPS_UNLINK, &CGROUP_ACQ)
+            .packed_counters("cgroup_ops_write", &CGROUP_EXT4_OPS_WRITE, &CGROUP_ACQ)
+            .packed_counters("cgroup_ops_rename", &CGROUP_EXT4_OPS_RENAME, &CGROUP_ACQ)
+            .packed_counters("cgroup_time_fsync", &CGROUP_EXT4_OP_TIME_FSYNC, &CGROUP_ACQ)
+            .packed_counters(
+                "cgroup_time_unlink",
+                &CGROUP_EXT4_OP_TIME_UNLINK,
+                &CGROUP_ACQ,
+            )
+            .packed_counters("cgroup_time_write", &CGROUP_EXT4_OP_TIME_WRITE, &CGROUP_ACQ)
+            .packed_counters(
+                "cgroup_time_rename",
+                &CGROUP_EXT4_OP_TIME_RENAME,
+                &CGROUP_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }

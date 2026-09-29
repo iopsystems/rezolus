@@ -446,6 +446,11 @@ the ext4 dashboard's Write Path group draws against `ext4_writepages_pages`,
 `ext4_journal_commit_blocks{kind="logged"}` and `blockio_bytes{op="write"}`.
 The per-cgroup series answer "how long are this service's request threads held
 inside the filesystem", the mechanism a slow disk reaches a request through.
+They exist only with `cgroup_attribution = true` in the sampler's section
+(or `[defaults]`): the per-cgroup path is 265 ns of the end hook's 535 ns,
+half its cost, so it is off by default and, when off, is removed from the
+loaded program rather than skipped at run time. Without it a write+fsync
+pair costs about 1.1 µs of probe time instead of 1.7.
 
 Kernel support: task local storage became usable from tracing programs in
 5.12, and `fentry` on a module's functions needs module BTF (5.11), so the
@@ -627,7 +632,11 @@ them per mount: `xfs_log_waits{wait="space"}` is `xfs_log_space_sleeps`
 `xfs_log_waits{wait="force"}` is `xfs_log_forces` (each force function counts
 once at entry). What the stats file cannot carry is how long anyone waited and
 which cgroup did; that is what this sampler adds. `xfs_log_wait_time /
-xfs_log_waits` is the mean per mount.
+xfs_log_waits` is the mean per mount. The `cgroup_*` series exist only with
+`cgroup_attribution = true` in the sampler's section (or `[defaults]`): the
+per-cgroup path is about half the end hook's cost (as measured on
+`ext4_ops`, the same shape), so it is off by default and removed from the
+loaded program when off.
 
 **Opt-in.** The force pair runs on every fsync, so this costs on the request
 path; the journal entry (`docs/journal/2026-09-29-xfs-samplers.md`) has the

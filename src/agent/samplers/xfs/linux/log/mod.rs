@@ -13,7 +13,8 @@
 //!   the ext4 samplers' counters are
 //! * `cgroup_xfs_log_waits{wait}`, `cgroup_xfs_log_wait_time{wait}` — per
 //!   cgroup of the waiting thread: the time request threads are held by the
-//!   log
+//!   log. Only with `cgroup_attribution = true`; the per-cgroup path is half
+//!   the end hook's cost, so it is off by default
 //!
 //! The counts duplicate two fields the `xfs_stats` sampler reads from sysfs
 //! (`xfs_log_space_sleeps`, `xfs_log_forces`) and should equal them per
@@ -198,7 +199,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &XFS_LOG_WAIT_TIME_FORCE,
     ];
 
-    let bpf = BpfBuilder::new(
+    let cgroup_attribution = config.cgroup_attribution(NAME);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -218,30 +221,43 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // distinguished by `wait` — see stats.rs.
     .histogram("space_latency", &XFS_LOG_WAIT_LATENCY_SPACE, &LATENCIES_ACQ)
     .histogram("force_latency", &XFS_LOG_WAIT_LATENCY_FORCE, &LATENCIES_ACQ)
-    .packed_counters(
-        "cgroup_waits_space",
-        &CGROUP_XFS_LOG_WAITS_SPACE,
-        &CGROUP_ACQ,
-    )
-    .packed_counters(
-        "cgroup_waits_force",
-        &CGROUP_XFS_LOG_WAITS_FORCE,
-        &CGROUP_ACQ,
-    )
-    .packed_counters(
-        "cgroup_time_space",
-        &CGROUP_XFS_LOG_WAIT_TIME_SPACE,
-        &CGROUP_ACQ,
-    )
-    .packed_counters(
-        "cgroup_time_force",
-        &CGROUP_XFS_LOG_WAIT_TIME_FORCE,
-        &CGROUP_ACQ,
-    )
-    .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .disabled_programs(&disabled)
     .required_programs(&required)
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
+    // exist only when it is on.
+    .pre_load(move |open| {
+        if let Some(rodata) = open.maps.rodata_data.as_mut() {
+            rodata.cgroup_attribution = cgroup_attribution as u8;
+        }
+    });
+
+    if cgroup_attribution {
+        builder = builder
+            .packed_counters(
+                "cgroup_waits_space",
+                &CGROUP_XFS_LOG_WAITS_SPACE,
+                &CGROUP_ACQ,
+            )
+            .packed_counters(
+                "cgroup_waits_force",
+                &CGROUP_XFS_LOG_WAITS_FORCE,
+                &CGROUP_ACQ,
+            )
+            .packed_counters(
+                "cgroup_time_space",
+                &CGROUP_XFS_LOG_WAIT_TIME_SPACE,
+                &CGROUP_ACQ,
+            )
+            .packed_counters(
+                "cgroup_time_force",
+                &CGROUP_XFS_LOG_WAIT_TIME_FORCE,
+                &CGROUP_ACQ,
+            )
+            .ringbuf_handler("cgroup_info", handle_cgroup_info);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }

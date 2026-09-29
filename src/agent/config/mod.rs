@@ -126,6 +126,21 @@ impl Config {
             .map(|d| *d)
     }
 
+    /// Whether `name` attributes its events to the calling thread's cgroup
+    /// (per-sampler override, falling back to the `defaults` section, then
+    /// off). Consumed by the request-path BPF samplers whose per-cgroup path
+    /// is a measured share of the probe cost (`ext4_ops`, `xfs_log`): with it
+    /// off, the `cgroup_*` series are absent and the path is not in the
+    /// loaded program.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn cgroup_attribution(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.cgroup_attribution())
+            .or_else(|| self.defaults.cgroup_attribution())
+            .unwrap_or(false)
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -162,6 +177,21 @@ mod tests {
 
     fn config(toml: &str) -> Config {
         toml::from_str(toml).expect("valid config")
+    }
+
+    #[test]
+    fn cgroup_attribution_is_off_unless_asked_for() {
+        let c = config("[samplers.ext4_ops]\nenabled = true\n");
+        assert!(!c.cgroup_attribution("ext4_ops"), "off by default");
+        let c = config("[samplers.ext4_ops]\nenabled = true\ncgroup_attribution = true\n");
+        assert!(c.cgroup_attribution("ext4_ops"));
+        assert!(!c.cgroup_attribution("xfs_log"), "per sampler");
+        // The defaults section is a fallback, and a sampler can opt back out.
+        let c = config(
+            "[defaults]\ncgroup_attribution = true\n[samplers.xfs_log]\ncgroup_attribution = false\n",
+        );
+        assert!(c.cgroup_attribution("ext4_ops"));
+        assert!(!c.cgroup_attribution("xfs_log"));
     }
 
     #[test]

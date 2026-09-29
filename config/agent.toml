@@ -248,6 +248,7 @@ enabled = true
 # when ext4 is a module). See docs/metrics.md#ext4_ops.
 [samplers.ext4_ops]
 enabled = false
+# cgroup_attribution = true   # per-cgroup series; half the end hook's cost
 
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
@@ -270,6 +271,7 @@ enabled = false
 # tracing programs; module BTF when XFS is a module). See docs/metrics.md#xfs_log.
 [samplers.xfs_log]
 enabled = false
+# cgroup_attribution = true   # per-cgroup series; half the end hook's cost
 
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)

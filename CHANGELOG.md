@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Changed
+
+- `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
+  `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
+  measured at half the end hook's cost (265 of 535 ns), so it is off by
+  default; when off, the `cgroup_ext4_*` and `cgroup_xfs_log_*` series are
+  absent and the path is folded out of the loaded program.
+
 ### Added
 
 - `xfs_log` sampler (opt-in): how long threads block on the XFS log, per
