@@ -28,6 +28,7 @@ mod status_cli;
 mod viewer;
 
 mod common;
+mod dendro_copy;
 
 pub use common::*;
 

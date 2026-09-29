@@ -13,9 +13,9 @@ source = "127.0.0.1:4241"
 # Specify the path for the snapshot output file. Snapshots are `.rez` archives
 # (readable by `rezolus view`, `rezolus mcp` and `rezolus recording metadata`).
 # A `.dendro` path keeps the buffer and its snapshots as dendro archives
-# instead: several times smaller, readable by `rezolus view` and `rezolus mcp`
-# but not yet by the `rezolus recording` subcommands. Opt-in until it becomes
-# the default.
+# instead: several times smaller, readable by `rezolus view`, `rezolus mcp` and
+# `rezolus recording` metadata/annotate/check/snapshot (not yet filter or
+# combine). Opt-in until it becomes the default.
 output = "/var/lib/rezolus/rezolus.rez"
 
 # Specify the directory the rolling buffer is kept in. It needs room for the

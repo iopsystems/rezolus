@@ -1,5 +1,5 @@
 use clap::ArgMatches;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::parquet_metadata::{
@@ -358,7 +358,7 @@ fn run_rez(args: &ArgMatches, path: &Path, format: RezFormat) {
     };
 
     annotate_rez_any(path, format, &annotation).unwrap_or_else(|e| {
-        eprintln!("error: failed to annotate .rez: {e}");
+        eprintln!("error: failed to annotate {}: {e}", path.display());
         std::process::exit(1);
     });
 }
@@ -393,7 +393,59 @@ pub(super) fn annotate_rez_any(
     Ok(())
 }
 
-/// Embed KPIs and/or events into every recording of a v3 (SQLite) `.rez`.
+/// Where annotating reads and writes each recording's metadata: a `.rez` v3
+/// catalog, or a dendro archive's sources. Both are an in-place update of a
+/// catalog row; no segment is touched. A dendro archive a writer still holds
+/// cannot be opened for writing, and says so.
+/// Each recording's catalog id and metadata.
+type RecordingMetadata = Vec<(i64, BTreeMap<String, String>)>;
+
+enum MetadataStore {
+    Rez(crate::recorder::rez_sqlite::RezDb),
+    Dendro(dendro::archive::ArchiveMut),
+}
+
+impl MetadataStore {
+    fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+            Ok(Self::Dendro(dendro::archive::ArchiveMut::open(path)?))
+        } else {
+            Ok(Self::Rez(crate::recorder::rez_sqlite::RezDb::open(path)?))
+        }
+    }
+
+    /// Each recording's id and metadata, in the order the reader lists them.
+    fn recordings(&self) -> Result<RecordingMetadata, Box<dyn std::error::Error>> {
+        Ok(match self {
+            Self::Rez(db) => db
+                .read_recordings()?
+                .into_iter()
+                .map(|r| (r.id, r.meta.metadata))
+                .collect(),
+            Self::Dendro(db) => db
+                .read_sources()?
+                .into_iter()
+                .map(|s| (s.id, s.meta.metadata))
+                .collect(),
+        })
+    }
+
+    /// Replace one recording's metadata with `metadata`.
+    fn write(
+        &mut self,
+        id: i64,
+        metadata: &BTreeMap<String, String>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            Self::Rez(db) => db.update_recording_metadata(id, metadata)?,
+            Self::Dendro(db) => db.update_source_metadata(id, metadata)?,
+        }
+        Ok(())
+    }
+}
+
+/// Embed KPIs and/or events into every recording of a v3 (SQLite) `.rez`
+/// or a dendro archive.
 ///
 /// Unlike `combine` and `filter` this rewrites nothing: KPIs and events are
 /// catalog columns, so annotating is an `UPDATE` per recording. No segment is
@@ -416,14 +468,13 @@ fn annotate_rez_v3_at(
     annotation: &RezAnnotation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::parquet_metadata::KEY_EVENTS;
-    use crate::recorder::rez_sqlite::RezDb;
     use crate::viewer::Events;
 
     let pool = metriken_query::BufferPool::new(256 * 1024 * 1024);
     let readers = crate::rez_reader::RezReader::open_recordings(path, pool)?;
 
-    let db = RezDb::open(path)?;
-    let recordings = db.read_recordings()?;
+    let mut db = MetadataStore::open(path)?;
+    let recordings = db.recordings()?;
     if recordings.len() != readers.len() {
         return Err(format!(
             "{} has {} recording(s) in its catalog but {} readable — refusing to annotate a \
@@ -456,8 +507,8 @@ fn annotate_rez_v3_at(
     // in for the report.
     let mut events_report: Option<(usize, bool)> = None;
     let mut per_recording_report: Option<CheckEventTally> = None;
-    for (idx, (rec, (_labels, reader))) in recordings.iter().zip(readers).enumerate() {
-        let mut metadata = rec.meta.metadata.clone();
+    for (idx, ((id, stored), (_labels, reader))) in recordings.iter().zip(readers).enumerate() {
+        let mut metadata = stored.clone();
 
         if let Some(ext_json) = annotation.ext_json {
             let mut ext: ServiceExtension = serde_json::from_str(ext_json)?;
@@ -512,7 +563,7 @@ fn annotate_rez_v3_at(
             tally.touched += usize::from(touched);
         }
 
-        db.update_recording_metadata(rec.id, &metadata)?;
+        db.write(*id, &metadata)?;
     }
 
     // Unlike the KPI and event flags, per-recording events are not applied
@@ -1364,6 +1415,61 @@ mod tests {
             md.contains_key("sampling_interval_ms"),
             "pre-existing metadata survives an events+KPIs annotate"
         );
+    }
+
+    /// A dendro archive takes events and KPIs into its source's metadata,
+    /// keeping what was there, and clearing drops the key, as for a `.rez`.
+    #[test]
+    fn annotate_writes_into_a_dendro_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&path, 6, true);
+        let metadata = || {
+            dendro::archive::Archive::open(&path)
+                .unwrap()
+                .read_sources()
+                .unwrap()[0]
+                .meta
+                .metadata
+                .clone()
+        };
+        let before = metadata();
+
+        let inline = vec!["timestamp=1700000002000000000,description=marker".to_string()];
+        let annotation = RezAnnotation {
+            ext_json: Some(
+                r#"{"service_name":"svc","kpis":[{"role":"overview","title":"Z","query":"0","type":"gauge"}]}"#,
+            ),
+            events: Some(EventOps {
+                add_files: &[],
+                inline: &inline,
+                clear: false,
+            }),
+            per_recording_events: None,
+            report_to_stderr: false,
+        };
+        annotate_rez_any(&path, RezFormat::V3Sqlite, &annotation).unwrap();
+        let md = metadata();
+        assert!(md.contains_key(KEY_SERVICE_QUERIES), "KPIs embedded");
+        let events: crate::viewer::Events =
+            serde_json::from_str(&md[crate::parquet_metadata::KEY_EVENTS]).unwrap();
+        assert_eq!(events.events.len(), 1);
+        for (k, v) in &before {
+            assert_eq!(md.get(k), Some(v), "{k} survives");
+        }
+
+        let clear = RezAnnotation {
+            ext_json: None,
+            events: Some(EventOps {
+                add_files: &[],
+                inline: &[],
+                clear: true,
+            }),
+            per_recording_events: None,
+            report_to_stderr: false,
+        };
+        annotate_rez_any(&path, RezFormat::V3Sqlite, &clear).unwrap();
+        assert!(!metadata().contains_key(crate::parquet_metadata::KEY_EVENTS));
     }
 
     /// `--clear-events` with no adds drops the key entirely rather than storing

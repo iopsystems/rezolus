@@ -679,22 +679,6 @@ fn run_inner(args: &ArgMatches, registry: &TemplateRegistry) -> Result<i32, Stri
 
     let (format, targets, total_recordings) = open_targets(path, &selector)?;
 
-    // Before evaluating anything: a dendro archive reads through the same
-    // reader as a v3 `.rez` (both are SQLite, and format detection cannot
-    // tell them apart), but nothing in this version writes one, so the
-    // annotation would fail after the verdicts were printed.
-    if annotate
-        && format == RezFormat::V3Sqlite
-        && crate::recorder::rez_sqlite::RezDb::is_dendro(path)?
-    {
-        return Err(format!(
-            "{} is a dendro archive (as written by `recording upgrade`); `check` reads it, but \
-             --annotate cannot write into it because this version of rezolus writes .rez \
-             archives only. Run without --annotate, or check the .rez it was converted from.",
-            path.display()
-        ));
-    }
-
     let mut results: Vec<CheckResult> = Vec::new();
     let mut per_recording_events: Vec<Vec<Event>> = vec![Vec::new(); total_recordings];
     let mut checks_seen = 0usize;

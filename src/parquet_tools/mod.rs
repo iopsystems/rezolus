@@ -256,9 +256,9 @@ pub fn command() -> Command {
                      event. On a .rez the events go into the recording they were evaluated\n\
                      against (each recording its own when no --recording is given); on parquet\n\
                      into the footer. A v1/v2 (tar) .rez is rewritten to v3 (SQLite) in place,\n\
-                     as `recording annotate` does. A dendro archive is read-only here: its\n\
-                     checks run, but --annotate is refused. With --json the annotation report\n\
-                     goes to stderr so stdout stays one JSON array.\n\n\
+                     as `recording annotate` does; a dendro archive gets them in its sources'\n\
+                     metadata. With --json the annotation report goes to stderr so stdout stays\n\
+                     one JSON array.\n\n\
                      --json prints an array with one object per check: `recording` (labels,\n\
                      .rez only), `title`, `query` (as evaluated), `check`, `status`, `windows`\n\
                      and `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,\n\
@@ -303,7 +303,7 @@ pub fn command() -> Command {
                 .arg(
                     clap::Arg::new("annotate")
                         .long("annotate")
-                        .help("Write each FAIL/WARN window into the recording as a kind=check range event (refused on a dendro archive)")
+                        .help("Write each FAIL/WARN window into the recording as a kind=check range event")
                         .action(clap::ArgAction::SetTrue),
                 )
                 .arg(
@@ -707,8 +707,7 @@ pub fn command() -> Command {
                      become sources and tables become streams; segment, WAL and caller-row\n\
                      bytes are copied unchanged, and WAL rows a segment already holds are\n\
                      dropped. `-o` is required and must not exist, and the input is never\n\
-                     replaced: `view` and `mcp` read a dendro archive, but the `recording`\n\
-                     tools and releases before this one refuse it.\n\n\
+                     replaced: releases before this one refuse a dendro archive.\n\n\
                      EXAMPLES:\n    \
                      # Upgrade in place\n    \
                      rezolus recording upgrade old.rez\n\n    \
@@ -806,6 +805,23 @@ fn snapshot_rez(
     if output.exists() {
         return Err(format!("{} already exists", output.display()).into());
     }
+    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+        // A sealed copy: the live tail is encoded into the copy's last
+        // segments, so the snapshot has no WAL rows for a reader to rebuild.
+        // Staged beside the output so a failed copy leaves nothing there.
+        let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
+        let staging = match dir {
+            Some(dir) => tempfile::tempdir_in(dir),
+            None => tempfile::tempdir(),
+        }?;
+        let staged = staging.path().join("snapshot.dendro");
+        let src = dendro::archive::Archive::open(path)?;
+        crate::dendro_copy::copy(&src, &staged, &dendro::rewrite::CopySpec::everything())?;
+        drop(src);
+        std::fs::rename(&staged, output)?;
+        println!("Wrote {}", output.display());
+        return Ok(());
+    }
     match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
         RezFormat::V3Sqlite => {
             crate::recorder::rez_sqlite::RezDb::open(path)?.vacuum_into(output)?;
@@ -834,6 +850,15 @@ fn upgrade_rez(
 
     match detect_rez_format(path).unwrap_or(RezFormat::NotRez) {
         RezFormat::V2Tar => {}
+        RezFormat::V3Sqlite
+            if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) =>
+        {
+            return Err(format!(
+                "{} is a dendro archive; there is nothing to upgrade",
+                path.display()
+            )
+            .into())
+        }
         RezFormat::V3Sqlite => {
             return Err(format!(
                 "{} is already a v3 (SQLite) archive; there is nothing to upgrade",
@@ -881,6 +906,9 @@ fn upgrade_to_dendro(
             output.display()
         )
         .into());
+    }
+    if metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false) {
+        return Err(format!("{} is already a dendro archive", path.display()).into());
     }
     let dir = output.parent().filter(|p| !p.as_os_str().is_empty());
     let staging = match dir {
@@ -1234,5 +1262,59 @@ mod upgrade_to_dendro_tests {
         let err = upgrade_to_dendro(&src, &dest).unwrap_err().to_string();
         assert!(err.contains("already exists"), "{err}");
         assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
+    }
+}
+
+#[cfg(test)]
+mod dendro_command_tests {
+    use super::{snapshot_rez, upgrade_rez, upgrade_to_dendro};
+    use crate::dendro_copy::fixtures;
+    use dendro::archive::Archive;
+
+    /// `snapshot` of a dendro archive with rows still in its WAL: the copy
+    /// holds every row, all sealed, and nothing is left beside it.
+    #[test]
+    fn a_dendro_snapshot_is_sealed_and_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let live = dir.path().join("live.dendro");
+        fixtures::recorded(&live, 10, false);
+        let out = dir.path().join("snap.dendro");
+        snapshot_rez(&live, &out).unwrap();
+        for suffix in ["-wal", "-shm"] {
+            assert!(!dir.path().join(format!("snap.dendro{suffix}")).exists());
+        }
+
+        let (src, snap) = (Archive::open(&live).unwrap(), Archive::open(&out).unwrap());
+        let (a, b) = (
+            src.read_sources().unwrap()[0].id,
+            snap.read_sources().unwrap()[0].id,
+        );
+        let streams = crate::dendro_copy::streams(&src).unwrap();
+        assert!(streams.iter().any(|s| s.ends_with("/occupants")));
+        for stream in streams {
+            let (_, sealed) = src.segment_span(a, &stream).unwrap();
+            let wal = src.live_wal_span(a, &stream).unwrap();
+            let (_, got) = snap.segment_span(b, &stream).unwrap();
+            assert_eq!(got.rows, sealed.rows + wal.rows, "{stream}");
+            assert_eq!(snap.live_wal_span(b, &stream).unwrap().rows, 0, "{stream}");
+        }
+        assert!(
+            snapshot_rez(&live, &out).is_err(),
+            "never over an existing file"
+        );
+    }
+
+    /// `upgrade` names a dendro input for what it is.
+    #[test]
+    fn upgrade_names_a_dendro_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        fixtures::recorded(&path, 4, true);
+        let err = upgrade_rez(&path, None).unwrap_err().to_string();
+        assert!(err.contains("is a dendro archive"), "{err}");
+        let err = upgrade_to_dendro(&path, &dir.path().join("out.dendro"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already a dendro archive"), "{err}");
     }
 }

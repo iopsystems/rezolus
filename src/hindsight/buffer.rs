@@ -486,8 +486,7 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 /// metriken-archive's encoder, and the clock offsets, all in one read
 /// snapshot of the buffer. The dump is therefore fully sealed: a reader
 /// opening it has no WAL tail to rebuild, which a `VACUUM INTO` copy would
-/// carry over unsealed. (dendro's `vacuum_into` also fails on the read
-/// handle today: `query_only`, which `Archive::open` sets, refuses it.)
+/// carry over unsealed.
 ///
 /// A range starts one restatement period early when the buffer has long
 /// tables. An occupant's labels are written when it is first seen and
@@ -496,15 +495,12 @@ pub fn dump(buffer: &Path, dest: &Path, range: &TimeRange) -> Result<Summary, St
 /// asked at each edge anyway (whole segments), and reports what it holds.
 fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summary, String> {
     use dendro::archive::{Archive, ArchiveMut};
-    use dendro::rewrite::{copy_sources_into, CopySpec};
+    use dendro::rewrite::CopySpec;
     let err = |e: dendro::Error| e.to_string();
 
     // A second connection, deliberately: the writer thread owns its own.
     let src = Archive::open(buffer).map_err(err)?;
-    let mut streams = Vec::new();
-    for source in src.read_sources().map_err(err)? {
-        streams.extend(src.all_streams(source.id).map_err(err)?);
-    }
+    let streams = crate::dendro_copy::streams(&src)?;
     let spec = match (range.start_ns(), range.end_ns()) {
         (None, None) => CopySpec::everything(),
         (start, end) => {
@@ -520,12 +516,7 @@ fn dump_dendro(buffer: &Path, staged: &Path, range: &TimeRange) -> Result<Summar
             }
         }
     };
-    let encoder =
-        metriken_archive::writer::Encoder::for_streams(streams.iter().map(String::as_str));
-    let mut dst = ArchiveMut::create(staged).map_err(err)?;
-    dst.transaction(|tx| copy_sources_into(&src, tx, &spec, &encoder))
-        .map_err(err)?;
-    drop(dst);
+    crate::dendro_copy::copy(&src, staged, &spec)?;
     drop(src);
 
     // The buffer's source is still running and so is never complete; this

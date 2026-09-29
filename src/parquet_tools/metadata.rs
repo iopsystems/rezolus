@@ -329,9 +329,14 @@ fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error
         print!("{}", describe_rez_string_at(path)?);
         return Ok(());
     }
+    if is_dendro(path) {
+        let json = v3_json(&read_dendro_summary(path)?, "dendro");
+        println!("{}", serde_json::to_string_pretty(&json)?);
+        return Ok(());
+    }
     match crate::recorder::rez::detect_rez_format(path)? {
         RezFormat::V3Sqlite => {
-            let json = v3_json(&read_v3_summary(path)?);
+            let json = v3_json(&read_v3_summary(path)?, "sqlite");
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
         _ => {
@@ -347,6 +352,11 @@ fn describe_rez(path: &Path, json: bool) -> Result<(), Box<dyn std::error::Error
 /// Dispatch is by CONTENT: a v3 `.rez` is a SQLite file whose catalog answers
 /// every question here, a v1/v2 `.rez` is a tar whose `manifest.json` does.
 pub(crate) fn describe_rez_string_at(path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    if is_dendro(path) {
+        let recordings = read_dendro_summary(path)?;
+        let header = format!("dendro archive — {} recording(s)", recordings.len());
+        return Ok(describe_v3_string_with(&header, &recordings));
+    }
     match crate::recorder::rez::detect_rez_format(path)? {
         RezFormat::V3Sqlite => Ok(describe_v3_string(&read_v3_summary(path)?)),
         _ => Ok(describe_rez_string(
@@ -429,6 +439,59 @@ fn read_v3_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
     Ok(out)
 }
 
+/// Whether `path` is a dendro archive, by its header. A dendro archive is a
+/// SQLite file too, so the `.rez` sniff alone calls it v3.
+fn is_dendro(path: &Path) -> bool {
+    metriken_archive::DendroCatalog::is_archive(path).unwrap_or(false)
+}
+
+/// [`read_v3_summary`] for a dendro archive: the same facts from dendro's
+/// catalog, read-only and without reading a segment. A source is a
+/// recording; a long table's occupant stream (`<table>/occupants`) is listed
+/// as a table of its own, as it is stored.
+fn read_dendro_summary(path: &Path) -> Result<Vec<V3Recording>, String> {
+    let err = |e: dendro::Error| e.to_string();
+    let db = dendro::archive::Archive::open(path).map_err(err)?;
+    let ts = |t: Option<i64>| t.and_then(|t| u64::try_from(t).ok());
+    let mut out = Vec::new();
+    for src in db.read_sources().map_err(err)? {
+        let mut tables = Vec::new();
+        for stream in db.all_streams(src.id).map_err(err)? {
+            let (segments, sealed) = db.segment_span(src.id, &stream).map_err(err)?;
+            let live = db.live_wal_span(src.id, &stream).map_err(err)?;
+            let rows = sealed.rows + live.rows;
+            let first = min_opt(ts(sealed.first_ts), ts(live.first_ts));
+            let last = max_opt(ts(sealed.last_ts), ts(live.last_ts));
+            tables.push(V3Table {
+                sampler: stream,
+                rows,
+                segments,
+                live_wal_rows: live.rows,
+                cadence_ns: match (first, last) {
+                    (Some(f), Some(l)) if rows >= 2 => Some(l.saturating_sub(f) / (rows - 1)),
+                    _ => None,
+                },
+            });
+        }
+        let clock_offsets = db
+            .read_clock_offsets(src.id)
+            .map_err(err)?
+            .into_iter()
+            .filter_map(|(t, o)| u64::try_from(t).ok().map(|t| (t, o)))
+            .collect();
+        out.push(V3Recording {
+            name: crate::recorder::rez::recording_dir_slug(&src.meta.labels),
+            labels: src.meta.labels,
+            metadata: src.meta.metadata,
+            complete: src.complete,
+            clock_anchor_wall_ns: u64::try_from(src.meta.clock_anchor_wall_ns).unwrap_or(0),
+            clock_offsets,
+            tables,
+        });
+    }
+    Ok(out)
+}
+
 fn min_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.min(b)),
@@ -447,13 +510,19 @@ fn max_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
 /// same recording/table lines, same clock line, with the container named and
 /// the live WAL depth added.
 fn describe_v3_string(recordings: &[V3Recording]) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
+    let header = format!(
         ".rez archive v3 (sqlite) — {} recording(s)",
         recordings.len()
     );
+    describe_v3_string_with(&header, recordings)
+}
+
+/// [`describe_v3_string`] under the given first line: a dendro archive is
+/// summarized from the same catalog facts.
+fn describe_v3_string_with(header: &str, recordings: &[V3Recording]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let _ = writeln!(out, "{header}");
     for rec in recordings {
         let labels: Vec<String> = rec.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let _ = writeln!(out, "  recording {} [{}]", rec.name, labels.join(", "));
@@ -499,10 +568,13 @@ fn describe_v3_string(recordings: &[V3Recording]) -> String {
 
 /// `--json` for a v3 archive: the same facts the text form renders. v2 dumps
 /// its manifest verbatim; v3 has no manifest document, so this is its analogue.
-fn v3_json(recordings: &[V3Recording]) -> serde_json::Value {
+///
+/// A dendro archive gives the same facts with `container` `"dendro"` and no
+/// `.rez` `version`.
+fn v3_json(recordings: &[V3Recording], container: &str) -> serde_json::Value {
     serde_json::json!({
-        "version": 3,
-        "container": "sqlite",
+        "version": (container == "sqlite").then_some(3),
+        "container": container,
         "recordings": recordings.iter().map(|rec| serde_json::json!({
             "name": rec.name,
             "labels": rec.labels,
@@ -1037,7 +1109,7 @@ mod rez_v3_tests {
         db.insert_wal_rows(rid, &[wal_row("cpu_usage", 3)]).unwrap();
         drop(db);
 
-        let v = v3_json(&read_v3_summary(&path).unwrap());
+        let v = v3_json(&read_v3_summary(&path).unwrap(), "sqlite");
         assert_eq!(v["version"], 3);
         // Qualified by `arm`: `source` alone collides across recordings in a
         // multi-recording archive, which is now the ordinary shape.
@@ -1054,5 +1126,40 @@ mod rez_v3_tests {
         assert_eq!(table["segments"], 1);
         assert_eq!(table["live_wal_rows"], 1);
         assert_eq!(table["cadence_ns"], SECOND);
+    }
+
+    /// A dendro archive is described from its catalog like a v3 `.rez`: its
+    /// sources as recordings, every stream as a table (a long table's
+    /// occupant stream included), with rows and segments.
+    #[test]
+    fn a_dendro_archive_is_described_from_its_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&path, 10, true);
+
+        let text = describe_rez_string_at(&path).unwrap();
+        assert!(
+            text.starts_with("dendro archive — 1 recording(s)"),
+            "{text}"
+        );
+        assert!(
+            text.contains("recording rezolus [source=rezolus]"),
+            "{text}"
+        );
+        assert!(text.contains("threads/tasks "), "{text}");
+        assert!(text.contains("threads/tasks/occupants"), "{text}");
+        assert!(!text.contains("not cleanly finalized"), "{text}");
+
+        let v = v3_json(&read_dendro_summary(&path).unwrap(), "dendro");
+        assert_eq!(v["container"], "dendro");
+        assert!(v["version"].is_null());
+        let tables = v["recordings"][0]["tables"].as_array().unwrap();
+        let tasks = tables
+            .iter()
+            .find(|t| t["sampler"] == "threads/tasks")
+            .unwrap();
+        // The catalog counts ticks, the WAL rows a segment consumed, not a
+        // long table's rows per thread: ten, as a `.rez` table would say.
+        assert_eq!(tasks["rows"], 10);
     }
 }

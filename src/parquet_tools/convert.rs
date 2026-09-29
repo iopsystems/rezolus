@@ -26,6 +26,8 @@ pub(crate) enum InputKind {
     Parquet,
     /// A tar archive, most likely a `.rez`.
     Tar,
+    /// A SQLite file: a v3 `.rez` or a dendro archive.
+    Sqlite,
 }
 
 /// Classify `path` by its leading bytes.
@@ -51,6 +53,8 @@ fn sniff(path: &Path) -> io::Result<InputKind> {
         InputKind::Parquet
     } else if head.len() >= 262 && &head[257..262] == b"ustar" {
         InputKind::Tar
+    } else if head.starts_with(b"SQLite format 3\0") {
+        InputKind::Sqlite
     } else {
         InputKind::RawMsgpack
     })
@@ -222,6 +226,8 @@ pub(crate) enum ConvertError {
     InputIsParquet,
     /// The input is a tar archive, most likely a `.rez`.
     InputIsTar,
+    /// The input is a SQLite archive: a v3 `.rez` or a dendro archive.
+    InputIsArchive,
     /// The output exists and `--force` was not given.
     OutputExists(PathBuf),
     Io(io::Error),
@@ -250,6 +256,11 @@ impl std::fmt::Display for ConvertError {
                 f,
                 "input is a tar archive (a .rez?), not a raw recording; \
                  a .rez cannot be converted to parquet"
+            ),
+            Self::InputIsArchive => write!(
+                f,
+                "input is a .rez or dendro archive, not a raw recording; \
+                 convert takes raw recordings only"
             ),
             Self::OutputExists(p) => {
                 write!(f, "output {} already exists (use --force)", p.display())
@@ -452,6 +463,7 @@ fn convert_file(
     match sniff(input)? {
         InputKind::Parquet => Err(ConvertError::InputIsParquet),
         InputKind::Tar => Err(ConvertError::InputIsTar),
+        InputKind::Sqlite => Err(ConvertError::InputIsArchive),
         kind => {
             let out_dir = output
                 .parent()
@@ -615,6 +627,16 @@ pub(crate) fn run(args: &clap::ArgMatches) {
 mod tests {
     use super::*;
     use std::io::{Cursor, Seek, Write};
+
+    /// A SQLite archive, `.rez` v3 or dendro, is named as one rather than
+    /// failing later as undecodable msgpack.
+    #[test]
+    fn a_sqlite_archive_is_recognized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rec.dendro");
+        crate::dendro_copy::fixtures::recorded(&path, 4, true);
+        assert!(matches!(sniff(&path).unwrap(), InputKind::Sqlite));
+    }
 
     /// Write `bytes` to a temp file and classify it.
     fn sniff_bytes(bytes: &[u8]) -> InputKind {
