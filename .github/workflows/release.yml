@@ -317,6 +317,21 @@ jobs:
             echo "Stable release detected: $TAG"
           fi
 
+          # A stable tag is the latest release only when no stable tag is
+          # higher. A patch on a maintenance branch (release/5.x) cut after a
+          # newer major shipped is stable but not latest: it still goes to the
+          # apt and yum repositories, which keep every version, but it must not
+          # take the GitHub "Latest" release (install.sh downloads that one) or
+          # the Homebrew formula.
+          HIGHEST=$(git ls-remote --tags --refs origin 'refs/tags/v[0-9]*' \
+            | sed 's#.*refs/tags/##' | grep -vE '[-+]' | sort -V | tail -1)
+          if [[ "$TAG" != *"+"* ]] && [[ "$TAG" != *"-"* ]] && [ "$TAG" = "$HIGHEST" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+            echo "Not the latest release: the highest stable tag is $HIGHEST"
+          fi
+
       # Download deb artifacts
       - uses: actions/download-artifact@v5
         with:
@@ -513,23 +528,24 @@ jobs:
           fi
           gh release create "${{ github.ref_name }}" \
             $PRERELEASE \
+            --latest=${{ steps.check-release.outputs.is_latest }} \
             --title "${{ github.ref_name }}" \
             --notes-file /tmp/release-notes.md \
             target/release-artifacts/*
 
-      # Update Homebrew formula
+      # Update Homebrew formula (latest release only)
       - name: set up Homebrew
-        if: steps.check-release.outputs.is_stable == 'true'
+        if: steps.check-release.outputs.is_latest == 'true'
         uses: Homebrew/actions/setup-homebrew@main
         with:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
       - name: set up git for Homebrew
-        if: steps.check-release.outputs.is_stable == 'true'
+        if: steps.check-release.outputs.is_latest == 'true'
         uses: Homebrew/actions/git-user-config@main
 
       - name: update Homebrew formula
-        if: steps.check-release.outputs.is_stable == 'true'
+        if: steps.check-release.outputs.is_latest == 'true'
         env:
           HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
