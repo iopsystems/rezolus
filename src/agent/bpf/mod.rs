@@ -390,19 +390,24 @@ mod btf_tests {
 /// in 5.11 for LSM programs and were opened to tracing programs in 5.12, so a
 /// sampler that keeps per-thread state in task local storage cannot load on
 /// 5.8–5.11 and asks this at init to report *unsupported* rather than fail.
-/// `false` also covers a kernel that refuses the probe for any other reason
-/// (no BPF at all, a locked-down host), which is the right answer for a
-/// sampler that would then fail to load anyway.
+///
+/// This answers only that question. libbpf reports 0 when the verifier names
+/// the helper as unknown for the program type, and 1 for every other outcome
+/// of loading its two-instruction probe, a permission failure or a kernel
+/// without `bpf()` included: on such a host this returns `true` and the
+/// sampler goes on to fail at load with the real error, which is what it did
+/// before the probe existed.
 pub fn kernel_tracing_has_task_storage() -> bool {
     let ret = probe_task_storage_helper();
     if ret != 1 {
         debug!("kernel BPF helper probe for task storage from tracing programs returned {ret}");
     }
-    // 1 = supported, 0 = not, negative = the probe itself failed.
     ret == 1
 }
 
-/// libbpf's raw answer: 1, 0, or a negative errno.
+/// libbpf's raw answer: 1 (supported, or the load failed for a reason other
+/// than the helper), 0 (the verifier does not know the helper for this
+/// program type), or a negative errno when libbpf refuses the probe itself.
 ///
 /// Probed as a `kprobe` program, not a `tracing` one: libbpf cannot load a
 /// standalone `BPF_PROG_TYPE_TRACING` probe and returns `-EOPNOTSUPP` for that
@@ -430,9 +435,11 @@ mod task_storage_probe_tests {
 
     /// The probe must reach the kernel. `-EOPNOTSUPP` (-95) is libbpf refusing
     /// the program type before any syscall, which is what happened with
-    /// `BPF_PROG_TYPE_TRACING` and made every kernel look unsupported. A
-    /// permission failure when the tests run unprivileged is a real answer
-    /// from the kernel and is fine here; so is 0 or 1.
+    /// `BPF_PROG_TYPE_TRACING` and made every kernel look unsupported. For the
+    /// `kprobe` type libbpf returns only 0 or 1, unprivileged runs included
+    /// (a load refused with EPERM writes no verifier log and counts as 1), so
+    /// the assertion holds wherever the tests run and fails only on the
+    /// regression it guards.
     #[test]
     fn the_task_storage_probe_is_answered_by_the_kernel_not_refused_by_libbpf() {
         let ret = probe_task_storage_helper();
