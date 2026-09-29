@@ -159,12 +159,15 @@ if command -v apt &> /dev/null; then
         ubuntu)
             case "$CODENAME" in
                 focal)
-                    # Ubuntu focal (20.04) is amd64-only in our build matrix.
+                    # Ubuntu focal (20.04) is no longer built. Its repository
+                    # still serves the last focal release, 5.22.1 (amd64 only).
                     if [[ "$DEB_ARCH" != "amd64" ]]; then
-                        echo "Error: Ubuntu focal (20.04) packages are only available for amd64 (got $DEB_ARCH)" >&2
+                        echo "Error: Ubuntu focal (20.04) packages were only built for amd64 (got $DEB_ARCH)" >&2
                         echo "arm64 packages are available for jammy (22.04) and noble (24.04)" >&2
                         exit 1
                     fi
+                    echo "Warning: Ubuntu focal (20.04) receives no new Rezolus packages; the last is 5.22.1." >&2
+                    echo "Upgrade to jammy (22.04) or noble (24.04) for current releases." >&2
                     REPO_NAME="ubuntu-${CODENAME}"
                     ;;
                 jammy|noble)
@@ -172,7 +175,7 @@ if command -v apt &> /dev/null; then
                     ;;
                 *)
                     echo "Error: Unsupported Ubuntu release: $CODENAME" >&2
-                    echo "Supported releases: focal (20.04), jammy (22.04), noble (24.04)" >&2
+                    echo "Supported releases: jammy (22.04), noble (24.04)" >&2
                     exit 1
                     ;;
             esac
