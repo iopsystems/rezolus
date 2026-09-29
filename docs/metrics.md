@@ -586,7 +586,7 @@ the same as a remount.
 | `xfs_log_blocks_written` | 512-byte blocks written to the journal (`log/blocks`); ×512 is the journal's share of device writes | `mount`, ... |
 | `xfs_log_iclog_stalls` | Log writes that waited for a free in-core log buffer (`log/noiclogs`) | `mount`, ... |
 | `xfs_log_forces` | Log forces, the synchronous flush an fsync demands (`log/force`) | `mount`, ... |
-| `xfs_log_force_sleeps` | Force callers that queued behind a force in progress (`log/force_sleep`) | `mount`, ... |
+| `xfs_log_force_sleeps` | Forces that waited for a log write to complete (`log/force_sleep`); a synchronous force sleeps once for its own write, and a second sleep per force is a wait on the previous in-core log buffer, that is on another caller's commit | `mount`, ... |
 | `xfs_log_space_requests` | Transactions that reserved log space (`push_ail/try_logspace`) | `mount`, ... |
 | `xfs_log_space_sleeps` | Transactions that slept for log space (`push_ail/sleep_logspace`); any rate means the log is too small or too slow for the write rate | `mount`, ... |
 | `xfs_ail_pushes` | AIL push attempts (`push_ail/pushes`) | `mount`, ... |

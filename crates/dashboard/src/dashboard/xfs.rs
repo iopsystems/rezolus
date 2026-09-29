@@ -21,8 +21,9 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
     let forces = log.subgroup("Forces");
     forces.describe(
         "Log forces are the synchronous flush an fsync or a synchronous transaction demands; \
-         a force sleep is a caller that found one already running and queued behind it. \
-         Force sleeps per force is how much fsyncs are waiting on each other.",
+         a force sleep is a force that waited for a log write to complete. A synchronous \
+         force sleeps once for its own write, so sleeps per force above one is fsyncs \
+         waiting on each other's log writes as well.",
     );
     forces.plot_promql(
         PlotOpts::counter("Forces", "log-forces", Unit::Count),
