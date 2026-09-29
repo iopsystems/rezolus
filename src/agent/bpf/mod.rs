@@ -385,6 +385,29 @@ mod btf_tests {
     }
 }
 
+/// Whether the running kernel lets tracing programs (`tp_btf`, `fentry`,
+/// `fexit`) call `bpf_task_storage_get`. The helper and its map type arrived
+/// in 5.11 for LSM programs and were opened to tracing programs in 5.12, so a
+/// sampler that keeps per-thread state in task local storage cannot load on
+/// 5.8–5.11 and asks this at init to report *unsupported* rather than fail.
+/// libbpf answers by loading a probe program; `false` also covers a kernel
+/// that refuses the probe for any other reason (no BPF at all, a locked-down
+/// host), which is the right answer for a sampler that would then fail to
+/// load anyway.
+pub fn kernel_tracing_has_task_storage() -> bool {
+    // SAFETY: FFI call with plain enum arguments and a null options pointer,
+    // which libbpf documents as "default options".
+    let ret = unsafe {
+        libbpf_sys::libbpf_probe_bpf_helper(
+            libbpf_sys::BPF_PROG_TYPE_TRACING,
+            libbpf_sys::BPF_FUNC_task_storage_get,
+            std::ptr::null(),
+        )
+    };
+    // 1 = supported, 0 = not, negative = the probe itself failed.
+    ret == 1
+}
+
 /// The length of one jiffy in nanoseconds, or `None` if the kernel would not
 /// say. `CLOCK_MONOTONIC_COARSE` is the tick-granular clock and its resolution
 /// is `TICK_NSEC`: 4,000,000 ns on a `CONFIG_HZ=250` kernel, 1,000,000 on

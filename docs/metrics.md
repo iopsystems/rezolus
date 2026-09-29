@@ -446,8 +446,9 @@ inside the filesystem", the mechanism a slow disk reaches a request through.
 
 Kernel support: task local storage became usable from tracing programs in
 5.12, and `fentry` on a module's functions needs module BTF (5.11), so the
-sampler needs 5.12 or later; on an older kernel `rezolus status` shows it
-unsupported. `ext4_rename2` has taken six arguments since 5.12; the sampler
+sampler needs 5.12 or later. The sampler probes both at init (the helper with
+libbpf's probe, the tracepoints in BTF) and on an older kernel `rezolus
+status` shows it unsupported rather than failed. `ext4_rename2` has taken six arguments since 5.12; the sampler
 confirms that from BTF and disables the rename pair on any other count. If
 BTF lacks `ext4_file_write_iter` or `ext4_rename2`, that operation's
 histogram stays empty and its counters read 0 while the rest run.

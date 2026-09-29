@@ -18,9 +18,10 @@
 //! ext4 dashboard's Write Path group draws (bytes written, pages written back,
 //! journal blocks logged, device bytes).
 //!
-//! **Off by default** (`config/agent.toml`): both probes of a pair run on the
-//! request path, once per call, so this is the most expensive of the ext4
-//! samplers and is benched before it is on by default; see the journal entry.
+//! **Opt-in**: both probes of a pair run on the request path, once per call,
+//! so this is the most expensive of the ext4 samplers (measured in the journal
+//! entry). It is in the config's `OPT_IN_SAMPLERS`, so `[defaults]` never
+//! enables it; only `[samplers.ext4_ops] enabled = true` does.
 //!
 //! Kernel support: the start timestamp is in task local storage
 //! (`BPF_MAP_TYPE_TASK_STORAGE`, usable from tracing programs since 5.12),
@@ -154,14 +155,23 @@ fn init(config: Arc<Config>) -> SamplerResult {
         return Ok(None);
     }
 
-    // This machine cannot, rather than this sampler failed: reported as
+    // This machine cannot, rather than this sampler failed: both checks report
     // unsupported, so `rezolus status` does not exit non-zero for a kernel
-    // that predates the BTF the sampler needs.
+    // that predates what the sampler needs. The helper probe is the one that
+    // catches 5.8–5.11: those kernels can have every tracepoint in BTF and
+    // still refuse `bpf_task_storage_get` from a tracing program at load.
+    if !kernel_tracing_has_task_storage() {
+        return Err(crate::agent::sampler_status::Unsupported(
+            "tracing programs cannot use task local storage on this kernel (needs 5.12+)"
+                .to_string(),
+        )
+        .into());
+    }
+
     if !kernel_btf_has_tracepoints(TRACEPOINTS) {
         return Err(crate::agent::sampler_status::Unsupported(
             "the kernel's BTF does not describe the ext4 fsync and unlink tracepoints; needs \
-             vmlinux BTF with ext4 built in, or module BTF (kernels 5.11+) with ext4 as a module, \
-             and task local storage for tracing programs (5.12+)"
+             vmlinux BTF with ext4 built in, or module BTF (kernels 5.11+) with ext4 as a module"
                 .to_string(),
         )
         .into());
