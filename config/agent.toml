@@ -239,6 +239,15 @@ enabled = true
 # See docs/metrics.md#ext4_journal.
 [samplers.ext4_journal]
 
+# BPF sampler on ext4's request-path operations: fsync, unlink, write and
+# rename latency, per-filesystem counts and time, and the time each cgroup's
+# threads spend held inside them. Two probes per call on the request path, so
+# it stays off until its probe cost has been benched on a fleet-representative
+# workload. Needs kernels 5.11+ (task local storage; module BTF when ext4 is a
+# module). See docs/metrics.md#ext4_ops.
+[samplers.ext4_ops]
+enabled = false
+
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems.

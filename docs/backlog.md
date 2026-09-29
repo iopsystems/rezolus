@@ -970,13 +970,16 @@ bare-metal probe-cost bench for anything at request rate).
   aliases at one directory walk per cache per sweep.
 - **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
   promoted): the cache device is never the root filesystem.
-- **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
-  enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
-  Forces the per-thread start-state decision (`MAX_PID` arrays vs task
-  local storage at a 5.11 floor). Bench before default-on.
-- **Write-amplification decomposition dashboard** — Roadmap. VFS bytes,
-  writeback pages, journal blocks logged, device bytes on one axis; no new
-  hooks once `ext4_ops` and `ext4_alloc` exist.
+- **`ext4_ops` sampler** — DONE, off by default. fsync and unlink from the
+  enter/exit tracepoints, write and rename via `fentry`/`fexit`, per
+  filesystem and per cgroup; task local storage for the start state. See the
+  gaps entry's "Results — C5 and C6" for the measured probe cost.
+- **`ext4_ops` on by default** — Open. Gated on the probe-cost bench on a
+  fleet-representative fsync rate; the numbers so far are in the gaps entry.
+- **Write-amplification decomposition dashboard** — DONE as the ext4
+  dashboard's Write Path group: application bytes (`ext4_write_bytes`),
+  writeback bytes, journal bytes, device bytes on one axis, each term drawn
+  when the recording has it.
 - **XFS journal and allocator samplers** — Idea. Module tracepoints; the
   module-BTF twin selection applies.
 - **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;

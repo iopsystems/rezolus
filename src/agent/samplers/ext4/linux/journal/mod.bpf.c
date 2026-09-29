@@ -174,15 +174,6 @@ static __always_inline void counter_incr(u32 slot, u32 counter) {
     counter_add(slot, counter, 1);
 }
 
-// The device of the file an fsync was called on.
-static __always_inline u32 file_dev(struct file* file) {
-    if (!file) {
-        return 0;
-    }
-
-    return BPF_CORE_READ(file, f_inode, i_sb, s_dev);
-}
-
 // jbd2_run_stats fires once per commit, from the journal's kjournald2 thread,
 // after the commit completes. Every phase is in jiffies.
 static int __always_inline handle_run_stats(u32 slot, void* stats) {

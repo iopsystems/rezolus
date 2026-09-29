@@ -11,4 +11,8 @@ mod stats {
     mod journal {
         include!("./linux/journal/stats.rs");
     }
+
+    mod ops {
+        include!("./linux/ops/stats.rs");
+    }
 }

@@ -42,32 +42,65 @@ pub fn kernel_has_btf() -> bool {
 /// Selecting on this function instead falls back to the kprobe twins, which miss
 /// gracefully.
 ///
-/// Not cached: callers ask once, at sampler init, and each call parses vmlinux
-/// BTF. Returns false when there is no kernel BTF to consult.
+/// Module BTF counts too: libbpf resolves an `fentry`/`fexit` target against
+/// every loaded module's BTF (kernels 5.11+), so a function that lives in
+/// `ext4.ko` is attachable when `/sys/kernel/btf/ext4` describes it.
+///
+/// Not cached: callers ask once, at sampler init, and each call parses the
+/// kernel's BTF. Returns false when there is no kernel BTF to consult.
 pub fn kernel_btf_has_funcs(names: &[&str]) -> bool {
     if !kernel_has_btf() {
         return false;
     }
 
-    let Ok(btf) = libbpf_rs::btf::Btf::from_vmlinux() else {
+    let Some(vmlinux) = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None) else {
         return false;
     };
+
+    // Declared after `vmlinux` so it drops first: a split BTF refers to its
+    // base for the whole of its life.
+    let modules: Vec<RawBtf> = module_btf_paths(Path::new("/sys/kernel/btf"))
+        .iter()
+        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
+        .collect();
 
     // Every name is checked, not just up to the first miss: when a sampler is
     // about to fall back, the useful debug output names all of what is absent.
     let mut all = true;
 
     for name in names {
-        if btf
-            .type_by_name::<libbpf_rs::btf::types::Func<'_>>(name)
-            .is_none()
-        {
-            debug!("kernel BTF has no function `{name}`");
+        if !vmlinux.has_func(name) && !modules.iter().any(|m| m.has_func(name)) {
+            debug!("kernel BTF (vmlinux and modules) has no function `{name}`");
             all = false;
         }
     }
 
     all
+}
+
+/// The number of parameters kernel function `name` takes, from its BTF
+/// prototype in vmlinux or a module, or `None` when no BTF describes it.
+///
+/// The `fentry`/`fexit` counterpart of [`kernel_btf_tracepoint_arg_count`]: a
+/// function's signature can change between kernel versions (`ext4_rename2`
+/// gained a namespace argument in 5.12), a trampoline program reads its
+/// arguments and, for `fexit`, the return value by position, and a program
+/// written for one arity reads the wrong slot on the other without an error.
+pub fn kernel_btf_func_arg_count(name: &str) -> Option<u32> {
+    if !kernel_has_btf() {
+        return None;
+    }
+
+    let vmlinux = RawBtf::parse(Path::new("/sys/kernel/btf/vmlinux"), None)?;
+
+    if let Some(n) = vmlinux.func_arg_count(name) {
+        return Some(n);
+    }
+
+    module_btf_paths(Path::new("/sys/kernel/btf"))
+        .iter()
+        .filter_map(|path| RawBtf::parse(path, Some(&vmlinux)))
+        .find_map(|btf| btf.func_arg_count(name))
 }
 
 /// Returns true if the running kernel's BTF — vmlinux **or any loaded
@@ -165,20 +198,49 @@ impl RawBtf {
     /// Whether this BTF — its own types only, not its base's — declares a
     /// typedef of that name.
     fn has_typedef(&self, name: &str) -> bool {
+        self.find(name, libbpf_sys::BTF_KIND_TYPEDEF) >= 0
+    }
+
+    /// Whether this BTF — its own types only, not its base's — declares a
+    /// function of that name.
+    fn has_func(&self, name: &str) -> bool {
+        self.find(name, libbpf_sys::BTF_KIND_FUNC) >= 0
+    }
+
+    /// The id of the type named `name` of `kind` in this BTF, or negative.
+    fn find(&self, name: &str, kind: u32) -> i32 {
         let Ok(cname) = std::ffi::CString::new(name) else {
-            return false;
+            return -1;
         };
 
         // SAFETY: `self.0` is a live BTF object and `cname` a valid C string.
-        let id = unsafe {
-            libbpf_sys::btf__find_by_name_kind(
-                self.0.as_ptr(),
-                cname.as_ptr(),
-                libbpf_sys::BTF_KIND_TYPEDEF,
-            )
-        };
+        unsafe { libbpf_sys::btf__find_by_name_kind(self.0.as_ptr(), cname.as_ptr(), kind) }
+    }
 
-        id >= 0
+    /// The number of parameters function `name` takes, from its BTF: a
+    /// `FUNC` refers to a `FUNC_PROTO` whose vlen is the parameter count.
+    /// `None` if this BTF has no such function.
+    fn func_arg_count(&self, name: &str) -> Option<u32> {
+        let id = self.find(name, libbpf_sys::BTF_KIND_FUNC);
+        if id < 0 {
+            return None;
+        }
+
+        // SAFETY: `self.0` is a live BTF object; every id passed to
+        // `btf__type_by_id` came from that object, and the returned pointer is
+        // read before the object is freed.
+        unsafe {
+            let func = libbpf_sys::btf__type_by_id(self.0.as_ptr(), id as u32);
+            if func.is_null() || btf_kind(&*func) != libbpf_sys::BTF_KIND_FUNC {
+                return None;
+            }
+            let proto =
+                libbpf_sys::btf__type_by_id(self.0.as_ptr(), (*func).__bindgen_anon_1.type_);
+            if proto.is_null() || btf_kind(&*proto) != libbpf_sys::BTF_KIND_FUNC_PROTO {
+                return None;
+            }
+            Some((*proto).info & 0xffff)
+        }
     }
 
     /// The number of arguments the tracepoint `name` passes to a `tp_btf` or
@@ -304,6 +366,12 @@ mod btf_tests {
             .expect("sched_switch is a tracepoint");
         assert!((3..=4).contains(&n), "sched_switch has {n} arguments");
         assert_eq!(vmlinux.tracepoint_arg_count("no_such_tracepoint"), None);
+        // vfs_fsync_range(struct file *, loff_t, loff_t, int) on every kernel
+        // since 2.6; the count is the FUNC_PROTO's vlen, not vlen - 1 as for a
+        // tracepoint's typedef (no leading context pointer).
+        assert!(vmlinux.has_func("vfs_fsync_range"));
+        assert_eq!(vmlinux.func_arg_count("vfs_fsync_range"), Some(4));
+        assert_eq!(vmlinux.func_arg_count("no_such_function"), None);
         for path in module_btf_paths(Path::new("/sys/kernel/btf")) {
             assert!(
                 RawBtf::parse(&path, Some(&vmlinux)).is_some(),
