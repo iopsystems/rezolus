@@ -50,4 +50,8 @@ Rules that hold on every recording:
 Lead with the finding and the instant it happened, then the evidence
 (metric, query, values with their bands). State what could not be measured.
 To mark a finding in the recording itself, the person can run
-`rezolus recording annotate <file> --event 'time=<RFC 3339>,kind=finding,description=<text>'`.
+`rezolus recording annotate <file> --event 'time=<RFC 3339>,kind=finding,description="<text>"'`.
+Keep the quotes around the description: a comma inside it otherwise splits
+the event. On a multi-recording archive, annotate writes the event into
+every recording, not only the one you investigated; say so when you suggest
+it.
