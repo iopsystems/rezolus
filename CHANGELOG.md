@@ -1,6 +1,19 @@
 ## [Unreleased]
 
-## [5.23.0] - 2026-09-29
+## [5.23.1] - 2026-09-29
+
+5.23.0 was tagged but never published: its Ubuntu 20.04 package failed to
+build, so no packages or release were made. 5.23.1 is that release without
+focal.
+
+### Removed
+
+- **Ubuntu 20.04 (focal) packages are no longer built.** Focal ships clang 10,
+  and the `memory_writeback` sampler's CO-RE enum relocations
+  (`bpf_core_enum_value`) need clang 12, so the focal package no longer
+  compiles. Focal's standard support ended in May 2025 and its GA kernel
+  (5.4) is below the 5.8 minimum. Its repository keeps serving 5.22.1, the
+  last focal release; `install.sh` still installs it there, with a warning.
 
 ### Added
 
@@ -1735,8 +1748,8 @@
 - Rewritten implementation of Rezolus using libbpf-rs and perf-event2 to provide
   a more modern approach to BPF and Perf Event instrumentation. 
 
-[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.23.0...HEAD
-[5.23.0]: https://github.com/iopsystems/rezolus/compare/v5.22.1...v5.23.0
+[unreleased]: https://github.com/iopsystems/rezolus/compare/v5.23.1...HEAD
+[5.23.1]: https://github.com/iopsystems/rezolus/compare/v5.22.1...v5.23.1
 [5.22.1]: https://github.com/iopsystems/rezolus/compare/v5.22.0...v5.22.1
 [5.22.0]: https://github.com/iopsystems/rezolus/compare/v5.21.0...v5.22.0
 [5.21.0]: https://github.com/iopsystems/rezolus/compare/v5.20.0...v5.21.0

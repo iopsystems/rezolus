@@ -29,7 +29,7 @@ OPTIONS:
 
 USE WITH DOCKER:
     This script is intended to be run within a debian-based docker container.
-    As an example, consider building for ubuntu focal:
+    As an example, consider building for ubuntu noble:
 
     docker run -it --rm \\
         -v \$(pwd):/mnt/rezolus \\
