@@ -244,6 +244,11 @@ mod tests {
                 "{name}: cgroup_attribution"
             );
             assert_eq!(
+                packaged.cgroup_attribution_or(name, true),
+                bare.cgroup_attribution_or(name, true),
+                "{name}: cgroup_attribution for a default-on sampler"
+            );
+            assert_eq!(
                 packaged.task_attribution(name),
                 bare.task_attribution(name),
                 "{name}: task_attribution"

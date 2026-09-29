@@ -2,6 +2,13 @@
 
 ### Changed
 
+- `cpu_perf` honours `cgroup_attribution` (on by default for this
+  sampler). With `cgroup_attribution = false` its `sched_switch` program is
+  not loaded, so nothing reads the PMU per context switch; `cpu_cycles` and
+  `cpu_instructions` are read per CPU at scrape time and the `cgroup_cpu_*`
+  series are absent. On a KVM guest with an emulated PMU the program's two
+  counter reads measured 20 µs per context switch. A `[defaults]
+  cgroup_attribution = false` reaches `cpu_perf` too.
 - `cpu_usage` no longer exports `task_cpu_usage` unless its section (or
   `[defaults]`) sets `task_attribution = true`. The per-task accounting the
   host and cgroup totals are computed from still runs; what is dropped by
