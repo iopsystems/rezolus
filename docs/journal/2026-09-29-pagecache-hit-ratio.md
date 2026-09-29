@@ -197,7 +197,40 @@ read_bytes`, readahead included; the memory dashboard's Page Cache group
 draws it per mount. What is lost against the design above: no per-call
 outcome, no read latency split by hit and miss, and a fill that the
 readahead of one read serves to a later read still counts as that read's
-miss. Cost and the VM cross-check are in the PR and below once measured.
+miss.
+
+**VM check** (systemslab `01a0edf4-0f4f-71fa-ef26-c9d678719100`, Debian 13,
+6.12, 56 vCPU, the root ext4 over virtio, the image's own agent stopped,
+`cgroup_attribution = true`). Each phase against what the workload must
+produce:
+
+| phase | expected | sampler |
+|---|---|---|
+| cold 4 KiB random reads of a 1 GiB file, 10 s | the file's 262,144 pages filled by reads | `pages_added{read}` 262,338; tracefs adds 267,875 host-wide; `pgpgin` 271,312 pages |
+| same, warm, 8 jobs (3.28 M reads/s) | no fills, every call counted | 0 fills; 32,812,534 reads |
+| `dd` 512 MiB write | 131,072 pages filled by a write | `pages_added{write}` 131,072 |
+| mmap walk of the cold 1 GiB file | 262,144 pages filled by faults | `pages_added{fault}` 262,212; 8,936 faults (fault-around) |
+| 20,000 cold 4 KiB files read with a 128 KiB buffer | 20,000 read fills; about 82 MB readable | `pages_added{read}` 20,000; `read_bytes` 83.9 MB (unclamped would be 2.6 GB); 1,381 `other` fills, the block device's inode tables and directories, as the probe found |
+| the same, warm, 5 passes | no fills | 0 read fills; 100,444 reads |
+| `drop_caches` with the file cached | the file's pages evicted | 286,536 evicted |
+
+The small-file reader ran in its own scope, and its cgroup's series carry
+its 20,005 reads and 21,377 fills. With the option absent the
+`memory_pagecache_cgroup` group is not emitted.
+
+**Cost**, from the kernel's program statistics:
+
+| program | ns per run, cgroup attribution on | off |
+|---|---|---|
+| `filemap_read` fentry | 666 (45.98 M runs) | 399 (4,633 runs) |
+| `mm_filemap_add_to_page_cache` (classified) | 557 | 293 |
+| `mm_filemap_delete_from_page_cache` | 214 | — |
+| `filemap_fault` fentry | 257 | 245 |
+
+The off column comes from a short idle arm, so its read figure rests on few
+runs. A cached 4 KiB read took about 2.4 µs of thread time at the 3.28 M/s
+ceiling here, so the read probe is 17–28% of a cache hit, which is why the
+sampler is opt-in. Refresh p50 92 µs, p99 308 µs.
 
 ## Deferred / reopen
 
