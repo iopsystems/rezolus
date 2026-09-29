@@ -7,7 +7,7 @@
 //! And produces these stats:
 //! * `cpu_usage`
 //! * `cgroup_cpu_usage`
-//! * `task_cpu_usage`
+//! * `task_cpu_usage` — only with `task_attribution = true` (off by default)
 //! * `softirq`
 //! * `softirq_time`
 //!
@@ -178,7 +178,9 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SOFTIRQ_TIME_RCU,
     ];
 
-    let bpf = BpfBuilder::new(
+    let task_attribution = config.task_attribution(NAME);
+
+    let mut builder = BpfBuilder::new(
         &config,
         NAME,
         BpfProgStats {
@@ -197,10 +199,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CGROUP_CPU_USAGE_EXITED,
         &CGROUP_EXITED_ACQ,
     )
-    .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE, &TASK_USAGE_ACQ)
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
-    .ringbuf_handler("task_info", handle_task_info)
-    .ringbuf_handler("task_exit", handle_task_exit)
     // BTF present: use the fentry twins (cheaper dispatch), disable the
     // kprobe/raw fallbacks. Without BTF: the reverse. cpuacct_account_field and
     // sched_process_exit both switch on the same signal.
@@ -223,7 +222,25 @@ fn init(config: Arc<Config>) -> SamplerResult {
     } else {
         &[("cpuacct_account_field_kprobe", "CPU time by category")]
     })
-    .build()?;
+    // The switch is read-only data the verifier folds at load (see
+    // `task_attribution` in mod.bpf.c). Off, the per-task accounting still
+    // runs; the per-task series and the events that label them do not exist.
+    .pre_load(move |open| {
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .task_attribution = task_attribution as u8;
+    });
+
+    if task_attribution {
+        builder = builder
+            .sparse_packed_counters("task_cpu_usage", &TASK_CPU_USAGE, &TASK_USAGE_ACQ)
+            .ringbuf_handler("task_info", handle_task_info)
+            .ringbuf_handler("task_exit", handle_task_exit);
+    }
+
+    let bpf = builder.build()?;
 
     Ok(Some(Box::new(bpf)))
 }
