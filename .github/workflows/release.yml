@@ -31,8 +31,9 @@ jobs:
           - { distro: debian, release: trixie, arch: x86_64 }
           - { distro: debian, release: trixie, arch: arm64 }
 
-          # ubuntu
-          - { distro: ubuntu, release: focal, arch: x86_64 } # 20.04
+          # ubuntu -- focal dropped: its clang 10 cannot build the BPF samplers
+          # (CO-RE enum relocations need clang 12), standard support ended
+          # 2025-05, and its GA kernel is below the 5.8 minimum (see CHANGELOG)
           - { distro: ubuntu, release: jammy, arch: x86_64 } # 22.04
           - { distro: ubuntu, release: jammy, arch: arm64 } # 22.04
           - { distro: ubuntu, release: noble, arch: x86_64 } # 24.04
