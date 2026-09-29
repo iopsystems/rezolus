@@ -178,6 +178,7 @@ mod bpf {
         }
 
         println!("cargo:rerun-if-changed=src/agent/bpf/histogram.h");
+        println!("cargo:rerun-if-changed=src/agent/bpf/filesystem.h");
         println!("cargo:rerun-if-changed=src/agent/bpf/vmlinux.h");
     }
 }

@@ -18,10 +18,14 @@
 //!   `ext4_preallocation_discarded_blocks`
 //! * `ext4_inode_loads`, `ext4_bitmap_loads{kind}`
 //!
-//! Host-wide, like `ext4_journal`; per-filesystem attribution is phase 3 of
-//! docs/journal/2026-09-28-ext4-sampler.md. Kernel support is the same as
-//! `ext4_journal`'s: the allocator hook reads `struct ext4_allocation_context`
-//! through CO-RE, which needs the ext4 types in vmlinux or module BTF.
+//! Counters are per filesystem, exactly as `ext4_journal`'s: one slot per
+//! mounted ext4 filesystem labeled `mount`, `fstype`, `devnum` and
+//! `block_device`, plus slot 0 `mount="other"`; the slot is a `dev_t` lookup
+//! on the superblock each hook reaches (`bpf/filesystem.h`,
+//! `bpf/filesystems.rs`). The allocation-size histogram stays host-wide.
+//! Kernel support is the same as `ext4_journal`'s: the allocator hook reads
+//! `struct ext4_allocation_context` through CO-RE, which needs the ext4 types
+//! in vmlinux or module BTF.
 
 const NAME: &str = "ext4_alloc";
 
@@ -104,6 +108,41 @@ const HOOKS: &[(&str, &str, &str, &str)] = &[
     ),
 ];
 
+/// What a filesystem slot means, published when the mount table changes.
+static FS_IDENTITY: crate::agent::identity::SlotIdentity =
+    crate::agent::identity::SlotIdentity::new(FS_IDENTITY_GROUPS);
+
+#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
+static FS_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &FS_IDENTITY;
+
+static FS_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
+    &COUNTERS_ACQ,
+    &[
+        &EXT4_ALLOCATIONS,
+        &EXT4_ALLOCATION_BLOCKS_REQUESTED,
+        &EXT4_ALLOCATION_BLOCKS_ALLOCATED,
+        &EXT4_ALLOCATION_GROUPS_SCANNED,
+        &EXT4_ALLOCATIONS_CR0,
+        &EXT4_ALLOCATIONS_CR1,
+        &EXT4_ALLOCATIONS_CR2,
+        &EXT4_ALLOCATIONS_CR3,
+        &EXT4_ALLOCATIONS_CR4,
+        &EXT4_FREED_BLOCKS,
+        &EXT4_INODES_ALLOCATED,
+        &EXT4_INODES_FREED,
+        &EXT4_WRITEPAGES,
+        &EXT4_WRITEPAGES_PAGES_WRITTEN,
+        &EXT4_WRITEPAGES_PAGES_SKIPPED,
+        &EXT4_WRITEPAGES_ERRORS,
+        &EXT4_TRIMMED_BLOCKS,
+        &EXT4_PREALLOCATION_DISCARDS,
+        &EXT4_PREALLOCATION_DISCARDED_BLOCKS,
+        &EXT4_INODE_LOADS,
+        &EXT4_BITMAP_LOADS_BLOCK,
+        &EXT4_BITMAP_LOADS_INODE,
+    ],
+)];
+
 fn init(config: Arc<Config>) -> SamplerResult {
     if !config.enabled(NAME) {
         return Ok(None);
@@ -160,7 +199,13 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    .counters("counters", counters, &COUNTERS_ACQ)
+    .filesystem_counters(
+        "counters",
+        "fs_slots",
+        counters,
+        &COUNTERS_ACQ,
+        &FS_IDENTITY,
+    )
     .histogram(
         "allocation_size",
         &EXT4_ALLOCATION_SIZE,
@@ -184,6 +229,7 @@ impl SkelExt for ModSkel<'_> {
     fn map(&self, name: &str) -> &libbpf_rs::Map<'_> {
         match name {
             "counters" => &self.maps.counters,
+            "fs_slots" => &self.maps.fs_slots,
             "allocation_size" => &self.maps.allocation_size,
             _ => unimplemented!(),
         }

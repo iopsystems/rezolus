@@ -85,7 +85,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-mod mounts;
+pub(crate) mod mounts;
 mod stats;
 
 use mounts::MountEntry;

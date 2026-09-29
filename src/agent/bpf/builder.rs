@@ -459,6 +459,17 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static CounterGroup,
         &'static AcquisitionGroup,
     )>,
+    /// Per-filesystem counter maps: the counters map, the `dev_t → slot`
+    /// lookup map, the per-slot metrics, their group and the identity that
+    /// labels the slots. See `filesystem_counters`.
+    #[allow(clippy::type_complexity)]
+    filesystem_counters: Vec<(
+        &'static str,
+        &'static str,
+        Vec<&'static CounterGroup>,
+        &'static AcquisitionGroup,
+        &'static crate::agent::identity::SlotIdentity,
+    )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
@@ -502,6 +513,7 @@ where
             perf_events: Vec::new(),
             perf_group: None,
             packed_counters: Vec::new(),
+            filesystem_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
@@ -787,6 +799,20 @@ where
                 .map(|(name, counters, group)| CpuCounters::new(skel.map(name), counters, group))
                 .collect();
 
+            let mut filesystem_counters: Vec<FilesystemCounters> = self
+                .filesystem_counters
+                .into_iter()
+                .map(|(name, lookup, counters, group, identity)| {
+                    FilesystemCounters::new(
+                        skel.map(name),
+                        skel.map(lookup),
+                        counters,
+                        group,
+                        identity,
+                    )
+                })
+                .collect();
+
             debug!(
                 "{} initializing perf counters for: {} events",
                 self.name,
@@ -982,6 +1008,10 @@ where
                     v.refresh();
                 }
 
+                for v in &mut filesystem_counters {
+                    v.refresh();
+                }
+
                 for v in &mut packed_counters {
                     v.refresh();
                 }
@@ -1124,6 +1154,26 @@ where
         group: &'static AcquisitionGroup,
     ) -> Self {
         self.cpu_counters.push((name, counters, group));
+        self
+    }
+
+    /// Register a set of per-filesystem counters: `name` is a BPF map laid
+    /// out as `MAX_CPUS × MAX_FILESYSTEMS` cacheline-padded banks and
+    /// `lookup` the `dev_t → slot` hash the program indexes it with (both
+    /// from `bpf/filesystem.h`). Each `counters` entry is a `CounterGroup`
+    /// of `MAX_FILESYSTEMS` slots, in the map's counter order; `identity`
+    /// labels the slots with the mount. `group` brackets this map's refresh
+    /// (single writer). See `FilesystemCounters` and `bpf/filesystems.rs`.
+    pub fn filesystem_counters(
+        mut self,
+        name: &'static str,
+        lookup: &'static str,
+        counters: Vec<&'static CounterGroup>,
+        group: &'static AcquisitionGroup,
+        identity: &'static crate::agent::identity::SlotIdentity,
+    ) -> Self {
+        self.filesystem_counters
+            .push((name, lookup, counters, group, identity));
         self
     }
 

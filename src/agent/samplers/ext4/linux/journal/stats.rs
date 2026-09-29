@@ -2,6 +2,7 @@ use crate::common::HISTOGRAM_GROUPING_POWER;
 use metriken::*;
 
 use crate::agent::timing::AcquisitionGroup;
+use crate::agent::MAX_FILESYSTEMS;
 use linkme::distributed_slice;
 
 // this is hard-coded still and must match the BPF histograms which are fixed to
@@ -146,9 +147,12 @@ pub static EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
 
 /*
- * counters: one `counters` map, one bank per CPU, summed in userspace. Order
- * here is documentation; the order that matters is the `counters` vec in
- * mod.rs, which must match the C_* indices in mod.bpf.c.
+ * counters: one `counters` map, one bank per (CPU, filesystem slot), summed
+ * over CPUs in userspace into one `CounterGroup` entry per slot
+ * (`bpf/filesystems.rs`): slot 0 is `mount="other"`, the rest carry the
+ * mount's labels, and totals are `sum(...)` over slots. Order here is
+ * documentation; the order that matters is the `counters` vec in mod.rs,
+ * which must match the C_* indices in mod.bpf.c.
  */
 
 #[metric(
@@ -156,98 +160,98 @@ pub static EXT4_JOURNAL_LOCK_BUFFER_STALL_LATENCY: RwLockHistogram =
     description = "The number of journal (jbd2) transaction commits",
     metadata = { unit = "commits", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_COMMITS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_COMMITS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_commit_handles",
     description = "The number of handles (metadata operations) committed to the journal, summed over commits",
     metadata = { unit = "handles", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_COMMIT_HANDLES: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_COMMIT_HANDLES: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_commit_blocks",
     description = "The number of metadata blocks dirtied by committed transactions, summed over commits",
     metadata = { unit = "blocks", kind = "dirtied", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_COMMIT_BLOCKS_DIRTIED: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_COMMIT_BLOCKS_DIRTIED: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_commit_blocks",
     description = "The number of blocks written to the journal by committed transactions (metadata plus descriptor and commit blocks), summed over commits",
     metadata = { unit = "blocks", kind = "logged", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_COMMIT_BLOCKS_LOGGED: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_COMMIT_BLOCKS_LOGGED: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_checkpoints",
     description = "The number of journal checkpoints",
     metadata = { unit = "checkpoints", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_CHECKPOINTS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_CHECKPOINTS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_checkpoint_buffers",
     description = "The number of buffers journal checkpoints wrote to their final location",
     metadata = { unit = "buffers", outcome = "written", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_CHECKPOINT_BUFFERS_WRITTEN: LazyCounter =
-    LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_CHECKPOINT_BUFFERS_WRITTEN: CounterGroup =
+    CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_checkpoint_buffers",
     description = "The number of buffers journal checkpoints found already written and dropped without I/O",
     metadata = { unit = "buffers", outcome = "dropped", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_CHECKPOINT_BUFFERS_DROPPED: LazyCounter =
-    LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_CHECKPOINT_BUFFERS_DROPPED: CounterGroup =
+    CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_checkpoint_forced_to_close",
     description = "The number of transactions a checkpoint had to force closed to free journal space. A rising rate means the journal is too small for the write rate",
     metadata = { unit = "transactions", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_CHECKPOINT_FORCED_TO_CLOSE: LazyCounter =
-    LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_CHECKPOINT_FORCED_TO_CLOSE: CounterGroup =
+    CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_sync_file",
     description = "The number of fsync calls that reached ext4",
     metadata = { unit = "operations", op = "fsync", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_SYNC_FILE_FSYNC: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_SYNC_FILE_FSYNC: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_sync_file",
     description = "The number of fdatasync calls that reached ext4",
     metadata = { unit = "operations", op = "fdatasync", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_SYNC_FILE_FDATASYNC: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_SYNC_FILE_FDATASYNC: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_sync_file_errors",
     description = "The number of fsync and fdatasync calls ext4 completed with an error",
     metadata = { unit = "operations", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_SYNC_FILE_ERRORS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_SYNC_FILE_ERRORS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_errors",
     description = "The number of errors ext4 reported (ext4_error and its variants), counted as they occur and before any errors=remount-ro takes effect. Absent on kernels without the ext4_error tracepoint",
     metadata = { unit = "errors", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_ERRORS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_ERRORS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_shutdowns",
     description = "The number of forced ext4 filesystem shutdowns",
     metadata = { unit = "shutdowns", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_SHUTDOWNS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_SHUTDOWNS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
 
 #[metric(
     name = "ext4_journal_lock_buffer_stalls",
     description = "The number of times the journal stalled on a locked buffer",
     metadata = { unit = "stalls", acq_group = "ext4_journal_counters" }
 )]
-pub static EXT4_JOURNAL_LOCK_BUFFER_STALLS: LazyCounter = LazyCounter::new(Counter::default);
+pub static EXT4_JOURNAL_LOCK_BUFFER_STALLS: CounterGroup = CounterGroup::new(MAX_FILESYSTEMS);
