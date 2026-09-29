@@ -418,9 +418,33 @@ plot.
   ns, twice the begin. `bpftool prog profile` (cycles and instructions per
   run) is not in Debian's bpftool build, so instructions per run were not
   measured; the ~300-instruction reopen threshold reads as roughly 300 ns
-  here. The first thing to try is a variant without the per-cgroup path in
-  the end hook, which is the only component that is three operations rather
-  than one. Reopen the on-by-default question if that halves the end hook.
+  here. The variant was then built and measured (systemslab
+  `01a0ecfa-e969-7193-2cce-b0d88e85d5ac`, same bench, the image's agent
+  stopped, four builds of the same tree with calls guarded by `if (0)`):
+
+  | end hook (`ext4_sync_file_exit` / `ext4_file_write_iter_fexit`) | ns per run | bench IOPS |
+  |---|---|---|
+  | as shipped | 537 / 531 | 465 K |
+  | without the per-cgroup path | 266 / 271 | 535 K |
+  | also without the per-filesystem counters | 269 / 257 | 526 K |
+  | also without the histogram (task storage, clock, compare only) | 230 / 234 | 520 K |
+
+  The per-cgroup path (`handle_new_cgroup`'s two `BPF_CORE_READ`s, serial
+  lookup and compare, then two `array_add`s on the cgroup's counters) is
+  **265 ns, half the end hook**; the per-filesystem counters through the
+  `dev_t → slot` hash are under 15 ns and the histogram about 30 ns. The
+  begin hooks did not move (270 / 325 ns). Two crossings per pair without
+  cgroup accounting would be 1.13 µs of program time against 1.67. The bench
+  also ran 15% more fsyncs per second without the cgroup path, more than the
+  saved program time explains at eight threads; the cgroup counters are one
+  slot per cgroup, not per CPU, so eight threads in one cgroup add to the
+  same two cache lines from eight CPUs, and the coherence traffic is paid by
+  the workload too. Not verified beyond the IOPS figure. **The reopen
+  condition is met.** The on-by-default question is now: drop per-cgroup
+  attribution from `ext4_ops` (and `xfs_log`, same shape), make it cheaper
+  (per-CPU cgroup banks cost `MAX_CPUS × MAX_CGROUPS` slots; caching the
+  cgroup id and serial in the task's start slot saves the reads but not the
+  adds), or keep it and stay opt-in. That is a product call, left open here.
 
 - **Merged slab caches** — By design. A cache SLUB merges is absent, not
   approximated from the pool it joined; `ext4_extent_status` is merged on
