@@ -191,6 +191,12 @@ rate.
    *Done as `memory_writeback`; measured below.*
 3. **`ext4_alloc` with metadata reads** (C2, C3). The allocator signals and
    `ext4_load_inode` together are what the two largest findings needed.
+   *Done; measured in the ext4 entry's "Results — phase 2": every counter
+   exact against tracefs, refresh 151–301 µs. One correction to C3:
+   `ext4_load_inode` fires once per inode-table read, and a read is an
+   `inode_readahead_blks` window of 32 blocks, so it counts reads, not
+   inodes. The rate is still the synchronous metadata cost; it is just
+   smaller than one-per-stat on any access pattern readahead can help.*
 4. **Slab gauges** (C9) beside `filesystem`'s sweep, so C3's inode-read rate
    has its cause on the same dashboard.
 5. **Per-filesystem counters** (C4), the lookup-map decision measured on the

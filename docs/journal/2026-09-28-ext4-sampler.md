@@ -1,9 +1,11 @@
 # ext4 telemetry through eBPF — journal first, allocator second
 
 - **Opened:** 2026-09-28
-- **Status:** **Phase 1 (`ext4_journal`) SHIPPED in #1321 and measured; GO
-  on probe cost (+225 instructions per fsync, under 1% of the fsync path at
-  450 K fsync/s on `null_blk`). Phases 2 and 3 OPEN**, re-prioritized by
+- **Status:** **Phases 1 and 2 SHIPPED and measured. Phase 1
+  (`ext4_journal`, #1321): GO on probe cost, +225 instructions per fsync at
+  450 K fsync/s on `null_blk`. Phase 2 (`ext4_alloc`): every counter exact
+  against tracefs, refresh 151–301 µs; see *Results — phase 2*. Phase 3
+  (per-filesystem) OPEN**, re-prioritized by
   `2026-09-28-filesystem-telemetry-gaps.md`. Two BPF
   samplers are specified: `ext4_journal` (jbd2 commit and checkpoint phases,
   fsync counts, filesystem errors) and `ext4_alloc` (block allocator effort,
@@ -446,7 +448,10 @@ rate is bounded by the commit rate.
    `ext4_journal_commits` being in the recording. *Done*, in the shared
    `dashboard` crate so both viewer backends get it.
 6. **`ext4_alloc`** as phase 2, same shape, its own bench on a write-heavy
-   fio run since `ext4_mballoc_alloc` tracks write throughput.
+   fio run since `ext4_mballoc_alloc` tracks write throughput. *Done; ten
+   hooks rather than the six specified, since the gaps entry's C3 metadata
+   reads (`ext4_load_inode`, the two bitmap loads) joined it, and
+   `ext4_discard_preallocations` came along for eviction churn.*
 7. **Phase 3** per-filesystem counters, after the lookup-map measurement.
 
 ## Results — phase 1
@@ -592,6 +597,60 @@ under the sampler's name in this run, so that number is not reported.
    `trusted_ptr_or_null`, and `BPF_CORE_READ`'s offset arithmetic on it is
    prohibited until it is null-checked. `blockio`'s `struct request*` never
    hit this because `block_rq_complete`'s argument is not nullable in BTF.
+
+## Results — phase 2
+
+Same guest as phase 1 (Debian 13, `6.12.63+deb13-amd64`, `CONFIG_EXT4_FS=m`,
+56 vCPU, root on ext4 over virtio), release build; systemslab
+`01a0eb8c-b8c3-71d4-1dc9-49adb555b59a`. Ten hooks, all `tp_btf` from module
+BTF; `struct ext4_allocation_context` CO-RE-relocated against the `ext4`
+module ("found target candidate ... in [ext4]").
+
+**Two facts the header did not settle.** `ac_criteria` was a `__u8` (as in
+the aarch64 header) until 6.5 made it an `enum criteria`, four bytes, and
+inserted a criterion at 2, so the numbering shifted. The field is read with
+`BPF_CORE_READ_BITFIELD_PROBED`, which takes the width from the kernel's BTF
+rather than the declaration; the trace confirmed it, every allocation on this
+6.12 kernel reading 1 where the format prints `CR_GOAL_LEN_FAST`. The
+descriptions and `docs/metrics.md` give both numberings. And
+`ext4_read_block_bitmap_load` gained a `prefetch` argument in 5.9; the
+program takes only the two arguments every kernel passes.
+
+**Verification against tracefs over the same window**, three phases: 20,000
+files of 56 KiB written and fsynced (fio, 36 s), caches dropped and every file
+`stat`ed, everything deleted:
+
+| metric | sampler | tracefs |
+|---|---|---|
+| `ext4_allocations`; blocks requested / allocated | 20,104; 279,636 / 279,636 | identical |
+| `ext4_allocations_by_criterion` | all 20,104 at `1` | every event `CR_GOAL_LEN_FAST` |
+| `ext4_allocation_groups_scanned` | 20,104 (one per allocation) | `grps 1` on every event |
+| `ext4_allocation_size` | 19,964 at 14 blocks (56 KiB), 140 at 1 block | |
+| `ext4_inodes` allocated / freed | 20,000 / 20,000 | identical |
+| `ext4_freed_blocks` | 280,000 | 280,000 |
+| `ext4_writepages`; pages written / skipped | 29,508; 280,118 / 0 | identical |
+| `ext4_preallocation_discards` | 144,435 | 144,436 |
+| `ext4_bitmap_loads` block / inode | 31 / 3 | 31 / 3 |
+| `ext4_inode_loads` | 36 | 43 |
+
+The seven-read difference on `ext4_inode_loads` is scrape timing: the last
+scrape landed before the deletes' final inode-table reads. The number itself
+taught something the design had wrong: 20,000 cold `stat`s cost 36 reads,
+not 1,250, because `__ext4_get_inode_loc` reads inode tables in
+`inode_readahead_blks` windows (32 blocks by default) and the tracepoint
+fires once per read. `ext4_inode_loads` is therefore the rate of synchronous
+inode-table *reads*, each serving up to 32 blocks of neighbouring inodes;
+the characterization's cold-atime cost is that rate on a table too large and
+too randomly accessed for readahead to help, which is exactly when it
+matters. `ext4_trimmed_blocks` read 417,996 without a tracefs check; the
+guest mounts with online discard and the deletes issued it.
+
+**Refresh cost**: 151–301 µs, median 221 µs (one counter map of `MAX_CPUS`
+× 24 banks, one histogram). **Probe cost**: not benched; the allocator hook is
+one CO-RE struct read, a few counter increments and one histogram increment
+per extent allocation, and allocations run at write-batch rate, three
+orders of magnitude below the fsync rate the phase 1 bench measured at
++225 instructions per event.
 
 ## Deferred / reopen
 
