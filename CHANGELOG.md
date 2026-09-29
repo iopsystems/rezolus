@@ -8,7 +8,8 @@
   device the agent's mount table does not know yet. The BPF programs look the
   device up in a `dev_t → slot` map the agent keeps in step with
   `/proc/self/mountinfo` (rescanned every 10 s, and sooner when `other`
-  moves); counter banks are per CPU and per slot. jbd2 events from an ocfs2
+  moves); counter banks are per CPU and per slot, 8 MiB and 12 MiB of
+  eagerly allocated map for the two samplers. jbd2 events from an ocfs2
   mount get their own slot rather than being folded into the ext4 totals.
   Histograms stay host-wide. The ext4 dashboard draws one line per mount.
 

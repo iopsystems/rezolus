@@ -355,8 +355,9 @@ pub(crate) fn filesystem_index(cpu: usize, slot: usize, idx: usize, bank_width: 
 /// principle 7's call: a filesystem is written from every CPU (fsync,
 /// allocation), so it is `Counters`' writer pattern, not `PackedCounters`'
 /// one-writer-per-slot. The map costs `MAX_CPUS × MAX_FILESYSTEMS × bank`
-/// bytes (8 MB for a 16-wide bank), of which the refresh reads only possible
-/// CPUs × occupied slots.
+/// bytes, allocated eagerly by the kernel: 8 MiB for `ext4_journal`'s 16-wide
+/// bank, 12 MiB for `ext4_alloc`'s 24-wide one. The refresh reads only
+/// possible CPUs × occupied slots.
 ///
 /// # Windowing
 ///
@@ -397,8 +398,15 @@ impl<'a> FilesystemCounters<'a> {
             other,
         };
 
-        // Slot 0 exists from the start, whatever the mount table says.
-        this.group.set_member_set(&[0]);
+        // Slot 0 exists from the start, whatever the mount table says. The
+        // population is declared as a BOUND, not a member set: the set is
+        // write-once (`AcquisitionGroup::set_member_set`) and this population
+        // changes with every mount and unmount. Principle 18 allows a changing
+        // population to revise its bound each read, as the `filesystem`
+        // sampler does. A vacant slot under the bound reads absent, not 0:
+        // these groups are owned (not mmap-attached) and `apply` writes the
+        // never-written sentinel when a slot empties.
+        this.group.set_member_bound(1);
         this.identity.set(
             0,
             [("mount".to_string(), super::filesystems::OTHER.to_string())]
@@ -454,7 +462,8 @@ impl<'a> FilesystemCounters<'a> {
                 self.identity.set(slot, new.labels());
             }
         }
-        self.group.set_member_set(&assignment.members());
+        // Stored before the next `finish()`, as the bound contract requires.
+        self.group.set_member_bound(assignment.bound());
         self.applied = assignment;
     }
 
@@ -472,7 +481,10 @@ impl<'a> FilesystemCounters<'a> {
 
     /// Sum each occupied slot over the CPUs and publish. Slot 0 moving since
     /// the last refresh asks the registry for a rescan, so a device the table
-    /// does not know yet gets its slot on the next refresh.
+    /// does not know yet gets its slot on the refresh after next (this one
+    /// notices, the next one's `current()` rescans and applies). Slot 0 always
+    /// moves a little at startup: the programs attach before `new()` fills the
+    /// lookup map, so the first events land there.
     pub fn refresh(&mut self) {
         self.apply(super::filesystems::current());
 

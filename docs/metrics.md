@@ -320,18 +320,22 @@ BPF sampler on the jbd2 and ext4 tracepoints. Reports every phase of each
 journal commit, checkpoint cost, lock-buffer stalls, fsync counts and errors,
 and filesystem errors.
 
-**Counters are per filesystem.** Every counter below carries the labels the
-`filesystem` sampler gives the same mount, `mount`, `fstype`, `devnum`
-(major:minor) and `block_device` (when the device has a kernel name), so the
-two join. A device the agent's mount table does not know, a mount younger
-than the last rescan or beyond the 63-slot cap, is counted under
-`mount="other"`, so `sum(...)` over a metric is always the host total. The
-BPF program looks the device up in a `dev_t → slot` map on each event; the
-agent re-reads `/proc/self/mountinfo` every 10 s, and sooner when `other`
-moves, so a new mount is attributed within one refresh of its first event.
-jbd2 is also ocfs2's journal, and an ocfs2 mount gets its own slot with
-`fstype="ocfs2"`. **Histograms are host-wide** until histogram groups have
-slots.
+**Counters are per filesystem.** Every counter below has one series per
+mounted filesystem, carrying the labels the `filesystem` sampler gives the
+same mount, `mount`, `fstype`, `devnum` (major:minor) and `block_device`
+(when the device has a kernel name), so the two join; plus one series labeled
+only `mount="other"` for a device the agent's mount table does not know, a
+mount younger than the last rescan or beyond the 63-slot cap. Every event
+lands in some series, so `sum(irate(...))` over a metric is the host rate.
+The cumulative sum is not a host total: an unmounted filesystem's series ends
+and a remount starts a fresh one from zero, so rates, not raw values, are the
+thing to compare across mounts. The BPF program looks the device up in a
+`dev_t → slot` map on each event; the agent re-reads `/proc/self/mountinfo`
+every 10 s, and sooner (at most once a second) when `other` moves, so a new
+mount is attributed within two refreshes of its first event, and the events
+before that stay under `other`. jbd2 is also ocfs2's journal, and an ocfs2
+mount gets its own slot with `fstype="ocfs2"`. **Histograms are host-wide**
+until histogram groups have slots.
 
 jbd2 reports commit and checkpoint phases in **jiffies**, so those histograms
 have one-jiffy resolution (1–10 ms depending on `CONFIG_HZ`); the sampler

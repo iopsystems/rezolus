@@ -30,9 +30,10 @@
 //! slot 0 takes a device the table does not know (a mount younger than the
 //! last rescan, one beyond the cap, a jbd2 client that is not ext4) and is
 //! labeled `mount="other"`. Movement in slot 0 is how a new mount is noticed
-//! between rescans: the reader asks for a rescan on the next refresh, so a
-//! mount is attributed within one refresh of its first event rather than at
-//! the next [`RESCAN_INTERVAL`].
+//! between rescans: the reader that sees it asks for a rescan, the next
+//! refresh's [`current`] performs it (at most once per [`RESCAN_FLOOR`]), so
+//! a mount is attributed within two refreshes of its first event rather than
+//! at the next [`RESCAN_INTERVAL`]. Events before that stay in slot 0.
 //!
 //! # Stability
 //!
@@ -67,6 +68,14 @@ const SYS_DEV_BLOCK: &str = "/sys/dev/block";
 /// How often the mount table is re-read when nothing asks sooner. Slot 0
 /// movement asks sooner; this bounds how long an unmount takes to free a slot.
 const RESCAN_INTERVAL: Duration = Duration::from_secs(10);
+
+/// The least time between rescans, requested or not. A source that stays
+/// unattributable (a device beyond the slot cap, an agent in a mount namespace
+/// that cannot see the host's mounts) moves slot 0 on every refresh, and
+/// without a floor each refresh would parse the mount table: at a fast
+/// stream subscriber's cadence that is the per-tick procfs parse principle 17
+/// exists to keep off the scrape path.
+const RESCAN_FLOOR: Duration = Duration::from_secs(1);
 
 /// Filesystem types ext4 serves (the ext4 driver mounts ext2 and ext3) or
 /// jbd2 journals (ocfs2). A jbd2 event from an ocfs2 mount is attributed to
@@ -137,6 +146,12 @@ impl Assignment {
             )
             .collect()
     }
+
+    /// The member bound a reader declares: one past the highest occupied
+    /// slot, at least 1 for slot 0. Vacant slots under it read absent.
+    pub fn bound(&self) -> usize {
+        self.members().last().map_or(1, |slot| slot + 1)
+    }
 }
 
 struct Registry {
@@ -163,14 +178,17 @@ impl Registry {
 static REGISTRY: LazyLock<Mutex<Registry>> = LazyLock::new(|| Mutex::new(Registry::new()));
 
 /// The current assignment, rescanning the mount table first when one is due:
-/// [`RESCAN_INTERVAL`] has passed, [`request_rescan`] was called, or this is
-/// the first call.
+/// [`RESCAN_INTERVAL`] has passed, or [`request_rescan`] was called and at
+/// least [`RESCAN_FLOOR`] has passed, or this is the first call.
 pub fn current() -> Arc<Assignment> {
     let mut registry = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
-    let due = registry.rescan_requested
-        || registry
-            .last_scan
-            .is_none_or(|t| t.elapsed() >= RESCAN_INTERVAL);
+    let since_last = registry.last_scan.map(|t| t.elapsed());
+    let due = match since_last {
+        None => true,
+        Some(elapsed) => {
+            elapsed >= RESCAN_INTERVAL || (registry.rescan_requested && elapsed >= RESCAN_FLOOR)
+        }
+    };
     if due {
         registry.rescan_requested = false;
         registry.last_scan = Some(Instant::now());
@@ -269,12 +287,20 @@ fn assign(
         let Some(dev) = kernel_dev(&mount.device) else {
             continue;
         };
+        // A block device does not lose its name while mounted, so a readlink
+        // that fails this scan keeps the name from the last one: a relabel
+        // mints a new identity uid, which is not what a transient sysfs miss
+        // means.
+        let previous = by_dev
+            .get(&dev)
+            .and_then(|&slot| slots[slot].as_ref())
+            .and_then(|f| f.block_device.clone());
         let filesystem = Filesystem {
             dev,
             devnum: mount.device.clone(),
             mount: mount.mount_point.clone(),
             fstype: mount.fstype.clone(),
-            block_device: block_device_name(&mount.device),
+            block_device: block_device_name(&mount.device).or(previous),
         };
         match by_dev.get(&dev) {
             Some(&slot) => {
@@ -455,5 +481,53 @@ mod tests {
     #[test]
     fn a_default_assignment_publishes_only_other() {
         assert_eq!(Assignment::default().members(), vec![0]);
+        assert_eq!(Assignment::default().bound(), 1);
+    }
+
+    #[test]
+    fn the_bound_is_one_past_the_highest_occupied_slot() {
+        let mut r = fresh();
+        assign(&mut r, TABLE, names);
+        assert_eq!(r.assignment.bound(), 4);
+        // Free the middle slot: the bound stays, the gap reads absent.
+        let table = TABLE.replace(
+            "25 22 8:17 / /data rw,relatime shared:3 - ext4 /dev/sdb1 rw\n",
+            "",
+        );
+        assign(&mut r, &table, names);
+        assert_eq!(r.assignment.members(), vec![0, 1, 3]);
+        assert_eq!(r.assignment.bound(), 4);
+    }
+
+    #[test]
+    fn a_transient_sysfs_miss_keeps_the_block_device_label() {
+        let mut r = fresh();
+        assign(&mut r, TABLE, names);
+        let generation = r.assignment.generation;
+        assert!(
+            !assign(&mut r, TABLE, |_| None),
+            "no relabel on a readlink miss"
+        );
+        assert_eq!(r.assignment.generation, generation);
+        assert_eq!(
+            r.assignment.slots[1]
+                .as_ref()
+                .unwrap()
+                .block_device
+                .as_deref(),
+            Some("nvme0n1p5")
+        );
+    }
+
+    /// The C header and the Rust constant must agree on the slot count; the
+    /// BPF index arithmetic and the reader's layout both depend on it.
+    #[test]
+    fn the_bpf_header_declares_the_same_slot_count() {
+        let header = include_str!("filesystem.h");
+        let line = format!("#define MAX_FILESYSTEMS {MAX_FILESYSTEMS}");
+        assert!(
+            header.contains(&line),
+            "bpf/filesystem.h does not say {line}"
+        );
     }
 }

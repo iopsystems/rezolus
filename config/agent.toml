@@ -230,12 +230,13 @@ enabled = true
 
 # BPF sampler on ext4's block allocator, inode allocation, writeback results,
 # discard, and the synchronous inode-table and bitmap reads that land on a
-# request's own thread. Host-wide. See docs/metrics.md#ext4_alloc.
+# request's own thread. Counters per filesystem. See docs/metrics.md#ext4_alloc.
 [samplers.ext4_alloc]
 
 # BPF sampler on the ext4 journal (jbd2) and ext4 tracepoints: every phase of
 # each journal commit, checkpoint cost, lock-buffer stalls, fsync counts and
-# errors, and filesystem errors. Host-wide. See docs/metrics.md#ext4_journal.
+# errors, and filesystem errors. Counters per filesystem, histograms host-wide.
+# See docs/metrics.md#ext4_journal.
 [samplers.ext4_journal]
 
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
