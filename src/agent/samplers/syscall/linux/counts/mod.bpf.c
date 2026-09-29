@@ -18,7 +18,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define COUNTER_GROUP_WIDTH 16
+#define COUNTER_GROUP_WIDTH 24
 #define MAX_CPUS 1024
 #define MAX_SYSCALL_ID 1024
 #define MAX_PID 4194304
@@ -45,8 +45,10 @@ struct {
 
 // counters for syscalls
 // 0 - other
-// 1..COUNTER_GROUP_WIDTH - grouped syscalls defined in userspace in the
-//                          `syscall_lut` map
+// 1..16 - grouped syscalls defined in userspace in the `syscall_lut` map
+// 17..COUNTER_GROUP_WIDTH - padding: a bank is a whole number of cachelines
+//                           (17 counters round up to 24), matching the
+//                           userspace `Counters` layout in bpf/counters.rs
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(map_flags, BPF_F_MMAPABLE);
@@ -196,6 +198,14 @@ struct {
     __uint(max_entries, MAX_CGROUPS);
 } cgroup_syscall_event SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, MAX_CGROUPS);
+} cgroup_syscall_sync SEC(".maps");
+
 SEC("tracepoint/raw_syscalls/sys_enter")
 int sys_enter(struct trace_event_raw_sys_enter* args) {
     u32 offset, idx, group = 0;
@@ -251,6 +261,7 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
                 bpf_map_update_elem(&cgroup_syscall_ipc, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_syscall_timer, &cgroup_id, &zero, BPF_ANY);
                 bpf_map_update_elem(&cgroup_syscall_event, &cgroup_id, &zero, BPF_ANY);
+                bpf_map_update_elem(&cgroup_syscall_sync, &cgroup_id, &zero, BPF_ANY);
             }
 
             switch (group) {
@@ -298,6 +309,9 @@ int sys_enter(struct trace_event_raw_sys_enter* args) {
                 break;
             case 15:
                 array_incr(&cgroup_syscall_event, cgroup_id);
+                break;
+            case 16:
+                array_incr(&cgroup_syscall_sync, cgroup_id);
                 break;
             default:
                 array_incr(&cgroup_syscall_other, cgroup_id);

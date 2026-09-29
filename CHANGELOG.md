@@ -2,6 +2,14 @@
 
 ### Added
 
+- `syscall_counts` / `syscall_latency`: a `sync` class (`op="sync"`) for
+  `fsync`, `fdatasync`, `sync`, `syncfs` and `msync`, split out of the
+  `filesystem` and `memory` classes so their latency, a device round trip,
+  is no longer averaged into metadata calls that complete from cache. New
+  `syscall{op="sync"}`, `cgroup_syscall{op="sync"}` and
+  `syscall_latency{op="sync"}` series; the Syscall dashboard gains a Sync
+  subgroup.
+
 - `ext4_alloc` sampler: BPF on ext4's block allocator and the metadata reads
   around it. Per extent allocation, requested versus returned blocks, groups
   scanned and the criterion reached (`ext4_allocations`,

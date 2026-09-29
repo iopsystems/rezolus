@@ -14,9 +14,9 @@ static LATENCY_HISTOGRAM_MAX: u8 = 64;
 // identity stable across platforms, while `mod.rs`'s BPF sampler code is
 // Linux-only.
 //
-// ONE group for all 16 syscall-class latency histograms: they are LIKE
+// ONE group for all 17 syscall-class latency histograms: they are LIKE
 // ENTITIES — instances of a single "syscall latency" family distinguished
-// by the `op` label — read back-to-back as one sweep, not 16 independent
+// by the `op` label — read back-to-back as one sweep, not 17 independent
 // read sections. See the `# Granularity rule` on
 // `crate::agent::samplers::ACQUISITION_GROUPS` and
 // docs/journal/2026-08-17-window-sidecar-cost.md's addendum, which names
@@ -180,4 +180,12 @@ pub static SYSCALL_TIMER_LATENCY: RwLockHistogram =
     metadata = { unit = "nanoseconds", op = "event", acq_group = "syscall_latency_latencies" }
 )]
 pub static SYSCALL_EVENT_LATENCY: RwLockHistogram =
+    RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);
+
+#[metric(
+    name = "syscall_latency",
+    description = "Distribution of syscall latencies",
+    metadata = { unit = "nanoseconds", op = "sync", acq_group = "syscall_latency_latencies" }
+)]
+pub static SYSCALL_SYNC_LATENCY: RwLockHistogram =
     RwLockHistogram::new(HISTOGRAM_GROUPING_POWER, LATENCY_HISTOGRAM_MAX);

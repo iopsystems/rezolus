@@ -33,6 +33,7 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         "Sleep",
         "Yield",
         "Filesystem",
+        "Sync",
         "Memory",
         "Process",
         "Query",

@@ -909,8 +909,8 @@ excessive system calls or unexpected patterns of system call usage.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `syscall` | The number of syscalls by operation type on a per-CPU basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}`, `id`: the CPU the syscall entered on |
-| `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event}`, `name`: the name of the cgroup | |
+| `syscall` | The number of syscalls by operation type on a per-CPU basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `id`: the CPU the syscall entered on |
+| `cgroup_syscall` | The number of syscalls by operation type on a per-cgroup basis | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}`, `name`: the name of the cgroup | |
 
 ### syscall_latency
 
@@ -921,7 +921,13 @@ latencies may indicate system-level bottlenecks.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `syscall_latency` | Distribution of syscall latency | `op={other,read,write,poll,lock,time,sleep,socket,yield}` |
+| `syscall_latency` | Distribution of syscall latency | `op={other,read,write,poll,lock,time,sleep,socket,yield,filesystem,memory,process,query,ipc,timer,event,sync}` |
+
+The `sync` class is `fsync`, `fdatasync`, `sync`, `syncfs` and `msync`: the
+calls that block until data reaches the device. They are kept apart from
+`filesystem` (metadata calls that usually complete from cache) and `memory`
+so that their latency, a device round trip, is visible on its own. The class
+table is `syscall_lut()` in `src/agent/samplers/syscall/linux/mod.rs`.
 
 ## TCP
 

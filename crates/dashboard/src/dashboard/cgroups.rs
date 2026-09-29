@@ -105,6 +105,7 @@ fn add_cgroup_metrics(group: &mut Group, individual: bool) {
         "Sleep",
         "Yield",
         "Filesystem",
+        "Sync",
         "Memory",
         "Process",
         "Query",

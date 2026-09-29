@@ -54,6 +54,7 @@ static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
         &CGROUP_SYSCALL_IPC,
         &CGROUP_SYSCALL_TIMER,
         &CGROUP_SYSCALL_EVENT,
+        &CGROUP_SYSCALL_SYNC,
     ],
 )];
 
@@ -83,6 +84,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &SYSCALL_IPC,
         &SYSCALL_TIMER,
         &SYSCALL_EVENT,
+        &SYSCALL_SYNC,
     ];
 
     let bpf = BpfBuilder::new(
@@ -176,6 +178,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
         &CGROUP_SYSCALL_EVENT,
         &CGROUP_COUNTERS_ACQ,
     )
+    .packed_counters(
+        "cgroup_syscall_sync",
+        &CGROUP_SYSCALL_SYNC,
+        &CGROUP_COUNTERS_ACQ,
+    )
     .ringbuf_handler("cgroup_info", handle_cgroup_info)
     .build()?;
 
@@ -209,6 +216,7 @@ impl SkelExt for ModSkel<'_> {
             "cgroup_syscall_ipc" => &self.maps.cgroup_syscall_ipc,
             "cgroup_syscall_timer" => &self.maps.cgroup_syscall_timer,
             "cgroup_syscall_event" => &self.maps.cgroup_syscall_event,
+            "cgroup_syscall_sync" => &self.maps.cgroup_syscall_sync,
             "counters" => &self.maps.counters,
             "syscall_lut" => &self.maps.syscall_lut,
             _ => unimplemented!(),

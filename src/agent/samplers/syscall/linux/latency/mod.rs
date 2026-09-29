@@ -35,12 +35,12 @@ fn init(config: Arc<Config>) -> SamplerResult {
         },
         ModSkelBuilder::default,
     )
-    // All 16 syscall-class latency histograms share ONE group: they are
+    // All 17 syscall-class latency histograms share ONE group: they are
     // LIKE ENTITIES (one "syscall latency" family, distinguished by the
     // `op` label) read as a single sweep — see stats.rs's `LATENCIES_ACQ`
     // doc comment. `BpfBuilder` batches every `.histogram()` call below
     // (same group reference) into one `HistogramBatch`, so it is stamped
-    // once per refresh, not 16 times.
+    // once per refresh, not 17 times.
     .histogram("other_latency", &SYSCALL_OTHER_LATENCY, &LATENCIES_ACQ)
     .histogram("read_latency", &SYSCALL_READ_LATENCY, &LATENCIES_ACQ)
     .histogram("write_latency", &SYSCALL_WRITE_LATENCY, &LATENCIES_ACQ)
@@ -61,6 +61,7 @@ fn init(config: Arc<Config>) -> SamplerResult {
     .histogram("ipc_latency", &SYSCALL_IPC_LATENCY, &LATENCIES_ACQ)
     .histogram("timer_latency", &SYSCALL_TIMER_LATENCY, &LATENCIES_ACQ)
     .histogram("event_latency", &SYSCALL_EVENT_LATENCY, &LATENCIES_ACQ)
+    .histogram("sync_latency", &SYSCALL_SYNC_LATENCY, &LATENCIES_ACQ)
     .map("syscall_lut", syscall_lut())
     .build()?;
 
@@ -93,6 +94,7 @@ impl SkelExt for ModSkel<'_> {
             "ipc_latency" => &self.maps.ipc_latency,
             "timer_latency" => &self.maps.timer_latency,
             "event_latency" => &self.maps.event_latency,
+            "sync_latency" => &self.maps.sync_latency,
             "syscall_lut" => &self.maps.syscall_lut,
             _ => unimplemented!(),
         }
