@@ -2251,9 +2251,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-archive"
-version = "0.2.7"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e952b0f609fc792a3acbfea9c3ff9aef27c71d549faebb443d171427b3af022a"
+checksum = "b2f69730df97b8f971c1d266e2f0e98d0a2bfa709f74b6b8a4c03fbfd66800c8"
 dependencies = [
  "arrow",
  "bytes",
@@ -2308,9 +2308,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-query"
-version = "0.33.1"
+version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "469535ef4f3052353b1b3b93f815301f3fc7c917aa82c8e21abb3c9d2c5d50f0"
+checksum = "89e4432a553e5ac09fd65b6feff53c0a981493aa01db2272f52c4b7fa121857b"
 dependencies = [
  "arrow",
  "bytes",
@@ -2328,15 +2328,16 @@ dependencies = [
 
 [[package]]
 name = "metriken-segment"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5ceef9a7b408fecbbae2bf89923e3b3f5fe9b73b176c6adee8e87268efe97f1"
+checksum = "0a0ae5f0b97ef03d71e5c4f582b2c16e5860b828450a7157b07610657834d044"
 dependencies = [
  "arrow",
  "bytes",
  "histogram",
  "metriken",
  "parquet",
+ "rmp",
  "rmp-serde",
  "serde",
  "tracing",

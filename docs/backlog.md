@@ -639,12 +639,11 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   row time, the first staggered) was prototyped for the seal-policy
   measurement ([entry](journal/2026-09-28-dendro-writer-adoption.md), "Seal
   policy") and matched the wall-time policy at 1 s.
-- **The reader routes a table by one segment's footer** — Open. A metric
-  that first appears in a later segment of the same table cannot be
-  queried, in a `.rez` and a dendro archive alike (metriken
-  `docs/journal/2026-09-28-archive-writer.md`). Samplers emit the same
-  metric names every tick, so it has not arisen; reopen for a producer
-  whose metric set grows mid-recording.
+- ~~**The reader routes a table by one segment's footer**~~ — Done
+  (metriken-archive 0.2.8, metriken #199). Sealed segments carry a names
+  fingerprint and the reader probes one footer per distinct fingerprint,
+  plus the live tail's schema-carrying rows; a segment without a
+  fingerprint (a `.rez`, a conversion) keeps the old assumption.
 - **The reshaping converter** — Roadmap, after the reader. Replaces #1301's byte
   copy. Oracle: on `--stream` recordings the occupants derived from the columns
   must equal those the recorded index gives, and every series must read back
