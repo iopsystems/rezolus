@@ -430,12 +430,18 @@ const FETCH_FAILED = Symbol('fetch failed');
 // The capture list and each capture's metadata come from the per-view memo
 // in data.js, so a section's charts share one answer instead of each asking
 // the backend again; the per-capture queries run through a bounded pool.
-// Measured on a 20-recording archive (`#/cpu`, server viewer): first load
-// went from 5.4 s with the sequential loop to the figure in
-// docs/journal/2026-09-28-baseline-from-many-recordings.md.
+// Measured on a 20-recording archive (`#/cpu`, server viewer): metadata
+// requests per load 347 -> 23, wall clock unchanged (the range queries
+// pace it); docs/journal/2026-09-28-baseline-from-many-recordings.md,
+// "The fetch loop was not the cost".
+//
+// A granularity change re-fires this while a pool may still be running;
+// the launch stamp lets the older run's result be discarded rather than
+// land last and overwrite the newer step's captures.
 const fetchExtraCaptures = (vnode) => {
     const { spec, sectionRoute } = vnode.attrs;
     if (!spec.promql_query) return;
+    const launch = (vnode.state._extrasLaunch = (vnode.state._extrasLaunch || 0) + 1);
     (async () => {
         try {
             const caps = await listCaptures();
@@ -485,6 +491,7 @@ const fetchExtraCaptures = (vnode) => {
             };
             const out = (await mapLimit(extras, EXTRA_CAPTURE_CONCURRENCY, fetchOne))
                 .filter(Boolean);
+            if (vnode.state._extrasLaunch !== launch) return;
             vnode.state.extraCaptures = out;
             // Invalidate the memoized extra caps so view() re-extracts.
             vnode.state._capExtrasResult = null;

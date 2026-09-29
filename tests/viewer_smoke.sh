@@ -289,9 +289,11 @@ for path in / /about /lib/style.css; do
     eq "static $path" "$status" "200" "$LOGDIR/upload.log"
 done
 
-# `grep -q` closes its stdin at the first match; an `echo` of a large file into
-# it then fails with EPIPE and the `||` fires on a file that has the string.
-# A here-string has no writer to fail.
+# `grep -q` exits at its first match. When the `echo` feeding it is still
+# writing (a payload past the pipe buffer, 16 KiB on macOS before it grows),
+# echo takes EPIPE, the pipeline fails under pipefail, and the `||` reports
+# the string missing from a file that has it. Observed once on selection.js
+# (62 KB); timing-dependent. A here-string has no writer to fail.
 echo "==> served JS bundle carries the URL view-state module"
 url_state_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/ui/url_state.js")
 grep -q "parseViewState" <<< "$url_state_js" \
@@ -308,7 +310,7 @@ grep -q "LoadedSelectionView" <<< "$selection_js" \
 # Sanity: the old identifiers should be gone (modulo the unrelated
 # `toggleSelection`, `isSelected`, `selectionCardTitle`, etc. which
 # stay — only the workspace-store identifiers were renamed).
-if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null; then
+if grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null <<< "$selection_js"; then
     fail "selection.js still has old workspace identifiers" \
          "$(echo "$selection_js" | grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' | head -3)" \
          "no old store identifiers" "$LOGDIR/file.log"

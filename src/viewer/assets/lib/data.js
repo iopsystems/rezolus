@@ -13,17 +13,17 @@ export const CAPTURE_EXPERIMENT = 'experiment';
 // Every compare-mode chart asks which captures are attached and, for each
 // extra capture, what its time range is. Neither answer changes while a
 // view is open: attach, detach and a file swap clear the memo (via
-// clearMetadataCache / app.js clearViewerCaches). Before this memo a
-// section of twenty charts over twenty recordings sent the same twenty
-// metadata requests four hundred times. One promise per key is shared by
+// clearMetadataCache / app.js clearViewerCaches). Before this memo one
+// `#/cpu` load of a 20-recording archive sent 347 metadata requests for
+// 20 distinct answers. One promise per key is shared by
 // concurrent callers; a rejection is evicted so the next caller retries
 // rather than inheriting the failure.
 let _capturesMemo = null;
 const _captureMetaMemo = new Map(); // capture id -> Promise<metadata>
 
 // The backend call, made now (not on a later microtask, so the backend in
-// place when the caller asked is the one used) and always a promise: the
-// WASM adapter throws synchronously for an unattached capture.
+// place when the caller asked is the one used) and always a promise, so a
+// backend that throws synchronously rejects like one that rejects.
 const asPromise = (fn) => {
     try {
         return Promise.resolve(fn());
