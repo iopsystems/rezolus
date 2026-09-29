@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>MCP Server - Rezolus Docs</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&amp;family=JetBrains+Mono:wght@700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script>
+      tailwind.config = {
+        darkMode: "media",
+        theme: { extend: { colors: { "primary": "#0059ba" }, fontFamily: { "body": ["Inter"] } } },
+      }
+</script>
+<style>
+    html { scroll-padding-top: 5rem; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    body { font-family: 'Inter', sans-serif; }
+
+        .brand {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 1rem;
+            letter-spacing: 0.15em;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .brand::before {
+            content: '';
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: linear-gradient(135deg, #58a6ff 0%, #79c0ff 100%);
+            mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M2 12h4l3-9 6 18 3-9h4' fill='none' stroke='white' stroke-width='2' stroke-linejoin='miter'/%3E%3C/svg%3E");
+            mask-size: contain;
+            -webkit-mask-size: contain;
+            mask-repeat: no-repeat;
+            -webkit-mask-repeat: no-repeat;
+        }
+    </style>
+</head>
+<body class="bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-200">
+
+<!-- Nav -->
+<nav class="fixed top-0 w-full z-50 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200/50 dark:border-slate-800">
+<div class="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
+<a href="/" class="brand text-slate-900 dark:text-white no-underline">REZOLUS</a>
+<div class="hidden md:flex items-center gap-8 text-base font-medium">
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="text-blue-700 dark:text-blue-400 font-bold no-underline" href="installation.html">Docs</a>
+<a class="text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+<button id="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Open menu"
+class="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">
+<span class="material-symbols-outlined" data-icon="menu">menu</span>
+</button>
+</div>
+<div id="nav-menu" hidden
+class="lg:hidden border-t border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md">
+<div class="max-w-6xl mx-auto px-6 py-2 flex flex-col text-lg font-semibold">
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="/">Home</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
+<a class="py-3 text-blue-700 dark:text-blue-400 font-bold transition-colors no-underline" href="mcp.html">MCP Server</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+<a class="py-3 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white transition-colors no-underline" href="https://github.com/iopsystems/rezolus">GitHub</a>
+</div>
+</div>
+</nav>
+
+<div class="flex max-w-6xl mx-auto pt-20">
+<!-- Sidebar -->
+<aside class="h-[calc(100vh-5rem)] w-56 sticky top-20 hidden lg:flex flex-col p-6 border-r border-slate-100 dark:border-slate-800 shrink-0">
+<div class="mb-8">
+<div class="font-mono text-[10px] uppercase tracking-widest text-slate-400">v5.22.1</div>
+</div>
+<nav class="flex-1 space-y-6 overflow-y-auto text-sm">
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Getting Started</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="installation.html">Installation</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html">Usage</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#long-running">Long-running</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#one-off">One-off</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="usage.html#offline">Offline analysis</a>
+<a class="block px-3 py-1.5 text-blue-700 dark:text-blue-400 font-bold bg-blue-50 dark:bg-blue-900/30 rounded-lg no-underline" href="mcp.html">MCP Server</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html#setup">Setup</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html#tools">Tools</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html#workflow">Workflow</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="mcp.html#flags">Server flags</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Core Concepts</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="architecture.html">Architecture</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html">Metrics</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#samplers">Samplers</a>
+<a class="block pl-7 pr-3 py-1 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="telemetry.html#types">Types</a>
+</div>
+<div class="space-y-1">
+<h4 class="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2">Reference</h4>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="api.html">API Reference</a>
+<a class="block px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:hover:text-white transition-colors no-underline" href="cli.html">CLI &amp; Configuration</a>
+</div>
+</nav>
+</aside>
+
+<!-- Content -->
+<main class="flex-1 px-8 lg:px-16 py-12 min-w-0 max-w-3xl lg:max-w-4xl">
+
+<h1 class="text-4xl font-extrabold tracking-tight mb-4">MCP Server</h1>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-12">Hand a recording to an LLM client over the Model Context Protocol. The agent describes it, queries it with PromQL, looks for anomalies and bottlenecks, and writes what it found back into the recording as timeline events you see in the viewer.</p>
+
+<section class="mb-16" id="setup">
+<h2 class="text-xl font-bold mb-2">Setup</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-4">One command registers the server with Claude Code and installs the <code>rezolus-mcp</code> skill, which tells the client how to investigate a recording: describe it and its metrics before querying, extract features before forming hypotheses, and pick one recording out of a multi-recording archive.</p>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># Register for every project (user scope) and install the skill</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp install</code></div>
+<div class="text-slate-500 text-sm mt-3"># This project only, with exports enabled</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp install --scope project --export-dir ./exports</code></div>
+<div class="text-slate-500 text-sm mt-3"># Show what would change, change nothing</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp install --dry-run</code></div>
+</div>
+</div>
+<p class="text-base text-slate-500 dark:text-slate-400 mt-4 mb-4">In Claude Code, <code>/mcp</code> lists the server and <code>/rezolus-mcp</code> loads the skill; <code>claude mcp list</code> checks the connection from a shell. Re-running replaces the entry, which is how server flags are changed. If another scope already has a <code>rezolus</code> entry that would win, <code>install</code> says so and prints the command that removes it.</p>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-4">Other MCP clients start the server the same way: a stdio command of <code>rezolus mcp</code> plus any of the <a class="text-blue-600 dark:text-blue-400" href="#flags">server flags</a>.</p>
+</section>
+
+<section class="mb-16" id="tools">
+<h2 class="text-xl font-bold mb-2">Tools</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-4">Every tool that reads a recording takes its path (<code>.parquet</code>, <code>.rez</code> or <code>.dendro</code>, detected by content). On a <code>.rez</code> holding several recordings, a <code>recording</code> selector such as <code>{"source": "redis"}</code> picks one; naming none or several is an error that lists the choices. Tools come in three tiers, decided by what a call can destroy.</p>
+<h3 class="text-base font-bold mb-3 mt-8">Read</h3>
+<div class="overflow-x-auto mb-4"><table class="w-full text-base"><thead><tr class="border-b border-slate-100 dark:border-slate-800"><th class="text-left font-bold py-2 pr-4 align-top">Tool</th><th class="text-left font-bold py-2 pr-4 align-top">What it returns</th></tr></thead><tbody><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>describe_recording</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Source, agent version, time range; for an archive, its recordings and the selector for each</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>describe_metrics</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Every metric with its type, labels and help text</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>extract_features</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">A versioned overview record: per-metric stats, noise class, anomalies, regime shifts, correlations, resource rankings</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>query</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">A PromQL result; <code>rate()</code> values carry an uncertainty band from the acquisition window</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>detect_anomalies</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">MAD, CUSUM and FFT findings for one series, or a sweep of every metric</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>analyze_correlation</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">How two series move together over the recording</td></tr></tbody></table></div>
+<h3 class="text-base font-bold mb-3 mt-8">Additive (always on)</h3>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-3">These can only add to a recording, so the worst a wrong call does is add an event.</p>
+<div class="overflow-x-auto mb-4"><table class="w-full text-base"><thead><tr class="border-b border-slate-100 dark:border-slate-800"><th class="text-left font-bold py-2 pr-4 align-top">Tool</th><th class="text-left font-bold py-2 pr-4 align-top">What it does</th></tr></thead><tbody><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>add_event</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Marks an instant or a range with a kind, a description and the evidence; the viewer draws it on the timeline. Returns the event id</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>run_checks</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Evaluates the recording&#39;s KPI checks and returns each verdict with its violation windows; <code>annotate: true</code> writes them as events</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>export_query</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Writes a range query as CSV or parquet (series, timestamp, value, lo, hi) under <code>--export-dir</code>, for analysis outside PromQL</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>viewer_link</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">A link that opens a running <code>rezolus view</code> at a section or chart, a time range and the rest of the view state</td></tr></tbody></table></div>
+<h3 class="text-base font-bold mb-3 mt-8">Mutating (off unless enabled)</h3>
+<div class="overflow-x-auto mb-4"><table class="w-full text-base"><thead><tr class="border-b border-slate-100 dark:border-slate-800"><th class="text-left font-bold py-2 pr-4 align-top">Tool</th><th class="text-left font-bold py-2 pr-4 align-top">What it does</th></tr></thead><tbody><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>remove_events</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Removes events by id, kind and/or source (<code>source: "mcp"</code> removes everything an agent wrote). Needs <code>--allow-mutating</code>; without it the tool is neither listed nor callable</td></tr></tbody></table></div>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-4">Each read tool also runs one-shot from a shell with the same analysis, e.g. <code>rezolus mcp query out.rez 'sum(rate(cpu_cycles[1m]))'</code>; see the <a class="text-blue-600 dark:text-blue-400" href="cli.html">CLI reference</a>.</p>
+</section>
+
+<section class="mb-16" id="workflow">
+<h2 class="text-xl font-bold mb-2">Workflow</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-4">The skill carries this; for a client without it, the same steps apply.</p>
+<ol class="list-decimal pl-6 space-y-2 text-lg text-slate-500 dark:text-slate-400 mb-4">
+<li><code>describe_recording</code>, then <code>describe_metrics</code>: metric names come from the recording, not from memory.</li>
+<li><code>extract_features</code> for the overview before forming hypotheses.</li>
+<li><code>query</code>, <code>detect_anomalies</code> and <code>analyze_correlation</code> to test them. A check or an anomaly search needs one series, so aggregate with <code>sum()</code> or add label matchers.</li>
+<li><code>add_event</code> for what was found, with the query and values in its details, and <code>viewer_link</code> to hand the person the chart.</li>
+</ol>
+<p class="text-base text-slate-500 dark:text-slate-400 mb-4">A missing metric is not zero, a difference inside the rate band is not a difference, and correlation is co-movement, not cause.</p>
+</section>
+
+<section class="mb-16" id="flags">
+<h2 class="text-xl font-bold mb-2">Server flags</h2>
+<p class="text-lg text-slate-500 dark:text-slate-400 mb-4">Set when the server starts; <code>install</code> accepts the same flags and bakes them into the registered command.</p>
+<div class="overflow-x-auto mb-4"><table class="w-full text-base"><thead><tr class="border-b border-slate-100 dark:border-slate-800"><th class="text-left font-bold py-2 pr-4 align-top">Flag</th><th class="text-left font-bold py-2 pr-4 align-top">Effect</th></tr></thead><tbody><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>--allow-mutating</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Enables <code>remove_events</code></td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>--export-dir DIR</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">Where <code>export_query</code> may write. Files land under a bare name, never over an existing file; a result over a million rows is refused</td></tr><tr class="border-b border-slate-100 dark:border-slate-800"><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300"><code>--viewer-url URL</code></td><td class="py-2 pr-4 align-top text-slate-600 dark:text-slate-300">A running viewer&#39;s address, e.g. <code>http://127.0.0.1:4200</code>, so <code>viewer_link</code> returns full URLs</td></tr></tbody></table></div>
+<div class="bg-slate-900 text-slate-300 rounded-xl overflow-hidden">
+<div class="p-5 font-mono text-base leading-8">
+<div class="text-slate-500 text-sm"># Run the stdio server by hand with every tier and both directories</div>
+<div class="flex gap-4"><span class="text-slate-600 select-none">$</span><code class="text-green-400">rezolus mcp --allow-mutating --export-dir ./exports --viewer-url http://127.0.0.1:4200</code></div>
+</div>
+</div>
+</section>
+
+<div class="flex justify-between items-center pt-8 border-t border-slate-200 dark:border-slate-800 text-base">
+<a href="usage.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">&larr; Usage</a>
+<a href="architecture.html" class="text-blue-600 dark:text-blue-400 font-bold no-underline hover:underline">Architecture &rarr;</a>
+</div>
+
+</main>
+</div>
+<script>
+// Mobile nav. The header links are `hidden md:flex` and the docs sidebar is
+// `hidden lg:flex`, so below 1024px there is otherwise no navigation at all.
+const navToggle = document.getElementById('nav-toggle');
+const navMenu = document.getElementById('nav-menu');
+const setNav = (open) => {
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    navToggle.querySelector('.material-symbols-outlined').textContent = open ? 'close' : 'menu';
+    navMenu.hidden = !open;
+};
+if (navToggle && navMenu) {
+    navToggle.addEventListener('click', () => setNav(navToggle.getAttribute('aria-expanded') !== 'true'));
+    navMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => setNav(false)));
+    window.matchMedia('(min-width: 1024px)').addEventListener('change', (e) => { if (e.matches) setNav(false); });
+}
+</script>
+</body></html>
