@@ -467,6 +467,7 @@ mod tests {
         "drivehealth",
         "ext4_alloc",
         "ext4_journal",
+        "ext4_ops",
         "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",
@@ -475,6 +476,7 @@ mod tests {
         "gpu_nvidia",
         "hw_sensors",
         "memory_meminfo",
+        "memory_pagecache",
         "memory_slabinfo",
         "memory_vmstat",
         "memory_writeback",
@@ -487,7 +489,9 @@ mod tests {
         "tcp_connect_latency",
         "tcp_packet_latency",
         "tcp_receive",
-        "tcp_retransmit"
+        "tcp_retransmit",
+        "xfs_log",
+        "xfs_stats"
       ]
     }
   },

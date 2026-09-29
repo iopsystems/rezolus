@@ -68,6 +68,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "drivehealth",
     "ext4_alloc",
     "ext4_journal",
+    "ext4_ops",
     "filesystem",
     "gpu_amd_pmu",
     "gpu_amd_smi",
@@ -76,6 +77,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "gpu_nvidia",
     "hw_sensors",
     "memory_meminfo",
+    "memory_pagecache",
     "memory_slabinfo",
     "memory_vmstat",
     "memory_writeback",
@@ -91,6 +93,8 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "xfs_log",
+    "xfs_stats",
 ];
 
 /// Explicit metric-name -> sampler mapping for metrics whose name cannot be
@@ -150,10 +154,17 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("cgroup_cpu_tlb_flush", "cpu_tlb_flush"),
     ("cgroup_cpu_usage", "cpu_usage"),
     ("cgroup_cpu_usage_exited_tasks", "cpu_usage"),
+    ("cgroup_ext4_op_time", "ext4_ops"),
+    ("cgroup_ext4_ops", "ext4_ops"),
+    ("cgroup_pagecache_pages_added", "memory_pagecache"),
+    ("cgroup_pagecache_read_bytes", "memory_pagecache"),
+    ("cgroup_pagecache_reads", "memory_pagecache"),
     ("cgroup_scheduler_context_switch", "scheduler_runqueue"),
     ("cgroup_scheduler_offcpu", "scheduler_runqueue"),
     ("cgroup_scheduler_runqueue_wait", "scheduler_runqueue"),
     ("cgroup_syscall", "syscall_counts"),
+    ("cgroup_xfs_log_wait_time", "xfs_log"),
+    ("cgroup_xfs_log_waits", "xfs_log"),
     ("core_c10_residency", "cpu_power"),
     ("core_c1_residency", "cpu_power"),
     ("core_c2_residency", "cpu_power"),
@@ -193,12 +204,18 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("ext4_freed_blocks", "ext4_alloc"),
     ("ext4_inode_loads", "ext4_alloc"),
     ("ext4_inodes", "ext4_alloc"),
+    // `ext4_ops`'s metrics: `ext4_op_*` misses the `_` boundary the prefix
+    // rule needs (`ext4_ops` itself resolves by exact name).
+    ("ext4_op_errors", "ext4_ops"),
+    ("ext4_op_latency", "ext4_ops"),
+    ("ext4_op_time", "ext4_ops"),
     ("ext4_preallocation_discarded_blocks", "ext4_alloc"),
     ("ext4_preallocation_discards", "ext4_alloc"),
     ("ext4_shutdowns", "ext4_journal"),
     ("ext4_sync_file", "ext4_journal"),
     ("ext4_sync_file_errors", "ext4_journal"),
     ("ext4_trimmed_blocks", "ext4_alloc"),
+    ("ext4_write_bytes", "ext4_ops"),
     ("ext4_writepages", "ext4_alloc"),
     ("ext4_writepages_errors", "ext4_alloc"),
     ("ext4_writepages_pages", "ext4_alloc"),
@@ -342,6 +359,13 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("tcp_packets", "tcp_traffic"),
     ("tcp_size", "tcp_traffic"),
     ("tcp_srtt", "tcp_receive"),
+    // The `memory_pagecache` sampler's metrics carry the subsystem's own
+    // prefix, not the sampler's.
+    ("pagecache_faults", "memory_pagecache"),
+    ("pagecache_pages_added", "memory_pagecache"),
+    ("pagecache_pages_evicted", "memory_pagecache"),
+    ("pagecache_read_bytes", "memory_pagecache"),
+    ("pagecache_reads", "memory_pagecache"),
     // The `memory_writeback` sampler's metrics carry the subsystem's own
     // prefix, not the sampler's.
     ("writeback_pages_written", "memory_writeback"),
@@ -350,6 +374,32 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("writeback_throttle_events", "memory_writeback"),
     ("writeback_throttle_latency", "memory_writeback"),
     ("writeback_throttled_time", "memory_writeback"),
+    // `xfs_stats`'s metrics carry the filesystem's prefix, not the sampler's.
+    ("xfs_ail_flushes", "xfs_stats"),
+    ("xfs_ail_push_items", "xfs_stats"),
+    ("xfs_ail_push_restarts", "xfs_stats"),
+    ("xfs_ail_pushes", "xfs_stats"),
+    ("xfs_buffer_busy_locks", "xfs_stats"),
+    ("xfs_buffer_creates", "xfs_stats"),
+    ("xfs_buffer_lock_waits", "xfs_stats"),
+    ("xfs_buffer_lookups", "xfs_stats"),
+    ("xfs_buffer_misses", "xfs_stats"),
+    ("xfs_buffer_reads", "xfs_stats"),
+    ("xfs_directory_ops", "xfs_stats"),
+    ("xfs_extent_blocks", "xfs_stats"),
+    ("xfs_extents", "xfs_stats"),
+    ("xfs_file_bytes", "xfs_stats"),
+    ("xfs_file_calls", "xfs_stats"),
+    ("xfs_inode_cache_lookups", "xfs_stats"),
+    ("xfs_inode_reclaims", "xfs_stats"),
+    ("xfs_log_blocks_written", "xfs_stats"),
+    ("xfs_log_force_sleeps", "xfs_stats"),
+    ("xfs_log_forces", "xfs_stats"),
+    ("xfs_log_iclog_stalls", "xfs_stats"),
+    ("xfs_log_space_requests", "xfs_stats"),
+    ("xfs_log_space_sleeps", "xfs_stats"),
+    ("xfs_log_writes", "xfs_stats"),
+    ("xfs_transactions", "xfs_stats"),
 ];
 
 /// The samplers that self-report `rezolus_bpf_run_count`/
@@ -373,6 +423,11 @@ const BPF_SAMPLERS: &[&str] = &[
     "cpu_perf",
     "cpu_tlb_flush",
     "cpu_usage",
+    "ext4_alloc",
+    "ext4_journal",
+    "ext4_ops",
+    "memory_pagecache",
+    "memory_writeback",
     "network_interfaces",
     "network_traffic",
     "scheduler_runqueue",
@@ -383,6 +438,7 @@ const BPF_SAMPLERS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "xfs_log",
 ];
 
 /// Metric names declared identically by more than one sampler (verified by

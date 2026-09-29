@@ -27,7 +27,13 @@ fn enabled() -> bool {
 /// explicitly opted into with `enabled = true` in their own `[samplers.<name>]`
 /// section. Reserved for samplers whose cost makes accidental activation
 /// (e.g. via an absent/commented config) unacceptable.
-const OPT_IN_SAMPLERS: &[&str] = &["gpu_amd_pmu", "hw_sensors"];
+const OPT_IN_SAMPLERS: &[&str] = &[
+    "ext4_ops",
+    "gpu_amd_pmu",
+    "hw_sensors",
+    "memory_pagecache",
+    "xfs_log",
+];
 
 fn listen() -> String {
     "0.0.0.0:4241".into()
@@ -126,6 +132,45 @@ impl Config {
             .map(|d| *d)
     }
 
+    /// Whether `name` attributes its events to the calling thread's cgroup
+    /// (per-sampler override, falling back to the `defaults` section, then
+    /// off). Consumed by the samplers whose per-cgroup path is a measured
+    /// share of their probe cost (`ext4_ops`, `xfs_log`, `memory_pagecache`):
+    /// with it off, the `cgroup_*` series are absent and the path is not in
+    /// the loaded program. `cpu_perf` defaults it on; see
+    /// `cgroup_attribution_or`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn cgroup_attribution(&self, name: &str) -> bool {
+        self.cgroup_attribution_or(name, false)
+    }
+
+    /// `cgroup_attribution` for a sampler whose own default is `default`
+    /// when neither its section nor `[defaults]` says: `cpu_perf` keeps its
+    /// per-cgroup series on unless asked, since the cgroups dashboard's IPC
+    /// comes from them.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn cgroup_attribution_or(&self, name: &str, default: bool) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.cgroup_attribution())
+            .or_else(|| self.defaults.cgroup_attribution())
+            .unwrap_or(default)
+    }
+
+    /// Whether `name` exports its per-task accounting as per-task series
+    /// (per-sampler override, falling back to the `defaults` section, then
+    /// off). Consumed by `cpu_usage`: with it off, `task_cpu_usage` is absent
+    /// and the task-metadata and task-exit events are not sent, while the
+    /// per-task accounting the host and cgroup totals rely on still runs.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn task_attribution(&self, name: &str) -> bool {
+        self.samplers
+            .get(name)
+            .and_then(|v| v.task_attribution())
+            .or_else(|| self.defaults.task_attribution())
+            .unwrap_or(false)
+    }
+
     pub fn enabled(&self, name: &str) -> bool {
         // Opt-in-only samplers are never turned on by the `[defaults]` fallback:
         // they require explicit `enabled = true` in their own section. These are
@@ -165,6 +210,88 @@ mod tests {
     }
 
     #[test]
+    fn cgroup_attribution_is_off_unless_asked_for() {
+        let c = config("[samplers.ext4_ops]\nenabled = true\n");
+        assert!(!c.cgroup_attribution("ext4_ops"), "off by default");
+        let c = config("[samplers.ext4_ops]\nenabled = true\ncgroup_attribution = true\n");
+        assert!(c.cgroup_attribution("ext4_ops"));
+        assert!(!c.cgroup_attribution("xfs_log"), "per sampler");
+        // The defaults section is a fallback, and a sampler can opt back out.
+        let c = config(
+            "[defaults]\ncgroup_attribution = true\n[samplers.xfs_log]\ncgroup_attribution = false\n",
+        );
+        assert!(c.cgroup_attribution("ext4_ops"));
+        assert!(!c.cgroup_attribution("xfs_log"));
+    }
+
+    /// The config the packages install (`config/agent.toml`, which the deb
+    /// and the rpm put at `/etc/rezolus/agent.toml`) documents the defaults
+    /// and must not change them: every sampler is enabled, attributed and
+    /// paced the same with it as with an empty config.
+    #[test]
+    fn the_packaged_config_changes_no_default() {
+        let packaged = config(include_str!("../../../config/agent.toml"));
+        let bare = config("");
+        for &name in crate::analysis::extract::context::EXPECTED_SUBSYSTEMS {
+            assert_eq!(
+                packaged.enabled(name),
+                bare.enabled(name),
+                "{name}: enabled"
+            );
+            assert_eq!(
+                packaged.cgroup_attribution(name),
+                bare.cgroup_attribution(name),
+                "{name}: cgroup_attribution"
+            );
+            assert_eq!(
+                packaged.cgroup_attribution_or(name, true),
+                bare.cgroup_attribution_or(name, true),
+                "{name}: cgroup_attribution for a default-on sampler"
+            );
+            assert_eq!(
+                packaged.task_attribution(name),
+                bare.task_attribution(name),
+                "{name}: task_attribution"
+            );
+            assert_eq!(
+                packaged.sampler_interval(name),
+                bare.sampler_interval(name),
+                "{name}: interval"
+            );
+            assert_eq!(
+                packaged.gpu_perf_level(name),
+                bare.gpu_perf_level(name),
+                "{name}: gpu_perf_level"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sampler_can_default_cgroup_attribution_on() {
+        let c = config("[samplers.cpu_perf]\n");
+        assert!(c.cgroup_attribution_or("cpu_perf", true), "its own default");
+        let c = config("[samplers.cpu_perf]\ncgroup_attribution = false\n");
+        assert!(!c.cgroup_attribution_or("cpu_perf", true), "section wins");
+        let c = config("[defaults]\ncgroup_attribution = false\n");
+        assert!(
+            !c.cgroup_attribution_or("cpu_perf", true),
+            "defaults win over the sampler's own"
+        );
+    }
+
+    #[test]
+    fn task_attribution_is_off_unless_asked_for() {
+        let c = config("[samplers.cpu_usage]\n");
+        assert!(!c.task_attribution("cpu_usage"), "off by default");
+        let c = config("[samplers.cpu_usage]\ntask_attribution = true\n");
+        assert!(c.task_attribution("cpu_usage"));
+        let c = config("[defaults]\ntask_attribution = true\n");
+        assert!(c.task_attribution("cpu_usage"), "defaults fallback");
+        // Independent of cgroup attribution.
+        assert!(!c.cgroup_attribution("cpu_usage"));
+    }
+
+    #[test]
     fn opt_in_sampler_off_when_section_absent() {
         // [defaults] enabled = true, but the opt-in sampler has no section.
         let c = config("[defaults]\nenabled = true\n");
@@ -175,6 +302,8 @@ mod tests {
         // A normal sampler does follow defaults=true.
         assert!(c.enabled("cpu_usage"));
         assert!(!c.enabled("hw_sensors"));
+        // The request-path ext4 sampler is opt-in for its probe cost.
+        assert!(!c.enabled("ext4_ops"));
     }
 
     #[test]

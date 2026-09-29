@@ -918,10 +918,13 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   (above, after 6.0) plus a per-thread start map: the `MAX_PID` array
   (32 MB, as `syscall_latency`) or `BPF_MAP_TYPE_TASK_STORAGE` once the kernel
   floor is 5.11.
-- **Phase 3 lookup map** — Open. `dev_t → slot`, userspace-written, BPF
-  read-only: `BPF_MAP_TYPE_HASH` with the principle 5 justification, or a
-  bounded linear scan over `MAX_FILESYSTEMS` `dev_t` values. Measure both on
-  the phase 1 bench before choosing.
+- **Phase 3 lookup map** — Built as `BPF_MAP_TYPE_HASH` keyed by `dev_t`,
+  userspace-written, BPF read-only (justification in `bpf/filesystem.h`).
+  Open: the per-filesystem path costs +914 instructions per fsync over the
+  host-wide phase 1 programs (ext4 entry, "Results — phase 3"), and the bench
+  does not split the hash lookup from the device derivation's pointer reads.
+  Measure a bounded linear scan against the hash, and a `sb_dev` read cached
+  per program run, before deciding either is worth changing.
 - **VFS-layer read/write latency via `fentry`/`fexit`** — Idea.
   `ext4_file_read_iter`/`ext4_file_write_iter`; page-cache hit/miss split per
   filesystem. Reopen with phase 3; check the symbol set on the oldest fleet
@@ -933,8 +936,8 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   representative workload before attaching any of them.
 - **Fast commit** — By design. `ext4_fc_*` off by default; reopen if a fleet
   enables `fast_commit`.
-- **jbd2 counts include ocfs2** — By design until phase 3 assigns slots by
-  `fstype`.
+- **jbd2 counts include ocfs2** — Resolved by phase 3 (per-filesystem
+  counters): an ocfs2 mount has its own slot, labeled `fstype="ocfs2"`.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
 - **XFS** — Idea. Its own tracepoint set and journaling model; a separate
@@ -971,15 +974,32 @@ bare-metal probe-cost bench for anything at request rate).
   `/proc/slabinfo` under its own name and so from `memory_slabinfo`. Reopen if
   its residency becomes the question; `/sys/kernel/slab/<cache>` resolves
   aliases at one directory walk per cache per sweep.
-- **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
-  promoted): the cache device is never the root filesystem.
-- **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the
-  enter/exit pairs, write and rename via `fexit`, per-cgroup blocked time.
-  Forces the per-thread start-state decision (`MAX_PID` arrays vs task
-  local storage at a 5.11 floor). Bench before default-on.
-- **Write-amplification decomposition dashboard** — Roadmap. VFS bytes,
-  writeback pages, journal blocks logged, device bytes on one axis; no new
-  hooks once `ext4_ops` and `ext4_alloc` exist.
+- **Per-filesystem counters** — DONE (phase 3 of the ext4 entry): every
+  `ext4_journal` and `ext4_alloc` counter carries `mount`, `fstype`, `devnum`
+  and `block_device`, plus `mount="other"`; exact against a three-mount VM.
+- **Vacant filesystem slots are null columns** — By design. A slot freed by
+  an unmount reads absent, which a V3 snapshot carries as a null-valued
+  column until the slot is reused; a host churning loop or dm minors
+  accumulates them, the same trade the `filesystem` sampler makes.
+- **`ext4_ops` sampler** — DONE, off by default. fsync and unlink from the
+  enter/exit tracepoints, write and rename via `fentry`/`fexit`, per
+  filesystem and per cgroup; task local storage for the start state (floor
+  5.12). See the gaps entry's "Results — C5 and C6" for the measured probe
+  cost.
+- **`ext4_ops` async direct-IO bytes** — By design. `ext4_file_write_iter`
+  returns queued for an io_uring/libaio `O_DIRECT` write; its bytes land at
+  completion, which the sampler does not hook, so `ext4_write_bytes` misses
+  them and the write latency is submission time. Reopen with an
+  `iomap_dio_complete`-side hook if a direct-IO workload needs the term.
+- **`ext4_ops` on by default** — Open, NO-GO as measured: +4,070 instructions
+  and +2.26 µs per write+fsync pair (four probes) on the phase 1 `null_blk`
+  bench, 12% at 450 K ops/s. Profile per program (`bpftool prog profile`), the
+  per-cgroup atomics and the two task-storage lookups first; reopen when a
+  probe is under ~300 instructions. Gaps entry, "Results — C5 and C6".
+- **Write-amplification decomposition dashboard** — DONE as the ext4
+  dashboard's Write Path group: application bytes (`ext4_write_bytes`),
+  writeback bytes, journal bytes, device bytes on one axis, each term drawn
+  when the recording has it.
 - **XFS journal and allocator samplers** — Idea. Module tracepoints; the
   module-BTF twin selection applies.
 - **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;

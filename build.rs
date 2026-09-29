@@ -125,6 +125,8 @@ mod bpf {
         ("cpu", "usage"),
         ("ext4", "alloc"),
         ("ext4", "journal"),
+        ("ext4", "ops"),
+        ("memory", "pagecache"),
         ("memory", "writeback"),
         ("network", "interfaces"),
         ("network", "traffic"),
@@ -136,6 +138,7 @@ mod bpf {
         ("tcp", "receive"),
         ("tcp", "retransmit"),
         ("tcp", "traffic"),
+        ("xfs", "log"),
     ];
 
     pub fn generate() {
@@ -178,6 +181,7 @@ mod bpf {
         }
 
         println!("cargo:rerun-if-changed=src/agent/bpf/histogram.h");
+        println!("cargo:rerun-if-changed=src/agent/bpf/filesystem.h");
         println!("cargo:rerun-if-changed=src/agent/bpf/vmlinux.h");
     }
 }

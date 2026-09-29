@@ -201,7 +201,11 @@ enabled = true
 [samplers.cpu_migrations]
 
 # Instruments CPU frequency, instructions, and cycles using perf counters.
+# The per-cgroup series read the counters on every context switch, which on a
+# VM with an emulated PMU is a hypervisor exit per read; set
+# cgroup_attribution = false to drop that program and keep per-CPU counters.
 [samplers.cpu_perf]
+# cgroup_attribution = false
 
 # Reports CPU energy and idle-state residency via perf. Power is derived at
 # query time from the energy counters. Discovers the
@@ -216,8 +220,11 @@ enabled = true
 [samplers.cpu_tlb_flush]
 
 # Instruments CPU usage by state with BPF on linux. On macos
-# host_processor_info() is used
+# host_processor_info() is used. Per-thread series (task_cpu_usage) are off by
+# default; the per-task accounting behind the host and cgroup totals runs
+# either way. See docs/metrics.md#cpu_usage.
 [samplers.cpu_usage]
+# task_attribution = true   # export task_cpu_usage, one series per thread
 
 # Reports per-drive temperature for NVMe and SATA drives via read-only
 # pass-through ioctls (like smartctl) — no kernel module required. Drives are
@@ -230,19 +237,48 @@ enabled = true
 
 # BPF sampler on ext4's block allocator, inode allocation, writeback results,
 # discard, and the synchronous inode-table and bitmap reads that land on a
-# request's own thread. Host-wide. See docs/metrics.md#ext4_alloc.
+# request's own thread. Counters per filesystem. See docs/metrics.md#ext4_alloc.
 [samplers.ext4_alloc]
 
 # BPF sampler on the ext4 journal (jbd2) and ext4 tracepoints: every phase of
 # each journal commit, checkpoint cost, lock-buffer stalls, fsync counts and
-# errors, and filesystem errors. Host-wide. See docs/metrics.md#ext4_journal.
+# errors, and filesystem errors. Counters per filesystem, histograms host-wide.
+# See docs/metrics.md#ext4_journal.
 [samplers.ext4_journal]
+
+# BPF sampler on ext4's request-path operations: fsync, unlink, write and
+# rename latency, per-filesystem counts and time, and the time each cgroup's
+# threads spend held inside them. Two probes per call on the request path, so
+# it costs about 2.3 us of CPU per write-plus-fsync pair and is opt-in: it
+# stays off unless this section says enabled = true, whatever [defaults] says.
+# Needs kernels 5.12+ (task local storage for tracing programs; module BTF
+# when ext4 is a module). See docs/metrics.md#ext4_ops.
+[samplers.ext4_ops]
+enabled = false
+# cgroup_attribution = true   # per-cgroup series; half the end hook's cost
 
 # Filesystem space, inode usage and read-only state; see docs/metrics.md#filesystem.
 # Rescans mounts at `interval` (default 60s); later sweeps run off the scrape cycle.
 # Excludes network filesystems, FUSE, autofs and pseudo-filesystems.
 [samplers.filesystem]
 # interval = "60s"
+
+# XFS's own per-mount counters from /sys/fs/xfs/<dev>/stats/stats: log writes
+# and forces, log-space sleeps, AIL pusher outcomes, inode-cache misses,
+# extents, directory operations, file I/O and the metadata buffer cache. One
+# sysfs read per XFS mount, off the scrape cycle at `interval` (default 1s).
+# See docs/metrics.md#xfs_stats.
+[samplers.xfs_stats]
+# interval = "1s"
+
+# Times threads blocked on the XFS log: waiting for log space and forcing the
+# log (the log write an fsync waits for), per mount and per cgroup, with
+# host-wide latency histograms; counts CIL-full waits. Opt-in: the force
+# probes run on every fsync. Needs kernels 5.12+ (task local storage for
+# tracing programs; module BTF when XFS is a module). See docs/metrics.md#xfs_log.
+[samplers.xfs_log]
+enabled = false
+# cgroup_attribution = true   # per-cgroup series; half the end hook's cost
 
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
@@ -310,6 +346,16 @@ enabled = false
 # `interval` (default 60s) off the scrape cycle. See docs/metrics.md#memory_slabinfo.
 [samplers.memory_slabinfo]
 # interval = "60s"
+
+# BPF sampler on the page cache: buffered read calls and bytes (one fentry on
+# filemap_read), pages filled by reason (read, write, fault, other), pages
+# evicted, mmap faults, per mount. Pages filled during reads over bytes read
+# is the read miss ratio. Opt-in: the read hook runs once per read call.
+# `cgroup_attribution = true` adds per-cgroup reads, bytes and fills. Needs
+# vmlinux BTF; 5.15+ to classify fills. See docs/metrics.md#memory_pagecache.
+[samplers.memory_pagecache]
+enabled = false
+# cgroup_attribution = true
 
 # BPF sampler on the page-cache writeback tracepoints: how long writers were
 # made to sleep by the dirty-page throttle, flusher runs by reason, and pages

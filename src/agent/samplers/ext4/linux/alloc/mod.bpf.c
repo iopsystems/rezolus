@@ -14,6 +14,7 @@
 
 #include <vmlinux.h>
 #include "../../../agent/bpf/helpers.h"
+#include "../../../agent/bpf/filesystem.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
@@ -40,6 +41,7 @@ struct ext4_free_extent___rz {
 } __attribute__((preserve_access_index));
 
 struct ext4_allocation_context___rz {
+    struct super_block* ac_sb;
     struct ext4_free_extent___rz ac_o_ex;
     struct ext4_free_extent___rz ac_b_ex;
     __u32 ac_flags;
@@ -48,7 +50,9 @@ struct ext4_allocation_context___rz {
     __u8 ac_criteria;
 } __attribute__((preserve_access_index));
 
-// counters: one bank of COUNTER_GROUP_WIDTH per CPU. The order MUST match the
+// counters: one bank of COUNTER_GROUP_WIDTH per (CPU, filesystem slot); the
+// slot comes from fs_slot() on the superblock's device, 0 for a device the
+// mount table does not know (bpf/filesystems.rs). The order MUST match the
 // `counters` vec in mod.rs.
 #define C_ALLOCATIONS 0
 #define C_ALLOC_BLOCKS_REQUESTED 1
@@ -77,7 +81,7 @@ struct {
     __uint(map_flags, BPF_F_MMAPABLE);
     __type(key, u32);
     __type(value, u64);
-    __uint(max_entries, MAX_CPUS* COUNTER_GROUP_WIDTH);
+    __uint(max_entries, MAX_CPUS* MAX_FILESYSTEMS* COUNTER_GROUP_WIDTH);
 } counters SEC(".maps");
 
 // Allocated extent length, in filesystem blocks.
@@ -89,14 +93,12 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS);
 } allocation_size SEC(".maps");
 
-static __always_inline void counter_add(u32 counter, u64 value) {
-    u32 idx = COUNTER_GROUP_WIDTH * bpf_get_smp_processor_id() + counter;
-
-    array_add(&counters, idx, value);
+static __always_inline void counter_add(u32 slot, u32 counter, u64 value) {
+    array_add(&counters, fs_counter_idx(slot, counter, COUNTER_GROUP_WIDTH), value);
 }
 
-static __always_inline void counter_incr(u32 counter) {
-    counter_add(counter, 1);
+static __always_inline void counter_incr(u32 slot, u32 counter) {
+    counter_add(slot, counter, 1);
 }
 
 // ext4_mballoc_alloc fires once per extent allocation, after the allocator
@@ -107,7 +109,7 @@ static __always_inline void counter_incr(u32 counter) {
 static int __always_inline handle_mballoc_alloc(void* ctx) {
     struct ext4_allocation_context___rz* ac = ctx;
     int requested, allocated;
-    u32 cr;
+    u32 cr, slot;
 
     // tp_btf pointer arguments are trusted_ptr_or_null to the verifier and
     // must be null-checked before BPF_CORE_READ's offset arithmetic.
@@ -115,41 +117,42 @@ static int __always_inline handle_mballoc_alloc(void* ctx) {
         return 0;
     }
 
+    slot = fs_slot(sb_dev(BPF_CORE_READ(ac, ac_sb)));
     requested = BPF_CORE_READ(ac, ac_o_ex.fe_len);
     allocated = BPF_CORE_READ(ac, ac_b_ex.fe_len);
     cr = BPF_CORE_READ_BITFIELD_PROBED(ac, ac_criteria);
 
-    counter_incr(C_ALLOCATIONS);
+    counter_incr(slot, C_ALLOCATIONS);
     if (requested > 0) {
-        counter_add(C_ALLOC_BLOCKS_REQUESTED, (u64)requested);
+        counter_add(slot, C_ALLOC_BLOCKS_REQUESTED, (u64)requested);
     }
     if (allocated > 0) {
-        counter_add(C_ALLOC_BLOCKS_ALLOCATED, (u64)allocated);
+        counter_add(slot, C_ALLOC_BLOCKS_ALLOCATED, (u64)allocated);
         histogram_incr(&allocation_size, HISTOGRAM_POWER, (u64)allocated);
     }
-    counter_add(C_ALLOC_GROUPS_SCANNED, BPF_CORE_READ(ac, ac_groups_scanned));
+    counter_add(slot, C_ALLOC_GROUPS_SCANNED, BPF_CORE_READ(ac, ac_groups_scanned));
 
     if (cr >= ALLOC_CR_SLOTS - 1) {
         cr = ALLOC_CR_SLOTS - 1;
     }
-    counter_incr(C_ALLOC_CR_BASE + cr);
+    counter_incr(slot, C_ALLOC_CR_BASE + cr);
 
     return 0;
 }
 
 // ext4_writepages_result fires once per writeback pass over an inode.
-static int __always_inline handle_writepages_result(struct writeback_control* wbc, int ret,
-                                                     int pages_written) {
+static int __always_inline handle_writepages_result(u32 slot, struct writeback_control* wbc,
+                                                     int ret, int pages_written) {
     long skipped;
 
-    counter_incr(C_WRITEPAGES);
+    counter_incr(slot, C_WRITEPAGES);
 
     if (pages_written > 0) {
-        counter_add(C_WRITEPAGES_PAGES_WRITTEN, (u64)pages_written);
+        counter_add(slot, C_WRITEPAGES_PAGES_WRITTEN, (u64)pages_written);
     }
 
     if (ret < 0) {
-        counter_incr(C_WRITEPAGES_ERRORS);
+        counter_incr(slot, C_WRITEPAGES_ERRORS);
     }
 
     if (!wbc) {
@@ -158,7 +161,7 @@ static int __always_inline handle_writepages_result(struct writeback_control* wb
 
     skipped = BPF_CORE_READ(wbc, pages_skipped);
     if (skipped > 0) {
-        counter_add(C_WRITEPAGES_PAGES_SKIPPED, (u64)skipped);
+        counter_add(slot, C_WRITEPAGES_PAGES_SKIPPED, (u64)skipped);
     }
 
     return 0;
@@ -182,58 +185,58 @@ int BPF_PROG(ext4_mballoc_alloc_raw, void* ac) {
 SEC("tp_btf/ext4_free_blocks")
 int BPF_PROG(ext4_free_blocks_btf, struct inode* inode, __u64 block, unsigned long count,
              int flags) {
-    counter_add(C_FREED_BLOCKS, count);
+    counter_add(fs_slot(inode_dev(inode)), C_FREED_BLOCKS, count);
     return 0;
 }
 
 SEC("raw_tp/ext4_free_blocks")
 int BPF_PROG(ext4_free_blocks_raw, struct inode* inode, __u64 block, unsigned long count,
              int flags) {
-    counter_add(C_FREED_BLOCKS, count);
+    counter_add(fs_slot(inode_dev(inode)), C_FREED_BLOCKS, count);
     return 0;
 }
 
 SEC("tp_btf/ext4_allocate_inode")
 int BPF_PROG(ext4_allocate_inode_btf, struct inode* inode, struct inode* dir, int mode) {
-    counter_incr(C_INODES_ALLOCATED);
+    counter_incr(fs_slot(inode_dev(inode)), C_INODES_ALLOCATED);
     return 0;
 }
 
 SEC("raw_tp/ext4_allocate_inode")
 int BPF_PROG(ext4_allocate_inode_raw, struct inode* inode, struct inode* dir, int mode) {
-    counter_incr(C_INODES_ALLOCATED);
+    counter_incr(fs_slot(inode_dev(inode)), C_INODES_ALLOCATED);
     return 0;
 }
 
 SEC("tp_btf/ext4_free_inode")
 int BPF_PROG(ext4_free_inode_btf, struct inode* inode) {
-    counter_incr(C_INODES_FREED);
+    counter_incr(fs_slot(inode_dev(inode)), C_INODES_FREED);
     return 0;
 }
 
 SEC("raw_tp/ext4_free_inode")
 int BPF_PROG(ext4_free_inode_raw, struct inode* inode) {
-    counter_incr(C_INODES_FREED);
+    counter_incr(fs_slot(inode_dev(inode)), C_INODES_FREED);
     return 0;
 }
 
 SEC("tp_btf/ext4_writepages_result")
 int BPF_PROG(ext4_writepages_result_btf, struct inode* inode, struct writeback_control* wbc,
              int ret, int pages_written) {
-    return handle_writepages_result(wbc, ret, pages_written);
+    return handle_writepages_result(fs_slot(inode_dev(inode)), wbc, ret, pages_written);
 }
 
 SEC("raw_tp/ext4_writepages_result")
 int BPF_PROG(ext4_writepages_result_raw, struct inode* inode, struct writeback_control* wbc,
              int ret, int pages_written) {
-    return handle_writepages_result(wbc, ret, pages_written);
+    return handle_writepages_result(fs_slot(inode_dev(inode)), wbc, ret, pages_written);
 }
 
 SEC("tp_btf/ext4_trim_extent")
 int BPF_PROG(ext4_trim_extent_btf, struct super_block* sb, unsigned int group, int start,
              int len) {
     if (len > 0) {
-        counter_add(C_TRIMMED_BLOCKS, (u64)len);
+        counter_add(fs_slot(sb_dev(sb)), C_TRIMMED_BLOCKS, (u64)len);
     }
     return 0;
 }
@@ -242,7 +245,7 @@ SEC("raw_tp/ext4_trim_extent")
 int BPF_PROG(ext4_trim_extent_raw, struct super_block* sb, unsigned int group, int start,
              int len) {
     if (len > 0) {
-        counter_add(C_TRIMMED_BLOCKS, (u64)len);
+        counter_add(fs_slot(sb_dev(sb)), C_TRIMMED_BLOCKS, (u64)len);
     }
     return 0;
 }
@@ -250,16 +253,20 @@ int BPF_PROG(ext4_trim_extent_raw, struct super_block* sb, unsigned int group, i
 SEC("tp_btf/ext4_discard_preallocations")
 int BPF_PROG(ext4_discard_preallocations_btf, struct inode* inode, unsigned int len,
              unsigned int needed) {
-    counter_incr(C_PREALLOC_DISCARDS);
-    counter_add(C_PREALLOC_DISCARDED_BLOCKS, len);
+    u32 slot = fs_slot(inode_dev(inode));
+
+    counter_incr(slot, C_PREALLOC_DISCARDS);
+    counter_add(slot, C_PREALLOC_DISCARDED_BLOCKS, len);
     return 0;
 }
 
 SEC("raw_tp/ext4_discard_preallocations")
 int BPF_PROG(ext4_discard_preallocations_raw, struct inode* inode, unsigned int len,
              unsigned int needed) {
-    counter_incr(C_PREALLOC_DISCARDS);
-    counter_add(C_PREALLOC_DISCARDED_BLOCKS, len);
+    u32 slot = fs_slot(inode_dev(inode));
+
+    counter_incr(slot, C_PREALLOC_DISCARDS);
+    counter_add(slot, C_PREALLOC_DISCARDED_BLOCKS, len);
     return 0;
 }
 
@@ -268,37 +275,37 @@ int BPF_PROG(ext4_discard_preallocations_raw, struct inode* inode, unsigned int 
 // read on the calling thread per event.
 SEC("tp_btf/ext4_load_inode")
 int BPF_PROG(ext4_load_inode_btf, struct super_block* sb, unsigned long ino) {
-    counter_incr(C_INODE_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_INODE_LOADS);
     return 0;
 }
 
 SEC("raw_tp/ext4_load_inode")
 int BPF_PROG(ext4_load_inode_raw, struct super_block* sb, unsigned long ino) {
-    counter_incr(C_INODE_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_INODE_LOADS);
     return 0;
 }
 
 SEC("tp_btf/ext4_read_block_bitmap_load")
 int BPF_PROG(ext4_read_block_bitmap_load_btf, struct super_block* sb, unsigned long group) {
-    counter_incr(C_BLOCK_BITMAP_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_BLOCK_BITMAP_LOADS);
     return 0;
 }
 
 SEC("raw_tp/ext4_read_block_bitmap_load")
 int BPF_PROG(ext4_read_block_bitmap_load_raw, struct super_block* sb, unsigned long group) {
-    counter_incr(C_BLOCK_BITMAP_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_BLOCK_BITMAP_LOADS);
     return 0;
 }
 
 SEC("tp_btf/ext4_load_inode_bitmap")
 int BPF_PROG(ext4_load_inode_bitmap_btf, struct super_block* sb, unsigned long group) {
-    counter_incr(C_INODE_BITMAP_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_INODE_BITMAP_LOADS);
     return 0;
 }
 
 SEC("raw_tp/ext4_load_inode_bitmap")
 int BPF_PROG(ext4_load_inode_bitmap_raw, struct super_block* sb, unsigned long group) {
-    counter_incr(C_INODE_BITMAP_LOADS);
+    counter_incr(fs_slot(sb_dev(sb)), C_INODE_BITMAP_LOADS);
     return 0;
 }
 

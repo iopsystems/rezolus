@@ -459,6 +459,17 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
         &'static CounterGroup,
         &'static AcquisitionGroup,
     )>,
+    /// Per-filesystem counter maps: the counters map, the `dev_t → slot`
+    /// lookup map, the per-slot metrics, their group and the identity that
+    /// labels the slots. See `filesystem_counters`.
+    #[allow(clippy::type_complexity)]
+    filesystem_counters: Vec<(
+        &'static str,
+        &'static str,
+        Vec<&'static CounterGroup>,
+        &'static AcquisitionGroup,
+        &'static crate::agent::identity::SlotIdentity,
+    )>,
     #[allow(clippy::type_complexity)]
     ringbuf_handler: Vec<(&'static str, fn(&[u8]) -> i32)>,
     btf_path: Option<String>,
@@ -477,6 +488,13 @@ pub struct Builder<T: 'static + SkelBuilder<'static>> {
     /// Optional human capability labels per program, for readable health
     /// reasons. Intent stays whatever `program_intents` says (default Required).
     program_labels: HashMap<&'static str, &'static str>,
+    /// Closures run on the open skeleton after program selection and before
+    /// `load()`: the one place a sampler can set read-only data
+    /// (`const volatile` globals) that the verifier then folds into the
+    /// program, so a feature switched off costs nothing at run time. See
+    /// `pre_load`.
+    #[allow(clippy::type_complexity)]
+    pre_load: Vec<Box<dyn FnOnce(&mut <T as SkelBuilder<'static>>::Output) + Send>>,
 }
 
 impl<T: 'static> Builder<T>
@@ -502,12 +520,14 @@ where
             perf_events: Vec::new(),
             perf_group: None,
             packed_counters: Vec::new(),
+            filesystem_counters: Vec::new(),
             ringbuf_handler: Vec::new(),
             btf_path: config.general().btf_path().map(|s| s.to_string()),
             enabled_programs: None,
             disabled_programs: None,
             program_intents: HashMap::new(),
             program_labels: HashMap::new(),
+            pre_load: Vec::new(),
         }
     }
 
@@ -626,6 +646,10 @@ where
                         );
                     }
                 }
+            }
+
+            for f in self.pre_load {
+                f(&mut open_skel);
             }
 
             let skel = match open_skel.load() {
@@ -785,6 +809,20 @@ where
                 .cpu_counters
                 .into_iter()
                 .map(|(name, counters, group)| CpuCounters::new(skel.map(name), counters, group))
+                .collect();
+
+            let mut filesystem_counters: Vec<FilesystemCounters> = self
+                .filesystem_counters
+                .into_iter()
+                .map(|(name, lookup, counters, group, identity)| {
+                    FilesystemCounters::new(
+                        skel.map(name),
+                        skel.map(lookup),
+                        counters,
+                        group,
+                        identity,
+                    )
+                })
                 .collect();
 
             debug!(
@@ -982,6 +1020,10 @@ where
                     v.refresh();
                 }
 
+                for v in &mut filesystem_counters {
+                    v.refresh();
+                }
+
                 for v in &mut packed_counters {
                     v.refresh();
                 }
@@ -1127,6 +1169,26 @@ where
         self
     }
 
+    /// Register a set of per-filesystem counters: `name` is a BPF map laid
+    /// out as `MAX_CPUS × MAX_FILESYSTEMS` cacheline-padded banks and
+    /// `lookup` the `dev_t → slot` hash the program indexes it with (both
+    /// from `bpf/filesystem.h`). Each `counters` entry is a `CounterGroup`
+    /// of `MAX_FILESYSTEMS` slots, in the map's counter order; `identity`
+    /// labels the slots with the mount. `group` brackets this map's refresh
+    /// (single writer). See `FilesystemCounters` and `bpf/filesystems.rs`.
+    pub fn filesystem_counters(
+        mut self,
+        name: &'static str,
+        lookup: &'static str,
+        counters: Vec<&'static CounterGroup>,
+        group: &'static AcquisitionGroup,
+        identity: &'static crate::agent::identity::SlotIdentity,
+    ) -> Self {
+        self.filesystem_counters
+            .push((name, lookup, counters, group, identity));
+        self
+    }
+
     /// Specify a perf event array name and an associated perf event.
     /// `counters` is the per-CPU target metric; `group` is the declared
     /// [`AcquisitionGroup`] whose acquisition brackets the perf-thread
@@ -1207,6 +1269,20 @@ where
 
     pub fn ringbuf_handler(mut self, name: &'static str, handler: fn(&[u8]) -> i32) -> Self {
         self.ringbuf_handler.push((name, handler));
+        self
+    }
+
+    /// Run `f` on the open skeleton after program selection and before
+    /// `load()`. Meant for read-only data: a `const volatile` global in the
+    /// program appears in the skeleton's `maps.rodata_data`, and a value
+    /// written here is what the verifier sees at load, so a branch on it is
+    /// removed from the loaded program rather than tested on every run. The
+    /// closure runs on the sampler's initialization thread.
+    pub fn pre_load(
+        mut self,
+        f: impl FnOnce(&mut <T as SkelBuilder<'static>>::Output) + Send + 'static,
+    ) -> Self {
+        self.pre_load.push(Box::new(f));
         self
     }
 

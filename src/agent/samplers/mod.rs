@@ -9,7 +9,7 @@ mod blockio;
 mod cpu;
 mod drivehealth;
 mod ext4;
-mod filesystem;
+pub(crate) mod filesystem;
 mod gpu;
 mod hw_sensors;
 mod memory;
@@ -18,6 +18,7 @@ mod rezolus;
 mod scheduler;
 mod syscall;
 mod tcp;
+mod xfs;
 
 /// A registered sampler: its stable name plus its init function.
 pub struct SamplerEntry {

@@ -25,13 +25,18 @@ This guide walks you through all the available metrics, organized by category.
 - [ext4](#ext4)
   - [ext4_alloc](#ext4_alloc)
   - [ext4_journal](#ext4_journal)
+  - [ext4_ops](#ext4_ops)
 - [Filesystem](#filesystem)
   - [filesystem](#filesystem-1)
+- [XFS](#xfs)
+  - [xfs_stats](#xfs_stats)
+  - [xfs_log](#xfs_log)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
+  - [memory_pagecache](#memory_pagecache)
   - [memory_slabinfo](#memory_slabinfo)
   - [memory_vmstat](#memory_vmstat)
   - [memory_writeback](#memory_writeback)
@@ -161,7 +166,17 @@ IPC = Instructions / Cycles
 | `cpu_cycles` | The number of elapsed CPU cycles | |
 | `cpu_instructions` | The number of instructions retired | |
 | `cgroup_cpu_cycles` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
-| `cgroup_cpu_instructions` | The number of elapsed CPU cycles on a per-cgroup basis | name: the name of the cgroup |
+| `cgroup_cpu_instructions` | The number of instructions retired on a per-cgroup basis | name: the name of the cgroup |
+
+The per-cgroup series come from a program on `sched_switch` that reads both
+counters at every context switch. On bare metal a counter read costs tens of
+nanoseconds; in a virtual machine whose PMU the hypervisor emulates, each
+read is a VM exit, measured at 1-11 µs on KVM and 20 µs per context switch
+for the pair. Set `cgroup_attribution = false` in `[samplers.cpu_perf]` (or
+in `[defaults]`, which also reaches the other samplers that have the option)
+to leave the program unloaded: `cpu_cycles` and `cpu_instructions` are still
+read per CPU at scrape time, and the `cgroup_cpu_*` series are absent. On by
+default for this sampler.
 
 ### cpu_power
 
@@ -263,6 +278,21 @@ optimizing workloads.
 | `cgroup_cpu_usage` | The amount of CPU time spent in different CPU states on a per-cgroup basis | `state={user,nice,system,softirq,irq,steal,guest,guest_nice}`, `name`: the name of the cgroup |
 | `softirq` | The count of softirqs | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
 | `softirq_time` | The time spent in softirq handlers | `kind={hi,timer,net_tx,net_rx,block,irq_poll,tasklet,sched,hrtimer,rcu}` |
+| `cpu_usage_exited_tasks` | CPU time of tasks that have exited, per CPU the exit ran on | `id` |
+| `cgroup_cpu_usage_exited_tasks` | CPU time of a cgroup's tasks that have exited | `name` |
+| `task_cpu_usage` | CPU time (user and system) per thread; only with `task_attribution = true` | `pid`, `tgid`, `comm`, `cgroup` |
+
+The sampler accounts CPU per task in every configuration: the per-CPU and
+per-cgroup deltas are computed from each thread's `utime`/`stime` whether
+or not per-task series are exported, so turning the export off does not
+change the host or cgroup totals. Exporting that per-task accounting as
+`task_cpu_usage` is the option `task_attribution`, **off by default**. On, it
+costs a task-metadata event per new thread (comm and three cgroup names),
+an exit event per thread, a walk of the per-pid map's populated slots each
+time a snapshot is served, and one series per thread in every recording,
+which on a host with thread
+churn is most of the recording. Set `task_attribution = true` in
+`[samplers.cpu_usage]` (or `[defaults]`) to get it.
 
 ## Drive
 
@@ -318,9 +348,24 @@ and the block device.
 
 BPF sampler on the jbd2 and ext4 tracepoints. Reports every phase of each
 journal commit, checkpoint cost, lock-buffer stalls, fsync counts and errors,
-and filesystem errors. **Host-wide**: one set of series for every ext4
-filesystem on the host (per-filesystem attribution is a later phase). jbd2 is
-also ocfs2's journal, so an ocfs2 mount's commits are counted here too.
+and filesystem errors.
+
+**Counters are per filesystem.** Every counter below has one series per
+mounted filesystem, carrying the labels the `filesystem` sampler gives the
+same mount, `mount`, `fstype`, `devnum` (major:minor) and `block_device`
+(when the device has a kernel name), so the two join; plus one series labeled
+only `mount="other"` for a device the agent's mount table does not know, a
+mount younger than the last rescan or beyond the 63-slot cap. Every event
+lands in some series, so `sum(irate(...))` over a metric is the host rate.
+The cumulative sum is not a host total: an unmounted filesystem's series ends
+and a remount starts a fresh one from zero, so rates, not raw values, are the
+thing to compare across mounts. The BPF program looks the device up in a
+`dev_t → slot` map on each event; the agent re-reads `/proc/self/mountinfo`
+every 10 s, and sooner (at most once a second) when `other` moves, so a new
+mount is attributed within two refreshes of its first event, and the events
+before that stay under `other`. jbd2 is also ocfs2's journal, and an ocfs2
+mount gets its own slot with `fstype="ocfs2"`. **Histograms are host-wide**
+until histogram groups have slots.
 
 jbd2 reports commit and checkpoint phases in **jiffies**, so those histograms
 have one-jiffy resolution (1–10 ms depending on `CONFIG_HZ`); the sampler
@@ -361,8 +406,10 @@ Reports each extent allocation's requested versus returned length, the block
 groups scanned and the criterion the allocator finished at, blocks freed,
 inodes allocated and freed, writeback passes with their pages written and
 skipped, discards and preallocation releases, and the synchronous inode-table
-and bitmap reads that land on the calling thread. **Host-wide**, like
-`ext4_journal`, with the same kernel-support rule: the allocator hook reads
+and bitmap reads that land on the calling thread. Counters are per filesystem
+exactly as `ext4_journal`'s are (`mount`, `fstype`, `devnum`, `block_device`,
+plus `mount="other"`); `ext4_allocation_size` is host-wide. Same
+kernel-support rule as `ext4_journal`: the allocator hook reads
 `struct ext4_allocation_context` through CO-RE, which needs ext4's types in
 vmlinux or module BTF.
 
@@ -390,6 +437,65 @@ metadata reads a cold inode cache imposes on `stat` and atime updates.
 | `ext4_preallocation_discarded_blocks` | Preallocated blocks released, summed | |
 | `ext4_inode_loads` | Inode-table reads from the device because an inode was not cached (`ext4_load_inode`), each a synchronous read of up to `inode_readahead_blks` blocks (32 by default), so 20,000 cold `stat`s cost about 40 reads on a fresh filesystem | |
 | `ext4_bitmap_loads` | Block-allocation bitmaps (including the allocator's prefetches) and inode-allocation bitmaps read from the device | `kind={block,inode}` |
+
+### ext4_ops
+
+BPF sampler that times ext4's request-path operations from the calling
+thread's side: how long each fsync, unlink, write and rename held the thread
+inside the filesystem, per filesystem and per cgroup. fsync and unlink are the
+`ext4_sync_file_enter`/`_exit` and `ext4_unlink_enter`/`_exit` tracepoints;
+write and rename have no tracepoints and are `fentry`/`fexit` on
+`ext4_file_write_iter` and `ext4_rename2`. The start timestamp lives in task
+local storage, one slot per operation, so an O_SYNC write's inner fsync does
+not lose the outer write's timing.
+
+**Opt-in.** Both probes of a pair run on the request path once per call, so
+this is the most expensive of the ext4 samplers: measured at +4,070
+instructions and +2.3 µs per write-plus-fsync pair (four probes) on a
+`null_blk` fsync bench, 12% of the CPU at a saturating 450 K operations per
+second, about 4.5% of one core at 20 K fsync/s. It is one of the samplers the
+`[defaults]` section never turns on (with `gpu_amd_pmu` and `hw_sensors`):
+enable it with `[samplers.ext4_ops] enabled = true` when that cost is
+acceptable for the workload; the journal entry has the bench.
+
+An asynchronous direct write (io_uring, libaio with `O_DIRECT`) returns from
+`ext4_file_write_iter` as queued, so for it the write latency is the
+submission time, it is not an error, and its bytes are reported at completion
+where this sampler does not see them: `ext4_write_bytes` undercounts such
+workloads by exactly their direct-IO bytes.
+
+Counters are per filesystem exactly as `ext4_journal`'s are (`mount`,
+`fstype`, `devnum`, `block_device`, plus `mount="other"`); the latency
+histograms are host-wide. `ext4_op_time / ext4_ops` is the mean latency per
+filesystem. `ext4_write_bytes` is the first term of write amplification, which
+the ext4 dashboard's Write Path group draws against `ext4_writepages_pages`,
+`ext4_journal_commit_blocks{kind="logged"}` and `blockio_bytes{op="write"}`.
+The per-cgroup series answer "how long are this service's request threads held
+inside the filesystem", the mechanism a slow disk reaches a request through.
+They exist only with `cgroup_attribution = true` in the sampler's section
+(or `[defaults]`): the per-cgroup path is 265 ns of the end hook's 535 ns,
+half its cost, so it is off by default and, when off, is removed from the
+loaded program rather than skipped at run time. Without it a write+fsync
+pair costs about 1.1 µs of probe time instead of 1.7.
+
+Kernel support: task local storage became usable from tracing programs in
+5.12, and `fentry` on a module's functions needs module BTF (5.11), so the
+sampler needs 5.12 or later. The sampler probes both at init (the helper with
+libbpf's probe, the tracepoints in BTF) and on an older kernel `rezolus
+status` shows it unsupported rather than failed. `ext4_rename2` has taken six arguments since 5.12; the sampler
+confirms that from BTF and disables the rename pair on any other count. If
+BTF lacks `ext4_file_write_iter` or `ext4_rename2`, that operation's
+histogram stays empty and its counters read 0 while the rest run.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `ext4_op_latency` | Distribution of the time a call held the calling thread inside ext4, in nanoseconds | `op={fsync,unlink,write,rename}` |
+| `ext4_ops` | Calls that completed | `op`, `mount`, `fstype`, `devnum`, `block_device` |
+| `ext4_op_time` | Nanoseconds the calls held their threads, summed; over `ext4_ops` it is the mean latency | `op`, `mount`, ... |
+| `ext4_op_errors` | Calls that returned an error | `op`, `mount`, ... |
+| `ext4_write_bytes` | Bytes applications wrote into ext4 (the return values of `ext4_file_write_iter`), summed | `mount`, ... |
+| `cgroup_ext4_ops` | Calls that completed, by the calling thread's cgroup | `op`, `name` |
+| `cgroup_ext4_op_time` | Nanoseconds a cgroup's threads spent inside each operation, summed | `op`, `name` |
 
 ## Filesystem
 
@@ -474,6 +580,113 @@ applications wrote it is the filesystem's term of write amplification. Both are
 sysfs text reads on the 60 s off-cycle sweep, the same principle 15 exception
 the sweep itself received, and they work on kernels the ext4 BPF samplers
 cannot run on.
+
+## XFS
+
+Metrics from inside XFS, between the syscall and the device.
+
+### xfs_stats
+
+XFS's own per-mount counters, read from `/sys/fs/xfs/<block_device>/stats/stats`
+(the same numbers `/proc/fs/xfs/stat` sums over mounts): the log, log space,
+the AIL pusher, transactions, the inode cache, the allocator, directories,
+file I/O and the metadata buffer cache. No probes: XFS maintains these at
+event rate itself, and counting the same events in BPF would cross about 5.6
+hooks per fsync (measured in `docs/journal/2026-09-29-xfs-samplers.md`) for
+numbers the kernel already has. What the file cannot say, how long a
+transaction waited for log space or a log force took and which cgroup waited,
+is the planned `xfs_log` BPF sampler's job.
+
+One read of the file costs about 160 µs, so the sweep runs off the scrape
+cycle on the blocking pool at most once per `interval` (default 1 s,
+`[samplers.xfs_stats]`); the counters keep their last values between sweeps.
+
+Every series is per mount, labeled `mount`, `fstype`, `devnum` and
+`block_device` exactly as the `filesystem` and ext4 samplers label the same
+mount, through the same slot registry, so the three join. A mount that is
+not XFS has no series here, and a host with no XFS mount has no table; a
+kernel whose file lacks a line or field leaves that counter absent. Field
+names below are the kernel's `xfsstats` (`fs/xfs/xfs_stats.h`). Every field
+but the byte counts is a 32-bit counter in the kernel, so a busy mount wraps
+one eventually (`xfs_log_blocks_written` after 2 TiB of log writes,
+`xfs_file_calls` after 4.29 billion calls); a wrap reads as a counter reset,
+the same as a remount.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `xfs_log_writes` | Log writes (`log/writes`) | `mount`, `fstype`, `devnum`, `block_device` |
+| `xfs_log_blocks_written` | 512-byte blocks written to the journal (`log/blocks`); ×512 is the journal's share of device writes | `mount`, ... |
+| `xfs_log_iclog_stalls` | Log writes that waited for a free in-core log buffer (`log/noiclogs`) | `mount`, ... |
+| `xfs_log_forces` | Log forces, the synchronous flush an fsync demands (`log/force`) | `mount`, ... |
+| `xfs_log_force_sleeps` | Forces that waited for a log write to complete (`log/force_sleep`); a synchronous force sleeps once for its own write, and a second sleep per force is a wait on the previous in-core log buffer, that is on another caller's commit | `mount`, ... |
+| `xfs_log_space_requests` | Transactions that reserved log space (`push_ail/try_logspace`) | `mount`, ... |
+| `xfs_log_space_sleeps` | Transactions that slept for log space (`push_ail/sleep_logspace`); any rate means the log is too small or too slow for the write rate | `mount`, ... |
+| `xfs_ail_pushes` | AIL push attempts (`push_ail/pushes`) | `mount`, ... |
+| `xfs_ail_push_items` | Items the pusher visited, by outcome (`push_ail/success`, `pushbuf`, `pinned`, `locked`, `flushing`) | `outcome={success,pushbuf,pinned,locked,flushing}`, `mount`, ... |
+| `xfs_ail_push_restarts` | Pushes that restarted after too many pinned or locked items (`push_ail/restarts`) | `mount`, ... |
+| `xfs_ail_flushes` | Pushes that forced the log because everything was pinned (`push_ail/flush`) | `mount`, ... |
+| `xfs_transactions` | Transactions committed (`trans/sync`, `async`, `empty`) | `kind={sync,async,empty}`, `mount`, ... |
+| `xfs_inode_cache_lookups` | Inode-cache lookups by outcome (`ig/found`, `missed`, `frecycle`, `dup`); a miss reads the inode from disk on the calling thread | `outcome={found,missed,recycled,duplicate}`, `mount`, ... |
+| `xfs_inode_reclaims` | Inodes reclaimed from the cache (`ig/reclaims`) | `mount`, ... |
+| `xfs_extents` | Extents allocated and freed (`extent_alloc/allocx`, `freex`) | `op={allocated,freed}`, `mount`, ... |
+| `xfs_extent_blocks` | Blocks allocated and freed (`extent_alloc/allocb`, `freeb`); allocated blocks over allocated extents is the mean extent length | `op={allocated,freed}`, `mount`, ... |
+| `xfs_directory_ops` | Directory operations (`dir/lookup`, `create`, `remove`, `getdents`) | `op={lookup,create,remove,getdents}`, `mount`, ... |
+| `xfs_file_calls` | Write and read calls into XFS (`rw`) | `op={write,read}`, `mount`, ... |
+| `xfs_file_bytes` | Bytes written into and read from XFS (`xpc/write_bytes`, `read_bytes`) | `op={written,read}`, `mount`, ... |
+| `xfs_buffer_lookups` | Metadata buffer lookups (`buf/get`) | `mount`, ... |
+| `xfs_buffer_creates` | Buffers created on a lookup that found none (`buf/create`) | `mount`, ... |
+| `xfs_buffer_lock_waits` | Lookups that waited for the buffer lock (`buf/get_locked_waited`) | `mount`, ... |
+| `xfs_buffer_busy_locks` | Trylocks that found the buffer busy (`buf/busy_locked`) | `mount`, ... |
+| `xfs_buffer_misses` | Lookups that missed the cache (`buf/miss_locked`) | `mount`, ... |
+| `xfs_buffer_reads` | Buffers read from the device (`buf/get_read`), the synchronous metadata reads of a cold buffer cache | `mount`, ... |
+
+### xfs_log
+
+BPF sampler that times the two places a thread blocks on the XFS log, per
+filesystem and per cgroup: waiting for log space (a transaction reservation
+that found the log full, `xfs_log_grant_sleep` to `xfs_log_grant_wake` on the
+same thread) and forcing the log (the synchronous log write an fsync waits
+for, `fentry`/`fexit` on `xfs_log_force` and `xfs_log_force_seq`). It also
+counts transactions that found the CIL over its hard limit (`xfs_log_cil_wait`;
+a count only, since nothing traces that wake). The start timestamp lives in
+task local storage, one slot per pair, so a force that sleeps for log space
+inside it keeps both timings.
+
+The counts here duplicate two fields `xfs_stats` reads from sysfs and equal
+them per mount: `xfs_log_waits{wait="space"}` is `xfs_log_space_sleeps`
+(both are incremented per trip through the grant wait loop) and
+`xfs_log_waits{wait="force"}` is `xfs_log_forces` (each force function counts
+once at entry). What the stats file cannot carry is how long anyone waited and
+which cgroup did; that is what this sampler adds. `xfs_log_wait_time /
+xfs_log_waits` is the mean per mount. The `cgroup_*` series exist only with
+`cgroup_attribution = true` in the sampler's section (or `[defaults]`): the
+per-cgroup path is about half the end hook's cost (as measured on
+`ext4_ops`, the same shape), so it is off by default and removed from the
+loaded program when off.
+
+**Opt-in.** The force pair runs on every fsync, so this costs on the request
+path; the journal entry (`docs/journal/2026-09-29-xfs-samplers.md`) has the
+bench. It is one of the samplers the `[defaults]` section never turns on
+(with `ext4_ops`, `gpu_amd_pmu` and `hw_sensors`): enable it with
+`[samplers.xfs_log] enabled = true`.
+
+Kernel support: task local storage became usable from tracing programs in
+5.12, and attaching to XFS's tracepoints and functions needs XFS's BTF (vmlinux
+if built in, module BTF from 5.11 if a module), so the floor is 5.12 with XFS
+loaded. The fsync path's force is `xfs_log_force_seq` from 5.13 and
+`xfs_log_force_lsn` before; the sampler loads whichever the kernel's BTF has,
+and on a kernel with neither the fsync-path forces are not timed. On an older
+kernel, or a host with no XFS, `rezolus status` shows the sampler unsupported
+rather than failed. A kernel without `xfs_log_cil_wait` in BTF reads 0 for the
+CIL count.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `xfs_log_wait_latency` | Distribution of the time a thread was blocked on the log, by wait: `space` is one grant sleep, `force` is one log force entry to return (a force without `XFS_LOG_SYNC`, as inode unpinning issues, returns once the write is issued and sits in the low tail) | `wait={space,force}`, `unit=nanoseconds` |
+| `xfs_log_waits` | Log waits completed: grant sleeps, forces, and CIL-full waits (count only) | `wait={space,force,cil}`, `mount`, `fstype`, `devnum`, `block_device` |
+| `xfs_log_wait_time` | Nanoseconds threads were blocked, summed, by wait; over `xfs_log_waits` it is the mean | `wait={space,force}`, `mount`, ... |
+| `cgroup_xfs_log_waits` | Log waits by the waiting thread's cgroup | `wait={space,force}`, `name` |
+| `cgroup_xfs_log_wait_time` | Nanoseconds a cgroup's threads were blocked on the log, summed: time request threads were held by a full log or by durability | `wait={space,force}`, `name` |
 
 ## GPU
 
@@ -642,6 +855,53 @@ utilized across the system.
 A line the running kernel does not print (`HardwareCorrupted` without
 `CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
 config) leaves its gauge absent from the snapshot rather than at 0.
+
+### memory_pagecache
+
+BPF sampler on the page cache, per filesystem and optionally per cgroup:
+buffered read calls and the bytes they ask for, pages filled by what the
+filling task was doing, pages evicted, and mmap faults. Reads are one
+`fentry` on `filemap_read` (`generic_file_buffered_read` before 5.12): no
+`fexit`, no task storage, so a read pays one probe crossing. Fills are the
+`mm_filemap_add_to_page_cache` tracepoint at the rate pages come in from the
+device, each classified from the task's saved syscall number (a read
+syscall, a write syscall, a page fault, or other; every fill is `other` on
+kernels before 5.15, which lack `bpf_task_pt_regs`). Evictions are the
+delete tracepoint; faults are `fentry` on `filemap_fault`.
+
+**The hit ratio.** `pagecache_pages_added{reason="read"} × 4096 /
+pagecache_read_bytes` is the fraction of bytes read that came from the
+device, readahead included, so `1 −` that is the page-level hit ratio.
+There is no per-call hit or miss and no latency by outcome: the design that
+had them bracketed every read with an `fexit` and task storage
+(`docs/journal/2026-09-29-pagecache-hit-ratio.md`), and this one keeps the
+read path to a single `fentry`.
+
+**Opt-in.** The read hook runs on every buffered read call. It is one of the
+samplers the `[defaults]` section never turns on: enable it with
+`[samplers.memory_pagecache] enabled = true`. `cgroup_attribution = true`
+adds the per-cgroup series at the cost measured for `ext4_ops`.
+
+Per filesystem means the slot registry's mounts (ext4, ext3, ext2, ocfs2,
+xfs): every other filesystem, and the block devices' own page cache (inode
+tables and directory blocks read through the buffer cache), lands in
+`mount="other"`. A large folio counts as its pages on every kernel with
+folios, wherever that kernel keeps the order. Read bytes are what each call
+could return, clamped at end of file, so a `cat` of a 4 KiB file counts 4
+KiB, not its 128 KiB buffer. The syscall table that classifies fills is
+written after the programs attach, so fills in the agent's first instant are
+`other`.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `pagecache_reads` | Buffered read calls into the page cache, hits and misses alike | `mount`, `fstype`, `devnum`, `block_device` |
+| `pagecache_read_bytes` | Bytes those calls could return: requested, clamped at end of file | `mount`, ... |
+| `pagecache_pages_added` | Pages added, by the adding task's context: `read` (misses and their readahead), `write` (buffered writes of uncached pages), `fault` (mmap), `other` | `reason={read,write,fault,other}`, `mount`, ... |
+| `pagecache_pages_evicted` | Pages removed: reclaim, truncation, invalidation | `mount`, ... |
+| `pagecache_faults` | mmap faults served by the page cache, resident or not | `mount`, ... |
+| `cgroup_pagecache_reads` | Read calls by the reading task's cgroup (`cgroup_attribution = true`) | `name` |
+| `cgroup_pagecache_read_bytes` | Bytes a cgroup's reads could return | `name` |
+| `cgroup_pagecache_pages_added` | Pages a cgroup's tasks filled, every reason | `name` |
 
 ### memory_slabinfo
 

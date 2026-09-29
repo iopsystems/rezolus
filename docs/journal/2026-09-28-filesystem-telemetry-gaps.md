@@ -154,7 +154,10 @@ becomes a question of which term moved, answerable from the recording.
 evictions; hits have no tracepoint and would need `fentry` on
 `filemap_get_folio` at every read. Rate is the read rate. Deferred until C1
 through C5 exist; the read path was not where this characterization lost its
-SLO.
+SLO. *Probed and decided in `2026-09-29-pagecache-hit-ratio.md`: hits are
+countable per read call (`filemap_read`, `mm_filemap_get_pages`), not per
+page, and `filemap_get_folio` is not on the read path; NO-GO for now on
+cost at the read rate against no read-path finding.*
 
 **C8. XFS parity** — an `xfs_log` sampler on XFS's log-grant, AIL-push and
 CIL tracepoints, and an `xfs_alloc` on its allocator, so the tuned-XFS
@@ -202,10 +205,19 @@ rate.
    sampler rather than a field on `filesystem`'s sweep: the file is
    host-wide, not per mount. Measured below.*
 5. **Per-filesystem counters** (C4), the lookup-map decision measured on the
-   `ext4_alloc` bench.
+   `ext4_alloc` bench. *Done; the ext4 entry's "Results — phase 3" has the
+   design as built and the measured lookup cost.*
 6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
-   amplification dashboard (C6) once its four terms exist.
-7. **XFS** (C8), then page cache (C7).
+   amplification dashboard (C6) once its four terms exist. *Done; see
+   Results — C5 and C6. The start map is task local storage, decided by
+   the kernel floor the sampler already has.*
+7. **XFS** (C8), then page cache (C7). *Designed and probed in its own
+   entry, `2026-09-29-xfs-samplers.md`: per-mount sysfs stats first, BPF for
+   the latencies the stats file cannot carry; the page cache is deferred
+   there. `xfs_stats` shipped in #1351 and `xfs_log` (opt-in) in #1352.
+   The page cache (C7) is probed and designed in
+   `2026-09-29-pagecache-hit-ratio.md` and not built: NO-GO for now, with
+   the reopen condition there.*
 
 ## Results — C1, the `memory_writeback` sampler
 
@@ -315,7 +327,128 @@ median, 86 µs maximum across 12 refreshes, the dispatch of a sweep. The
 default interval is 60 s, so the ~450 µs sweep is 7.5 µs per second of
 blocking-pool time.
 
+## Results — C5 and C6, the `ext4_ops` sampler
+
+Same guest (`6.12.63+deb13-amd64`, `CONFIG_EXT4_FS=m` with module BTF,
+56 vCPU); systemslab `01a0ebeb-6ca9-71cd-5439-b7eef2574e83`. Eight programs,
+all attached: the fsync and unlink tracepoint pairs as `tp_btf`, write and
+rename as `fentry`/`fexit` on the module's functions, the rename pair after
+`kernel_btf_func_arg_count("ext4_rename2")` confirmed the six arguments the
+program reads (the run carried a five-argument twin for pre-5.12 kernels;
+review pointed out no such kernel can load the skeleton, task storage being
+5.12 for tracing programs, and the twin was removed).
+
+**Counts are exact.** A driver in its own cgroup wrote 200 files of 8 KiB,
+fsynced each, renamed 100 and unlinked all 200. Its cgroup's series read
+fsync 200, write 200, rename 100, unlink 200; the host-wide fsync histogram
+held 600 events and tracefs counted 600 `ext4_sync_file_enter` over the same
+window (the other 400 were the guest's own services), unlink 200 both ways.
+The per-filesystem rows of this run were hidden by the member-set defect the
+per-filesystem review found (fixed before either landed); the same reader
+serves both samplers and is verified in the phase 3 results of the ext4
+entry.
+
+**Probe cost, the number this sampler was gated on.** The phase 1 bench
+(`null_blk`, 4 KiB `randwrite` with `fsync=1`, 8 fio jobs pinned to CPUs 8–15,
+agent on 0–7, `perf stat` on the fio CPUs, 3 reps × 20 s), so one fio
+operation is one write plus one fsync and crosses four probes:
+
+| arm | IOPS | instructions / op | cycles / op | task-clock ns / op |
+|---|---|---|---|---|
+| no agent | 444,684 ± 10,256 | 33,096 ± 162 | 68,628 ± 998 | 18,345 ± 454 |
+| agent, no samplers | 452,201 ± 3,050 | 33,008 ± 146 | 68,038 ± 369 | 18,035 ± 98 |
+| agent + `ext4_ops` | 402,609 ± 3,357 | 37,076 ± 178 | 76,361 ± 263 | 20,292 ± 166 |
+
+`ext4_ops` costs **+4,070 instructions, +8,320 cycles, +2.26 µs per
+write+fsync pair** against the idle agent: 12% at this saturating 450 K
+ops/s, roughly 1,000 instructions per probe. For comparison phase 1's two
+`ext4_sync_file` probes cost +225 instructions together. The difference is
+what each probe does: two task-local-storage lookups per operation
+(`bpf_task_storage_get` at begin and end), a hash lookup for the filesystem
+slot, a histogram increment, four per-filesystem counter adds and the
+per-cgroup path (`handle_new_cgroup`'s serial-number check plus two atomic
+adds into cache lines every CPU shares). Which of these dominates is not
+measured; `bpftool prog profile` on each program is the next step, and the
+per-cgroup atomics are the first suspect for the cycle count exceeding the
+instruction count's share.
+
+**Verdict.** NO-GO for on-by-default, GO as an opt-in: at the
+characterization's 20 K fsync/s a 2.3 µs pair cost is 4.5% of one core spread
+over the request threads, which is affordable for the finding it serves
+(request threads held inside the filesystem, per cgroup) but not a fleetwide
+always-on cost. It is in `OPT_IN_SAMPLERS` (`src/agent/config/mod.rs`), so
+`[defaults] enabled = true` never turns it on; `config/agent.toml` ships it
+`enabled = false`. Two things review caught after the run: an asynchronous
+direct write returns `-EIOCBQUEUED`, which the program now excludes from the
+error count (its bytes are unknowable at submission and are documented as
+missing from `ext4_write_bytes`), and an operation whose function BTF lacks
+reads 0 rather than absent, which the docs now say. Refresh cost
+315–488 µs on the 56-vCPU guest (one 16-wide slotted counter map, four
+histograms, eight cgroup maps).
+
+**The amplification dashboard (C6)** needs no measurement: it is four
+existing rates on one axis (`ext4_write_bytes`, `ext4_writepages_pages`
+written × 4 KiB, `ext4_journal_commit_blocks{kind="logged"}` × 4 KiB,
+`blockio_bytes{op="write"}`), each drawn when the recording has it. The
+4 KiB conversion is the default page and block size and is stated on the
+plot.
+
 ## Deferred / reopen
+
+- **`ext4_ops` probe cost** — Profiled per program; cutting it is open.
+  With `kernel.bpf_stats_enabled=1` on the same `null_blk` fsync bench
+  (systemslab `01a0ecd6-3645-7126-e09f-1a228805939d`, 26.0 M write+fsync
+  pairs at 371 K IOPS, the image's own agent running as in every bench):
+
+  | program | ns per run |
+  |---|---|
+  | `ext4_sync_file_enter` | 269 |
+  | `ext4_sync_file_exit` | 538 |
+  | `ext4_file_write_iter_fentry` | 312 |
+  | `ext4_file_write_iter_fexit` | 546 |
+  | `ext4_unlink_enter` / `_exit` (164,811 runs) | 283 / 636 |
+  | `ext4_rename2_fentry` / `_fexit` (164,811 runs) | 339 / 651 |
+
+  1.67 µs of program time per pair against the +2.26 µs the phase 1 bench
+  measured end to end, so about 150 ns per crossing is trampoline and
+  tracepoint dispatch outside the program. Every begin hook (task-storage
+  get-or-create, clock read, device read) is under 340 ns; every end hook
+  (task-storage get, histogram, two or three per-filesystem counters through
+  the `dev_t → slot` hash, cgroup serial check and two atomics) is 540–650
+  ns, twice the begin. `bpftool prog profile` (cycles and instructions per
+  run) is not in Debian's bpftool build, so instructions per run were not
+  measured; the ~300-instruction reopen threshold reads as roughly 300 ns
+  here. The variant was then built and measured (systemslab
+  `01a0ecfa-e969-7193-2cce-b0d88e85d5ac`, same bench, the image's agent
+  stopped, four builds of the same tree with calls guarded by `if (0)`):
+
+  | end hook (`ext4_sync_file_exit` / `ext4_file_write_iter_fexit`) | ns per run | bench IOPS |
+  |---|---|---|
+  | as shipped | 537 / 531 | 465 K |
+  | without the per-cgroup path | 266 / 271 | 535 K |
+  | also without the per-filesystem counters | 269 / 257 | 526 K |
+  | also without the histogram (task storage, clock, compare only) | 230 / 234 | 520 K |
+
+  The per-cgroup path (`handle_new_cgroup`'s two `BPF_CORE_READ`s, serial
+  lookup and compare, then two `array_add`s on the cgroup's counters) is
+  **265 ns, half the end hook**; the per-filesystem counters through the
+  `dev_t → slot` hash are under 15 ns and the histogram about 30 ns. The
+  begin hooks did not move (270 / 325 ns). Two crossings per pair without
+  cgroup accounting would be 1.13 µs of program time against 1.67. The bench
+  also ran 15% more fsyncs per second without the cgroup path, more than the
+  saved program time explains at eight threads; the cgroup counters are one
+  slot per cgroup, not per CPU, so eight threads in one cgroup add to the
+  same two cache lines from eight CPUs, and the coherence traffic is paid by
+  the workload too. Not verified beyond the IOPS figure. **The reopen
+  condition is met.** The on-by-default question is now: drop per-cgroup
+  attribution from `ext4_ops` (and `xfs_log`, same shape), make it cheaper
+  (per-CPU cgroup banks cost `MAX_CPUS × MAX_CGROUPS` slots; caching the
+  cgroup id and serial in the task's start slot saves the reads but not the
+  adds), or keep it and stay opt-in. Decided: it is the config option
+  `cgroup_attribution`, off by default, for `ext4_ops` and `xfs_log`; when
+  off the path is folded out of the loaded program by the verifier (a
+  `const volatile` switch written before load). The default-on question is
+  now about the 1.13 µs per pair that remains.
 
 - **Merged slab caches** — By design. A cache SLUB merges is absent, not
   approximated from the pool it joined; `ext4_extent_status` is merged on
@@ -326,10 +459,15 @@ blocking-pool time.
 - **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages`
   carries `cgroup_ino`, not the css id the cgroup slot machinery keys on; an
   inode-keyed lookup is a `bpf/cgroup.h` change. Host-wide first.
-- **Per-thread start state for paired hooks** — Open, decision forced by C5:
-  one `MAX_PID` array per paired hook (32 MB each), one shared array with the
-  hook id in the value, or task local storage at a 5.11 floor.
-- **Page-cache hits** — Idea. Needs `fentry` at read rate; C7.
+- **Per-thread start state for paired hooks** — Decided by C5: task local
+  storage (`BPF_MAP_TYPE_TASK_STORAGE`), one slot per operation in one value.
+  Tracing programs can use it from 5.12, one release above the module-BTF
+  `fentry` (5.11) `ext4_ops` needs anyway, so the floor is 5.12; a write to
+  an O_SYNC file nests fsync inside it on one thread, which a single shared
+  slot would lose and separate 32 MB arrays would pay 128 MB for.
+- **Page-cache hits** — Decided, not built: `2026-09-29-pagecache-hit-ratio.md`.
+  Two crossings per read call (`filemap_read`), not per page; NO-GO for now,
+  reopen on a read-path finding.
 - **Free-space fragmentation as a gauge** — By design, not eBPF. The state
   `e2freefrag` reports is the on-disk bitmap; the allocator signals in C2
   are its rate-of-change and the honest always-on proxy. Reopen if a cheap

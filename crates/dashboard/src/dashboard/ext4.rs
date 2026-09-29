@@ -1,11 +1,18 @@
-//! The ext4 journal, allocator, inodes, writeback and metadata reads.
-//! Host-wide, from the `ext4_journal` and `ext4_alloc` samplers; each
-//! sampler's groups render only when the recording carries its metrics.
+//! The ext4 journal, allocator, inodes, writeback and metadata reads, one
+//! line per filesystem (its `mount` label; `other` is a device the agent's
+//! mount table did not know), from the `ext4_journal` and `ext4_alloc`
+//! samplers; each sampler's groups render only when the recording carries
+//! its metrics. Plots that already split by another label sum over mounts.
 
 use crate::MetricsSource;
 use crate::plot::*;
 
 fn rate(metric: &str) -> String {
+    format!("sum by (mount) (irate({metric}[5m]))")
+}
+
+/// A ratio of two host totals; per-mount ratios of sparse counters are noise.
+fn total_rate(metric: &str) -> String {
     format!("sum(irate({metric}[5m]))")
 }
 
@@ -20,7 +27,137 @@ pub fn generate(data: &dyn MetricsSource, sections: Vec<Section>) -> View {
         allocator(&mut view);
     }
 
+    if has_metric(data, "ext4_ops") {
+        operations(&mut view);
+    }
+
+    if has_metric(data, "ext4_write_bytes") || has_metric(data, "ext4_writepages_pages") {
+        write_path(&mut view, data);
+    }
+
     view
+}
+
+/// The `ext4_ops` sampler: how long each request-path call held its thread,
+/// per filesystem.
+fn operations(view: &mut View) {
+    let mut ops = Group::new("Operations", "operations");
+
+    for (op, title, what) in [
+        (
+            "fsync",
+            "fsync",
+            "fsync and fdatasync, from the ext4 entry point to its return: the device round \
+             trip a durable write waits for. Mean latency is time held over calls, per \
+             filesystem; the distribution is host-wide.",
+        ),
+        (
+            "write",
+            "Write",
+            "write calls into ext4 (buffered or direct). A buffered write that returns quickly \
+             has only copied into the page cache; one that stalls is being throttled by dirty \
+             pages or waiting on a page lock.",
+        ),
+        (
+            "unlink",
+            "Unlink",
+            "unlink calls: an eviction pass on a file-per-object store shows here as a burst of \
+             calls whose latency tracks the journal.",
+        ),
+        (
+            "rename",
+            "Rename",
+            "rename calls (ext4_rename2). A write path whose durability ends at a rename that is \
+             not itself fsynced pays for it here.",
+        ),
+    ] {
+        let sg = ops.subgroup(title);
+        sg.describe(what);
+        sg.plot_promql(
+            PlotOpts::histogram_latency(format!("{title} Latency"), format!("op-{op}-latency")),
+            format!("ext4_op_latency{{op=\"{op}\"}}"),
+        );
+        sg.plot_promql(
+            PlotOpts::counter(
+                format!("{title} Calls"),
+                format!("op-{op}-calls"),
+                Unit::Count,
+            ),
+            format!("sum by (mount) (irate(ext4_ops{{op=\"{op}\"}}[5m]))"),
+        );
+        sg.plot_promql(
+            PlotOpts::counter(
+                format!("{title} Mean Latency"),
+                format!("op-{op}-mean"),
+                Unit::Time,
+            ),
+            format!(
+                "sum by (mount) (irate(ext4_op_time{{op=\"{op}\"}}[5m])) / \
+                 sum by (mount) (irate(ext4_ops{{op=\"{op}\"}}[5m]))"
+            ),
+        );
+        sg.plot_promql(
+            PlotOpts::counter(
+                format!("{title} Errors"),
+                format!("op-{op}-errors"),
+                Unit::Count,
+            ),
+            format!("sum by (mount) (irate(ext4_op_errors{{op=\"{op}\"}}[5m]))"),
+        );
+        if op == "write" {
+            sg.plot_promql(
+                PlotOpts::counter("Bytes Written", "op-write-bytes", Unit::Datarate),
+                rate("ext4_write_bytes"),
+            );
+        }
+    }
+
+    view.group(ops);
+}
+
+/// Write amplification, term by term: what applications wrote, what
+/// writeback put on the device, what the journal logged, and what the block
+/// layer saw. Each term is a host total; the block layer knows devices, not
+/// mounts, so a per-mount join is not possible here.
+fn write_path(view: &mut View, data: &dyn MetricsSource) {
+    let mut path = Group::new("Write Path", "write-path");
+
+    let terms = path.subgroup("Amplification");
+    terms.describe(
+        "Bytes per second at each stage of the write path, on one axis: pages writeback sent \
+         to the device, blocks the journal logged, bytes the block layer wrote, and, when the \
+         ext4_ops sampler is on, the bytes applications wrote into ext4 (buffered and \
+         synchronous direct writes; queued async direct writes are not counted). Device bytes \
+         over application bytes is the write amplification; which of the middle terms moved \
+         says where it comes from. Pages and journal blocks are converted at 4 KiB, the \
+         default for both.",
+    );
+    if has_metric(data, "ext4_write_bytes") {
+        terms.plot_promql(
+            PlotOpts::counter("Application Bytes", "path-application", Unit::Datarate),
+            total_rate("ext4_write_bytes"),
+        );
+    }
+    if has_metric(data, "ext4_writepages_pages") {
+        terms.plot_promql(
+            PlotOpts::counter("Writeback Bytes", "path-writeback", Unit::Datarate),
+            "sum(irate(ext4_writepages_pages{outcome=\"written\"}[5m])) * 4096".to_string(),
+        );
+    }
+    if has_metric(data, "ext4_journal_commit_blocks") {
+        terms.plot_promql(
+            PlotOpts::counter("Journal Bytes", "path-journal", Unit::Datarate),
+            "sum(irate(ext4_journal_commit_blocks{kind=\"logged\"}[5m])) * 4096".to_string(),
+        );
+    }
+    if has_metric(data, "blockio_bytes") {
+        terms.plot_promql(
+            PlotOpts::counter("Device Bytes", "path-device", Unit::Datarate),
+            "sum(irate(blockio_bytes{op=\"write\"}[5m]))".to_string(),
+        );
+    }
+
+    view.group(path);
 }
 
 fn journal(view: &mut View) {
@@ -165,8 +302,8 @@ fn allocator(view: &mut View) {
         ),
         format!(
             "{} / {}",
-            rate("ext4_allocation_groups_scanned"),
-            rate("ext4_allocations")
+            total_rate("ext4_allocation_groups_scanned"),
+            total_rate("ext4_allocations")
         ),
     );
     effort.plot_promql(
@@ -327,8 +464,8 @@ mod tests {
                 "missing phase {phase}"
             );
         }
-        assert!(j.contains("sum(irate(ext4_journal_commits[5m]))"));
-        assert!(j.contains("sum(irate(ext4_journal_checkpoint_forced_to_close[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_journal_commits[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_journal_checkpoint_forced_to_close[5m]))"));
         // No allocator sampler in this recording: its groups stay out.
         assert!(!j.contains("ext4_allocations"));
     }
@@ -338,8 +475,8 @@ mod tests {
         let view = generate(&store_with(&["ext4_journal_commits"]), vec![]);
         let j = json(&view);
         assert!(j.contains("sum by (op) (irate(ext4_sync_file[5m]))"));
-        assert!(j.contains("sum(irate(ext4_sync_file_errors[5m]))"));
-        assert!(j.contains("sum(irate(ext4_errors[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_sync_file_errors[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_errors[5m]))"));
     }
 
     #[test]
@@ -354,9 +491,46 @@ mod tests {
         assert!(j.contains("\"ext4_allocation_size\""));
         assert!(j.contains("sum by (op) (irate(ext4_inodes[5m]))"));
         assert!(j.contains("sum by (outcome) (irate(ext4_writepages_pages[5m]))"));
-        assert!(j.contains("sum(irate(ext4_inode_loads[5m]))"));
+        assert!(j.contains("sum by (mount) (irate(ext4_inode_loads[5m]))"));
         assert!(j.contains("sum by (kind) (irate(ext4_bitmap_loads[5m]))"));
         assert!(!j.contains("ext4_journal_commits"));
+    }
+
+    #[test]
+    fn operations_render_per_op_with_mean_latency_by_mount() {
+        let view = generate(&store_with(&["ext4_ops"]), vec![]);
+        let j = json(&view);
+        for op in ["fsync", "unlink", "write", "rename"] {
+            assert!(
+                j.contains(&format!("ext4_op_latency{{op=\"{op}\"}}")),
+                "{op} latency"
+            );
+            assert!(
+                j.contains(&format!(
+                    "sum by (mount) (irate(ext4_op_time{{op=\"{op}\"}}[5m])) / sum by (mount) \
+                     (irate(ext4_ops{{op=\"{op}\"}}[5m]))"
+                )),
+                "{op} mean latency"
+            );
+        }
+        assert!(!j.contains("ext4_journal_commits"));
+        assert!(
+            !j.contains("\"Write Path\""),
+            "no write-path term in this recording"
+        );
+    }
+
+    #[test]
+    fn the_write_path_draws_only_the_terms_the_recording_has() {
+        let view = generate(
+            &store_with(&["ext4_write_bytes", "ext4_writepages_pages"]),
+            vec![],
+        );
+        let j = json(&view);
+        assert!(j.contains("sum(irate(ext4_write_bytes[5m]))"));
+        assert!(j.contains("sum(irate(ext4_writepages_pages{outcome=\"written\"}[5m])) * 4096"));
+        assert!(!j.contains("blockio_bytes"));
+        assert!(!j.contains("ext4_journal_commit_blocks"));
     }
 
     #[test]
