@@ -390,22 +390,58 @@ mod btf_tests {
 /// in 5.11 for LSM programs and were opened to tracing programs in 5.12, so a
 /// sampler that keeps per-thread state in task local storage cannot load on
 /// 5.8–5.11 and asks this at init to report *unsupported* rather than fail.
-/// libbpf answers by loading a probe program; `false` also covers a kernel
-/// that refuses the probe for any other reason (no BPF at all, a locked-down
-/// host), which is the right answer for a sampler that would then fail to
-/// load anyway.
+/// `false` also covers a kernel that refuses the probe for any other reason
+/// (no BPF at all, a locked-down host), which is the right answer for a
+/// sampler that would then fail to load anyway.
 pub fn kernel_tracing_has_task_storage() -> bool {
+    let ret = probe_task_storage_helper();
+    if ret != 1 {
+        debug!("kernel BPF helper probe for task storage from tracing programs returned {ret}");
+    }
+    // 1 = supported, 0 = not, negative = the probe itself failed.
+    ret == 1
+}
+
+/// libbpf's raw answer: 1, 0, or a negative errno.
+///
+/// Probed as a `kprobe` program, not a `tracing` one: libbpf cannot load a
+/// standalone `BPF_PROG_TYPE_TRACING` probe and returns `-EOPNOTSUPP` for that
+/// type without asking the kernel (`libbpf_probes.c`), which would report
+/// every kernel as unsupported. The kernel answers helper availability for
+/// `kprobe`, `tracepoint`, `raw_tracepoint` and `tracing` programs from the
+/// same table (`bpf_tracing_func_proto`), and the commit that opened task
+/// storage to tracing programs added it there, so the `kprobe` probe is the
+/// same question.
+fn probe_task_storage_helper() -> i32 {
     // SAFETY: FFI call with plain enum arguments and a null options pointer,
     // which libbpf documents as "default options".
-    let ret = unsafe {
+    unsafe {
         libbpf_sys::libbpf_probe_bpf_helper(
-            libbpf_sys::BPF_PROG_TYPE_TRACING,
+            libbpf_sys::BPF_PROG_TYPE_KPROBE,
             libbpf_sys::BPF_FUNC_task_storage_get,
             std::ptr::null(),
         )
-    };
-    // 1 = supported, 0 = not, negative = the probe itself failed.
-    ret == 1
+    }
+}
+
+#[cfg(test)]
+mod task_storage_probe_tests {
+    use super::probe_task_storage_helper;
+
+    /// The probe must reach the kernel. `-EOPNOTSUPP` (-95) is libbpf refusing
+    /// the program type before any syscall, which is what happened with
+    /// `BPF_PROG_TYPE_TRACING` and made every kernel look unsupported. A
+    /// permission failure when the tests run unprivileged is a real answer
+    /// from the kernel and is fine here; so is 0 or 1.
+    #[test]
+    fn the_task_storage_probe_is_answered_by_the_kernel_not_refused_by_libbpf() {
+        let ret = probe_task_storage_helper();
+        assert_ne!(
+            ret,
+            -libc::EOPNOTSUPP,
+            "libbpf refused to probe this program type"
+        );
+    }
 }
 
 /// The length of one jiffy in nanoseconds, or `None` if the kernel would not
