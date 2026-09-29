@@ -418,7 +418,13 @@ Refresh cost (the `sampling latency` line, one `counters` bank read plus
 two histograms and the cgroup maps): p50 220–249 µs across the runs,
 p99 509 µs, max 571 µs in run 3 and one 3.9 ms outlier in run 2 (n=47).
 Instruction counts 677 (`xfs_log_grant_wake`) and 678
-(`xfs_log_force_seq_fexit`).
+(`xfs_log_force_seq_fexit`). Per program, from the kernel's statistics on
+`main` after the merge (systemslab `01a0ecd6-3645-7126-e09f-1a228805939d`,
+337,059 forces from the create+fsync driver): `xfs_log_force_seq_fentry`
+384 ns per run, `_fexit` 807 ns; `xfs_log_force_fentry` 353, `_fexit` 865.
+The end hook, which does the histogram, the two per-mount counters and the
+cgroup accounting, costs twice the begin hook, the same shape `ext4_ops`'s
+pairs have (gaps entry, Deferred, "`ext4_ops` probe cost").
 
 **Review.** Adversarial review found no defect. Its one note is now in the
 descriptions: a force called without `XFS_LOG_SYNC` (inode unpinning,
@@ -426,6 +432,26 @@ buffer locking) returns once the write is issued, so the force histogram's
 low tail is those, and the count must include them to equal
 `xfs_log_forces`. A `sync` split would be one flag test in each `fentry`
 if it is ever wanted.
+
+**Also observed: the guest image's own agent.** The per-program table
+listed programs this PR never loaded: `spool/images/debian-13-ci@golden`
+runs rezolus 5.20.0 as a service (`/usr/bin/rezolus /etc/rezolus/agent.toml`,
+every default sampler on), and it was running through every VM bench in
+this entry and the ext4 and gaps entries, in every arm, so the deltas
+stand and the absolute figures are a little low. Two things it showed
+(systemslab `01a0ece3-aace-713c-8049-5c09aad1102e`): its `cpu_perf`
+holds the guest's PMU counters, which is why every new agent started in
+these runs reported `cpu_branch`, `cpu_dtlb` and `cpu_perf` as
+pmu-starved ("needs 2/cpu, 1 free"); and its `cpu_perf` `sched_switch`
+program costs **20.5 µs per run** on this KVM guest, 8,235,630 runs and
+169 s of program time over a 247 s `perf bench sched pipe`, 0.68 of a core
+at 33 K switches/s, against 114 ns and 665 ns for the `cpu_migrations`
+and `scheduler_runqueue` programs on the same tracepoint. The program's
+two `bpf_perf_event_read` calls (`cpu/linux/perf/mod.bpf.c`) read the
+cycles and instructions counters, which a virtualized PMU services through
+the hypervisor. On bare metal a counter read is hundreds of nanoseconds;
+in a guest it is the whole cost. Recorded in the backlog under "Agent —
+`cpu_perf` under virtualization".
 
 ## Deferred / reopen
 
