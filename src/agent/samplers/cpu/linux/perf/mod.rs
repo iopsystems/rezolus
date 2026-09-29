@@ -31,17 +31,15 @@ use stats::*;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-/// Every group a cgroup id reaches, paired with the metrics carrying it.
+/// The metrics a cgroup id reaches, one list per acquisition group.
 ///
 /// One id spans several groups, and each group's schema carries its own copy
 /// of the labels, so each group's metrics need their own entry.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[
-    (&CGROUP_CYCLES_ACQ, &[&CGROUP_CPU_CYCLES]),
-    (&CGROUP_INSTRUCTIONS_ACQ, &[&CGROUP_CPU_INSTRUCTIONS]),
-];
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] =
+    &[&[&CGROUP_CPU_CYCLES], &[&CGROUP_CPU_INSTRUCTIONS]];
 
 fn handle_event(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)

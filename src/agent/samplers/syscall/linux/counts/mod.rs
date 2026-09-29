@@ -24,35 +24,32 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-/// Every group a cgroup id reaches, paired with the metrics carrying it.
+/// The metrics a cgroup id reaches, one list per acquisition group.
 ///
 /// One id spans several groups, and each group's schema carries its own copy
 /// of the labels, so each group's metrics need their own entry.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &CGROUP_COUNTERS_ACQ,
-    &[
-        &CGROUP_SYSCALL_OTHER,
-        &CGROUP_SYSCALL_READ,
-        &CGROUP_SYSCALL_WRITE,
-        &CGROUP_SYSCALL_POLL,
-        &CGROUP_SYSCALL_LOCK,
-        &CGROUP_SYSCALL_TIME,
-        &CGROUP_SYSCALL_SLEEP,
-        &CGROUP_SYSCALL_SOCKET,
-        &CGROUP_SYSCALL_YIELD,
-        &CGROUP_SYSCALL_FILESYSTEM,
-        &CGROUP_SYSCALL_MEMORY,
-        &CGROUP_SYSCALL_PROCESS,
-        &CGROUP_SYSCALL_QUERY,
-        &CGROUP_SYSCALL_IPC,
-        &CGROUP_SYSCALL_TIMER,
-        &CGROUP_SYSCALL_EVENT,
-        &CGROUP_SYSCALL_SYNC,
-    ],
-)];
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[
+    &CGROUP_SYSCALL_OTHER,
+    &CGROUP_SYSCALL_READ,
+    &CGROUP_SYSCALL_WRITE,
+    &CGROUP_SYSCALL_POLL,
+    &CGROUP_SYSCALL_LOCK,
+    &CGROUP_SYSCALL_TIME,
+    &CGROUP_SYSCALL_SLEEP,
+    &CGROUP_SYSCALL_SOCKET,
+    &CGROUP_SYSCALL_YIELD,
+    &CGROUP_SYSCALL_FILESYSTEM,
+    &CGROUP_SYSCALL_MEMORY,
+    &CGROUP_SYSCALL_PROCESS,
+    &CGROUP_SYSCALL_QUERY,
+    &CGROUP_SYSCALL_IPC,
+    &CGROUP_SYSCALL_TIMER,
+    &CGROUP_SYSCALL_EVENT,
+    &CGROUP_SYSCALL_SYNC,
+]];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
     process_cgroup_info::<bpf::types::cgroup_info>(data, &CGROUP_IDENTITY)

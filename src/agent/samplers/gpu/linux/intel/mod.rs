@@ -151,30 +151,25 @@ const GLOBAL_EVENTS: [(&str, &metriken::CounterGroup, Option<&str>); 2] = [
 ];
 
 /// Identity for the per-engine slots, whose members are `engine_index` values.
-static ENGINE_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(ENGINE_IDENTITY_GROUPS);
+static ENGINE_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(ENGINE_IDENTITY_GROUPS);
 
-static ENGINE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
-    &[(&GPU_INTEL_PMU_ENGINE_ACQ, &[&GPU_ENGINE_BUSY])];
+static ENGINE_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[&[&GPU_ENGINE_BUSY]];
 
 /// Identity for the per-device slots, whose members are GPU ids.
-static DEVICE_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(DEVICE_IDENTITY_GROUPS);
+static DEVICE_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(DEVICE_IDENTITY_GROUPS);
 
-static DEVICE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &GPU_INTEL_PMU_DEVICE_ACQ,
-    &[&GPU_FREQUENCY_ACTUAL, &GPU_FREQUENCY_REQUESTED],
-)];
+static DEVICE_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] =
+    &[&[&GPU_FREQUENCY_ACTUAL, &GPU_FREQUENCY_REQUESTED]];
 
 /// Identity for the VRAM gauges, a different population from the device
 /// counters: only a GPU with device-local memory has them.
-static MEMORY_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(MEMORY_IDENTITY_GROUPS);
+static MEMORY_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(MEMORY_IDENTITY_GROUPS);
 
-static MEMORY_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
-    &GPU_INTEL_PMU_MEMORY_ACQ,
-    &[&GPU_MEMORY_USED, &GPU_MEMORY_FREE],
-)];
+static MEMORY_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] =
+    &[&[&GPU_MEMORY_USED, &GPU_MEMORY_FREE]];
 
 fn init(config: Arc<Config>) -> SamplerResult {
     // Zero FIRST, so every exit below leaves the group empty rather than at
@@ -537,7 +532,7 @@ impl Gpu {
             if !live_indices.contains(&metric_index) {
                 continue;
             }
-            ENGINE_IDENTITY.set(
+            ENGINE_IDENTITY.assign(
                 metric_index,
                 [
                     ("id".to_string(), id.to_string()),
@@ -551,7 +546,7 @@ impl Gpu {
             );
         }
 
-        DEVICE_IDENTITY.set(
+        DEVICE_IDENTITY.assign(
             id,
             [
                 ("id".to_string(), id.to_string()),
@@ -585,7 +580,7 @@ impl Gpu {
             });
 
         if drm.is_some() {
-            MEMORY_IDENTITY.set(
+            MEMORY_IDENTITY.assign(
                 id,
                 [
                     ("id".to_string(), id.to_string()),

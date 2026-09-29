@@ -2,6 +2,11 @@
 
 ### Changed
 
+- Slot identity and the producer epoch come from metriken 0.11.2
+  (`metriken::group::SlotIdentity`, `metriken::epoch`), which took them from
+  the agent; `__uid__` minting, the no-op on a re-announced label set, and
+  the epoch's format are unchanged. Samplers declare the metrics a slot
+  spans as one list per acquisition group (`SlotIdentity::grouped`).
 - `record --stream` writes `.dendro` only. `-o out.rez` or `--format rez`
   with `--stream` is refused at parse time; scraping into a `.rez` is
   unchanged. The identity index that `.rez --stream` stored beside its rows

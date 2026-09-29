@@ -28,20 +28,17 @@ use std::sync::Arc;
 unsafe impl plain::Plain for bpf::types::cgroup_info {}
 impl_cgroup_info!(bpf::types::cgroup_info);
 
-/// Every group a cgroup id reaches, paired with the metrics carrying it.
+/// The metrics a cgroup id reaches, one list per acquisition group.
 ///
 /// One id spans several groups, and each group's schema carries its own copy
 /// of the labels, so each group's metrics need their own entry.
-static CGROUP_IDENTITY: crate::agent::identity::SlotIdentity =
-    crate::agent::identity::SlotIdentity::new(CGROUP_IDENTITY_GROUPS);
+static CGROUP_IDENTITY: metriken::group::SlotIdentity =
+    metriken::group::SlotIdentity::grouped(CGROUP_IDENTITY_GROUPS);
 
-static CGROUP_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[
-    (
-        &CGROUP_CONTEXT_SWITCH_ACQ,
-        &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
-    ),
-    (&CGROUP_OFFCPU_ACQ, &[&CGROUP_SCHEDULER_OFFCPU]),
-    (&CGROUP_WAIT_ACQ, &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT]),
+static CGROUP_IDENTITY_GROUPS: &[&[&dyn metriken::group::SlotMetadata]] = &[
+    &[&CGROUP_SCHEDULER_IVCSW, &CGROUP_SCHEDULER_VCSW],
+    &[&CGROUP_SCHEDULER_OFFCPU],
+    &[&CGROUP_SCHEDULER_RUNQUEUE_WAIT],
 ];
 
 fn handle_cgroup_info(data: &[u8]) -> i32 {
