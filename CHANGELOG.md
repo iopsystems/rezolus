@@ -83,6 +83,24 @@
 
 ### Changed
 
+- **`record` and `hindsight` write dendro archives by default** (`.dendro`),
+  through metriken-archive's `ArchiveWriter`. A bare `rezolus record` writes
+  `rezolus.dendro`; hindsight's default output is
+  `/var/lib/rezolus/rezolus.dendro`, and any hindsight `output` not ending in
+  `.rez` gets a dendro buffer. Groups with slots (threads, cgroups, CPUs) are
+  stored one row per occupant, with the occupants' labels in a
+  `<table>/occupants` stream. Replayed against the `.rez` writer on four
+  recordings, the archives were 3.3–8.8 times smaller, with the same answers
+  to 213 of 213 queries on each and a tick p99 of 16–38 ms against
+  375–407 ms. Segments are zstd-3 (55–57% smaller than lz4 for about 4% more
+  encode time). `-o out.rez`, `--format rez` or a hindsight `output` ending
+  in `.rez` still writes a `.rez`, and every tool still reads one. Built in
+  stages: `record` (#1326), hindsight, whose snapshots are fully sealed
+  copies (#1329), `record --stream` (#1336), and `recording` metadata,
+  annotate, check, snapshot, filter and combine (#1339, #1340, #1342) and
+  Save-as-Report in both viewers (#1345) on dendro archives. Design and
+  measurements: `docs/journal/2026-09-28-dendro-writer-adoption.md`.
+
 - The archive reader moved to metriken-archive 0.1.0 (`ArchiveReader`), with
   no change in behaviour: every reader test passes unchanged. `RezReader`
   is now a wrapper that recognizes the container (a `.rez` v1/v2/v3 or a

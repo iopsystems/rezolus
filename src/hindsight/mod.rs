@@ -18,9 +18,9 @@ pub fn command() -> Command {
         .long_about(
             "Long-running daemon that pulls from a Rezolus agent and keeps a rolling,\n\
              high-resolution buffer on disk. When an incident happens you snapshot the\n\
-             buffer to a `.rez` file — effectively recording the minutes *before* the trigger,\n\
+             buffer to a `.dendro` file — effectively recording the minutes *before* the trigger,\n\
              at a resolution finer than your normal observability stack keeps.\n\n\
-             The buffer is an ordinary `.rez` recording with retention: everything older than\n\
+             The buffer is an ordinary `.dendro` recording with retention: everything older than\n\
              the lookback is evicted every tick, so the file stays bounded. It is readable\n\
              while it is being written — `rezolus view`, the MCP tools and\n\
              `rezolus recording metadata` all open it live — and a snapshot is a consistent\n\
@@ -28,7 +28,9 @@ pub fn command() -> Command {
              Configuration is a TOML file (the only argument). It sets the sampling interval\n\
              ([general] interval, e.g. 1s), how far back the buffer reaches ([general] duration,\n\
              e.g. 15m), the agent to read from ([general] source), and the snapshot output path\n\
-             ([general] output). See config/hindsight.toml for a documented starting point.\n\n\
+             ([general] output). An output ending in .rez keeps the buffer and its snapshots\n\
+             in the archive format before 6.0; any other output is a .dendro archive. See\n\
+             config/hindsight.toml for a documented starting point.\n\n\
              TRIGGERING A SNAPSHOT: send SIGHUP to write the buffer to the output file without\n\
              stopping the daemon. Optionally set [general] listen to enable an HTTP endpoint for\n\
              remote status/dump requests instead. Either way the recording keeps running for the\n\
@@ -49,7 +51,7 @@ pub fn command() -> Command {
 }
 
 /// Runs the Rezolus `flight-recorder`: a Rezolus client that pulls from the
-/// agent's msgpack endpoint and keeps a rolling `.rez` buffer covering the
+/// agent's msgpack endpoint and keeps a rolling archive buffer covering the
 /// configured lookback. On SIGHUP it writes the buffer out to the output file.
 ///
 /// This is intended to be run as a daemon that allows retroactive collection of
@@ -60,8 +62,9 @@ pub fn command() -> Command {
 /// not only cover the duration of an anomalous event but give time for an
 /// engineer or automated process to respond and trigger a snapshot.
 ///
-/// The buffer is the same streaming `.rez` v3 writer the recorder uses, with
-/// retention configured — see [`buffer`]. That is what replaced the fixed-size
+/// The buffer is the same archive writer the recorder uses (metriken-archive's
+/// for a dendro buffer, the `.rez` v3 writer for a `.rez` one), with retention
+/// configured — see [`buffer`]. That is what replaced the fixed-size
 /// ring of 4 KB slots: a ring nothing but hindsight could read, whose dump
 /// copied a buffer that was being overwritten in place and could therefore
 /// tear.
@@ -180,14 +183,11 @@ pub fn run(config: Config) {
         error!("failed to open destination file: {e}");
         std::process::exit(1);
     }
-    // A `.dendro` output selects a dendro buffer, written through
-    // metriken-archive; anything else is a `.rez` buffer, as before. Opt-in,
-    // as for `record -o out.dendro`.
-    let dendro = output.extension().is_some_and(|e| e == "dendro");
+    let dendro = writes_dendro(&output);
     if output.extension().is_some_and(|e| e == "parquet") {
         warn!(
-            "{} will be written as a .rez archive, not parquet — hindsight snapshots \
-             are `.rez` recordings since v3",
+            "{} will be written as a .dendro archive, not parquet — hindsight snapshots \
+             are archives",
             output.display()
         );
     }
@@ -513,8 +513,8 @@ fn dump_to_file(buffer_path: &Path, output: &Path, range: &TimeRange) -> DumpToF
 /// Where a signal-triggered capture goes: `output`'s directory and stem, a
 /// UTC timestamp, and `output`'s extension.
 ///
-/// `/var/lib/rezolus/rezolus.rez` becomes
-/// `/var/lib/rezolus/rezolus-20260915T204500Z.rez`.
+/// `/var/lib/rezolus/rezolus.dendro` becomes
+/// `/var/lib/rezolus/rezolus-20260915T204500Z.dendro`.
 ///
 /// Timestamped rather than a fixed second name so that successive restarts do
 /// not overwrite each other either — two stops a minute apart are two
@@ -612,9 +612,25 @@ fn buffer_metadata(
     m
 }
 
+/// Whether the buffer for `output` is a dendro archive: every output except
+/// one ending in `.rez`, which keeps the format before 6.0.
+fn writes_dendro(output: &Path) -> bool {
+    !output.extension().is_some_and(|e| e == "rez")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `.rez` output keeps a `.rez` buffer; everything else is dendro,
+    /// including an output with no extension or a parquet name.
+    #[test]
+    fn only_a_rez_output_keeps_a_rez_buffer() {
+        assert!(!writes_dendro(Path::new("/var/lib/rezolus/rezolus.rez")));
+        for out in ["rezolus.dendro", "rezolus.parquet", "buffer", "incident.db"] {
+            assert!(writes_dendro(Path::new(out)), "{out}");
+        }
+    }
 
     /// A signal-triggered capture must never land on `output`: that is where
     /// an operator's deliberate `POST /dump/file` captures go, and a service

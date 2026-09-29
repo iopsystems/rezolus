@@ -4,7 +4,7 @@
 
 - [Agent](#agent) and [Exporter](#exporter)
 - [Hindsight](#hindsight) and its [HTTP endpoint](#http-endpoint-optional)
-- [Recorder](#recorder): [formats](#output-formats), [labels](#tagging-a-recording), [multiple endpoints](#several-endpoints-in-one-rez), [durability](#rez-durability)
+- [Recorder](#recorder): [formats](#output-formats), [labels](#tagging-a-recording), [multiple endpoints](#several-endpoints-in-one-archive), [durability](#archive-durability)
 - [Viewer](#viewer), [recording tools](#recording-tools), and [MCP](#mcp-server)
 - [Source-build helper](#source-build-capture-helper) and [Docker](#docker)
 
@@ -50,15 +50,14 @@ Save the retained history after an incident without reproducing the workload.
 It must be running before the event; configure its lookback and disk budget
 before enabling it. It bounds retention, not the cost of collection or writes.
 
-The buffer is an ordinary `.rez` recording trimmed to the configured lookback,
-so you can open it with `rezolus view` or the MCP tools _while it is being
-written_, and a snapshot is a consistent point-in-time copy taken without
+The buffer is an ordinary `.dendro` recording trimmed to the configured
+lookback, so you can open it with `rezolus view` or the MCP tools _while it is
+being written_, and a snapshot is a consistent point-in-time copy taken without
 pausing the recording — however it is triggered, by signal or over HTTP.
 
-An `output` ending in `.dendro` keeps the buffer and its snapshots as dendro
-archives instead (opt-in): several times smaller where threads and cgroups
-come and go, and readable by `rezolus view`, the MCP tools and `rezolus
-recording` subcommands (`combine` into a `.dendro` output).
+An `output` ending in `.rez` keeps the buffer and its snapshots in the archive
+format before 6.0, several times larger where threads and cgroups come and go.
+Any other `output` is a `.dendro` archive.
 
 Hindsight is **disabled by default**. Review the config before enabling it.
 
@@ -88,17 +87,17 @@ rezolus record -- ./my-benchmark --threads 8
 ```
 
 By default this records the local agent (`http://localhost:4241`) into
-`rezolus.rez`. Override the endpoint with `--url` and the output with `-o`:
+`rezolus.dendro`. Override the endpoint with `--url` and the output with `-o`:
 
 ```bash
-rezolus record --url http://host:4241 -o run.rez -- ./driver
+rezolus record --url http://host:4241 -o run.dendro -- ./driver
 ```
 
 Or record a fixed window instead, until `--duration` elapses or you press
 ctrl-c:
 
 ```bash
-rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o run.rez
+rezolus record --interval 1s --duration 15m --url http://localhost:4241 -o run.dendro
 ```
 
 When wrapping a command, `--duration` also acts as a safety cap: if the command
@@ -110,18 +109,18 @@ is deprecated in favor of `--url`/`-o`.
 
 The output path's extension picks the format, so `--format` is rarely needed;
 with no `-o` at all the recording goes to `rezolus.<ext>` for the format in
-play, which by default means `rezolus.rez`.
+play, which by default means `rezolus.dendro`.
 
 | Extension | What it is | When |
 | --- | --- | --- |
-| `.rez` | **Default.** An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
-| `.dendro` | The same recordings in a dendro archive. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member, several times smaller than a `.rez`. Opt-in until it becomes the default. | Where size matters. `rezolus view`, `rezolus mcp` and the `recording` subcommands read it (`combine` assembles one from `.rez` and `.dendro` inputs into a `.dendro` output). `--stream` records to it. |
+| `.dendro` | **Default** (since 6.0). An archive with separate acquisition groups and their cadences/windows. Holds one *recording* per endpoint. Groups whose members come and go (threads, cgroups, CPUs) are stored one row per member. | One or more Rezolus or Prometheus endpoints, including mixed inputs. |
+| `.rez` | The same recordings in the archive format before 6.0, several times larger than a `.dendro`. Every tool still reads and writes it. | A consumer that has not moved to `.dendro`. |
 | `.parquet` | One columnar table on a single uniform clock. | Uniform tabular export or other Parquet tooling. |
 | `.raw` | The msgpack snapshots as scraped, concatenated. | Capture now, decide later — convert with `rezolus recording convert`. |
 
 Passing a `--format` that contradicts the extension (say `--format parquet` with
-`-o out.rez`) is an error. Both Rezolus and Prometheus endpoints can be recorded
-to `.rez`; a Prometheus scrape gets an acquisition window spanning the HTTP
+`-o out.dendro`) is an error. Both Rezolus and Prometheus endpoints can be
+recorded to an archive (`.dendro` or `.rez`); a Prometheus scrape gets an acquisition window spanning the HTTP
 request and response. Multiple endpoints remain separate recordings in the
 same archive.
 
@@ -130,18 +129,18 @@ file per endpoint. If the output format was left at its default, that option
 selects parquet; an explicit `.rez` or `.dendro` output instead produces an
 error.
 
-A `.rez` output path must not already exist — the recorder refuses rather than
+An archive output path (`.dendro` or `.rez`) must not already exist — the recorder refuses rather than
 truncate, since the archive is committed as it goes and has no staging file. A
 parquet or raw output is overwritten. There is no `--force`.
 
 When wrapping a command, rezolus passes its stdio straight through and exits
-with the command's own status, so `rezolus record -o bench.rez -- ./bench.sh &&
-analyze bench.rez` gates on the benchmark; the exception is the `--duration`
+with the command's own status, so `rezolus record -o bench.dendro -- ./bench.sh &&
+analyze bench.dendro` gates on the benchmark; the exception is the `--duration`
 cap, which exits 124 if it has to kill the command.
 
 A wrapped run is also marked in the recording: a `run_start` event when the
-command spawns and a `run_end` event when its exit is observed (both in `.rez`,
-`.dendro` and parquet output; raw output has no metadata to carry them), named by the
+command spawns and a `run_end` event when its exit is observed (both in `.dendro`,
+`.rez` and parquet output; raw output has no metadata to carry them), named by the
 program alone. Pass `--record-command-line` to store the full argument list in
 the `run_start` event's details, since arguments can carry paths or tokens you
 may not want in a file you share.
@@ -149,27 +148,27 @@ may not want in a file you share.
 ### Tagging a recording
 
 `-m/--metadata k=v` writes file-level metadata and applies to every format.
-`-l/--label k=v` applies to `.rez` only — it tags the recording inside the
-archive (`source` and `host` are filled in for you), and a two-recording `.rez`
-drives the viewer's A/B comparison, which is what `--label arm=redis` is for:
+`-l/--label k=v` applies to archives (`.dendro`, `.rez`) only — it tags the
+recording inside the archive (`source` and `host` are filled in for you), and a
+two-recording archive drives the viewer's A/B comparison, which is what `--label arm=redis` is for:
 
 ```bash
-rezolus record --url http://localhost:4241 -o out.rez --label arm=redis
+rezolus record --url http://localhost:4241 -o out.dendro --label arm=redis
 ```
 
 `--label` applies to *every* recording the run produces, so in a multi-endpoint
 run it cannot tell two endpoints apart — see below.
 
-### Several endpoints in one `.rez`
+### Several endpoints in one archive
 
-A `.rez` holds one *recording* per endpoint, so several endpoints can be
+An archive (`.dendro` or `.rez`) holds one *recording* per endpoint, so several endpoints can be
 captured in a single invocation and land in one archive:
 
 ```bash
-rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez
+rezolus record --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro
 ```
 
-A two-recording `.rez` opens in the viewer as an A/B comparison. Concurrent
+A two-recording archive opens in the viewer as an A/B comparison. Concurrent
 captures share the same time period; captures taken sequentially can also
 differ in background load, not just the experimental change.
 
@@ -184,33 +183,33 @@ recording alike. Give each endpoint its own `source=`:
 rezolus record \
   --endpoint http://localhost:4241,source=redis \
   --endpoint http://localhost:4242,source=valkey \
-  -o ab.rez
+  -o ab.dendro
 ```
 
 If two recordings end up with identical labels, the recorder warns at startup:
 nothing downstream can tell them apart, and they will also seal their segments
 in lockstep. Rezolus and Prometheus endpoints can coexist in one archive
 (see [Output formats](#output-formats)).
-`--separate` does not apply to `.rez`, which already keeps each endpoint as its
-own recording inside the one archive.
+`--separate` does not apply to an archive, which already keeps each endpoint as
+its own recording.
 
-### `.rez` durability
+### Archive durability
 
-`.rez` uses a SQLite container with incrementally committed samples and sealed
+`.dendro` and `.rez` both use a SQLite container with incrementally committed samples and sealed
 Parquet segments. Ctrl-c and SIGTERM interrupt the wait between samples and
 finalize the still-open segments, rather than rewriting the entire recording.
 There is no `.partial` staging file. After an unclean stop, inspect the archive's
 completion status and retained time range before treating it as a complete run:
 
 ```bash
-rezolus recording metadata -i out.rez   # reports "not cleanly finalized"
+rezolus recording metadata -i out.dendro   # reports "not cleanly finalized"
 ```
 
-For a file still being written, use `rezolus recording snapshot live.rez -o
-incident.rez` to include committed data in SQLite's sidecar; copying only the
+For a file still being written, use `rezolus recording snapshot live.dendro -o
+incident.dendro` to include committed data in SQLite's sidecar; copying only the
 main file can miss recent samples.
 
-The previous tar container is no longer written. Archives recorded by older
+The `.rez` tar container is no longer written. Archives recorded by older
 releases still open everywhere, and `rezolus recording upgrade old.rez` converts
 one to the current container — as does rewriting it with `combine`, `filter` or
 `annotate`, all of which read either container and emit the current one.
@@ -226,12 +225,12 @@ in the same transaction as the rows it describes, and a `.dendro` takes the
 same identity from the rows' schemas into its occupant streams.
 
 ```bash
-rezolus record --stream --url http://localhost:4241 -o run.rez
-rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.rez
+rezolus record --stream --url http://localhost:4241 -o run.dendro
+rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4241 -o fleet.dendro
 ```
 
 Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.rez` or `.dendro`, and every endpoint must be a rezolus agent that serves
+records to `.dendro` or `.rez`, and every endpoint must be a rezolus agent that serves
 the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
 from before `/metrics/stream`) fails the run rather than being scraped. An
 endpoint that is merely unreachable is retried each tick. A stream that drops
@@ -248,9 +247,12 @@ and quantile heatmaps. A remote agent must be reachable from the viewer server.
 
 ```bash
 # open a recording
-rezolus view run.rez
-# A/B compare two recordings
-rezolus view baseline.rez experiment.rez
+rezolus view run.dendro
+# A/B compare two recordings: combine them into one archive, then view it
+rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro
+rezolus view ab.dendro
+# two parquet files are compared as given
+rezolus view baseline.parquet experiment.parquet
 # stream live from an agent
 rezolus view http://localhost:4241
 # upload-only mode (no file argument)
@@ -265,7 +267,7 @@ A/B compare remains browser-only.
 
 ```bash
 # explore a recording in the terminal
-rezolus view --tui run.rez
+rezolus view --tui run.dendro
 # stream a live agent in the terminal UI
 rezolus view --tui http://localhost:4241
 ```
@@ -593,7 +595,7 @@ causation.
 
 ### Multi-recording archives
 
-A `.rez` built from several endpoints (see "Several endpoints in one `.rez`"
+A `.rez` built from several endpoints (see "Several endpoints in one archive"
 above) holds one *recording* per endpoint. Every MCP tool reads one recording
 at a time, so run `describe-recording` with no selector to see what the
 archive holds and the flag that picks each one:
@@ -636,11 +638,11 @@ Available endpoints:
 
 - `GET /status` — returns buffer status: the time range actually retained, rows
   and segments per sampler, on-disk size, and whether retention has started
-- `GET /dump` — downloads the buffer as a `.rez` archive
+- `GET /dump` — downloads the buffer as an archive, in the buffer's format
 - `POST /dump/file` — writes the buffer to the configured output file
 
 The `/dump` and `/dump/file` endpoints support query parameters for time
-filtering. A `.rez` segment is an immutable parquet blob, so a filtered dump
+filtering. An archive segment is an immutable parquet blob, so a filtered dump
 keeps any segment overlapping the range rather than splitting one: you may get
 a little more than you asked for, and `/dump/file` reports the span it actually
 wrote.
@@ -657,11 +659,11 @@ Examples:
 # check buffer status
 curl http://localhost:4242/status
 
-# download last 5 minutes as a .rez archive
-curl -o dump.rez "http://localhost:4242/dump?last=5m"
+# download last 5 minutes as a .dendro archive
+curl -o dump.dendro "http://localhost:4242/dump?last=5m"
 
 # download a specific time range using RFC 3339 datetime
-curl -o dump.rez "http://localhost:4242/dump?start=2024-01-01T12:00:00Z&end=2024-01-01T13:00:00Z"
+curl -o dump.dendro "http://localhost:4242/dump?start=2024-01-01T12:00:00Z&end=2024-01-01T13:00:00Z"
 
 # trigger a dump to the configured output file
 curl -X POST http://localhost:4242/dump/file
@@ -682,7 +684,7 @@ The helper starts an agent if necessary, records to parquet, and launches the
 viewer. Its default agent config is `config/agent.toml`; use `--agent-config`
 if you run it elsewhere. For service metrics, pass paired `--endpoint` and
 `--source` flags. This helper's parquet workflow is separate from the recorder's
-`.rez` default. Run `scripts/rezolus-capture --help` for its full options.
+`.dendro` default. Run `scripts/rezolus-capture --help` for its full options.
 
 ## Docker
 

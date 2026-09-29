@@ -67,12 +67,12 @@ releases, package repositories, and source builds.
 With the local agent running, capture a minute and open it:
 
 ```bash
-rezolus record --duration 60s -o first-run.rez
-rezolus view first-run.rez
+rezolus record --duration 60s -o first-run.dendro
+rezolus view first-run.dendro
 ```
 
 The recorder defaults to `http://localhost:4241`. It does **not** start an agent.
-Choose a new output filename for each `.rez` capture; existing files are not
+Choose a new output filename for each `.dendro` capture; existing files are not
 overwritten. The viewer prints its local address for your browser. To watch the
 agent without recording:
 
@@ -89,7 +89,7 @@ default; use `127.0.0.1:4241` in its configuration for local-only access.
 
 ```bash
 brew install iopsystems/iop/rezolus
-rezolus view first-run.rez
+rezolus view first-run.dendro
 # Or inspect a reachable Linux agent:
 rezolus view http://linux-host:4241
 ```
@@ -107,19 +107,19 @@ The macOS installer does not install Linux systemd services.
 | You want to… | Start here | What it needs / produces |
 | --- | --- | --- |
 | See the machine now | `rezolus view http://host:4241` | A reachable agent; live dashboard. Add `--tui` for a terminal view. |
-| Capture a benchmark | `rezolus record -o run.rez -- ./benchmark` | An existing agent; records for the command's lifetime. Then `rezolus view run.rez`. |
+| Capture a benchmark | `rezolus record -o run.dendro -- ./benchmark` | An existing agent; records for the command's lifetime. Then `rezolus view run.dendro`. |
 | Explain a past incident | [Hindsight](docs/usage.md#hindsight) | A buffer running before the incident; save recent history to a recording. |
 | Feed Prometheus | [Exporter](docs/usage.md#exporter) | A running agent; set the exporter interval to match the scrape interval. |
-| Compare a change | `rezolus view baseline.rez experiment.rez` | Two recordings; browser A/B comparison. |
-| Capture service and system metrics together | [Multiple endpoints](docs/usage.md#several-endpoints-in-one-rez) | Agent and/or Prometheus endpoints; one recording per endpoint in a `.rez` archive. |
+| Compare a change | `rezolus recording combine baseline.dendro experiment.dendro -o ab.dendro`, then `rezolus view ab.dendro` | Two recordings in one archive; browser A/B comparison. |
+| Capture service and system metrics together | [Multiple endpoints](docs/usage.md#several-endpoints-in-one-archive) | Agent and/or Prometheus endpoints; one recording per endpoint in a `.dendro` archive. |
 | Investigate with an AI assistant | [MCP workflow](#analyze-with-an-agent) | A recording; discovery, feature extraction, and targeted queries. |
 | Inspect or transform captures | `rezolus recording --help` | [Recording tools](docs/usage.md#recording-tools) for metadata, annotation, combination, filtering, conversion, and snapshots. |
 
 For example, record at 100 ms while a benchmark runs:
 
 ```bash
-rezolus record --interval 100ms -o benchmark.rez -- ./my-benchmark --threads 8
-rezolus view benchmark.rez
+rezolus record --interval 100ms -o benchmark.dendro -- ./my-benchmark --threads 8
+rezolus view benchmark.dendro
 ```
 
 System and service endpoints can also share an archive:
@@ -128,13 +128,13 @@ System and service endpoints can also share an archive:
 rezolus record --duration 60s \
   --endpoint http://localhost:4241,source=system \
   --endpoint http://localhost:9121/metrics,source=valkey \
-  -o combined.rez
+  -o combined.dendro
 ```
 
 Each endpoint remains a distinct recording. KPI templates for vLLM, SGLang, and
 Valkey provide service-specific dashboards; they consume exposed service metrics,
 not automatically instrument application code. See [KPI dashboard setup](docs/parquet_metadata.md#service_queries)
-for annotation and template instructions (`.rez` archives require an explicit
+for annotation and template instructions (archives require an explicit
 `--queries` file), and the [usage guide](docs/usage.md) for recording labels and selection.
 
 ## What Rezolus measures
@@ -161,9 +161,10 @@ can run as managed services; Recorder, Viewer, MCP, and recording tools run on
 demand. Solid boxes in the diagram are Rezolus commands; dashed boxes are the
 systems and services being measured.
 
-The normal capture format is **`.rez`**, an archive with a recording per endpoint
-and separate acquisition groups/cadences. It accepts Rezolus and Prometheus
-sources. Use **`.parquet`** for a uniform tabular export or other Parquet tools;
+The normal capture format is **`.dendro`**, an archive with a recording per
+endpoint and separate acquisition groups/cadences. It accepts Rezolus and
+Prometheus sources. **`.rez`**, the archive format before 6.0, is still read and
+written. Use **`.parquet`** for a uniform tabular export or other Parquet tools;
 **`.raw`** captures snapshots for later conversion. See [format details](docs/usage.md#output-formats)
 for the tradeoffs and overwrite rules.
 

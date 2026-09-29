@@ -1,6 +1,10 @@
-//! The hindsight rolling buffer: **a `.rez` v3 recording with retention**, and
+//! The hindsight rolling buffer: **an archive recording with retention**, and
 //! nothing else. See docs/journal/2026-08-12-rez-sqlite-container.md
-//! § "Hindsight".
+//! § "Hindsight". Since 6.0 the buffer is a dendro archive written through
+//! metriken-archive (`create_dendro`, `dump_dendro`) unless the output names a
+//! `.rez`; the notes below were written for the `.rez` buffer, and the dendro
+//! one keeps the same properties (docs/journal/2026-09-28-dendro-writer-adoption.md,
+//! "B: built").
 //!
 //! What this replaces is a fixed-size ring of 4 KB-aligned slots
 //! (`snapshot_len` × `snapshot_count`) written round-robin and overwritten in
@@ -393,8 +397,8 @@ fn bytes_on_disk(path: &Path) -> u64 {
     total
 }
 
-/// Write the buffer out to `dest` as a standalone `.rez`, replacing whatever
-/// was there.
+/// Write the buffer out to `dest` as a standalone archive in the buffer's
+/// container, replacing whatever was there.
 ///
 /// This is the whole of what `perform_dump_to_file` used to do by walking ring
 /// slots and running a msgpack→parquet conversion over them. `VACUUM INTO`

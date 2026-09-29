@@ -13,5 +13,6 @@ site/viewer/templates/manifest.json
 .worktrees/
 results/
 # default `rezolus record` output files (repo root only)
+/rezolus.dendro
 /rezolus.rez
 /rezolus.parquet
