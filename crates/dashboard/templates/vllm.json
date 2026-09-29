@@ -1,7 +1,6 @@
 {
   "service_name": "vllm",
   "service_metadata": {},
-  "slo": null,
   "kpis": [
     {
       "role": "requests",

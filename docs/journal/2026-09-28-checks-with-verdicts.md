@@ -1,7 +1,10 @@
 # Checks with verdicts, stored in the recording
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — design, nothing built.
+- **Status:** BUILT (this PR): `Kpi.check`, `rezolus recording check` with
+  `--queries`/`--recording`/`--annotate`/`--json`, band-aware verdicts. Family
+  checks and the in-viewer button remain open. Deviations from the design are
+  listed at the end of the Design section.
 
 ## Problem
 
@@ -42,15 +45,17 @@ entity. Two optional fields:
 {
   "role": "latency",
   "title": "p99 request latency",
-  "query": "histogram_quantile(0.99, rate(request_latency[1m]))",
+  "query": "request_latency",
   "type": "histogram",
-  "check": { "above": 5e6, "for": "10s", "severity": "fail" }
+  "check": { "above": 5e6, "quantile": 0.99, "for": "10s", "severity": "fail" }
 }
 ```
 
 `check.above` / `check.below` is the threshold on the query's value;
+`check.quantile` picks the quantile of a histogram KPI, whose query names
+the raw histogram (the check wraps it in `histogram_quantile` itself);
 `check.for` is the minimum duration the condition must hold before it counts
-(the Prometheus alerting-rule shape, which users already know). `severity` is
+(the shape of a Prometheus alerting rule's `for`). `severity` is
 `fail` or `warn`. A KPI without `check` is a chart as today, so every existing
 template is unchanged. The `slo` field is removed or repurposed in the same
 change; leaving a second null slot beside `check` invites drift.
@@ -90,6 +95,94 @@ and it is the point of having the bands.
 exists, a check may say `{"outside_family_sigma": 2, "for": "30s"}` against
 the family band. Same evaluation path, same event output. Not part of the
 first cut.
+
+*Built (this PR).* `Check` (`above`/`below`, `quantile`, `for`, `severity`)
+is `Kpi.check` in `crates/dashboard/src/service_extension.rs`; `slo` is
+removed from `ServiceExtension` and from every template. Exactly one of
+`above`/`below` is enforced at deserialization (`serde(try_from)`), so
+`annotate --queries`, `check --queries` and the viewer all refuse an invalid
+check with the same message; unknown keys inside `check` are refused too, so
+a misspelled `for` cannot become a check that never fires. `for` is parsed by
+a small hand-written grammar (`10s`, `1m30s`, `500ms`, `1.5s`, a bare number
+of seconds) rather than `humantime`, since the crate builds for wasm32; it
+serializes back as that string. `rezolus recording check` is
+`src/parquet_tools/check.rs`: it reads the recording's KPIs through
+`viewer::metadata::service_extensions_from_metadata`, the parquet-footer
+loader split so it takes a metadata map and therefore also serves a `.rez`
+recording's manifest (the viewer's path-based loader now calls it), evaluates
+each check with one `query_range` over the whole span on a uniform grid whose
+step is the recording's sampling interval capped at 1 s, and scans the single
+series for runs. The comparison is strict (a value equal to the threshold
+passes). A run is consecutive points that do not pass; it ends at a passing
+point and at a gap of more than 1.5 steps between points, since the engine
+emits no point where the recording has no data and without the gap rule
+`for` counted unobserved time (a gauge above threshold for 2 s, the agent
+down for five minutes, above again for 2 s, read as one 5m04s window). The
+run step is the grid step or the series' own median point spacing, whichever
+is coarser: a `.rez` reports its finest table cadence as `interval()`, and
+the engine emits one point per read of a slower sampler, so on the grid step
+alone a 10 s gauge was nine one-second windows and could never satisfy
+`for: 60s`. A run violates only if every point violates; one indeterminate
+point makes the whole run indeterminate, because splitting on the straddle
+turned 60 s of violation with every tenth point straddling into runs of 9 s
+and 1 s that never reached `for: 30s` and read as a pass. An interpolated
+point (`MatrixSample.interpolated`, a value across an unread span with no
+band) is indeterminate. Verdict lines are
+`PASS|WARN|FAIL|INDETERMINATE|ERROR`; exit 2 on any ERROR, else 1 on a
+`fail`-severity FAIL, else 0; `--json` emits the same as an array, and with
+`--annotate` the annotation report goes to stderr so stdout stays one array.
+`--annotate` writes each FAIL/WARN window as a `kind=check` event through the
+existing event code (`events::append_to_parquet`; `annotate_rez_v3_at` with a
+new per-recording events field). The id is `check:<sha256[..8]>` over the
+title, the evaluated query, the condition and the window start; the query is
+in the hash because titles repeat across services by design. On a re-run
+`events::append_events` replaces a stored `kind=check` event whose id matches
+and whose content differs (a window that grew gets its new `duration_ns`),
+counts an identical one as unchanged, and counts an id repeated inside one
+batch as a duplicate; a stored event of another kind with the same id is
+kept as it is, and a window that no longer fires keeps its old event. A
+dendro archive evaluates (it reads through the same `RezReader`) but
+`--annotate` is refused before evaluation, since nothing in this version
+writes one. Deviations from the design above:
+
+- **Histogram KPIs take `check.quantile`.** The design's example originally
+  put `histogram_quantile(0.99, ...)` inside the KPI query, but
+  `Kpi::effective_query` wraps a histogram KPI's query in
+  `histogram_quantiles([...], q)` for the chart, so a query that already
+  selects a quantile would render wrong. The check instead evaluates
+  `histogram_quantile(<quantile>, <query>)` and the chart is unchanged; a
+  histogram KPI whose check has no `quantile`, or whose query already contains
+  `histogram_quantile`, is an ERROR naming the problem, and `quantile` on a
+  non-histogram KPI is an ERROR rather than a condition text that claims a
+  quantile the evaluation never applied. The example above was corrected.
+- **`details` is two lines, not the check JSON verbatim:** the condition as
+  prose (`<title> <condition>: <severity>`) then the check JSON. The JSON is
+  still the version record; the first line is what a tooltip shows.
+- **Exit 2 exists** for evaluation errors (a query matching nothing, several
+  series, an unreadable file), and outranks exit 1. The design named only
+  exit 1.
+- **A multi-recording `.rez` with no `--recording` is checked whole**, one
+  verdict list per recording with the labels as a line prefix, where the MCP
+  tools would refuse and ask for a selector; `--annotate` then writes each
+  recording's events into that recording. With `--recording` the flag has the
+  MCP semantics (exactly one recording) and `--annotate` writes only into
+  that recording.
+- **The `for` rule is span `>= for` with span `= last - first + step`.** A
+  single point at a 1 s step spans 1 s, so `for: "1s"` accepts one point.
+  This is one step more generous than a Prometheus `for`, which needs the
+  condition to have held for the duration since it first became true.
+- **Cross-cadence evaluation is not used.** `RezReader::query_range_opts`
+  passes straight through, and only the viewer supplies
+  `QueryOptions::eval_timestamps`; `check` evaluates on the uniform grid and
+  takes a slow sampler's cadence from the spacing of the points it got back.
+- **No template gained a check.** Every built-in KPI is a chart still; the
+  worked example lives in `docs/usage.md`. The GO condition's "one check in
+  each of the vLLM, SGLang and Valkey templates" was not done: a `fail` in a
+  shipped template would turn every user's CI red on a threshold nobody
+  chose, and a `warn` is noise with nothing behind it.
+- **Not measured:** the NO-GO gate on the 9.6 h archive. The cost is one
+  `query_range` per check, the same as one `mcp query` each, so it is bounded
+  by that entry's numbers rather than by anything new here.
 
 ## Not in scope
 

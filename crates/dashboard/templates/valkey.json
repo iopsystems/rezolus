@@ -2,7 +2,6 @@
   "service_name": "valkey",
   "aliases": ["redis"],
   "service_metadata": {},
-  "slo": null,
   "kpis": [
     {
       "role": "throughput",

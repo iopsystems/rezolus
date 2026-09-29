@@ -367,6 +367,8 @@ and flags differ by format; check `rezolus recording <subcommand> --help`.
   schema.
 - **Annotate** — embed service extension KPI definitions for custom viewer
   dashboards.
+- **Check** — evaluate the checks a recording's KPIs carry and report a
+  verdict per check. See [Checks](#checks) below.
 - **Combine** — merge a Rezolus parquet with service-level parquet files,
   joining on timestamps to produce a unified multi-source recording, or package
   captures as a multi-recording `.rez`. A/B tarballs are a legacy option.
@@ -387,6 +389,7 @@ rezolus recording metadata -i rezolus.parquet
 rezolus recording annotate rezolus.parquet --queries ext.json
 rezolus recording annotate run.rez --event 'time=2026-09-28T14:03:11Z,kind=deploy,description=rollout'
 rezolus recording annotate run.rez --event 'time=2026-09-28T14:00Z,duration=90s,kind=warmup,description=warm-up'
+rezolus recording check run.rez --annotate
 rezolus recording combine rezolus.parquet service.parquet -o combined.parquet
 rezolus recording convert rezolus.raw.zst              # writes rezolus.parquet
 rezolus recording filter rezolus.parquet -o slim.parquet
@@ -406,6 +409,148 @@ supply them with `--systeminfo` / `--descriptions` if you saved them. Afterwards
 no annotate route for descriptions. A `.rez` archive cannot be produced from a
 raw recording: it needs the per-sampler cadence and acquisition windows that a
 raw snapshot stream never carried.
+
+### Checks
+
+A check is a threshold on a KPI. It lives on the KPI itself, as a `check`
+object in the service-extension JSON that `recording annotate --queries`
+embeds, so the recording carries what it is judged against. A complete file:
+
+```json
+{
+  "service_name": "myservice",
+  "aliases": ["my-service"],
+  "service_metadata": {},
+  "kpis": [
+    {
+      "role": "latency",
+      "title": "p99 request latency",
+      "query": "request_latency_seconds",
+      "type": "histogram",
+      "check": {"above": 0.25, "quantile": 0.99, "for": "10s", "severity": "fail"}
+    },
+    {
+      "role": "throughput",
+      "title": "Request rate",
+      "query": "sum(rate(http_requests_total[10s]))",
+      "type": "delta_counter",
+      "unit_system": "rate",
+      "check": {"below": 100, "severity": "warn"}
+    },
+    {
+      "role": "queue",
+      "title": "Queue depth",
+      "query": "queue_depth",
+      "type": "gauge"
+    }
+  ]
+}
+```
+
+The file: `service_name` is required; `aliases` (other `source` names this
+template matches) and `service_metadata` are optional. Each KPI needs `role`
+(any word; it groups charts on the dashboard), `title` (keep it unique within
+the file, since it names the check in the output and in events), `query`
+(PromQL) and `type`, one of `gauge`, `histogram` or a counter kind
+(`delta_counter`, `counter`); any other `type` is charted as a counter and
+evaluated as written. `description`, `unit_system`, `subtype`, `percentiles`,
+`subgroup`, `subgroup_description`, `full_width`, `denominator` and `check`
+are optional. A KPI without `check` is a chart only.
+
+The check:
+
+- Exactly one of `above` / `below` is the threshold, compared in the query's
+  own unit (seconds for the histogram above, requests per second for the
+  rate). The comparison is strict: a value equal to the threshold passes.
+- `for` is the shortest run that counts (default `0s`, so one point is
+  enough). Accepted forms: `500ms`, `10s`, `1m30s`, `2h`, `1d`, `1.5s`, or a
+  bare number of seconds.
+- `severity` is `fail` (default) or `warn`.
+- `quantile`, in (0, 1], is required on a histogram KPI: its query names the
+  raw histogram and the check evaluates `histogram_quantile(<quantile>,
+  <query>)` itself, so leave `histogram_quantile` out of the query. On any
+  other type `quantile` is an error.
+- Unknown keys inside `check` are rejected, so a misspelled `for` cannot
+  become a check that never fires.
+
+`rezolus recording check <file>` runs every check over the whole recording
+through the query engine, the same path `rezolus mcp query` uses, and prints
+one line per check followed by a summary:
+
+```
+PASS          Queue depth low  above 10
+FAIL          p99 request latency  p99 above 0.25 for 10s  [2026-09-28T14:03:11Z..2026-09-28T14:03:41Z, 3 windows]
+2 checks: 1 passed, 1 failed, 0 warned, 0 indeterminate, 0 errors
+```
+
+Which checks run: the KPIs embedded in the recording; else the built-in
+template whose `service_name` or `aliases` match the recording's `source`
+metadata (the same lookup the viewer makes), or the templates in
+`--templates <DIR>` in place of the built-in set. `--queries kpis.json` runs
+that file's checks instead of either and writes nothing to the recording.
+
+How a check is evaluated: the query runs on a grid of one point per step,
+where the step is the recording's sampling interval capped at 1 s, and must
+yield exactly one series (aggregate with `sum(...)` or add label matchers if
+it yields several). A query that matches nothing is an error, not a pass.
+Each point is classified against the threshold. Where a value carries an
+acquisition-window band (`rate()`, `irate()`, histogram quantiles), the band
+is compared rather than the point: `above` fires only when the whole band is
+above the threshold and `below` only when it is entirely below. A point
+whose band straddles the threshold, or a point interpolated across a span the
+recording never observed, is neither, and is classified `INDETERMINATE`.
+
+The run rule: a run is consecutive points that do not pass. A passing point
+ends it, and so does a gap of more than 1.5 steps between points, because the
+engine emits no point where the recording has no data and `for` must not
+count time nobody observed. A run violates only if every point in it
+violates; one indeterminate point makes the whole run indeterminate. This is
+deliberate: splitting on the straddle would turn 60 s of violation with every
+tenth point straddling into runs of 9 s and 1 s, none reaching `for: 30s`,
+and report a pass; instead it is one 60 s `INDETERMINATE` window. The step
+is the evaluation grid step or the series' own point spacing (the median gap
+between its points), whichever is coarser: a 10 s sampler evaluated on a 1 s
+grid yields one point per 10 s, each spanning its 10 s, so the 10 s between
+them is not a gap, while a real hole still is. A run's span is
+`last point - first point + step`, and the run is a window when
+`span >= for`. A check with any violating window is `FAIL` (or `WARN` by
+severity) even if it also has indeterminate windows, which the line then
+counts beside it; with only indeterminate windows it is `INDETERMINATE`;
+otherwise `PASS`.
+
+Exit status: `2` if any check could not be evaluated or the command itself
+failed; else `1` if any check with severity `fail` failed; else `0`. `WARN`
+and `INDETERMINATE` never fail the run. A recording with no checks exits `0`
+with a note on stderr.
+
+`--json` prints the verdicts as an array with one object per check:
+`recording` (the recording's labels, `.rez` only), `title`, `query` (as
+evaluated, so a histogram KPI's is wrapped in `histogram_quantile`), `check`
+(as loaded, `for` as a duration string), `status` (`pass`, `warn`, `fail`,
+`indeterminate`, `error`), `windows` and `indeterminate` (each entry has
+`start` and `end` as RFC 3339, `start_ns`, `duration_ns` and `points`), and
+`error` (present on `error` only).
+
+`--annotate` writes each `FAIL`/`WARN` window into the recording as a range
+event: `kind=check`, `timestamp` at the window start, `duration_ns` for its
+span (so the event ends one step after the last violating point), the KPI
+title as `description`, and `details` carrying the condition plus the check
+JSON on a second line. That JSON is the version record: editing the template
+later does not change what an old recording claims. The event id is a hash of
+the title, the evaluated query, the condition and the window start, so
+running the checks again overwrites a check event of the same id whose
+content differs (a window that grew, or an event edited in the viewer),
+adds nothing for one that did not change, and leaves a window that no longer
+fires with its old event. Only a stored `kind=check` event is overwritten;
+an event of another kind that carries the same id is kept.
+The viewer draws these as shaded bands. On a multi-recording `.rez` every
+recording is checked and each line is prefixed with the recording's labels;
+with `--annotate` each recording's events go into that recording only.
+`--recording k=v` narrows the run, and the write, to one recording. A v1/v2
+(tar) `.rez` is rewritten to v3 (SQLite) in place, as `annotate` does. A
+dendro archive is read-only here: its checks run, but `--annotate` is
+refused. With `--json`, the annotation report goes to stderr so stdout stays
+one JSON array.
 
 ## MCP Server
 

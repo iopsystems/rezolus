@@ -437,6 +437,20 @@ impl RezDb {
         Ok(())
     }
 
+    /// Whether `path` is a dendro archive rather than a `.rez`. Both are
+    /// SQLite files, told apart by the `application_id` dendro stamps into
+    /// the header. For a caller that reads either through `RezReader` but
+    /// can only write a `.rez`, so it can refuse the write before doing the
+    /// read.
+    pub fn is_dendro(path: &Path) -> Result<bool, String> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("failed to open {}: {e}", path.display()))?;
+        let id: i64 = conn
+            .pragma_query_value(None, "application_id", |row| row.get(0))
+            .map_err(|e| format!("failed to read {}'s application_id: {e}", path.display()))?;
+        Ok(id == i64::from(dendro::archive::APPLICATION_ID))
+    }
+
     /// Open a `.rez` that exists only as bytes — an upload in a browser,
     /// where there is no filesystem to point `open` at.
     ///

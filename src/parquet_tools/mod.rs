@@ -1,4 +1,5 @@
 mod annotate;
+mod check;
 pub(crate) mod combine;
 mod convert;
 mod events;
@@ -30,6 +31,7 @@ pub fn command() -> Command {
              SUBCOMMANDS:\n    \
              metadata   Inspect a file's file-level/column metadata, schema, and geometry\n    \
              annotate   Embed service-extension KPIs, events, or source/node tags into a file\n    \
+             check      Evaluate the KPI checks a recording carries and report pass/fail verdicts\n    \
              combine    Merge multiple files (multi-node / multi-instance), assemble an A/B .rez, or build a legacy A/B tarball\n    \
              convert    Turn a raw msgpack recording (from `record -o out.raw`) into parquet\n    \
              filter     Drop columns not needed by a file's service-extension KPIs (shrink it)\n    \
@@ -168,6 +170,155 @@ pub fn command() -> Command {
                         .help("Remove existing events before applying --add-events / --event")
                         .action(clap::ArgAction::SetTrue)
                         .conflicts_with("undo"),
+                ),
+        )
+        .subcommand(
+            Command::new("check")
+                .about("Evaluate the checks a recording's KPIs carry and report a verdict per check")
+                .long_about(
+                    "Run every KPI check over a recording and print one line per check\n\
+                     (PASS / WARN / FAIL / INDETERMINATE / ERROR), then a summary line.\n\n\
+                     THE FILE: checks live on KPIs in a service-extension JSON file, the same\n\
+                     file `recording annotate --queries` embeds for the viewer's KPI dashboard:\n\n    \
+                     {\n      \
+                       \"service_name\": \"myservice\",\n      \
+                       \"kpis\": [\n        \
+                         {\"role\": \"latency\", \"title\": \"p99 request latency\",\n         \
+                          \"query\": \"request_latency_seconds\", \"type\": \"histogram\",\n         \
+                          \"check\": {\"above\": 0.25, \"quantile\": 0.99, \"for\": \"10s\"}},\n        \
+                         {\"role\": \"throughput\", \"title\": \"Request rate\",\n         \
+                          \"query\": \"sum(rate(http_requests_total[10s]))\", \"type\": \"delta_counter\",\n         \
+                          \"check\": {\"below\": 100, \"severity\": \"warn\"}}\n      \
+                       ]\n    \
+                     }\n\n\
+                     `service_name` (required) names the service; `aliases` (a list) and\n\
+                     `service_metadata` (a map) are optional. Each KPI needs `role` (any word;\n\
+                     it groups charts on the dashboard), `title` (keep it unique in the file:\n\
+                     it names the check in output and events), `query` (PromQL) and `type`:\n\
+                     `gauge`, `histogram`, or a counter kind (`delta_counter`, `counter`).\n\
+                     Any other `type` is charted as a counter and evaluated as written.\n\
+                     Optional: `description`, `unit_system`, `subtype`, `percentiles`,\n\
+                     `subgroup`, `subgroup_description`, `full_width`, `denominator`, `check`.\n\
+                     A KPI without `check` is a chart only and is skipped here.\n\n\
+                     THE CHECK: exactly one of `above` / `below` is the threshold, compared in\n\
+                     the query's own unit (seconds for the histogram above, requests per\n\
+                     second for the rate); the comparison is strict, so a value equal to the\n\
+                     threshold passes. `for` (default 0s) is the shortest run that counts,\n\
+                     written as 500ms, 10s, 1m30s, 2h, 1d, 1.5s, or a bare number of seconds.\n\
+                     `severity` is `fail` (default) or `warn`. A histogram KPI needs `quantile`\n\
+                     in (0, 1]: its query names the raw histogram and the check evaluates\n\
+                     histogram_quantile(<quantile>, <query>) itself, so leave\n\
+                     histogram_quantile out of the query. `quantile` on any other type is an\n\
+                     ERROR. Unknown keys inside `check` are rejected.\n\n\
+                     WHICH CHECKS RUN: the KPIs embedded in the recording (by\n\
+                     `recording annotate --queries`); else the built-in template whose\n\
+                     `service_name` or `aliases` match the recording's `source` metadata, the\n\
+                     same lookup the viewer makes. --templates <DIR> uses the template JSON\n\
+                     files in DIR instead of the built-in set for that fallback. --queries\n\
+                     <file> runs that file's checks instead of either, and writes nothing.\n\n\
+                     HOW A CHECK IS EVALUATED: the query runs over the whole recording through\n\
+                     the same engine as `rezolus mcp query`, on a grid of one point per step\n\
+                     (the recording's sampling interval, at most 1s), and must yield exactly\n\
+                     one series (aggregate with sum(...) or add label matchers if it yields\n\
+                     several). A query that matches nothing is an ERROR, not a pass. Each\n\
+                     point is classified: where a value carries an acquisition-window\n\
+                     uncertainty band (rate(), irate(), histogram quantiles) the band is\n\
+                     compared, so `above` fires only when the whole band is above the\n\
+                     threshold and `below` only when it is entirely below; a point whose band\n\
+                     straddles the threshold, or one interpolated across a span the recording\n\
+                     never observed, is INDETERMINATE. A run is consecutive points that do\n\
+                     not pass; a passing point, or a gap of more than 1.5 steps between\n\
+                     points (the engine emits no point where the recording has no data),\n\
+                     ends it. A run violates only if every point in it violates; one\n\
+                     indeterminate point makes the whole run indeterminate, so a long\n\
+                     violation with an intermittent straddle is one long INDETERMINATE window\n\
+                     rather than short violations that never reach `for`. The step is the grid\n\
+                     step or the series' own point spacing, whichever is coarser (a 10 s\n\
+                     sampler on a 1 s grid yields a point per 10 s, each spanning 10 s). A run's\n\
+                     span is (last point - first point + step); it is a window when\n\
+                     span >= for. A check with a violating window is FAIL (WARN for severity\n\
+                     warn) even if it also has indeterminate windows; with only indeterminate\n\
+                     windows it is INDETERMINATE; otherwise PASS.\n\n\
+                     EXIT STATUS: 2 if any check could not be evaluated (or the command itself\n\
+                     failed), else 1 if any check with severity `fail` failed, else 0. WARN and\n\
+                     INDETERMINATE never fail the run. No checks at all is 0, with a note on\n\
+                     stderr.\n\n\
+                     MULTI-RECORDING .rez: with no --recording every recording is checked and\n\
+                     each line is prefixed with its labels; --recording k=v (the selector\n\
+                     `rezolus mcp` uses) narrows to one.\n\n\
+                     --annotate writes each FAIL/WARN window into the recording as a range\n\
+                     event: kind=check, timestamp=window start, duration_ns=span (the event\n\
+                     ends one step after the last violating point), description=the KPI title,\n\
+                     details=the condition and, on a second line, the check as JSON. The event\n\
+                     id is a hash of the title, the evaluated query, the condition and the\n\
+                     window start: running again rewrites a window that grew and adds nothing\n\
+                     for one that did not, and a window that no longer fires keeps its old\n\
+                     event. On a .rez the events go into the recording they were evaluated\n\
+                     against (each recording its own when no --recording is given); on parquet\n\
+                     into the footer. A v1/v2 (tar) .rez is rewritten to v3 (SQLite) in place,\n\
+                     as `recording annotate` does. A dendro archive is read-only here: its\n\
+                     checks run, but --annotate is refused. With --json the annotation report\n\
+                     goes to stderr so stdout stays one JSON array.\n\n\
+                     --json prints an array with one object per check: `recording` (labels,\n\
+                     .rez only), `title`, `query` (as evaluated), `check`, `status`, `windows`\n\
+                     and `indeterminate` (each with `start` and `end` as RFC 3339, `start_ns`,\n\
+                     `duration_ns`, `points`), and `error` (ERROR only).\n\n\
+                     EXAMPLES:\n    \
+                     # Run the checks a recording already carries\n    \
+                     rezolus recording check run.rez\n\n    \
+                     # Run checks from a file instead (nothing is written to the recording)\n    \
+                     rezolus recording check run.parquet --queries kpis.json\n\n    \
+                     # CI: fail the job on a violated check, and store the verdicts as events\n    \
+                     rezolus recording check run.rez --annotate || exit 1\n\n    \
+                     # One recording of a multi-recording archive, machine-readable\n    \
+                     rezolus recording check fleet.rez --recording host=web-01 --json",
+                )
+                .arg(
+                    clap::Arg::new("FILE")
+                        .help("The recording to check (.parquet or .rez, told apart by content)")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    clap::Arg::new("queries")
+                        .long("queries")
+                        .value_name("PATH")
+                        .help("Service-extension JSON whose KPI checks to run, instead of the recording's own")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
+                )
+                .arg(
+                    clap::Arg::new("RECORDING")
+                        .long("recording")
+                        .value_name("KEY=VALUE")
+                        .help(
+                            "Which recording of a multi-recording .rez to check, as key=value (e.g. --recording source=redis)\n\
+                             Repeatable: the pairs are ANDed and must together name exactly one\n\
+                             recording. Without it every recording is checked. Not accepted for\n\
+                             a .parquet file.",
+                        )
+                        .action(clap::ArgAction::Append),
+                )
+                .arg(
+                    clap::Arg::new("annotate")
+                        .long("annotate")
+                        .help("Write each FAIL/WARN window into the recording as a kind=check range event (refused on a dendro archive)")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("json")
+                        .long("json")
+                        .help("Print the verdicts as a JSON array instead of one line per check")
+                        .action(clap::ArgAction::SetTrue),
+                )
+                .arg(
+                    clap::Arg::new("templates")
+                        .long("templates")
+                        .value_name("DIR")
+                        .help("Directory of service-extension template JSON files to use instead of the built-in set, for a recording with no embedded KPIs (matched to the recording's source metadata)")
+                        .value_parser(value_parser!(PathBuf))
+                        .action(clap::ArgAction::Set),
                 ),
         )
         .subcommand(
@@ -777,6 +928,14 @@ pub fn run(args: ArgMatches) {
             );
             annotate::run(sub_args, &registry);
             return;
+        }
+        Some(("check", sub_args)) => {
+            let registry = load_template_registry(
+                sub_args
+                    .get_one::<PathBuf>("templates")
+                    .map(|p| p.as_path()),
+            );
+            std::process::exit(check::run(sub_args, &registry));
         }
         Some(("combine", sub_args)) => combine::run(sub_args),
         Some(("convert", sub_args)) => {
