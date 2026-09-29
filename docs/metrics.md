@@ -30,7 +30,6 @@ This guide walks you through all the available metrics, organized by category.
   - [filesystem](#filesystem-1)
 - [XFS](#xfs)
   - [xfs_stats](#xfs_stats)
-  - [filesystem](#filesystem-1)
 - [GPU](#gpu)
   - [gpu_nvidia](#gpu_nvidia)
   - [gpu_intel_pmu](#gpu_intel_pmu)
@@ -573,9 +572,13 @@ cycle on the blocking pool at most once per `interval` (default 1 s,
 Every series is per mount, labeled `mount`, `fstype`, `devnum` and
 `block_device` exactly as the `filesystem` and ext4 samplers label the same
 mount, through the same slot registry, so the three join. A mount that is
-not XFS has no series here; a kernel whose file lacks a line or field leaves
-that counter absent. Field names below are the kernel's `xfsstats`
-(`fs/xfs/xfs_stats.h`).
+not XFS has no series here, and a host with no XFS mount has no table; a
+kernel whose file lacks a line or field leaves that counter absent. Field
+names below are the kernel's `xfsstats` (`fs/xfs/xfs_stats.h`). Every field
+but the byte counts is a 32-bit counter in the kernel, so a busy mount wraps
+one eventually (`xfs_log_blocks_written` after 2 TiB of log writes,
+`xfs_file_calls` after 4.29 billion calls); a wrap reads as a counter reset,
+the same as a remount.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|

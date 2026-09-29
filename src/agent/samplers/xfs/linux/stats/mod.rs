@@ -324,6 +324,11 @@ fn sweep(state: &mut SweepState, sys_fs_xfs: &Path, assignment: &Assignment) -> 
     let guard = XFS_STATS_ACQ.acquire();
     let started = Instant::now();
     let mut published = 0;
+    // One past the highest slot this sweep gave values: the group's own
+    // population. The registry's bound covers ext4 slots this sampler never
+    // writes, and declaring those would put an all-null XFS column for each
+    // into every tick's snapshot on a host with no XFS at all.
+    let mut bound = 0;
     let mut read_us = 0u128;
 
     if state.labeled.len() < assignment.slots.len() {
@@ -363,6 +368,7 @@ fn sweep(state: &mut SweepState, sys_fs_xfs: &Path, assignment: &Assignment) -> 
                 }
                 if publish(slot, &text) > 0 {
                     published += 1;
+                    bound = slot + 1;
                 }
             }
             None => {
@@ -376,7 +382,7 @@ fn sweep(state: &mut SweepState, sys_fs_xfs: &Path, assignment: &Assignment) -> 
     }
 
     // The sweep is the sole writer; the bound must be stored before finish().
-    XFS_STATS_ACQ.set_member_bound(assignment.bound());
+    XFS_STATS_ACQ.set_member_bound(bound);
 
     if published > 0 {
         guard.finish();
@@ -399,7 +405,9 @@ fn line_fields(text: &str, name: &str) -> Option<Vec<u64>> {
         if parts.next()? != name {
             return None;
         }
-        Some(parts.filter_map(|f| f.parse().ok()).collect())
+        // A token that is not a number makes the whole line absent: dropping
+        // it would shift every later field onto the wrong counter.
+        parts.map(|f| f.parse().ok()).collect()
     })
 }
 
@@ -538,6 +546,9 @@ debug 0
         assert_eq!(sweep(&mut state, sys.path(), &assignment), 1);
         assert_eq!(XFS_LOG_FORCES.value(xfs_slot), Some(1850));
         assert_eq!(XFS_LOG_FORCES.value(ext4_slot), None);
+        // The population is the XFS slots this sweep filled, not the shared
+        // registry's bound (which the ext4 slot above would raise).
+        assert_eq!(XFS_STATS_ACQ.member_bound(), Some(xfs_slot + 1));
         let labels = XFS_LOG_FORCES.load_metadata(xfs_slot).expect("labels set");
         assert_eq!(labels.get("mount").map(String::as_str), Some("/scratch"));
         assert_eq!(labels.get("fstype").map(String::as_str), Some("xfs"));
@@ -548,5 +559,15 @@ debug 0
         assert_eq!(sweep(&mut state, sys.path(), &assignment), 0);
         assert_eq!(XFS_LOG_FORCES.value(xfs_slot), None);
         assert!(!state.labeled[xfs_slot]);
+        // With no XFS mount left the group declares no members, so an
+        // ext4-only host gets no XFS table at all.
+        assert_eq!(XFS_STATS_ACQ.member_bound(), Some(0));
+    }
+
+    #[test]
+    fn a_line_with_a_non_numeric_token_reads_absent_rather_than_shifted() {
+        let text = "log 12 34 x 56 78\nrw 1 2\n";
+        assert_eq!(line_fields(text, "log"), None);
+        assert_eq!(line_fields(text, "rw"), Some(vec![1, 2]));
     }
 }
