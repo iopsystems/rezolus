@@ -238,6 +238,14 @@
 
 ### Fixed
 
+- A dendro archive's metric that first appears in a later segment of its
+  table, or only in the live tail, can be queried; the reader learned a
+  table's metric names from its first segment alone (metriken-archive
+  0.2.8). A dendro archive's segments now also carry a format version
+  (`metriken.format`), and the reader refuses a newer format, an unknown
+  layout, or a source written by an encoder it does not decode, instead of
+  misreading it (metriken-segment 0.1.5, metriken-query 0.33.2).
+
 - Agent: a `/metrics/stream` interval with no reading to send (before the
   first sampling pass, or when a snapshot failed to encode) now gets an empty
   `Rows` frame with the next `seq`, as every other interval does. It was
