@@ -421,9 +421,12 @@ local storage, one slot per operation, so an O_SYNC write's inner fsync does
 not lose the outer write's timing.
 
 **Off by default.** Both probes of a pair run on the request path once per
-call, so this is the most expensive of the ext4 samplers. Enable it with
-`[samplers.ext4_ops] enabled = true` once its probe cost is acceptable for the
-workload; the journal entry carries the measured cost.
+call, so this is the most expensive of the ext4 samplers: measured at
++4,070 instructions and +2.3 µs per write-plus-fsync pair (four probes) on a
+`null_blk` fsync bench, 12% of the CPU at a saturating 450 K operations per
+second, about 4.5% of one core at 20 K fsync/s. Enable it with
+`[samplers.ext4_ops] enabled = true` when that cost is acceptable for the
+workload; the journal entry has the bench.
 
 Counters are per filesystem exactly as `ext4_journal`'s are (`mount`,
 `fstype`, `devnum`, `block_device`, plus `mount="other"`); the latency

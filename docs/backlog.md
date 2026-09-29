@@ -974,8 +974,11 @@ bare-metal probe-cost bench for anything at request rate).
   enter/exit tracepoints, write and rename via `fentry`/`fexit`, per
   filesystem and per cgroup; task local storage for the start state. See the
   gaps entry's "Results — C5 and C6" for the measured probe cost.
-- **`ext4_ops` on by default** — Open. Gated on the probe-cost bench on a
-  fleet-representative fsync rate; the numbers so far are in the gaps entry.
+- **`ext4_ops` on by default** — Open, NO-GO as measured: +4,070 instructions
+  and +2.26 µs per write+fsync pair (four probes) on the phase 1 `null_blk`
+  bench, 12% at 450 K ops/s. Profile per program (`bpftool prog profile`), the
+  per-cgroup atomics and the two task-storage lookups first; reopen when a
+  probe is under ~300 instructions. Gaps entry, "Results — C5 and C6".
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
