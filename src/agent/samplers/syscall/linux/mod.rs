@@ -39,18 +39,17 @@ pub fn syscall_lut() -> Vec<u64> {
                     // 8: Yield
                     "sched_yield" => 8,
 
-                    // 9: Filesystem operations
-                    "open" | "openat" | "close" | "creat" | "lseek" | "fsync" | "fdatasync"
-                    | "sync" | "syncfs" | "truncate" | "ftruncate" | "rename" | "renameat"
-                    | "link" | "symlink" | "unlink" | "readlink" | "stat" | "fstat" | "lstat"
-                    | "statx" | "access" | "faccessat" | "chmod" | "fchmod" | "chown"
-                    | "fchown" | "lchown" | "utime" | "utimes" | "utimensat" | "mkdir"
-                    | "rmdir" | "chdir" | "fchdir" | "getcwd" | "getdents" | "getdents64"
-                    | "readdir" => 9,
+                    // 9: Filesystem operations (durability calls are class 16)
+                    "open" | "openat" | "close" | "creat" | "lseek" | "truncate" | "ftruncate"
+                    | "rename" | "renameat" | "link" | "symlink" | "unlink" | "readlink"
+                    | "stat" | "fstat" | "lstat" | "statx" | "access" | "faccessat" | "chmod"
+                    | "fchmod" | "chown" | "fchown" | "lchown" | "utime" | "utimes"
+                    | "utimensat" | "mkdir" | "rmdir" | "chdir" | "fchdir" | "getcwd"
+                    | "getdents" | "getdents64" | "readdir" => 9,
 
                     // 10: Memory management
-                    "mmap" | "munmap" | "mprotect" | "mremap" | "madvise" | "msync" | "mincore"
-                    | "mlock" | "munlock" | "mlockall" | "munlockall" | "brk" | "sbrk" => 10,
+                    "mmap" | "munmap" | "mprotect" | "mremap" | "madvise" | "mincore" | "mlock"
+                    | "munlock" | "mlockall" | "munlockall" | "brk" | "sbrk" => 10,
 
                     // 11: Process control
                     "clone" | "fork" | "vfork" | "execve" | "execveat" | "exit" | "exit_group"
@@ -81,6 +80,12 @@ pub fn syscall_lut() -> Vec<u64> {
                     | "fanotify_init" | "fanotify_mark" | "io_setup" | "io_destroy"
                     | "io_submit" | "io_cancel" | "io_getevents" | "io_uring_setup"
                     | "io_uring_enter" | "io_uring_register" => 15,
+
+                    // 16: Durability: calls that block until data reaches the
+                    // device. Split from filesystem (9) and memory (10) so their
+                    // latency, which is a device round trip, is not diluted by
+                    // metadata calls that complete from cache.
+                    "fsync" | "fdatasync" | "sync" | "syncfs" | "msync" => 16,
 
                     _ => {
                         // no group defined for these syscalls

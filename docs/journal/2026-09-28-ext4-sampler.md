@@ -429,7 +429,10 @@ rate is bounded by the commit rate.
    16-wide per-CPU counter bank exactly, so a seventeenth widens
    `COUNTER_GROUP_WIDTH` to 24 in both syscall BPF programs (the bank is a
    whole number of cachelines, `bpf/counters.rs`) and adds a
-   `cgroup_syscall_sync` map to `syscall_counts`.
+   `cgroup_syscall_sync` map to `syscall_counts`. *Done:* class 16 in the
+   LUT, `sync_latency` histogram, `syscall{op="sync"}` and
+   `cgroup_syscall{op="sync"}` counters, width 24 in both programs, Sync
+   subgroup in the Syscall and cgroup dashboards.
 4. **`ext4_journal`**: `src/agent/samplers/ext4/linux/journal/{mod.rs,
    mod.bpf.c,stats.rs}`, `tp_btf`/`raw_tp` twins per hook, the local struct
    declarations, the tick config map, registration in

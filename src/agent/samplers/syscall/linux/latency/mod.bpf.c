@@ -17,7 +17,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 
-#define COUNTER_GROUP_WIDTH 16
+#define COUNTER_GROUP_WIDTH 24
 #define HISTOGRAM_BUCKETS HISTOGRAM_BUCKETS_POW_3
 #define HISTOGRAM_POWER 3
 #define MAX_CPUS 1024
@@ -160,6 +160,14 @@ struct {
     __uint(max_entries, HISTOGRAM_BUCKETS);
 } event_latency SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(map_flags, BPF_F_MMAPABLE);
+    __type(key, u32);
+    __type(value, u64);
+    __uint(max_entries, HISTOGRAM_BUCKETS);
+} sync_latency SEC(".maps");
+
 // provides a lookup table from syscall id to a counter index offset
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -257,6 +265,9 @@ int sys_exit(struct trace_event_raw_sys_exit* args) {
         break;
     case 15:
         histogram_incr(&event_latency, HISTOGRAM_POWER, lat);
+        break;
+    case 16:
+        histogram_incr(&sync_latency, HISTOGRAM_POWER, lat);
         break;
     default:
         histogram_incr(&other_latency, HISTOGRAM_POWER, lat);

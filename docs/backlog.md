@@ -912,10 +912,11 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   metadata reads; every counter exact against tracefs on the Debian 13
   module-ext4 guest; refresh 151–301 µs. Not probe-cost benched: allocations
   run at write-batch rate, far below the fsync rate phase 1 benched.
-- **`sync` class in `syscall_latency`** — Open. `fsync`, `fdatasync`, `sync`,
-  `syncfs`, `msync` leave class 9 (`src/agent/samplers/syscall/linux/mod.rs`)
-  for their own histogram. Independent of the ext4 samplers and delivers
-  host-wide fsync latency with no new probe or map.
+- **`sync` class in `syscall_latency`** — DONE. `fsync`, `fdatasync`, `sync`,
+  `syncfs` (class 9) and `msync` (class 10) moved to class 16
+  (`src/agent/samplers/syscall/linux/mod.rs`) with their own histogram and
+  per-CPU/per-cgroup counters; `COUNTER_GROUP_WIDTH` 16 → 24 in both syscall
+  BPF programs. No new probe.
 - **sysfs `errors_count` and `lifetime_write_kbytes` in the `filesystem` sweep**
   — Open. `/sys/fs/ext4/<block_device>/` per ext4 mount, read on the existing
   60 s off-cycle sweep (`src/agent/samplers/filesystem/linux/mod.rs`). Works on
