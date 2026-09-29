@@ -996,10 +996,13 @@ bare-metal probe-cost bench for anything at request rate).
   266–271 ns, so **the cgroup accounting is 265 ns, half the end hook**, and
   the bench ran 15% more fsyncs per second without it (one slot per cgroup,
   eight threads adding to the same cache lines). The per-filesystem counters
-  cost under 15 ns and the histogram about 30 ns. Options: drop per-cgroup
-  attribution from `ext4_ops` and `xfs_log`, make it cheaper (per-CPU cgroup
-  banks, or cache the cgroup id and serial in the task's start slot), or
-  keep it and stay opt-in. Gaps entry, Deferred, "`ext4_ops` probe cost".
+  cost under 15 ns and the histogram about 30 ns. Decided: per-cgroup
+  attribution is the option `cgroup_attribution`, off by default, and folded
+  out of the loaded program when off (both samplers). What remains of the
+  default-on question is the 1.13 µs per pair that stays; making the cgroup
+  path cheaper (per-CPU cgroup banks, or caching the cgroup id and serial in
+  the task's start slot) is the way to have both. Gaps entry, Deferred,
+  "`ext4_ops` probe cost".
 - **Write-amplification decomposition dashboard** — DONE as the ext4
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn

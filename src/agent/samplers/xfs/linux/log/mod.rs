@@ -227,9 +227,11 @@ fn init(config: Arc<Config>) -> SamplerResult {
     // `cgroup_attribution` in mod.bpf.c); the cgroup maps and their series
     // exist only when it is on.
     .pre_load(move |open| {
-        if let Some(rodata) = open.maps.rodata_data.as_mut() {
-            rodata.cgroup_attribution = cgroup_attribution as u8;
-        }
+        open.maps
+            .rodata_data
+            .as_mut()
+            .expect("the program declares read-only data")
+            .cgroup_attribution = cgroup_attribution as u8;
     });
 
     if cgroup_attribution {
