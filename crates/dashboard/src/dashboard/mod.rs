@@ -20,6 +20,7 @@ mod scheduler;
 mod service;
 mod softirq;
 mod syscall;
+mod xfs;
 
 type Generator = fn(&dyn MetricsSource, Vec<Section>) -> View;
 
@@ -39,6 +40,7 @@ static SECTION_META: &[(&str, &str, Generator)] = &[
     ("BlockIO", "/blockio", blockio::generate),
     ("Filesystem", "/filesystem", filesystem::generate),
     ("ext4", "/ext4", ext4::generate),
+    ("XFS", "/xfs", xfs::generate),
     ("cgroups", "/cgroups", cgroups::generate),
     ("Rezolus", "/rezolus", rezolus::generate),
 ];

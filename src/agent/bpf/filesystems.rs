@@ -46,7 +46,8 @@
 //! # Which mounts
 //!
 //! Every mount whose type ext4 serves or jbd2 journals (`ext4`, `ext3`,
-//! `ext2`, `ocfs2`), deduplicated by device: a bind mount is the same
+//! `ext2`, `ocfs2`), and every `xfs` mount, deduplicated by device: a bind
+//! mount is the same
 //! filesystem, and the shortest mount point names it. No path lookup and no
 //! `statvfs`, so nothing here can block on a device or a server; the
 //! `filesystem` sampler's local-only policy is about lookups, and does not
@@ -77,10 +78,13 @@ const RESCAN_INTERVAL: Duration = Duration::from_secs(10);
 /// exists to keep off the scrape path.
 const RESCAN_FLOOR: Duration = Duration::from_secs(1);
 
-/// Filesystem types ext4 serves (the ext4 driver mounts ext2 and ext3) or
-/// jbd2 journals (ocfs2). A jbd2 event from an ocfs2 mount is attributed to
-/// that mount, labeled with its own `fstype`, rather than folded into "other".
-const FSTYPES: &[&str] = &["ext4", "ext3", "ext2", "ocfs2"];
+/// Filesystem types the samplers attribute by mount: those ext4 serves (the
+/// ext4 driver mounts ext2 and ext3) or jbd2 journals (ocfs2), and XFS for
+/// `xfs_stats`. A jbd2 event from an ocfs2 mount is attributed to that mount,
+/// labeled with its own `fstype`, rather than folded into "other"; an XFS
+/// mount never produces an ext4 event, so its slot only ever carries the XFS
+/// samplers' series.
+const FSTYPES: &[&str] = &["ext4", "ext3", "ext2", "ocfs2", "xfs"];
 
 /// The label slot 0 carries.
 pub const OTHER: &str = "other";
@@ -382,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn ext4_family_and_ocfs2_get_slots_once_per_device_in_mount_order() {
+    fn ext4_family_ocfs2_and_xfs_get_slots_once_per_device_in_mount_order() {
         let mut r = fresh();
         assert!(assign(&mut r, TABLE, names));
         let a = r.assignment.clone();
@@ -394,21 +398,22 @@ mod tests {
             .filter_map(|(s, f)| f.as_ref().map(|f| (s, f.mount.as_str(), f.fstype.as_str())))
             .collect();
         // Mount-point order; the bind alias of the root device is folded in
-        // (shortest mount point wins); xfs is not a candidate.
+        // (shortest mount point wins); proc is not a candidate.
         assert_eq!(
             occupied,
             vec![
                 (1, "/", "ext4"),
                 (2, "/data", "ext4"),
-                (3, "/var/lib/cluster", "ocfs2"),
+                (3, "/scratch", "xfs"),
+                (4, "/var/lib/cluster", "ocfs2"),
             ]
         );
-        assert_eq!(a.members(), vec![0, 1, 2, 3]);
+        assert_eq!(a.members(), vec![0, 1, 2, 3, 4]);
         let root = a.slots[1].as_ref().unwrap();
         assert_eq!(root.dev, (259 << 20) | 3);
         assert_eq!(root.devnum, "259:3");
         assert_eq!(root.block_device.as_deref(), Some("nvme0n1p5"));
-        assert_eq!(a.slots[3].as_ref().unwrap().block_device, None);
+        assert_eq!(a.slots[4].as_ref().unwrap().block_device, None);
         let labels = root.labels();
         assert_eq!(labels.get("mount").map(String::as_str), Some("/"));
         assert_eq!(labels.get("fstype").map(String::as_str), Some("ext4"));
@@ -443,8 +448,13 @@ mod tests {
         );
         assert_eq!(
             a.slots[3].as_ref().unwrap().mount,
+            "/scratch",
+            "xfs kept slot 3"
+        );
+        assert_eq!(
+            a.slots[4].as_ref().unwrap().mount,
             "/var/lib/cluster",
-            "ocfs2 kept slot 3"
+            "ocfs2 kept slot 4"
         );
     }
 
@@ -488,15 +498,15 @@ mod tests {
     fn the_bound_is_one_past_the_highest_occupied_slot() {
         let mut r = fresh();
         assign(&mut r, TABLE, names);
-        assert_eq!(r.assignment.bound(), 4);
-        // Free the middle slot: the bound stays, the gap reads absent.
+        assert_eq!(r.assignment.bound(), 5);
+        // Free a middle slot: the bound stays, the gap reads absent.
         let table = TABLE.replace(
             "25 22 8:17 / /data rw,relatime shared:3 - ext4 /dev/sdb1 rw\n",
             "",
         );
         assign(&mut r, &table, names);
-        assert_eq!(r.assignment.members(), vec![0, 1, 3]);
-        assert_eq!(r.assignment.bound(), 4);
+        assert_eq!(r.assignment.members(), vec![0, 1, 3, 4]);
+        assert_eq!(r.assignment.bound(), 5);
     }
 
     #[test]

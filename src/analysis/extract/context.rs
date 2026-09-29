@@ -92,6 +92,7 @@ pub(crate) const EXPECTED_SUBSYSTEMS: &[&str] = &[
     "tcp_receive",
     "tcp_retransmit",
     "tcp_traffic",
+    "xfs_stats",
 ];
 
 /// Explicit metric-name -> sampler mapping for metrics whose name cannot be
@@ -359,6 +360,32 @@ pub(crate) const METRIC_SAMPLERS: &[(&str, &str)] = &[
     ("writeback_throttle_events", "memory_writeback"),
     ("writeback_throttle_latency", "memory_writeback"),
     ("writeback_throttled_time", "memory_writeback"),
+    // `xfs_stats`'s metrics carry the filesystem's prefix, not the sampler's.
+    ("xfs_ail_flushes", "xfs_stats"),
+    ("xfs_ail_push_items", "xfs_stats"),
+    ("xfs_ail_push_restarts", "xfs_stats"),
+    ("xfs_ail_pushes", "xfs_stats"),
+    ("xfs_buffer_busy_locks", "xfs_stats"),
+    ("xfs_buffer_creates", "xfs_stats"),
+    ("xfs_buffer_lock_waits", "xfs_stats"),
+    ("xfs_buffer_lookups", "xfs_stats"),
+    ("xfs_buffer_misses", "xfs_stats"),
+    ("xfs_buffer_reads", "xfs_stats"),
+    ("xfs_directory_ops", "xfs_stats"),
+    ("xfs_extent_blocks", "xfs_stats"),
+    ("xfs_extents", "xfs_stats"),
+    ("xfs_file_bytes", "xfs_stats"),
+    ("xfs_file_calls", "xfs_stats"),
+    ("xfs_inode_cache_lookups", "xfs_stats"),
+    ("xfs_inode_reclaims", "xfs_stats"),
+    ("xfs_log_blocks_written", "xfs_stats"),
+    ("xfs_log_force_sleeps", "xfs_stats"),
+    ("xfs_log_forces", "xfs_stats"),
+    ("xfs_log_iclog_stalls", "xfs_stats"),
+    ("xfs_log_space_requests", "xfs_stats"),
+    ("xfs_log_space_sleeps", "xfs_stats"),
+    ("xfs_log_writes", "xfs_stats"),
+    ("xfs_transactions", "xfs_stats"),
 ];
 
 /// The samplers that self-report `rezolus_bpf_run_count`/

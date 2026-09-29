@@ -255,6 +255,14 @@ enabled = false
 [samplers.filesystem]
 # interval = "60s"
 
+# XFS's own per-mount counters from /sys/fs/xfs/<dev>/stats/stats: log writes
+# and forces, log-space sleeps, AIL pusher outcomes, inode-cache misses,
+# extents, directory operations, file I/O and the metadata buffer cache. One
+# sysfs read per XFS mount, off the scrape cycle at `interval` (default 1s).
+# See docs/metrics.md#xfs_stats.
+[samplers.xfs_stats]
+# interval = "1s"
+
 # Produces nVIDIA GPU metrics using NVML and optionally CUPTI PM sampling.
 # CUPTI PM sampling (SM utilization, DRAM throughput, L2 hit rate, occupancy)
 # requires Turing+ GPU and is only available when built with --features cupti.
