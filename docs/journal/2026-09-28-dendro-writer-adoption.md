@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight) and C (`record --stream`) built; D–E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight), C (`record --stream`) and D1 (`recording` metadata, annotate, check, snapshot) built; D2–D4 and E not.
 
 ## Goal
 
@@ -155,6 +155,58 @@ slot changing hands mid-stream, with its counter restarting, reads back as
 two occupants with their own labels and rates beside a steady one; no
 caller rows), `a_streamed_schema_is_attached_where_it_arrived`,
 `a_streamed_row_with_an_unsent_schema_is_skipped`.
+
+## D1: built
+
+D is split by what each subcommand needs from dendro. D1 is the part with
+no layout questions: catalog reads, metadata writes and whole copies.
+
+- `recording metadata` describes a dendro archive from its catalog, as a
+  v3 `.rez`: sources as recordings, every stream as a table (a long
+  table's occupant stream included), rows, segments, unsealed WAL rows,
+  cadence and the clock line (`read_dendro_summary`); `--json` has
+  `container: "dendro"` and no `.rez` `version`. Rows are the catalog's,
+  which counts ticks (the WAL rows a segment consumed), not a long table's
+  rows per occupant.
+- `recording annotate` and `check --annotate` write into a dendro archive
+  through `MetadataStore`, which lists and replaces each recording's
+  metadata in either container; the rest of annotate is unchanged. A
+  dendro archive a writer still holds cannot be opened for writing, and
+  says so. `check`'s refusal of `--annotate` on a dendro archive is gone.
+- `recording snapshot` of a dendro archive is a sealed copy
+  (`dendro_copy::copy`, `CopySpec::everything()`): the live tail is
+  encoded into the copy's last segments, staged beside the output and
+  renamed. The copy code is shared with hindsight's dump
+  (`src/dendro_copy.rs`).
+- `recording upgrade` names a dendro input ("is a dendro archive; there is
+  nothing to upgrade", "is already a dendro archive"), and `recording
+  convert` refuses a SQLite archive by name rather than failing to decode
+  it. The generic refusal left in `RezDb::open` (still reached by `filter`
+  and `combine`) says "this command reads .rez archives only".
+- dendro 0.3.2, whose `vacuum_into` works on the read handle; nothing here
+  uses it (a snapshot seals its tail instead).
+
+Tests: `a_copy_seals_the_live_tail`, `a_dendro_snapshot_is_sealed_and_whole`,
+`a_dendro_archive_is_described_from_its_catalog`,
+`annotate_writes_into_a_dendro_archive`, `upgrade_names_a_dendro_input`,
+`a_sqlite_archive_is_recognized`, and `check_annotates_a_dendro_archive`
+through the binary (`tests/recording_check.rs`). A fixture records a long
+table through the real writer (`dendro_copy::fixtures::recorded`).
+
+Still to do in D:
+
+- **D2, `filter`:** `--samplers` maps to a stream predicate that keeps
+  `<table>/occupants` with its table. `--metrics` needs column projection
+  that knows a long table: `occupant` is structural, an occupant stream is
+  kept whole while its table survives, the long layout's file key-value
+  metadata (`metriken.layout`, `metriken.occupants`) must survive the
+  re-encode, and the writer's codec must be used. That projection belongs
+  beside the long layout, in metriken.
+- **D3, `combine`:** dendro inputs through `copy_sources_into` into one
+  transaction, refusing a duplicate source (`shared_sources`); `.rez` and
+  parquet inputs need converting first.
+- **D4, Save-as-Report:** the same projection as D2, built for the browser
+  viewer too.
 
 ## Seal policy
 

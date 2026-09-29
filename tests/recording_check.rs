@@ -473,3 +473,54 @@ fn an_invalid_check_in_the_queries_file_is_refused() {
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("exactly one"), "{}", stderr(&out));
 }
+
+/// A dendro archive takes `check --annotate` as a `.rez` does: the events go
+/// into the selected source's metadata, and `recording metadata --json`
+/// reads them back out of the dendro catalog.
+#[test]
+fn check_annotates_a_dendro_archive() {
+    let dir = tempfile::tempdir().unwrap();
+    let rez = two_recording_rez(dir.path());
+    let dendro = dir.path().join("ab.dendro");
+    let out = rezolus(&[
+        "recording",
+        "upgrade",
+        "--to",
+        "dendro",
+        rez.to_str().unwrap(),
+        "-o",
+        dendro.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let queries = write_queries(dir.path(), "q.json", &[PASSING, FAILING].join(","));
+
+    let out = rezolus(&[
+        "recording",
+        "check",
+        dendro.to_str().unwrap(),
+        "--queries",
+        queries.to_str().unwrap(),
+        "--recording",
+        "source=other",
+        "--annotate",
+    ]);
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("1 new check event(s)"),
+        "{}",
+        stdout(&out)
+    );
+
+    let recordings = rez_recordings(&dendro);
+    assert_eq!(recordings.len(), 2);
+    for rec in &recordings {
+        let events = rec["metadata"].get("events").and_then(|s| s.as_str());
+        if rec["labels"]["source"] == "other" {
+            let payload: serde_json::Value =
+                serde_json::from_str(events.expect("the selected source has events")).unwrap();
+            assert_eq!(payload["events"].as_array().unwrap().len(), 1);
+        } else {
+            assert!(events.is_none(), "the other source is untouched: {rec}");
+        }
+    }
+}

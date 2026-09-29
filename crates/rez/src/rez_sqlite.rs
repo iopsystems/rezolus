@@ -430,8 +430,8 @@ impl RezDb {
             .map_err(|e| format!("failed to read {what}'s application_id: {e}"))?;
         if id == i64::from(dendro::archive::APPLICATION_ID) {
             return Err(format!(
-                "{what} is a dendro archive (as written by `recording upgrade --to dendro`), \
-                 not a .rez; this version of rezolus reads .rez archives only"
+                "{what} is a dendro archive, not a .rez; this command reads .rez archives \
+                 only"
             ));
         }
         Ok(())
