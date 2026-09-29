@@ -205,7 +205,9 @@ rate.
    `ext4_alloc` bench. *Done; the ext4 entry's "Results — phase 3" has the
    design as built and the measured lookup cost.*
 6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
-   amplification dashboard (C6) once its four terms exist.
+   amplification dashboard (C6) once its four terms exist. *Done; see
+   Results — C5 and C6. The start map is task local storage, decided by
+   the kernel floor the sampler already has.*
 7. **XFS** (C8), then page cache (C7).
 
 ## Results — C1, the `memory_writeback` sampler
@@ -327,9 +329,12 @@ blocking-pool time.
 - **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages`
   carries `cgroup_ino`, not the css id the cgroup slot machinery keys on; an
   inode-keyed lookup is a `bpf/cgroup.h` change. Host-wide first.
-- **Per-thread start state for paired hooks** — Open, decision forced by C5:
-  one `MAX_PID` array per paired hook (32 MB each), one shared array with the
-  hook id in the value, or task local storage at a 5.11 floor.
+- **Per-thread start state for paired hooks** — Decided by C5: task local
+  storage (`BPF_MAP_TYPE_TASK_STORAGE`), one slot per operation in one value.
+  `fentry` on a module's functions is itself 5.11, so the floor cost nothing
+  `ext4_ops` did not already pay, and a write to an O_SYNC file nests fsync
+  inside it on one thread, which a single shared slot would lose and separate
+  32 MB arrays would pay 128 MB for.
 - **Page-cache hits** — Idea. Needs `fentry` at read rate; C7.
 - **Free-space fragmentation as a gauge** — By design, not eBPF. The state
   `e2freefrag` reports is the on-disk bitmap; the allocator signals in C2

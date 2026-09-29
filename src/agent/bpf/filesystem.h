@@ -60,6 +60,15 @@ static __always_inline u32 inode_dev(struct inode* inode) {
     return BPF_CORE_READ(inode, i_sb, s_dev);
 }
 
+// The device under an open file.
+static __always_inline u32 file_dev(struct file* file) {
+    if (!file) {
+        return 0;
+    }
+
+    return BPF_CORE_READ(file, f_inode, i_sb, s_dev);
+}
+
 // Index of `counter` in this CPU's bank for `slot`; the reader computes the
 // same (counters.rs `filesystem_index`).
 static __always_inline u32 fs_counter_idx(u32 slot, u32 counter, u32 width) {

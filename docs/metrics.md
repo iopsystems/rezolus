@@ -25,6 +25,7 @@ This guide walks you through all the available metrics, organized by category.
 - [ext4](#ext4)
   - [ext4_alloc](#ext4_alloc)
   - [ext4_journal](#ext4_journal)
+  - [ext4_ops](#ext4_ops)
 - [Filesystem](#filesystem)
   - [filesystem](#filesystem-1)
 - [GPU](#gpu)
@@ -407,6 +408,48 @@ metadata reads a cold inode cache imposes on `stat` and atime updates.
 | `ext4_preallocation_discarded_blocks` | Preallocated blocks released, summed | |
 | `ext4_inode_loads` | Inode-table reads from the device because an inode was not cached (`ext4_load_inode`), each a synchronous read of up to `inode_readahead_blks` blocks (32 by default), so 20,000 cold `stat`s cost about 40 reads on a fresh filesystem | |
 | `ext4_bitmap_loads` | Block-allocation bitmaps (including the allocator's prefetches) and inode-allocation bitmaps read from the device | `kind={block,inode}` |
+
+### ext4_ops
+
+BPF sampler that times ext4's request-path operations from the calling
+thread's side: how long each fsync, unlink, write and rename held the thread
+inside the filesystem, per filesystem and per cgroup. fsync and unlink are the
+`ext4_sync_file_enter`/`_exit` and `ext4_unlink_enter`/`_exit` tracepoints;
+write and rename have no tracepoints and are `fentry`/`fexit` on
+`ext4_file_write_iter` and `ext4_rename2`. The start timestamp lives in task
+local storage, one slot per operation, so an O_SYNC write's inner fsync does
+not lose the outer write's timing.
+
+**Off by default.** Both probes of a pair run on the request path once per
+call, so this is the most expensive of the ext4 samplers. Enable it with
+`[samplers.ext4_ops] enabled = true` once its probe cost is acceptable for the
+workload; the journal entry carries the measured cost.
+
+Counters are per filesystem exactly as `ext4_journal`'s are (`mount`,
+`fstype`, `devnum`, `block_device`, plus `mount="other"`); the latency
+histograms are host-wide. `ext4_op_time / ext4_ops` is the mean latency per
+filesystem. `ext4_write_bytes` is the first term of write amplification, which
+the ext4 dashboard's Write Path group draws against `ext4_writepages_pages`,
+`ext4_journal_commit_blocks{kind="logged"}` and `blockio_bytes{op="write"}`.
+The per-cgroup series answer "how long are this service's request threads held
+inside the filesystem", the mechanism a slow disk reaches a request through.
+
+Kernel support: task local storage and `fentry` on a module's functions are
+both 5.11, so the sampler needs 5.11 or later (module BTF where ext4 is a
+module). `ext4_rename2` gained a namespace argument in 5.12; the sampler
+carries a program per arity and selects from BTF. If BTF lacks
+`ext4_file_write_iter` or `ext4_rename2`, that operation's series are absent
+and the rest run.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `ext4_op_latency` | Distribution of the time a call held the calling thread inside ext4, in nanoseconds | `op={fsync,unlink,write,rename}` |
+| `ext4_ops` | Calls that completed | `op`, `mount`, `fstype`, `devnum`, `block_device` |
+| `ext4_op_time` | Nanoseconds the calls held their threads, summed; over `ext4_ops` it is the mean latency | `op`, `mount`, ... |
+| `ext4_op_errors` | Calls that returned an error | `op`, `mount`, ... |
+| `ext4_write_bytes` | Bytes applications wrote into ext4 (the return values of `ext4_file_write_iter`), summed | `mount`, ... |
+| `cgroup_ext4_ops` | Calls that completed, by the calling thread's cgroup | `op`, `name` |
+| `cgroup_ext4_op_time` | Nanoseconds a cgroup's threads spent inside each operation, summed | `op`, `name` |
 
 ## Filesystem
 

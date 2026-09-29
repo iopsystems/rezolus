@@ -467,6 +467,7 @@ mod tests {
         "drivehealth",
         "ext4_alloc",
         "ext4_journal",
+        "ext4_ops",
         "filesystem",
         "gpu_amd_pmu",
         "gpu_amd_smi",
