@@ -2,6 +2,16 @@
 
 ### Added
 
+- `xfs_stats` sampler: XFS's own per-mount counters from
+  `/sys/fs/xfs/<dev>/stats/stats`, one sysfs read per XFS mount off the
+  scrape cycle (1 s default): log writes, forces and force sleeps, in-core
+  log buffer stalls, log-space requests and sleeps, AIL pusher outcomes,
+  transactions, inode-cache lookups by outcome and reclaims, extents and
+  blocks allocated and freed, directory operations, file calls and bytes,
+  and the metadata buffer cache. Labeled `mount`, `fstype`, `devnum` and
+  `block_device` through the same slot registry as the ext4 samplers, which
+  now also assigns slots to XFS mounts. The viewer gains an XFS section.
+
 - `ext4_ops` sampler (opt-in, never enabled by `[defaults]`): how long fsync,
   unlink, write and rename held the calling thread inside ext4. `ext4_op_latency{op}`
   histograms; per-filesystem `ext4_ops{op}`, `ext4_op_time{op}`,

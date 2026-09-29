@@ -18,6 +18,7 @@ mod rezolus;
 mod scheduler;
 mod syscall;
 mod tcp;
+mod xfs;
 
 /// A registered sampler: its stable name plus its init function.
 pub struct SamplerEntry {
