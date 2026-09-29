@@ -647,7 +647,7 @@ CIL count.
 
 | Metric | Description | Metadata |
 |--------|-------------|----------|
-| `xfs_log_wait_latency` | Distribution of the time a thread was blocked on the log, by wait: `space` is one grant sleep, `force` is one log force entry to return | `wait={space,force}`, `unit=nanoseconds` |
+| `xfs_log_wait_latency` | Distribution of the time a thread was blocked on the log, by wait: `space` is one grant sleep, `force` is one log force entry to return (a force without `XFS_LOG_SYNC`, as inode unpinning issues, returns once the write is issued and sits in the low tail) | `wait={space,force}`, `unit=nanoseconds` |
 | `xfs_log_waits` | Log waits completed: grant sleeps, forces, and CIL-full waits (count only) | `wait={space,force,cil}`, `mount`, `fstype`, `devnum`, `block_device` |
 | `xfs_log_wait_time` | Nanoseconds threads were blocked, summed, by wait; over `xfs_log_waits` it is the mean | `wait={space,force}`, `mount`, ... |
 | `cgroup_xfs_log_waits` | Log waits by the waiting thread's cgroup | `wait={space,force}`, `name` |

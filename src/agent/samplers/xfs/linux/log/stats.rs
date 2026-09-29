@@ -75,7 +75,7 @@ pub static XFS_LOG_WAIT_LATENCY_SPACE: RwLockHistogram =
 
 #[metric(
     name = "xfs_log_wait_latency",
-    description = "Distribution of the time an XFS log force took (xfs_log_force or xfs_log_force_seq, entry to return): the log write an fsync waits for, in nanoseconds",
+    description = "Distribution of the time an XFS log force took (xfs_log_force or xfs_log_force_seq, entry to return), in nanoseconds: the log write an fsync waits for; a force without XFS_LOG_SYNC returns once the write is issued and sits in the low tail",
     metadata = { unit = "nanoseconds", wait = "force", acq_group = "xfs_log_latencies" }
 )]
 pub static XFS_LOG_WAIT_LATENCY_FORCE: RwLockHistogram =

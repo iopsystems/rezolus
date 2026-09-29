@@ -937,9 +937,9 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   counters): an ocfs2 mount has its own slot, labeled `fstype="ocfs2"`.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
-- **XFS** — `xfs_stats` shipped (#1351), see
-  [XFS telemetry](journal/2026-09-29-xfs-samplers.md); `xfs_log` BPF for
-  grant-sleep and force latency is open there.
+- **XFS** — `xfs_stats` (#1351) and `xfs_log` (#1352, opt-in) shipped, see
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md); the log-space
+  latency path is verified only at zero there.
 
 ## Agent — filesystem telemetry gaps
 
@@ -998,14 +998,16 @@ bare-metal probe-cost bench for anything at request rate).
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
   when the recording has it.
-- **XFS samplers** — Step 1 done, step 2 open, in
-  [XFS telemetry](journal/2026-09-29-xfs-samplers.md). `xfs_stats` shipped
-  in #1351: 41 per-mount counters from `/sys/fs/xfs/<dev>/stats/stats` (no
-  probes), exact against the file and `/proc/fs/xfs/stat` in the VM, sweep
-  measured in *Results — step 1*. Open: `xfs_log` BPF for grant-sleep and
-  log-force latency and per-cgroup blocked time (opt-in, benched on
-  `null_blk` XFS first). Probed on Debian 13: 623 tracepoints, 606 in module
-  BTF, 5.6 log-family events per fsync.
+- **XFS samplers** — Both steps done, in
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md). `xfs_stats` (#1351):
+  41 per-mount counters from `/sys/fs/xfs/<dev>/stats/stats`, exact against
+  the file and `/proc/fs/xfs/stat`. `xfs_log` (#1352, opt-in): log-space
+  and log-force blocked time per mount and per cgroup with host histograms;
+  force counts exact against the stats file, 1.3 µs per force by
+  `kernel.bpf_stats_enabled`. Left open there: the log-space latency has
+  only ever read 0 (three attempts to fill a 64 MiB log failed; reopen on a
+  host with nonzero `xfs_log_space_sleeps`), default-on (by design opt-in;
+  the number is 1.3 µs per force), and CIL wait latency (count only).
 - **Refresh-dispatched sweeps race the snapshot walk** — Open, from
   [XFS telemetry](journal/2026-09-29-xfs-samplers.md) Results — step 1. A
   `spawn_blocking` sweep dispatched by `refresh()` (`xfs_stats`,
