@@ -32,6 +32,7 @@ This guide walks you through all the available metrics, organized by category.
   - [gpu_intel_pmu](#gpu_intel_pmu)
 - [Memory](#memory)
   - [memory_meminfo](#memory_meminfo)
+  - [memory_slabinfo](#memory_slabinfo)
   - [memory_vmstat](#memory_vmstat)
   - [memory_writeback](#memory_writeback)
 - [Network](#network)
@@ -641,6 +642,35 @@ utilized across the system.
 A line the running kernel does not print (`HardwareCorrupted` without
 `CONFIG_MEMORY_FAILURE`, the huge-page lines without the corresponding
 config) leaves its gauge absent from the snapshot rather than at 0.
+
+### memory_slabinfo
+
+Sizes of a fixed set of slab caches from `/proc/slabinfo`, read at most once
+per `interval` (60 s by default) off the scrape cycle, since the file is
+root-only, lists every cache on the machine and is generated under the slab
+lock. The question it answers is whether the metadata caches fit: a
+filesystem with tens of millions of files whose inode cache is evicted pays a
+synchronous inode-table read on `stat` and on every atime update
+(`ext4_inode_loads`), and `ext4_inode_cache` here is the cause on the same
+axis. `vm.vfs_cache_pressure` trades this memory against the page cache.
+
+Caches followed: `dentry`, `inode_cache`, `ext4_inode_cache`,
+`ext4_extent_status`, `jbd2_journal_head`, `buffer_head`, `xfs_inode`,
+`radix_tree_node` (the page-cache index). A cache the running kernel does not
+have leaves its gauges absent, and so does one SLUB has merged into a
+same-sized pool, which the file lists under one name only: caches without a
+constructor are candidates, and `ext4_extent_status` is merged on the Debian 13
+6.12 kernel. The inode and dentry caches have constructors and are never
+merged. Booting with `slab_nomerge` lists every cache under its own name.
+
+Measured on a 56-vCPU guest with a 196-line `/proc/slabinfo`: the sweep reads
+the file in 366–409 µs and parses it in 51–63 µs, once per interval on the
+blocking pool; the scrape-path `refresh()` is 0 µs except for the dispatch.
+
+| Metric | Description | Metadata |
+|--------|-------------|----------|
+| `memory_slab_cache_objects` | Objects in the cache: `active` are in use, `total` are allocated to the cache's slabs whether in use or free | `cache={...}`, `state={active,total}` |
+| `memory_slab_cache_bytes` | Memory the cache holds: slabs times pages per slab times the page size | `cache={...}` |
 
 ### memory_vmstat
 

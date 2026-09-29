@@ -962,9 +962,15 @@ bare-metal probe-cost bench for anything at request rate).
   results). Was: adds an allocated-extent-length histogram, preallocation discard
   counts, and `ext4_load_inode` / bitmap-load counters for synchronous
   metadata reads on the request path.
-- **Slab gauges** — Open. `ext4_inode_cache`, `dentry`, `buffer_head` from
-  `/proc/slabinfo` on the `filesystem` sweep's 60 s cadence; a principle 15
-  exception, measured.
+- **Slab gauges** — DONE as the `memory_slabinfo` sampler (its own sweep, 60 s
+  default): eight caches, values exact against the file, sweep 366–409 µs
+  read + 51–63 µs parse, 0 µs on the scrape path. See the gaps entry's
+  "Results — C9".
+- **Merged slab caches** — By design. A cache SLUB merges into a same-sized
+  pool (`ext4_extent_status` on Debian 13's 6.12) is absent from
+  `/proc/slabinfo` under its own name and so from `memory_slabinfo`. Reopen if
+  its residency becomes the question; `/sys/kernel/slab/<cache>` resolves
+  aliases at one directory walk per cache per sweep.
 - **Per-filesystem counters** — Roadmap (phase 3 of the ext4 entry,
   promoted): the cache device is never the root filesystem.
 - **`ext4_ops` sampler** — Roadmap. fsync and unlink latency from the

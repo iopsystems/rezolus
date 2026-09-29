@@ -198,7 +198,9 @@ rate.
    inodes. The rate is still the synchronous metadata cost; it is just
    smaller than one-per-stat on any access pattern readahead can help.*
 4. **Slab gauges** (C9) beside `filesystem`'s sweep, so C3's inode-read rate
-   has its cause on the same dashboard.
+   has its cause on the same dashboard. *Done as `memory_slabinfo`, its own
+   sampler rather than a field on `filesystem`'s sweep: the file is
+   host-wide, not per mount. Measured below.*
 5. **Per-filesystem counters** (C4), the lookup-map decision measured on the
    `ext4_alloc` bench.
 6. **`ext4_ops`** (C5) with the per-thread start map decision, and the
@@ -281,7 +283,45 @@ divided by tens of pages.
 timed out on its 20 s deadline in three of four full-workspace test runs on
 this 56-vCPU guest today and passes in CI; not touched by this work.
 
+## Results — C9, the `memory_slabinfo` sampler
+
+Same guest as C1 (`6.12.63+deb13-amd64`, 56 vCPU, root on ext4); systemslab
+`01a0ebb3-3a29-71a0-1775-9d5b6fe01608`. Eight caches followed: `dentry`,
+`inode_cache`, `ext4_inode_cache`, `ext4_extent_status`, `jbd2_journal_head`,
+`buffer_head`, `xfs_inode`, `radix_tree_node`. Two gauges per cache,
+`memory_slab_cache_objects{cache,state=active|total}` and
+`memory_slab_cache_bytes{cache}` (slabs × pages per slab × page size).
+
+**Values match the file.** After a `cargo build` had warmed the caches, the
+sampler's gauges equalled the `/proc/slabinfo` line read beside the scrape:
+`dentry` 66,562 active of 66,780, 1,590 slabs × 2 pages = 13,025,280 bytes;
+`ext4_inode_cache` 27,076 of 27,076; `buffer_head` 163,801 of 163,995;
+`radix_tree_node` 56,597 of 56,924.
+
+**Six of the eight caches were present.** `xfs_inode` is absent because XFS is
+not loaded, which the design expected. `ext4_extent_status` is absent for a
+reason the design did not: SLUB merges a cache that has no constructor into a
+same-sized pool, and the file lists the pool under one name, so the
+extent-status cache (40 bytes, `SLAB_RECLAIM_ACCOUNT`, no constructor) is
+invisible on this kernel. The module doc's claim that the followed caches
+"are not merged in practice" was wrong and is corrected. The inode and
+dentry caches have constructors and cannot merge; `jbd2_journal_head` has
+none and happened not to merge here. `slab_nomerge` on the kernel command
+line is the operator's fix; the sampler reports absent, not 0.
+
+**Sweep cost**, 196-line file: read 366–409 µs, parse 51–63 µs, four sweeps
+at a 3 s test interval. **Refresh cost** on the scrape path: 0 µs at the
+median, 86 µs maximum across 12 refreshes, the dispatch of a sweep. The
+default interval is 60 s, so the ~450 µs sweep is 7.5 µs per second of
+blocking-pool time.
+
 ## Deferred / reopen
+
+- **Merged slab caches** — By design. A cache SLUB merges is absent, not
+  approximated from the pool it joined; `ext4_extent_status` is merged on
+  Debian 13's 6.12. Reopen if that cache's residency becomes the question:
+  the alternative is `/sys/kernel/slab/<cache>` which resolves aliases, at
+  the cost of one directory walk per cache per sweep.
 
 - **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages`
   carries `cgroup_ino`, not the css id the cgroup slot machinery keys on; an

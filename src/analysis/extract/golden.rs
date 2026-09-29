@@ -475,6 +475,7 @@ mod tests {
         "gpu_nvidia",
         "hw_sensors",
         "memory_meminfo",
+        "memory_slabinfo",
         "memory_vmstat",
         "memory_writeback",
         "network_ethtool",
