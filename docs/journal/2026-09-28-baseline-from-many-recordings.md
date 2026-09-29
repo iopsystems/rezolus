@@ -1,8 +1,9 @@
 # A baseline built from many recordings
 
 - **Opened:** 2026-09-28
-- **Status:** BUILT (this PR), as a viewer setting rather than a CLI
-  selector; see the corrections under the design.
+- **Status:** BUILT (#1331), as a viewer setting rather than a CLI
+  selector; see the corrections under the design. The load gate was
+  re-measured on a release build in the follow-up PR and holds at 1.2×.
 
 ## Problem
 
@@ -135,26 +136,69 @@ recordings, and 20 copies of one recording.
 | 4 recordings | 1.7 s | 2.0 s |
 | 20 recordings | 5.4 s | 2.0 s |
 
-The gate as written fails: 20 recordings load in 4.1× the two-capture
-time. But the number is not the family's. The switch to the family view
+The gate as written fails on this debug-build measurement: 20 recordings
+load in 4.1× the two-capture time (the release build, measured in the
+follow-up below, gives 1.2×). But the number is not the family's. The switch to the family view
 costs the same 2.0 s at 4 and at 20 members (most of it the fixed wait for
 network idle after the redraw), and the aggregation runs over data the
 page already holds. The 5.4 s is the N-way overlay's first load, which
-predates this entry: `viewer_core.js` fetches the extra captures one at a
+predates this entry: `viewer_core.js` fetched the extra captures one at a
 time per chart (`for (const cap of extras)` with three awaited requests
 each: metadata, the range query, the display query), so a 20-arm archive
-issues 54 sequential round trips per chart. The
+issued 54 sequential round trips per chart. The
 NO-GO branch (move the statistic to the backend) would not touch that
-cost. Verdict: GO for the family band; the load cost is a backlog item on
-the N-way fetch loop, which should issue the per-capture requests in
-parallel. Correctness gates held: 20 identical copies produced a
-zero-width band with `19 members` in the legend, and the 4-recording
-archive drew a min..max band around its three members with the fourth as
-the experiment line.
+cost. Verdict: GO for the family band; the load cost went to the backlog
+as an item on the N-way fetch loop. Correctness gates held: 20 identical
+copies produced a zero-width band with `19 members` in the legend, and
+the 4-recording archive drew a min..max band around its three members
+with the fourth as the experiment line.
 
 The WASM viewer was not measured; the frontend is the same and the
 per-capture calls are local, so its number can only be lower on the fetch
 loop.
+
+### The fetch loop was not the cost
+
+The follow-up PR did what the backlog item said: `data.js` memoizes the
+capture list and each capture's metadata for the life of a view
+(`listCaptures`, `captureMetadata`; cleared by `clearMetadataCache` and
+`clearViewerCaches`, which attach, detach and a file swap all reach), and
+`fetchExtraCaptures` runs the per-capture fetches through a bounded pool
+(`mapLimit`, four captures in flight, each capture's range and display
+queries issued together). Request counts per `#/cpu` load on the
+20-recording archive fell as expected: `/api/v1/metadata` 347 → 23,
+`/api/v1/captures` 19 → 1. The 561 range queries are unchanged, since each
+chart still asks each capture for its data.
+
+Wall clock did not follow. Same harness, three fresh page loads per cell,
+median, developer mode, headless Chrome, `#/cpu`, with the same three
+files swapped between their `main` and PR versions under one server
+binary (developer mode serves them from disk):
+
+| archive | debug before | debug after | release before | release after |
+|---|---|---|---|---|
+| 2 recordings | 1.08 s | 1.09 s | 0.94 s | 0.96 s |
+| 4 recordings | 1.23 s | 1.19 s | 1.00 s | 0.96 s |
+| 20 recordings | 3.26 s | 3.20 s | 1.15 s | 1.09 s |
+
+The first load of the 20-recording archive after the server starts is
+slower in both trees (debug: 4.9 s before, 3.3 s after, one sample each),
+which is what the earlier single-run 5.4 s measured. Widening the pool
+from 4 to 18 left the debug 20-recording median at 3.20 s, so the client
+is not what paces the load. `range_query` in `src/viewer/routes.rs`
+evaluates each query inline on a tokio worker, so the server is not
+serializing them either; the debug load is the query engine's throughput
+over 561 evaluations, about 34 ms each with six browser connections in
+flight.
+
+The release build answers the gate. Twenty recordings load in 1.2× the
+two-capture time, before this change as well as after it, so the 4.1× in
+the table above was the debug engine, not the fetch loop and not the
+family. **Gate: held**, on the build that ships. The memo and pool stay
+for what they do measurably, 15× fewer metadata requests per load, and
+because the sequential loop was wrong on its own terms. The backend-side
+family statistic (this entry's NO-GO branch) is not needed for the gate
+and stays unbuilt.
 
 Correctness gate: a family of identical copies of one recording produces a
 zero-width band (held: the 20-copy archive above). The design's second
@@ -168,7 +212,9 @@ stands, which a node test pins.
   T" is a check in the sense of
   [checks with verdicts](2026-09-28-checks-with-verdicts.md), and lands there.
 - **Family over heatmaps and percentile charts.** Reopen after the line case.
-- **Backend family aggregation.** Reopen on the NO-GO above.
+- **Backend family aggregation.** Reopen if the 2× gate fails on a
+  release build; the debug-build 4.1× was the engine, not the fetch shape
+  (see "The fetch loop was not the cost").
 
 ## Cross-references
 

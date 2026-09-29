@@ -1296,13 +1296,15 @@ Source: [A baseline built from many recordings](journal/2026-09-28-baseline-from
   (`charts/util/family_math.js`, `compare.js::overlayLine`), mean ± kσ or
   min..max over the first member's grid, member count in the legend,
   `family=` in the link. Spread view only.
-- **N-way extra captures are fetched one at a time per chart** — Open (bug,
-  pre-existing, measured). `viewer_core.js` awaits three requests per extra
-  capture in sequence (metadata, range query, display query), so a
-  20-recording archive takes 5.4 s to first load
-  against 1.3 s for two (measured on `#/cpu`, server viewer). Issue the
-  per-capture requests in parallel, bounded, and the family band's gate is
-  met as written.
+- **N-way extra captures are fetched one at a time per chart** — DONE.
+  `data.js` memoizes the capture list and per-capture metadata per view
+  (`listCaptures`, `captureMetadata`) and `fetchExtraCaptures` runs the
+  per-capture fetches through a bounded pool (`mapLimit`). Metadata
+  requests per 20-recording `#/cpu` load fell 347 → 23. The wall clock did
+  not move on either build (debug 3.26 → 3.20 s, release 1.15 → 1.09 s),
+  and the release build loads 20 recordings in 1.2× the two-capture time
+  before and after: the 4.1× that raised this item was the debug query
+  engine, not the loop. See the entry's "The fetch loop was not the cost".
 - **Family named by label from the CLI** (`--baseline arm=nightly` matching
   many) — Open, no demand yet: today the family is every attached capture
   but the experiment, and `combine`/a multi-recording `.rez` decides what

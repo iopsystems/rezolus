@@ -11,11 +11,11 @@ import {
     promqlResultToHeatmapTriples, promqlResultToLinePair, promqlResultToSeriesMap,
     getStepOverride, CAPTURE_BASELINE, CAPTURE_EXPERIMENT,
     fetchQuantileSpectrumForPlot, nativeInterval, stepAtLeast,
+    listCaptures, captureMetadata, mapLimit,
 } from './data.js';
 import { canonicalQuantileLabel, composeScatterLabel } from './charts/util/compare_math.js';
 import { quantilesForKind } from './charts/util/spectrum_quantiles.js';
 import { heatmapTriplesMinMax } from './charts/util/heatmap_data.js';
-import { ViewerApi } from './viewer_api.js';
 import { firstVisibleLabelValue } from './labels.js';
 
 // Normalization helpers for compare-mode captures.
@@ -235,7 +235,7 @@ const fetchExperimentResult = (vnode) => {
             let range = vnode.attrs.experimentQueryRange;
             if (!range) {
                 try {
-                    const meta = await ViewerApi.getMetadata(CAPTURE_EXPERIMENT);
+                    const meta = await captureMetadata(CAPTURE_EXPERIMENT);
                     const data = meta?.data ?? meta;
                     const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
                     const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
@@ -316,7 +316,7 @@ const fetchExperimentResult = (vnode) => {
 // 3600 s-capped baseline range — fine outside the diff path.
 const fetchBaselineRange = async () => {
     try {
-        const meta = await ViewerApi.getMetadata(CAPTURE_BASELINE);
+        const meta = await captureMetadata(CAPTURE_BASELINE);
         const data = meta?.data ?? meta;
         const minT = data?.minTime ?? data?.min_time ?? data?.start_time;
         const maxT = data?.maxTime ?? data?.max_time ?? data?.end_time;
@@ -409,24 +409,47 @@ const rangeFromMeta = (meta) => {
     };
 };
 
+// Extra captures in flight per chart. Each capture is two requests (the
+// range query and the display query, issued together once its range is
+// known), so four captures keep about eight requests queued behind the
+// browser's per-host connection limit without crowding out the baseline
+// fetches every other chart on the page is waiting on.
+const EXTRA_CAPTURE_CONCURRENCY = 4;
+// Distinguishes a range query that threw (the capture is dropped, as the
+// sequential loop did) from one that resolved to nothing.
+const FETCH_FAILED = Symbol('fetch failed');
+
 // Fetch every capture BEYOND baseline+experiment, for an N-way overlay.
 //
 // Additive and deliberately separate from `fetchExperimentResult`: the
 // baseline/experiment path (and with it every two-capture strategy — diff,
 // side-by-side, spectrum) is left exactly as it was, and this only adds the
-// extra arms an overlay draws. With a plain A/B `getCaptures()` returns just
+// extra arms an overlay draws. With a plain A/B `listCaptures()` returns just
 // baseline+experiment, so `extraCaptures` stays empty and nothing changes.
+//
+// The capture list and each capture's metadata come from the per-view memo
+// in data.js, so a section's charts share one answer instead of each asking
+// the backend again; the per-capture queries run through a bounded pool.
+// Measured on a 20-recording archive (`#/cpu`, server viewer): metadata
+// requests per load 347 -> 23, wall clock unchanged (the range queries
+// pace it); docs/journal/2026-09-28-baseline-from-many-recordings.md,
+// "The fetch loop was not the cost".
+//
+// A granularity change re-fires this while a pool may still be running;
+// the launch stamp lets the older run's result be discarded rather than
+// land last and overwrite the newer step's captures.
 const fetchExtraCaptures = (vnode) => {
     const { spec, sectionRoute } = vnode.attrs;
     if (!spec.promql_query) return;
+    const launch = (vnode.state._extrasLaunch = (vnode.state._extrasLaunch || 0) + 1);
     (async () => {
         try {
-            const caps = await ViewerApi.getCaptures();
+            const caps = await listCaptures();
             const extras = (Array.isArray(caps) ? caps : []).filter(
                 (c) => c.id !== CAPTURE_BASELINE && c.id !== CAPTURE_EXPERIMENT,
             );
             if (extras.length === 0) {
-                vnode.state.extraCaptures = [];
+                if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
             }
             const baseQuery = spec.promql_query_experiment || spec.promql_query;
@@ -435,7 +458,7 @@ const fetchExtraCaptures = (vnode) => {
                 { sectionRoute, crossCapture: true },
             );
             if (query == null) {
-                vnode.state.extraCaptures = [];
+                if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
             }
             const displayStyle = resolvedStyle(spec);
@@ -443,28 +466,32 @@ const fetchExtraCaptures = (vnode) => {
             const pts = (Array.isArray(spec.boxplot) && spec.boxplot[0]?.t?.length)
                 ? spec.boxplot[0].t.length : 500;
 
-            const out = [];
-            for (const cap of extras) {
+            // One capture: its range (memoized), then the range query and
+            // the display query together. Null when the capture has no
+            // usable range or its range query failed; a failed display
+            // query leaves `boxplot` null for the raw-matrix fallback.
+            const fetchOne = async (cap) => {
                 let range;
                 try {
-                    range = rangeFromMeta(await ViewerApi.getMetadata(cap.id));
+                    range = rangeFromMeta(await captureMetadata(cap.id));
                 } catch (_) { range = null; }
-                if (!range) continue;
+                if (!range) return null;
                 const step = effectiveExperimentStep(vnode.attrs, range);
-                let result;
-                try {
-                    result = await queryRangeForCapture(cap.id, query, range.start, range.end, step);
-                } catch (_) { continue; }
-                let boxplot = null;
-                if (wantBoxplot) {
-                    try {
-                        boxplot = await queryRangeDisplayForCapture(
+                const [result, boxplot] = await Promise.all([
+                    queryRangeForCapture(cap.id, query, range.start, range.end, step)
+                        .catch(() => FETCH_FAILED),
+                    wantBoxplot
+                        ? queryRangeDisplayForCapture(
                             cap.id, query, range.start, range.end, nativeInterval(range), pts,
-                        );
-                    } catch (_) { /* leave null → raw-matrix fallback */ }
-                }
-                out.push({ id: cap.id, alias: cap.alias, result, boxplot });
-            }
+                        ).catch(() => null)
+                        : Promise.resolve(null),
+                ]);
+                if (result === FETCH_FAILED) return null;
+                return { id: cap.id, alias: cap.alias, result, boxplot };
+            };
+            const out = (await mapLimit(extras, EXTRA_CAPTURE_CONCURRENCY, fetchOne))
+                .filter(Boolean);
+            if (vnode.state._extrasLaunch !== launch) return;
             vnode.state.extraCaptures = out;
             // Invalidate the memoized extra caps so view() re-extracts.
             vnode.state._capExtrasResult = null;

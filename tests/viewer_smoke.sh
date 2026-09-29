@@ -289,23 +289,28 @@ for path in / /about /lib/style.css; do
     eq "static $path" "$status" "200" "$LOGDIR/upload.log"
 done
 
+# `grep -q` exits at its first match. When the `echo` feeding it is still
+# writing (a payload past the pipe buffer, 16 KiB on macOS before it grows),
+# echo takes EPIPE, the pipeline fails under pipefail, and the `||` reports
+# the string missing from a file that has it. Observed once on selection.js
+# (62 KB); timing-dependent. A here-string has no writer to fail.
 echo "==> served JS bundle carries the URL view-state module"
 url_state_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/ui/url_state.js")
-echo "$url_state_js" | grep -q "parseViewState" \
+grep -q "parseViewState" <<< "$url_state_js" \
     || fail "ui/url_state.js missing parseViewState" "" "parseViewState present" "$LOGDIR/file.log"
 
 echo "==> served JS bundle has the Notebook rename + new Selection sidebar"
 selection_js=$(curl -fsS "http://127.0.0.1:$PORT_FILE/lib/selection/selection.js")
-echo "$selection_js" | grep -q "notebookStore" \
+grep -q "notebookStore" <<< "$selection_js" \
     || fail "selection.js missing notebookStore identifier" "" "notebookStore present" "$LOGDIR/file.log"
-echo "$selection_js" | grep -q "loadedSelectionStore" \
+grep -q "loadedSelectionStore" <<< "$selection_js" \
     || fail "selection.js missing loadedSelectionStore identifier" "" "loadedSelectionStore present" "$LOGDIR/file.log"
-echo "$selection_js" | grep -q "LoadedSelectionView" \
+grep -q "LoadedSelectionView" <<< "$selection_js" \
     || fail "selection.js missing LoadedSelectionView" "" "LoadedSelectionView present" "$LOGDIR/file.log"
 # Sanity: the old identifiers should be gone (modulo the unrelated
 # `toggleSelection`, `isSelected`, `selectionCardTitle`, etc. which
 # stay — only the workspace-store identifiers were renamed).
-if echo "$selection_js" | grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null; then
+if grep -E "(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)" >/dev/null <<< "$selection_js"; then
     fail "selection.js still has old workspace identifiers" \
          "$(echo "$selection_js" | grep -nE '(\bselectionStore\b|\bSelectionView\b|\bpersistSelection\b)' | head -3)" \
          "no old store identifiers" "$LOGDIR/file.log"
