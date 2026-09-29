@@ -219,7 +219,7 @@ fn reject_separate_with_rez(
     Ok(())
 }
 
-/// `--stream` feeds the `.rez` writer and nothing else.
+/// `--stream` feeds an archive writer (`.rez` or `.dendro`) and nothing else.
 ///
 /// The stream carries WAL rows and index entries — the archive's own shapes —
 /// and there is no parquet or raw form of either, so a run that asked for one
@@ -240,23 +240,16 @@ fn reject_stream_without_rez(
     if !stream {
         return Ok(());
     }
-    if format != Format::Rez {
-        let why = if format == Format::Dendro {
-            "the recorder cannot yet rebuild the stream's rows for a dendro archive".to_string()
-        } else {
-            format!(
-                "the stream carries the archive's own rows, which have no {} form",
-                format_name(format)
-            )
-        };
+    if !is_archive(format) {
         return Err(format!(
-            "--stream records to .rez only, not .{} ({why}); drop --stream, or record to a .rez",
+            "--stream records to .rez or .dendro only (the stream carries the archive's own \
+             rows, which have no {} form); drop --stream, or record to a .rez or .dendro",
             format_name(format)
         ));
     }
     if separate && endpoints > 1 {
         return Err(
-            "--stream cannot be combined with --separate: the stream records to one .rez \
+            "--stream cannot be combined with --separate: the stream records to one \
              archive, and --separate asks for a file per endpoint"
                 .to_string(),
         );
@@ -533,7 +526,7 @@ mod tests {
     /// cannot both happen, and it is refused at parse time — an explicit
     /// choice is never silently substituted.
     #[test]
-    fn stream_is_accepted_for_rez_and_refused_for_every_other_format() {
+    fn stream_is_accepted_for_the_archives_and_refused_for_every_other_format() {
         let parse = |args: &[&str]| {
             let mut argv = vec!["record"];
             argv.extend_from_slice(args);
@@ -546,14 +539,14 @@ mod tests {
         // The default output is a .rez, and an explicit one is too.
         assert!(parse(&["--stream"]).unwrap().stream);
         assert!(parse(&["--stream", "-o", "out.rez"]).unwrap().stream);
+        assert!(parse(&["--stream", "-o", "out.dendro"]).unwrap().stream);
+        assert!(parse(&["--stream", "--format", "dendro"]).unwrap().stream);
         assert!(!parse(&[]).unwrap().stream, "opt-in: off unless asked for");
 
         for args in [
             &["--stream", "-o", "out.parquet"][..],
             &["--stream", "--format", "raw"],
             &["--stream", "--format", "parquet", "-o", "out.parquet"],
-            &["--stream", "-o", "out.dendro"],
-            &["--stream", "--format", "dendro"],
         ] {
             let err = parse(args)
                 .err()

@@ -816,6 +816,103 @@ pub(crate) async fn pump(
     }
 }
 
+/// Streamed rows back into the V3 snapshots metriken-archive's writer
+/// ingests, for `record --stream -o out.dendro`.
+///
+/// The stream's rows are `WalGroupRow`s: values and a window per group, the
+/// schema only when it changed. The producer sends a stream's schema whenever
+/// its hash differs from the last one it sent on that stream
+/// (`FrameProducer::interval`), so one schema per stream is all a consumer
+/// needs to keep. That schema already carries a slotted member's `id` and
+/// identity labels, `__uid__` included: the stream and a scrape are built from
+/// the same `create_v3` pass. So the writer takes occupant identity from it
+/// exactly as it does from a scrape, and the index frames, which repeat those
+/// labels, are not written to a dendro archive.
+#[derive(Default)]
+pub(crate) struct StreamSchemas {
+    /// Per stream, the schema its rows currently align with, by hash.
+    current: std::collections::HashMap<
+        String,
+        ((u64, u64), std::sync::Arc<metriken_exposition::GroupSchema>),
+    >,
+    /// Rows whose schema hash matched no schema this connection has sent;
+    /// the producer re-sends on every change, so these are rows from before
+    /// a reconnect's first schema.
+    pub unresolved: u64,
+}
+
+impl StreamSchemas {
+    /// One pass's rows as a V3 snapshot. A group's schema rides along on the
+    /// rows where it arrived, which are the rows where it changed, so the
+    /// writer validates and lays out a schema once per change.
+    pub(crate) fn snapshot(
+        &mut self,
+        pass: &AgentRows,
+    ) -> Result<metriken_exposition::Snapshot, String> {
+        use metriken_exposition::{GroupSchema, GroupSnapshot, MetricDesc, Snapshot, SnapshotV3};
+        let mut groups = Vec::with_capacity(pass.rows.len());
+        for row in &pass.rows {
+            let arrived = row.schema.as_ref().map(|s| {
+                let convert = |list: &[crate::recorder::schema::MetricDesc]| {
+                    list.iter()
+                        .map(|d| MetricDesc {
+                            name: d.name.clone(),
+                            metadata: d.metadata.clone(),
+                        })
+                        .collect()
+                };
+                std::sync::Arc::new(GroupSchema {
+                    counters: convert(&s.counters),
+                    gauges: convert(&s.gauges),
+                    histograms: convert(&s.histograms),
+                })
+            });
+            if let Some(schema) = &arrived {
+                self.current.insert(
+                    row.stream.clone(),
+                    (row.schema_hash, std::sync::Arc::clone(schema)),
+                );
+            }
+            match self.current.get(&row.stream) {
+                Some((hash, _)) if *hash == row.schema_hash => {}
+                _ => {
+                    self.unresolved += 1;
+                    continue;
+                }
+            }
+            let decoded = crate::recorder::wal::decode_wal_group_row(&row.row)
+                .map_err(|e| format!("stream {}: {e}", row.stream))?;
+            let histograms = decoded
+                .histograms
+                .into_iter()
+                .map(|h| {
+                    h.map(|(gp, mvp, buckets)| {
+                        histogram::Histogram::from_buckets(gp, mvp, buckets)
+                            .map_err(|e| format!("stream {}: histogram: {e}", row.stream))
+                    })
+                    .transpose()
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            groups.push(GroupSnapshot {
+                name: row.stream.clone(),
+                schema_hash: row.schema_hash,
+                schema: arrived,
+                window: row.window.map(|(b, e)| metriken::Window::new(b, e)),
+                counters: decoded.counters,
+                gauges: decoded.gauges,
+                histograms,
+            });
+        }
+        let wall = u64::try_from(pass.ts.saturating_add(pass.wall_offset)).unwrap_or(0);
+        Ok(Snapshot::V3(SnapshotV3 {
+            systemtime: std::time::UNIX_EPOCH + Duration::from_nanos(wall),
+            duration: Duration::from_nanos(pass.duration_ns),
+            metadata: Default::default(),
+            groups,
+        }))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1361,6 +1458,55 @@ mod tests {
             histograms: Vec::new(),
         })
         .unwrap()
+    }
+
+    /// One pass holding one payload, as `for_writer` builds it.
+    fn pass_of(row: Vec<u8>) -> AgentRows {
+        AgentRows {
+            wall_ns: 1_000,
+            duration_ns: 0,
+            ts: 1_000,
+            wall_offset: 0,
+            rows: vec![AgentRow::from_payload("fake/ops".to_string(), row).unwrap()],
+        }
+    }
+
+    /// The schema rides only on the row where it arrived, so the writer
+    /// validates it once per change; rows after it resolve by hash.
+    #[test]
+    fn a_streamed_schema_is_attached_where_it_arrived() {
+        let mut schemas = StreamSchemas::default();
+        let group = |snap: metriken_exposition::Snapshot| match snap {
+            metriken_exposition::Snapshot::V3(v3) => v3.groups.into_iter().next().unwrap(),
+            _ => panic!("a V3 snapshot"),
+        };
+        let first = group(schemas.snapshot(&pass_of(payload(2, true, 2_000))).unwrap());
+        assert_eq!(first.schema.as_ref().map(|s| s.counters.len()), Some(2));
+        assert_eq!(first.counters, vec![Some(0), Some(1)]);
+        let next = group(
+            schemas
+                .snapshot(&pass_of(payload(2, false, 3_000)))
+                .unwrap(),
+        );
+        assert!(next.schema.is_none(), "known by hash, not re-sent");
+        assert_eq!(next.schema_hash, first.schema_hash);
+        assert_eq!(schemas.unresolved, 0);
+    }
+
+    /// A row naming a schema this connection never sent is skipped and
+    /// counted, not decoded against the wrong members.
+    #[test]
+    fn a_streamed_row_with_an_unsent_schema_is_skipped() {
+        let mut schemas = StreamSchemas::default();
+        schemas.snapshot(&pass_of(payload(2, true, 2_000))).unwrap();
+        let metriken_exposition::Snapshot::V3(v3) = schemas
+            .snapshot(&pass_of(payload(3, false, 3_000)))
+            .unwrap()
+        else {
+            panic!("a V3 snapshot");
+        };
+        assert!(v3.groups.is_empty());
+        assert_eq!(schemas.unresolved, 1);
     }
 
     fn wal_row(stream: &str, ts: i64, wall_offset: i64, row: Vec<u8>) -> WalRow {

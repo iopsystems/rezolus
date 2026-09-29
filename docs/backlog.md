@@ -625,9 +625,8 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   (#1312, #1315; the reader moved to metriken-archive in #1320).
 - **Recording to dendro archives** — Open, in stages
   ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
-  out.dendro`, and B, hindsight, are built. Remaining:
-  - **C. `record --stream` to `.dendro`**: rebuild group schemas from the
-    stream's identity frames before the writer.
+  out.dendro`, B, hindsight, and C, `record --stream`, are built.
+  Remaining:
   - **D. `recording` subcommands accept dendro**: `metadata`, `annotate`
     (events via `ArchiveMut::patch_source_metadata`), `filter`, `combine`,
     `snapshot`; and Save-as-Report.
@@ -641,6 +640,12 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
   (the connection stays `SQLITE_OPEN_READ_ONLY`). Nothing in rezolus needs
   it: hindsight dumps through `copy_sources_into`, which leaves no WAL tail
   in the dump.
+- **The 5 min seal bound in row time** — Open. dendro's `max_age` is wall
+  time, so a paused producer or an offline conversion seals differently
+  from a live recording. A row-time bound (seal once a segment spans N of
+  row time, the first staggered) was prototyped for the seal-policy
+  measurement ([entry](journal/2026-09-28-dendro-writer-adoption.md), "Seal
+  policy") and matched the wall-time policy at 1 s.
 - **The reader routes a table by one segment's footer** — Open. A metric
   that first appears in a later segment of the same table cannot be
   queried, in a `.rez` and a dendro archive alike (metriken
