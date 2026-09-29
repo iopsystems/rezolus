@@ -2441,14 +2441,10 @@ fn create_v3(
         // documents for an ordinary failed read (see its doc comment).
         // The group's window slot keeps whatever it held before; nothing
         // was actually read this tick, so there is nothing honest to
-        // publish. In practice this path is reachable only in a
-        // synthetic/test registry — a real reader-stamped group only
-        // creates a `GroupBuilder` when some metric routed to it (the
-        // `Entry::Vacant` arm above), and that same metric's
-        // CounterGroup/GaugeGroup arm always pushes SOMETHING (an entry
-        // per registered/populated index) or the metric wasn't a member at
-        // all — so an empty reader-stamped group here would mean a routed
-        // metric matched no `Value` arm `create_v3` knows how to expose.
+        // publish. A real reader-stamped group reaches this with no
+        // populated slots: `cpu_usage`'s task group when
+        // `task_attribution` is off (its metrics are registered, nothing
+        // backs them), and any slot-keyed group whose slots are all empty.
         if group.counter_values.is_empty()
             && group.gauge_values.is_empty()
             && group.histogram_values.is_empty()
