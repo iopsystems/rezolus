@@ -1,7 +1,7 @@
 # Recording to dendro archives: `record`, then hindsight, then the default
 
 - **Opened:** 2026-09-28
-- **Status:** OPEN — stages A (`record -o out.dendro`) and B (hindsight) built; C–E not.
+- **Status:** OPEN — stages A (`record -o out.dendro`), B (hindsight) and C (`record --stream`) built; D–E not.
 
 ## Goal
 
@@ -125,6 +125,47 @@ Tests: `a_dendro_buffer_evicts_whole_segments_and_quiet_wal_rows`,
 `a_ranged_dendro_dump_keeps_labels_of_an_occupant_seen_before_it`, and
 `a_dendro_buffer_dumps_a_dendro_archive` through the binary
 (`tests/hindsight_dump.rs`).
+
+## C: built
+
+The design above expected the stream to carry identity only in its index
+frames, so that the recorder would rebuild group schemas from them. It
+does not: the agent builds the stream from the same `create_v3` pass as a
+scrape (`latest_rows` → `wire::encode_snapshot`), so a streamed schema's
+slotted members already carry `id` and the identity labels, `__uid__`
+included, and the index frames repeat them. So the dendro arm needs no
+index at all:
+
+- `stream::StreamSchemas` turns each pass's `WalGroupRow`s back into a V3
+  snapshot for `SourceRecorder::stage`. The producer sends a stream's
+  schema whenever its hash differs from the last one it sent on that
+  stream (`FrameProducer::interval`), so one schema per stream is all it
+  keeps, and a row carries its schema into the snapshot exactly when the
+  schema changed; the writer validates and lays out a schema once per
+  change. A row naming a hash the connection never sent is skipped and
+  counted.
+- The recorder still applies the index frames (they gate rows on the
+  source's index state), but a `.dendro` does not write them: its occupant
+  streams hold the same identity, taken from the schemas.
+- `--stream` is accepted for `.dendro` (`reject_stream_without_rez` refuses
+  only the non-archive formats).
+
+Tests: `a_streamed_dendro_recording_takes_occupants_from_the_schemas` (a
+slot changing hands mid-stream, with its counter restarting, reads back as
+two occupants with their own labels and rates beside a steady one; no
+caller rows), `a_streamed_schema_is_attached_where_it_arrived`,
+`a_streamed_row_with_an_unsent_schema_is_skipped`.
+
+## Seal policy
+
+Measured on three replayed recordings (metriken
+`docs/journal/2026-09-28-archive-writer.md`, "Seal policy, measured"):
+rezolus's combination of 8 MiB, 900 rows and 5 minutes is kept. Longer
+segments were 7–12% smaller and up to 10% faster to query, but their seals
+took 260–630 ms against 41–96 ms, on the tick; aligned seals put every
+stream on one tick (1.8–4.2 s); a byte or row cap alone never seals a slow
+stream. Sealing only at finalize was ten times the disk while recording, a
+5.3 s open of the live archive and a 21 s finalize on the busy host.
 
 ## Not in scope
 
