@@ -937,8 +937,9 @@ The entry specifies `ext4_journal` (phase 1, implemented and measured),
   counters): an ocfs2 mount has its own slot, labeled `fstype="ocfs2"`.
 - **Degraded on module-ext4 kernels below 5.11** — By design. No module BTF,
   no CO-RE against jbd2 structs; `rezolus status` shows the sampler degraded.
-- **XFS** — Idea. Its own tracepoint set and journaling model; a separate
-  design.
+- **XFS** — Designed, see [XFS telemetry](journal/2026-09-29-xfs-samplers.md):
+  a per-mount sysfs stats sampler first, then `xfs_log` BPF for grant-sleep
+  and force latency.
 
 ## Agent — filesystem telemetry gaps
 
@@ -997,10 +998,15 @@ bare-metal probe-cost bench for anything at request rate).
   dashboard's Write Path group: application bytes (`ext4_write_bytes`),
   writeback bytes, journal bytes, device bytes on one axis, each term drawn
   when the recording has it.
-- **XFS journal and allocator samplers** — Idea. Module tracepoints; the
-  module-BTF twin selection applies.
+- **XFS samplers** — Open, designed in
+  [XFS telemetry](journal/2026-09-29-xfs-samplers.md): `xfs_stats` from
+  `/sys/fs/xfs/<dev>/stats/stats` per mount (no probes; the kernel keeps the
+  counts), then `xfs_log` BPF for grant-sleep and log-force latency and
+  per-cgroup blocked time (opt-in, benched first). Probed on Debian 13:
+  623 tracepoints, 606 in module BTF, 5.6 log-family events per fsync.
 - **Page-cache hit ratio** — Idea. Misses from `mm_filemap_add_to_page_cache`;
-  hits need `fentry` at read rate.
+  hits need `fentry` at read rate. Deferred behind the XFS steps in the same
+  entry.
 - **Per-cgroup writeback throttling** — Roadmap. `balance_dirty_pages` keys
   by `cgroup_ino`, not css id; needs an inode-keyed lookup in `bpf/cgroup.h`.
 

@@ -208,7 +208,10 @@ rate.
    amplification dashboard (C6) once its four terms exist. *Done; see
    Results — C5 and C6. The start map is task local storage, decided by
    the kernel floor the sampler already has.*
-7. **XFS** (C8), then page cache (C7).
+7. **XFS** (C8), then page cache (C7). *Designed and probed in its own
+   entry, `2026-09-29-xfs-samplers.md`: per-mount sysfs stats first, BPF for
+   the latencies the stats file cannot carry; the page cache is deferred
+   there.*
 
 ## Results — C1, the `memory_writeback` sampler
 
