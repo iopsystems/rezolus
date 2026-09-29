@@ -449,7 +449,7 @@ const fetchExtraCaptures = (vnode) => {
                 (c) => c.id !== CAPTURE_BASELINE && c.id !== CAPTURE_EXPERIMENT,
             );
             if (extras.length === 0) {
-                vnode.state.extraCaptures = [];
+                if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
             }
             const baseQuery = spec.promql_query_experiment || spec.promql_query;
@@ -458,7 +458,7 @@ const fetchExtraCaptures = (vnode) => {
                 { sectionRoute, crossCapture: true },
             );
             if (query == null) {
-                vnode.state.extraCaptures = [];
+                if (vnode.state._extrasLaunch === launch) vnode.state.extraCaptures = [];
                 return;
             }
             const displayStyle = resolvedStyle(spec);
