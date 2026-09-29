@@ -756,9 +756,8 @@ where
             "".to_string()
         };
 
-        // Written and published together. A cgroup whose name changed without
-        // being published is invisible to a subscriber for the life of its
-        // connection — there is no per-tick diff to notice it any more.
+        // Written through `SlotIdentity`, which mints a new `__uid__` when the
+        // name changes, so a renamed cgroup is a new series.
         if !path.is_empty() {
             identity.set(
                 cgroup_info.id() as usize,

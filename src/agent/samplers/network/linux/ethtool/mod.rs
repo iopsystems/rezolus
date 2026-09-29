@@ -130,9 +130,6 @@ impl Ifreq {
 static INTERFACE_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(INTERFACE_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static INTERFACE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &INTERFACE_IDENTITY;
-
 static INTERFACE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &ETHTOOL_DEFAULT_ACQ,
     &[

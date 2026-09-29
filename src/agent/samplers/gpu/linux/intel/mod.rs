@@ -154,18 +154,12 @@ const GLOBAL_EVENTS: [(&str, &metriken::CounterGroup, Option<&str>); 2] = [
 static ENGINE_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(ENGINE_IDENTITY_GROUPS);
 
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static ENGINE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &ENGINE_IDENTITY;
-
 static ENGINE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] =
     &[(&GPU_INTEL_PMU_ENGINE_ACQ, &[&GPU_ENGINE_BUSY])];
 
 /// Identity for the per-device slots, whose members are GPU ids.
 static DEVICE_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(DEVICE_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static DEVICE_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &DEVICE_IDENTITY;
 
 static DEVICE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &GPU_INTEL_PMU_DEVICE_ACQ,
@@ -176,9 +170,6 @@ static DEVICE_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
 /// counters: only a GPU with device-local memory has them.
 static MEMORY_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(MEMORY_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static MEMORY_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &MEMORY_IDENTITY;
 
 static MEMORY_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &GPU_INTEL_PMU_MEMORY_ACQ,
@@ -546,9 +537,6 @@ impl Gpu {
             if !live_indices.contains(&metric_index) {
                 continue;
             }
-            // Written and published together: a GPU discovered after a
-            // subscriber connected would otherwise change identity with
-            // nothing to notice, there being no per-tick diff any more.
             ENGINE_IDENTITY.set(
                 metric_index,
                 [

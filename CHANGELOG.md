@@ -2,6 +2,19 @@
 
 ### Changed
 
+- `record --stream` writes `.dendro` only. `-o out.rez` or `--format rez`
+  with `--stream` is refused at parse time; scraping into a `.rez` is
+  unchanged. The identity index that `.rez --stream` stored beside its rows
+  is gone with it: the agent no longer sends `Frame::Index` on
+  `/metrics/stream` (every rows frame names dendro's `NO_INDEX_STATE`), no
+  longer keeps the slot-change broadcast or index history, and `/status`
+  drops `index_resyncs`. Slot identity reaches a `.dendro` through each
+  group's schema, `__uid__` included, as before. `.rez` archives written by
+  a 5.x `record --stream` still read with their occupants split by the
+  recorded index. 5.x keeps `.rez --stream` on `release/5.x`; a 5.x
+  `record --stream -o out.rez` against a 6.0 agent receives no index frames,
+  so it no longer records an identity index. A 6.0 `record --stream` from a
+  5.x agent ignores that agent's index frames.
 - `ext4_ops` and `xfs_log` attribute to cgroups only when their section (or
   `[defaults]`) sets `cgroup_attribution = true`. The per-cgroup path was
   measured at half the end hook's cost (265 of 535 ns), so it is off by

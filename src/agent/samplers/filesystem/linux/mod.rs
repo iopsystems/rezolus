@@ -108,13 +108,10 @@ static COUNTER_GROUPS: &[&CounterGroup] = &[&FILESYSTEM_WRITTEN_BYTES];
 
 /// What a filesystem slot means. Unlike a GPU or a drive this genuinely moves
 /// at runtime — a mount appears, a filesystem is unmounted and its slot is
-/// reused — so a subscriber told only at connect would be wrong within
+/// reused — so labels written only at startup would be wrong within
 /// minutes.
 static MOUNT_IDENTITY: crate::agent::identity::SlotIdentity =
     crate::agent::identity::SlotIdentity::new(MOUNT_IDENTITY_GROUPS);
-
-#[linkme::distributed_slice(crate::agent::identity::SLOT_IDENTITIES)]
-static MOUNT_IDENTITY_REG: &'static crate::agent::identity::SlotIdentity = &MOUNT_IDENTITY;
 
 static MOUNT_IDENTITY_GROUPS: &[crate::agent::identity::GroupMetrics] = &[(
     &FILESYSTEM_SWEEP_ACQ,
@@ -396,8 +393,8 @@ impl Filesystem {
 
 fn vacate(slot: usize) {
     unset(slot);
-    // And say so. A subscriber not told keeps attributing rows to a filesystem
-    // that is no longer mounted, and the slot is reusable immediately.
+    // And clear its labels. Left in place, they would name a filesystem that
+    // is no longer mounted, and the slot is reusable immediately.
     MOUNT_IDENTITY.clear(slot);
 }
 

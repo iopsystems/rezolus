@@ -219,10 +219,9 @@ one to the current container — as does rewriting it with `combine`, `filter` o
 `--stream` subscribes to each agent's replication stream (`/metrics/stream`)
 instead of scraping it. The agent pushes one frame per `--interval`, carrying
 only the acquisition groups it re-read since the last frame, stamped when the
-agent sampled rather than when the recorder asked. The identity index — which
-task or cgroup each slot means — arrives on the same stream; a `.rez` commits it
-in the same transaction as the rows it describes, and a `.dendro` takes the
-same identity from the rows' schemas into its occupant streams.
+agent sampled rather than when the recorder asked. Which task or cgroup each
+slot means travels in each group's schema, and the `.dendro` takes it from
+there into its occupant streams.
 
 ```bash
 rezolus record --stream --url http://localhost:4241 -o run.dendro
@@ -230,7 +229,10 @@ rezolus record --stream --endpoint http://web-01:4241 --endpoint http://web-02:4
 ```
 
 Scraping stays the default and the transport is never auto-detected. `--stream`
-records to `.dendro` or `.rez`, and every endpoint must be a rezolus agent that serves
+records to `.dendro` only; `-o out.rez` or `--format rez` with `--stream` is
+refused. (Rezolus 5.x wrote `.rez` from a stream, with an identity index beside
+the rows; 6.0 removed both. `.rez` recordings written that way still open.)
+Every endpoint must be a rezolus agent that serves
 the stream: an endpoint that cannot (a Prometheus exporter, a V2 agent, an agent
 from before `/metrics/stream`) fails the run rather than being scraped. An
 endpoint that is merely unreachable is retried each tick. A stream that drops
