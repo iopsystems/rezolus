@@ -2251,9 +2251,9 @@ dependencies = [
 
 [[package]]
 name = "metriken-archive"
-version = "0.2.6"
+version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a8243d77a0a5954643efd78e2ce431934eba33963e0f935b47a9a3b34f0802b"
+checksum = "e952b0f609fc792a3acbfea9c3ff9aef27c71d549faebb443d171427b3af022a"
 dependencies = [
  "arrow",
  "bytes",
@@ -2989,6 +2989,8 @@ dependencies = [
  "arrow",
  "bytes",
  "dashboard",
+ "dendro",
+ "metriken-archive",
  "metriken-query",
  "parquet",
  "rez",
@@ -3059,7 +3061,7 @@ dependencies = [
 
 [[package]]
 name = "rezolus"
-version = "5.22.2-alpha.35"
+version = "5.22.2-alpha.36"
 dependencies = [
  "allan",
  "anyhow",
@@ -4273,6 +4275,7 @@ dependencies = [
  "bytes",
  "console_error_panic_hook",
  "dashboard",
+ "metriken-archive",
  "metriken-query",
  "report-save",
  "rez",

@@ -416,6 +416,9 @@ pub fn build_rez_report_from_rez(
     use rez::rez_sqlite::RezDb;
     use rez::rez_v3_rewrite::{copy_recordings_into, CopySpec};
 
+    if metriken_archive::DendroCatalog::is_archive_bytes(source_bytes) {
+        return build_dendro_report(source_bytes, keep_metrics, selection_json, events_json);
+    }
     let src = RezDb::open_bytes(source_bytes.to_vec())?;
     let mut dst = RezDb::create_in_memory()?;
     dst.transaction(|tx| {
@@ -433,6 +436,80 @@ pub fn build_rez_report_from_rez(
     })?;
     embed_rez_report_markers(&dst, keep_metrics.is_some(), selection_json, events_json)?;
     dst.serialize()
+}
+
+/// [`build_rez_report_from_rez`] for a dendro archive: a dendro report.
+///
+/// The same assembly, in memory: every source copied through dendro's
+/// `copy_sources_into` (trimmed with metriken-archive's `KeepMetrics` when
+/// `keep_metrics` is `Some`, which keeps a long table long and its occupant
+/// stream whole), each stream's live tail sealed with metriken-archive's
+/// `Encoder`, and segments re-encoded with the writer's properties. An
+/// occupant stream whose table the trim dropped is removed, as `recording
+/// filter` removes it. The markers go on the first source.
+fn build_dendro_report(
+    source_bytes: &[u8],
+    keep_metrics: Option<&BTreeSet<String>>,
+    selection_json: &str,
+    events_json: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    use dendro::archive::{Archive, ArchiveMut};
+    use dendro::rewrite::{copy_sources_into, ColumnFilter, CopySpec};
+    use rez::occupants::table_of;
+    let err = |e: dendro::Error| e.to_string();
+
+    let src = Archive::open_bytes(source_bytes.to_vec()).map_err(err)?;
+    let mut names = Vec::new();
+    for s in src.read_sources().map_err(err)? {
+        names.extend(src.all_streams(s.id).map_err(err)?);
+    }
+    let encoder = metriken_archive::Encoder::for_streams(names.iter().map(String::as_str));
+    let keep = keep_metrics.map(metriken_archive::KeepMetrics::new);
+    let spec = CopySpec {
+        keep_columns: keep.as_ref().map(|k| k as &dyn ColumnFilter),
+        writer_props: Some(metriken_archive::segment_props(
+            metriken_archive::default_compression(),
+        )),
+        ..CopySpec::everything()
+    };
+    let mut dst = ArchiveMut::create_in_memory().map_err(err)?;
+    dst.transaction(|tx| copy_sources_into(&src, tx, &spec, &encoder))
+        .map_err(err)?;
+
+    let sources = dst.read_sources().map_err(err)?;
+    for source in &sources {
+        let streams = dst.all_streams(source.id).map_err(err)?;
+        let tables: BTreeSet<&str> = streams
+            .iter()
+            .map(String::as_str)
+            .filter(|s| table_of(s).is_none())
+            .collect();
+        let orphan = |stream: &str| table_of(stream).is_some_and(|t| !tables.contains(t));
+        if streams.iter().any(|s| orphan(s)) {
+            dst.evict_streams_before(source.id, i64::MAX, &orphan)
+                .map_err(err)?;
+        }
+    }
+
+    let anchor = sources.first().ok_or_else(|| {
+        "report has no recordings (source was empty or fully trimmed)".to_string()
+    })?;
+    let mut metadata = anchor.meta.metadata.clone();
+    metadata.insert(KEY_SELECTION.to_string(), selection_json.to_string());
+    if keep_metrics.is_some() {
+        metadata.insert(KEY_REPORT.to_string(), REPORT_VALUE_TRIMMED.to_string());
+    }
+    match events_json {
+        Some(events) => {
+            metadata.insert(KEY_EVENTS.to_string(), events.to_string());
+        }
+        None => {
+            metadata.remove(KEY_EVENTS);
+        }
+    }
+    dst.update_source_metadata(anchor.id, &metadata)
+        .map_err(err)?;
+    dst.serialize().map_err(err)
 }
 
 /// One side of a parquet compare: its bytes and the columns to keep (`None`

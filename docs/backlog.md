@@ -626,21 +626,14 @@ Source: [The layout of a rezolus dendro archive](journal/2026-09-25-dendro-archi
 - **Recording to dendro archives** — Open, in stages
   ([entry](journal/2026-09-28-dendro-writer-adoption.md)). A, `record -o
   out.dendro`, B, hindsight, C, `record --stream`, D1, `recording`
-  metadata/annotate/check/snapshot, D2, `recording filter`, and D3,
-  `recording combine`, are built. Remaining:
-  - **D4. Save-as-Report on dendro**: `KeepMetrics` (metriken-archive,
-    outside `write`), also for the wasm viewer; the tail encoder is behind
-    `write`, so the report needs another way to seal it.
+  metadata/annotate/check/snapshot, D2, `recording filter`, D3,
+  `recording combine`, and D4, Save-as-Report (both viewers), are built.
+  Remaining:
   - **E. 6.0 default**: `record` and `hindsight` write dendro by default,
     after D.
-- **dendro's `vacuum_into` fails on the read handle** — Open, a dendro
-  defect. `Archive::open` sets `PRAGMA query_only = 1`, and SQLite refuses
-  `VACUUM INTO` under it ("attempt to write a readonly database"), though
-  the statement writes only the destination; a live archive allows no
-  other handle. Fix in dendro: lift `query_only` for that one statement
-  (the connection stays `SQLITE_OPEN_READ_ONLY`). Nothing in rezolus needs
-  it: hindsight dumps through `copy_sources_into`, which leaves no WAL tail
-  in the dump.
+- ~~**dendro's `vacuum_into` fails on the read handle**~~ — Done (dendro
+  #25, released in 0.3.2): `vacuum_into` lifts `query_only` for the one
+  statement.
 - **The 5 min seal bound in row time** — Open. dendro's `max_age` is wall
   time, so a paused producer or an offline conversion seals differently
   from a live recording. A row-time bound (seal once a segment spans N of

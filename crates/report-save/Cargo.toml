@@ -24,3 +24,7 @@ tracing = "0.1"
 # metriken-free so the WASM viewer can build a report in the browser. The
 # binary unifies this to the full `write` build via its own dependency.
 rez = { path = "../rez", default-features = false }
+# A dendro source's report: dendro's copy, and metriken-archive's reader-side
+# encoder and column filter (no `write`, so the WASM viewer builds it too).
+dendro.workspace = true
+metriken-archive.workspace = true

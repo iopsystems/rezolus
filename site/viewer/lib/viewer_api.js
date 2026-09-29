@@ -176,8 +176,9 @@ const ViewerApi = {
     async saveWithSelection(payload) {
         ensureAttached('baseline');
         const bytes = registry.save_with_selection(JSON.stringify(payload));
-        // The registry decides the output shape: `.rez` for a `.rez` source or
-        // a parquet compare, `.parquet` for a single parquet.
+        // The registry decides the output shape: `.dendro` for a dendro
+        // source, `.rez` for a `.rez` source or a parquet compare, `.parquet`
+        // for a single parquet.
         const extension = registry.report_extension();
         return { bytes, mime: 'application/octet-stream', extension };
     },
